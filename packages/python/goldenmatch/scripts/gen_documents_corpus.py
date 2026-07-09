@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO))
 from goldenmatch.documents._openai import parse_message_text  # noqa: E402
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict  # noqa: E402
 from goldenmatch.documents.suggest import _PROMPT  # noqa: E402
-from goldenmatch.documents.templates import _ORDER, get_template  # noqa: E402
+from goldenmatch.documents.templates import _ORDER, _pure_template  # noqa: E402
 from goldenmatch.documents.types import DocTemplate, ExtractedRow  # noqa: E402
 from goldenmatch.documents.vlm_backend import _instruction  # noqa: E402
 
@@ -147,8 +147,12 @@ def _template_to_dict(t: DocTemplate) -> dict:
 
 
 for name in _ORDER:
-    add("template", {"doctype": name}, {"ok": _template_to_dict(get_template(name))})
-add("template", {"doctype": "nope"}, {"error": True})
+    add("template", {"doctype": name}, {"ok": _template_to_dict(_pure_template(name))})
+add("template", {"doctype": "nope"}, {"error": True, "substring": "unknown doctype"})
+
+# template_list: cross-checks native template_list() (vec in templates.rs) vs the
+# pure _ORDER, so a doctype added to one but not the other can't ship silently.
+add("template_list", {}, {"ok": list(_ORDER)})
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 with OUT.open("w", encoding="utf-8") as f:

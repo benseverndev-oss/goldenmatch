@@ -39,7 +39,21 @@ _PURE: dict[str, DocTemplate] = {
             _f("purchase_date","date"), _f("total_amount","number"), _f("payment_method","text")]),
         TargetSchema([])),
 }
-_ORDER = ["invoice", "po", "statement", "receipt"]
+_ORDER = list(_PURE)  # insertion order: invoice, po, statement, receipt
+
+
+def _pure_template(doctype: str) -> DocTemplate:
+    """Pure-Python accessor -- reads _PURE directly, NEVER dispatches to native.
+    The parity harness uses this so the pure leg actually tests the mirror even
+    on a native-built CI lane (get_template would silently route to Rust there)."""
+    if doctype not in _PURE:
+        raise ValueError(f"unknown doctype: {doctype}")
+    return _PURE[doctype]
+
+
+def _pure_list() -> list[str]:
+    """Pure-Python accessor -- reads _ORDER directly, NEVER dispatches to native."""
+    return list(_ORDER)
 
 
 def _from_native_json(doc: dict) -> DocTemplate:

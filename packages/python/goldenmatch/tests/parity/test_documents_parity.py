@@ -29,7 +29,7 @@ from goldenmatch.core._native_loader import native_module
 from goldenmatch.documents._openai import parse_message_text
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
 from goldenmatch.documents.suggest import _PROMPT
-from goldenmatch.documents.templates import get_template
+from goldenmatch.documents.templates import _pure_list, _pure_template
 from goldenmatch.documents.types import DocTemplate, ExtractedRow
 from goldenmatch.documents.vlm_backend import _instruction
 
@@ -80,7 +80,9 @@ def _run_pure(kernel: str, input_: object):
             "confidence": [[c, row.confidence[c]] for c in cols],
         }
     if kernel == "template":
-        return _template_to_dict(get_template(input_["doctype"]))
+        return _template_to_dict(_pure_template(input_["doctype"]))
+    if kernel == "template_list":
+        return _pure_list()
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -113,6 +115,8 @@ def _run_native(kernel: str, input_: object, symbol: str):
         }
     if kernel == "template":
         return json.loads(nm.documents_template(input_["doctype"]))
+    if kernel == "template_list":
+        return json.loads(nm.documents_template_list())
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -123,6 +127,7 @@ _KERNEL_SYMBOL = {
     "prompt_suggest": "documents_suggest_prompt",
     "normalize": "documents_normalize_record",
     "template": "documents_template",
+    "template_list": "documents_template_list",
 }
 
 
