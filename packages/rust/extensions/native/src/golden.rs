@@ -496,6 +496,17 @@ fn resolve_group(
             // rank(l) = index of the row's source in the priority list, or
             // `len(priority)` when absent/null (winner.py:25-26). A null source
             // (`sc < 0`) never matches an absent-priority sentinel (`pc < 0`).
+            //
+            // KNOWN DIVERGENCE (out-of-contract, no clean fix): for a MALFORMED
+            // priority list with DUPLICATE sources, this returns the FIRST index
+            // of a match, matching the SCALAR reference `_source_priority`
+            // (golden.py, walk-and-return-on-first-match). But the GROUP reference
+            // `winner.py::_ranking` builds a dict `{s: i}` that keeps the LAST
+            // index. So the two reference paths ALREADY disagree with each other
+            // on duplicate priority lists; no single kernel behavior can byte-match
+            // both. `GoldenGroupRule` doesn't forbid duplicates, but they're a user
+            // error (a priority list is an ordered set). Flagged for a shared
+            // priority-rank helper on the next source_priority touch.
             let rank = |l: usize| -> usize {
                 let sc = source_vals[off + l];
                 if sc >= 0 {

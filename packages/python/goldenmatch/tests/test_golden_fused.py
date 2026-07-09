@@ -923,6 +923,36 @@ def test_group_most_complete_tie_conf_scaled_070():
     assert abs(got[1]["__golden_confidence__"] - 0.7) < 1e-12
 
 
+def test_group_null_winner_cell_pins_null_no_backfill():
+    # The null-pin contract: allow_fill=False, and the WINNER row (most populated)
+    # itself holds a null in one group column. That column pins to the winner
+    # row's OWN null (kernel emits off+best, gathering to null) -- NOT the -1
+    # scalar sentinel, and NOT back-filled even though a lower-ranked row has a
+    # non-null value there. winner_populated EXCLUDES the null cell, so
+    # base = winner_populated / n_cols = 2/3 (a kernel that counted the null cell,
+    # or that back-filled, would diverge on the value and/or the confidence).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            # row0 populated 2 (winner); row1 populated 1 but HOLDS a non-null c
+            # (a would-be donor the no-fill winner must ignore).
+            "a": ["A0", None],
+            "b": ["B0", None],
+            "c": [None, "C1"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="trip", columns=["a", "b", "c"])],
+    )
+    got = _assert_value_conf_parity(df, rules, ["a", "b", "c"])
+    assert got[1]["a"] == "A0" and got[1]["b"] == "B0"
+    assert got[1]["c"] is None  # winner row0's own null, NOT donor "C1"
+    # winner_populated 2 / 3 cols, no tie -> 2/3 (sole unit -> golden 2/3).
+    assert abs(got[1]["__golden_confidence__"] - 2.0 / 3.0) < 1e-12
+
+
 def test_group_allow_fill_backfills_from_next_best_row():
     # allow_fill: winner row has a null group column -> back-fill it from the
     # next-best ranked row that has a non-null there (winner.py:65-72).

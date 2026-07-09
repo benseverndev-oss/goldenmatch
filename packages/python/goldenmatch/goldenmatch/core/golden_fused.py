@@ -523,6 +523,13 @@ def run_golden_fused_arrow(
         gspec_anchor_idx = -1
         if g.strategy == "source_priority":
             # src_map is populated (need_source True since a group uses it).
+            # NOTE (known divergence, out-of-contract): a DUPLICATE-bearing
+            # priority list is un-byte-matchable because the reference's own two
+            # paths disagree -- the scalar `_source_priority` returns on the FIRST
+            # matching index, while the group `winner.py::_ranking` dict `{s: i}`
+            # keeps the LAST. The kernel matches the scalar (first-index) behavior
+            # (see golden.rs GROUP_SOURCE_PRIORITY). Duplicates are a user error;
+            # GoldenGroupRule permits them but a priority list is an ordered set.
             gspec_priority = [src_map.get(s, -1) for s in (g.source_priority or [])]
         elif g.strategy == "most_recent":
             built = _build_date_arrays(sdf, g.date_column)
