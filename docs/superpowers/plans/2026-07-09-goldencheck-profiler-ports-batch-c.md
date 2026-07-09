@@ -99,7 +99,7 @@ git commit -m "feat(goldencheck): add positional slice + str cast-kind to the Fr
 
 **Files:** Modify `packages/python/goldencheck/goldencheck/profilers/drift_detection.py`
 
-- [ ] **Step 1: Read the file first**, then rewrite:
+- [ ] **Step 1: Read the file first**, then rewrite (this is an in-place edit — keep the `findings: list[Finding] = []` init and the trailing `return findings`; only change the lines called out below):
   - Signature: `def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:` — **drop `frame: pl.DataFrame`**. Keep `frame = to_frame(frame)`.
   - Remove `df = frame.native`; use `col = frame.column(column)`.
   - `total = len(col)`; `if total < MIN_ROWS: return findings` UNCHANGED.
