@@ -504,3 +504,86 @@ def test_most_recent_all_dates_null_emits_null():
     got = _assert_value_conf_parity(df, rules, ["name"])
     assert got[1]["name"] is None
     assert abs(got[1]["__golden_confidence__"] - 0.0) < 1e-12
+
+
+# ─── most_recent date-dtype gate (the _MOST_RECENT_ORDER_SAFE_DTYPES allow-list)
+
+
+def test_most_recent_uint64_date_declines():
+    # UInt64's cast to Int64 wraps for values >= 2**63, so the fused path can't
+    # guarantee ordering parity -> declines (returns None), caller falls back.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "name": ["Bob", "Robert"],
+            "dt": pl.Series("dt", [1, 2], dtype=pl.UInt64),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    assert run_golden_fused_arrow(df, rules) is None
+
+
+def test_most_recent_string_date_declines():
+    # String dates order lexically in Python; no order-preserving i64 physical
+    # repr -> declines rather than risk divergence from the reference.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "name": ["Bob", "Robert"],
+            "dt": ["2020-01-01", "2022-06-15"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    assert run_golden_fused_arrow(df, rules) is None
+
+
+def test_most_recent_datetime_matches_reference():
+    import datetime as _dt
+
+    # pl.Datetime physical is i64 microseconds -> order-preserving. Latest wins.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "name": ["Bob", "Robert", "Bobby"],
+            "dt": [
+                _dt.datetime(2020, 1, 1, 8, 0, 0),
+                _dt.datetime(2022, 6, 15, 9, 30, 0),
+                _dt.datetime(2021, 3, 3, 12, 0, 0),
+            ],
+        },
+        schema_overrides={"dt": pl.Datetime},
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] == "Robert"  # 2022 latest
+
+
+def test_most_recent_integer_date_matches_reference():
+    # An integer date column (e.g. an epoch-day / version counter) has an
+    # identity i64 physical -> order-preserving; exercises the Int* branch.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "name": ["Bob", "Robert", "Bobby"],
+            "dt": pl.Series("dt", [100, 305, 202], dtype=pl.Int64),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] == "Robert"  # dt 305 is the max

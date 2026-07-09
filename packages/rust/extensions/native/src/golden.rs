@@ -248,11 +248,47 @@ fn most_recent(
     (winner_local, conf)
 }
 
+/// Kernel result: `(winner_idx, field_conf, cluster_ids_out)`, each outer Vec
+/// indexed by output column (except `cluster_ids_out`, the per-cluster id list).
+/// `winner_idx[col][k]` is the GLOBAL pre-sorted-frame row index whose value
+/// survives for column `col` in cluster `k` (`-1` = null); `field_conf[col][k]`
+/// its confidence.
+type GoldenFusedResult = (Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>);
+
+/// Per-column strategy SIDE CHANNELS, extracted from a Python
+/// `_GoldenFusedSideChannels` dataclass (attribute-named to match these fields).
+/// Consolidating the side channels into ONE carrier keeps `golden_fused`'s
+/// positional arity flat as later stages add channels: each new channel is ONE
+/// struct field + ONE Python assignment, not a new positional arg threaded
+/// through both the marshal site and this destructure.
+///
+/// Stage 2 fields:
+/// - `source_code`: factorized `__source__` (Int64, len n_rows) — present only
+///   when some column uses source_priority (else an empty array).
+/// - `priority_codes[col]`: that column's source_priority list mapped into
+///   source-code space (empty for non source_priority columns; absent sources
+///   encoded `< 0`).
+/// - `date_cols[col]` / `date_null_masks[col]`: Int64 arrays (len n_rows) for
+///   most_recent columns (empty arrays otherwise); the mask is 1 = null-date,
+///   0 = present.
+///
+/// Future stages append fields here (qweights, pair scores, group specs,
+/// predicate IR, cluster-override codes) — same one-field-per-stage rule.
+#[derive(FromPyObject)]
+pub struct GoldenFusedSideChannels {
+    source_code: PyArrowType<ArrayData>,
+    priority_codes: Vec<Vec<i64>>,
+    date_cols: Vec<PyArrowType<ArrayData>>,
+    date_null_masks: Vec<PyArrowType<ArrayData>>,
+}
+
 #[pyfunction]
 #[pyo3(signature = (
-    row_ids, cluster_ids, n_output_cols, strategy_ids, text_cols, code_cols,
-    source_code, priority_codes, date_cols, date_null_masks,
+    row_ids, cluster_ids, n_output_cols, strategy_ids, text_cols, code_cols, side,
 ))]
+// 8/7 with `py`: the six core args + the single `side` carrier. Folding the
+// side channels into `side` is exactly what keeps this from ballooning as later
+// stages add channels; the remaining args are the irreducible per-column core.
 #[allow(clippy::too_many_arguments)]
 pub fn golden_fused(
     py: Python<'_>,
@@ -262,18 +298,14 @@ pub fn golden_fused(
     strategy_ids: Vec<u8>,
     text_cols: Vec<PyArrowType<ArrayData>>,
     code_cols: Vec<PyArrowType<ArrayData>>,
-    // Stage 2 extra keys. `source_code` is the factorized `__source__` column
-    // (Int64, len n_rows) — present only when some column uses source_priority
-    // (else an empty array). `priority_codes[col]` is that column's
-    // source_priority list mapped into source-code space (empty for non
-    // source_priority columns; absent sources encoded < 0). `date_cols[col]` /
-    // `date_null_masks[col]` are Int64 arrays (len n_rows) for most_recent
-    // columns (empty arrays otherwise); the mask is 1 = null-date, 0 = present.
-    source_code: PyArrowType<ArrayData>,
-    priority_codes: Vec<Vec<i64>>,
-    date_cols: Vec<PyArrowType<ArrayData>>,
-    date_null_masks: Vec<PyArrowType<ArrayData>>,
-) -> PyResult<(Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>)> {
+    side: GoldenFusedSideChannels,
+) -> PyResult<GoldenFusedResult> {
+    let GoldenFusedSideChannels {
+        source_code,
+        priority_codes,
+        date_cols,
+        date_null_masks,
+    } = side;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
     // values: spans are formed from `cluster_ids` alone, and winner indices are
@@ -358,7 +390,6 @@ pub fn golden_fused(
 
     // ── Stage 2 keys: source_priority + most_recent ─────────────────────────
     let any_source_priority = strategy_ids.contains(&STRAT_SOURCE_PRIORITY);
-    let any_most_recent = strategy_ids.contains(&STRAT_MOST_RECENT);
 
     // Read an Int64 arrow array into an owned Vec. A length-0 array yields an
     // empty Vec (the "column doesn't use this key" placeholder).
@@ -372,7 +403,23 @@ pub fn golden_fused(
         Ok(Int64Array::from(d).values().to_vec())
     }
 
-    // source_code: only required (len n_rows) when a source_priority column exists.
+    // Per-column side-channel Vecs are ALWAYS n_output_cols long (Python fills a
+    // placeholder for columns that don't use a channel) -- validate all three
+    // unconditionally so the per-column indexing below can't panic.
+    for (name, len) in [
+        ("priority_codes", priority_codes.len()),
+        ("date_cols", date_cols.len()),
+        ("date_null_masks", date_null_masks.len()),
+    ] {
+        if len != n_output_cols {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: {name} length {len} != n_output_cols {n_output_cols}"
+            )));
+        }
+    }
+
+    // source_code is a single shared column: only required (len n_rows) when a
+    // source_priority column exists (else it's an empty placeholder array).
     let source_vals = read_i64(source_code.0, "source_code")?;
     if any_source_priority && source_vals.len() != n_rows {
         return Err(PyValueError::new_err(format!(
@@ -380,28 +427,7 @@ pub fn golden_fused(
             source_vals.len()
         )));
     }
-    if priority_codes.len() != n_output_cols {
-        return Err(PyValueError::new_err(format!(
-            "golden_fused: priority_codes length {} != n_output_cols {n_output_cols}",
-            priority_codes.len()
-        )));
-    }
 
-    // date + null mask: required (len n_rows) only for most_recent columns.
-    if any_most_recent {
-        if date_cols.len() != n_output_cols {
-            return Err(PyValueError::new_err(format!(
-                "golden_fused: date_cols length {} != n_output_cols {n_output_cols}",
-                date_cols.len()
-            )));
-        }
-        if date_null_masks.len() != n_output_cols {
-            return Err(PyValueError::new_err(format!(
-                "golden_fused: date_null_masks length {} != n_output_cols {n_output_cols}",
-                date_null_masks.len()
-            )));
-        }
-    }
     let mut date_vals: Vec<Vec<i64>> = Vec::with_capacity(n_output_cols);
     for (c, p) in date_cols.into_iter().enumerate() {
         let v = read_i64(p.0, "date col")?;

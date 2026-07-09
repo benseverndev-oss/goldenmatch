@@ -10,6 +10,7 @@ docs/superpowers/specs/2026-07-08-fused-golden-record-kernel-design.md
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 import polars as pl
@@ -96,19 +97,31 @@ def _factorize_codes(values: list) -> list[int]:
     ``None`` -> ``-1`` (the null sentinel the kernel reads). This is the
     byte-identical grouping key for ``majority_vote`` / ``unanimous_or_null``
     and the universal short-circuit (raw-value equality, NOT text equality).
+
+    The null-> -1 / first-occurrence contract lives ONCE, in
+    ``_factorize_with_map`` -- this drops the map half.
     """
-    codes: list[int] = []
-    mapping: dict = {}
-    for v in values:
-        if v is None:
-            codes.append(-1)
-            continue
-        c = mapping.get(v)
-        if c is None:
-            c = len(mapping)
-            mapping[v] = c
-        codes.append(c)
-    return codes
+    return _factorize_with_map(values)[0]
+
+
+@dataclass
+class _GoldenFusedSideChannels:
+    """Per-column side channels handed to the ``golden_fused`` kernel as ONE
+    carrier arg (a Rust ``#[derive(FromPyObject)]`` struct reads these attrs).
+
+    Consolidating the side channels here keeps the FFI call's positional arity
+    flat: each later stage (qweights, pair scores, group specs, predicate IR,
+    cluster-override codes) adds ONE field + ONE assignment, not another pair of
+    positional args aligned across the Python marshal site and the Rust
+    destructure. All per-column lists are ``n_output_cols`` long (a placeholder
+    entry for columns that don't use the channel); ``source_code`` is a single
+    shared Arrow column (empty when no source_priority column exists).
+    """
+
+    source_code: Any  # pa.Int64Array (len n_rows) or empty placeholder
+    priority_codes: list[list[int]] = field(default_factory=list)
+    date_cols: list[Any] = field(default_factory=list)  # per-col pa.Int64Array
+    date_null_masks: list[Any] = field(default_factory=list)  # per-col pa.Int64Array
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -336,6 +349,12 @@ def run_golden_fused_arrow(
         date_cols[ci] = pa.array(date_vals, type=pa.int64())
         date_null_masks[ci] = pa.array(mask_vals, type=pa.int64())
 
+    side = _GoldenFusedSideChannels(
+        source_code=source_code_arr,
+        priority_codes=priority_codes,
+        date_cols=date_cols,
+        date_null_masks=date_null_masks,
+    )
     winner_idx, field_conf, cluster_ids_out = fn(
         row_ids_arr,
         cluster_ids_arr,
@@ -343,10 +362,7 @@ def run_golden_fused_arrow(
         strategy_ids,
         text_cols,
         code_cols,
-        source_code_arr,
-        priority_codes,
-        date_cols,
-        date_null_masks,
+        side,
     )
 
     out: dict[str, pl.Series] = {}
