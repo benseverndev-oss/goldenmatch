@@ -53,10 +53,17 @@ provenance=needed)`. Use its result if non-`None`; else fall back to
 - `run_golden_fused_arrow` itself declines when `_polars_native_eligible` is True, so fused golden
   only bites on the slow path (exactly where the RSS win lives) — the fast columnar path is
   untouched.
+- **Provenance caveat (a real decline condition, not just a passthrough).** `run_golden_fused_arrow`
+  emits field-level `{value, confidence, source_row_id}` but does NOT reproduce the slow path's
+  top-level `__survivorship_prov__` (`ClusterProvenance`: group `tie` flag + conditional
+  fired-clause strategy). So "transparent" holds only when the run does NOT consume full
+  `ClusterProvenance`. The golden wiring must therefore ALSO fall back to `build_golden_records_batch`
+  when the run requests full-provenance lineage (a `__survivorship_prov__` consumer), not merely
+  field-level `source_row_id`. Absent that, field-level provenance is byte-identical.
 - **Default-on**; `GOLDENMATCH_GOLDEN_FUSED=0` kill-switch; native-required (declines if the
   `golden_fused` symbol is absent). Fires on every covered slow-path config — the broad win.
 
-## 4. Match routing (controller rule + plan field + pipeline short-circuit)
+## 4. Match routing (controller post-step + plan field + pipeline short-circuit)
 
 ### 4.1 The est-peak-RSS model
 
@@ -84,35 +91,67 @@ against drift; the model is tuned to measured reality, not asserted from first p
 All four constants (`BYTES_PER_PAIR`, `BYTES_PER_CELL`, `BLOCK_CONCURRENCY`, `PRESSURE_FRACTION`) are
 `GOLDENMATCH_*` env-overridable so the trigger tunes without a code change.
 
+**Input-scale caveat (the plan must handle this).** `estimated_pair_count` is extrapolated to full
+data (`BlockingProfile.extrapolate_to` scales `total_comparisons` by the row ratio), but
+`block_sizes_max` is explicitly NOT scaled by `extrapolate_to` — it reflects the SAMPLE's max block,
+so the `block_gb` term under-reads at scale while `pairs_gb` is full-scale. The plan must either
+(a) feed a full-scale block-size signal (use `measure_blocking_profile`'s measured max when
+`planning_effort in (thinking, einstein)`, else extrapolate the sample max by the row ratio), or
+(b) fold the block term's scale bias into the calibration coefficient — and the calibration test must
+assert the model at the full-data (n_rows, est_pairs, block_max) the bench actually ran, not at
+sample scale. Pin this in the plan; a naive sample-scale `block_sizes_max` silently under-triggers.
+
 **Why roughly-wrong is safe:** the estimator only decides WHETHER to try fused; `match_fused_ready`
 + the decline-to-`None` fallback mean an over-trigger costs a fallback and an under-trigger uses the
 classic/out-of-core path. Directionally right + calibrated is enough.
 
-### 4.2 The planner rule
+### 4.2 A Python post-step, NOT a planner rule (the native short-circuit)
 
-New `PlannerRule` `plan_fused_match`, inserted into `DEFAULT_RULES` (`core/autoconfig_planner_rules.py`)
-**before** `rule_duckdb` and after the simple/fast_box/bucket rules. The rule needs the config +
-output flags, so extend the planner `context` (today `{"user_backend": None}`) to carry
-`{config, needs_artifacts, em_result}`. Fires when ALL THREE hold:
+**Critical constraint discovered in review:** `apply_planner_rules` short-circuits to the native
+kernel (`_nm.autoconfig_decide_plan(...)`) BEFORE the Python rule loop whenever `native_enabled(
+"autoconfig")` AND the wheel carries the symbol AND `rules is _default_rules()` — and autoconfig is
+native-default-on. So a new `PlannerRule` added to `DEFAULT_RULES` would be **dead code in the
+default environment** (the Rust kernel decides the plan), silently no-op'ing match routing. Teaching
+the Rust kernel about fused routing would be a cross-language JSON-round-trip change.
+
+**Instead, decide match routing as a Python post-step in the controller, AFTER the backend plan is
+chosen** (whether the native kernel or the Python rules chose it). Fused-match is a whole-stage
+short-circuit, ORTHOGONAL to backend selection — the chosen backend (bucket/duckdb/…) becomes the
+FALLBACK that runs if fused declines. A new `maybe_route_fused_match(committed_config, profile,
+runtime, *, needs_artifacts, em_result) -> bool` runs at `autoconfig_controller.py` ~1246-1254
+(right after `apply_planner_rules` + `plan.apply_to`), and sets `use_fused_match` on the plan/config
+when ALL THREE hold:
 
 1. **covered** — `match_fused_ready(config)` OR `match_fused_fs_ready(config)` (with `em_result`) OR
    `match_fused_multipass_ready(config)`.
 2. **under pressure** — `estimate_classic_match_peak_rss_gb(...) > available_ram_gb * PRESSURE_FRACTION`.
-3. **artifacts not needed** — `not needs_artifacts` (see 4.3).
+3. **safe** — `not needs_artifacts` (see 4.3).
 
-Action -> `ExecutionPlan(use_fused_match=True, rule_name="plan_fused_match")`. `ExecutionPlan` gains a
-new `use_fused_match: bool = False` field; `apply_to` sets a flag the pipeline reads (a config field
-or a dedicated attribute).
+`ExecutionPlan` gains a `use_fused_match: bool = False` field; `apply_to` sets a flag the pipeline
+reads (`apply_to` already writes `backend` AND `_throughput_plan`, so this follows the existing
+attribute-write precedent — one more attribute). This sidesteps the native short-circuit entirely and
+needs no Rust change. `rule_name` records `"fused_match_post_step"` for telemetry alongside the
+backend rule's name.
 
-### 4.3 The `needs_artifacts` gate (conservative by design)
+### 4.3 The `needs_artifacts` / no-divergence gate (conservative by design)
 
-`needs_artifacts = True` if the run requests / consumes anything `match_fused` cannot produce:
-output-lineage, review-queue, explain, returned `scored_pairs`, cluster confidence/bottleneck, OR a
-golden config using `confidence_majority` (needs pair scores). This makes match routing **rare and
-correct** — it fires only on artifact-free runs under real pressure (the last-resort capacity mode).
-Under pressure WITH artifacts, the existing `rule_duckdb` / `rule_chunked` (which spill pairs to disk
-and PRESERVE artifacts) still fire; `plan_fused_match` sits in front of them only for the artifact-free
-case. The golden win is the broad one; match is the narrow survival extra.
+`match_fused` returns bare connected components, so it drops MORE than artifacts — it also skips the
+classic clustering's oversized-cluster handling. `needs_artifacts = True` (do NOT route) if ANY hold:
+
+- **output artifacts requested/consumed:** output-lineage (incl. full `__survivorship_prov__`),
+  review-queue, explain, returned `scored_pairs`, cluster confidence/bottleneck, OR a golden config
+  using `confidence_majority` (needs pair scores).
+- **clustering would diverge:** `golden_rules.auto_split` is on (default True) — classic MST-splits
+  oversized clusters + weak-cluster downgrade, which bare CCs don't; `config.identity.enabled` (builds
+  evidence edges from pairs); anomaly detection requested.
+
+So match routing fires only when the run is genuinely artifact-free AND its clustering can't diverge
+(`auto_split` off, identity/anomaly off) AND covered AND under pressure — a deliberately narrow
+last-resort capacity mode. Under pressure WITH any of these, the existing `rule_duckdb` /
+`rule_chunked` (which spill pairs to disk and PRESERVE artifacts + do full clustering) still fire; the
+fused-match post-step just declines and the chosen backend runs. **The golden win is the broad one;
+match is the narrow survival extra.** (Because the gate is this narrow, the est-RSS model + post-step
+serve a rarely-firing path by design — the machinery is the price of a safe auto capacity-survival.)
 
 ### 4.4 The pipeline short-circuit
 
@@ -126,8 +165,9 @@ dropped artifacts aren't requested, so simply not producing them is correct.
 
 ## 5. Telemetry
 
-`ExecutionPlan.rule_name` already surfaces on `PostflightReport` / `serialize_telemetry`, so
-`plan_fused_match` is observable. Add a `golden_fused_used: bool` to the result / telemetry so the
+The plan carries `use_fused_match` + `rule_name="fused_match_post_step"`, which surface on
+`PostflightReport` / `serialize_telemetry`, so the match-routing decision is observable. Add a
+`golden_fused_used: bool` to the result / telemetry so the
 golden routing (which is pipeline-local, not a planner rule) is also visible — essential for
 answering "is it actually routing."
 
@@ -135,32 +175,47 @@ answering "is it actually routing."
 
 - `estimate_classic_match_peak_rss_gb` unit tests + the bench-calibration test (asserts est vs the
   memcap bench's measured classic peaks within tolerance at 1M/5M/10M).
-- Planner-rule tests: covered + pressure + artifact-free -> `use_fused_match`; each of the three
-  conditions falsified -> not (and `needs_artifacts` -> falls to duckdb/chunked under pressure).
+- `maybe_route_fused_match` post-step tests: covered + pressure + safe -> `use_fused_match`; each of
+  the three conditions falsified -> not (and each `needs_artifacts` / divergence sub-condition
+  — auto_split/identity/anomaly/lineage/review/explain/pairs/confidence_majority — individually
+  blocks). Assert the post-step runs even under native-autoconfig (mock native plan chosen, post-step
+  still sets the flag) — the whole point of not being a `DEFAULT_RULES` rule.
 - Golden-wiring parity test: a fused-routed `dedupe_df` on a covered slow-path config produces
-  byte-identical golden output vs the classic path (reuse the golden_fused parity discipline).
-- Match short-circuit test: covered + pressure + artifact-free routes to fused and its clusters match
-  the classic clustering on the same config; uncovered / artifacts-needed / no-pressure fall back.
+  byte-identical golden output vs the classic path (reuse the golden_fused parity discipline); a
+  full-`ClusterProvenance` run declines to classic.
+- Match short-circuit test: covered + pressure + safe routes to fused and its clusters match the
+  classic clustering on the same config; uncovered / needs-artifacts / diverging / no-pressure fall
+  back.
 - Kill-switch test: `GOLDENMATCH_GOLDEN_FUSED=0` / `GOLDENMATCH_MATCH_FUSED=0` restore the classic
   path byte-for-byte.
 
 ## 7. Non-goals
 
 - Distributed / Sail fused routing.
-- The est-RSS model feeding any non-fused rule (it is only for `plan_fused_match`).
+- The est-RSS model feeding any non-fused decision (it is only for the fused-match post-step).
+- Teaching the native `autoconfig_decide_plan` kernel about fused routing (the Python post-step
+  sidesteps it; a native round-trip is a possible future optimization, not needed now).
 - Changing the existing backend rules' thresholds.
 - A dedicated user-facing "capacity mode" API (match routing is auto-gated; an explicit override can
   be a follow-up if needed).
 
 ## 8. Risks
 
-- **est-peak-RSS model accuracy.** Mitigation: calibrate against the memcap bench; the decline-to-None
-  fallback bounds the cost of a wrong estimate; the model is directionally-right-and-tunable, not
-  precise.
-- **`needs_artifacts` completeness** — missing an artifact-consuming path would silently drop it under
-  pressure. Mitigation: enumerate conservatively (any doubt -> needs_artifacts True -> classic/duckdb);
-  the pipeline short-circuit only triggers on the explicit flag.
-- **Planner-rule ordering** — `plan_fused_match` must sit before `rule_duckdb` but after the
-  in-memory-cheap rules so it only fires under genuine pressure. Pin the order in a test.
+- **Native planner short-circuit (resolved in 4.2).** A `DEFAULT_RULES` planner rule would be dead
+  under native-default-on autoconfig. Resolved by deciding match routing as a Python post-step after
+  `apply_planner_rules` — no Rust change, and the post-step runs regardless of which engine chose the
+  backend.
+- **est-peak-RSS model accuracy + the sample-scale `block_sizes_max` input (4.1).** Mitigation:
+  calibrate against the memcap bench at FULL-data inputs; feed a full-scale block signal or fold the
+  bias into the coefficient; the decline-to-None fallback bounds the cost of a wrong estimate; the
+  model is directionally-right-and-tunable, not precise.
+- **`needs_artifacts` / divergence completeness** — missing an artifact-consuming OR
+  clustering-diverging path (auto_split / identity / anomaly / lineage / review / explain / pairs /
+  confidence_majority / cluster-confidence) would silently drop or diverge it under pressure.
+  Mitigation: enumerate conservatively (any doubt -> needs_artifacts True -> classic/duckdb); the
+  short-circuit only triggers on the explicit flag; a test asserts each condition gates.
+- **Golden provenance degradation (3)** — golden default-on with a full-`ClusterProvenance` consumer
+  would silently lose richness. Mitigation: the golden wiring declines to `build_golden_records_batch`
+  when full provenance is consumed.
 - **#1604 dependency** — golden_fused not yet on main; execution branches off `feat/golden-fused-kernel`
   and rebases onto main once it lands.
