@@ -104,6 +104,20 @@ def test_vlm_classifier_transport_failure_raises_valueerror():
     assert len(send.calls) == 3  # exhausted the retry budget
 
 
+def test_vlm_classifier_parse_failure_raises_and_is_not_retried():
+    # A successful-but-malformed response: parse is deterministic (temp 0), so the
+    # ValueError propagates and is NOT retried (would just reproduce the bad JSON).
+    send = scripted_transport([_msg("not json at all")])
+    with pytest.raises(ValueError):
+        VLMClassifier(transport=send, model="gpt-4o", max_attempts=3).classify(PAGES)
+    assert len(send.calls) == 1
+
+
+def test_vlm_classifier_rejects_bad_max_attempts():
+    with pytest.raises(ValueError):
+        VLMClassifier(transport=scripted_transport([]), model="gpt-4o", max_attempts=0)
+
+
 # ---------------------------------------------------------------- VLMTemplateExtractor
 
 
@@ -137,6 +151,34 @@ def test_vlm_template_extractor_transport_failure_wraps_not_raises():
     assert out.error is not None  # WRAPPED, never raised (batch-continues contract)
 
 
+def test_vlm_template_extractor_parse_failure_wraps_and_is_not_retried():
+    # A successful-but-malformed response: WRAP into StructuredResult(error=...),
+    # never raise, and don't retry a deterministic parse failure.
+    send = scripted_transport([_msg("not json at all")])
+    t = get_template("invoice")
+    out = VLMTemplateExtractor(transport=send, model="gpt-4o",
+                               max_attempts=3).extract_structured(PAGES, t)
+    assert out.header is None and out.line_items == []
+    assert out.error is not None
+    assert len(send.calls) == 1
+
+
+def test_vlm_template_extractor_receipt_flat_no_line_items():
+    # Receipt has empty line_item_fields -> the flat branch of the instruction, and
+    # any stray line_items in the response are forced to [].
+    resp = {"header": {"values": {"merchant_name": "Cafe", "total_amount": "9"},
+                       "confidence": {}},
+            "line_items": [{"values": {"description": "ignored"}, "confidence": {}}]}
+    send = scripted_transport([_msg(json.dumps(resp))])
+    t = get_template("receipt")
+    out = VLMTemplateExtractor(transport=send, model="gpt-4o").extract_structured(PAGES, t)
+    assert out.error is None
+    assert out.header.values["merchant_name"] == "Cafe"
+    assert out.line_items == []  # flat doctype ignores stray items
+    instruction = send.calls[0]["messages"][0]["content"][0]["text"]
+    assert "merchant_name" in instruction and '"line_items": []' in instruction
+
+
 # ---------------------------------------------------------------- VLMFallbackExtractor
 
 
@@ -156,6 +198,17 @@ def test_vlm_fallback_extractor_two_calls_suggest_then_extract():
     assert len(send.calls) == 2  # suggest then extract
 
 
+def test_vlm_fallback_extractor_suggest_failure_wraps_not_raises():
+    # suggest_schema RAISES on transport-exhaust, but the fallback seam's contract
+    # is ExtractResult -- so a suggest failure must WRAP (batch-continues in Task 6),
+    # never bubble out of the batch loop. No extract call is made.
+    send = scripted_transport([OSError("boom"), OSError("boom"), OSError("boom")])
+    out = VLMFallbackExtractor(transport=send, model="gpt-4o").suggest_and_extract(PAGES)
+    assert isinstance(out, ExtractResult)
+    assert out.rows == [] and out.error is not None
+    assert len(send.calls) == 3  # suggest retried to exhaustion, no extract call
+
+
 # ---------------------------------------------------------------- resolve_structured
 
 
@@ -170,3 +223,5 @@ def test_resolve_structured_returns_three_protocol_objects(monkeypatch):
     assert isinstance(clf, Classifier)
     assert isinstance(tex, TemplateExtractor)
     assert isinstance(fb, FallbackExtractor)
+    # all three share ONE resolved transport (the stated purpose of resolve_structured)
+    assert clf._send is tex._send is fb._send

@@ -24,9 +24,11 @@ class VLMClassifier:
 
     def __init__(self, *, transport: Transport, model: str = "gpt-4o",
                  max_attempts: int = 3):
+        if max_attempts < 1:  # match VLMExtractor / VLMTemplateExtractor policy
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
         self._send = transport
         self._model = model
-        self._max_attempts = max(1, max_attempts)
+        self._max_attempts = max_attempts
 
     def _payload(self, pages: list[PageImage]) -> dict:
         content = [{"type": "text", "text": classify_prompt()}] + image_blocks(pages)
@@ -58,7 +60,14 @@ class VLMFallbackExtractor:
         self._model = model
 
     def suggest_and_extract(self, pages: list[PageImage]) -> ExtractResult:
-        schema = suggest_schema(pages, transport=self._send, model=self._model)
+        # suggest_schema RAISES on transport-exhaust / malformed schema JSON, but the
+        # seam's contract is ExtractResult -- WRAP so a suggest failure batch-continues
+        # (report.errors in Task 6) instead of throwing out of the loop, matching the
+        # extract half and VLMTemplateExtractor.
+        try:
+            schema = suggest_schema(pages, transport=self._send, model=self._model)
+        except ValueError as e:
+            return ExtractResult(rows=[], error=f"suggest: {e}")
         # transport is provided, so api_key is never consulted (placeholder ok).
         return VLMExtractor(api_key="", model=self._model,
                             transport=self._send).extract(pages, schema)
