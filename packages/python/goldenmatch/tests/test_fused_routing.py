@@ -16,6 +16,7 @@ from goldenmatch.config.schemas import (
 from goldenmatch.core.fused_routing import (
     config_needs_artifacts,
     estimate_classic_match_peak_rss_gb,
+    maybe_route_fused_match,
 )
 
 
@@ -247,3 +248,174 @@ def test_all_clear_returns_false():
         output=OutputConfig(lineage_provenance=False),
     )
     assert config_needs_artifacts(cfg) is False
+
+
+# --- Stage D: maybe_route_fused_match (the match-routing post-step) ------------
+#
+# All four conditions (kill-switch off, not needs_artifacts, COVERED, under
+# pressure) must hold for True. Each falsified in isolation -> False. The routing
+# decision is orthogonal to `config_needs_artifacts` here -- `needs_artifacts` is
+# passed in already-computed (the controller folds the caller hint + config gate),
+# so these tests drive it directly.
+
+from types import SimpleNamespace  # noqa: E402
+
+from goldenmatch.config.schemas import (  # noqa: E402
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
+from goldenmatch.core.complexity_profile import BlockingProfile  # noqa: E402
+from goldenmatch.core.runtime_profile import RuntimeProfile  # noqa: E402
+
+
+def _covered_match_config(n_fields: int = 1, threshold: float = 0.85) -> GoldenMatchConfig:
+    """A config COVERED by the single-key fused entry: static single-key blocking
+    + one weighted matchkey with covered scorers + a threshold."""
+    fields = [
+        MatchkeyField(field=f"c{i}", scorer="jaro_winkler", weight=1.0)
+        for i in range(n_fields)
+    ]
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["blk"])]),
+        matchkeys=[MatchkeyConfig(name="mk", type="weighted", fields=fields, threshold=threshold)],
+    )
+
+
+def _uncovered_match_config() -> GoldenMatchConfig:
+    """A probabilistic config -- OUT of the fused v1 boundary (no EMResult at
+    decision time), so not covered by match_fused_ready / _multipass_ready."""
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["blk"])]),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk",
+                type="probabilistic",
+                fields=[MatchkeyField(field="c0", scorer="jaro_winkler")],
+            )
+        ],
+    )
+
+
+def _profile(est_pairs: int = 100_000_000, block_max: int = 43) -> SimpleNamespace:
+    return SimpleNamespace(
+        blocking=BlockingProfile(total_comparisons=est_pairs, block_sizes_max=block_max)
+    )
+
+
+def _runtime(available_ram_gb: float) -> RuntimeProfile:
+    return RuntimeProfile(available_ram_gb=available_ram_gb, cpu_count=4, disk_free_gb=100.0)
+
+
+def test_routes_when_covered_pressure_safe():
+    # est at 10M/100M pairs/1 col ~= 5.19 GB; RAM 1 GB -> threshold 0.65 GB -> pressure.
+    assert (
+        maybe_route_fused_match(
+            config=_covered_match_config(),
+            profile=_profile(),
+            runtime=_runtime(1.0),
+            n_rows=10_000_000,
+            needs_artifacts=False,
+        )
+        is True
+    )
+
+
+def test_not_covered_declines():
+    # Probabilistic config -> not covered by the fused single/multi-pass entry ->
+    # declines even under extreme pressure.
+    assert (
+        maybe_route_fused_match(
+            config=_uncovered_match_config(),
+            profile=_profile(),
+            runtime=_runtime(0.001),
+            n_rows=10_000_000,
+            needs_artifacts=False,
+        )
+        is False
+    )
+
+
+def test_no_pressure_declines():
+    # Huge available RAM -> est well under available_ram_gb * frac -> declines.
+    assert (
+        maybe_route_fused_match(
+            config=_covered_match_config(),
+            profile=_profile(),
+            runtime=_runtime(10_000.0),
+            n_rows=10_000_000,
+            needs_artifacts=False,
+        )
+        is False
+    )
+
+
+def test_needs_artifacts_declines():
+    # needs_artifacts short-circuits BEFORE coverage/pressure -> declines even
+    # covered + under pressure.
+    assert (
+        maybe_route_fused_match(
+            config=_covered_match_config(),
+            profile=_profile(),
+            runtime=_runtime(1.0),
+            n_rows=10_000_000,
+            needs_artifacts=True,
+        )
+        is False
+    )
+
+
+def test_kill_switch(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_MATCH_FUSED", "0")
+    assert (
+        maybe_route_fused_match(
+            config=_covered_match_config(),
+            profile=_profile(),
+            runtime=_runtime(1.0),
+            n_rows=10_000_000,
+            needs_artifacts=False,
+        )
+        is False
+    )
+
+
+def test_multipass_covered_routes():
+    # The multi-pass fused entry is also a coverage path.
+    cfg = _covered_match_config()
+    cfg.blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=["blk"]), BlockingKeyConfig(fields=["c0"])],
+    )
+    assert (
+        maybe_route_fused_match(
+            config=cfg,
+            profile=_profile(),
+            runtime=_runtime(1.0),
+            n_rows=10_000_000,
+            needs_artifacts=False,
+        )
+        is True
+    )
+
+
+def test_count_score_cols_widens_estimate():
+    # More comparison fields -> larger frame term -> the pressure trigger is easier
+    # to hit. At the boundary RAM where 1 field declines, 8 fields should route.
+    import goldenmatch.core.fused_routing as fr
+
+    one = fr.estimate_classic_match_peak_rss_gb(1_000_000, 5_000_000, 500, 1)
+    eight = fr.estimate_classic_match_peak_rss_gb(1_000_000, 5_000_000, 500, 8)
+    assert eight > one
+    # RAM chosen between the two ests / frac so 8 cols routes, 1 col doesn't.
+    frac = 0.65
+    ram = (one + eight) / 2 / frac
+    prof = _profile(est_pairs=5_000_000, block_max=500)
+    assert maybe_route_fused_match(
+        config=_covered_match_config(n_fields=8), profile=prof,
+        runtime=_runtime(ram), n_rows=1_000_000, needs_artifacts=False,
+    ) is True
+    assert maybe_route_fused_match(
+        config=_covered_match_config(n_fields=1), profile=prof,
+        runtime=_runtime(ram), n_rows=1_000_000, needs_artifacts=False,
+    ) is False

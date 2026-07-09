@@ -137,3 +137,82 @@ def config_needs_artifacts(config) -> bool:
     if output is not None and output.lineage_provenance:
         return True
     return False
+
+
+# --- Stage D: the match-routing post-step -------------------------------------
+
+# Fraction of available RAM the estimated classic peak must exceed to route match
+# to the fused kernel. 0.65 leaves headroom for the OS + allocator slack; env
+# ``GOLDENMATCH_FUSED_PRESSURE_FRACTION`` tunes it without a code change.
+_DEFAULT_PRESSURE_FRACTION = 0.65
+
+
+def _count_score_cols(config) -> int:
+    """Number of matchkey comparison fields in the covered weighted matchkey.
+
+    Reads the SINGLE covered ``weighted`` matchkey via
+    ``fused_match._covered_weighted_matchkey`` (the same gate the single-key and
+    multi-pass fused entries use) and counts its comparison fields -- the columns
+    the classic scorer materializes. Floors to 1 (a matchkey always materializes
+    >=1 score column); callers only reach this after confirming coverage, so the
+    None branch is defensive.
+    """
+    from goldenmatch.core.fused_match import _covered_weighted_matchkey
+
+    mk = _covered_weighted_matchkey(config)
+    fields = getattr(mk, "fields", None) if mk is not None else None
+    return len(fields) if fields else 1
+
+
+def maybe_route_fused_match(
+    *,
+    config,
+    profile,
+    runtime,
+    n_rows: int,
+    needs_artifacts: bool,
+) -> bool:
+    """Decide whether to route the match stage to the fused kernel.
+
+    Returns True only when ALL hold:
+
+    - ``GOLDENMATCH_MATCH_FUSED`` is not the kill-switch (``0``/``false``/``off``);
+    - ``needs_artifacts`` is False (no caller-intent / config-driven divergence --
+      the controller folds the caller hint + ``config_needs_artifacts`` into it);
+    - the config is COVERED by the fused single-key OR multi-pass entry
+      (``match_fused_ready`` / ``match_fused_multipass_ready``). The
+      Fellegi-Sunter branch is deliberately OUT of v1 -- no trained ``EMResult``
+      exists at decision time -- so a probabilistic config is not covered here;
+    - the estimated CLASSIC peak RSS exceeds ``available_ram_gb * frac`` (memory
+      pressure). Match routing is a capacity-survival escape hatch, not a broad
+      default; below the pressure line the classic path runs unchanged.
+
+    ``n_rows`` is passed explicitly: the controller holds the authoritative
+    full-data row count as its local ``n_rows`` at the insertion point.
+    ``profile.blocking.estimated_pair_count`` (property) + ``block_sizes_max``
+    (field) carry the full-scale blocking signals (extrapolated or measured).
+    """
+    import os
+
+    if os.environ.get("GOLDENMATCH_MATCH_FUSED", "").lower() in {"0", "false", "off"}:
+        return False
+    if needs_artifacts:
+        return False
+
+    from goldenmatch.core.fused_match import match_fused_multipass_ready, match_fused_ready
+
+    if not (match_fused_ready(config) or match_fused_multipass_ready(config)):
+        return False  # FS branch out of v1 (no EMResult at decision time).
+
+    frac = float(
+        os.environ.get(
+            "GOLDENMATCH_FUSED_PRESSURE_FRACTION", str(_DEFAULT_PRESSURE_FRACTION)
+        )
+    )
+    est = estimate_classic_match_peak_rss_gb(
+        n_rows=n_rows,
+        est_pairs=profile.blocking.estimated_pair_count,
+        block_max=profile.blocking.block_sizes_max,
+        n_score_cols=_count_score_cols(config),
+    )
+    return est > runtime.available_ram_gb * frac

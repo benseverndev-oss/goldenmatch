@@ -507,6 +507,14 @@ def dedupe_df(
                         allow_red_config=allow_red_config,
                         planning_effort=planning_effort,
                         throughput=throughput,
+                        # dedupe_df has no lineage/review/explain/anomaly kwargs and
+                        # passes no output dir to run_dedupe_df, so it can NEVER
+                        # request a caller-intent artifact -> fused match is allowed
+                        # (the config-driven divergence gate still hard-blocks in the
+                        # controller). File-based dedupe()/CLI/MCP paths don't thread
+                        # this, so they default-deny (fused match never routes there
+                        # in v1).
+                        fused_match_allowed=True,
                     )
                 _used_controller = True
 
@@ -761,6 +769,11 @@ def match_df(
                         confidence_required=confidence_required,
                         allow_red_config=allow_red_config,
                         planning_effort=planning_effort,
+                        # No lineage/review/explain/anomaly kwargs on match_df ->
+                        # caller-intent artifacts can't be requested -> fused match
+                        # allowed (config-driven gate still hard-blocks). Non-DF
+                        # entry points default-deny (never route in v1).
+                        fused_match_allowed=True,
                     )
                 _used_controller = True
 

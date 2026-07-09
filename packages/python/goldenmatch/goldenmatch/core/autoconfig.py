@@ -3480,6 +3480,7 @@ def auto_configure_df(
     planning_effort: str | None = None,
     n_rows_full: int | None = None,
     throughput: Any | None = None,
+    fused_match_allowed: bool = False,
 ) -> GoldenMatchConfig:
     """Public auto-configuration entry point (controller-backed).
 
@@ -3670,6 +3671,7 @@ def auto_configure_df(
         allow_red_config=allow_red_config,
         planning_effort=effort,
         throughput=_resolved_tp_cfg,
+        fused_match_allowed=fused_match_allowed,
     )
     # Surface the resolved tier on the committed config for observability
     # (telemetry, YAML round-trip). No-op for the default "normal".
