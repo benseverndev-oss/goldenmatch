@@ -133,7 +133,7 @@ git commit -m "feat(goldencheck): add dtype/cast/member_count to the Frame seam 
   - `int_cast = non_null.cast("int", strict=False)`; `int_count = len(non_null) - int_cast.null_count()`.
   - The SHOULD_BE_STRING gate: `if dt in ("int", "float"):` (was signed-ints+floats only — `"int"` is signed, `"uint"` is EXCLUDED, so byte-identical; a `UInt` column is not flagged, same as today).
   - Keep all thresholds/messages/Finding construction UNCHANGED.
-  - Remove `from goldencheck._polars_lazy import pl` (no longer referenced).
+  - **Drop BOTH the `pl` import AND the `frame: pl.DataFrame` annotation** → `def profile(self, frame, column: str, *, context: dict | None = None)` (matching the P0-ported `nullability`/`cardinality`/`uniqueness`). Leaving `: pl.DataFrame` keeps a `pl` reference that the Step-3 polars-free grep flags.
 
 - [ ] **Step 2: Run the existing test UNEDITED (parity gate).**
 ```bash
@@ -170,7 +170,7 @@ git commit -m "refactor(goldencheck): port type_inference onto the Frame seam (p
   - Clustering block UNCHANGED (`values` is `list[str]`; native/`_python_clusters` untouched).
   - `affected_rows=col.member_count(variants)` (was `int(col.is_in(variants).sum())`).
   - Keep everything else (messages, metadata, `_python_clusters`, rapidfuzz import) UNCHANGED.
-  - Remove `from goldencheck._polars_lazy import pl` (no longer referenced).
+  - **Drop BOTH the `pl` import AND the `frame: pl.DataFrame` annotation** → `def profile(self, frame, column: str, *, context: dict | None = None)` (matching the P0 profilers). Leaving `: pl.DataFrame` keeps a `pl` reference the Step-3 grep flags.
 
 - [ ] **Step 2: Run the existing test UNEDITED (parity gate).**
 ```bash
