@@ -13,7 +13,7 @@
 **Ground-truth reference (read before starting):**
 - `packages/python/goldenmatch/goldenmatch/core/golden.py` — `merge_field:62` (returns `(value, confidence, source_index)`, `source_index` = positional index into the values list), the 8 `_strategy` helpers (`:125`–`:305`), `build_golden_records_batch:784`, `_multi_df_from_frames:1275`.
 - `packages/python/goldenmatch/goldenmatch/core/survivorship/resolve.py` — `resolve_cluster` (the oracle for covered configs; walks `resolution_order`, one confidence per unit, `__golden_confidence__ = sum(confidences)/len`).
-- `packages/python/goldenmatch/goldenmatch/core/survivorship/groups.py` (`group_winner`), `conditions.py` (`build_resolution_order`, `select_conditional_strategy`, `eval_predicate`), `winner.py`.
+- `packages/python/goldenmatch/goldenmatch/core/survivorship/winner.py` (`group_winner`/`_ranking`/`GroupResult` at `:50/:21/:8`), `groups.py` (group *detection* only — `build_field_groups`), `conditions.py` (`build_resolution_order`, `select_conditional_strategy`, `eval_predicate`).
 - `packages/python/goldenmatch/goldenmatch/core/fused_match.py` — the sibling pattern (gate + `run_*_arrow` + `_native` dispatch + decline-to-None).
 - `packages/rust/extensions/native/src/fused.rs`, `block.rs`, `lib.rs` — the sibling kernel + registration.
 
@@ -24,6 +24,8 @@
 - **Build the kernel:** `python scripts/build_native.py` (in-tree build → `goldenmatch/_native.pyd`). Rust unit tests: `cargo test --lib` from `packages/rust/extensions/native/`.
 - **Run Python tests (Windows):** `.venv/Scripts/python.exe -m pytest packages/python/goldenmatch/tests/test_golden_fused.py -v` from repo root. Set `POLARS_SKIP_CPU_CHECK=1 PYTHONIOENCODING=utf-8`.
 - **Parity oracle:** every parity test builds a cluster+frame, sorts within-cluster by `__row_id__` ascending (spec §4.3), runs `run_golden_fused_arrow` AND `build_golden_records_batch` on the identical input, and asserts frame + provenance equality.
+- **Oracle is the EXACT survivorship path, NOT the fast columnar path.** `build_golden_records_batch` has three internal paths with different confidence semantics; the polars-native fast path *approximates* `most_complete` confidence (0.7 for any multi-distinct cluster, not the exact `_most_complete` unique-longest→1.0). The fused path **declines** fast-path-eligible configs (§2/§7 of the spec) — reuse `golden.py::_polars_native_eligible` in `run_golden_fused_arrow` to return `None` when the config+`quality_scores` would route to that path. So every parity test must build a config that routes the reference to the EXACT path: use an explicit `field_rules` entry, a `field_group`, `cluster_overrides`, or pass a non-None `quality_scores` — a bare `default_strategy="most_complete"` with no other feature routes to the approximating fast path and is out of scope.
+- **`run_golden_fused_arrow` filters singletons/oversized itself** (`size > 1 & ~oversized`), matching `_multi_df_from_frames`, so it accepts an unfiltered cluster frame and emits one golden row per multi-member cluster. A parity test should include a singleton + an oversized cluster and assert both are excluded on both sides.
 - **Commit after every green step.** Branch: `feat/golden-fused-kernel` (already created off fresh `origin/main`).
 - **Strategy id enum** (Rust `u8`, shared with Python `_GOLDEN_STRATEGY_IDS`):
   `most_complete=0, majority_vote=1, source_priority=2, most_recent=3, first_non_null=4, longest_value=5, unanimous_or_null=6, confidence_majority=7`.
@@ -146,6 +148,16 @@ def golden_fused_ready(rules: GoldenRulesConfig) -> bool:
 
 Note: Stage 6 adds `golden_fused_predicate.py`. Until then, guard the import so list-form conditionals decline. For Stage 0, add a stub `predicate_lowerable` that returns `False` (so any `when:` declines) — see Task 6.1.
 
+The **fast-path decline** is NOT in `golden_fused_ready(rules)` (which lacks `quality_scores`); it lives in `run_golden_fused_arrow` (Task 0.3), which reuses `golden.py::_polars_native_eligible(...)` with the resolved config + `quality_scores` in scope and returns `None` when eligible. Add a test for it there:
+
+```python
+def test_run_declines_fast_path_eligible_simple_config():
+    df = _cluster_frame()  # from Task 0.3
+    # simple most_complete default, no field_rules/groups/overrides, no quality_scores
+    rules = GoldenRulesConfig(default_strategy="most_complete")
+    assert run_golden_fused_arrow(df, rules) is None  # routes to fast columnar path
+```
+
 - [ ] **Step 4: Run to verify pass** (add a temporary `golden_fused_predicate.py` with `def predicate_lowerable(_): return False`)
 
 Run: `.venv/Scripts/python.exe -m pytest packages/python/goldenmatch/tests/test_golden_fused.py -k gate -v`
@@ -211,8 +223,14 @@ def _cluster_frame():
 
 def test_most_complete_matches_reference():
     df = _cluster_frame()
-    rules = GoldenRulesConfig(default_strategy="most_complete")
-    # reference: build_golden_records_batch wants __cluster_id__ present
+    # EXPLICIT field_rule forces the reference off the approximating fast columnar
+    # path onto the exact merge_field path (see the oracle note in Conventions).
+    # A bare default_strategy="most_complete" would route to the fast path and is
+    # DECLINED by run_golden_fused_arrow (returns None).
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
     ref = build_golden_records_batch(df, rules)               # list[dict]
     got = run_golden_fused_arrow(df, rules)                   # pl.DataFrame
     # compare on (cluster_id, name, confidence)
@@ -330,7 +348,7 @@ def test_scalar_strategy_matches_reference(strategy, expected_conf_rule):
 
 - [ ] **Step 1: Failing parity test** with a date column + `GoldenFieldRule(strategy="most_recent", date_column="dt")`. Include a date-tie fixture (conf 0.5) and a null-date row (dropped).
 - [ ] **Step 2: Run → fail.**
-- [ ] **Step 3: Implement.** Python passes `date: i64` + a `date_null_mask` per most_recent column (spec §4.2 — explicit mask, not a sentinel). Parse dates via the reference path (whatever `resolve_cluster._dates_for` yields; usually `pl` date → physical i64). Kernel mirrors `_most_recent` (`golden.py:185`): drop rows where value-null OR date-null, stable-sort by date desc, top; tie on top date → conf 0.5 else 1.0; none eligible → `-1` conf 0.0. **Stable sort** — Rust `sort_by` is unstable; use `sort_by_key` with the original index as the secondary key to match Python's stable `list.sort`.
+- [ ] **Step 3: Implement.** Python passes `date: i64` + a `date_null_mask` per most_recent column (spec §4.2 — explicit mask, not a sentinel). Parse dates via the reference path (whatever `resolve_cluster._dates_for` yields; usually `pl` date → physical i64). Kernel mirrors `_most_recent` (`golden.py:185`): drop rows where value-null OR date-null, stable-sort by date desc, top; tie on top date → conf 0.5 else 1.0; none eligible → `-1` conf 0.0. **Stable sort direction is load-bearing** — Python's `sort(key=date, reverse=True)` is stable, so among rows tied on the top date the FIRST-occurring (lowest original index) wins. In Rust, sort by `(date DESC, original_index ASC)` — a naive "reverse the whole comparator" would flip the tie to the LAST occurrence and pick the wrong representative index (breaking provenance).
 - [ ] **Step 4: Build + run → pass. Step 5: Commit.**
 
 ---
@@ -369,7 +387,7 @@ def test_scalar_strategy_matches_reference(strategy, expected_conf_rule):
 
 - [ ] **Step 1: Failing parity tests**, one per group strategy (`most_complete`, `source_priority`, `most_recent`, `anchor`) + one `allow_fill=True`. Reference must route through `resolve_cluster` (survivorship path) — build the frame so `build_golden_records_batch` takes that path (any `field_groups` present forces it). Assert every group column's value + the single group confidence contribution.
 - [ ] **Step 2: Run → fail.**
-- [ ] **Step 3: Implement.** Python passes per-group: column indices, strategy, `source_code`/`date`+mask/anchor-column-index as needed, `allow_fill`. Kernel mirrors `group_winner` (`groups.py`, via `winner.py`): rank rows (populated-count from the group columns' null masks / source rank / date / anchor-present), pin one winner index across all group columns; with `allow_fill`, per-column back-fill from the next-best ranked row that has the column. Confidence `base = (winner_populated + n_filled)/len(columns)`, `×0.7` on tie. Emit ONE confidence entry for the group (spec §8; `resolve.py:100`).
+- [ ] **Step 3: Implement.** Python passes per-group: column indices, strategy, `source_code`/`date`+mask/anchor-column-index as needed, `allow_fill`. Kernel mirrors `winner.py::group_winner`: rank rows (populated-count from the group columns' null masks / source rank / date / anchor-present), pin one winner index across all group columns; with `allow_fill`, per-column back-fill from the next-best ranked row that has the column. Confidence `base = (winner_populated + n_filled)/len(columns)`, `×0.7` on tie. Emit ONE confidence entry for the group (spec §8; `resolve.py:100`).
 - [ ] **Step 4: Build + run → pass. Step 5: Commit.**
 
 ---

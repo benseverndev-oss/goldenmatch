@@ -53,6 +53,23 @@ common config surface — so a covered dedupe -> golden workload keeps its ~2x c
 - `custom:<name>` (plugin strategies — call back into Python)
 - `use_llm_for_ambiguous` (LLM — calls out)
 - any conditional `when:` predicate that does not lower to the kernel IR (see 6.3)
+- **configs eligible for the polars-native fast columnar path**
+  (`_build_golden_records_polars_native` / `build_golden_records_df`): a *simple*
+  `most_complete`/`first_non_null` default with no `field_rules`, no `field_groups`, no
+  `cluster_overrides`, and no `quality_scores`. Two reasons: (1) that path is **already** a
+  low-RSS columnar select (no `multi_df`, no per-cluster dicts) — there is no capacity win to
+  capture; (2) it **approximates** `most_complete` confidence (0.7 for any multi-distinct cluster,
+  not the exact `_most_complete` unique-longest→1.0), so a kernel replicating `merge_field`
+  exactly would diverge from it. Declining it makes the byte-parity oracle unambiguous.
+
+### The byte-parity oracle
+
+For every covered config, the oracle is the **exact survivorship semantics** — `resolve_cluster`
+(the per-cluster `merge_field` / `group_winner` path) — NOT the approximating polars-native fast
+path. The covered surface (any survivorship-activating feature, or `most_complete` +
+`quality_scores`) always routes `build_golden_records_batch` to that exact path, and the
+fast-path-eligible simple configs are declined (above), so the kernel replicates `merge_field`
+confidence exactly with no per-path ambiguity.
 
 ### Explicit non-goals (deferred to later PRs)
 
@@ -199,7 +216,7 @@ The kernel ranks rows once per group (populated-count from the group columns' nu
 columns — or, with `allow_fill`, per-column back-fill indices from the next-best ranked row that
 has the column. The group contributes **one** confidence to the cluster mean
 (`base = (winner_populated + n_filled) / len(columns)`; `x0.7` on tie), matching
-`core/survivorship/groups.py::group_winner` and `resolve.py`.
+`core/survivorship/winner.py::group_winner` (`groups.py` is group *detection*) and `resolve.py`.
 
 ### 6.3 Conditional field_rules (predicate IR)
 
@@ -244,8 +261,13 @@ Thread into the tie-breaks (`most_complete`/`longest` length-tie -> highest `qwe
 - no `validate_with`, no `custom:*`, no `use_llm_for_ambiguous`; and
 - every conditional `when:` predicate lowers to the IR (6.3).
 
-Otherwise False -> caller falls through to `build_golden_records_batch`. Same decline-loudly
-posture as `match_fused_ready`.
+`run_golden_fused_arrow` additionally returns `None` (decline) when the resolved config +
+`quality_scores` would route the reference to the **polars-native fast columnar path** — reuse
+`golden.py::_polars_native_eligible` (which has `quality_scores` in scope) rather than
+re-deriving. This is the fast-path decline from §2.
+
+Otherwise -> caller falls through to `build_golden_records_batch`. Same decline-loudly posture as
+`match_fused_ready`.
 
 ## 8. Output materialization (Python)
 
@@ -295,9 +317,14 @@ New except `lib.rs` (register) and a docs sweep:
   `group_winner` case-for-case; the parity matrix (incl. mixed-type fixtures) is the gate.
 - **Predicate IR completeness.** Mitigation: cover the lowerable subset, decline the rest loudly;
   parse/validate stays in the vetted `conditions.py`.
+- **Multi-path oracle / confidence semantics.** `build_golden_records_batch` has three internal
+  paths (polars-native fast, survivorship-native, slow `merge_field`) with DIFFERENT confidence
+  semantics — the fast path approximates `most_complete` confidence. Resolved by declining
+  fast-path-eligible configs (§2, §7) so the oracle is unambiguously the exact `merge_field`
+  path. The plan must confirm, per covered config, that the reference routes to that exact path.
 - **Within-cluster ordering (4.3)** governs every order-dependent tie-break and the representative
-  index — the plan pins the per-path oracle ordering and confirms the kernel matches it before any
-  kernel code is written. This is the highest-risk parity item.
+  index — the plan pins `__row_id__`-ascending ordering and confirms the kernel matches it before
+  any kernel code is written. This is the highest-risk parity item.
 - **Confirming the exact `__golden_confidence__` aggregation** (denominator = units, not columns)
   and the `confidence_majority` edge-iteration-order representative index against source before
   coding — pinned in the implementation plan.
