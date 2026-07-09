@@ -43,9 +43,24 @@ common config surface — so a covered dedupe -> golden workload keeps its ~2x c
   - `quality_weighting` (per-cell quality scores)
 - **Output surface: golden frame + provenance.** All user columns at their **native dtype** +
   `__cluster_id__` + `__golden_confidence__`; plus, when `provenance=True`, a per-field
-  `source_row_id` provenance frame.
+  `source_row_id` provenance frame (returned as a `(golden_df, records)` tuple, where each
+  `records` field dict carries `{value, confidence, source_row_id}`, byte-identical at the field
+  level to `build_golden_records_batch(provenance=True)`).
 - Byte-parity tests vs `build_golden_records_batch`, a memory-capped RSS bench proving the
   capacity win, and a Febrl3 dogfood.
+
+### Provenance scope boundary (v1, as-built)
+
+The provenance surface is **per-field `source_row_id`** — exactly what §8 specifies. On
+survivorship-active configs (`field_groups` / conditional `field_rules`), the reference
+`build_golden_records_batch(provenance=True)` ALSO stamps a top-level `__survivorship_prov__`
+(`ClusterProvenance`) key carrying group `tie` flags, `winner_source`, and per-field
+`condition`/`validator`/`dropped_invalid`. The fused path does **not** reproduce that richer
+object (it would need the kernel to return group-tie + fired-clause data). This is a deliberate,
+documented boundary: the fused `records` are byte-identical at the field level (value +
+confidence + `source_row_id`) and fully byte-identical for non-survivorship configs; the
+`__survivorship_prov__` enrichment is a follow-up, and the reference's own
+`golden_records_to_provenance` degrades gracefully when it's absent.
 
 ### Declined -> classic Polars path (loud, never silent)
 
