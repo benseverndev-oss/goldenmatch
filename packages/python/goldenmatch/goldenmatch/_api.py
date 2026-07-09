@@ -177,6 +177,17 @@ class DedupeResult:
     # when heal=True (else None).
     suggestions: list = field(default_factory=list)
     heal_trail: list | None = None
+    # Fused-routing run-outcome markers (spec 2026-07-09). Originate in the
+    # pipeline result dict; surfaced here (not in serialize_telemetry, which
+    # never receives the result dict) so a caller/telemetry can observe the
+    # fused path. `golden_fused_used`: the fused golden kernel genuinely built
+    # this run's golden records (vs a silent decline to classic).
+    # `match_fused_capacity_mode`: the run short-circuited to the fused match
+    # kernel under est-RSS pressure and therefore SHED scored_pairs + cluster
+    # confidence/bottleneck/lineage (clusters + golden stay byte-identical to
+    # classic). The marker makes that capacity-survival tradeoff never silent.
+    golden_fused_used: bool = False
+    match_fused_capacity_mode: bool = False
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -394,6 +405,8 @@ def dedupe(
             result.get("postflight_report"), _mem
         ),
         memory_stats=_mem,
+        golden_fused_used=bool(result.get("golden_fused_used", False)),
+        match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
 
 
@@ -663,6 +676,8 @@ def dedupe_df(
             else None
         ),
         throughput_posture=result.get("throughput_posture"),
+        golden_fused_used=bool(result.get("golden_fused_used", False)),
+        match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
 
     # Config-suggestion (healer) surface. ADVISORY — wrapped so a healer failure
