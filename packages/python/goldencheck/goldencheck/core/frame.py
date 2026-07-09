@@ -21,6 +21,10 @@ class Column(Protocol):
     def unique(self) -> Column: ...
     def sort(self) -> Column: ...
     def to_list(self) -> list: ...
+    @property
+    def dtype(self) -> str: ...
+    def cast(self, kind: str, *, strict: bool = False) -> Column: ...
+    def member_count(self, values: list) -> int: ...
 
 
 @runtime_checkable
@@ -32,6 +36,25 @@ class Frame(Protocol):
     @property
     def native(self) -> Any: ...
     def column(self, name: str) -> Column: ...
+
+
+def _neutral_dtype(dt: Any) -> str:
+    if dt in (pl.Utf8, pl.String):
+        return "str"
+    if dt in (pl.Int8, pl.Int16, pl.Int32, pl.Int64):
+        return "int"
+    if dt in (pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64):
+        return "uint"
+    if dt in (pl.Float32, pl.Float64):
+        return "float"
+    if dt == pl.Date:
+        return "date"
+    if dt == pl.Datetime:
+        return "datetime"
+    return "other"
+
+
+_CAST_KIND = {"float": "Float64", "int": "Int64"}   # strings only; resolved via getattr in cast()
 
 
 class PolarsColumn:
@@ -60,6 +83,17 @@ class PolarsColumn:
 
     def to_list(self) -> list:
         return self._s.to_list()
+
+    @property
+    def dtype(self) -> str:
+        return _neutral_dtype(self._s.dtype)
+
+    def cast(self, kind: str, *, strict: bool = False) -> PolarsColumn:
+        pl_type = getattr(pl, _CAST_KIND[kind])
+        return PolarsColumn(self._s.cast(pl_type, strict=strict))
+
+    def member_count(self, values: list) -> int:
+        return int(self._s.is_in(values).sum())
 
 
 class PolarsFrame:

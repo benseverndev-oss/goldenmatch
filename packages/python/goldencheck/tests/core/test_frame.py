@@ -31,3 +31,34 @@ def test_to_frame_idempotent_and_rejects_other():
     import pytest
     with pytest.raises(TypeError):
         to_frame([1, 2, 3])                            # not a DataFrame/Frame
+
+
+def test_column_dtype_neutral_mapping():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    f = to_frame(pl.DataFrame({
+        "s": ["a"], "i": pl.Series([1], dtype=pl.Int64), "u": pl.Series([1], dtype=pl.UInt32),
+        "f": [1.5], "b": [True],
+    }))
+    assert f.column("s").dtype == "str"
+    assert f.column("i").dtype == "int"
+    assert f.column("u").dtype == "uint"      # DISTINCT from int (byte-identity for type_inference)
+    assert f.column("f").dtype == "float"
+    assert f.column("b").dtype == "other"
+
+
+def test_column_cast_uncastable_to_null():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"x": ["1", "2", "oops"]})).column("x")
+    casted = col.cast("float", strict=False)
+    assert casted.null_count() == 1            # "oops" -> null
+    assert len(casted) - casted.null_count() == 2
+    assert to_frame(pl.DataFrame({"x": ["1", "2"]})).column("x").cast("int", strict=False).to_list() == [1, 2]
+
+
+def test_column_member_count():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"x": ["a", "b", "a", "c", None]})).column("x")
+    assert col.member_count(["a", "c"]) == 3   # a,a,c ; matches int(s.is_in(v).sum())
