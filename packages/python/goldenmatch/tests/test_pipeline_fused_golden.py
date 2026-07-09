@@ -30,7 +30,7 @@ from goldenmatch.config.schemas import (
     MatchkeyConfig,
     MatchkeyField,
 )
-from goldenmatch.core.pipeline import run_dedupe_df
+from goldenmatch.core.pipeline import run_dedupe, run_dedupe_df
 from polars.testing import assert_frame_equal
 
 
@@ -135,3 +135,45 @@ def test_full_provenance_declines_fused(monkeypatch):
     res = run_dedupe_df(df, cfg)
     assert res["golden_fused_used"] is False
     assert res["golden"] is not None and res["golden"].height > 0
+
+
+def _write_nonstring_csv(path) -> None:
+    """CSV with a NON-string golden column (`age` Int). The file path
+    (scan_csv) infers native dtypes and does NOT pre-cast user columns to Utf8
+    (unlike run_match's _cast_user_cols_to_str), so the classic slow golden path
+    forces `age` to String while the fused kernel would preserve Int64 -- the
+    exact byte-identity divergence the Utf8 cast in _try_fused_golden fixes."""
+    lines = ["name,email,zip,age"]
+    for c in range(15):
+        email = f"cluster{c}@example.com"
+        for m in range(3):
+            name = f"Person {c}" + ("." if m % 2 else "")
+            lines.append(f"{name},{email},100{c % 9:02d},{30 + c}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf8")
+
+
+@requires_kernel
+def test_file_path_nonstring_golden_byte_identical(tmp_path, monkeypatch):
+    """The file entry point (run_dedupe / scan_csv native dtypes) with a
+    non-string golden column: fused==classic on values AND dtypes (both Utf8
+    after the cast fix), fused genuinely used. This is the case that hid the
+    dtype divergence -- dedupe_df pre-casts, run_dedupe does not."""
+    csv_path = tmp_path / "people.csv"
+    _write_nonstring_csv(csv_path)
+    cfg = _slow_path_config()
+
+    monkeypatch.delenv("GOLDENMATCH_GOLDEN_FUSED", raising=False)
+    fused = run_dedupe([(str(csv_path), "people")], cfg.model_copy(deep=True))
+    assert fused["golden_fused_used"] is True
+
+    monkeypatch.setenv("GOLDENMATCH_GOLDEN_FUSED", "0")
+    classic = run_dedupe([(str(csv_path), "people")], cfg.model_copy(deep=True))
+    assert classic["golden_fused_used"] is False
+
+    assert fused["golden"] is not None and classic["golden"] is not None
+    # The classic slow path emits `age` as Utf8; the fix makes fused match.
+    assert classic["golden"].schema["age"] == pl.Utf8
+    assert fused["golden"].schema["age"] == pl.Utf8
+    a = fused["golden"].sort("__cluster_id__")
+    b = classic["golden"].sort("__cluster_id__")
+    assert_frame_equal(a, b, check_column_order=False, check_row_order=False)

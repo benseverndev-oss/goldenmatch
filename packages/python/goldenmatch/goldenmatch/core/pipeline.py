@@ -1170,8 +1170,23 @@ def _try_fused_golden(
     # it), so run_golden_fused_arrow returns a DataFrame or None -- never the
     # (df, records) provenance tuple. Guard defensively.
     if isinstance(result, tuple):
-        return result[0]
-    return result
+        result = result[0]
+    if result is None:
+        return None
+    # Byte-identity: the classic SLOW golden path this replaces assembles its
+    # frame from list[dict] records with an all-Utf8 schema_overrides, so its
+    # user columns come back String. The fused kernel PRESERVES the source
+    # dtype. On dedupe_df/run_dedupe_df the entry point already pre-casts every
+    # user column to Utf8 (so this is a no-op there), but the file-based
+    # run_dedupe/dedupe path infers native dtypes via scan_csv/scan_parquet, so
+    # a golden `age` column would come back Int64 (fused) vs String (classic).
+    # Cast the non-internal user columns to Utf8 to match the slow path exactly
+    # (__cluster_id__ Int64 / __golden_confidence__ Float64 already agree). We
+    # deliberately do NOT keep native dtypes -- that would change the slow
+    # path's own behavior, out of scope for a transparent routing flag.
+    return result.with_columns(
+        [pl.col(c).cast(pl.Utf8) for c in result.columns if not c.startswith("__")]
+    )
 
 
 def _run_dedupe_pipeline(
