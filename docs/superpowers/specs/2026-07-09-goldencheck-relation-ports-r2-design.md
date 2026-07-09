@@ -106,7 +106,9 @@ For each of the three profiler modules:
 Thin delegator into `relations.functional_dependency`/`approx_fd` internals. Its test
 (`tests/test_functional_dependencies.py`) imports ONLY the public `functional_dependencies` (verified),
 so the private `_strict_pairs`/`_approx_triples` signatures are free to change. Remove
-`from goldencheck._polars_lazy import pl`. Drop all `pl.DataFrame` annotations.
+`from goldencheck._polars_lazy import pl`; **add `from goldencheck.core.frame import to_frame`** (the
+bridge does NOT currently import it — unlike the three profilers — so it must be added or `to_frame`
+NameErrors). Drop all `pl.DataFrame` annotations.
 - `functional_dependencies(df, *, min_confidence)`: keep the public param `df` (tests pass a raw
   `pl.DataFrame`); add `frame = to_frame(df)`; `n = frame.height`; `if n < 2 or len(frame.columns) < 2:
   return []` (was `df.height`/`df.width`). Call `_strict_pairs(frame, n)` / `_approx_triples(frame, n,
