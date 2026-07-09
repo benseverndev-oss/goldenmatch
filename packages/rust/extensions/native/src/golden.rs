@@ -806,22 +806,34 @@ pub struct GoldenFusedSideChannels {
     qweights: Vec<PyArrowType<ArrayData>>,
     pair_edges: Vec<(i64, i64, i64, f64)>,
     group_specs: Vec<GroupSpec>,
-    // Stage 6: scalar-column resolution order (non-group output-column indices,
-    // in the topological `build_resolution_order` order) + the conditional
-    // (list-form field_rule) specs. `col_order` covers EVERY non-group column
-    // exactly once; conditional columns among them are resolved via
-    // `conditionals` (IR eval -> strategy), the rest via `strategy_ids`. Empty
-    // `conditionals` => no conditional columns (Stages 0-5 behavior, unaffected
-    // by `col_order`, since scalar columns are mutually independent then).
+    // Stage 6/7: the CONTROL-flow resolution plan (scalar resolution order +
+    // conditional specs + cluster overrides) -- separated from the value channels
+    // above so the two concerns don't intermix as later stages touch the carrier.
+    resolution_plan: ResolutionPlan,
+}
+
+/// The kernel's RESOLUTION PLAN, extracted from a Python
+/// `_GoldenFusedResolutionPlan`. Control-flow, not columnar data: it decides
+/// which strategy each scalar column resolves under, and in what order.
+/// - `col_order` (Stage 6): scalar-column resolution order (non-group
+///   output-column indices, in the topological `build_resolution_order` order).
+///   Covers EVERY non-group column exactly once; conditional columns among them
+///   resolve via `conditionals` (IR eval -> strategy), the rest via
+///   `strategy_ids`. Empty `conditionals` => no conditional columns (Stages 0-5
+///   behavior, unaffected by `col_order` since scalar columns are independent
+///   then).
+/// - `conditionals` (Stage 6): the conditional (list-form field_rule) specs.
+/// - `overrides` (Stage 7): per-(cluster, col) strategy overrides, flattened to
+///   `(cluster_id, col_index, strategy_code)`. Bucketed by cluster id (like
+///   `pair_edges`); when resolving a scalar column for that cluster, the override
+///   strategy is dispatched instead of the column's static `strategy_ids` entry
+///   (a column without an override for a cluster keeps its base strategy). Empty
+///   unless the Python caller determined overrides apply (cluster_overrides set
+///   AND survivorship inactive) -- so it is inert for every Stage 0-6 config.
+#[derive(FromPyObject)]
+pub struct ResolutionPlan {
     col_order: Vec<i64>,
     conditionals: Vec<ConditionalSpec>,
-    // Stage 7: per-(cluster, col) strategy overrides, flattened to
-    // `(cluster_id, col_index, strategy_code)`. Bucketed by cluster id (like
-    // `pair_edges`); when resolving a scalar column for that cluster, the override
-    // strategy is dispatched instead of the column's static `strategy_ids` entry.
-    // A column without an override for a cluster keeps its base strategy. Empty
-    // unless the Python caller determined overrides apply (cluster_overrides set
-    // AND survivorship inactive) -- so it is inert for every Stage 0-6 config.
     overrides: Vec<(i64, i64, u8)>,
 }
 
@@ -868,10 +880,13 @@ pub fn golden_fused(
         qweights,
         pair_edges,
         group_specs,
+        resolution_plan,
+    } = side;
+    let ResolutionPlan {
         col_order,
         conditionals,
         overrides,
-    } = side;
+    } = resolution_plan;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
     // values: spans are formed from `cluster_ids` alone, and winner indices are
@@ -1197,6 +1212,19 @@ pub fn golden_fused(
         // codes.
         const RC_UNRESOLVED: i64 = i64::MIN;
 
+        // Stage 7: ONE reusable per-cluster override buffer, allocated outside the
+        // span loop and ONLY when overrides exist. The dominant Stage 0-6 path
+        // (`have_overrides == false`) leaves it empty and never touches it, so
+        // there is zero per-cluster allocation there (this kernel's whole thesis
+        // is allocator behavior). When overrides DO apply it is `.fill(None)`-reset
+        // per span and repopulated for that cluster.
+        let have_overrides = !overrides_by_cluster.is_empty();
+        let mut override_strat: Vec<Option<u8>> = if have_overrides {
+            vec![None; n_output_cols]
+        } else {
+            Vec::new()
+        };
+
         for &(off, size, cid) in &spans {
             // Per-column resolved winner CODE for THIS cluster (for conditional IR
             // eval). Set as each column resolves; conditionals read only
@@ -1205,13 +1233,16 @@ pub fn golden_fused(
 
             let edges = edges_by_cluster.get(&cid).unwrap_or(&no_edges);
 
-            // Stage 7: this cluster's per-column strategy overrides (col -> strat),
-            // if any. `override_strat[col]` = Some(s) means dispatch strategy `s`
-            // for that column INSTEAD of `strategy_ids[col]` (or a conditional).
-            let mut override_strat: Vec<Option<u8>> = vec![None; n_output_cols];
-            if let Some(ovs) = overrides_by_cluster.get(&cid) {
-                for &(col, strat) in ovs {
-                    override_strat[col] = Some(strat);
+            // Stage 7: fill this cluster's per-column overrides (col -> strat) into
+            // the reusable buffer. `override_strat[col]` = Some(s) means dispatch
+            // strategy `s` for that column INSTEAD of `strategy_ids[col]` (or a
+            // conditional). Skipped entirely on the no-override path.
+            if have_overrides {
+                override_strat.iter_mut().for_each(|s| *s = None);
+                if let Some(ovs) = overrides_by_cluster.get(&cid) {
+                    for &(col, strat) in ovs {
+                        override_strat[col] = Some(strat);
+                    }
                 }
             }
 
@@ -1300,7 +1331,14 @@ pub fn golden_fused(
                 // never sends both, since overrides only fire when survivorship is
                 // inactive, i.e. no conditionals exist). Else fall to the
                 // conditional IR-selected strategy, else the static base strategy.
-                let strat = match override_strat[col] {
+                // `override_strat` is empty on the no-override path (guarded by
+                // `have_overrides` so the index can't panic).
+                let ov = if have_overrides {
+                    override_strat[col]
+                } else {
+                    None
+                };
+                let strat = match ov {
                     Some(s) => s,
                     None => match cond_index[col] {
                         Some(ci) => select_conditional_strategy(&conditionals[ci], &resolved_code),

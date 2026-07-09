@@ -183,17 +183,54 @@ class _GoldenFusedConditional:
 
 
 @dataclass
+class _GoldenFusedResolutionPlan:
+    """The kernel's RESOLUTION PLAN -- control-flow, not columnar data. Where the
+    side-channels carrier holds per-column value arrays (text/code/source/date/
+    weights/pair-edges/group-specs), this sub-struct holds the CONTROL flow that
+    decides which strategy each scalar column resolves under, and in what order.
+    Nested on ``_GoldenFusedSideChannels.resolution_plan`` (a Rust
+    ``#[derive(FromPyObject)]`` ``ResolutionPlan`` reads these attrs) so the two
+    concerns don't intermix as later stages (e.g. provenance) touch the carrier.
+
+    - ``col_order`` (Stage 6): scalar-column resolution order (non-group
+      output-column indices, in build_resolution_order topological order -- covers
+      EVERY non-group column exactly once, so a conditional's referenced columns
+      resolve first). Order is immaterial for the mutually-independent
+      non-conditional columns (Stages 0-5).
+    - ``conditionals`` (Stage 6): the conditional (list-form field_rule) specs, in
+      resolution order. Empty => no list-form field_rules (Stages 0-5 behavior).
+    - ``overrides`` (Stage 7): per-(cluster, col) strategy overrides, flattened to
+      ``(cluster_id, col_index, strategy_code)`` tuples. The kernel buckets by
+      ``cluster_id`` and, when resolving a scalar column for that cluster,
+      dispatches the override strategy instead of the column's base
+      ``strategy_ids`` entry (a column with NO override keeps its base strategy).
+      Empty when no cluster_overrides apply -- which, matching the reference
+      EXACTLY, is whenever cluster_overrides is unset OR survivorship is active
+      (see ``run_golden_fused_arrow`` for the precedence rationale). The extra
+      value channels an override strategy needs (source_code / date) are built via
+      the shared per-column ``candidate_rules`` fold, so only the strategy code
+      lives here.
+    """
+
+    col_order: list[int] = field(default_factory=list)
+    conditionals: list[_GoldenFusedConditional] = field(default_factory=list)
+    overrides: list[tuple[int, int, int]] = field(default_factory=list)
+
+
+@dataclass
 class _GoldenFusedSideChannels:
     """Per-column side channels handed to the ``golden_fused`` kernel as ONE
     carrier arg (a Rust ``#[derive(FromPyObject)]`` struct reads these attrs).
 
     Consolidating the side channels here keeps the FFI call's positional arity
-    flat: each later stage (qweights, pair scores, group specs, predicate IR,
-    cluster-override codes) adds ONE field + ONE assignment, not another pair of
-    positional args aligned across the Python marshal site and the Rust
-    destructure. All per-column lists are ``n_output_cols`` long (a placeholder
-    entry for columns that don't use the channel); ``source_code`` is a single
-    shared Arrow column (empty when no source_priority column exists).
+    flat: each later stage (qweights, pair scores, group specs) adds ONE field +
+    ONE assignment, not another pair of positional args aligned across the Python
+    marshal site and the Rust destructure. The fields split into two concerns:
+    per-column VALUE channels (below) vs the CONTROL-flow ``resolution_plan``
+    sub-struct (`col_order` / `conditionals` / `overrides`). All per-column lists
+    are ``n_output_cols`` long (a placeholder entry for columns that don't use the
+    channel); ``source_code`` is a single shared Arrow column (empty when no
+    source_priority column exists).
     """
 
     source_code: Any  # pa.Int64Array (len n_rows) or empty placeholder
@@ -217,25 +254,12 @@ class _GoldenFusedSideChannels:
     # confidence (folded into the cluster mean ONCE), plus the winner index for
     # every group column. Empty when no field_groups are configured.
     group_specs: list[_GoldenFusedGroupSpec] = field(default_factory=list)
-    # Stage 6: scalar-column resolution order (non-group output-column indices, in
-    # build_resolution_order topological order -- covers EVERY non-group column
-    # exactly once) + the conditional (list-form field_rule) specs (in resolution
-    # order, so a conditional's referenced columns resolve first). Empty
-    # `conditionals` => no list-form field_rules (Stages 0-5 behavior; `col_order`
-    # order is immaterial for the mutually-independent non-conditional columns).
-    col_order: list[int] = field(default_factory=list)
-    conditionals: list[_GoldenFusedConditional] = field(default_factory=list)
-    # Stage 7: per-(cluster, col) strategy overrides, flattened to
-    # `(cluster_id, col_index, strategy_code)` tuples. The kernel buckets by
-    # `cluster_id` and, when resolving a scalar column for that cluster, dispatches
-    # the override strategy instead of the column's base `strategy_ids` entry. A
-    # column with NO override for a cluster keeps its base strategy. Empty when no
-    # cluster_overrides apply -- which, matching the reference EXACTLY, is whenever
-    # cluster_overrides is unset OR survivorship is active (see run_golden_fused_arrow
-    # for the precedence rationale). The extra channels an override strategy needs
-    # (source_code / date) are built via the shared per-column candidate_rules fold,
-    # so no per-(cluster,col) side data is required here -- only the strategy code.
-    overrides: list[tuple[int, int, int]] = field(default_factory=list)
+    # Stage 6/7: the CONTROL-flow resolution plan (col_order + conditionals +
+    # cluster overrides) -- separated from the value channels above so provenance
+    # (Stage 8) and later work touch one concern at a time.
+    resolution_plan: _GoldenFusedResolutionPlan = field(
+        default_factory=_GoldenFusedResolutionPlan
+    )
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -746,9 +770,11 @@ def run_golden_fused_arrow(
         qweights=qweights,
         pair_edges=pair_edges,
         group_specs=group_specs,
-        col_order=col_order,
-        conditionals=conditionals,
-        overrides=override_specs,
+        resolution_plan=_GoldenFusedResolutionPlan(
+            col_order=col_order,
+            conditionals=conditionals,
+            overrides=override_specs,
+        ),
     )
     winner_idx, field_conf, group_conf, cluster_ids_out = fn(
         row_ids_arr,

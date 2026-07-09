@@ -1356,3 +1356,30 @@ def test_cluster_overrides_ignored_when_survivorship_active():
     )
     assert golden_fused_ready(rules) is True
     _assert_value_conf_parity(df, rules, ["first", "last"])
+
+
+def test_cluster_overrides_conflicting_source_priority_lists_declines():
+    # Two clusters override the SAME column to source_priority with DIFFERENT
+    # priority lists. The fused path carries ONE per-column priority channel, so it
+    # cannot represent both -> it must decline (return None) and let the caller fall
+    # back to the reference. Exercises the documented decline in
+    # run_golden_fused_arrow (the source-loop's per-column list-conflict guard).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 2, 2, 2],
+            "__source__": ["crm", "erp", "web", "crm", "erp", "web"],
+            "v": ["a", "b", "c", "x", "y", "z"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={
+            1: {"v": GoldenFieldRule(strategy="source_priority", source_priority=["erp", "crm"])},
+            2: {"v": GoldenFieldRule(strategy="source_priority", source_priority=["web", "crm"])},
+        },
+    )
+    # Gate passes (both override rules are covered), but the run declines on the
+    # per-column channel conflict.
+    assert golden_fused_ready(rules) is True
+    assert run_golden_fused_arrow(df, rules) is None
