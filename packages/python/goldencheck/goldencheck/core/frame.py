@@ -23,6 +23,7 @@ class Column(Protocol):
     def to_list(self) -> list: ...
     @property
     def dtype(self) -> str: ...
+    def dtype_repr(self) -> str: ...
     def cast(self, kind: str, *, strict: bool = False) -> Column: ...
     def member_count(self, values: list) -> int: ...
     def str_match_count(self, pattern: str) -> int: ...
@@ -67,6 +68,8 @@ def _neutral_dtype(dt: Any) -> str:
         return "date"
     if dt == pl.Datetime:
         return "datetime"
+    if dt == pl.Boolean:
+        return "bool"
     return "other"
 
 
@@ -103,6 +106,9 @@ class PolarsColumn:
     @property
     def dtype(self) -> str:
         return _neutral_dtype(self._s.dtype)
+
+    def dtype_repr(self) -> str:
+        return str(self._s.dtype)
 
     def cast(self, kind: str, *, strict: bool = False) -> PolarsColumn:
         pl_type = getattr(pl, _CAST_KIND[kind])
