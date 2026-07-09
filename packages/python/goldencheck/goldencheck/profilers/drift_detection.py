@@ -1,21 +1,9 @@
 """Drift detection profiler — detects distribution drift between first and second half of data."""
 from __future__ import annotations
 
-from functools import lru_cache
-
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
-
-
-@lru_cache(maxsize=1)
-def _numeric_dtypes() -> tuple:
-    return (
-        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-        pl.Float32, pl.Float64,
-    )
 
 # Minimum row count to attempt drift detection (small samples are unreliable)
 MIN_ROWS = 1000
@@ -30,19 +18,18 @@ CATEGORICAL_DRIFT_EXTREME = 0.50    # >50% new categories → WARNING; 20-50% �
 
 
 class DriftDetectionProfiler(BaseProfiler):
-    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
         total = len(col)
 
         if total < MIN_ROWS:
             return findings
 
         mid = total // 2
-        first_half = col[:mid].drop_nulls()
-        second_half = col[mid:].drop_nulls()
+        first_half = col.slice(0, mid).drop_nulls()
+        second_half = col.slice(mid).drop_nulls()
 
         if len(first_half) == 0 or len(second_half) == 0:
             return findings
@@ -52,10 +39,10 @@ class DriftDetectionProfiler(BaseProfiler):
         non_null = col.drop_nulls()
         if len(non_null) > 0:
             unique_pct = non_null.n_unique() / len(non_null)
-            if unique_pct > 0.90 and col.dtype not in _numeric_dtypes():
+            if unique_pct > 0.90 and col.dtype not in ("int", "uint", "float"):
                 return findings
 
-        is_numeric = col.dtype in _numeric_dtypes()
+        is_numeric = col.dtype in ("int", "uint", "float")
 
         if is_numeric:
             # Numeric drift: compare means
@@ -85,8 +72,8 @@ class DriftDetectionProfiler(BaseProfiler):
                 ))
         else:
             # Categorical drift: look for new categories in second half
-            cats_first = set(first_half.cast(pl.String).to_list())
-            cats_second = set(second_half.cast(pl.String).to_list())
+            cats_first = set(first_half.cast("str", strict=True).to_list())
+            cats_second = set(second_half.cast("str", strict=True).to_list())
             new_cats = cats_second - cats_first
 
             if new_cats:
@@ -95,8 +82,7 @@ class DriftDetectionProfiler(BaseProfiler):
                 if new_cat_pct > CATEGORICAL_DRIFT_THRESHOLD:
                     sample_new = sorted(new_cats)[:10]
                     # Count rows in second half that contain new categories
-                    new_cat_mask = second_half.cast(pl.String).is_in(list(new_cats))
-                    affected = int(new_cat_mask.sum())
+                    affected = second_half.cast("str", strict=True).member_count(list(new_cats))
                     # >50% new categories → WARNING (extreme); 20-50% → INFO
                     severity = Severity.WARNING if new_cat_pct > CATEGORICAL_DRIFT_EXTREME else Severity.INFO
                     findings.append(Finding(
