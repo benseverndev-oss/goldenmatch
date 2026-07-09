@@ -326,3 +326,181 @@ def test_null_winner_round_trips_on_object_dtype():
     got = _assert_value_conf_parity(df, rules, ["v"])
     assert got[1]["v"] is None
     assert abs(got[1]["__golden_confidence__"] - 0.0) < 1e-12
+
+
+# ─── source_priority (Task 2.1) ──────────────────────────────────────────────
+
+
+def test_source_priority_matches_reference():
+    # cluster 1: sources [crm, web]; distinct values -> priority [web, crm]
+    #   picks the web row's value at conf 1.0 (idx 0).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "__source__": ["crm", "web", "crm", "web"],
+            "name": ["Bob", "Bobby", "Sue", "Susan"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(strategy="source_priority", source_priority=["web", "crm"]),
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] == "Bobby"  # the web row
+    assert abs(got[1]["__golden_confidence__"] - 1.0) < 1e-12
+
+
+def test_source_priority_top_source_null_falls_through():
+    # top-priority source `web`'s FIRST row has a null value, so the next
+    # priority `crm` wins (idx 1 -> conf 0.9). Distinct non-null values so the
+    # universal short-circuit doesn't fire.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "__source__": ["crm", "web", "erp"],
+            "name": ["Bob", None, "Robert"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(
+                strategy="source_priority", source_priority=["web", "crm", "erp"]
+            ),
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] == "Bob"  # crm, since web's first row is null
+    assert abs(got[1]["__golden_confidence__"] - 0.9) < 1e-12
+
+
+def test_source_priority_absent_source_in_list():
+    # priority lists a source (`mdm`) ABSENT from the column -> skipped; `crm`
+    # wins at idx 1 -> conf 0.9.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "__source__": ["crm", "web"],
+            "name": ["Bob", "Bobby"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(
+                strategy="source_priority", source_priority=["mdm", "crm", "web"]
+            ),
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] == "Bob"  # crm
+    assert abs(got[1]["__golden_confidence__"] - 0.9) < 1e-12
+
+
+def test_source_priority_no_match_emits_null():
+    # priority lists only absent sources -> no winner -> null, conf 0.0.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "__source__": ["crm", "web"],
+            "name": ["Bob", "Bobby"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(strategy="source_priority", source_priority=["mdm", "erp"]),
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] is None
+    assert abs(got[1]["__golden_confidence__"] - 0.0) < 1e-12
+
+
+# ─── most_recent (Task 2.2) ──────────────────────────────────────────────────
+
+
+def test_most_recent_matches_reference():
+    import datetime as _dt
+
+    # cluster 1: distinct dates -> latest wins, conf 1.0.
+    # cluster 2: two rows share the top date -> conf 0.5, first-occurrence wins.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "name": ["Bob", "Robert", "Bobby", "Sue", "Susan"],
+            "dt": [
+                _dt.date(2020, 1, 1),
+                _dt.date(2022, 6, 15),
+                _dt.date(2021, 3, 3),
+                _dt.date(2023, 5, 5),
+                _dt.date(2023, 5, 5),  # tie on top date with row 10
+            ],
+        },
+        schema_overrides={"dt": pl.Date},
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    # NOTE: `dt` is also a (non-internal) user column resolved via the default
+    # most_complete, so __golden_confidence__ is a mean over {name, dt}; assert
+    # the per-field name confidence against the reference to pin the most_recent
+    # semantics (unique top date -> 1.0; date tie -> 0.5).
+    ref = {r["__cluster_id__"]: r for r in build_golden_records_batch(df, rules)}
+    assert got[1]["name"] == "Robert"  # 2022 is latest
+    assert abs(ref[1]["name"]["confidence"] - 1.0) < 1e-12
+    assert got[2]["name"] == "Sue"  # tie -> first occurrence
+    assert abs(ref[2]["name"]["confidence"] - 0.5) < 1e-12
+
+
+def test_most_recent_null_date_and_null_value_dropped():
+    import datetime as _dt
+
+    # row 0: null DATE -> dropped. row 1: null VALUE -> dropped. row 2: eligible.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "name": ["Newest", None, "Kept"],
+            "dt": [None, _dt.date(2022, 1, 1), _dt.date(2019, 1, 1)],
+        },
+        schema_overrides={"dt": pl.Date},
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    ref = {r["__cluster_id__"]: r for r in build_golden_records_batch(df, rules)}
+    assert got[1]["name"] == "Kept"
+    # single eligible row -> name confidence 1.0 (dt column shifts the mean).
+    assert abs(ref[1]["name"]["confidence"] - 1.0) < 1e-12
+
+
+def test_most_recent_all_dates_null_emits_null():
+    # every row's date is null -> no eligible row -> null, conf 0.0. Distinct
+    # values so the universal short-circuit doesn't fire.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "name": ["Bob", "Robert"],
+            "dt": pl.Series("dt", [None, None], dtype=pl.Date),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["name"])
+    assert got[1]["name"] is None
+    assert abs(got[1]["__golden_confidence__"] - 0.0) < 1e-12

@@ -27,6 +27,8 @@ use crate::score::StrCol;
 // Strategy ids — shared with Python `_GOLDEN_STRATEGY_IDS`.
 const STRAT_MOST_COMPLETE: u8 = 0;
 const STRAT_MAJORITY_VOTE: u8 = 1;
+const STRAT_SOURCE_PRIORITY: u8 = 2;
+const STRAT_MOST_RECENT: u8 = 3;
 const STRAT_FIRST_NON_NULL: u8 = 4;
 const STRAT_LONGEST_VALUE: u8 = 5;
 const STRAT_UNANIMOUS_OR_NULL: u8 = 6;
@@ -155,10 +157,103 @@ fn first_non_null(non_null: &[(usize, i64)]) -> (i64, f64) {
     (non_null[0].0 as i64, 0.6)
 }
 
+/// `_source_priority` (`golden.py:142`). Records the FIRST row per source
+/// (regardless of null value), then walks `priority` (a source-code list); the
+/// first source whose first-occurrence value is non-null wins.
+/// `conf = max(0.1, 1.0 - idx*0.1)`; no match -> `(-1, 0.0)`.
+///
+/// Precise null handling (matches the reference `source_val[src] = val` /
+/// `if val is not None`): the winner value is specifically the FIRST row of the
+/// winning source. If that first row's value is null, the source is skipped even
+/// if a LATER row of the same source has a non-null value — we only ever look at
+/// the first row's `value_code`.
+///
+/// `source_code[i] < 0` (null `__source__`) rows are never a priority target (a
+/// priority list holds strings, never None), and an ABSENT priority source is
+/// encoded as a negative code in Python — so both are excluded by the `< 0`
+/// guard, which also prevents an absent-priority sentinel from colliding with
+/// the null-source group. Winner index is the LOCAL span index.
+fn source_priority(
+    source_code: &[i64],
+    value_code: &[i64],
+    priority: &[i64],
+    off: usize,
+    size: usize,
+) -> (i64, f64) {
+    // First-occurrence (source_code >= 0) in span order: (source_code, local).
+    let mut first: Vec<(i64, usize)> = Vec::new();
+    for l in 0..size {
+        let sc = source_code[off + l];
+        if sc < 0 {
+            continue;
+        }
+        if !first.iter().any(|&(s, _)| s == sc) {
+            first.push((sc, l));
+        }
+    }
+    for (idx, &pc) in priority.iter().enumerate() {
+        if pc < 0 {
+            continue; // absent priority source (or reserved sentinel)
+        }
+        if let Some(&(_, first_local)) = first.iter().find(|&&(s, _)| s == pc) {
+            if value_code[off + first_local] != -1 {
+                let conf = (1.0 - idx as f64 * 0.1).max(0.1);
+                return (first_local as i64, conf);
+            }
+        }
+    }
+    (-1, 0.0)
+}
+
+/// `_most_recent` (`golden.py:166`). Eligible rows = value non-null AND date
+/// non-null. Python `sort(key=date, reverse=True)` is STABLE, so among rows tied
+/// on the top date the FIRST-occurring (lowest local index) wins — replicated
+/// here as "first eligible row holding the max date" (NOT a reversed comparator,
+/// which would pick the last). `conf = 0.5` when >=2 eligible rows share the top
+/// date, else `1.0`; none eligible -> `(-1, 0.0)`.
+fn most_recent(
+    value_code: &[i64],
+    date: &[i64],
+    date_null: &[i64],
+    off: usize,
+    size: usize,
+) -> (i64, f64) {
+    let eligible = |l: usize| value_code[off + l] != -1 && date_null[off + l] == 0;
+    let mut max_date: Option<i64> = None;
+    for l in 0..size {
+        if !eligible(l) {
+            continue;
+        }
+        let d = date[off + l];
+        max_date = Some(match max_date {
+            Some(m) if m >= d => m,
+            _ => d,
+        });
+    }
+    let md = match max_date {
+        Some(m) => m,
+        None => return (-1, 0.0),
+    };
+    let mut winner_local: i64 = -1;
+    let mut tie_count = 0usize;
+    for l in 0..size {
+        if eligible(l) && date[off + l] == md {
+            if winner_local < 0 {
+                winner_local = l as i64;
+            }
+            tie_count += 1;
+        }
+    }
+    let conf = if tie_count > 1 { 0.5 } else { 1.0 };
+    (winner_local, conf)
+}
+
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, cluster_ids, n_output_cols, strategy_ids, text_cols, code_cols,
+    source_code, priority_codes, date_cols, date_null_masks,
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn golden_fused(
     py: Python<'_>,
     row_ids: PyArrowType<ArrayData>,
@@ -167,6 +262,17 @@ pub fn golden_fused(
     strategy_ids: Vec<u8>,
     text_cols: Vec<PyArrowType<ArrayData>>,
     code_cols: Vec<PyArrowType<ArrayData>>,
+    // Stage 2 extra keys. `source_code` is the factorized `__source__` column
+    // (Int64, len n_rows) — present only when some column uses source_priority
+    // (else an empty array). `priority_codes[col]` is that column's
+    // source_priority list mapped into source-code space (empty for non
+    // source_priority columns; absent sources encoded < 0). `date_cols[col]` /
+    // `date_null_masks[col]` are Int64 arrays (len n_rows) for most_recent
+    // columns (empty arrays otherwise); the mask is 1 = null-date, 0 = present.
+    source_code: PyArrowType<ArrayData>,
+    priority_codes: Vec<Vec<i64>>,
+    date_cols: Vec<PyArrowType<ArrayData>>,
+    date_null_masks: Vec<PyArrowType<ArrayData>>,
 ) -> PyResult<(Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>)> {
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
@@ -250,6 +356,75 @@ pub fn golden_fused(
         code_vals.push(arr.values().to_vec());
     }
 
+    // ── Stage 2 keys: source_priority + most_recent ─────────────────────────
+    let any_source_priority = strategy_ids.contains(&STRAT_SOURCE_PRIORITY);
+    let any_most_recent = strategy_ids.contains(&STRAT_MOST_RECENT);
+
+    // Read an Int64 arrow array into an owned Vec. A length-0 array yields an
+    // empty Vec (the "column doesn't use this key" placeholder).
+    fn read_i64(d: ArrayData, what: &str) -> PyResult<Vec<i64>> {
+        if d.data_type() != &DataType::Int64 {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: {what} must be int64, got {:?}",
+                d.data_type()
+            )));
+        }
+        Ok(Int64Array::from(d).values().to_vec())
+    }
+
+    // source_code: only required (len n_rows) when a source_priority column exists.
+    let source_vals = read_i64(source_code.0, "source_code")?;
+    if any_source_priority && source_vals.len() != n_rows {
+        return Err(PyValueError::new_err(format!(
+            "golden_fused: source_code length {} != row count {n_rows}",
+            source_vals.len()
+        )));
+    }
+    if priority_codes.len() != n_output_cols {
+        return Err(PyValueError::new_err(format!(
+            "golden_fused: priority_codes length {} != n_output_cols {n_output_cols}",
+            priority_codes.len()
+        )));
+    }
+
+    // date + null mask: required (len n_rows) only for most_recent columns.
+    if any_most_recent {
+        if date_cols.len() != n_output_cols {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: date_cols length {} != n_output_cols {n_output_cols}",
+                date_cols.len()
+            )));
+        }
+        if date_null_masks.len() != n_output_cols {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: date_null_masks length {} != n_output_cols {n_output_cols}",
+                date_null_masks.len()
+            )));
+        }
+    }
+    let mut date_vals: Vec<Vec<i64>> = Vec::with_capacity(n_output_cols);
+    for (c, p) in date_cols.into_iter().enumerate() {
+        let v = read_i64(p.0, "date col")?;
+        if strategy_ids[c] == STRAT_MOST_RECENT && v.len() != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: date col {c} length {} != row count {n_rows}",
+                v.len()
+            )));
+        }
+        date_vals.push(v);
+    }
+    let mut date_null_vals: Vec<Vec<i64>> = Vec::with_capacity(n_output_cols);
+    for (c, p) in date_null_masks.into_iter().enumerate() {
+        let v = read_i64(p.0, "date null mask")?;
+        if strategy_ids[c] == STRAT_MOST_RECENT && v.len() != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: date null mask {c} length {} != row count {n_rows}",
+                v.len()
+            )));
+        }
+        date_null_vals.push(v);
+    }
+
     let cluster_vals: Vec<i64> = cluster_ids.values().to_vec();
 
     Ok(py.detach(|| {
@@ -284,12 +459,25 @@ pub fn golden_fused(
                     match strategy_ids[col] {
                         STRAT_MOST_COMPLETE => most_complete(&text[col], &non_null, off),
                         STRAT_MAJORITY_VOTE => majority_vote(&non_null),
+                        STRAT_SOURCE_PRIORITY => source_priority(
+                            &source_vals,
+                            &code_vals[col],
+                            &priority_codes[col],
+                            off,
+                            size,
+                        ),
+                        STRAT_MOST_RECENT => most_recent(
+                            &code_vals[col],
+                            &date_vals[col],
+                            &date_null_vals[col],
+                            off,
+                            size,
+                        ),
                         STRAT_FIRST_NON_NULL => first_non_null(&non_null),
                         STRAT_LONGEST_VALUE => longest_value(&text[col], &non_null, off),
                         STRAT_UNANIMOUS_OR_NULL => unanimous_or_null(&non_null),
-                        // Strategies not yet ported (source_priority/most_recent/
-                        // confidence_majority) decline in Python before reaching
-                        // here; return the null sentinel defensively.
+                        // confidence_majority (Stage 4) still declines in Python
+                        // before reaching here; null sentinel defensively.
                         _ => (-1i64, 0.0),
                     }
                 };
@@ -413,5 +601,109 @@ mod tests {
     fn first_non_null_leading_null_picks_first_present() {
         // null, "b", "c" -> first present at local idx 1, conf 0.6.
         assert_eq!(first_non_null(&nn(&[-1, 1, 2], 0, 3)), (1, 0.6));
+    }
+
+    // ── source_priority ──────────────────────────────────────────────────────
+
+    #[test]
+    fn source_priority_top_priority_wins() {
+        // sources [A=0, B=1], values [x, y]; priority [B, A] -> B (code 1) first
+        // occurrence at local 1, idx 0 in priority -> conf 1.0.
+        let src = [0i64, 1];
+        let val = [10i64, 20];
+        assert_eq!(source_priority(&src, &val, &[1, 0], 0, 2), (1, 1.0));
+    }
+
+    #[test]
+    fn source_priority_null_top_source_falls_through() {
+        // First row of the TOP-priority source has a null value -> skip it, next
+        // priority wins. sources [A=0, B=1]; values [null, 20]; priority [A, B]:
+        // A's first value is null -> B wins at local 1, idx 1 -> conf 0.9.
+        let src = [0i64, 1];
+        let val = [-1i64, 20];
+        assert_eq!(source_priority(&src, &val, &[0, 1], 0, 2), (1, 0.9));
+    }
+
+    #[test]
+    fn source_priority_absent_source_skipped() {
+        // priority [absent(-1), A(0)] -> absent skipped, A wins at idx 1 conf 0.9.
+        let src = [0i64, 1];
+        let val = [10i64, 20];
+        assert_eq!(source_priority(&src, &val, &[-1, 0], 0, 2), (0, 0.9));
+    }
+
+    #[test]
+    fn source_priority_first_occurrence_per_source() {
+        // Two rows of source A (code 0): only the FIRST (local 0) is recorded.
+        // sources [A, A, B]; values [10, 99, 20]; priority [A] -> local 0.
+        let src = [0i64, 0, 1];
+        let val = [10i64, 99, 20];
+        assert_eq!(source_priority(&src, &val, &[0], 0, 3), (0, 1.0));
+    }
+
+    #[test]
+    fn source_priority_no_match_is_sentinel() {
+        // priority holds only an absent source -> no winner.
+        let src = [0i64, 1];
+        let val = [10i64, 20];
+        assert_eq!(source_priority(&src, &val, &[-1], 0, 2), (-1, 0.0));
+    }
+
+    #[test]
+    fn source_priority_conf_floor_01() {
+        // 11th priority position -> 1.0 - 10*0.1 = 0.0, floored to 0.1.
+        let src = [0i64];
+        let val = [10i64];
+        let prio: Vec<i64> = (0..10).map(|_| -1).chain(std::iter::once(0)).collect();
+        assert_eq!(source_priority(&src, &val, &prio, 0, 1), (0, 0.1));
+    }
+
+    // ── most_recent ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn most_recent_picks_latest() {
+        // dates [1, 3, 2], all values present, no nulls -> local 1 (date 3), conf 1.0.
+        let val = [10i64, 20, 30];
+        let date = [1i64, 3, 2];
+        let mask = [0i64, 0, 0];
+        assert_eq!(most_recent(&val, &date, &mask, 0, 3), (1, 1.0));
+    }
+
+    #[test]
+    fn most_recent_top_date_tie_first_occurrence_conf_05() {
+        // dates [3, 3, 1]; two rows share the top date 3 -> first (local 0), conf 0.5.
+        let val = [10i64, 20, 30];
+        let date = [3i64, 3, 1];
+        let mask = [0i64, 0, 0];
+        assert_eq!(most_recent(&val, &date, &mask, 0, 3), (0, 0.5));
+    }
+
+    #[test]
+    fn most_recent_drops_null_date_and_null_value() {
+        // local 0: null date (dropped). local 1: null value (dropped). local 2:
+        // eligible date 5. -> local 2, conf 1.0.
+        let val = [10i64, -1, 30];
+        let date = [9i64, 8, 5];
+        let mask = [1i64, 0, 0];
+        assert_eq!(most_recent(&val, &date, &mask, 0, 3), (2, 1.0));
+    }
+
+    #[test]
+    fn most_recent_none_eligible_is_sentinel() {
+        // all rows have null date -> no eligible row.
+        let val = [10i64, 20];
+        let date = [1i64, 2];
+        let mask = [1i64, 1];
+        assert_eq!(most_recent(&val, &date, &mask, 0, 2), (-1, 0.0));
+    }
+
+    #[test]
+    fn most_recent_negative_epoch_ordering() {
+        // Negative epoch values order correctly (the reason for an explicit mask,
+        // not a sentinel): dates [-10, -3, -20] -> latest is -3 at local 1.
+        let val = [10i64, 20, 30];
+        let date = [-10i64, -3, -20];
+        let mask = [0i64, 0, 0];
+        assert_eq!(most_recent(&val, &date, &mask, 0, 3), (1, 1.0));
     }
 }

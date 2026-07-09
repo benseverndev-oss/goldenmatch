@@ -29,11 +29,62 @@ _GOLDEN_STRATEGY_IDS = {
 _COVERED_STRATEGIES = frozenset(_GOLDEN_STRATEGY_IDS)
 
 # Strategies the kernel implements as pure-scalar branches (needing only the
-# per-column text/code keys, no extra gathered column). Stage 2 adds
-# source_priority/most_recent; Stage 4 adds confidence_majority.
+# per-column text/code keys, no extra gathered column).
 _KERNEL_SCALAR_STRATEGIES = frozenset(
     {"most_complete", "majority_vote", "first_non_null", "longest_value", "unanimous_or_null"}
 )
+
+# Stage 2 strategies: they need extra gathered columns (source_priority needs the
+# factorized __source__ + the priority list; most_recent needs a date i64 + null
+# mask). Stage 4 adds confidence_majority.
+_KERNEL_STAGE2_STRATEGIES = frozenset({"source_priority", "most_recent"})
+
+# Every strategy the kernel can dispatch today.
+_KERNEL_COVERED_STRATEGIES = _KERNEL_SCALAR_STRATEGIES | _KERNEL_STAGE2_STRATEGIES
+
+# polars dtypes whose physical i64 repr is order-preserving vs the Python object
+# comparison the reference `_most_recent` does (`sort(key=date, reverse=True)`).
+# Temporal dtypes (Date days, Datetime us, ...) and integer dtypes map to a
+# monotonic i64 via `.to_physical()`; string/float date columns do NOT (lexical
+# vs numeric ordering diverges), so the fused path declines them.
+_MOST_RECENT_ORDER_SAFE_DTYPES = (
+    pl.Date,
+    pl.Datetime,
+    pl.Time,
+    pl.Duration,
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.Int64,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    # NOTE: pl.UInt64 is intentionally excluded -- its cast to Int64 wraps for
+    # values >= 2**63, which would silently flip the date ordering vs the
+    # reference's Python-int compare. Such a column declines to the classic path.
+)
+
+
+def _factorize_with_map(values: list) -> tuple[list[int], dict]:
+    """Like ``_factorize_codes`` but also returns the ``raw value -> code`` map.
+
+    Used to translate a ``source_priority`` list (raw source strings) into the
+    same code space as the factorized ``__source__`` column. A priority source
+    NOT present in the column has no entry, so callers map it to a negative
+    "absent" sentinel the kernel skips.
+    """
+    codes: list[int] = []
+    mapping: dict = {}
+    for v in values:
+        if v is None:
+            codes.append(-1)
+            continue
+        c = mapping.get(v)
+        if c is None:
+            c = len(mapping)
+            mapping[v] = c
+        codes.append(c)
+    return codes, mapping
 
 
 def _factorize_codes(values: list) -> list[int]:
@@ -199,21 +250,21 @@ def run_golden_fused_arrow(
         empty["__golden_confidence__"] = pl.Series("__golden_confidence__", [], dtype=pl.Float64)
         return pl.DataFrame(empty)
 
-    # Per-column effective strategy (default or field_rule). Stage 5/6/7 extend
-    # this with groups / conditionals / cluster overrides.
+    # Per-column effective strategy + rule (default or field_rule). Stage 5/6/7
+    # extend this with groups / conditionals / cluster overrides.
     strategy_ids: list[int] = []
-    covered = True
+    effective_rules: list[GoldenFieldRule] = []
+    default_rule = GoldenFieldRule(strategy=rules.default_strategy)
     for c in user_cols:
         rule = rules.field_rules.get(c)
-        strat = rule.strategy if isinstance(rule, GoldenFieldRule) else rules.default_strategy
-        # Stage 0/1 kernel branches: the pure-scalar strategies (no extra
-        # gathered column). source_priority/most_recent/confidence_majority land
-        # in Stages 2/4 -- decline them until then.
-        if strat not in _KERNEL_SCALAR_STRATEGIES:
-            covered = False
+        rule = rule if isinstance(rule, GoldenFieldRule) else default_rule
+        strat = rule.strategy
+        # Kernel branches covered today: scalar strategies + source_priority /
+        # most_recent (Stage 2). confidence_majority lands in Stage 4 -- decline.
+        if strat not in _KERNEL_COVERED_STRATEGIES:
+            return None  # temporary decline until the strategy's stage lands
         strategy_ids.append(_GOLDEN_STRATEGY_IDS[strat])
-    if not covered:
-        return None  # temporary decline until the strategy's stage lands
+        effective_rules.append(rule)
 
     import pyarrow as pa
 
@@ -240,6 +291,51 @@ def run_golden_fused_arrow(
         text_cols.append(pa.array(text, type=pa.string()))
         code_cols.append(pa.array(codes, type=pa.int64()))
 
+    # ── Stage 2: source_priority + most_recent extra keys ────────────────────
+    empty_i64 = pa.array([], type=pa.int64())
+
+    # source_code: factorized __source__ (shared across all columns). Only built
+    # when some column uses source_priority; if that column is configured but no
+    # __source__ is present, the reference would raise -- decline instead.
+    priority_codes: list[list[int]] = [[] for _ in user_cols]
+    source_code_arr: Any = empty_i64
+    if any(r.strategy == "source_priority" for r in effective_rules):
+        if "__source__" not in sdf.columns:
+            return None
+        src_values = sdf.get_column("__source__").to_list()
+        src_codes, src_map = _factorize_with_map(src_values)
+        source_code_arr = pa.array(src_codes, type=pa.int64())
+        for ci, rule in enumerate(effective_rules):
+            if rule.strategy == "source_priority":
+                # A priority source absent from the column -> negative sentinel
+                # the kernel skips (never collides with a >=0 real source code
+                # nor the -1 null-source group, both excluded by the < 0 guard).
+                priority_codes[ci] = [src_map.get(s, -1) for s in (rule.source_priority or [])]
+
+    # most_recent: per-column date i64 (order-preserving physical) + null mask
+    # (1 = null-date). Non-most_recent columns get empty arrays.
+    date_cols: list[Any] = [empty_i64 for _ in user_cols]
+    date_null_masks: list[Any] = [empty_i64 for _ in user_cols]
+    for ci, rule in enumerate(effective_rules):
+        if rule.strategy != "most_recent":
+            continue
+        date_col = rule.date_column
+        # Reference passes dates only when the date column is present; absent ->
+        # merge_field raises. Decline so the caller falls back cleanly.
+        if not date_col or date_col not in sdf.columns:
+            return None
+        date_series = sdf.get_column(date_col)
+        if not isinstance(date_series.dtype, _MOST_RECENT_ORDER_SAFE_DTYPES):
+            # Non-order-preserving physical repr (e.g. string / float dates):
+            # can't guarantee byte-parity with the reference's object compare.
+            return None
+        phys = date_series.to_physical().cast(pl.Int64)
+        phys_list = phys.to_list()
+        date_vals = [0 if x is None else int(x) for x in phys_list]
+        mask_vals = [1 if x is None else 0 for x in phys_list]
+        date_cols[ci] = pa.array(date_vals, type=pa.int64())
+        date_null_masks[ci] = pa.array(mask_vals, type=pa.int64())
+
     winner_idx, field_conf, cluster_ids_out = fn(
         row_ids_arr,
         cluster_ids_arr,
@@ -247,6 +343,10 @@ def run_golden_fused_arrow(
         strategy_ids,
         text_cols,
         code_cols,
+        source_code_arr,
+        priority_codes,
+        date_cols,
+        date_null_masks,
     )
 
     out: dict[str, pl.Series] = {}
