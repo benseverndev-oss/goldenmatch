@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import datetime
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 
 # Words that contain "age" but are NOT age columns

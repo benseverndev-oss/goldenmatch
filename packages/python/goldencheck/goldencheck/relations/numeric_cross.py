@@ -1,15 +1,19 @@
 """Numeric cross-column validation — detects value > max violations and age/DOB mismatches."""
 from __future__ import annotations
 
-import polars as pl
+from functools import lru_cache
 
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 
-NUMERIC_DTYPES = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Float32, pl.Float64,
-)
+
+@lru_cache(maxsize=1)
+def _numeric_dtypes() -> tuple:
+    return (
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+        pl.Float32, pl.Float64,
+    )
 
 # Heuristic pairs: (value_column_keyword, max_column_keyword)
 # The value column should be <= the max column
@@ -73,16 +77,16 @@ class NumericCrossColumnProfiler:
             return None
 
         # Both must be numeric
-        if val_series.dtype not in NUMERIC_DTYPES or max_series.dtype not in NUMERIC_DTYPES:
+        if val_series.dtype not in _numeric_dtypes() or max_series.dtype not in _numeric_dtypes():
             # Try casting strings to float
             try:
                 if val_series.dtype in (pl.Utf8, pl.String):
                     val_series = val_series.cast(pl.Float64, strict=False)
                 if max_series.dtype in (pl.Utf8, pl.String):
                     max_series = max_series.cast(pl.Float64, strict=False)
-                if val_series.dtype not in NUMERIC_DTYPES + (pl.Float64,):
+                if val_series.dtype not in _numeric_dtypes() + (pl.Float64,):
                     return None
-                if max_series.dtype not in NUMERIC_DTYPES + (pl.Float64,):
+                if max_series.dtype not in _numeric_dtypes() + (pl.Float64,):
                     return None
             except Exception:
                 return None

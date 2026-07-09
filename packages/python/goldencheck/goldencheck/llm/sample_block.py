@@ -5,8 +5,7 @@ import logging
 import random
 from collections import defaultdict
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding
 
 logger = logging.getLogger(__name__)

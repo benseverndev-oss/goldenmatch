@@ -14,8 +14,7 @@ except ImportError as _err:  # pragma: no cover
         "Install them with: pip install 'goldencheck[baseline]'"
     ) from _err
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import CorrelationEntry
 
 if TYPE_CHECKING:

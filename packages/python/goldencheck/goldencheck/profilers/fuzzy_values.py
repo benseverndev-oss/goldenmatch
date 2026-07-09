@@ -22,9 +22,9 @@ old pure-Python DP), so the two paths agree.
 """
 from __future__ import annotations
 
-import polars as pl
 from rapidfuzz.distance import Levenshtein as _RFLevenshtein
 
+from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler

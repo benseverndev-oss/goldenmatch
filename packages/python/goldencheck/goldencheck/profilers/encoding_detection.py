@@ -1,8 +1,7 @@
 """Encoding detection profiler — detects encoding anomalies in string columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 

@@ -4,8 +4,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import PatternGrammar
 
 __all__ = ["induce_patterns", "_induce_column_grammars"]

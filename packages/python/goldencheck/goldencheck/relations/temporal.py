@@ -1,8 +1,7 @@
 """Temporal order profiler — checks that start-like date columns precede end-like columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 
 # Pairs of (start-pattern, end-pattern) — matched against lowercased column names

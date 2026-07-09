@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding
 
 

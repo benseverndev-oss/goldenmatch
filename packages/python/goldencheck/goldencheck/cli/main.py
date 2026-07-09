@@ -6,12 +6,12 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-import polars as pl
 import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
 from goldencheck import __version__
+from goldencheck._polars_lazy import pl
 from goldencheck.config.loader import load_config
 from goldencheck.config.writer import save_config
 from goldencheck.engine.confidence import apply_confidence_downgrade

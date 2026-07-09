@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import polars as pl
+from goldencheck._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile

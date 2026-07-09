@@ -21,8 +21,7 @@ this profiler is the deterministic normalize-and-group tier.
 """
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 
 _SEP = "\x1f"  # unit separator -- won't appear in normal data

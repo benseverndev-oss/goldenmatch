@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from itertools import combinations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 
 _DEFAULT_THRESHOLD = 0.90

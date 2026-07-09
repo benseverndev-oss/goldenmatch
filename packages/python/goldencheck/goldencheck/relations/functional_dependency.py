@@ -22,8 +22,9 @@ reports a bounded number of findings.
 """
 from __future__ import annotations
 
-import polars as pl
+from functools import lru_cache
 
+from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.models.finding import Finding, Severity
 
@@ -31,12 +32,15 @@ _MIN_ROWS = 50          # enough support that a strict FD isn't a small-sample f
 _MAX_CANDIDATES = 12    # bound the O(k^2) pair space
 _MAX_FINDINGS = 10
 
-_SUPPORTED = (
-    pl.Utf8,
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Boolean,
-)
+
+@lru_cache(maxsize=1)
+def _supported() -> tuple:
+    return (
+        pl.Utf8,
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+        pl.Boolean,
+    )
 
 
 def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
@@ -45,7 +49,7 @@ def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
     scored: list[tuple[int, str]] = []
     for col in df.columns:
         series = df[col]
-        if series.dtype not in _SUPPORTED:
+        if series.dtype not in _supported():
             continue
         nu = series.n_unique()
         if nu <= 1:

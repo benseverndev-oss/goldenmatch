@@ -1,16 +1,20 @@
 """Drift detection profiler — detects distribution drift between first and second half of data."""
 from __future__ import annotations
 
-import polars as pl
+from functools import lru_cache
 
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
-NUMERIC_DTYPES = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Float32, pl.Float64,
-)
+
+@lru_cache(maxsize=1)
+def _numeric_dtypes() -> tuple:
+    return (
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+        pl.Float32, pl.Float64,
+    )
 
 # Minimum row count to attempt drift detection (small samples are unreliable)
 MIN_ROWS = 1000
@@ -45,10 +49,10 @@ class DriftDetectionProfiler(BaseProfiler):
         non_null = col.drop_nulls()
         if len(non_null) > 0:
             unique_pct = non_null.n_unique() / len(non_null)
-            if unique_pct > 0.90 and col.dtype not in NUMERIC_DTYPES:
+            if unique_pct > 0.90 and col.dtype not in _numeric_dtypes():
                 return findings
 
-        is_numeric = col.dtype in NUMERIC_DTYPES
+        is_numeric = col.dtype in _numeric_dtypes()
 
         if is_numeric:
             # Numeric drift: compare means

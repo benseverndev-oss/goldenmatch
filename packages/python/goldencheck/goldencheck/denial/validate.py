@@ -17,8 +17,7 @@ from __future__ import annotations
 
 import random
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.denial.constants import VALIDATION_SAMPLE
 from goldencheck.denial.models import Predicate
 from goldencheck.denial.predicates import encode_columns, predicate_holds
