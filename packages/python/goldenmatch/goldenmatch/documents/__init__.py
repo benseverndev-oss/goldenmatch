@@ -80,9 +80,15 @@ def _ingest_one(path: str, *, schema: TargetSchema | None, template: DocTemplate
       * auto: classify (1 call) then route on confidence:
           - hit  (>= threshold and doctype has a template) -> structured, 2 calls
           - miss (low conf / no template / classify raised) -> generic fallback,
-            3 calls (classify + suggest + extract; the classify call counts even
+            3 calls (classify + suggest + extract; the classify stage counts even
             when it raised, since the request went out).
-    `vlm_calls` = the number of transport calls actually issued for this doc."""
+    `vlm_calls` = the number of logical VLM request STAGES issued for this doc
+    (classify / structured-extract / suggest+extract). It is an UPPER BOUND on
+    physical transport calls, NOT a tally: retries are not added, and a fallback
+    stage that short-circuits after a failed suggest (skipping the extract call) is
+    not subtracted. A physical tally is impossible by design anyway -- the injectable
+    Fake collaborators issue zero transport calls yet a classify-hit still logically
+    costs 2 stages."""
     doc_id = record_fingerprint({"path": path})
     try:
         pages = load_pages(path)
@@ -103,14 +109,18 @@ def _ingest_one(path: str, *, schema: TargetSchema | None, template: DocTemplate
 
     # auto-classify path -------------------------------------------------------
     try:
-        cls = classifier.classify(pages)  # 1 transport call
-    except Exception:
+        cls = classifier.classify(pages)  # 1 transport stage
+    except Exception as e:
         # classify request went out but failed to parse/return -> generic fallback.
         # vlm_calls = 1 (classify, issued) + 2 (suggest + extract) = 3. No classifier
-        # value survived, so confidence is 0.0.
+        # value survived, so confidence is 0.0. A raised classify is NOT a genuine
+        # low-confidence doc, so we leave a trace in report.errors (via `warning`)
+        # rather than letting a broken classifier masquerade as a 0.0 classification.
         return _DocOutcome(doc_id=doc_id, source_file=path, doctype="generic",
                            confidence=0.0, vlm_calls=3,
-                           result=_generic_fallback(fallback_extractor, pages, path))
+                           result=_generic_fallback(fallback_extractor, pages, path),
+                           warning=f"classify failed, used generic fallback: "
+                                   f"{type(e).__name__}: {e}")
 
     if cls.confidence >= classify_threshold and cls.doctype in list_templates():
         return _DocOutcome(doc_id=doc_id, source_file=path, doctype=cls.doctype,
@@ -145,6 +155,8 @@ def ingest_documents(paths, schema: TargetSchema | None = None, *,
         a confident hit on a known doctype extracts against its template; anything
         else falls back to the generic suggest-then-extract path. `report.doctypes`,
         `report.classify_confidence`, and `report.vlm_calls` record what happened.
+        With no schema/template and `auto_classify=False`, raises `ValueError` (there
+        is nothing to do -- the flag makes the caller opt in to the VLM classify cost).
 
     Hand the header frame to the ER pipeline as:
         dedupe_df(df, exclude_columns=DOC_SIDECARS)
@@ -167,6 +179,11 @@ def ingest_documents(paths, schema: TargetSchema | None = None, *,
         if template_extractor is None:
             _, template_extractor, _ = resolve_structured(backend, model)
     else:  # auto-classify path -- resolve the three collaborators only if needed
+        if not auto_classify:
+            raise ValueError(
+                "no schema=/template= given and auto_classify=False; pass schema= "
+                "(flat) or template= (pinned), or leave auto_classify=True"
+            )
         if classifier is None or template_extractor is None or fallback_extractor is None:
             r_cls, r_te, r_fb = resolve_structured(backend, model)
             classifier = classifier or r_cls

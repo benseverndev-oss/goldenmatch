@@ -159,6 +159,9 @@ class _DocOutcome:
     confidence: float      # classifier confidence; 1.0 for pinned template / flat schema
     vlm_calls: int         # transport calls this doc cost
     result: DocResult      # ExtractResult (flat) | StructuredResult
+    warning: str | None = None  # non-fatal notice (e.g. classify failed -> fell back
+    #                             to generic); surfaced in report.errors, NOT the
+    #                             doctypes/classify_confidence maps
 
 
 @dataclass

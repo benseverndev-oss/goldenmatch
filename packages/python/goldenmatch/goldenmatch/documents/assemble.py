@@ -157,6 +157,12 @@ def assemble_structured(outcomes: list[_DocOutcome], *, drop_empty: bool = True
         # header row -- keeps the two report maps' key-sets identical + well-defined.
         report.doctypes[o.doc_id] = o.doctype
         report.classify_confidence[o.doc_id] = o.confidence
+        # A non-fatal notice (e.g. a raised classify that fell back to generic) rides
+        # the report.errors channel so a broken classifier leaves a trace instead of
+        # masquerading as a genuine 0.0 classification. It does NOT touch the two maps
+        # above, so their key-sets stay aligned.
+        if o.warning is not None:
+            report.errors.append((o.source_file, o.warning))
 
     for o in deduped:
         res = o.result

@@ -209,6 +209,41 @@ def test_auto_classify_classify_raises_falls_back(tmp_path):
     assert report.vlm_calls == 3   # classify (issued, raised) + suggest + extract
     assert report.classify_confidence[doc_id] == 0.0
     assert cls.calls == 1 and te.calls == 0 and fb.calls == 1
+    # a RAISED classify is not a genuine 0.0 classification -- it must leave a trace
+    # in report.errors (naming the file), not silently masquerade as low-confidence.
+    assert any(str(a) == fname and "classify failed" in msg
+               for fname, msg in report.errors)
+    # the warning goes to errors, NOT the two report maps -> key-sets stay aligned.
+    assert set(report.classify_confidence) == set(report.doctypes)
+
+
+def test_auto_classify_false_without_schema_or_template_raises(tmp_path):
+    a = tmp_path / "a.png"; _img(a)
+    with pytest.raises(ValueError, match="auto_classify=False"):
+        ingest_documents([a], auto_classify=False)
+
+
+def test_auto_classify_true_default_still_auto_classifies(tmp_path):
+    a = tmp_path / "inv.png"; _img(a)
+    header = _erow(INV.header, {"invoice_number": "INV-5"})
+    cls = FakeClassifier([ClassifyResult("invoice", 0.9)])
+    te = FakeTemplateExtractor([StructuredResult(header=header, line_items=[], error=None)])
+    fb = FakeFallbackExtractor([])
+    df, report = ingest_documents([a], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    assert cls.calls == 1 and report.doctypes[df["_doc_id"][0]] == "invoice"
+
+
+def test_flat_path_needs_no_api_key(tmp_path, monkeypatch):
+    """The flat schema= path with an injected extractor must never reach
+    resolve_structured/resolve_api_key -- succeeds with no key in the env."""
+    monkeypatch.delenv("OPENAI_API_KEY_PERSONAL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    a = tmp_path / "a.png"; _img(a)
+    GEN = TargetSchema([Field("full_name")])
+    fake = FakeExtractor([ExtractResult(rows=_rows(GEN, [({"full_name": "Ada"}, {})], "a"))])
+    df = ingest_documents([a], GEN, extractor=fake)
+    assert df.height == 1
 
 
 def test_auto_classify_structured_error_recorded_batch_continues(tmp_path):
