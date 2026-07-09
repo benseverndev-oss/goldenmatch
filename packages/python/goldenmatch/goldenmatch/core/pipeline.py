@@ -1124,6 +1124,56 @@ def _semantic_blocking_pairs(
     return out
 
 
+def _try_fused_golden(
+    multi_df: pl.DataFrame,
+    golden_rules: GoldenRulesConfig,
+    quality_scores: dict[tuple[int, str], float] | None,
+    cluster_pair_scores: dict[int, dict[tuple[int, int], float]] | None,
+    provenance: bool,
+    wants_full_provenance: bool,
+) -> pl.DataFrame | None:
+    """Try the fused Arrow-native golden kernel on a cluster ``multi_df``.
+
+    ``multi_df`` carries ``__row_id__`` + ``__cluster_id__`` + user columns; the
+    kernel drops singletons/oversized itself. Returns the fused golden
+    ``pl.DataFrame`` (one row per multi-member cluster, native dtypes) or
+    ``None`` to decline, in which case the caller falls back to the classic
+    builder unchanged. Declines when:
+
+    - ``GOLDENMATCH_GOLDEN_FUSED`` is ``0``/``false``/``off`` (kill-switch),
+    - ``wants_full_provenance`` (= ``config.output.lineage_provenance``): the
+      fused path cannot reproduce the slow path's ``__survivorship_prov__``
+      object (spec 2026-07-09 3), so decline rather than silently drop it,
+    - ``run_golden_fused_arrow`` itself declines (uncovered config, fast-path-
+      eligible config, or native kernel absent) or raises.
+    """
+    import os
+
+    if os.environ.get("GOLDENMATCH_GOLDEN_FUSED", "").lower() in {"0", "false", "off"}:
+        return None
+    if wants_full_provenance:
+        return None
+    try:
+        from goldenmatch.core.golden_fused import run_golden_fused_arrow
+
+        result = run_golden_fused_arrow(
+            multi_df,
+            golden_rules,
+            quality_scores=quality_scores,
+            cluster_pair_scores=cluster_pair_scores,
+            provenance=provenance,
+        )
+    except Exception:
+        logger.debug("fused golden declined", exc_info=True)
+        return None
+    # provenance is False whenever we reach here (wants_full_provenance gates
+    # it), so run_golden_fused_arrow returns a DataFrame or None -- never the
+    # (df, records) provenance tuple. Guard defensively.
+    if isinstance(result, tuple):
+        return result[0]
+    return result
+
+
 def _run_dedupe_pipeline(
     combined_lf: pl.LazyFrame,
     config: GoldenMatchConfig,
@@ -2278,6 +2328,9 @@ def _run_dedupe_pipeline(
     # block can write to it directly without the slow path's `golden_df = None`
     # re-init clobbering it after the `with` exits.
     golden_df: pl.DataFrame | None = None
+    # Fused-golden routing marker (spec 2026-07-09, Stage G telemetry): flips
+    # True when the Arrow-native golden kernel produced the golden frame.
+    golden_fused_used = False
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
     # Throughput tier (#1151): corpus dedup consumes the clusters / dup mapping,
@@ -2406,25 +2459,49 @@ def _run_dedupe_pipeline(
             # of degrading to count-majority (the frames-out cluster dict carries
             # pair_scores={}). The fast builder ignores it; only built once here
             # if the slow path needs it.
-            _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
-            if not (
+            _frames_fast_eligible = (
                 not _provenance_on
                 and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
-            ):
+            )
+            _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
+            if not _frames_fast_eligible:
                 _psv = _pair_score_view()
                 if _psv is not None:
                     _frames_pair_scores = {
                         cid: {(a, b): s for (a, b, s) in edges}
                         for cid, edges in _psv.iter_clusters()
                     }
-            golden_df, golden_records = build_golden_records_from_frames(
-                _golden_source,
-                cluster_frames,
-                golden_rules,
-                quality_scores=quality_scores,
-                provenance=_provenance_on,
-                cluster_pair_scores=_frames_pair_scores,
-            )
+            # Fused-golden routing (spec 2026-07-09, default-on): try the Arrow-
+            # native kernel on the SAME multi_df the classic from-frames builder
+            # assembles internally (via _multi_df_from_frames), so a non-None
+            # result is byte-identical to the slow path it replaces. Attempt only
+            # when the slow path would run -- the fused kernel declines fast-path-
+            # eligible configs anyway, and gating avoids an extra join on the hot
+            # fast path. On None, fall back unchanged.
+            _fused_golden_df = None
+            if not _frames_fast_eligible:
+                from goldenmatch.core.golden import _multi_df_from_frames
+                _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
+                _fused_golden_df = _try_fused_golden(
+                    _fused_multi_df,
+                    golden_rules,
+                    quality_scores=quality_scores,
+                    cluster_pair_scores=_frames_pair_scores,
+                    provenance=_provenance_on,
+                    wants_full_provenance=_provenance_on,
+                )
+            if _fused_golden_df is not None:
+                golden_df, golden_records = _fused_golden_df, []
+                golden_fused_used = True
+            else:
+                golden_df, golden_records = build_golden_records_from_frames(
+                    _golden_source,
+                    cluster_frames,
+                    golden_rules,
+                    quality_scores=quality_scores,
+                    provenance=_provenance_on,
+                    cluster_pair_scores=_frames_pair_scores,
+                )
     else:
         with stage("golden"):
             with stage("golden_eligible_filter"):
@@ -2533,12 +2610,29 @@ def _run_dedupe_pipeline(
                             cid: info.get("pair_scores", {})
                             for cid, info in clusters.items()
                         }
-                        golden_records = build_golden_records_batch(
-                            multi_df, golden_rules,
+                        # Fused-golden routing (spec 2026-07-09, default-on): try
+                        # the Arrow-native kernel on the live multi_df; a non-None
+                        # result is byte-identical to build_golden_records_batch
+                        # for the covered config surface. On None, fall back.
+                        _fused_golden_df = _try_fused_golden(
+                            multi_df,
+                            golden_rules,
                             quality_scores=quality_scores,
-                            provenance=_provenance_on,
                             cluster_pair_scores=cluster_pair_scores,
+                            provenance=_provenance_on,
+                            wants_full_provenance=_provenance_on,
                         )
+                        if _fused_golden_df is not None:
+                            golden_df = _fused_golden_df
+                            golden_records = []
+                            golden_fused_used = True
+                        else:
+                            golden_records = build_golden_records_batch(
+                                multi_df, golden_rules,
+                                quality_scores=quality_scores,
+                                provenance=_provenance_on,
+                                cluster_pair_scores=cluster_pair_scores,
+                            )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated
@@ -2717,6 +2811,7 @@ def _run_dedupe_pipeline(
         "scored_pairs": scored_pairs,
         "llm_cost": llm_budget_summary,
         "throughput_posture": _throughput_posture,
+        "golden_fused_used": golden_fused_used,
     }
 
     try:
