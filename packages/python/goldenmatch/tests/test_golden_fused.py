@@ -12,7 +12,11 @@ import polars as pl
 
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_records_batch
-from goldenmatch.core.golden_fused import golden_fused_ready, run_golden_fused_arrow
+from goldenmatch.core.golden_fused import (
+    _factorize_codes,
+    golden_fused_ready,
+    run_golden_fused_arrow,
+)
 
 
 # ─── Gate tests (Task 0.1) ───────────────────────────────────────────────────
@@ -54,6 +58,22 @@ def test_gate_declines_custom_plugin():
 def test_gate_declines_llm():
     rules = GoldenRulesConfig(default_strategy="most_complete", use_llm_for_ambiguous=True)
     assert golden_fused_ready(rules) is False
+
+
+# ─── factorization helper (Task 1.1) ─────────────────────────────────────────
+
+
+def test_factorize_respects_python_equality_and_order():
+    # int 1 and float 1.0 are == in Python -> same code; None -> -1; codes
+    # assigned in first-occurrence order.
+    vals = [1, 1.0, None, "x", 1]
+    codes = _factorize_codes(vals)
+    assert codes == [0, 0, -1, 1, 0]
+
+
+def test_factorize_empty_and_all_null():
+    assert _factorize_codes([]) == []
+    assert _factorize_codes([None, None]) == [-1, -1]
 
 
 # ─── most_complete end-to-end parity (Task 0.3) ──────────────────────────────

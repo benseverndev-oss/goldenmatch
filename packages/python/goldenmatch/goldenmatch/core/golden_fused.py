@@ -29,6 +29,30 @@ _GOLDEN_STRATEGY_IDS = {
 _COVERED_STRATEGIES = frozenset(_GOLDEN_STRATEGY_IDS)
 
 
+def _factorize_codes(values: list) -> list[int]:
+    """Map raw values to integer codes in first-occurrence order.
+
+    Keyed by the raw Python value (``==``/``hash``), so ``1`` and ``1.0``
+    (equal + same hash) collapse to one code, matching the reference's
+    ``set(v)`` / ``Counter(v)`` grouping in ``core/golden.py`` (:82/:153/:246).
+    ``None`` -> ``-1`` (the null sentinel the kernel reads). This is the
+    byte-identical grouping key for ``majority_vote`` / ``unanimous_or_null``
+    and the universal short-circuit (raw-value equality, NOT text equality).
+    """
+    codes: list[int] = []
+    mapping: dict = {}
+    for v in values:
+        if v is None:
+            codes.append(-1)
+            continue
+        c = mapping.get(v)
+        if c is None:
+            c = len(mapping)
+            mapping[v] = c
+        codes.append(c)
+    return codes
+
+
 def _rule_covered(rule: GoldenFieldRule) -> bool:
     if rule.strategy not in _COVERED_STRATEGIES:
         return False  # custom:* and any unknown strategy
