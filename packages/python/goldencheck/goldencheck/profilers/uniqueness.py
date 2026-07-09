@@ -1,18 +1,16 @@
 """Uniqueness profiler — detects primary key candidates and duplicates."""
 from __future__ import annotations
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
 
 class UniquenessProfiler(BaseProfiler):
-    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
         total = len(col)
         non_null = col.drop_nulls()
         unique_count = non_null.n_unique() if len(non_null) > 0 else 0

@@ -1,7 +1,6 @@
 """Cardinality profiler — detects low-cardinality columns that may be enum candidates."""
 from __future__ import annotations
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
@@ -11,11 +10,10 @@ ENUM_MIN_ROWS = 50
 
 
 class CardinalityProfiler(BaseProfiler):
-    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
         total = len(col)
         unique_count = col.n_unique()
 
