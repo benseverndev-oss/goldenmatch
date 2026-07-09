@@ -362,6 +362,69 @@ def _build_date_arrays(sdf: pl.DataFrame, date_col: str | None) -> tuple[Any, An
     return pa.array(date_vals, type=pa.int64()), pa.array(mask_vals, type=pa.int64())
 
 
+def _build_provenance_records(
+    *,
+    sdf: pl.DataFrame,
+    n: int,
+    user_cols: list[str],
+    out: dict[str, pl.Series],
+    winner_idx: Any,
+    field_conf: Any,
+    group_conf: Any,
+    group_col_lists: list[list[int]],
+    cluster_ids_out: Any,
+    gconf: list[float],
+) -> list[dict]:
+    """Assemble Stage 8 per-field provenance records from the kernel outputs.
+
+    Returns records byte-identical (at the field level) to
+    ``build_golden_records_batch(provenance=True)``: each user-col field dict
+    carries ``{value, confidence, source_row_id}``, plus ``__cluster_id__`` /
+    ``__golden_confidence__``. ``source_row_id`` = the SORTED frame's ``__row_id__``
+    at the kernel's ``winner_idx`` (or ``None`` when ``winner_idx = -1``, matching
+    ``merge_field``'s ``idx=None``) -- derivable Python-side from data the kernel
+    already returns, no kernel change. A group column's ``winner_idx`` already
+    reflects the group winner row (or the per-column FILLED row under
+    ``allow_fill``), and the kernel pins the winner position (not ``-1``) for a
+    null-pinned group cell, so ``source_row_id`` = the winner/filled id, matching
+    resolve.py's ``filled_ids.get(c, wid)``. Per-column confidence: a grouped
+    column takes its GROUP's single confidence (the kernel writes ``field_conf=0.0``
+    for grouped cols and the real value into ``group_conf``), a scalar column its
+    own ``field_conf`` -- mirroring resolve_cluster, which stamps ``res.confidence``
+    on every group column's field dict.
+    """
+    if "__row_id__" in sdf.columns:
+        row_ids_sorted = sdf.get_column("__row_id__").cast(pl.Int64).to_list()
+    else:
+        row_ids_sorted = list(range(n))
+    # col index -> owning group index, from the group_col_lists already built for
+    # the kernel call (no rebuild from group_specs).
+    col_to_group: dict[int, int] = {}
+    for g_idx, cols in enumerate(group_col_lists):
+        for ci in cols:
+            col_to_group[ci] = g_idx
+    col_value_lists = {c: out[c].to_list() for c in user_cols}
+    records: list[dict] = []
+    for k in range(len(cluster_ids_out)):
+        rec: dict = {}
+        for ci, c in enumerate(user_cols):
+            wi = winner_idx[ci][k]
+            src_row = row_ids_sorted[wi] if wi is not None and wi >= 0 else None
+            if ci in col_to_group:
+                conf = group_conf[col_to_group[ci]][k]
+            else:
+                conf = field_conf[ci][k]
+            rec[c] = {
+                "value": col_value_lists[c][k],
+                "confidence": conf,
+                "source_row_id": src_row,
+            }
+        rec["__golden_confidence__"] = gconf[k]
+        rec["__cluster_id__"] = cluster_ids_out[k]
+        records.append(rec)
+    return records
+
+
 def run_golden_fused_arrow(
     columns: Any,  # pl.DataFrame (cluster frame with __row_id__ + __cluster_id__)
     config: GoldenRulesConfig,
@@ -830,45 +893,18 @@ def run_golden_fused_arrow(
     if not provenance:
         return result
 
-    # ── Stage 8: per-field provenance. Build records byte-identical (at the field
-    # level) to build_golden_records_batch(provenance=True): each user-col field
-    # dict carries {value, confidence, source_row_id}. source_row_id = the SORTED
-    # frame's __row_id__ at the kernel's winner_idx (or None when winner_idx = -1,
-    # matching merge_field's idx=None). This is derivable Python-side from data the
-    # kernel already returns -- no kernel change. A group column's winner_idx
-    # already reflects the group winner row (or the per-column FILLED row under
-    # allow_fill), and the kernel pins the winner position (not -1) for a
-    # null-pinned group cell, so source_row_id = the winner/filled id, matching
-    # resolve.py's `filled_ids.get(c, wid)`. Per-column confidence: a grouped
-    # column takes its GROUP's single confidence (the kernel writes field_conf=0.0
-    # for grouped cols and the real value into group_conf), a scalar column its own
-    # field_conf -- mirroring resolve_cluster, which stamps res.confidence on every
-    # group column's field dict.
-    if "__row_id__" in sdf.columns:
-        row_ids_sorted = sdf.get_column("__row_id__").cast(pl.Int64).to_list()
-    else:
-        row_ids_sorted = list(range(n))
-    col_to_group: dict[int, int] = {}
-    for g_idx, gspec in enumerate(group_specs):
-        for ci in gspec.col_indices:
-            col_to_group[ci] = g_idx
-    col_value_lists = {c: out[c].to_list() for c in user_cols}
-    records: list[dict] = []
-    for k in range(n_clusters):
-        rec: dict = {}
-        for ci, c in enumerate(user_cols):
-            wi = winner_idx[ci][k]
-            src_row = row_ids_sorted[wi] if wi is not None and wi >= 0 else None
-            if ci in col_to_group:
-                conf = group_conf[col_to_group[ci]][k]
-            else:
-                conf = field_conf[ci][k]
-            rec[c] = {
-                "value": col_value_lists[c][k],
-                "confidence": conf,
-                "source_row_id": src_row,
-            }
-        rec["__golden_confidence__"] = gconf[k]
-        rec["__cluster_id__"] = cluster_ids_out[k]
-        records.append(rec)
+    # ── Stage 8: per-field provenance (assembled from data the kernel already
+    # returns -- no kernel change). See _build_provenance_records for the mapping.
+    records = _build_provenance_records(
+        sdf=sdf,
+        n=n,
+        user_cols=user_cols,
+        out=out,
+        winner_idx=winner_idx,
+        field_conf=field_conf,
+        group_conf=group_conf,
+        group_col_lists=group_col_lists,
+        cluster_ids_out=cluster_ids_out,
+        gconf=gconf,
+    )
     return result, records

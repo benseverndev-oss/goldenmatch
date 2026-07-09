@@ -1616,8 +1616,8 @@ def test_provenance_confidence_majority():
     cps = {1: {(0, 1): 0.1, (1, 2): 0.1, (0, 2): 0.1, (3, 4): 0.91}}
     got, _ = _assert_provenance_parity(df, rules, ["v"], cluster_pair_scores=cps)
     assert got[1]["v"]["value"] == "Banana"
-    # source_row_id is the first-agreeing-edge endpoint for the winning value.
-    assert got[1]["v"]["source_row_id"] == got[1]["v"]["source_row_id"]  # matches ref (checked in helper)
+    # source_row_id (first-agreeing-edge endpoint for the winning value) parity is
+    # asserted against the reference inside the helper.
 
 
 def test_provenance_group_lockstep_winner_id():
@@ -1734,7 +1734,8 @@ def test_provenance_cluster_overrides():
 # Each case builds a frame + config that routes the reference to the EXACT
 # survivorship/merge_field oracle (never the approximating fast path). The matrix
 # sweeps every covered strategy family x {provenance on/off}; each case asserts
-# FRAME equality (values + DTYPES via assert_frame_equal) and, when provenance is
+# FRAME equality (values + dtypes via schema + per-column comparison -- NOT
+# assert_frame_equal, which is unreliable on Object dtype) and, when provenance is
 # on, per-field source_row_id parity vs build_golden_records_batch.
 
 
