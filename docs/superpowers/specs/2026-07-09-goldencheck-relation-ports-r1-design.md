@@ -82,8 +82,9 @@ R2/R3/R4 and their profilers. The Stage-2 non-Polars backend. The reader. The de
   `f"({dtype})"`). `n_rows = len(col)`; `n_nulls = col.null_count()`; `col.n_unique() != n_rows` — all
   existing Column ops. The empty/null/non-unique reason strings + the qualifies-True string are pure
   Python, UNCHANGED.
-- **`profile(self, df)` → `profile(self, frame)`**: drop `df: pl.DataFrame`; keep `frame = to_frame(frame)`;
-  remove `df = frame.native`. `if len(frame.columns) == 0: return []` (was `df.width == 0`). Loop
+- **`profile(self, frame)`**: the param is ALREADY named `frame` (annotated `pl.DataFrame`) — drop the
+  `pl.DataFrame` annotation; keep `frame = to_frame(frame)`; remove the local `df = frame.native`.
+  `if len(frame.columns) == 0: return []` (was `df.width == 0`). Loop
   `for column in frame.columns:` (was `df.columns`) calling `_column_qualifies_as_pk(frame, column)`.
   `affected_rows=frame.height` (was `len(df)`, both = row count). `sample_cols = ", ".join(frame.columns[:5])`;
   `if len(frame.columns) > 5:` (was `df.width > 5`). Both Findings (the named-PK-disqualifier WARNING and
