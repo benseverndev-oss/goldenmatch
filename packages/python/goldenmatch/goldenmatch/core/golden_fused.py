@@ -413,10 +413,12 @@ def run_golden_fused_arrow(
             if cluster_scores:
                 rid_to_pos = {rid: p for p, rid in enumerate(rid_list[start:pos])}
                 for (rid_a, rid_b), score in cluster_scores.items():
-                    pa = rid_to_pos.get(rid_a)
-                    pb = rid_to_pos.get(rid_b)
-                    if pa is not None and pb is not None:
-                        pair_edges.append((int(cid), pa, pb, float(score)))
+                    # NB: not `pa`/`pb` -- those would shadow the `pyarrow as pa`
+                    # alias used throughout this function.
+                    pos_a = rid_to_pos.get(rid_a)
+                    pos_b = rid_to_pos.get(rid_b)
+                    if pos_a is not None and pos_b is not None:
+                        pair_edges.append((int(cid), pos_a, pos_b, float(score)))
 
     side = _GoldenFusedSideChannels(
         source_code=source_code_arr,
