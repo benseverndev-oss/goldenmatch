@@ -126,8 +126,10 @@ def _gather_with_nulls(series: pl.Series, idx: list[int]) -> pl.Series:
     ``-1`` sentinel to null while preserving the source column's native dtype."""
     idx_s = pl.Series("__idx__", idx, dtype=pl.Int64)
     if (idx_s >= 0).all():
-        # No null sentinel -> a plain gather preserves the source dtype exactly
-        # (and avoids a when/then that Object-dtype columns can't round-trip).
+        # Common case (no null winner): a plain gather is the cheapest path and
+        # preserves the source dtype exactly. The when/then below handles the
+        # null-sentinel case and DOES round-trip Object columns fine -- this is a
+        # fast/simple shortcut, not a correctness workaround.
         return series.gather(idx_s)
     safe = idx_s.clip(lower_bound=0)  # -1 -> 0 (masked out below)
     gathered = series.gather(safe)

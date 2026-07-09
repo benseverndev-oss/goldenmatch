@@ -72,10 +72,12 @@ fn char_len(text: &StrCol, off: usize, local: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// `_most_complete` (`golden.py:125`), sans the short-circuit (handled
-/// universally). Longest `str(v)`; unique-longest -> conf 1.0, else first-in-
-/// order -> conf 0.7. (Quality-weight tie-break is Stage 3.)
-fn most_complete(text: &StrCol, non_null: &[(usize, i64)], off: usize) -> (i64, f64) {
+/// Shared "longest `str(v)` wins" pick for `most_complete` / `longest_value`.
+/// Unique longest -> conf 1.0; a length tie -> first-in-order member at
+/// `tie_conf` (0.7 for most_complete, 0.5 for longest_value -- the ONLY
+/// difference between the two strategies on the unweighted path). Quality-weight
+/// tie-break is Stage 3.
+fn longest_pick(text: &StrCol, non_null: &[(usize, i64)], off: usize, tie_conf: f64) -> (i64, f64) {
     let max_len = non_null
         .iter()
         .map(|&(l, _)| char_len(text, off, l))
@@ -89,28 +91,20 @@ fn most_complete(text: &StrCol, non_null: &[(usize, i64)], off: usize) -> (i64, 
     if longest.len() == 1 {
         (longest[0] as i64, 1.0)
     } else {
-        (longest[0] as i64, 0.7)
+        (longest[0] as i64, tie_conf)
     }
 }
 
-/// `_longest_value` (`golden.py:209`), unweighted branch. Same length pick as
+/// `_most_complete` (`golden.py:125`), sans the short-circuit (handled
+/// universally): longest `str(v)`, length tie -> first-in-order at conf 0.7.
+fn most_complete(text: &StrCol, non_null: &[(usize, i64)], off: usize) -> (i64, f64) {
+    longest_pick(text, non_null, off, 0.7)
+}
+
+/// `_longest_value` (`golden.py:209`), unweighted branch: same pick as
 /// `most_complete` but a length tie yields conf 0.5 (not 0.7).
 fn longest_value(text: &StrCol, non_null: &[(usize, i64)], off: usize) -> (i64, f64) {
-    let max_len = non_null
-        .iter()
-        .map(|&(l, _)| char_len(text, off, l))
-        .max()
-        .unwrap();
-    let longest: Vec<usize> = non_null
-        .iter()
-        .filter(|&&(l, _)| char_len(text, off, l) == max_len)
-        .map(|&(l, _)| l)
-        .collect();
-    if longest.len() == 1 {
-        (longest[0] as i64, 1.0)
-    } else {
-        (longest[0] as i64, 0.5)
-    }
+    longest_pick(text, non_null, off, 0.5)
 }
 
 /// `_majority_vote` (`golden.py:153`), unweighted branch. Highest code count
@@ -127,6 +121,11 @@ fn majority_vote(non_null: &[(usize, i64)]) -> (i64, f64) {
             order.push((c, l, 1));
         }
     }
+    // First-appearance tie-break: strict `>` keeps the EARLIEST-appearing code
+    // on a count tie (matching `Counter.most_common`'s stable order). Do NOT
+    // rewrite to `max_by_key` -- it returns the LAST max, silently flipping the
+    // tie to the last occurrence and picking the wrong representative index.
+    #[allow(clippy::needless_range_loop)]
     let mut best = 0usize;
     for i in 1..order.len() {
         if order[i].2 > order[best].2 {

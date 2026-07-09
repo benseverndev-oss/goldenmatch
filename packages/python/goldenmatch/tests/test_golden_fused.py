@@ -304,3 +304,25 @@ def test_mixed_type_short_circuit_uses_raw_value_equality():
     got = _assert_value_conf_parity(df, rules, ["v"])
     assert got[1]["v"] == 1
     assert abs(got[1]["__golden_confidence__"] - 1.0) < 1e-12
+
+
+def test_null_winner_round_trips_on_object_dtype():
+    # unanimous_or_null on an Object-dtype column with a DISAGREEMENT emits a
+    # null winner (kernel -1 sentinel). This exercises the when/then null path in
+    # _gather_with_nulls on an Object column -- pins that it round-trips to a real
+    # null matching build_golden_records_batch (a later all-null stage would
+    # otherwise silently trip on this).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "v": pl.Series("v", [1, 2], dtype=pl.Object),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="unanimous_or_null",
+        field_rules={"v": GoldenFieldRule(strategy="unanimous_or_null")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    assert got[1]["v"] is None
+    assert abs(got[1]["__golden_confidence__"] - 0.0) < 1e-12
