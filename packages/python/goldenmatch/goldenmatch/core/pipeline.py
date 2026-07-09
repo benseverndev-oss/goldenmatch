@@ -1286,7 +1286,7 @@ def _fused_needed_src_cols(config: GoldenMatchConfig) -> list[str]:
         if keys:
             fields.extend(keys[0].fields)
     mk = config.get_matchkeys()[0]
-    fields.extend(f.field for f in mk.fields)
+    fields.extend(f.field for f in mk.fields if f.field is not None)
     return list(dict.fromkeys(fields))
 
 
@@ -1362,6 +1362,7 @@ def _run_fused_match_short_circuit(
     if config.golden_rules is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
     fused_df = pl.from_arrow(fused_tbl)
+    assert isinstance(fused_df, pl.DataFrame)  # from_arrow returns a DataFrame for a Table
     sizes = fused_df.group_by("__cluster_id__").agg(pl.len().alias("__size__"))
     # dupes: members of every multi-member cluster (oversized INCLUDED, mirroring
     # the classic size>1 dupe rule). golden: non-oversized multi-member only.
