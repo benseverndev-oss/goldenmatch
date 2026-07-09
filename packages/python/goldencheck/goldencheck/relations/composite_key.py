@@ -23,6 +23,7 @@ from functools import lru_cache
 
 from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # A key wider than this is rarely a meaningful natural key and the search space
@@ -109,7 +110,9 @@ def _python_search(
 class CompositeKeyProfiler:
     """Dataset-level relation profiler: discover minimal composite keys."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         n_rows = df.height
         if n_rows < 2 or df.width < 2:
             return []

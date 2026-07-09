@@ -24,6 +24,7 @@ from functools import lru_cache
 
 from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 100
@@ -115,7 +116,9 @@ def _discover_python(cols_ids: list[list[int]], n_rows: int, min_conf: float) ->
 class ApproximateFDProfiler:
     """Dataset-level relation profiler: near-FD violations (likely errors)."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         n_rows = df.height
         if n_rows < _MIN_ROWS or df.width < 2:
             return []

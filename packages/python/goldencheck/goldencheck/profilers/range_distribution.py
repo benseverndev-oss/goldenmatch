@@ -4,6 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -18,7 +19,9 @@ def _numeric_dtypes() -> tuple:
 
 
 class RangeDistributionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
         col = df[column]
         dtype = col.dtype

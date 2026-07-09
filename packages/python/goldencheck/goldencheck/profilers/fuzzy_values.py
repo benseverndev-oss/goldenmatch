@@ -26,6 +26,7 @@ from rapidfuzz.distance import Levenshtein as _RFLevenshtein
 
 from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -106,7 +107,9 @@ def _python_clusters(values: list[str], min_similarity: float) -> list[list[int]
 
 
 class FuzzyValuesProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         if df.height < _MIN_ROWS:
             return []
         col = df[column]

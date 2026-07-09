@@ -26,6 +26,7 @@ from functools import lru_cache
 
 from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 50          # enough support that a strict FD isn't a small-sample fluke
@@ -86,7 +87,9 @@ def _discover_python(df: pl.DataFrame, cols: list[str], n_rows: int) -> list[tup
 class FunctionalDependencyProfiler:
     """Dataset-level relation profiler: discover strict single-column FDs."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         n_rows = df.height
         if n_rows < _MIN_ROWS or df.width < 2:
             return []

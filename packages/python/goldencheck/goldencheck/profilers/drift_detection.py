@@ -4,6 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -29,7 +30,9 @@ CATEGORICAL_DRIFT_EXTREME = 0.50    # >50% new categories â†’ WARNING; 20-50% â†
 
 
 class DriftDetectionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
         col = df[column]
         total = len(col)

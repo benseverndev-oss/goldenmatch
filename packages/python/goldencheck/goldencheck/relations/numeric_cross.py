@@ -4,6 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 
@@ -52,7 +53,9 @@ def _find_max_pairs(columns: list[str]) -> list[tuple[str, str]]:
 class NumericCrossColumnProfiler:
     """Detects rows where a numeric value exceeds a related maximum column."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
 
         # Value > Max checks
