@@ -25,14 +25,16 @@ import pytest
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
+    GoldenFieldRule,
     GoldenMatchConfig,
     GoldenRulesConfig,
     MatchkeyConfig,
     MatchkeyField,
+    MemoryConfig,
 )
 from goldenmatch.core.fused_match import match_fused_ready
 from goldenmatch.core.fused_routing import config_needs_artifacts
-from goldenmatch.core.pipeline import run_dedupe_df
+from goldenmatch.core.pipeline import _run_fused_match_short_circuit, run_dedupe_df
 from polars.testing import assert_frame_equal
 
 
@@ -114,11 +116,38 @@ def _golden_content(g: pl.DataFrame) -> pl.DataFrame:
     return g.select(sorted(cols)).sort(sorted(cols))
 
 
+def _slow_golden_config(scorer: str = "jaro_winkler") -> GoldenMatchConfig:
+    """Covered match config whose golden is NOT _polars_native_eligible (a
+    field_rules entry forces the SLOW / fused golden arm of
+    _golden_from_multi_df), still artifact-free (auto_split off, most_complete)."""
+    cfg = _covered_config(scorer)
+    cfg.golden_rules.field_rules = {"name": GoldenFieldRule(strategy="most_complete")}
+    return cfg
+
+
 def test_config_is_covered_and_artifact_free():
     """Sanity: the parity config is match_fused-covered and needs no artifacts."""
     cfg = _covered_config()
     assert match_fused_ready(cfg) is True
     assert config_needs_artifacts(cfg) is False
+
+
+def test_config_needs_artifacts_gates_divergent_features():
+    """The divergence-causing config flags the short-circuit can't replicate each
+    force config_needs_artifacts True (decline routing), so the classic path runs
+    and byte-identity holds. (adaptive -> refine_golden_rules mutation; memory ->
+    correction overlay; llm_boost -> LLM re-scoring.)"""
+    adaptive = _covered_config()
+    adaptive.golden_rules.adaptive = True
+    assert config_needs_artifacts(adaptive) is True
+
+    mem = _covered_config()
+    mem.memory = MemoryConfig(enabled=True, backend="sqlite")
+    assert config_needs_artifacts(mem) is True
+
+    boost = _covered_config()
+    boost.llm_boost = True
+    assert config_needs_artifacts(boost) is True
 
 
 @requires_kernel
@@ -216,6 +245,92 @@ def test_oversized_cluster_excluded_from_golden_like_classic(monkeypatch):
         classic["dupes"]["__row_id__"].to_list()
     )
     assert _multi_partition(fused["clusters"]) == _multi_partition(classic["clusters"])
+
+
+@requires_kernel
+@pytest.mark.parametrize("golden_fused_env", [None, "0"])
+def test_slow_golden_arm_byte_identical(monkeypatch, golden_fused_env):
+    """The SLOW golden arm of _golden_from_multi_df (field_rules -> NOT
+    _polars_native_eligible) is byte-identical to classic on the fused-match
+    route. Parametrized over GOLDENMATCH_GOLDEN_FUSED so BOTH sub-arms run:
+    unset -> the fused-golden kernel (_try_fused_golden); =0 -> the pure-Python
+    build_golden_records_batch + _golden_records_to_df rebuild."""
+    monkeypatch.delenv("GOLDENMATCH_MATCH_FUSED", raising=False)
+    if golden_fused_env is None:
+        monkeypatch.delenv("GOLDENMATCH_GOLDEN_FUSED", raising=False)
+    else:
+        monkeypatch.setenv("GOLDENMATCH_GOLDEN_FUSED", golden_fused_env)
+    df = _people_df()
+
+    classic = run_dedupe_df(df, _slow_golden_config())
+    fused = run_dedupe_df(df, _flag(_slow_golden_config()))
+    assert fused["match_fused_capacity_mode"] is True
+    # golden_fused_used tracks whether the fused golden kernel actually fired:
+    # True with the default (kernel present), False under the =0 kill-switch.
+    assert fused["golden_fused_used"] is (golden_fused_env is None)
+
+    assert _multi_partition(fused["clusters"]) == _multi_partition(classic["clusters"])
+    assert fused["golden"] is not None and classic["golden"] is not None
+    assert_frame_equal(
+        _golden_content(fused["golden"]), _golden_content(classic["golden"])
+    )
+
+
+@requires_kernel
+def test_result_dict_keys_match_classic(monkeypatch):
+    """The short-circuit's hand-built result dict has the IDENTICAL key set as the
+    classic path's result dict -- a future 15th key added to one and not the other
+    would KeyError downstream in _api.py DedupeResult assembly."""
+    monkeypatch.delenv("GOLDENMATCH_MATCH_FUSED", raising=False)
+    df = _people_df()
+    classic = run_dedupe_df(df, _covered_config())
+    fused = run_dedupe_df(df, _flag(_covered_config()))
+    assert set(fused.keys()) == set(classic.keys())
+
+
+@requires_kernel
+def test_adaptive_golden_rules_declines_routing(monkeypatch):
+    """auto_split=False + adaptive=True: config_needs_artifacts is True (the
+    classic golden seam runs refine_golden_rules, which the short-circuit can't
+    replicate), so the flag is a no-op and the classic path runs byte-identical."""
+    monkeypatch.delenv("GOLDENMATCH_MATCH_FUSED", raising=False)
+    df = _people_df()
+    cfg = _covered_config()
+    cfg.golden_rules.adaptive = True
+    assert config_needs_artifacts(cfg) is True
+
+    classic = run_dedupe_df(df, cfg.model_copy(deep=True))
+    flagged = run_dedupe_df(df, _flag(cfg.model_copy(deep=True)))
+    assert flagged.get("match_fused_capacity_mode") is not True
+    assert _multi_partition(flagged["clusters"]) == _multi_partition(classic["clusters"])
+
+
+def test_across_files_only_declines_short_circuit():
+    """The short-circuit declines (returns None -> classic) when across_files_only
+    is set: match_fused clusters all pairs, but the classic path drops
+    within-source pairs, so routing would DIVERGE. Direct-helper test (the
+    across_files_only param isn't threaded through dedupe_df)."""
+    df = _people_df().with_row_index("__row_id__")
+    res = _run_fused_match_short_circuit(
+        df, _covered_config(), quarantine_df=None,
+        output_report=False, across_files_only=True,
+    )
+    assert res is None
+
+
+def test_pending_postflight_declines_short_circuit():
+    """The short-circuit declines when a non-strict postflight is pending
+    (_preflight_report set, _strict_autoconfig falsy): postflight may raise the
+    effective threshold from the full-data score histogram, which the fused kernel
+    never materializes, so it can't be replicated -> decline to stay
+    byte-identical."""
+    df = _people_df().with_row_index("__row_id__")
+    cfg = _covered_config()
+    cfg._preflight_report = object()  # non-None sentinel; strict defaults falsy
+    res = _run_fused_match_short_circuit(
+        df, cfg, quarantine_df=None, output_report=False, across_files_only=False,
+    )
+    assert res is None
 
 
 @requires_kernel

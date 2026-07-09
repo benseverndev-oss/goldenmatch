@@ -1296,6 +1296,7 @@ def _run_fused_match_short_circuit(
     *,
     quarantine_df: pl.DataFrame | None,
     output_report: bool,
+    across_files_only: bool,
 ) -> dict | None:
     """Fused-match whole-stage short-circuit (spec 2026-07-09 Stage F).
 
@@ -1313,8 +1314,29 @@ def _run_fused_match_short_circuit(
     byte-identical to classic. ``match_fused_capacity_mode=True`` marks the shed so
     it is never silent (Stage G telemetry). The config-driven divergence gate
     (``config_needs_artifacts``) is re-checked by the caller before entry.
+
+    DIVERGENCE GUARDS beyond ``config_needs_artifacts`` (transient / call-scoped
+    signals that live on the pipeline call, NOT the persistent config, so they
+    can't be folded into the single-source config gate):
+
+    - ``across_files_only`` -- the classic exact/fuzzy stages drop within-source
+      pairs; match_fused clusters all pairs, so an across-files run would
+      DIVERGE. Decline.
+    - ``_preflight_report`` present + NOT ``_strict_autoconfig`` -- the classic
+      path runs ``_apply_postflight`` which may RAISE the effective threshold
+      from a bimodal score histogram (needs the full scored-pair histogram the
+      fused kernel never materializes, so it can't be replicated). Decline to
+      stay byte-identical. NOTE this narrows auto-routing on the non-strict
+      auto-config path; the fast-follow is for the controller (Stage D) to bake
+      the postflight-adjusted threshold into the committed config before setting
+      the flag, which would re-open this path.
     """
     if os.environ.get("GOLDENMATCH_MATCH_FUSED", "").lower() in {"0", "false", "off"}:
+        return None
+    if across_files_only:
+        return None
+    _preflight = getattr(config, "_preflight_report", None)
+    if _preflight is not None and not getattr(config, "_strict_autoconfig", False):
         return None
 
     from goldenmatch.core.fused_match import (
@@ -1387,9 +1409,11 @@ def _run_fused_match_short_circuit(
     # Golden -- route the fused clusters through the SAME builder the classic path
     # picks (fast columnar vs slow batch), over the joined multi_df. Byte-identical
     # golden by construction (frames-path golden == dict-path golden == this).
-    golden_rules = config.golden_rules or GoldenRulesConfig(
-        default_strategy="most_complete"
-    )
+    # golden_rules is non-None here: config_needs_artifacts (re-checked by the
+    # caller before entry) returns True for a None golden_rules (auto_split
+    # defaults True), so a None golden_rules never reaches the short-circuit.
+    golden_rules = config.golden_rules
+    assert golden_rules is not None  # noqa: S101 - invariant from config_needs_artifacts
     golden_df: pl.DataFrame | None = None
     golden_fused_used = False
     if golden_row_ids:
@@ -1429,7 +1453,7 @@ def _run_fused_match_short_circuit(
             total_records=collected_df.height,
             total_clusters=len(clusters),
             cluster_sizes=[c["size"] for c in clusters.values()],
-            oversized_clusters=0,
+            oversized_clusters=len(oversized_ids),
             matchkeys_used=[mk.name for mk in config.get_matchkeys()],
         )
 
@@ -1743,6 +1767,7 @@ def _run_dedupe_pipeline(
             config,
             quarantine_df=quarantine_df,
             output_report=output_report,
+            across_files_only=across_files_only,
         )
         if _fused_result is not None:
             if memory_store is not None:

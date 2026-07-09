@@ -105,6 +105,17 @@ def config_needs_artifacts(config) -> bool:
     - golden uses ``confidence_majority`` anywhere -- needs pair scores.
     - ``config.output.lineage_provenance`` -- full ``__survivorship_prov__``
       the fused golden path can't reproduce.
+    - ``golden_rules.adaptive`` -- the classic golden seam runs
+      ``refine_golden_rules`` (cluster-shape + MemoryStore-correction-driven
+      per-field strategy mutation) before survivorship; the short-circuit uses
+      the config's golden_rules verbatim, so an adaptive run would DIVERGE.
+    - ``config.memory.enabled`` -- ``_apply_memory_post`` overlays stored
+      pair corrections onto the scored pairs before clustering; match_fused
+      has no correction overlay, so an enabled memory store DIVERGES the
+      clustering.
+    - ``config.llm_boost`` -- the classic path re-scores/re-filters borderline
+      pairs through the LLM boost stage; match_fused doesn't, so clustering
+      DIVERGES.
 
     This is the CONFIG-only half of ``needs_artifacts`` (both the controller and
     the pipeline read it authoritatively -- single source of truth). Caller-intent
@@ -128,6 +139,9 @@ def config_needs_artifacts(config) -> bool:
     auto_split = True if golden_rules is None else golden_rules.auto_split
     if auto_split:
         return True
+    # golden_rules is non-None past this point (auto_split branch handles None).
+    if getattr(golden_rules, "adaptive", False):
+        return True
     identity = config.identity
     if identity is not None and identity.enabled:
         return True
@@ -135,6 +149,11 @@ def config_needs_artifacts(config) -> bool:
         return True
     output = config.output
     if output is not None and output.lineage_provenance:
+        return True
+    memory = getattr(config, "memory", None)
+    if memory is not None and getattr(memory, "enabled", False):
+        return True
+    if getattr(config, "llm_boost", False):
         return True
     return False
 
