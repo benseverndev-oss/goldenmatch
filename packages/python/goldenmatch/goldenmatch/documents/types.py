@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # runtime stays stdlib-only (offline-testable); polars only for typing
+    import polars as pl
 
 
 @dataclass(frozen=True)
@@ -144,7 +148,25 @@ DocResult = ExtractResult | StructuredResult
 
 
 @dataclass
+class _DocOutcome:
+    """Per-document dispatch carrier. Carries the FLOW facts (`confidence`,
+    `vlm_calls`) that assemble can't derive from the `result` alone, plus the
+    stable `doc_id` (path fingerprint) both frames and the report key on."""
+
+    doc_id: str            # record_fingerprint({"path": normalized source_file})
+    source_file: str
+    doctype: str           # invoice | po | statement | receipt | generic
+    confidence: float      # classifier confidence; 1.0 for pinned template / flat schema
+    vlm_calls: int         # transport calls this doc cost
+    result: DocResult      # ExtractResult (flat) | StructuredResult
+
+
+@dataclass
 class IngestReport:
     n_files: int = 0
     n_rows: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)  # (file, message)
+    line_items: "pl.DataFrame | None" = None                     # child frame, None if none
+    doctypes: dict[str, str] = field(default_factory=dict)       # doc_id -> doctype
+    classify_confidence: dict[str, float] = field(default_factory=dict)  # doc_id -> conf
+    vlm_calls: int = 0                                           # total transport calls
