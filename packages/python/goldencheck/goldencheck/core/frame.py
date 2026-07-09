@@ -27,6 +27,15 @@ class Column(Protocol):
     def member_count(self, values: list) -> int: ...
     def str_match_count(self, pattern: str) -> int: ...
     def str_filter(self, pattern: str, *, matching: bool) -> Column: ...
+    def min(self) -> Any: ...
+    def max(self) -> Any: ...
+    def mean(self) -> Any: ...
+    def std(self) -> Any: ...
+    def diff(self) -> Column: ...
+    def is_sorted(self) -> bool: ...
+    def count_gt(self, value: Any) -> int: ...
+    def count_eq(self, value: Any) -> int: ...
+    def filter_outside(self, lower: Any, upper: Any) -> Column: ...
 
 
 @runtime_checkable
@@ -103,6 +112,33 @@ class PolarsColumn:
     def str_filter(self, pattern: str, *, matching: bool) -> PolarsColumn:
         mask = self._s.str.contains(pattern)
         return PolarsColumn(self._s.filter(mask if matching else ~mask))
+
+    def min(self) -> Any:
+        return self._s.min()
+
+    def max(self) -> Any:
+        return self._s.max()
+
+    def mean(self) -> Any:
+        return self._s.mean()
+
+    def std(self) -> Any:
+        return self._s.std()
+
+    def diff(self) -> PolarsColumn:
+        return PolarsColumn(self._s.diff())
+
+    def is_sorted(self) -> bool:
+        return bool(self._s.is_sorted())
+
+    def count_gt(self, value: Any) -> int:
+        return int((self._s > value).sum())
+
+    def count_eq(self, value: Any) -> int:
+        return int((self._s == value).sum())
+
+    def filter_outside(self, lower: Any, upper: Any) -> PolarsColumn:
+        return PolarsColumn(self._s.filter((self._s < lower) | (self._s > upper)))
 
 
 class PolarsFrame:
