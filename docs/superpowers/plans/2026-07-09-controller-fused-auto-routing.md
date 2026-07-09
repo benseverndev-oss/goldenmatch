@@ -307,19 +307,24 @@ Two concrete sub-problems the plan pins:
 2. **Route the fused clusters to golden via the multi_df, NOT a synthetic clusters dict** — the fused table is `(__row_id__, __cluster_id__)` only. Join `__cluster_id__` onto `collected_df` to build the same `multi_df` the dict path uses, then let the golden seam (Stage E) run on it (fused golden or classic). `run_golden_fused_arrow` takes exactly that frame and drops singletons itself, so no `cluster_frames`/oversized metadata and no `pair_scores` are needed (the `needs_artifacts` gate already excluded `confidence_majority`).
 
 ```python
-if getattr(config, "_use_fused_match", False) and not _config_needs_artifacts(config, golden_rules):
+if getattr(config, "_use_fused_match", False) and not config_needs_artifacts(config):
     from goldenmatch.core.fused_match import run_match_fused_arrow, run_match_fused_multipass_arrow
     columns = {c: collected_df[c].to_arrow() for c in _fused_needed_src_cols(config)}
     fused_tbl = run_match_fused_arrow(columns, config, n_rows=collected_df.height) \
         or run_match_fused_multipass_arrow(columns, config, n_rows=collected_df.height)
     if fused_tbl is not None:
         multi_df = collected_df.join(pl.from_arrow(fused_tbl), on="__row_id__", how="inner")  # attach __cluster_id__
-        # -> jump to the golden seam on multi_df (dict-path shape); scored_pairs empty, confidence absent (capacity mode)
-        clusters, cluster_frames, scored_pairs = None, None, []  # capacity-mode: no pairs/confidence
+        # capacity mode: DIRECT-call the golden builder on multi_df + assemble the
+        # result dict, BYPASSING the 3-branch golden dispatch (its dict `else`
+        # branch REBUILDS multi_df from a `clusters` dict, which we don't have).
+        # scored_pairs = [], no cluster confidence/lineage.
+        ...  # -> _try_fused_golden(multi_df, ...) or build_golden_records_batch(multi_df, ...) -> result dict, return
     # else fall through to the classic block->score->cluster path unchanged
 ```
 
-The pipeline re-checks the **config-driven** `needs_artifacts` conditions here (`_config_needs_artifacts` = auto_split/identity/confidence_majority/lineage_provenance — authoritative in config scope). The caller-intent conditions (lineage/review/explain/anomaly) are already folded into the controller flag via the `_api.py` hint (Task D.3), so they are NOT re-checked here (they aren't in pipeline scope — the reason for the hint). Set `match_fused_capacity_mode=True` for telemetry (Stage G). The exact control-flow to "jump to the golden seam" (a helper that runs the golden branch on `multi_df` and returns the result dict) is the implementer's to structure cleanly — do NOT duplicate the golden branch; factor it or set the locals so the existing golden seam consumes `multi_df`.
+Use the SINGLE-ARG `config_needs_artifacts(config)` (it derives `config.golden_rules` internally — the `golden_rules` local isn't bound until ~2281, out of scope at ~1513). It's the SAME helper the controller calls (single source). The caller-intent conditions (lineage/review/explain/anomaly) are already folded into the controller flag via the `_api.py` hint (Task D.3), so they are NOT re-checked here (they aren't in pipeline scope — the reason for the hint). Set `match_fused_capacity_mode=True` for telemetry (Stage G).
+
+**Control-flow (pin this — the reviewer flagged it):** do NOT try to feed the pre-built `multi_df` into the existing dict-path golden branch (that branch rebuilds `multi_df` from a `clusters` dict). Instead call the golden builder DIRECTLY on the joined `multi_df` (`_try_fused_golden(multi_df, ...) or build_golden_records_batch(multi_df, ...)`), assemble the result dict (empty `scored_pairs`, no confidence/lineage), and return — bypassing the three-branch dispatch. Factor a small helper rather than duplicating the golden logic.
 
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
@@ -352,7 +357,7 @@ The pipeline re-checks the **config-driven** `needs_artifacts` conditions here (
 
 ### Task H.1: docs sweep
 
-- [ ] Invoke `rollout-docs-sweep`. Change set: ADDED `core/fused_routing.py` (`estimate_classic_match_peak_rss_gb`, `maybe_route_fused_match`, `needs_artifacts_or_diverges`), `ExecutionPlan.use_fused_match`, `golden_fused_used` telemetry, env flags (`GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_MATCH_FUSED`, `GOLDENMATCH_FUSED_*`). Update `docs-site/goldenmatch/tuning.mdx` (the canonical opt-ins doc) with the new env flags; CHANGELOG under `[Unreleased]`; the controller-v3 planner doc/telemetry surface if it enumerates rules. Run `check_native_symbols` (no new native symbols — should be unaffected) + the version-consistency gate.
+- [ ] Invoke `rollout-docs-sweep`. Change set: ADDED `core/fused_routing.py` (`estimate_classic_match_peak_rss_gb`, `maybe_route_fused_match`, `config_needs_artifacts`), `ExecutionPlan.use_fused_match`, `golden_fused_used` + `match_fused_capacity_mode` telemetry, env flags (`GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_MATCH_FUSED`, `GOLDENMATCH_FUSED_*`). Update `docs-site/goldenmatch/tuning.mdx` (the canonical opt-ins doc) with the new env flags; CHANGELOG under `[Unreleased]`; the controller-v3 planner doc/telemetry surface if it enumerates rules. Run `check_native_symbols` (no new native symbols — should be unaffected) + the version-consistency gate.
 
 ### Task H.2: rebase + PR
 
