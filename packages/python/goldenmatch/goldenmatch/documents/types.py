@@ -28,6 +28,12 @@ class DocTemplate:
 
 
 @dataclass(frozen=True)
+class ClassifyResult:
+    doctype: str                # invoice | po | statement | receipt | generic
+    confidence: float           # clamped to [0, 1]
+
+
+@dataclass(frozen=True)
 class PageImage:
     png_bytes: bytes            # normalized PNG
     width: int

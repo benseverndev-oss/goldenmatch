@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 from goldenmatch.core._native_loader import native_module
 from goldenmatch.documents._openai import parse_message_text
+from goldenmatch.documents.classify import _pure_parse, _pure_prompt
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
 from goldenmatch.documents.suggest import _PROMPT
 from goldenmatch.documents.templates import _pure_list, _pure_template
@@ -83,6 +84,11 @@ def _run_pure(kernel: str, input_: object):
         return _template_to_dict(_pure_template(input_["doctype"]))
     if kernel == "template_list":
         return _pure_list()
+    if kernel == "classify_prompt":
+        return _pure_prompt()
+    if kernel == "classify_parse":
+        r = _pure_parse(input_)
+        return {"doctype": r.doctype, "confidence": r.confidence}
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -117,6 +123,10 @@ def _run_native(kernel: str, input_: object, symbol: str):
         return json.loads(nm.documents_template(input_["doctype"]))
     if kernel == "template_list":
         return json.loads(nm.documents_template_list())
+    if kernel == "classify_prompt":
+        return nm.documents_classify_prompt()
+    if kernel == "classify_parse":
+        return json.loads(nm.documents_parse_classify(input_))
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -128,6 +138,8 @@ _KERNEL_SYMBOL = {
     "normalize": "documents_normalize_record",
     "template": "documents_template",
     "template_list": "documents_template_list",
+    "classify_prompt": "documents_classify_prompt",
+    "classify_parse": "documents_parse_classify",
 }
 
 

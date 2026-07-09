@@ -34,3 +34,11 @@
 {"expected": {"ok": {"doctype": "receipt", "header_fields": [{"hint": null, "kind": "text", "name": "merchant_name"}, {"hint": null, "kind": "address", "name": "merchant_address"}, {"hint": null, "kind": "date", "name": "purchase_date"}, {"hint": null, "kind": "number", "name": "total_amount"}, {"hint": null, "kind": "text", "name": "payment_method"}], "line_item_fields": []}}, "input": {"doctype": "receipt"}, "kernel": "template"}
 {"expected": {"error": true, "substring": "unknown doctype"}, "input": {"doctype": "nope"}, "kernel": "template"}
 {"expected": {"ok": ["invoice", "po", "statement", "receipt"]}, "input": {}, "kernel": "template_list"}
+{"expected": {"ok": "You are shown a document. Classify it as exactly one of these types: invoice, po, statement, receipt. If it is none of these, answer \"generic\". Return ONLY JSON: {\"doctype\": \"<one of: invoice|po|statement|receipt|generic>\", \"confidence\": <0..1>}. No prose."}, "input": null, "kernel": "classify_prompt"}
+{"expected": {"ok": {"confidence": 0.9, "doctype": "invoice"}}, "input": "{\"doctype\":\"invoice\",\"confidence\":0.9}", "kernel": "classify_parse"}
+{"expected": {"ok": {"confidence": 0.5, "doctype": "receipt"}}, "input": "```json\n{\"doctype\":\"receipt\",\"confidence\":0.5}\n```", "kernel": "classify_parse"}
+{"expected": {"ok": {"confidence": 0.2, "doctype": "generic"}}, "input": "{\"doctype\":\"generic\",\"confidence\":0.2}", "kernel": "classify_parse"}
+{"expected": {"ok": {"confidence": 1.0, "doctype": "po"}}, "input": "{\"doctype\":\"po\",\"confidence\":1.5}", "kernel": "classify_parse"}
+{"expected": {"ok": {"confidence": 0.0, "doctype": "po"}}, "input": "{\"doctype\":\"po\",\"confidence\":-0.3}", "kernel": "classify_parse"}
+{"expected": {"error": true}, "input": "{\"doctype\":\"nope\",\"confidence\":0.9}", "kernel": "classify_parse"}
+{"expected": {"error": true}, "input": "{\"doctype\":\"invoice\"}", "kernel": "classify_parse"}

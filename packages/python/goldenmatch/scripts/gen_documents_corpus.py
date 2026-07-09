@@ -27,6 +27,7 @@ OUT = REPO / "tests" / "parity" / "documents_corpus.jsonl"
 sys.path.insert(0, str(REPO))
 
 from goldenmatch.documents._openai import parse_message_text  # noqa: E402
+from goldenmatch.documents.classify import _pure_parse, _pure_prompt  # noqa: E402
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict  # noqa: E402
 from goldenmatch.documents.suggest import _PROMPT  # noqa: E402
 from goldenmatch.documents.templates import _ORDER, _pure_template  # noqa: E402
@@ -153,6 +154,29 @@ add("template", {"doctype": "nope"}, {"error": True, "substring": "unknown docty
 # template_list: cross-checks native template_list() (vec in templates.rs) vs the
 # pure _ORDER, so a doctype added to one but not the other can't ship silently.
 add("template_list", {}, {"ok": list(_ORDER)})
+
+# --- classify: prompt (fixed constant, no input) --------------------------
+add("classify_prompt", None, {"ok": _pure_prompt()})
+
+# --- classify: parse -------------------------------------------------------
+# ok = {"doctype", "confidence"} (the same dict the native shim's JSON decodes to).
+classify_parse_ok = [
+    '{"doctype":"invoice","confidence":0.9}',                 # clean
+    '```json\n{"doctype":"receipt","confidence":0.5}\n```',   # fenced
+    '{"doctype":"generic","confidence":0.2}',                 # generic escape hatch
+    '{"doctype":"po","confidence":1.5}',                      # out-of-range -> clamp to 1.0
+    '{"doctype":"po","confidence":-0.3}',                     # out-of-range -> clamp to 0.0
+]
+for text in classify_parse_ok:
+    r = _pure_parse(text)
+    add("classify_parse", text, {"ok": {"doctype": r.doctype, "confidence": r.confidence}})
+
+classify_parse_err = [
+    '{"doctype":"nope","confidence":0.9}',  # unknown doctype
+    '{"doctype":"invoice"}',                # missing confidence
+]
+for text in classify_parse_err:
+    add("classify_parse", text, {"error": True})
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 with OUT.open("w", encoding="utf-8") as f:
