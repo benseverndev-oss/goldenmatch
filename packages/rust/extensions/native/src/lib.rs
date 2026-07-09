@@ -14,6 +14,7 @@ mod cluster;
 mod documents;
 mod featurize;
 mod fused;
+mod golden;
 mod hash;
 mod pairs;
 mod perceptual;
@@ -39,6 +40,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(block::build_block_index_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(fused::match_fused, m)?)?;
     m.add_function(wrap_pyfunction!(fused::match_fused_fs, m)?)?;
+    m.add_function(wrap_pyfunction!(golden::golden_fused, m)?)?;
     m.add_function(wrap_pyfunction!(featurize::char_ngram_features, m)?)?;
     m.add_function(wrap_pyfunction!(featurize::char_ngram_project, m)?)?;
     m.add_function(wrap_pyfunction!(score::jaro_winkler_similarity, m)?)?;
@@ -63,17 +65,38 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(perceptual::perceptual_phash_image, m)?)?;
     m.add_function(wrap_pyfunction!(perceptual::perceptual_phash_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(perceptual::perceptual_fingerprint_audio, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        perceptual::perceptual_fingerprint_audio,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(perceptual::perceptual_radial_variance, m)?)?;
     m.add_function(wrap_pyfunction!(autoconfig::autoconfig_decide_plan, m)?)?;
-    m.add_function(wrap_pyfunction!(autoconfig::autoconfig_classify_columns, m)?)?;
-    m.add_function(wrap_pyfunction!(autoconfig::autoconfig_extrapolate_pair_count, m)?)?;
-    m.add_function(wrap_pyfunction!(autoconfig::autoconfig_sparse_match_floor, m)?)?;
-    m.add_function(wrap_pyfunction!(autoconfig::autoconfig_exact_matchkey_floor, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        autoconfig::autoconfig_classify_columns,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        autoconfig::autoconfig_extrapolate_pair_count,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        autoconfig::autoconfig_sparse_match_floor,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        autoconfig::autoconfig_exact_matchkey_floor,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(suggest::suggest_config, m)?)?;
     m.add_function(wrap_pyfunction!(documents::documents_schema_validate, m)?)?;
-    m.add_function(wrap_pyfunction!(documents::documents_parse_message_text, m)?)?;
-    m.add_function(wrap_pyfunction!(documents::documents_extract_instruction, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        documents::documents_parse_message_text,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        documents::documents_extract_instruction,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(documents::documents_suggest_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(documents::documents_normalize_record, m)?)?;
     Ok(())
