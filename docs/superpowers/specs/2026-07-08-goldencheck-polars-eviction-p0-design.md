@@ -52,8 +52,9 @@ substrate-agnostic (ships only `PolarsColumn`), so the choice is made when P2 po
    goldencheck._polars_lazy import pl`, and **defer every module-level `pl.` reference**.
 2. `goldencheck/core/frame.py` — `Frame` + `Column` Protocols + a `PolarsFrame`/`PolarsColumn`
    backend + `to_frame()` factory.
-3. Route `scanner.py` + `BaseProfiler.profile` (all ~13 profilers + relation profilers) through
-   `Frame` instead of raw `pl.DataFrame`.
+3. Route `scanner.py` + the profilers through `Frame` instead of raw `pl.DataFrame` — two passes:
+   the 13 `BaseProfiler` column profilers (`profile(df, column, *, context)`) and the 9
+   relation profilers (`profile(df)`, don't inherit `BaseProfiler`).
 4. Port 3 profilers (`nullability`, `cardinality`, `uniqueness`) onto the seam (byte-identical).
 5. An import-graph subprocess gate test.
 
@@ -76,16 +77,38 @@ imports polars on first attribute access) into `goldencheck/_polars_lazy.py`. Sw
 
 **The real work + top risk — module-level Polars references.** Function-body `pl.DataFrame(...)`
 is lazy for free (the function isn't run at import). But anything evaluated at *import* time
-triggers the proxy's import and defeats the linchpin — e.g. `_SUPPORTED = (pl.Utf8, pl.Int64, …)`
-dtype tuples in the profilers, a `pl.col(...)` in a module constant, a dtype in a default
-argument. The sweep must **grep for every `pl.` attribute access outside a `def`/method body** and
-defer each: move it into a function, a lazily-built cache (`@lru_cache`/module-level function), or
-a backend-neutral dtype string. The subprocess import-graph gate is what proves none were missed.
+triggers the proxy's import and defeats the linchpin. An audit of the ~90 `pl.<dtype>` references
+found the vast majority are inside function/method bodies (lazy-safe); the actual import-time
+killers are exactly **7 module-level dtype-tuple constants** (verified — no module-level
+`pl.col(...)` constant, no default-arg dtypes):
+- `profilers/sequence_detection.py:9` `INTEGER_DTYPES = (pl.Int8, …)`
+- `profilers/range_distribution.py:9-12`
+- `profilers/drift_detection.py:9-12`
+- `relations/numeric_cross.py:8-11` `NUMERIC_DTYPES`
+- `relations/composite_key.py:36-41`
+- `relations/approx_fd.py:33-37`
+- `relations/functional_dependency.py:34-39` `_SUPPORTED`
+
+The sweep is therefore genuinely mechanical: the 49 import-line rewrites + deferring these **7**
+constants (into a function or a lazily-built cache; these live in *unported* modules, so they're
+part of the lazy-import sweep, independent of the 3-profiler port). The subprocess import-graph
+gate proves none were missed.
+
+**Precondition to assert (goldenflow's proxy relies on it):** every swept module must have `from
+__future__ import annotations` (so `-> pl.Expr` annotations stay strings) and no `def f(x=pl.X)`
+default-arg dtypes. Both already hold across goldencheck (audited: zero default-arg dtypes) — the
+plan asserts it rather than assuming it.
 
 ## Component 2 — The `Frame`/`Column` seam (`goldencheck/core/frame.py`)
 
 Two minimal Protocols (mirroring goldenflow's `engine/frame.py`, plus a `Column` accessor
 goldencheck needs for its scalar reductions):
+
+The `Column` surface is exactly what the 3 P0 profilers use — verified against
+`nullability.py` (`len`, `null_count`), `uniqueness.py` (`len`, `drop_nulls`, `n_unique`), and
+`cardinality.py` (`len`, `n_unique`, and the chain `drop_nulls().unique().sort().to_list()`). So
+P0's `Column` is `{len, null_count, n_unique, drop_nulls, unique, sort, to_list}` plus `dtype` —
+**not** `value_counts`/`is_in` (no P0 profiler uses those; they arrive when later stages need them):
 
 ```python
 class Column(Protocol):
@@ -95,8 +118,8 @@ class Column(Protocol):
     def null_count(self) -> int: ...
     def n_unique(self) -> int: ...
     def drop_nulls(self) -> "Column": ...
-    def value_counts(self) -> list[tuple[object, int]]: ...
-    def is_in(self, values) -> "Column": ...
+    def unique(self) -> "Column": ...    # cardinality: drop_nulls().unique().sort().to_list()
+    def sort(self) -> "Column": ...
     def to_list(self) -> list: ...
 
 class Frame(Protocol):
@@ -118,22 +141,37 @@ the 3 ported profilers use; grow it as later stages port more. Backend-neutral `
 `pl.Date/Datetime -> "date"` (the exact mapping is defined here so ported profilers compare against
 strings, not `pl.` types — which also removes their module-level `pl.` dtype references).
 
-## Component 3 — Route `scanner.py` + `BaseProfiler` through the seam
+## Component 3 — Route `scanner.py` + the profilers through the seam (TWO signatures)
 
-`BaseProfiler.profile` signature changes from `df: pl.DataFrame` to `frame: Frame` for **all ~13
-profilers + the relation profilers**. For the 10 unported profilers this is a **one-line** change:
-`df = frame.native` at the top, body untouched. `scanner.py` wraps its sampled `pl.DataFrame` in a
-`PolarsFrame` once (`to_frame(sample)`) and passes the `Frame` everywhere. The seam threads through
-the whole scan immediately; bodies migrate one stage at a time. (Relation profilers take the
-`Frame` too and use `.native` until P2.)
+goldencheck has **two distinct `profile()` shapes** — the routing is two mechanical passes, not
+one:
+- **13 column profilers** inherit `BaseProfiler` (`profilers/base.py`): `profile(self, df:
+  pl.DataFrame, column: str, *, context: dict | None = None)`. Change `df: pl.DataFrame` → `frame:
+  Frame`. 10 unported ones get a one-line `df = frame.native` at the top, body untouched.
+- **9 relation profilers** (`relations/*.py`) do **NOT** inherit `BaseProfiler` and use a different
+  signature `profile(self, df: pl.DataFrame)` — whole frame, **no `column`, no `context`** (e.g.
+  `functional_dependency.py`). Change `df` → `frame`, add `df = frame.native` — all 9 stay on
+  `.native` in P0 (they're the FD-mining/pivot tail, ported or declined in P2).
+
+`scanner.py` (`sample: pl.DataFrame` at ~line 84) wraps the sample once via `to_frame(sample)` and
+passes the `Frame` to both fan-outs (`COLUMN_PROFILERS` ~44-60 and `RELATION_PROFILERS` ~62-81).
+The seam threads through the whole scan immediately; bodies migrate one stage at a time.
 
 ## Component 4 — Port `nullability`, `cardinality`, `uniqueness`
 
-These use only `null_count`/`n_unique`/`len`/`drop_nulls` (+ dtype checks). Port each body from
-`df[col].drop_nulls().n_unique()` → `frame.column(col).drop_nulls().n_unique()`, and dtype checks
-from `col.dtype == pl.Utf8` → `frame.dtype(col) == "str"`. Because `PolarsColumn` delegates to the
-same Polars calls, the ports are **byte-identical by construction** — the existing tests for these
+These three do **no dtype comparisons** and have **no module-level `pl.` references** — they use
+only the `Column` reductions above (`nullability`: `len`+`null_count`; `uniqueness`:
+`len`+`drop_nulls`+`n_unique`; `cardinality`: `len`+`n_unique`+`drop_nulls().unique().sort()
+.to_list()`). Port each body from `df[col]…` → `frame.column(col)…`. Because `PolarsColumn`
+delegates to the same Polars calls (and its chained methods return `PolarsColumn` wrappers that
+also delegate), the ports are **byte-identical by construction** — the existing tests for these
 three profilers pass with zero edits (the parity gate).
+
+(The backend-neutral `dtype`-string mapping defined in Component 2 is **infrastructure for later
+ports** — `type_inference`, `format_detection`, `sequence_detection`, etc. compare against `pl.`
+dtypes — not something the 3 P0 profilers use. The neutral collapse `int`/`date` is safe for P0
+precisely because the profilers needing Int32-vs-Float64 or Date-vs-Datetime distinctions aren't
+ported yet and reach through `.native`.)
 
 ## Testing
 
@@ -149,8 +187,10 @@ three profilers pass with zero edits (the parity gate).
 
 - **Module-level `pl.` references defeating the linchpin** (top risk) — mitigated by the
   grep-for-module-level-`pl.` sweep + the subprocess import-graph gate.
-- **The 13-profiler signature change** — broad but mechanical (one line per unported profiler);
-  parity tests guard against behavior drift.
+- **The signature change spans 22 `profile()` methods across TWO shapes** (13 `BaseProfiler`
+  column profilers `profile(df, column, *, context)` + 9 relation profilers `profile(df)`) — broad
+  but mechanical (one line per unported method); parity tests guard against behavior drift. Treat
+  them as two passes.
 - **Seam API incompleteness / over-design** — start minimal (only what the 3 profilers + scanner
   need); grow the `Column` Protocol as later stages port more. Do NOT model the pivot/`group_by`
   tail in P0 (those decline to `.native`/Polars until P2).
