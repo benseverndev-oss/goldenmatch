@@ -118,14 +118,22 @@ the Rust kernel about fused routing would be a cross-language JSON-round-trip ch
 chosen** (whether the native kernel or the Python rules chose it). Fused-match is a whole-stage
 short-circuit, ORTHOGONAL to backend selection — the chosen backend (bucket/duckdb/…) becomes the
 FALLBACK that runs if fused declines. A new `maybe_route_fused_match(committed_config, profile,
-runtime, *, needs_artifacts, em_result) -> bool` runs at `autoconfig_controller.py` ~1246-1254
-(right after `apply_planner_rules` + `plan.apply_to`), and sets `use_fused_match` on the plan/config
-when ALL THREE hold:
+runtime, *, needs_artifacts) -> bool` sets `use_fused_match` on the plan/config when ALL THREE hold:
 
-1. **covered** — `match_fused_ready(config)` OR `match_fused_fs_ready(config)` (with `em_result`) OR
-   `match_fused_multipass_ready(config)`.
+1. **covered** — `match_fused_ready(config)` OR `match_fused_multipass_ready(config)`. **The FS
+   (probabilistic) branch is OUT of v1:** `match_fused_fs_ready` needs a trained `EMResult`, but
+   EM training happens INSIDE the pipeline scoring stage — AFTER the controller runs — so no
+   `EMResult` exists at decision time. Wiring FS-fused routing needs EM trained pre-pipeline (or a
+   two-phase decision); scoped as a follow-up. v1 covers weighted + multi-pass only.
 2. **under pressure** — `estimate_classic_match_peak_rss_gb(...) > available_ram_gb * PRESSURE_FRACTION`.
 3. **safe** — `not needs_artifacts` (see 4.3).
+
+**Insertion point (pin exactly in the plan).** The post-step must run AFTER the FINAL plan mutation,
+not merely after `apply_planner_rules` (line ~1335): the controller then calls
+`apply_distributed_routing` / `enforce_routing` / a throughput overlay (~1346-1369) which
+`dataclasses.replace` the plan. Insert `maybe_route_fused_match` + its `use_fused_match` write BELOW
+that whole routing/overlay block (and any final `plan.apply_to`), so a later `replace` can't clobber
+the flag. The plan pins the exact line.
 
 `ExecutionPlan` gains a `use_fused_match: bool = False` field; `apply_to` sets a flag the pipeline
 reads (`apply_to` already writes `backend` AND `_throughput_plan`, so this follows the existing
