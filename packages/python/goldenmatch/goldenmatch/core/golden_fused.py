@@ -49,6 +49,19 @@ _KERNEL_COVERED_STRATEGIES = (
     _KERNEL_SCALAR_STRATEGIES | _KERNEL_STAGE2_STRATEGIES | _KERNEL_STAGE4_STRATEGIES
 )
 
+# Stage 5: field_groups. Group strategies form their OWN small enum (shared with
+# the Rust `GROUP_*` consts) -- distinct from `_GOLDEN_STRATEGY_IDS` because the
+# group ranking (winner.py::group_winner) is NOT the scalar merge_field dispatch
+# (e.g. group `most_complete` ranks by populated-count over the group columns and
+# derives one lock-step confidence, unlike scalar `most_complete`). `anchor` is a
+# group-only strategy with no scalar counterpart.
+_GROUP_STRATEGY_IDS = {
+    "most_complete": 0,
+    "source_priority": 1,
+    "most_recent": 2,
+    "anchor": 3,
+}
+
 # polars dtypes whose physical i64 repr is order-preserving vs the Python object
 # comparison the reference `_most_recent` does (`sort(key=date, reverse=True)`).
 # Temporal dtypes (Date days, Datetime us, ...) and integer dtypes map to a
@@ -111,6 +124,39 @@ def _factorize_codes(values: list) -> list[int]:
 
 
 @dataclass
+class _GoldenFusedGroupSpec:
+    """One field_group's kernel spec (a Rust ``#[derive(FromPyObject)]`` struct
+    reads these attrs). Groups resolve as a UNIT: the kernel ranks the cluster's
+    rows once per group (winner.py::group_winner), pins ONE winner row across all
+    the group's columns (or per-column back-fill indices under ``allow_fill``),
+    and emits ONE confidence for the group -- so a group spec is per-group, not
+    per-column (like ``pair_edges`` is per-cluster).
+
+    - ``col_indices``: indices into the output columns (into ``text_cols`` /
+      ``code_cols``) for this group's columns, in the group's declared order.
+    - ``strategy``: a ``_GROUP_STRATEGY_IDS`` code.
+    - ``priority_codes``: for ``source_priority`` -- the group's source list
+      mapped into the shared ``source_code`` space (absent sources encoded < 0);
+      empty otherwise.
+    - ``date_col`` / ``date_null_mask``: for ``most_recent`` -- Int64 arrays
+      (len n_rows), mask 1 = null-date; empty placeholders otherwise.
+    - ``anchor_col_index``: for ``anchor`` -- the output-column index of the
+      anchor column (the kernel reads its code array for anchor-presence); -1
+      otherwise.
+    - ``allow_fill``: per-column back-fill of null group cells from the next-best
+      ranked row (winner.py:65).
+    """
+
+    col_indices: list[int]
+    strategy: int
+    priority_codes: list[int] = field(default_factory=list)
+    date_col: Any = None  # pa.Int64Array (len n_rows) or empty placeholder
+    date_null_mask: Any = None  # pa.Int64Array (len n_rows) or empty placeholder
+    anchor_col_index: int = -1
+    allow_fill: bool = False
+
+
+@dataclass
 class _GoldenFusedSideChannels:
     """Per-column side channels handed to the ``golden_fused`` kernel as ONE
     carrier arg (a Rust ``#[derive(FromPyObject)]`` struct reads these attrs).
@@ -140,6 +186,11 @@ class _GoldenFusedSideChannels:
     # representative index (set on the FIRST agreeing edge; spec 6.4). Empty when
     # no confidence_majority column is present or no pair scores were supplied.
     pair_edges: list[tuple[int, int, int, float]] = field(default_factory=list)
+    # Stage 5: per-group specs (one entry per rules.field_groups, group-detection
+    # order). The kernel resolves each group as a unit and returns a per-group
+    # confidence (folded into the cluster mean ONCE), plus the winner index for
+    # every group column. Empty when no field_groups are configured.
+    group_specs: list[_GoldenFusedGroupSpec] = field(default_factory=list)
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -222,6 +273,26 @@ def _gather_with_nulls(series: pl.Series, idx: list[int]) -> pl.Series:
     ).to_series()
 
 
+def _build_date_arrays(sdf: pl.DataFrame, date_col: str | None) -> tuple[Any, Any] | None:
+    """Build the ``(date_i64, null_mask_i64)`` Arrow arrays for a ``most_recent``
+    date column, or ``None`` to decline. Shared by the scalar and group
+    ``most_recent`` paths. Declines when the column is absent (the reference's
+    ``merge_field`` would raise) or its physical repr is not order-preserving vs
+    the reference's Python-object date compare (``_MOST_RECENT_ORDER_SAFE_DTYPES``).
+    """
+    import pyarrow as pa
+
+    if not date_col or date_col not in sdf.columns:
+        return None
+    date_series = sdf.get_column(date_col)
+    if not isinstance(date_series.dtype, _MOST_RECENT_ORDER_SAFE_DTYPES):
+        return None
+    phys_list = date_series.to_physical().cast(pl.Int64).to_list()
+    date_vals = [0 if x is None else int(x) for x in phys_list]
+    mask_vals = [1 if x is None else 0 for x in phys_list]
+    return pa.array(date_vals, type=pa.int64()), pa.array(mask_vals, type=pa.int64())
+
+
 def run_golden_fused_arrow(
     columns: Any,  # pl.DataFrame (cluster frame with __row_id__ + __cluster_id__)
     config: GoldenRulesConfig,
@@ -281,17 +352,41 @@ def run_golden_fused_arrow(
         empty["__golden_confidence__"] = pl.Series("__golden_confidence__", [], dtype=pl.Float64)
         return pl.DataFrame(empty)
 
-    # Per-column effective strategy + rule (default or field_rule). Stage 5/6/7
-    # extend this with groups / conditionals / cluster overrides.
+    # ── Stage 5: identify group-owned columns (resolved as a unit, NOT via the
+    # per-column scalar dispatch). Every group column must be a present user
+    # column -- decline otherwise (the reference tolerates a missing group column
+    # as all-null + emits an extra output column; the fused path gathers on frame
+    # columns only, so an off-frame group column has no home here).
+    col_index = {c: i for i, c in enumerate(user_cols)}
+    grouped_col_idx: set[int] = set()
+    group_col_lists: list[list[int]] = []
+    for g in rules.field_groups:
+        try:
+            gcols = [col_index[c] for c in g.columns]
+        except KeyError:
+            return None
+        group_col_lists.append(gcols)
+        grouped_col_idx.update(gcols)
+
+    # Per-column effective strategy + rule (default or field_rule). Group-owned
+    # columns get a benign most_complete placeholder: their winner index +
+    # confidence come from the group pass, so the kernel never runs the scalar
+    # dispatch for them (and the placeholder never triggers scalar source/date
+    # channel building below). Stage 6/7 extend this with conditionals / overrides.
+    _group_placeholder = GoldenFieldRule(strategy="most_complete")
     strategy_ids: list[int] = []
     effective_rules: list[GoldenFieldRule] = []
     default_rule = GoldenFieldRule(strategy=rules.default_strategy)
-    for c in user_cols:
+    for ci, c in enumerate(user_cols):
+        if ci in grouped_col_idx:
+            strategy_ids.append(_GOLDEN_STRATEGY_IDS["most_complete"])
+            effective_rules.append(_group_placeholder)
+            continue
         rule = rules.field_rules.get(c)
         rule = rule if isinstance(rule, GoldenFieldRule) else default_rule
         strat = rule.strategy
         # Kernel branches covered today: scalar strategies + source_priority /
-        # most_recent (Stage 2). confidence_majority lands in Stage 4 -- decline.
+        # most_recent (Stage 2) + confidence_majority (Stage 4).
         if strat not in _KERNEL_COVERED_STRATEGIES:
             return None  # temporary decline until the strategy's stage lands
         strategy_ids.append(_GOLDEN_STRATEGY_IDS[strat])
@@ -325,12 +420,18 @@ def run_golden_fused_arrow(
     # ── Stage 2: source_priority + most_recent extra keys ────────────────────
     empty_i64 = pa.array([], type=pa.int64())
 
-    # source_code: factorized __source__ (shared across all columns). Only built
-    # when some column uses source_priority; if that column is configured but no
-    # __source__ is present, the reference would raise -- decline instead.
+    # source_code: factorized __source__ (shared across all columns AND groups).
+    # Built when some scalar column OR some field_group uses source_priority; if
+    # so configured but no __source__ is present, the reference would raise --
+    # decline instead. `src_map` (raw source -> code) is reused below to map the
+    # group source_priority lists into the same code space.
     priority_codes: list[list[int]] = [[] for _ in user_cols]
     source_code_arr: Any = empty_i64
-    if any(r.strategy == "source_priority" for r in effective_rules):
+    src_map: dict = {}
+    need_source = any(r.strategy == "source_priority" for r in effective_rules) or any(
+        g.strategy == "source_priority" for g in rules.field_groups
+    )
+    if need_source:
         if "__source__" not in sdf.columns:
             return None
         src_values = sdf.get_column("__source__").to_list()
@@ -350,22 +451,12 @@ def run_golden_fused_arrow(
     for ci, rule in enumerate(effective_rules):
         if rule.strategy != "most_recent":
             continue
-        date_col = rule.date_column
-        # Reference passes dates only when the date column is present; absent ->
-        # merge_field raises. Decline so the caller falls back cleanly.
-        if not date_col or date_col not in sdf.columns:
+        built = _build_date_arrays(sdf, rule.date_column)
+        if built is None:
+            # Absent (merge_field would raise) or non-order-preserving physical
+            # repr (string/float dates): decline so the caller falls back.
             return None
-        date_series = sdf.get_column(date_col)
-        if not isinstance(date_series.dtype, _MOST_RECENT_ORDER_SAFE_DTYPES):
-            # Non-order-preserving physical repr (e.g. string / float dates):
-            # can't guarantee byte-parity with the reference's object compare.
-            return None
-        phys = date_series.to_physical().cast(pl.Int64)
-        phys_list = phys.to_list()
-        date_vals = [0 if x is None else int(x) for x in phys_list]
-        mask_vals = [1 if x is None else 0 for x in phys_list]
-        date_cols[ci] = pa.array(date_vals, type=pa.int64())
-        date_null_masks[ci] = pa.array(mask_vals, type=pa.int64())
+        date_cols[ci], date_null_masks[ci] = built
 
     # ── Stage 3: per-column quality weights ──────────────────────────────────
     # Mirror the reference (resolve.py:124 / golden.py:999): per column, the
@@ -420,6 +511,40 @@ def run_golden_fused_arrow(
                     if pos_a is not None and pos_b is not None:
                         pair_edges.append((int(cid), pos_a, pos_b, float(score)))
 
+    # ── Stage 5: per-group specs. A group resolves as a UNIT (winner.py::
+    # group_winner): one winner row pinned across all group columns (or per-column
+    # back-fill under allow_fill), and ONE confidence folded into the cluster mean.
+    group_specs: list[_GoldenFusedGroupSpec] = []
+    for g, gcols in zip(rules.field_groups, group_col_lists):
+        gstrat = _GROUP_STRATEGY_IDS[g.strategy]
+        gspec_priority: list[int] = []
+        gspec_date: Any = empty_i64
+        gspec_date_mask: Any = empty_i64
+        gspec_anchor_idx = -1
+        if g.strategy == "source_priority":
+            # src_map is populated (need_source True since a group uses it).
+            gspec_priority = [src_map.get(s, -1) for s in (g.source_priority or [])]
+        elif g.strategy == "most_recent":
+            built = _build_date_arrays(sdf, g.date_column)
+            if built is None:
+                return None
+            gspec_date, gspec_date_mask = built
+        elif g.strategy == "anchor":
+            # anchor is validated to be one of the group's columns, so it is a
+            # present user column (group columns were validated above).
+            gspec_anchor_idx = col_index[g.anchor]
+        group_specs.append(
+            _GoldenFusedGroupSpec(
+                col_indices=gcols,
+                strategy=gstrat,
+                priority_codes=gspec_priority,
+                date_col=gspec_date,
+                date_null_mask=gspec_date_mask,
+                anchor_col_index=gspec_anchor_idx,
+                allow_fill=g.allow_fill,
+            )
+        )
+
     side = _GoldenFusedSideChannels(
         source_code=source_code_arr,
         priority_codes=priority_codes,
@@ -427,8 +552,9 @@ def run_golden_fused_arrow(
         date_null_masks=date_null_masks,
         qweights=qweights,
         pair_edges=pair_edges,
+        group_specs=group_specs,
     )
-    winner_idx, field_conf, cluster_ids_out = fn(
+    winner_idx, field_conf, group_conf, cluster_ids_out = fn(
         row_ids_arr,
         cluster_ids_arr,
         len(user_cols),
@@ -447,12 +573,23 @@ def run_golden_fused_arrow(
         pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
     )
 
-    # __golden_confidence__ = mean of per-field confidences over columns.
+    # __golden_confidence__ = mean of per-UNIT confidences. A resolution unit is a
+    # scalar column OR a whole group (resolve.py:100/149) -- so the denominator is
+    # `n_scalar_cols + n_groups`, NOT n_output_cols: each group contributes exactly
+    # ONE confidence (group_conf[g][k]), regardless of how many columns it spans,
+    # and group-owned columns are EXCLUDED from the per-field scalar sum.
     n_clusters = len(cluster_ids_out)
-    n_cols = len(user_cols)
-    # n_cols >= 1 here (the empty-user_cols case returned early above).
+    n_groups = len(group_specs)
+    scalar_col_indices = [ci for ci in range(len(user_cols)) if ci not in grouped_col_idx]
+    denom = len(scalar_col_indices) + n_groups
+    # denom >= 1: user_cols is non-empty (early return), and every user column is
+    # either a scalar unit or owned by one of the >=1 groups.
     gconf = [
-        sum(field_conf[ci][k] for ci in range(n_cols)) / n_cols
+        (
+            sum(field_conf[ci][k] for ci in scalar_col_indices)
+            + sum(group_conf[g][k] for g in range(n_groups))
+        )
+        / denom
         for k in range(n_clusters)
     ]
     result = result.with_columns(pl.Series("__golden_confidence__", gconf, dtype=pl.Float64))

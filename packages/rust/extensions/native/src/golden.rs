@@ -34,6 +34,14 @@ const STRAT_LONGEST_VALUE: u8 = 5;
 const STRAT_UNANIMOUS_OR_NULL: u8 = 6;
 const STRAT_CONFIDENCE_MAJORITY: u8 = 7;
 
+// Group strategy ids — shared with Python `_GROUP_STRATEGY_IDS`. A DISTINCT enum
+// from the scalar `STRAT_*` above: group ranking (winner.py::group_winner) is not
+// the scalar merge_field dispatch, and `anchor` is group-only.
+const GROUP_MOST_COMPLETE: u8 = 0;
+const GROUP_SOURCE_PRIORITY: u8 = 1;
+const GROUP_MOST_RECENT: u8 = 2;
+const GROUP_ANCHOR: u8 = 3;
+
 /// The non-null members of one cluster span as `(local_idx, code)`, in span
 /// order. `code == -1` (the Python-side factorization null sentinel) is a null.
 fn span_non_null(code: &[i64], off: usize, size: usize) -> Vec<(usize, i64)> {
@@ -420,12 +428,159 @@ fn confidence_majority(
     (order[best].1 as i64, conf)
 }
 
-/// Kernel result: `(winner_idx, field_conf, cluster_ids_out)`, each outer Vec
-/// indexed by output column (except `cluster_ids_out`, the per-cluster id list).
+/// One field_group's owned kernel data, pre-read from Arrow (before `py.detach`).
+/// `col_indices` = output-column indices this group spans; `date`/`date_null` are
+/// full-length (n_rows) for `most_recent` groups (empty otherwise);
+/// `anchor_col_index` is the anchor column's output index for `anchor` groups
+/// (`-1` otherwise).
+struct GroupPrep {
+    col_indices: Vec<usize>,
+    strategy: u8,
+    priority_codes: Vec<i64>,
+    date: Vec<i64>,
+    date_null: Vec<i64>,
+    anchor_col_index: i64,
+    allow_fill: bool,
+}
+
+/// `winner.py::group_winner` — correlated / lock-step survivorship for one group,
+/// over one cluster's span `[off, off+size)`. Ranks the cluster's rows ONCE by the
+/// group strategy, pins ONE winner row across every group column (or, under
+/// `allow_fill`, per-column back-fill from the next-best-ranked row holding that
+/// column), and returns `(per_column_global_index, group_confidence)`.
+///
+/// Returns a global winner index for EVERY group column (never `-1`): a
+/// null-pinned column points at the winner row whose cell IS null, so the Python
+/// `.gather()` yields null naturally (no sentinel needed — the group `n == 0`
+/// empty case can't occur here, spans are size >= 1).
+///
+/// Confidence (`winner.py:74`): `base = (winner_populated + n_filled) / n_cols`,
+/// `x0.7` on tie. Ranking / tie semantics per `_ranking` (`winner.py:21`):
+/// - `most_complete`: populated-count DESC (stable); tie = >=2 rows share max.
+/// - `source_priority`: priority-rank ASC (stable, absent source ranks last);
+///   tie always False.
+/// - `most_recent`: `(date_present, date)` DESC (stable); tie always False.
+/// - `anchor`: `(anchor_present, populated)` DESC (stable); tie = >=2 rows share
+///   the top composite. Degrades to most_complete when no row has the anchor.
+///
+/// **Stability is load-bearing** (as in the scalar strategies): Python's `sorted`
+/// is stable and `reverse=True` preserves input order among equal keys, so the
+/// first-occurring (lowest local index) tied row is `order[0]`. Rust `sort_by` is
+/// stable; a DESC key comparison that returns `Equal` on ties preserves that.
+fn resolve_group(
+    prep: &GroupPrep,
+    off: usize,
+    size: usize,
+    code_vals: &[Vec<i64>],
+    source_vals: &[i64],
+) -> (Vec<i64>, f64) {
+    let cols = &prep.col_indices;
+    let ncg = cols.len();
+    let populated = |l: usize| {
+        cols.iter()
+            .filter(|&&c| code_vals[c][off + l] != -1)
+            .count()
+    };
+
+    // Default = most_complete ranking (populated-count DESC, stable). The non-
+    // most_complete strategies override `order`/`tie` below; GROUP_MOST_COMPLETE
+    // (and any unknown code, which degrades to most_complete since Python
+    // validates the strategy) keeps this default.
+    let mut order: Vec<usize> = (0..size).collect();
+    let counts: Vec<usize> = (0..size).map(populated).collect();
+    order.sort_by(|&a, &b| counts[b].cmp(&counts[a]));
+    let top_count = counts[order[0]];
+    let mut tie = counts.iter().filter(|&&c| c == top_count).count() > 1;
+    match prep.strategy {
+        GROUP_SOURCE_PRIORITY => {
+            // rank(l) = index of the row's source in the priority list, or
+            // `len(priority)` when absent/null (winner.py:25-26). A null source
+            // (`sc < 0`) never matches an absent-priority sentinel (`pc < 0`).
+            let rank = |l: usize| -> usize {
+                let sc = source_vals[off + l];
+                if sc >= 0 {
+                    for (j, &pc) in prep.priority_codes.iter().enumerate() {
+                        if pc >= 0 && pc == sc {
+                            return j;
+                        }
+                    }
+                }
+                prep.priority_codes.len()
+            };
+            let ranks: Vec<usize> = (0..size).map(rank).collect();
+            order = (0..size).collect();
+            order.sort_by(|&a, &b| ranks[a].cmp(&ranks[b])); // ASC, stable
+            tie = false; // winner.py: source_priority tie is always False
+        }
+        GROUP_MOST_RECENT => {
+            // key = (present, date) DESC; absent-date rows share a constant date
+            // component (0) so they compare EQUAL among themselves (winner.py:29
+            // never compares None to None because the present flag differs first).
+            let key = |l: usize| -> (i64, i64) {
+                if prep.date_null[off + l] == 0 {
+                    (1, prep.date[off + l])
+                } else {
+                    (0, 0)
+                }
+            };
+            let keys: Vec<(i64, i64)> = (0..size).map(key).collect();
+            order = (0..size).collect();
+            order.sort_by(|&a, &b| keys[b].cmp(&keys[a])); // DESC, stable
+            tie = false; // winner.py: most_recent tie is always False
+        }
+        GROUP_ANCHOR => {
+            let ai = prep.anchor_col_index as usize;
+            let key = |l: usize| -> (i64, usize) {
+                let present = if code_vals[ai][off + l] != -1 { 1 } else { 0 };
+                (present, counts[l])
+            };
+            let keys: Vec<(i64, usize)> = (0..size).map(key).collect();
+            order = (0..size).collect();
+            order.sort_by(|&a, &b| keys[b].cmp(&keys[a])); // DESC, stable
+            let top = keys[order[0]];
+            tie = keys.iter().filter(|&&k| k == top).count() > 1;
+        }
+        GROUP_MOST_COMPLETE => {} // keep the default most_complete ranking above
+        _ => {}                   // unknown code -> degrade to most_complete
+    }
+
+    let best = order[0];
+    let mut per_col_idx = Vec::with_capacity(ncg);
+    let mut n_filled = 0usize;
+    for &c in cols {
+        if code_vals[c][off + best] != -1 || !prep.allow_fill {
+            // Non-null winner cell, OR no back-fill: pin the winner row (a null
+            // cell here gathers to null on the Python side).
+            per_col_idx.push((off + best) as i64);
+        } else {
+            // allow_fill: winner cell is null -> the FIRST next-best-ranked row
+            // holding a non-null value for this column (winner.py:66-72). If none
+            // is found the value stays the winner's null (not counted as filled).
+            let mut gi = (off + best) as i64;
+            for &j in &order[1..] {
+                if code_vals[c][off + j] != -1 {
+                    gi = (off + j) as i64;
+                    n_filled += 1;
+                    break;
+                }
+            }
+            per_col_idx.push(gi);
+        }
+    }
+
+    let winner_populated = populated(best);
+    let base = (winner_populated + n_filled) as f64 / ncg as f64;
+    let conf = if tie { base * 0.7 } else { base };
+    (per_col_idx, conf)
+}
+
+/// Kernel result: `(winner_idx, field_conf, group_conf, cluster_ids_out)`.
 /// `winner_idx[col][k]` is the GLOBAL pre-sorted-frame row index whose value
 /// survives for column `col` in cluster `k` (`-1` = null); `field_conf[col][k]`
-/// its confidence.
-type GoldenFusedResult = (Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>);
+/// its confidence (a placeholder `0.0` for group-owned columns — the group's
+/// single confidence lives in `group_conf[g][k]`, one entry per field_group). The
+/// Python caller folds `group_conf` into the cluster mean ONCE per group (spec §8).
+type GoldenFusedResult = (Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<i64>);
 
 /// Per-column strategy SIDE CHANNELS, extracted from a Python
 /// `_GoldenFusedSideChannels` dataclass (attribute-named to match these fields).
@@ -462,8 +617,15 @@ type GoldenFusedResult = (Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>);
 ///   present. Edges are shared across all confidence_majority columns of a cluster
 ///   (pair scores are per-cluster, not per-column).
 ///
-/// Future stages append fields here (group specs, predicate IR, cluster-override
-/// codes) — same one-field-per-stage rule.
+/// Stage 5 field:
+/// - `group_specs`: one `GroupSpec` per `rules.field_groups`. A group resolves as
+///   a UNIT (winner.py::group_winner): the kernel ranks the cluster's rows once,
+///   pins one winner row across all the group's columns (or per-column back-fill
+///   under `allow_fill`), and emits ONE confidence folded into the cluster mean.
+///   Empty when no field_groups are configured.
+///
+/// Future stages append fields here (predicate IR, cluster-override codes) — same
+/// one-field-per-stage rule.
 #[derive(FromPyObject)]
 pub struct GoldenFusedSideChannels {
     source_code: PyArrowType<ArrayData>,
@@ -472,6 +634,24 @@ pub struct GoldenFusedSideChannels {
     date_null_masks: Vec<PyArrowType<ArrayData>>,
     qweights: Vec<PyArrowType<ArrayData>>,
     pair_edges: Vec<(i64, i64, i64, f64)>,
+    group_specs: Vec<GroupSpec>,
+}
+
+/// One field_group's kernel spec, extracted from a Python `_GoldenFusedGroupSpec`
+/// dataclass. `col_indices` are output-column indices; `strategy` is a `GROUP_*`
+/// code; `priority_codes` maps the group's source_priority list into source-code
+/// space (source_priority); `date_col`/`date_null_mask` are len-n_rows Int64 for
+/// most_recent (empty otherwise); `anchor_col_index` is the anchor column's output
+/// index for anchor (`-1` otherwise); `allow_fill` toggles per-column back-fill.
+#[derive(FromPyObject)]
+pub struct GroupSpec {
+    col_indices: Vec<i64>,
+    strategy: u8,
+    priority_codes: Vec<i64>,
+    date_col: PyArrowType<ArrayData>,
+    date_null_mask: PyArrowType<ArrayData>,
+    anchor_col_index: i64,
+    allow_fill: bool,
 }
 
 #[pyfunction]
@@ -499,6 +679,7 @@ pub fn golden_fused(
         date_null_masks,
         qweights,
         pair_edges,
+        group_specs,
     } = side;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
@@ -613,10 +794,53 @@ pub fn golden_fused(
         }
     }
 
-    // source_code is a single shared column: only required (len n_rows) when a
-    // source_priority column exists (else it's an empty placeholder array).
+    // ── Stage 5: pre-read each field_group's spec into an owned GroupPrep
+    // (Arrow reads must precede py.detach). Validate col indices in range, the
+    // most_recent date arrays (len n_rows), and the anchor column index.
+    let mut group_preps: Vec<GroupPrep> = Vec::with_capacity(group_specs.len());
+    for (g, gs) in group_specs.into_iter().enumerate() {
+        let col_indices: Vec<usize> = gs.col_indices.iter().map(|&c| c as usize).collect();
+        for &c in &col_indices {
+            if c >= n_output_cols {
+                return Err(PyValueError::new_err(format!(
+                    "golden_fused: group {g} col index {c} >= n_output_cols {n_output_cols}"
+                )));
+            }
+        }
+        let date = read_i64(gs.date_col.0, "group date col")?;
+        let date_null = read_i64(gs.date_null_mask.0, "group date null mask")?;
+        if gs.strategy == GROUP_MOST_RECENT && (date.len() != n_rows || date_null.len() != n_rows) {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: group {g} most_recent date arrays must be length {n_rows}"
+            )));
+        }
+        if gs.strategy == GROUP_ANCHOR
+            && (gs.anchor_col_index < 0 || gs.anchor_col_index as usize >= n_output_cols)
+        {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: group {g} anchor col index {} out of range",
+                gs.anchor_col_index
+            )));
+        }
+        group_preps.push(GroupPrep {
+            col_indices,
+            strategy: gs.strategy,
+            priority_codes: gs.priority_codes,
+            date,
+            date_null,
+            anchor_col_index: gs.anchor_col_index,
+            allow_fill: gs.allow_fill,
+        });
+    }
+    let any_group_source = group_preps
+        .iter()
+        .any(|p| p.strategy == GROUP_SOURCE_PRIORITY);
+
+    // source_code is a single shared column: required (len n_rows) when a scalar
+    // source_priority column OR a source_priority GROUP exists (else an empty
+    // placeholder array).
     let source_vals = read_i64(source_code.0, "source_code")?;
-    if any_source_priority && source_vals.len() != n_rows {
+    if (any_source_priority || any_group_source) && source_vals.len() != n_rows {
         return Err(PyValueError::new_err(format!(
             "golden_fused: source_code length {} != row count {n_rows}",
             source_vals.len()
@@ -691,6 +915,12 @@ pub fn golden_fused(
         let mut field_conf: Vec<Vec<f64>> = (0..n_output_cols)
             .map(|_| Vec::with_capacity(n_clusters))
             .collect();
+        // One confidence per field_group per cluster (folded into the mean ONCE
+        // by the Python caller; spec §8).
+        let n_groups = group_preps.len();
+        let mut group_conf: Vec<Vec<f64>> = (0..n_groups)
+            .map(|_| Vec::with_capacity(n_clusters))
+            .collect();
         let cluster_out: Vec<i64> = spans.iter().map(|&(_, _, c)| c).collect();
 
         // Bucket confidence_majority edges by cluster id, preserving per-cluster
@@ -707,7 +937,27 @@ pub fn golden_fused(
         let no_edges: Vec<(usize, usize, f64)> = Vec::new();
 
         for &(off, size, cid) in &spans {
+            // Resolve field_groups first: pin each group's lock-step winner index
+            // per group column and record the group's single confidence. A group
+            // column's winner index overrides the per-column scalar dispatch below.
+            let mut group_col_idx: Vec<Option<i64>> = vec![None; n_output_cols];
+            for (g, prep) in group_preps.iter().enumerate() {
+                let (per_col, conf) = resolve_group(prep, off, size, &code_vals, &source_vals);
+                for (k, &c) in prep.col_indices.iter().enumerate() {
+                    group_col_idx[c] = Some(per_col[k]);
+                }
+                group_conf[g].push(conf);
+            }
+
             for col in 0..n_output_cols {
+                // Group-owned column: winner index came from the group pass; the
+                // group's confidence is in group_conf, so push a placeholder here
+                // (Python excludes group columns from the scalar-confidence sum).
+                if let Some(gi) = group_col_idx[col] {
+                    winner_idx[col].push(gi);
+                    field_conf[col].push(0.0);
+                    continue;
+                }
                 let non_null = span_non_null(&code_vals[col], off, size);
                 // Per-column quality weights: an empty channel (quality_scores
                 // was None) -> None -> the unweighted branch.
@@ -757,7 +1007,7 @@ pub fn golden_fused(
                 field_conf[col].push(conf);
             }
         }
-        (winner_idx, field_conf, cluster_out)
+        (winner_idx, field_conf, group_conf, cluster_out)
     }))
 }
 
@@ -1153,5 +1403,129 @@ mod tests {
         let (idx, conf) = confidence_majority(&code, &nn(&code, 2, 5), &edges, 2, None);
         assert_eq!(idx, 3);
         assert!((conf - 0.9 / 1.0).abs() < 1e-12);
+    }
+
+    // ── field_groups / resolve_group (Stage 5) ───────────────────────────────
+
+    fn gprep(
+        col_indices: &[usize],
+        strategy: u8,
+        priority_codes: &[i64],
+        date: &[i64],
+        date_null: &[i64],
+        anchor_col_index: i64,
+        allow_fill: bool,
+    ) -> GroupPrep {
+        GroupPrep {
+            col_indices: col_indices.to_vec(),
+            strategy,
+            priority_codes: priority_codes.to_vec(),
+            date: date.to_vec(),
+            date_null: date_null.to_vec(),
+            anchor_col_index,
+            allow_fill,
+        }
+    }
+
+    #[test]
+    fn group_most_complete_lockstep_winner_and_conf() {
+        // 2 cols (a=code_vals[0], b=code_vals[1]), 2 rows. row0 populated 2,
+        // row1 populated 1 -> winner row0. Both columns pin to global off+0.
+        // base = 2/2 = 1.0, no tie.
+        let a = vec![10i64, 20];
+        let b = vec![30i64, -1]; // row1 has null b
+        let code_vals = vec![a, b];
+        let prep = gprep(&[0, 1], GROUP_MOST_COMPLETE, &[], &[], &[], -1, false);
+        let (idx, conf) = resolve_group(&prep, 0, 2, &code_vals, &[]);
+        assert_eq!(idx, vec![0, 0]); // both columns -> winner row0
+        assert!((conf - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn group_most_complete_tie_conf_scaled_070() {
+        // Both rows fully populated -> tie, winner = row0 (first). base 2/2, x0.7.
+        let code_vals = vec![vec![1i64, 2], vec![3i64, 4]];
+        let prep = gprep(&[0, 1], GROUP_MOST_COMPLETE, &[], &[], &[], -1, false);
+        let (idx, conf) = resolve_group(&prep, 0, 2, &code_vals, &[]);
+        assert_eq!(idx, vec![0, 0]);
+        assert!((conf - 0.7).abs() < 1e-12);
+    }
+
+    #[test]
+    fn group_allow_fill_backfills_from_next_best_row() {
+        // 3 rows, all populated=1 (tie) -> winner row0. col a non-null on row0;
+        // col b null on row0 -> back-fill from the first next-best row holding b
+        // (row2). winner_populated 1 + n_filled 1 = 2/2 = 1.0, x0.7 (tie) -> 0.7.
+        let a = vec![10i64, 11, -1];
+        let b = vec![-1i64, -1, 22];
+        let code_vals = vec![a, b];
+        let prep = gprep(&[0, 1], GROUP_MOST_COMPLETE, &[], &[], &[], -1, true);
+        let (idx, conf) = resolve_group(&prep, 0, 3, &code_vals, &[]);
+        assert_eq!(idx, vec![0, 2]); // a from winner row0, b filled from row2
+        assert!((conf - 0.7).abs() < 1e-12);
+    }
+
+    #[test]
+    fn group_allow_fill_no_donor_keeps_winner_null_not_counted() {
+        // col b null everywhere -> no donor; b stays winner row0 (null), NOT
+        // counted as filled. winner_populated (a only) = 1, n_filled 0 -> 1/2,
+        // x0.7 on the populated tie -> 0.35.
+        let a = vec![10i64, 11];
+        let b = vec![-1i64, -1];
+        let code_vals = vec![a, b];
+        let prep = gprep(&[0, 1], GROUP_MOST_COMPLETE, &[], &[], &[], -1, true);
+        let (idx, conf) = resolve_group(&prep, 0, 2, &code_vals, &[]);
+        assert_eq!(idx, vec![0, 0]);
+        assert!((conf - (0.5 * 0.7)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn group_source_priority_ranks_and_pins() {
+        // sources row0=crm(0), row1=web(1). priority [web, crm] -> codes [1, 0].
+        // web ranks first -> winner row1. Both cols pin to row1.
+        let code_vals = vec![vec![10i64, 20], vec![30i64, 40]];
+        let src = [0i64, 1];
+        let prep = gprep(&[0, 1], GROUP_SOURCE_PRIORITY, &[1, 0], &[], &[], -1, false);
+        let (idx, conf) = resolve_group(&prep, 0, 2, &code_vals, &src);
+        assert_eq!(idx, vec![1, 1]);
+        assert!((conf - 1.0).abs() < 1e-12); // both cols populated on winner
+    }
+
+    #[test]
+    fn group_most_recent_ranks_by_date() {
+        // dates [100, 305], no nulls -> winner = row1 (latest). Both cols pin row1.
+        let code_vals = vec![vec![10i64, 20], vec![30i64, 40]];
+        let date = [100i64, 305];
+        let mask = [0i64, 0];
+        let prep = gprep(&[0, 1], GROUP_MOST_RECENT, &[], &date, &mask, -1, false);
+        let (idx, conf) = resolve_group(&prep, 0, 2, &code_vals, &[]);
+        assert_eq!(idx, vec![1, 1]);
+        assert!((conf - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn group_anchor_present_row_wins() {
+        // anchor = col 0 (a). row0 a null (anchor absent), row1 a present ->
+        // winner row1 (anchor-present ranks first). tie False. base 2/2.
+        let a = vec![-1i64, 20];
+        let b = vec![30i64, 40];
+        let code_vals = vec![a, b];
+        let prep = gprep(&[0, 1], GROUP_ANCHOR, &[], &[], &[], 0, false);
+        let (idx, conf) = resolve_group(&prep, 0, 2, &code_vals, &[]);
+        assert_eq!(idx, vec![1, 1]);
+        assert!((conf - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn group_respects_span_offset() {
+        // Span [2,4): 2 rows at global off 2. row0(local) populated 2, row1
+        // populated 1 -> winner local 0 -> global 2. Both cols pin global 2.
+        let a = vec![9i64, 9, 10, 20];
+        let b = vec![9i64, 9, 30, -1];
+        let code_vals = vec![a, b];
+        let prep = gprep(&[0, 1], GROUP_MOST_COMPLETE, &[], &[], &[], -1, false);
+        let (idx, conf) = resolve_group(&prep, 2, 2, &code_vals, &[]);
+        assert_eq!(idx, vec![2, 2]); // global = off(2) + local(0)
+        assert!((conf - 1.0).abs() < 1e-12);
     }
 }

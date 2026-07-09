@@ -9,7 +9,7 @@ the exact `merge_field` survivorship path, which is the byte-parity oracle. See
 from __future__ import annotations
 
 import polars as pl
-from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
+from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_records_batch
 from goldenmatch.core.golden_fused import (
     _factorize_codes,
@@ -865,3 +865,181 @@ def test_quality_scores_none_unweighted_path_unchanged():
         r = ref_map[row["__cluster_id__"]]
         assert row["v"] == r["v"]["value"]
         assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12
+
+
+# ─── field_groups / correlated survivorship (Task 5.1) ───────────────────────
+#
+# A `field_groups` config forces the reference (build_golden_records_batch) onto
+# the survivorship path (resolve_cluster / build_survivorship_native), the exact
+# byte-parity oracle. The fused kernel ports core/survivorship/winner.py exactly:
+# one winner row pinned lock-step across all group columns, ONE confidence per
+# group folded into the cluster mean (denominator = n_scalar_cols + n_groups),
+# and per-column back-fill under allow_fill.
+
+
+def test_group_most_complete_lockstep_winner():
+    # Group [street, city] most_complete: winner is the most-populated row across
+    # the group columns; every group column pins to that ONE row.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            # cluster 1: row0 populated 2, row1 populated 1 -> winner row0.
+            # cluster 2: row10 populated 1, row11 populated 2 -> winner row11.
+            "street": ["123 Main", "456 Oak", "9 Elm", "5 Ash"],
+            "city": ["Springfield", None, None, "Shelbyville"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])],
+    )
+    got = _assert_value_conf_parity(df, rules, ["street", "city"])
+    # cluster 1 winner = row0 (both columns from the SAME row, lock-step).
+    assert got[1]["street"] == "123 Main" and got[1]["city"] == "Springfield"
+    # winner_populated 2 / 2 cols, no tie -> group conf 1.0 (sole unit).
+    assert abs(got[1]["__golden_confidence__"] - 1.0) < 1e-12
+    # cluster 2 winner = row11.
+    assert got[2]["street"] == "5 Ash" and got[2]["city"] == "Shelbyville"
+
+
+def test_group_most_complete_tie_conf_scaled_070():
+    # Both rows fully populated -> populated-count tie -> winner = first row,
+    # base = 2/2 = 1.0, x0.7 on tie -> group conf 0.7 (sole unit -> golden 0.7).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "a": ["A0", "A1"],
+            "b": ["B0", "B1"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="pair", columns=["a", "b"])],
+    )
+    got = _assert_value_conf_parity(df, rules, ["a", "b"])
+    assert got[1]["a"] == "A0" and got[1]["b"] == "B0"  # first row wins the tie
+    assert abs(got[1]["__golden_confidence__"] - 0.7) < 1e-12
+
+
+def test_group_allow_fill_backfills_from_next_best_row():
+    # allow_fill: winner row has a null group column -> back-fill it from the
+    # next-best ranked row that has a non-null there (winner.py:65-72).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            # all rows populated=1 -> tie, winner = row0.
+            "a": ["A0", "A1", None],
+            "b": [None, None, "B2"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="pair", columns=["a", "b"], allow_fill=True)],
+    )
+    got = _assert_value_conf_parity(df, rules, ["a", "b"])
+    # a pinned to winner row0 ("A0"); b null in row0 -> filled from row2 ("B2").
+    assert got[1]["a"] == "A0" and got[1]["b"] == "B2"
+    # winner_populated 1 + n_filled 1 = 2 / 2 cols = 1.0, x0.7 (tie) -> 0.7.
+    assert abs(got[1]["__golden_confidence__"] - 0.7) < 1e-12
+
+
+def test_group_source_priority_lockstep():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "__source__": ["crm", "web"],
+            "a": ["Acrm", "Aweb"],
+            "b": ["Bcrm", "Bweb"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(
+                name="pair",
+                columns=["a", "b"],
+                strategy="source_priority",
+                source_priority=["web", "crm"],
+            )
+        ],
+    )
+    got = _assert_value_conf_parity(df, rules, ["a", "b"])
+    # web ranks above crm -> winner = row1 (web); both columns from row1.
+    assert got[1]["a"] == "Aweb" and got[1]["b"] == "Bweb"
+
+
+def test_group_most_recent_lockstep():
+    import datetime as _dt
+
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "a": ["A0", "A1"],
+            "b": ["B0", "B1"],
+            "dt": [_dt.date(2020, 1, 1), _dt.date(2023, 6, 6)],
+        },
+        schema_overrides={"dt": pl.Date},
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(
+                name="pair", columns=["a", "b"], strategy="most_recent", date_column="dt"
+            )
+        ],
+    )
+    # `dt` is also a scalar user column (default most_complete). Assert group
+    # columns pin to the latest-dated row; golden_confidence checked vs reference.
+    got = _assert_value_conf_parity(df, rules, ["a", "b"])
+    assert got[1]["a"] == "A1" and got[1]["b"] == "B1"  # 2023 is latest
+
+
+def test_group_anchor_lockstep():
+    # anchor="a": rows holding a non-null anchor rank first, then by populated
+    # count. Winner pins both columns lock-step.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "a": [None, "A1"],  # anchor present only on row1
+            "b": ["B0", "B1"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[
+            GoldenGroupRule(name="pair", columns=["a", "b"], strategy="anchor", anchor="a")
+        ],
+    )
+    got = _assert_value_conf_parity(df, rules, ["a", "b"])
+    assert got[1]["a"] == "A1" and got[1]["b"] == "B1"  # anchor-present row wins
+
+
+def test_group_mixed_with_scalar_field_rule_denominator():
+    # A group + a scalar field_rule: golden_confidence denominator must be
+    # (n_scalar_cols + n_groups) = 1 + 1 = 2, NOT n_output_cols (3). Distinct
+    # per-unit confidences pin it: group tie conf 0.7, name unique-longest 1.0
+    # -> golden = (0.7 + 1.0)/2 = 0.85 (a wrong 3-denominator gives != 0.85).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "name": ["Bob", "Robert"],  # unique-longest -> conf 1.0
+            "street": ["S0", "S1"],
+            "city": ["C0", "C1"],  # group both-populated tie -> conf 0.7
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])],
+    )
+    got = _assert_value_conf_parity(df, rules, ["name", "street", "city"])
+    assert got[1]["name"] == "Robert"
+    assert got[1]["street"] == "S0" and got[1]["city"] == "C0"
+    assert abs(got[1]["__golden_confidence__"] - 0.85) < 1e-12
