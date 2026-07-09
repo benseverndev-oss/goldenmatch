@@ -71,6 +71,20 @@ def test_oversized_raises(tmp_path, monkeypatch):
         )
 
 
+def test_size_cap_measures_decoded_not_encoded_bytes(tmp_path, monkeypatch):
+    # Pin the guarantee that the cap is on DECODED bytes: 6 raw bytes
+    # base64-encode to 8 chars. With cap=7, decoded (6) is under and must
+    # succeed; a buggy check on the encoded length (8) would wrongly reject.
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
+    monkeypatch.setenv("GOLDENMATCH_MCP_MAX_UPLOAD_BYTES", "7")
+    raw = b"x" * 6
+    assert len(_b64(raw)) == 8  # encoded length exceeds the cap
+    path = _ingest.resolve_input_source(
+        file_path=None, file_content=_b64(raw), filename="d.csv"
+    )
+    assert Path(path).read_bytes() == raw
+
+
 def test_invalid_base64_hints_text(tmp_path, monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
     with pytest.raises(ValueError, match="base64"):
