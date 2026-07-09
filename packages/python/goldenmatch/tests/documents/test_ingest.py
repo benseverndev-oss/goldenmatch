@@ -1,15 +1,18 @@
 import pytest
-from goldenmatch.documents import ingest_documents
-from goldenmatch.documents.extractor import FakeExtractor
+from goldenmatch.documents import DOC_SIDECARS, ingest_documents
+from goldenmatch.documents.extractor import FakeExtractor, FakeTemplateExtractor
+from goldenmatch.documents.templates import get_template
 from goldenmatch.documents.types import (
     ExtractedRow,
     ExtractResult,
     Field,
+    StructuredResult,
     TargetSchema,
 )
 from PIL import Image
 
 SCHEMA = TargetSchema([Field("full_name"), Field("email")])
+INV = get_template("invoice")
 
 
 def _img(path):
@@ -70,3 +73,42 @@ def test_bad_file_recorded_and_good_file_survives(tmp_path):
     assert df.height == 1
     assert df["full_name"].to_list() == ["Ada"]
     assert any(str(bad) == fname for fname, _ in report.errors)
+
+
+def _erow(schema, vals):
+    return ExtractedRow.from_partial(vals, {}, schema, source_file="", source_page=0)
+
+
+def test_ingest_template_pinned_structured_e2e(tmp_path):
+    a = tmp_path / "inv.png"; _img(a)
+    header = _erow(INV.header, {"invoice_number": "INV-9", "total_amount": "200"})
+    items = [_erow(INV.line_items, {"description": "Widget", "quantity": "2"}),
+             _erow(INV.line_items, {"description": "Gadget", "quantity": "1"})]
+    te = FakeTemplateExtractor([StructuredResult(header=header, line_items=items, error=None)])
+    df, report = ingest_documents([a], template="invoice", template_extractor=te,
+                                  return_report=True)
+    assert df.height == 1
+    doc_id = df["_doc_id"][0]
+    assert df["_doctype"][0] == "invoice"
+    assert "invoice_number" in df.columns
+    # DOC_SIDECARS present so the header frame feeds
+    # dedupe_df(df, exclude_columns=DOC_SIDECARS) cleanly; match cols survive.
+    assert set(DOC_SIDECARS) <= set(df.columns)
+    assert report.vlm_calls == 1
+    assert report.classify_confidence[doc_id] == 1.0
+    assert report.doctypes[doc_id] == "invoice"
+    assert report.line_items is not None and report.line_items.height == 2
+    assert report.line_items["_doc_id"].to_list() == [doc_id, doc_id]
+    assert te.calls == 1
+
+
+def test_ingest_schema_and_template_both_set_raises(tmp_path):
+    a = tmp_path / "a.png"; _img(a)
+    with pytest.raises(ValueError, match="schema.*template|template.*schema"):
+        ingest_documents([a], SCHEMA, template="invoice")
+
+
+def test_ingest_auto_classify_not_yet_implemented(tmp_path):
+    a = tmp_path / "a.png"; _img(a)
+    with pytest.raises(NotImplementedError, match="Task 6|auto-classify"):
+        ingest_documents([a])

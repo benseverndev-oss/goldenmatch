@@ -1,6 +1,5 @@
 from goldenmatch import dedupe_df
-from goldenmatch.documents import ingest_documents
-from goldenmatch.documents.assemble import SIDECARS
+from goldenmatch.documents import DOC_SIDECARS, ingest_documents
 from goldenmatch.documents.extractor import FakeExtractor
 from goldenmatch.documents.types import (
     ExtractedRow,
@@ -38,7 +37,7 @@ def test_extracted_frame_feeds_dedupe_df_and_finds_the_dupe(tmp_path):
     result = dedupe_df(
         df,
         exact=["email"],
-        exclude_columns=SIDECARS,
+        exclude_columns=DOC_SIDECARS,
         confidence_required=False,
         allow_red_config=True,
     )
