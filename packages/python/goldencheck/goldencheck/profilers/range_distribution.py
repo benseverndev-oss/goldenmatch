@@ -1,40 +1,27 @@
 """Range and distribution profiler — detects outliers and reports min/max for numeric columns."""
 from __future__ import annotations
 
-from functools import lru_cache
-
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
 
-@lru_cache(maxsize=1)
-def _numeric_dtypes() -> tuple:
-    return (
-        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-        pl.Float32, pl.Float64,
-    )
-
-
 class RangeDistributionProfiler(BaseProfiler):
-    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
         dtype = col.dtype
-        is_numeric = dtype in _numeric_dtypes()
+        is_numeric = dtype in ("int", "uint", "float")
 
         # Chain: if type inference flagged as mostly numeric, cast and run
         if not is_numeric and context and context.get(column, {}).get("mostly_numeric"):
-            col = col.cast(pl.Float64, strict=False).drop_nulls()
+            col = col.cast("float", strict=False).drop_nulls()
             is_numeric = True
         elif not is_numeric:
             return findings
 
-        non_null = col.drop_nulls() if is_numeric and dtype in _numeric_dtypes() else col
+        non_null = col.drop_nulls() if is_numeric and dtype in ("int", "uint", "float") else col
         total = len(non_null)
         if total < 2:
             return findings
@@ -54,10 +41,10 @@ class RangeDistributionProfiler(BaseProfiler):
         if std is not None and std > 0:
             lower = mean - 3 * std
             upper = mean + 3 * std
-            outliers = non_null.filter((non_null < lower) | (non_null > upper))
+            outliers = non_null.filter_outside(lower, upper)
             outlier_count = len(outliers)
             if outlier_count > 0:
-                sample = outliers.head(5).to_list()
+                sample = outliers.to_list()[:5]
                 # Determine how many stddevs outliers are
                 # Use max deviation to determine confidence
                 max_dev = max(
