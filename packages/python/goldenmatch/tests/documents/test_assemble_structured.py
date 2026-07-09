@@ -180,6 +180,30 @@ def test_report_key_sets_are_aligned():
     assert set(report.classify_confidence) == set(report.doctypes) == {"A"}
 
 
+def test_warning_surfaced_even_when_no_header_row():
+    # classify raised -> generic fallback that produced NOTHING (empty rows). The
+    # warning must still land in report.errors even though no header row is emitted.
+    o = _DocOutcome(doc_id="w1", source_file="wf.pdf", doctype="generic",
+                    confidence=0.0, vlm_calls=3,
+                    result=ExtractResult(rows=[], error=None),
+                    warning="classify failed, used generic fallback: boom")
+    df, report = assemble_structured([o], drop_empty=True)
+    assert df.height == 0
+    assert "w1" not in report.doctypes
+    assert any(f == "wf.pdf" and "classify failed" in m for f, m in report.errors)
+
+
+def test_warning_surfaced_alongside_result_error():
+    o = _DocOutcome(doc_id="w2", source_file="both.pdf", doctype="invoice",
+                    confidence=0.0, vlm_calls=3,
+                    result=StructuredResult(header=None, line_items=[], error="parse blew up"),
+                    warning="classify failed, used generic fallback: boom")
+    _, report = assemble_structured([o], drop_empty=True)
+    msgs = [m for f, m in report.errors if f == "both.pdf"]
+    assert any("classify failed" in m for m in msgs)   # warning not dropped
+    assert any("parse blew up" in m for m in msgs)      # result error also recorded
+
+
 def test_exact_columns_for_mixed_batch():
     df, _ = assemble_structured([_invoice_outcome(), _receipt_outcome()], drop_empty=True)
     expected = [

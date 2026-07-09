@@ -217,6 +217,20 @@ def test_auto_classify_classify_raises_falls_back(tmp_path):
     assert set(report.classify_confidence) == set(report.doctypes)
 
 
+def test_auto_classify_warning_surfaced_when_fallback_empty(tmp_path):
+    a = tmp_path / "doc.png"; _img(a)
+    empty = ExtractResult(rows=[], error=None)  # fallback produced no rows
+    cls = _RaisingClassifier()
+    te = FakeTemplateExtractor([])
+    fb = FakeFallbackExtractor([empty])
+    df, report = ingest_documents([a], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    assert df.height == 0
+    # no header row, but the classify failure must still name the file in errors.
+    assert any(str(a) == fname and "classify failed" in msg
+               for fname, msg in report.errors)
+
+
 def test_auto_classify_false_without_schema_or_template_raises(tmp_path):
     a = tmp_path / "a.png"; _img(a)
     with pytest.raises(ValueError, match="auto_classify=False"):

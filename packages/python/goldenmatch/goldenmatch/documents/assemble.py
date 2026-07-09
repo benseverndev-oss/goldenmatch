@@ -1,17 +1,14 @@
-"""Collapse per-document ExtractResults into one records DataFrame + a report."""
+"""Two-frame structured assemble: turn per-doc `_DocOutcome`s into a header frame
+(entities) + an optional line-item frame (children linked by `_doc_id`)."""
 from __future__ import annotations
 
 import polars as pl
 
 from goldenmatch.documents.types import (
-    ExtractResult,
     IngestReport,
     StructuredResult,
-    TargetSchema,
     _DocOutcome,
 )
-
-SIDECARS = ["_source_file", "_source_page", "_extract_confidence"]
 
 # The structured (two-frame) sidecar set: provenance/confidence + the stable
 # `_doc_id` (path fingerprint, the FK linking line items to their header) and
@@ -28,50 +25,6 @@ _ITEM_SIDECAR_SPECS = [
     ("_doc_id", pl.Utf8), ("_line_no", pl.Int64), ("_source_file", pl.Utf8),
     ("_source_page", pl.Int64), ("_extract_confidence", pl.Float64),
 ]
-
-
-def _empty_frame(schema: TargetSchema) -> pl.DataFrame:
-    cols = {c: pl.Series(c, [], dtype=pl.Utf8) for c in schema.column_names()}
-    cols["_source_file"] = pl.Series("_source_file", [], dtype=pl.Utf8)
-    cols["_source_page"] = pl.Series("_source_page", [], dtype=pl.Int64)
-    cols["_extract_confidence"] = pl.Series("_extract_confidence", [], dtype=pl.Float64)
-    return pl.DataFrame(cols)
-
-
-def assemble(results: list[ExtractResult], schema: TargetSchema, *,
-             drop_empty: bool = True,
-             files: list[str] | None = None) -> tuple[pl.DataFrame, IngestReport]:
-    """`files` (optional) aligns to `results` positionally so an errored doc can be named
-    in the report even though it produced no rows."""
-    report = IngestReport(n_files=len(results))
-    cols = schema.column_names()
-    records: list[dict] = []
-    for idx, res in enumerate(results):
-        if res.error is not None:
-            fname = files[idx] if files and idx < len(files) else "<unknown>"
-            report.errors.append((fname, res.error))
-            continue
-        for row in res.rows:
-            if drop_empty and all(v is None for v in row.values.values()):
-                continue
-            rec = dict(row.values)
-            rec["_source_file"] = row.source_file
-            rec["_source_page"] = row.source_page
-            rec["_extract_confidence"] = row.row_confidence()
-            records.append(rec)
-
-    if not records:
-        report.n_rows = 0
-        return _empty_frame(schema), report
-
-    df = pl.DataFrame(records)
-    # enforce column order (schema cols first, then sidecars) and string typing on cols
-    df = df.select([pl.col(c).cast(pl.Utf8) for c in cols] +
-                   [pl.col("_source_file").cast(pl.Utf8),
-                    pl.col("_source_page").cast(pl.Int64),
-                    pl.col("_extract_confidence").cast(pl.Float64)])
-    report.n_rows = df.height
-    return df, report
 
 
 class _ColUnion:
@@ -157,14 +110,17 @@ def assemble_structured(outcomes: list[_DocOutcome], *, drop_empty: bool = True
         # header row -- keeps the two report maps' key-sets identical + well-defined.
         report.doctypes[o.doc_id] = o.doctype
         report.classify_confidence[o.doc_id] = o.confidence
-        # A non-fatal notice (e.g. a raised classify that fell back to generic) rides
-        # the report.errors channel so a broken classifier leaves a trace instead of
-        # masquerading as a genuine 0.0 classification. It does NOT touch the two maps
-        # above, so their key-sets stay aligned.
-        if o.warning is not None:
-            report.errors.append((o.source_file, o.warning))
 
     for o in deduped:
+        # A non-fatal notice (e.g. a raised classify that fell back to generic) rides
+        # the report.errors channel so a broken classifier leaves a trace instead of
+        # masquerading as a genuine 0.0 classification -- surfaced UNCONDITIONALLY,
+        # independent of whether this doc later emits a header row, so an empty/dropped
+        # fallback can't swallow it. It does NOT touch doctypes/classify_confidence, so
+        # their key-sets stay aligned. Recorded separately from result.error below
+        # (distinct messages -> both kept, no double-count of the same string).
+        if o.warning is not None:
+            report.errors.append((o.source_file, o.warning))
         res = o.result
         if res.error is not None:
             report.errors.append((o.source_file, res.error))

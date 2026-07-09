@@ -27,6 +27,14 @@ frame is the return value; line items come back on `report.line_items`
 Install the extra: `pip install "goldenmatch[documents]"`. The VLM backend reads
 `OPENAI_API_KEY_PERSONAL` (or `OPENAI_API_KEY`). A local OCR backend is planned (Phase 3).
 
+> **Note (sidecar columns).** The ingest output frame carries five provenance/meta
+> sidecar columns: `_source_file`, `_source_page`, `_extract_confidence`, `_doc_id`,
+> `_doctype`, exported together as `DOC_SIDECARS`. This applies to BOTH the flat
+> (`schema=`) and structured (`template=`) paths -- stamping is uniform. When handing
+> the frame to `dedupe_df`, exclude ALL of them: `exclude_columns=DOC_SIDECARS`.
+> `_doc_id` is unique per document, so treating it as a match field would prevent any
+> two rows from ever matching -- never leave it in the match set.
+
 ## CLI
 
 ```bash
