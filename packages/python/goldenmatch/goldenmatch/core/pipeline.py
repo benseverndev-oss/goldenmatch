@@ -177,6 +177,7 @@ def _is_columnar_eligible(
             return False
     return True
 
+from goldenmatch.core.fused_routing import config_needs_artifacts
 from goldenmatch.core.golden import (
     _polars_native_eligible,
     build_golden_records_batch,
@@ -1124,6 +1125,357 @@ def _semantic_blocking_pairs(
     return out
 
 
+def _try_fused_golden(
+    multi_df: pl.DataFrame,
+    golden_rules: GoldenRulesConfig,
+    quality_scores: dict[tuple[int, str], float] | None,
+    cluster_pair_scores: dict[int, dict[tuple[int, int], float]] | None,
+    provenance: bool,
+    wants_full_provenance: bool,
+) -> pl.DataFrame | None:
+    """Try the fused Arrow-native golden kernel on a cluster ``multi_df``.
+
+    ``multi_df`` carries ``__row_id__`` + ``__cluster_id__`` + user columns; the
+    kernel drops singletons/oversized itself. Returns the fused golden
+    ``pl.DataFrame`` (one row per multi-member cluster, native dtypes) or
+    ``None`` to decline, in which case the caller falls back to the classic
+    builder unchanged. Declines when:
+
+    - ``GOLDENMATCH_GOLDEN_FUSED`` is ``0``/``false``/``off`` (kill-switch),
+    - ``wants_full_provenance`` (= ``config.output.lineage_provenance``): the
+      fused path cannot reproduce the slow path's ``__survivorship_prov__``
+      object (spec 2026-07-09 3), so decline rather than silently drop it,
+    - ``run_golden_fused_arrow`` itself declines (uncovered config, fast-path-
+      eligible config, or native kernel absent) or raises.
+    """
+    import os
+
+    if os.environ.get("GOLDENMATCH_GOLDEN_FUSED", "").lower() in {"0", "false", "off"}:
+        return None
+    if wants_full_provenance:
+        return None
+    try:
+        from goldenmatch.core.golden_fused import run_golden_fused_arrow
+
+        result = run_golden_fused_arrow(
+            multi_df,
+            golden_rules,
+            quality_scores=quality_scores,
+            cluster_pair_scores=cluster_pair_scores,
+            provenance=provenance,
+        )
+    except Exception:
+        logger.debug("fused golden declined", exc_info=True)
+        return None
+    # provenance is False whenever we reach here (wants_full_provenance gates
+    # it), so run_golden_fused_arrow returns a DataFrame or None -- never the
+    # (df, records) provenance tuple. Guard defensively.
+    if isinstance(result, tuple):
+        result = result[0]
+    if result is None:
+        return None
+    # Byte-identity: the classic SLOW golden path this replaces assembles its
+    # frame from list[dict] records with an all-Utf8 schema_overrides, so its
+    # user columns come back String. The fused kernel PRESERVES the source
+    # dtype. On dedupe_df/run_dedupe_df the entry point already pre-casts every
+    # user column to Utf8 (so this is a no-op there), but the file-based
+    # run_dedupe/dedupe path infers native dtypes via scan_csv/scan_parquet, so
+    # a golden `age` column would come back Int64 (fused) vs String (classic).
+    # Cast the non-internal user columns to Utf8 to match the slow path exactly
+    # (__cluster_id__ Int64 / __golden_confidence__ Float64 already agree). We
+    # deliberately do NOT keep native dtypes -- that would change the slow
+    # path's own behavior, out of scope for a transparent routing flag.
+    return result.with_columns(
+        [pl.col(c).cast(pl.Utf8) for c in result.columns if not c.startswith("__")]
+    )
+
+
+def _golden_records_to_df(golden_records: list[dict]) -> pl.DataFrame | None:
+    """Assemble a golden ``pl.DataFrame`` from the ``list[dict]`` records the slow
+    survivorship builder returns (``build_golden_records_batch``).
+
+    Mirrors the shared slow-path rebuild in ``_run_dedupe_pipeline`` exactly: each
+    record's ``{value}`` field-dicts collapse to a scalar, an all-``Utf8``
+    ``schema_overrides`` prevents mixed-type inference errors, and
+    ``__cluster_id__`` / ``__golden_confidence__`` keep their native dtypes.
+    Returns ``None`` for an empty record list.
+    """
+    if not golden_records:
+        return None
+    golden_rows: list[dict] = []
+    for rec in golden_records:
+        row: dict = {"__cluster_id__": rec["__cluster_id__"]}
+        row["__golden_confidence__"] = rec.get("__golden_confidence__", 0.0)
+        for col, val_info in rec.items():
+            if col in ("__cluster_id__", "__golden_confidence__"):
+                continue
+            if isinstance(val_info, dict) and "value" in val_info:
+                row[col] = val_info["value"]
+        golden_rows.append(row)
+    all_keys: set[str] = set()
+    for row in golden_rows:
+        all_keys.update(row.keys())
+    schema_overrides = {
+        k: pl.Utf8 for k in all_keys
+        if k not in ("__cluster_id__", "__golden_confidence__")
+    }
+    return pl.DataFrame(golden_rows, schema_overrides=schema_overrides)
+
+
+def _golden_from_multi_df(
+    multi_df: pl.DataFrame,
+    golden_rules: GoldenRulesConfig,
+    quality_scores: dict[tuple[int, str], float] | None,
+    provenance_on: bool,
+) -> tuple[pl.DataFrame | None, bool]:
+    """Build golden for a pre-joined ``(__row_id__ + __cluster_id__)`` ``multi_df``,
+    mirroring the classic dict-path golden demux so the output is byte-identical.
+
+    Returns ``(golden_df, golden_fused_used)``. Decision, exactly as the pipeline's
+    dict / frames golden branches:
+
+    - FAST (``not provenance`` AND ``_polars_native_eligible``): the columnar
+      ``build_golden_records_df`` -- no fused try (the fused kernel declines
+      fast-path-eligible configs anyway).
+    - SLOW: try ``_try_fused_golden`` (Stage E, default-on); on ``None`` fall back
+      to ``build_golden_records_batch`` + the ``list[dict]`` -> frame rebuild.
+
+    ``cluster_pair_scores`` is ``None`` (capacity mode sheds pair scores);
+    ``confidence_majority`` is the only strategy that consumes them and is excluded
+    upstream by ``config_needs_artifacts``, so ``None`` is byte-identical here.
+    """
+    fast_eligible = not provenance_on and _polars_native_eligible(
+        golden_rules, quality_scores=quality_scores
+    )
+    if fast_eligible:
+        return build_golden_records_df(multi_df, golden_rules), False
+
+    fused_golden_df = _try_fused_golden(
+        multi_df,
+        golden_rules,
+        quality_scores=quality_scores,
+        cluster_pair_scores=None,
+        provenance=provenance_on,
+        wants_full_provenance=provenance_on,
+    )
+    if fused_golden_df is not None:
+        return fused_golden_df, True
+
+    golden_records = build_golden_records_batch(
+        multi_df,
+        golden_rules,
+        quality_scores=quality_scores,
+        provenance=provenance_on,
+        cluster_pair_scores=None,
+    )
+    return _golden_records_to_df(golden_records), False
+
+
+def _fused_needed_src_cols(config: GoldenMatchConfig) -> list[str]:
+    """Source columns the fused match kernel needs as Arrow arrays: the blocking
+    key field(s) (single-key or every multi-pass field) + the covered weighted
+    matchkey's comparison fields. Deduped, source-order preserved (mirrors
+    ``fused_match.run_match_fused_arrow``'s own ``src_cols`` derivation)."""
+    fields: list[str] = []
+    b = config.blocking
+    if b is not None and getattr(b, "strategy", None) == "multi_pass":
+        for p in getattr(b, "passes", None) or []:
+            fields.extend(p.fields)
+    elif b is not None:
+        keys = getattr(b, "keys", None) or []
+        if keys:
+            fields.extend(keys[0].fields)
+    mk = config.get_matchkeys()[0]
+    fields.extend(f.field for f in mk.fields if f.field is not None)
+    return list(dict.fromkeys(fields))
+
+
+def _run_fused_match_short_circuit(
+    collected_df: pl.DataFrame,
+    config: GoldenMatchConfig,
+    *,
+    quarantine_df: pl.DataFrame | None,
+    output_report: bool,
+    across_files_only: bool,
+) -> dict | None:
+    """Fused-match whole-stage short-circuit (spec 2026-07-09 Stage F).
+
+    Runs block + score + dedup + cluster in ONE ``match_fused`` FFI call, then
+    routes the resulting connected components DIRECTLY to golden -- bypassing the
+    classic ``exact -> fuzzy -> cluster -> 3-branch golden dispatch``. Returns a
+    full result dict (the SAME keys ``_run_dedupe_pipeline`` returns) on success,
+    or ``None`` to fall through to the classic path unchanged (kill-switch set, or
+    the kernel declined the config / is absent).
+
+    CAPACITY-SURVIVAL contract (spec §4.4): this fires only under est-RSS pressure
+    (the controller's ``maybe_route_fused_match``), where the classic path would
+    likely OOM. It sheds ``scored_pairs`` (``[]``) + per-cluster
+    confidence/bottleneck/lineage, but the CLUSTER MEMBERSHIP + GOLDEN records are
+    byte-identical to classic. ``match_fused_capacity_mode=True`` marks the shed so
+    it is never silent (Stage G telemetry). The config-driven divergence gate
+    (``config_needs_artifacts``) is re-checked by the caller before entry.
+
+    DIVERGENCE GUARDS beyond ``config_needs_artifacts`` (transient / call-scoped
+    signals that live on the pipeline call, NOT the persistent config, so they
+    can't be folded into the single-source config gate):
+
+    - ``across_files_only`` -- the classic exact/fuzzy stages drop within-source
+      pairs; match_fused clusters all pairs, so an across-files run would
+      DIVERGE. Decline.
+    - ``_preflight_report`` present + NOT ``_strict_autoconfig`` -- the classic
+      path runs ``_apply_postflight`` which may RAISE the effective threshold
+      from a bimodal score histogram (needs the full scored-pair histogram the
+      fused kernel never materializes, so it can't be replicated). Decline to
+      stay byte-identical. NOTE this narrows auto-routing on the non-strict
+      auto-config path; the fast-follow is for the controller (Stage D) to bake
+      the postflight-adjusted threshold into the committed config before setting
+      the flag, which would re-open this path.
+    """
+    if os.environ.get("GOLDENMATCH_MATCH_FUSED", "").lower() in {"0", "false", "off"}:
+        return None
+    if across_files_only:
+        return None
+    _preflight = getattr(config, "_preflight_report", None)
+    if _preflight is not None and not getattr(config, "_strict_autoconfig", False):
+        return None
+
+    from goldenmatch.core.fused_match import (
+        run_match_fused_arrow,
+        run_match_fused_multipass_arrow,
+    )
+
+    n_rows = collected_df.height
+    columns = {c: collected_df[c].to_arrow() for c in _fused_needed_src_cols(config)}
+    fused_tbl = run_match_fused_arrow(
+        columns, config, n_rows=n_rows
+    ) or run_match_fused_multipass_arrow(columns, config, n_rows=n_rows)
+    if fused_tbl is None:
+        return None
+
+    # (__row_id__, __cluster_id__), one row per input record. match_fused emits
+    # every record incl singletons (own component). auto_split is excluded by
+    # config_needs_artifacts, so oversized clusters are never SPLIT -- but the
+    # classic path still FLAGS clusters over max_cluster_size as oversized and
+    # excludes them from golden (while keeping them in dupes). Mirror that flag so
+    # golden stays byte-identical.
+    max_cluster_size = 100
+    if config.golden_rules is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+    fused_df = pl.from_arrow(fused_tbl)
+    assert isinstance(fused_df, pl.DataFrame)  # from_arrow returns a DataFrame for a Table
+    sizes = fused_df.group_by("__cluster_id__").agg(pl.len().alias("__size__"))
+    # dupes: members of every multi-member cluster (oversized INCLUDED, mirroring
+    # the classic size>1 dupe rule). golden: non-oversized multi-member only.
+    dupe_ids = sizes.filter(pl.col("__size__") > 1)["__cluster_id__"].to_list()
+    golden_ids = sizes.filter(
+        (pl.col("__size__") > 1) & (pl.col("__size__") <= max_cluster_size)
+    )["__cluster_id__"].to_list()
+    oversized_ids = set(
+        sizes.filter(pl.col("__size__") > max_cluster_size)["__cluster_id__"].to_list()
+    )
+
+    dupe_row_ids = fused_df.filter(pl.col("__cluster_id__").is_in(dupe_ids))[
+        "__row_id__"
+    ].to_list()
+    golden_row_ids = fused_df.filter(pl.col("__cluster_id__").is_in(golden_ids))[
+        "__row_id__"
+    ].to_list()
+    dupe_set = set(dupe_row_ids)
+    all_ids = collected_df["__row_id__"].to_list()
+    unique_row_ids = [r for r in all_ids if r not in dupe_set]
+    dupes_df = collected_df.filter(pl.col("__row_id__").is_in(dupe_row_ids))
+    unique_df = collected_df.filter(pl.col("__row_id__").is_in(unique_row_ids))
+
+    # Clusters dict (capacity mode: pair_scores/confidence/bottleneck shed). Same
+    # STRUCTURE as build_clusters so DedupeResult.clusters consumers don't break;
+    # confidence sentinel mirrors cluster.py (1.0 singleton / 0.0 multi).
+    grouped: dict[int, list[int]] = {}
+    for rid, cid in zip(
+        fused_df["__row_id__"].to_list(), fused_df["__cluster_id__"].to_list()
+    ):
+        grouped.setdefault(cid, []).append(rid)
+    clusters: dict[int, dict] = {}
+    for cid, members in grouped.items():
+        size = len(members)
+        clusters[cid] = {
+            "members": sorted(members),
+            "size": size,
+            "oversized": cid in oversized_ids,
+            "pair_scores": {},
+            "confidence": 1.0 if size <= 1 else 0.0,
+            "bottleneck_pair": None,
+            "cluster_quality": "strong",
+        }
+
+    # Golden -- route the fused clusters through the SAME builder the classic path
+    # picks (fast columnar vs slow batch), over the joined multi_df. Byte-identical
+    # golden by construction (frames-path golden == dict-path golden == this).
+    # golden_rules is non-None here: config_needs_artifacts (re-checked by the
+    # caller before entry) returns True for a None golden_rules (auto_split
+    # defaults True), so a None golden_rules never reaches the short-circuit.
+    golden_rules = config.golden_rules
+    assert golden_rules is not None  # noqa: S101 - invariant from config_needs_artifacts
+    golden_df: pl.DataFrame | None = None
+    golden_fused_used = False
+    if golden_row_ids:
+        # Quality-weighted survivorship, gated + scoped exactly as the classic
+        # golden stage (over the full-column member frame, before slim; members =
+        # non-oversized multi-member cluster rows).
+        quality_scores: dict[tuple[int, str], float] | None = None
+        if getattr(golden_rules, "quality_weighting", False):
+            from goldenmatch.core.quality import compute_quality_scores
+
+            quality_scores = (
+                compute_quality_scores(
+                    collected_df.filter(pl.col("__row_id__").is_in(golden_row_ids))
+                )
+                or None
+            )
+        # Build multi_df: member rows + slim internal columns + __cluster_id__
+        # (mirrors the dict-path golden branch for byte-identity).
+        multi_df = collected_df.filter(pl.col("__row_id__").is_in(golden_row_ids))
+        if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
+            _internal_prefixes = ("__xform_", "__mk_", "__block_key__", "__bucket__")
+            multi_df = multi_df.select(
+                [
+                    c
+                    for c in multi_df.columns
+                    if not any(c.startswith(p) for p in _internal_prefixes)
+                ]
+            )
+        multi_df = multi_df.join(fused_df, on="__row_id__", how="inner")
+        golden_df, golden_fused_used = _golden_from_multi_df(
+            multi_df, golden_rules, quality_scores, config.output.lineage_provenance
+        )
+
+    report = None
+    if output_report:
+        report = generate_dedupe_report(
+            total_records=collected_df.height,
+            total_clusters=len(clusters),
+            cluster_sizes=[c["size"] for c in clusters.values()],
+            oversized_clusters=len(oversized_ids),
+            matchkeys_used=[mk.name for mk in config.get_matchkeys()],
+        )
+
+    return {
+        "clusters": clusters,
+        "golden": golden_df,
+        "unique": unique_df,
+        "dupes": dupes_df,
+        "report": report,
+        "quarantine": quarantine_df,
+        "postflight_report": None,
+        "memory_stats": None,
+        "identity_summary": None,
+        "scored_pairs": [],
+        "llm_cost": None,
+        "throughput_posture": None,
+        "golden_fused_used": golden_fused_used,
+        "match_fused_capacity_mode": True,
+    }
+
+
 def _run_dedupe_pipeline(
     combined_lf: pl.LazyFrame,
     config: GoldenMatchConfig,
@@ -1398,6 +1750,30 @@ def _run_dedupe_pipeline(
     combined_lf = collected_df.lazy()
     with stage("auto_suggest_blocking"):
         _run_auto_suggest(collected_df, config)
+
+    # ── Fused-match whole-stage short-circuit (spec 2026-07-09 Stage F) ──
+    # When the controller flagged this run for fused match (est-RSS pressure via
+    # ExecutionPlan.use_fused_match -> config._use_fused_match) AND the
+    # config-driven divergence gate is clear, run block+score+dedup+cluster in ONE
+    # match_fused FFI call and route the components DIRECTLY to golden, bypassing
+    # the classic exact->fuzzy->cluster->golden dispatch below. config_needs_
+    # artifacts is the authoritative single-source re-check (the same helper the
+    # controller consulted); the caller-intent conditions are already folded into
+    # the flag via the _api.py hint (Task D.3), so they are not re-checked here
+    # (out of pipeline scope). On decline (kill-switch / uncovered / native
+    # absent) the helper returns None and the classic path runs unchanged.
+    if getattr(config, "_use_fused_match", False) and not config_needs_artifacts(config):
+        _fused_result = _run_fused_match_short_circuit(
+            collected_df,
+            config,
+            quarantine_df=quarantine_df,
+            output_report=output_report,
+            across_files_only=across_files_only,
+        )
+        if _fused_result is not None:
+            if memory_store is not None:
+                memory_store.close()
+            return _fused_result
 
     # ── Step 3: BLOCK + COMPARE (cascading: exact first, then fuzzy) ──
     all_pairs: list[tuple[int, int, float]] = []
@@ -2278,6 +2654,9 @@ def _run_dedupe_pipeline(
     # block can write to it directly without the slow path's `golden_df = None`
     # re-init clobbering it after the `with` exits.
     golden_df: pl.DataFrame | None = None
+    # Fused-golden routing marker (spec 2026-07-09, Stage G telemetry): flips
+    # True when the Arrow-native golden kernel produced the golden frame.
+    golden_fused_used = False
     golden_rules = config.golden_rules or GoldenRulesConfig(default_strategy="most_complete")
 
     # Throughput tier (#1151): corpus dedup consumes the clusters / dup mapping,
@@ -2406,25 +2785,49 @@ def _run_dedupe_pipeline(
             # of degrading to count-majority (the frames-out cluster dict carries
             # pair_scores={}). The fast builder ignores it; only built once here
             # if the slow path needs it.
-            _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
-            if not (
+            _frames_fast_eligible = (
                 not _provenance_on
                 and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
-            ):
+            )
+            _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
+            if not _frames_fast_eligible:
                 _psv = _pair_score_view()
                 if _psv is not None:
                     _frames_pair_scores = {
                         cid: {(a, b): s for (a, b, s) in edges}
                         for cid, edges in _psv.iter_clusters()
                     }
-            golden_df, golden_records = build_golden_records_from_frames(
-                _golden_source,
-                cluster_frames,
-                golden_rules,
-                quality_scores=quality_scores,
-                provenance=_provenance_on,
-                cluster_pair_scores=_frames_pair_scores,
-            )
+            # Fused-golden routing (spec 2026-07-09, default-on): try the Arrow-
+            # native kernel on the SAME multi_df the classic from-frames builder
+            # assembles internally (via _multi_df_from_frames), so a non-None
+            # result is byte-identical to the slow path it replaces. Attempt only
+            # when the slow path would run -- the fused kernel declines fast-path-
+            # eligible configs anyway, and gating avoids an extra join on the hot
+            # fast path. On None, fall back unchanged.
+            _fused_golden_df = None
+            if not _frames_fast_eligible:
+                from goldenmatch.core.golden import _multi_df_from_frames
+                _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
+                _fused_golden_df = _try_fused_golden(
+                    _fused_multi_df,
+                    golden_rules,
+                    quality_scores=quality_scores,
+                    cluster_pair_scores=_frames_pair_scores,
+                    provenance=_provenance_on,
+                    wants_full_provenance=_provenance_on,
+                )
+            if _fused_golden_df is not None:
+                golden_df, golden_records = _fused_golden_df, []
+                golden_fused_used = True
+            else:
+                golden_df, golden_records = build_golden_records_from_frames(
+                    _golden_source,
+                    cluster_frames,
+                    golden_rules,
+                    quality_scores=quality_scores,
+                    provenance=_provenance_on,
+                    cluster_pair_scores=_frames_pair_scores,
+                )
     else:
         with stage("golden"):
             with stage("golden_eligible_filter"):
@@ -2533,39 +2936,40 @@ def _run_dedupe_pipeline(
                             cid: info.get("pair_scores", {})
                             for cid, info in clusters.items()
                         }
-                        golden_records = build_golden_records_batch(
-                            multi_df, golden_rules,
+                        # Fused-golden routing (spec 2026-07-09, default-on): try
+                        # the Arrow-native kernel on the live multi_df; a non-None
+                        # result is byte-identical to build_golden_records_batch
+                        # for the covered config surface. On None, fall back.
+                        _fused_golden_df = _try_fused_golden(
+                            multi_df,
+                            golden_rules,
                             quality_scores=quality_scores,
-                            provenance=_provenance_on,
                             cluster_pair_scores=cluster_pair_scores,
+                            provenance=_provenance_on,
+                            wants_full_provenance=_provenance_on,
                         )
+                        if _fused_golden_df is not None:
+                            golden_df = _fused_golden_df
+                            golden_records = []
+                            golden_fused_used = True
+                        else:
+                            golden_records = build_golden_records_batch(
+                                multi_df, golden_rules,
+                                quality_scores=quality_scores,
+                                provenance=_provenance_on,
+                                cluster_pair_scores=cluster_pair_scores,
+                            )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated
     # golden_df directly and left golden_records empty, so this branch is
     # a no-op on the fast path.)
     if golden_records:
-        golden_rows = []
-        for rec in golden_records:
-            row = {"__cluster_id__": rec["__cluster_id__"]}
-            row["__golden_confidence__"] = rec.get("__golden_confidence__", 0.0)
-            for col, val_info in rec.items():
-                if col in ("__cluster_id__", "__golden_confidence__"):
-                    continue
-                if isinstance(val_info, dict) and "value" in val_info:
-                    row[col] = val_info["value"]
-            golden_rows.append(row)
-        # Build explicit schema to prevent mixed-type inference errors.
-        # Golden records from different clusters may have different value types
-        # for the same column (e.g. "0" str vs 0 int).
-        all_keys: set[str] = set()
-        for row in golden_rows:
-            all_keys.update(row.keys())
-        schema_overrides = {
-            k: pl.Utf8 for k in all_keys
-            if k not in ("__cluster_id__", "__golden_confidence__")
-        }
-        golden_df = pl.DataFrame(golden_rows, schema_overrides=schema_overrides)
+        # Build explicit schema to prevent mixed-type inference errors: golden
+        # records from different clusters may have different value types for the
+        # same column (e.g. "0" str vs 0 int). Shared with the fused-match
+        # short-circuit via _golden_records_to_df.
+        golden_df = _golden_records_to_df(golden_records)
 
     # Classify records
     if cluster_frames is not None:
@@ -2717,6 +3121,10 @@ def _run_dedupe_pipeline(
         "scored_pairs": scored_pairs,
         "llm_cost": llm_budget_summary,
         "throughput_posture": _throughput_posture,
+        "golden_fused_used": golden_fused_used,
+        # Classic path never sheds artifacts; the fused-match short-circuit sets
+        # this True on its own early-return (spec 2026-07-09 Stage F/G).
+        "match_fused_capacity_mode": False,
     }
 
     try:

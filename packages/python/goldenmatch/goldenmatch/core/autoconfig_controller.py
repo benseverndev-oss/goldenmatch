@@ -553,6 +553,7 @@ class AutoConfigController:
         allow_red_config: bool = False,
         planning_effort: str = "normal",
         throughput: Any | None = None,
+        fused_match_allowed: bool = False,
     ) -> tuple[GoldenMatchConfig, ComplexityProfile, RunHistory]:
         """Run iterative auto-config.
 
@@ -1375,6 +1376,48 @@ class AutoConfigController:
                 logger.debug("Throughput overlay failed; skipping.", exc_info=True)
         plan.apply_to(committed_config)
         history.execution_plan = plan
+
+        # Fused-match routing post-step (spec 2026-07-09). Runs AFTER the backend
+        # plan is chosen (native OR Python) -- fused match is a whole-stage
+        # short-circuit, orthogonal to backend selection; the chosen backend is
+        # the fallback when fused declines. Deliberately NOT a DEFAULT_RULES rule:
+        # the native autoconfig kernel short-circuits those, so a rule there would
+        # be dead under native-default-on autoconfig. `needs_artifacts` folds the
+        # caller-intent hint (`fused_match_allowed`, threaded from _api.py; absent
+        # => default-deny) with the config-driven divergence gate.
+        import dataclasses
+
+        from goldenmatch.core.fused_routing import (
+            config_needs_artifacts,
+            maybe_route_fused_match,
+        )
+        _needs_art = (not fused_match_allowed) or config_needs_artifacts(committed_config)
+        # Use the AUTHORITATIVE full-data row count, NOT the loop-local `n_rows`:
+        # on the GREEN stop path `n_rows` is rebound to the SAMPLE height
+        # (`profile_n.data.n_rows`, ~line 837), which would under-estimate classic
+        # peak RSS and silently suppress routing on a large clean dataset that
+        # greens on its sample -- exactly the capacity-survival target.
+        # `_current_run_full_n_rows` is stashed once at run() entry (df.height /
+        # df.count()) and never rebound. Same source line 1788 reads for profiles.
+        _full_n_rows = getattr(self, "_current_run_full_n_rows", None) or n_rows
+        if maybe_route_fused_match(
+            config=committed_config,
+            profile=profile_for_planner,
+            runtime=runtime,
+            n_rows=_full_n_rows,
+            needs_artifacts=_needs_art,
+        ):
+            plan = dataclasses.replace(
+                plan,
+                use_fused_match=True,
+                rule_name=(
+                    f"{plan.rule_name}+fused_match_post_step"
+                    if plan.rule_name
+                    else "fused_match_post_step"
+                ),
+            )
+            plan.apply_to(committed_config)
+            history.execution_plan = plan
 
         # Fix 4: When skip_finalize=True (called from _api zero-config path),
         # OR when running on a distributed dataset (Phase 2: _finalize takes a

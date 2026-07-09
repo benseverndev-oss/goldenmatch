@@ -60,6 +60,7 @@ class ExecutionPlan:
     sketch_rows: int | None = None
     sketch_similarity: float | None = None
     sketch_metric: str | None = None
+    use_fused_match: bool = False
 
     def apply_to(self, config: GoldenMatchConfig) -> None:
         """Write plan onto a GoldenMatchConfig in place.
@@ -73,3 +74,5 @@ class ExecutionPlan:
             config.backend = self.backend
         if self.verify_mode != "full":
             config._throughput_plan = self
+        if self.use_fused_match:
+            config._use_fused_match = True

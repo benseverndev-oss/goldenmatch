@@ -251,6 +251,19 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 
 ---
 
+## Fused kernel auto-routing
+
+The pipeline can route covered slow-path runs to the fused Arrow-native kernels, byte-identically, with no config change. There are two seams with very different maturity: **golden routing is a broad default-on win; match routing is a dormant capacity-survival scaffold that effectively never fires by default.**
+
+| Variable | Default | Effect | When to change |
+|----------|---------|--------|----------------|
+| `GOLDENMATCH_GOLDEN_FUSED` | on | **Golden seam auto-routing (default-on, byte-identical).** Tries the fused Arrow-native golden kernel on every covered slow-path config, reaching golden output at ~2x lower peak RSS. Declines to the classic builder (unchanged output) when the config is uncovered, the native kernel is absent, full `ClusterProvenance` lineage is requested, or the run is fast-path-eligible. Surfaced on `DedupeResult.golden_fused_used`. | `0` / `false` / `off` is the kill-switch (forces the classic golden builder everywhere). |
+| `GOLDENMATCH_MATCH_FUSED` | on (but dormant) | **Match seam auto-routing - a narrow capacity-survival path, dormant by default.** A controller post-step can short-circuit the match stage to the fused match kernel, but only under a memory-pressure gate AND a narrow config profile (`auto_split=False`, no identity/adaptive/memory/llm_boost/confidence_majority/full-provenance, not across-files-only, a covered weighted matchkey). Zero-config auto-config commits `auto_split=True` and explicit configs bypass the controller, so it effectively **never fires by default**. When it does fire it is a capacity mode that sheds `scored_pairs` / cluster-confidence / lineage to survive; marked `DedupeResult.match_fused_capacity_mode` + telemetry `rule_name` `+fused_match_post_step`. | `0` / `false` / `off` is the kill-switch. Leave on; the wake-up path (a postflight threshold or explicit opt-in) is a follow-up. |
+| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | Fraction of available RAM the estimated classic-path peak RSS must exceed before match routing's pressure gate fires. Only relevant to the (dormant) match seam. | Lower to make the capacity path trip earlier; raise toward `1.0` to make it trip only under extreme pressure. |
+| `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | Calibration coefficients for the est-peak-RSS model that drives the match pressure gate. Defaults are fit against measured runs. | Only when re-calibrating the est-RSS model against a new box/workload; leave alone otherwise. |
+
+---
+
 ## Auto-config & planning
 
 | Variable | Default | Effect | When to set |
@@ -528,6 +541,10 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 |----------|---------|--------|
 | `GOLDENMATCH_BUCKET_SLIM_PROJECTION` | `1` (on) | Drop unneeded columns after bucket scoring. |
 | `GOLDENMATCH_GOLDEN_SLIM_MULTIDF` | `1` (on) | Slim internal columns before golden build. |
+| `GOLDENMATCH_GOLDEN_FUSED` | on | Golden-seam fused auto-routing (default-on, byte-identical, ~2x lower peak RSS). `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
+| `GOLDENMATCH_MATCH_FUSED` | on (dormant) | Match-seam fused auto-routing - a narrow capacity-survival path that effectively never fires by default. `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
+| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | RAM-fraction pressure gate for the (dormant) match-seam routing. |
+| `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | est-peak-RSS calibration coefficients for the match pressure gate. |
 | `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Batch no-PK identity hashing. |
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |
