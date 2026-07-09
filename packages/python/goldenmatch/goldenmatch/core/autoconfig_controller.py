@@ -1390,11 +1390,19 @@ class AutoConfigController:
             maybe_route_fused_match,
         )
         _needs_art = (not fused_match_allowed) or config_needs_artifacts(committed_config)
+        # Use the AUTHORITATIVE full-data row count, NOT the loop-local `n_rows`:
+        # on the GREEN stop path `n_rows` is rebound to the SAMPLE height
+        # (`profile_n.data.n_rows`, ~line 837), which would under-estimate classic
+        # peak RSS and silently suppress routing on a large clean dataset that
+        # greens on its sample -- exactly the capacity-survival target.
+        # `_current_run_full_n_rows` is stashed once at run() entry (df.height /
+        # df.count()) and never rebound. Same source line 1788 reads for profiles.
+        _full_n_rows = getattr(self, "_current_run_full_n_rows", None) or n_rows
         if maybe_route_fused_match(
             config=committed_config,
             profile=profile_for_planner,
             runtime=runtime,
-            n_rows=n_rows,
+            n_rows=_full_n_rows,
             needs_artifacts=_needs_art,
         ):
             plan = dataclasses.replace(

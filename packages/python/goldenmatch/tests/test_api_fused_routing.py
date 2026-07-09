@@ -53,6 +53,29 @@ def test_dedupe_df_threads_hint_true(monkeypatch):
     assert captured.get("fused_match_allowed") is True
 
 
+def test_dedupe_df_certify_denies_hint(monkeypatch):
+    # certify annotates the returned result with a recall certificate the user
+    # expects transparent -> deny the hint.
+    captured = _spy_controller_run(monkeypatch)
+    dedupe_df(_df(), certify=True)
+    assert captured.get("fused_match_allowed") is False
+
+
+def test_dedupe_df_suggest_denies_hint(monkeypatch):
+    # suggest_from_result reads DedupeResult.scored_pairs, which capacity mode
+    # empties -> deny.
+    captured = _spy_controller_run(monkeypatch)
+    dedupe_df(_df(), suggest=True)
+    assert captured.get("fused_match_allowed") is False
+
+
+def test_dedupe_df_heal_denies_hint(monkeypatch):
+    # heal is a full-artifact repair loop -> deny.
+    captured = _spy_controller_run(monkeypatch)
+    dedupe_df(_df(), heal=True)
+    assert captured.get("fused_match_allowed") is False
+
+
 def test_direct_auto_configure_df_default_denies(monkeypatch):
     # A direct auto_configure_df call (no _api hint) leaves the default False.
     captured = _spy_controller_run(monkeypatch)

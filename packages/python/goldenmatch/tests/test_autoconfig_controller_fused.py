@@ -17,6 +17,7 @@ import polars as pl
 import pytest
 from goldenmatch.core.autoconfig_controller import AutoConfigController, ControllerBudget
 from goldenmatch.core.autoconfig_policy import HeuristicRefitPolicy
+from goldenmatch.core.complexity_profile import StopReason
 from goldenmatch.core.execution_plan import ExecutionPlan
 
 
@@ -35,6 +36,36 @@ def _df() -> pl.DataFrame:
 
 def _controller() -> AutoConfigController:
     return AutoConfigController(policy=HeuristicRefitPolicy(), budget=ControllerBudget())
+
+
+# 60-name surname pool spread across soundex codes (per the synthetic-fixture rule
+# — same-soundex surnames hang blocking). Enough distinct keys to keep blocks small.
+_SURNAMES = [
+    "Anderson", "Baker", "Carter", "Diaz", "Edwards", "Fisher", "Garcia", "Hughes",
+    "Ibrahim", "Jackson", "Klein", "Lopez", "Murphy", "Nguyen", "Owens", "Patel",
+    "Quinn", "Reyes", "Sullivan", "Turner", "Underwood", "Vargas", "Walsh", "Xiong",
+    "Young", "Zimmerman", "Bishop", "Chandler", "Delgado", "Emerson", "Franklin",
+    "Gallagher", "Hoffman", "Ingram", "Jennings", "Kirkland", "Lombardi", "Mercer",
+    "Norton", "Osborne", "Pearson", "Quintero", "Ramsey", "Schneider", "Thornton",
+    "Ulrich", "Valentine", "Whitaker", "Yamamoto", "Zamora",
+]
+
+
+def _exact_dup_df(n_people: int, copies: int = 3) -> pl.DataFrame:
+    """`n_people` distinct people, EACH repeated `copies` times. copies=3 makes
+    within-block candidate pairs >= 0.5*n_rows so the controller's GREEN-path
+    `_suspicious_tight_blocking` override does NOT divert the break (it needs
+    candidates < 0.5*n_rows), giving a clean GREEN stop that rebinds the loop-local
+    `n_rows` to the sample height -- the exact condition finding 1 regresses on."""
+    rows = []
+    for i in range(n_people):
+        rec = {
+            "name": f"{_SURNAMES[i % len(_SURNAMES)]}{i}",
+            "zip": str(10000 + (i % 500)),
+        }
+        for _ in range(copies):
+            rows.append(dict(rec))
+    return pl.DataFrame(rows)
 
 
 def _run(controller, df, **kw):
@@ -101,6 +132,45 @@ def test_default_deny_absent_hint(monkeypatch):
     committed, _profile, _history = _run(_controller(), _df())  # fused_match_allowed defaults False
     assert seen.get("needs_artifacts") is True
     assert getattr(committed, "_use_fused_match", False) is False
+
+
+def test_post_step_receives_full_count_not_sample_on_green(monkeypatch):
+    """REGRESSION (finding 1): on the GREEN stop path the loop-local `n_rows` is
+    rebound to the SAMPLE height (profile_n.data.n_rows). The post-step must use the
+    AUTHORITATIVE full-data count (`_current_run_full_n_rows`), NOT the sample --
+    otherwise classic-RSS is under-estimated and match routing silently fails to
+    fire on a large clean dataset that greens on its sample."""
+    from goldenmatch.core.complexity_profile import ComplexityProfile, HealthVerdict
+
+    captured: dict = {}
+
+    def _spy(**kw):
+        captured["n_rows"] = kw.get("n_rows")
+        return False
+
+    monkeypatch.setattr("goldenmatch.core.fused_routing.maybe_route_fused_match", _spy)
+    # Force the GREEN stop path deterministically (real GREEN is data-dependent and
+    # flaky). The iter-0 GREEN branch rebinds the loop-local `n_rows` to the SAMPLE
+    # height at controller line 837 -- the bug's trigger.
+    monkeypatch.setattr(ComplexityProfile, "health", lambda self: HealthVerdict.GREEN)
+
+    # Force sampling: full (1800) > sample (400).
+    controller = AutoConfigController(
+        policy=HeuristicRefitPolicy(),
+        budget=ControllerBudget(sample_size_default=400, sample_skip_below=1000),
+    )
+    df = _exact_dup_df(600, copies=3)  # 1800 rows
+    full_height = df.height
+    _committed, _profile, history = controller.run(
+        df, skip_finalize=True, confidence_required=False, fused_match_allowed=True
+    )
+    # Prove the GREEN break actually fired (so the loop-local n_rows WAS rebound to
+    # the sample) -- otherwise this test would pass trivially.
+    assert history.stop_reason == StopReason.GREEN
+    # The post-step must have seen the FULL row count, never the sample height.
+    assert captured.get("n_rows") == full_height
+    assert captured["n_rows"] == getattr(controller, "_current_run_full_n_rows", None)
+    assert full_height > 400  # sampling really happened
 
 
 if __name__ == "__main__":  # pragma: no cover

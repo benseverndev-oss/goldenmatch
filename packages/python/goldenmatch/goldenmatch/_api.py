@@ -509,12 +509,17 @@ def dedupe_df(
                         throughput=throughput,
                         # dedupe_df has no lineage/review/explain/anomaly kwargs and
                         # passes no output dir to run_dedupe_df, so it can NEVER
-                        # request a caller-intent artifact -> fused match is allowed
-                        # (the config-driven divergence gate still hard-blocks in the
-                        # controller). File-based dedupe()/CLI/MCP paths don't thread
-                        # this, so they default-deny (fused match never routes there
-                        # in v1).
-                        fused_match_allowed=True,
+                        # request one of THOSE caller-intent artifacts. BUT
+                        # certify/suggest/heal DO consume the run's pairs/findings
+                        # that bare-CC match_fused (capacity mode) empties -- suggest
+                        # reads DedupeResult.scored_pairs directly; heal is a
+                        # full-artifact repair loop; certify annotates the returned
+                        # result with a recall certificate the user expects
+                        # transparent. So deny the hint when any is requested. The
+                        # config-driven divergence gate still hard-blocks in the
+                        # controller regardless; file-based dedupe()/CLI/MCP paths
+                        # don't thread this at all -> default-deny.
+                        fused_match_allowed=not (certify or suggest or heal),
                     )
                 _used_controller = True
 
