@@ -59,6 +59,8 @@ def test_column_dtype_bool_and_repr():
     assert frame.column("s").dtype_repr() == "String"
 ```
 
+(Note: the `dtype_repr()` string assertions `"String"`/`"Int64"` are Polars-version-sensitive — modern Polars renders the string dtype as `"String"`; if this suite's Polars renders `"Utf8"`, reconcile the TEST literal, not the port. This never touches the parity gate — `identity_safe_pk`'s tests only exercise the float/boolean disqualifier paths.)
+
 - [ ] **Step 2: Run → FAIL** (`AssertionError: 'other' == 'bool'` and/or `AttributeError: ... no attribute 'dtype_repr'`).
 ```bash
 $PY -m pytest packages/python/goldencheck/tests/core/test_frame.py -k "dtype_bool_and_repr" -v
