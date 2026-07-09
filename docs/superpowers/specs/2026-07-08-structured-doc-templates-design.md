@@ -291,9 +291,16 @@ Per document, auto-classify default:
 go straight to structured extract. Zero classifier cost, fully deterministic;
 also how tests pin behavior.
 
-**Cost:** auto-classify = **2 VLM calls/doc** (classify + extract) vs 1 today;
-pinning `template=` = 1. The classifier prompt is short / low `max_tokens`.
-`report.vlm_calls` surfaces the count so cost is visible, not hidden.
+**Cost:** classify-hit = **2 VLM calls/doc** (classify + structured extract) vs 1
+today; pinning `template=` = 1; the **generic-fallback branch = 3** (classify +
+suggest + extract). The classifier prompt is short / low `max_tokens`.
+`report.vlm_calls` surfaces the actual count so cost is visible, not hidden.
+
+**Fallback seam:** the generic path (`suggest_schema` → flat extract) is behind a
+`FallbackExtractor` protocol (`suggest_and_extract(pages) -> ExtractResult`) so it
+is injectable/offline-testable, same as the flat `Extractor`. `resolve_structured`
+returns `(Classifier, TemplateExtractor, FallbackExtractor)`, all sharing one
+resolved transport.
 
 **Failure handling** (matches existing batch semantics):
 - classify failure → fall back to generic (don't fail the doc).

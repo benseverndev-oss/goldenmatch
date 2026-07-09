@@ -14,7 +14,7 @@
 
 ## Reference: existing patterns to mirror (read before starting)
 
-- **Core kernel + parity discipline:** `packages/rust/extensions/documents-core/src/{schema,prompt,normalize,parse}.rs`. Note: serialize structs (NOT `json!`/BTreeMap) for stable key order; empty-string hint is falsy; each `.rs` carries a `byte_exact_check` test asserting Rust output == the exact Python string.
+- **Core kernel + parity discipline:** `packages/rust/extensions/documents-core/src/{schema,prompt,normalize,parse}.rs`. Note: serialize structs (NOT `json!`/BTreeMap) for stable key order; empty-string hint is falsy. `prompt.rs` has a `byte_exact_check` test — it asserts Rust output equals a **hardcoded Rust string literal** that a human keeps in sync with Python; there is NO cross-language assertion at the Rust layer. The real cross-language guarantee is the `documents_corpus.jsonl` replay on the Python/TS side (pure == native == corpus == TS). So a Rust `byte_exact_check` = "does this kernel emit the exact bytes I wrote down", and the corpus = "do pure/native/TS agree with the recorded expectation". **Order-sensitive kernels** (normalize, and this spec's `parse_structured`) do NOT emit column-ordered JSON — `normalize_record` returns `BTreeMap`s and the shim serializes them **alphabetically**; column order is re-imposed downstream in Python (`ExtractedRow.from_partial` rebuilds `{c: pv.get(c) for c in cols}`) and asserted in the corpus via ordered `[col, val]` pairs. Do NOT assert raw-JSON column order for these.
 - **Native shim + registration (TWO touch points per symbol):** `packages/rust/extensions/native/src/documents.rs` (the `#[pyfunction]` shims) + `packages/rust/extensions/native/src/lib.rs:74-78` (`wrap_pyfunction!` lines).
 - **Python dual-path with `hasattr` guard (the #688 wheel-skew lesson):** `documents/vlm_backend.py::_instruction` and `documents/types.py::ExtractedRow.from_partial` — each checks `native_enabled("documents") and (nm := native_module()) is not None and hasattr(nm, "<symbol>")` before calling native, else pure-Python.
 - **Parity corpus + harness:** `packages/python/goldenmatch/tests/parity/documents_corpus.jsonl` (one `{"kernel","input","expected"}` per line) + `tests/parity/test_documents_parity.py` (`_run_pure`, `_run_native`, `_KERNEL_SYMBOL`). Generator: `packages/python/goldenmatch/scripts/gen_documents_corpus.py`.
@@ -378,7 +378,7 @@ You are shown a document. Classify it as exactly one of these types: invoice, po
 
 **Parse contract (`documents_parse_classify(text) -> {"doctype","confidence"}`):** strip a ```json fence if present (reuse the `parse.rs` fence-strip helper — `rfind`/rsplit, NOT `strip_suffix`); `json.loads`; require `doctype` a string in `{invoice,po,statement,receipt,generic}` (else `Err`); `confidence` coerced to f64 in `[0,1]` (missing → `Err`; out-of-range → clamp). Error parity by outcome.
 
-- [ ] **Step 1:** Write failing Rust tests in `classify.rs`: `classify_prompt()` starts/ends with the exact constant; `parse_classify` on clean JSON, on a fenced blob, on unknown doctype (`Err`), on missing confidence (`Err`), on `confidence: 1.5` → clamped to `1.0`. Include a `byte_exact_check` asserting `classify_prompt()` equals the exact Python string.
+- [ ] **Step 1:** Write failing Rust tests in `classify.rs`: `classify_prompt()` starts/ends with the exact constant; `parse_classify` on clean JSON, on a fenced blob, on unknown doctype (`Err`), on missing confidence (`Err`), on `confidence: 1.5` → clamped to `1.0`. Include a `byte_exact_check` mod asserting `classify_prompt()` equals a hardcoded Rust string literal (the exact prompt bytes — same style as `prompt.rs::byte_exact_check`; keep it identical to the Python `_CLASSIFY_PROMPT` constant you add in Step 5, the corpus `classify_prompt` row is what actually cross-checks them).
 - [ ] **Step 2:** Run → FAIL. Implement `classify.rs` (mirror `prompt.rs` for the constant, `parse.rs` for fence-strip). Add `pub mod classify;`. Run → PASS.
 - [ ] **Step 3:** Add shims `documents_classify_prompt() -> String` and `documents_parse_classify(text: &str) -> PyResult<String>` in `native/src/documents.rs`; register both in `lib.rs`. `cargo build -p goldenmatch-native`, grep `^error` clean.
 - [ ] **Step 4:** Write failing `tests/documents/test_classify.py` for the Python `classify.py` helpers: `classify_prompt()` returns the constant; `parse_classify('{"doctype":"invoice","confidence":0.9}')` → `("invoice", 0.9)`; fenced input parses; unknown doctype raises `ValueError`; missing confidence raises. Run (pure) → FAIL.
@@ -391,6 +391,8 @@ You are shown a document. Classify it as exactly one of these types: invoice, po
 ## Task 3: Structured-extract parse kernel
 
 Adds `documents_parse_structured(text, template_json) -> {"header": {...}, "line_items": [...]}`, normalizing the VLM's `{"header": {...}, "line_items": [{...}, ...]}` response against a template. Reuses `normalize.rs` field-coercion discipline for BOTH the header (against `header_fields`) and each line item (against `line_item_fields`).
+
+> **Signature is `(text, template_json)` — NOT `(text, doctype)`.** The kernel takes the FULL `DocTemplate` JSON (`{"doctype","header_fields","line_item_fields"}`, the same bytes `documents_template` emits) and parses it into the two field lists. This matches the spec and — critically — keeps native/pure parity for ANY template, including a custom `DocTemplate` a caller injects that isn't one of the four registry doctypes. (An earlier draft passed `doctype` and looked it up in the registry; that would make the native path `Err` on a custom template while the pure path succeeded — a parity break. Do NOT do that.)
 
 **Files:**
 - Create: `documents-core/src/extract_structured.rs`
@@ -408,31 +410,30 @@ Adds `documents_parse_structured(text, template_json) -> {"header": {...}, "line
 
 Edge cases the tests MUST cover: empty `line_items` (flat/receipt-style) → `"line_items": []`; a line item missing a field → null; extra keys dropped; `header` absent in the response → `Err` (malformed); a receipt template (empty `line_item_fields`) ignores any `line_items` in the response and returns `[]`.
 
-- [ ] **Step 1:** Write failing Rust tests in `extract_structured.rs`: invoice template, response with header + 2 line items → correct normalized shape + column order; missing header field → null; extra key dropped; empty line_items → `[]`; receipt template + response with stray line_items → `[]`; malformed (no `header`) → `Err`.
-- [ ] **Step 2:** Run → FAIL. Implement `extract_structured.rs`: `parse_structured(text: &str, template: &DocTemplate) -> Result<StructuredParsed, String>` — `serde_json::from_str`, pull `header` object (`Err` if absent) → `normalize::normalize_record(header_json, header_conf_json, &header_schema)`; pull `line_items` array (default `[]`) → normalize each against `line_item_fields`; if `line_item_fields` is empty, force `[]`. Build a `TargetSchema` from the template's field vecs. Emit JSON via struct-serialize (ordered). Add a `documents_parse_structured(text, template_json)` entry that parses `template_json` back into a `DocTemplate` (add a `template_from_json` in `templates.rs` if needed, or accept the doctype string and look it up — **prefer passing `doctype` string, not full JSON**, to avoid a second parse path; adjust the shim signature to `(text, doctype)`). Add `pub mod extract_structured;`. Run → PASS.
+- [ ] **Step 1:** Write failing Rust tests in `extract_structured.rs`: invoice template, response with header + 2 line items → correct normalized shape (assert via the `NormalizedRow`/`BTreeMap` values, NOT a raw-JSON column-order substring — the emitted JSON is alphabetical, order is re-imposed in Python); missing header field → null; extra key dropped; empty line_items → `[]`; receipt template + response with stray line_items → `[]`; malformed (no `header`) → `Err`.
+- [ ] **Step 2:** Run → FAIL. Implement `extract_structured.rs`: `parse_structured(text: &str, template: &DocTemplate) -> Result<StructuredParsed, String>` — `serde_json::from_str`, pull the `header` object (`Err` if absent). The VLM response header may be either `{"values":{...},"confidence":{...}}` or a bare `{field: value}` map — support the same shape the flat extractor's records use (`{"values":..,"confidence":..}`); if `confidence` is absent, default each to 0.0. Call `normalize::normalize_record(header_values_json, header_conf_json, &header_schema)`; pull `line_items` array (default `[]`) → normalize each against `line_item_fields`; if `line_item_fields` is empty, force `[]`. Build a `TargetSchema` from the template's field vecs. Add `add pub mod extract_structured;`. Run → PASS.
+  > `documents_parse_structured(text, template_json)` parses `template_json` into a `DocTemplate`. Add `pub fn template_from_json(s: &str) -> Result<DocTemplate, String>` to `templates.rs` (serde `Deserialize` on `DocTemplate` — add `Deserialize` to its derives). This is the ONLY new parse path; it deserializes the exact bytes `documents_template`/`template_json` emit, so round-trip is guaranteed.
 
-  > Decision: shim signature is `documents_parse_structured(text: &str, doctype: &str)` — it looks the template up via `templates::template(doctype)`. Simpler and keeps the template single-sourced. Update Step-1 tests to match if they used a JSON template arg.
-
-- [ ] **Step 3:** Add shim `documents_parse_structured(text, doctype) -> PyResult<String>`; register in `lib.rs`; `cargo build`, grep clean. Add symbol to `_COMPONENT_SYMBOLS`.
+- [ ] **Step 3:** Add shim `documents_parse_structured(text: &str, template_json: &str) -> PyResult<String>` (parse template via `templates::template_from_json`, then `parse_structured`); register in `lib.rs`; `cargo build`, grep clean. Add symbol to `_COMPONENT_SYMBOLS`.
 - [ ] **Step 4:** Write failing `tests/documents/test_structured.py`: `parse_structured(text, template)` (Python) returns a `StructuredResult(header: ExtractedRow, line_items: list[ExtractedRow], error=None)` for a good invoice response; empty line items → `line_items == []`; malformed → `StructuredResult(error=...)` (Python wraps the `ValueError`, does NOT raise, since the flow records it in `report.errors`). Run (pure) → FAIL.
-- [ ] **Step 5:** Implement `documents/structured.py::parse_structured(text, template) -> StructuredResult` (dual-path `hasattr`-guarded on `documents_parse_structured`; pure-Python fallback reusing `ExtractedRow.from_partial` for header + each item). `StructuredResult` dataclass added to `types.py` (Task 4 formally, but add it here since this task needs it). Reshape native `{"values","confidence"}` payloads into `ExtractedRow`s with `_doc_id`/source stamped later by the flow (here source_file/page are placeholders; the flow stamps them). Run (pure) → PASS.
-- [ ] **Step 6:** Add `parse_structured` parity rows (good invoice, empty items, receipt-ignores-items, malformed error) keyed by `{"text":..., "doctype":...}`; wire `"parse_structured"` into the harness (`_run_pure` builds the same reshaped dict as `_run_native`, comparing ordered `[col,val]` pairs like the `normalize` kernel does — see the existing `normalize` handling for the exact reshape). Regenerate corpus. Run parity `-k structured` → PASS.
+- [ ] **Step 5:** Implement `documents/structured.py::parse_structured(text, template: DocTemplate) -> StructuredResult`. Dual-path: native path calls `nm.documents_parse_structured(text, json.dumps(_template_to_dict(template)))` (`hasattr`-guarded on `documents_parse_structured`); pure-Python fallback reuses `ExtractedRow.from_partial` for the header (against `template.header`) + each item (against `template.line_items`), forcing `[]` items when `template.line_items.fields` is empty. Both legs must produce the same `StructuredResult`. `StructuredResult` dataclass added to `types.py`. `_doc_id`/source are stamped later by the flow (here source_file/page are placeholders). A malformed response → `StructuredResult(header=None, line_items=[], error=<msg>)` (Python wraps, does NOT raise). Run (pure) → PASS.
+- [ ] **Step 6:** Add `parse_structured` parity rows (good invoice, empty items, receipt-ignores-items, malformed error) keyed by `{"text":..., "template": <DocTemplate dict>}` (NOT doctype — the kernel takes template JSON). Wire `"parse_structured"` into the harness: `_run_pure` builds a `DocTemplate` from `input_["template"]` and calls the pure `parse_structured`, reshaping to ordered `[col,val]` pairs (like the `normalize` kernel — header pairs + a list of per-item pair-lists); `_run_native` calls `nm.documents_parse_structured(input_["text"], json.dumps(input_["template"]))` and reshapes identically. Compare ordered pairs, not raw dicts. Regenerate corpus. Run parity `-k structured` → PASS.
 - [ ] **Step 7:** Commit: `feat(documents): structured-extract parse kernel (header + line items + parity)`.
 
 ---
 
-## Task 4: Structured collaborators (Classifier + TemplateExtractor seams)
+## Task 4: Structured collaborators (Classifier + TemplateExtractor + FallbackExtractor seams)
 
-Adds the two new Protocols + their VLM and Fake implementations + `resolve_structured`. All VLM calls behind the injectable `Transport`. No frame assembly yet.
+Adds the three new Protocols + their VLM and Fake implementations + `resolve_structured`. All VLM calls behind the injectable `Transport`. No frame assembly yet.
 
 **Files:**
-- Modify: `documents/types.py` (confirm `ClassifyResult`, `StructuredResult` present from Tasks 2/3; add `DocResult` type alias `ExtractResult | StructuredResult` if useful)
-- Modify: `documents/extractor.py` (add `Classifier`, `TemplateExtractor` Protocols + `FakeClassifier`, `FakeTemplateExtractor`)
-- Create: `documents/vlm_classifier.py` (`VLMClassifier`), extend `documents/structured.py` (`VLMTemplateExtractor`) — keep VLM classes near their parse helpers.
+- Modify: `documents/types.py` (confirm `ClassifyResult`, `StructuredResult` present from Tasks 2/3; add `DocResult = ExtractResult | StructuredResult` type alias)
+- Modify: `documents/extractor.py` (add `Classifier`, `TemplateExtractor`, `FallbackExtractor` Protocols + `FakeClassifier`, `FakeTemplateExtractor`, `FakeFallbackExtractor`)
+- Create: `documents/vlm_classifier.py` (`VLMClassifier`), extend `documents/structured.py` (`VLMTemplateExtractor`), add `VLMFallbackExtractor` (in `vlm_classifier.py` or a new `documents/fallback.py`) — keep VLM classes near their parse helpers.
 - Modify: `documents/config.py` (`resolve_structured`)
 - Test: `tests/documents/test_structured_collaborators.py`
 
-**Protocols** (per spec "Collaborator seams"):
+**Protocols** (per spec "Collaborator seams", + the fallback seam added in the plan review):
 
 ```python
 @runtime_checkable
@@ -442,13 +443,18 @@ class Classifier(Protocol):
 @runtime_checkable
 class TemplateExtractor(Protocol):
     def extract_structured(self, pages: list[PageImage], template: DocTemplate) -> StructuredResult: ...
+
+@runtime_checkable
+class FallbackExtractor(Protocol):
+    # the "generic" path: suggest a schema from the doc, then extract against it (2 VLM calls)
+    def suggest_and_extract(self, pages: list[PageImage]) -> ExtractResult: ...
 ```
 
-- [ ] **Step 1:** Write failing tests: `FakeClassifier([ClassifyResult("invoice",0.9)]).classify(pages)` returns it; `FakeTemplateExtractor([StructuredResult(...)]).extract_structured(pages, t)` returns it; `VLMClassifier(transport=scripted).classify(pages)` builds a payload with `classify_prompt()` + `image_blocks(pages)`, `temperature=0`, and parses the scripted response via `parse_classify`; `VLMTemplateExtractor(transport=scripted).extract_structured(pages, invoice_template)` builds a payload embedding the template's header+line-item fields in the instruction and parses via `parse_structured`; transport failure → `VLMClassifier` retries then raises `ValueError`, `VLMTemplateExtractor` returns `StructuredResult(error=...)` (batch-continues contract). Use a `scripted_transport(responses)` helper (mirror `test_vlm_backend.py`). Run (pure) → FAIL.
+- [ ] **Step 1:** Write failing tests: `FakeClassifier([ClassifyResult("invoice",0.9)]).classify(pages)` returns it; `FakeTemplateExtractor([StructuredResult(...)]).extract_structured(pages, t)` returns it; `FakeFallbackExtractor([ExtractResult(...)]).suggest_and_extract(pages)` returns it; `VLMClassifier(transport=scripted).classify(pages)` builds a payload with `classify_prompt()` + `image_blocks(pages)`, `temperature=0`, `max_tokens` small (e.g. 200), and parses the scripted response via `parse_classify`; `VLMTemplateExtractor(transport=scripted).extract_structured(pages, invoice_template)` builds a payload embedding the template's header+line-item fields and parses via `parse_structured`; `VLMFallbackExtractor(transport=scripted, model=...).suggest_and_extract(pages)` issues TWO scripted calls (suggest then extract) reusing `suggest_schema` + `VLMExtractor`; transport failure → `VLMClassifier` retries then raises `ValueError`, `VLMTemplateExtractor` returns `StructuredResult(error=...)` (batch-continues contract). Use a `scripted_transport(responses)` helper (mirror `test_vlm_backend.py`). Run (pure) → FAIL.
 - [ ] **Step 2:** Run → FAIL (classes absent).
-- [ ] **Step 3:** Implement the Protocols + Fakes in `extractor.py`; `VLMClassifier` in `vlm_classifier.py` (compose `classify_prompt` + `image_blocks` + `parse_message_text` + `parse_classify`, `max_tokens` small e.g. 200); `VLMTemplateExtractor` in `structured.py` (build a structured instruction: reuse `extract_instruction`-style text but ask for `{"header": {...}, "line_items": [...]}` against header+item fields — put the instruction builder in core later if desired; for v1 a Python-side f-string is acceptable since its OUTPUT isn't parity-critical, only the PARSE is). `resolve_structured(backend, model)` returns `(VLMClassifier(...), VLMTemplateExtractor(...))`, `backend != "vlm"` → `ValueError`.
+- [ ] **Step 3:** Implement the Protocols + Fakes in `extractor.py`; `VLMClassifier` in `vlm_classifier.py`; `VLMTemplateExtractor` in `structured.py` (build a structured instruction: reuse `extract_instruction`-style text but ask for `{"header": {...}, "line_items": [...]}` against header+item fields — a Python-side f-string is fine for v1 since its OUTPUT isn't parity-critical, only the PARSE is); `VLMFallbackExtractor` composing `suggest_schema(pages, transport, model)` + `VLMExtractor(transport, model).extract(pages, schema)`. `resolve_structured(backend, model) -> tuple[Classifier, TemplateExtractor, FallbackExtractor]` returns `(VLMClassifier(...), VLMTemplateExtractor(...), VLMFallbackExtractor(...))` all sharing one resolved `urllib_transport`; `backend != "vlm"` → `ValueError`.
 - [ ] **Step 4:** Run (pure) → PASS.
-- [ ] **Step 5:** Commit: `feat(documents): classifier + template-extractor collaborator seams`.
+- [ ] **Step 5:** Commit: `feat(documents): classifier + template-extractor + fallback collaborator seams`.
 
 > Note: the structured-extract *instruction* string is Python-only and NOT in the parity corpus (only the PARSE is parity-locked). If you later want it byte-parity across TS, move it to core in a follow-up — out of scope here (spec: only the 5 named kernels are core).
 
@@ -465,21 +471,36 @@ The convergence point. Extends `assemble.py` to emit a header frame + optional l
 - Modify: `documents/__init__.py` docstring + `documents/README.md` (exclude-list → `DOC_SIDECARS`)
 - Test: `tests/documents/test_assemble_structured.py`, extend `tests/documents/test_ingest.py`
 
-**`_doc_id`** = `record_fingerprint({"path": normalized_source_file})` (import from `goldenmatch.core._hashing`; use the path ONLY — see spec, NOT header values). Stamp on header row + every child. `ingest_documents` de-dups `paths` (last wins) before the loop.
+**`_doc_id`** = `record_fingerprint({"path": normalized_source_file})` (import from `goldenmatch.core._hashing`; use the path ONLY — see spec, NOT header values). Computed in `_ingest_one` (which has the path) and carried on the outcome so BOTH the frames and the flow-level report fields key on the same id. `ingest_documents` de-dups `paths` (last wins) before the loop. (Note: `record_fingerprint` drops `__`-double-underscore keys only; the single non-prefixed `"path"` key is used and survives — deterministic and byte-identical native vs pure since hashing is off under `auto`.)
 
 **`DOC_SIDECARS`** = `["_source_file", "_source_page", "_extract_confidence", "_doc_id", "_doctype"]` (exported from `documents/__init__.py`).
 
-- [ ] **Step 1:** Write failing `test_assemble_structured.py`:
-  - single invoice `StructuredResult` (header + 2 items) → header frame 1 row with `_doc_id`/`_doctype="invoice"`/sidecars; line-item frame 2 rows with matching `_doc_id` FK + `_line_no` 0,1.
-  - receipt `StructuredResult` (no items) alone → `line_items is None`.
-  - mixed batch (invoice + receipt) → header frame outer-union (receipt-only cols null on the invoice row and vice versa), `_doctype` correct per row; line-item frame only the invoice's 2 rows.
-  - re-run same file path twice in one batch → ONE header row, stable `_doc_id`.
-  - flat `ExtractResult` (generic) in the mix → contributes to header frame with `_doctype="generic"`, no line items.
-  - error `StructuredResult(error=...)` → `report.errors` gets `(file, msg)`, no rows.
+**Per-doc outcome carrier (resolves the report-threading gap).** `_ingest_one` returns a `_DocOutcome` dataclass, NOT a bare tuple — a bare `(doctype, DocResult)` cannot carry `classify_confidence` or `vlm_calls`, which are flow facts assemble can't compute:
+
+```python
+@dataclass
+class _DocOutcome:
+    doc_id: str            # record_fingerprint of the path
+    source_file: str
+    doctype: str           # "invoice"|"po"|"statement"|"receipt"|"generic"
+    confidence: float      # classifier confidence; 1.0 for pinned template / flat schema
+    vlm_calls: int         # calls this doc cost (1 flat/pinned, 2 auto-hit, 3 auto-fallback)
+    result: DocResult      # ExtractResult (flat) | StructuredResult
+```
+
+`assemble_structured(outcomes: list[_DocOutcome], *, drop_empty)` builds the two frames + `report.doctypes` + `report.errors` + `n_rows` (all derivable from the outcomes). `ingest_documents` then fills the FLOW fields from the same outcomes: `report.vlm_calls = sum(o.vlm_calls)`, `report.classify_confidence = {o.doc_id: o.confidence for o in outcomes}`.
+
+- [ ] **Step 1:** Write failing `test_assemble_structured.py` (build `_DocOutcome`s directly, no flow):
+  - single invoice outcome (`StructuredResult` header + 2 items) → header frame 1 row with `_doc_id`/`_doctype="invoice"`/sidecars; line-item frame 2 rows with matching `_doc_id` FK + `_line_no` 0,1; `report.doctypes[doc_id]=="invoice"`.
+  - receipt outcome (no items) alone → `report.line_items is None`.
+  - mixed batch (invoice + receipt outcomes) → header frame outer-union (receipt-only cols null on the invoice row and vice versa), `_doctype` correct per row; line-item frame only the invoice's 2 rows.
+  - two outcomes with the SAME `doc_id` (same file dedup happens upstream, but assert assemble is last-wins-safe) → ONE header row.
+  - flat `ExtractResult` outcome (`doctype="generic"`) in the mix → header frame row, no line items.
+  - `StructuredResult(error=...)` outcome → `report.errors` gets `(source_file, msg)`, no rows.
 - [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement. Add `assemble_structured(results: list[tuple[str, DocResult]], *, drop_empty) -> (header_df, IngestReport)` where each tuple is `(doctype, DocResult)`; build header records (union via `pl.concat(how="diagonal")` or the existing record-dict approach — reuse `assemble`'s dict-accumulate + `pl.DataFrame(records)` then `select` with per-doctype column awareness; simplest: accumulate all header dicts, let polars diagonal-union fill missing with null, then order columns as [union of header cols in template order per first-seen doctype] + sidecars). Line items likewise into a second frame or `None`. Extend `IngestReport`. Keep the OLD flat `assemble` untouched for the generic path (Task 6 merges generic rows into the header frame).
-  > Column-order rule: header columns ordered by first-appearance across the batch's doctypes (deterministic given input order), then `DOC_SIDECARS`. Assert this in a test so a polars-version reshuffle can't slip through.
-- [ ] **Step 4:** Rewire `ingest_documents` (this task: explicit `schema=` OR `template=` only; `auto_classify` raises `NotImplementedError` until Task 6). `_ingest_one(path, ...)` loads pages, runs flat `VLMExtractor` (schema) or `VLMTemplateExtractor` (template) → `DocResult`, returns `(doctype, DocResult)`. Aggregate → `assemble_structured`. Update docstring to use `DOC_SIDECARS`. Export `DocTemplate`, `list_templates`, `DOC_SIDECARS`. Extend `test_ingest.py` with a `FakeTemplateExtractor`-driven end-to-end for `template="invoice"`.
+- [ ] **Step 3:** Implement `assemble_structured`. Header frame: accumulate header dicts (each = the header `ExtractedRow.values` + `_doc_id`, `_doctype`, `_source_file`, `_source_page`, `_extract_confidence`); build via `pl.DataFrame(records)` — but records have HETEROGENEOUS keys across doctypes, so a plain `pl.DataFrame(list_of_dicts)` raises on ragged keys. Use `pl.concat([pl.DataFrame([rec]) for rec in records], how="diagonal")` (diagonal fills missing cols with null — the deterministic union), OR pre-compute the ordered column union and pad each dict with `None` before one `pl.DataFrame(records)`. **Prefer the explicit pad-then-DataFrame approach** (avoids per-row DataFrame overhead and a `concat` dtype surprise): compute `header_cols = ordered union of header field names by first-appearance across outcomes`, pad every record with missing cols = `None`, `pl.DataFrame(records).select([pl.col(c).cast(pl.Utf8) for c in header_cols] + DOC_SIDECARS-with-casts)`. Line-item frame likewise (cols = union of line-item fields by first-appearance + `_doc_id`,`_line_no`,`_source_file`,`_source_page`,`_extract_confidence`); `None` if zero items total. Extend `IngestReport` (new fields default `line_items=None`, `doctypes=field(default_factory=dict)`, `classify_confidence=field(default_factory=dict)`, `vlm_calls=0`). Keep the OLD flat `assemble` untouched (still used by the pure Phase-2 path / other callers).
+  > Column-order rule: header (and line-item) columns ordered by first-appearance across the batch (deterministic given input order), then the sidecars. Assert exact `df.columns` in a test so a polars-version reshuffle can't slip through.
+- [ ] **Step 4:** Rewire `ingest_documents` (this task: explicit `schema=` OR `template=` only; `auto_classify` path raises `NotImplementedError` until Task 6). `_ingest_one(path, *, schema, template, template_extractor, ...)` loads pages, computes `doc_id`, runs flat `VLMExtractor` (schema, doctype `"generic"`, `vlm_calls=1`, `confidence=1.0`) or `VLMTemplateExtractor`/injected `template_extractor` (template, `vlm_calls=1`, `confidence=1.0`) → wraps in `_DocOutcome`. De-dup `paths` (last wins). Aggregate → `assemble_structured`, then fill `vlm_calls`/`classify_confidence` from the outcomes. Update docstring to `DOC_SIDECARS`. Export `DocTemplate`, `list_templates`, `DOC_SIDECARS`. Extend `test_ingest.py` with a `FakeTemplateExtractor`-driven e2e for `template="invoice"` asserting `report.vlm_calls==1`, `report.classify_confidence[id]==1.0`.
 - [ ] **Step 5:** Run all `tests/documents/` (pure) → PASS. Commit: `feat(documents): two-frame structured assemble + ingest contract`.
 
 ---
@@ -489,23 +510,31 @@ The convergence point. Extends `assemble.py` to emit a header frame + optional l
 Wires the classifier into `ingest_documents` so `auto_classify=True` (default) works end-to-end: classify → route on confidence → structured extract or generic fallback. Fills `report.doctypes`, `report.classify_confidence`, `report.vlm_calls`.
 
 **Files:**
-- Modify: `documents/__init__.py` (`_ingest_one` gains the classify→route branch; `resolve_structured` used lazily)
+- Modify: `documents/__init__.py` (`_ingest_one` gains the classify→route branch; `resolve_structured` used lazily; new `classifier=`/`template_extractor=`/`fallback_extractor=` injection params)
 - Test: extend `tests/documents/test_ingest.py`, `tests/documents/test_e2e.py`
 
-**Per-doc flow (`_ingest_one`)** — precedence `extractor`(flat) > `schema`(flat) > `template`(pinned) > `auto_classify`:
-1. flat `extractor`/`schema` → `VLMExtractor.extract` → flat `DocResult`, doctype `"generic"`, `vlm_calls += 1`.
-2. pinned `template` → `template_extractor.extract_structured` → `vlm_calls += 1`, `classify_confidence[_doc_id]=1.0`.
-3. auto: `classifier.classify(pages)` → `vlm_calls += 1`; if `error` → generic fallback (see below); if `confidence >= classify_threshold` and `doctype in list_templates()` → `extract_structured(pages, get_template(doctype))` (`vlm_calls += 1`, total 2); else **generic fallback**: `suggest_schema(pages, transport=...)` → `VLMExtractor.extract` (`vlm_calls += 2`, doctype `"generic"`).
+**Generic-fallback injection seam (resolves offline-testability).** The real generic fallback is `suggest_schema(pages, transport=...)` then `VLMExtractor(transport).extract(...)` — 2 VLM calls, both needing a transport that a fake-driven test can't reach through the `extractor=`/`classifier=` seams (and injecting `extractor=` short-circuits the whole auto path). So add a dedicated seam: `fallback_extractor: Extractor | None`. When the auto path decides "generic," it calls `_generic_extract(pages)`:
+- if `fallback_extractor` is injected → `fallback_extractor.extract(pages, <a placeholder empty schema is wrong>)` — instead, `fallback_extractor` is a `Callable[[list[PageImage]], ExtractResult]` OR a small `FallbackExtractor` protocol `suggest_and_extract(pages) -> ExtractResult`. **Use a `FallbackExtractor` protocol** with `suggest_and_extract(pages) -> ExtractResult`; the real `VLMFallbackExtractor(transport, model)` does suggest+extract (2 calls); `FakeFallbackExtractor([ExtractResult(...)])` is scripted for tests.
+- if not injected → resolve the real `VLMFallbackExtractor` from `resolve_structured` (which now also returns it / its transport).
 
-- [ ] **Step 1:** Write failing tests (all offline, `FakeClassifier` + `FakeTemplateExtractor` + `FakeExtractor` injected via the new `classifier=`/`template_extractor=`/`extractor=` params):
+This keeps the low-confidence path fully offline-testable via `fallback_extractor=FakeFallbackExtractor([...])`, no live `suggest_schema`.
+
+**Per-doc flow (`_ingest_one`)** — precedence `extractor`(flat) > `schema`(flat) > `template`(pinned) > `auto_classify`:
+1. flat `extractor`/`schema` → `VLMExtractor.extract` → flat `_DocOutcome`, doctype `"generic"`, `vlm_calls=1`, `confidence=1.0`.
+2. pinned `template` → `template_extractor.extract_structured` → `vlm_calls=1`, `confidence=1.0`.
+3. auto: `classifier.classify(pages)` → 1 call; on classify EXCEPTION → generic fallback, that doc's `vlm_calls = 1 (failed classify) + 2 (fallback) = 3`... — simpler and honest: count only calls actually made. On classify success with `confidence >= classify_threshold` and `doctype in list_templates()` → `template_extractor.extract_structured(pages, get_template(doctype))`, `vlm_calls=2`, `confidence=<classifier value>`. Else (low-confidence, unknown doctype, or classify raised) → `_generic_extract(pages)` → flat `_DocOutcome`, doctype `"generic"`; `vlm_calls = (1 if classify succeeded else 0 attempted-but-failed→still 1 network call) + 2`. **Rule: `vlm_calls` = number of transport calls that were actually issued** (classify counts even if it raised, since the call went out). Document the exact per-branch count in a comment.
+
+> Cost note: the generic-fallback branch is **3** VLM calls (classify + suggest + extract), exceeding the spec's headline "2/doc" for the happy structured path. That's expected — `report.vlm_calls` makes it visible. The happy path (classify-hit) is 2; pinned/flat is 1.
+
+- [ ] **Step 1:** Write failing tests (all offline; inject `classifier=FakeClassifier`, `template_extractor=FakeTemplateExtractor`, `fallback_extractor=FakeFallbackExtractor`):
   - auto-classify high-confidence invoice → invoice template used, `vlm_calls == 2`, `doctypes[id]=="invoice"`, `classify_confidence[id]==0.9`.
-  - low-confidence (`0.3 < threshold`) → generic fallback path taken, `doctype=="generic"`.
-  - `template="invoice"` override → classifier NOT called (assert `FakeClassifier` call count 0), `vlm_calls == 1`.
-  - classify raises → generic fallback, batch continues.
-  - structured extract returns `error` → `report.errors`, batch continues, other docs still processed.
+  - low-confidence (`0.3 < threshold=0.6`) → `_generic_extract` path, `doctype=="generic"`, `vlm_calls == 3`, `classify_confidence[id]==0.3`.
+  - `template="invoice"` override → classifier NOT called (`FakeClassifier` call count 0), `vlm_calls == 1`.
+  - classify raises → generic fallback, batch continues (`vlm_calls == 3`).
+  - one doc's structured extract returns `StructuredResult(error=...)` → `report.errors`, batch continues, OTHER docs still produce rows.
 - [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement the branch in `_ingest_one`; resolve `(classifier, template_extractor)` once via `resolve_structured` only if the auto/template path is reached and they weren't injected. Thread `classify_threshold`.
-- [ ] **Step 4:** Run all `tests/documents/` (pure) → PASS. Add an `test_e2e.py` case: `ingest_documents([invoice, receipt], return_report=True)` with fakes → `df` (headers) feeds `dedupe_df(df, exclude_columns=DOC_SIDECARS)` clean; `report.line_items` has the invoice items; `report.doctypes`/`vlm_calls` populated.
+- [ ] **Step 3:** Implement the branch in `_ingest_one` + `_generic_extract`; resolve `(classifier, template_extractor, fallback_extractor)` once via `resolve_structured` (extended to return the 3rd) only if the auto path is reached and they weren't injected. Thread `classify_threshold`. Fill `confidence` on each outcome (classifier value, or 1.0 for pinned/flat).
+- [ ] **Step 4:** Run all `tests/documents/` (pure) → PASS. Add a `test_e2e.py` case: `ingest_documents([invoice, receipt], return_report=True)` with fakes → `df` (headers) feeds `dedupe_df(df, exclude_columns=DOC_SIDECARS)` clean; `report.line_items` has the invoice items; `report.doctypes`/`classify_confidence`/`vlm_calls` populated.
 - [ ] **Step 5:** Commit: `feat(documents): auto-classify flow (routing + generic fallback + cost report)`.
 
 ---
