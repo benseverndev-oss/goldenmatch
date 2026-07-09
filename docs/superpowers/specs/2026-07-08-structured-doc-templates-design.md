@@ -320,7 +320,7 @@ Input: per-doc `DocResult` results, each either a flat `ExtractResult`
   then sidecars) — deterministic, diff-stable, same discipline as
   `documents_normalize_record`.
 - **Report additions:** `line_items: pl.DataFrame | None`, `doctypes: dict`,
-  `vlm_calls: int`.
+  `classify_confidence: dict`, `vlm_calls: int`.
 
 This is where the flat and structured paths converge → highest-risk unit for
 column-order / union bugs → heaviest test coverage.
@@ -346,7 +346,7 @@ All offline (injectable transport + `FakeExtractor`; no network, no API key).
 5. **Flow:** auto-classify picks right template (scripted classifier transport);
    low-confidence → generic fallback; `template=` override skips classify (assert
    call count == 1); classify failure → generic, batch continues; extract failure
-   → error row, batch continues.
+   → recorded in `report.errors`, batch continues.
 6. **E2E:** `ingest_documents` → header frame → `dedupe_df(exclude_columns=[...])`
    clean; `return_report=True` surfaces line items + doctypes + `vlm_calls`.
 
