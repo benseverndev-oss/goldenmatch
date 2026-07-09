@@ -1989,6 +1989,57 @@ def _case_cluster_overrides():
     return df, rules, ["v"], {}
 
 
+def _case_kitchen_sink():
+    # CROSS-STAGE SEAM test: ONE config combining, all firing at once, a
+    # field_group + a conditional whose when: reads a GROUP column + a plain
+    # scalar field_rule + non-None quality_scores. Verifies the seams that are
+    # otherwise only argued-correct-by-construction:
+    #  - gconf denominator mixing grouped + conditional + scalar units
+    #    (n_scalar {country, dt, phone} + n_groups {addr} = 4, NOT n_output_cols),
+    #  - build_resolution_order interleaving the group:addr unit BEFORE the
+    #    conditional `phone` whose when references the group column `city`,
+    #  - group group_conf vs scalar field_conf provenance/confidence stamping
+    #    under a non-None quality_scores (weighting active).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            # group addr=[street, city], most_complete.
+            #  c1: row0 populated 2, row1 1, row2 2 -> tie row0/row2 -> winner row0
+            #      => city resolves "Springfield" (fires the conditional most_recent).
+            #  c2: row10 populated 1, row11 2 -> winner row11 => city "Shelbyville".
+            "street": ["123 Main", "456 Oak", "123 Main", "9 Elm", "5 Ash"],
+            "city": ["Springfield", None, "Springfield", None, "Shelbyville"],
+            # plain scalar field_rule: majority_vote.
+            "country": ["US", "US", "CA", "CA", "CA"],
+            # scalar user col (default most_complete) that most_recent reads.
+            "dt": [1, 3, 2, 5, 6],
+            # conditional: when city == "Springfield" -> most_recent(dt) else
+            # default most_complete.
+            #  c1 fires most_recent: latest dt=3 -> row1 "222".
+            #  c2 default most_complete: len-4 tie "4444"/"5555" broken by weight
+            #     -> row11 "5555".
+            "phone": ["111", "222", "333", "4444", "5555"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "country": GoldenFieldRule(strategy="majority_vote"),
+            "phone": [
+                GoldenFieldRule(
+                    strategy="most_recent", date_column="dt", when='city == "Springfield"'
+                ),
+                GoldenFieldRule(strategy="most_complete"),
+            ],
+        },
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])],
+    )
+    # weight c2's phone tie toward row11; other (rid, col) default to 1.0.
+    qs = {(10, "phone"): 0.2, (11, "phone"): 0.9}
+    return df, rules, ["street", "city", "country", "dt", "phone"], {"quality_scores": qs}
+
+
 _MATRIX_CASES = {
     "most_complete": _case_most_complete,
     "majority_mixed_type": _case_majority_mixed_type,
@@ -2004,6 +2055,7 @@ _MATRIX_CASES = {
     "confidence_majority_with_quality_scores": _case_confidence_majority_with_quality_scores,
     "quality_weighted": _case_quality_weighted,
     "cluster_overrides": _case_cluster_overrides,
+    "kitchen_sink": _case_kitchen_sink,
 }
 
 

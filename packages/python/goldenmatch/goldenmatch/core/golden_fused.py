@@ -519,6 +519,13 @@ def run_golden_fused_arrow(
     # rule whose extra channels (source/date) must be built for that column (one
     # for a plain column; all clauses for a conditional), so the right channel is
     # present whichever clause fires. Stage 7 extends this with cluster_overrides.
+    # Reconstruct the default rule verbatim from `default_strategy`, mirroring
+    # build_golden_records_batch (golden.py:948). RAISE-parity is intentional: a
+    # bare `most_recent`/`source_priority` default (no date_column/source_priority)
+    # makes the reference raise in merge_field; here it makes the shared
+    # source/date channel builders return None (decline) so the caller falls back
+    # to the reference, which then raises the SAME error. Do NOT "fix" this into a
+    # silent None/most_complete coercion -- that would mask the reference's raise.
     default_rule = GoldenFieldRule(strategy=rules.default_strategy)
     strategy_ids: list[int] = []
     candidate_rules: list[list[GoldenFieldRule]] = []
