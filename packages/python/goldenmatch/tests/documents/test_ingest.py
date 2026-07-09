@@ -1,8 +1,14 @@
 import pytest
 from goldenmatch.documents import DOC_SIDECARS, ingest_documents
-from goldenmatch.documents.extractor import FakeExtractor, FakeTemplateExtractor
+from goldenmatch.documents.extractor import (
+    FakeClassifier,
+    FakeExtractor,
+    FakeFallbackExtractor,
+    FakeTemplateExtractor,
+)
 from goldenmatch.documents.templates import get_template
 from goldenmatch.documents.types import (
+    ClassifyResult,
     ExtractedRow,
     ExtractResult,
     Field,
@@ -108,7 +114,129 @@ def test_ingest_schema_and_template_both_set_raises(tmp_path):
         ingest_documents([a], SCHEMA, template="invoice")
 
 
-def test_ingest_auto_classify_not_yet_implemented(tmp_path):
-    a = tmp_path / "a.png"; _img(a)
-    with pytest.raises(NotImplementedError, match="Task 6|auto-classify"):
-        ingest_documents([a])
+# ---- Task 6: auto-classify flow (all offline via injected fakes) --------------
+
+class _RaisingClassifier:
+    """Classify call goes out but the response fails to parse -> raises. Exposes
+    `.calls` like the fakes so we can assert the call was issued."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def classify(self, pages):
+        self.calls += 1
+        raise ValueError("classify blew up")
+
+
+def test_auto_classify_high_confidence_invoice(tmp_path):
+    a = tmp_path / "inv.png"; _img(a)
+    header = _erow(INV.header, {"invoice_number": "INV-1", "total_amount": "500"})
+    items = [_erow(INV.line_items, {"description": "Widget", "quantity": "3"}),
+             _erow(INV.line_items, {"description": "Bolt", "quantity": "4"})]
+    cls = FakeClassifier([ClassifyResult("invoice", 0.9)])
+    te = FakeTemplateExtractor([StructuredResult(header=header, line_items=items, error=None)])
+    fb = FakeFallbackExtractor([])  # never called on the hit path
+    df, report = ingest_documents([a], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    assert df.height == 1
+    doc_id = df["_doc_id"][0]
+    assert df["_doctype"][0] == "invoice"
+    assert report.vlm_calls == 2
+    assert report.doctypes[doc_id] == "invoice"
+    assert report.classify_confidence[doc_id] == 0.9
+    assert report.line_items is not None and report.line_items.height == 2
+    assert cls.calls == 1 and te.calls == 1 and fb.calls == 0
+
+
+def test_auto_classify_low_confidence_falls_back_generic(tmp_path):
+    a = tmp_path / "doc.png"; _img(a)
+    GEN = TargetSchema([Field("full_name"), Field("email")])
+    flat = ExtractResult(rows=_rows(GEN, [({"full_name": "Ada", "email": "a@x.io"}, {})], "doc"))
+    cls = FakeClassifier([ClassifyResult("invoice", 0.3)])   # below threshold 0.6
+    te = FakeTemplateExtractor([])   # must NOT be touched
+    fb = FakeFallbackExtractor([flat])
+    df, report = ingest_documents([a], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    assert df.height == 1
+    doc_id = df["_doc_id"][0]
+    assert df["_doctype"][0] == "generic"
+    assert report.vlm_calls == 3
+    assert report.doctypes[doc_id] == "generic"
+    assert report.classify_confidence[doc_id] == 0.3
+    assert cls.calls == 1 and te.calls == 0 and fb.calls == 1
+
+
+def test_auto_classify_generic_doctype_falls_back(tmp_path):
+    a = tmp_path / "doc.png"; _img(a)
+    GEN = TargetSchema([Field("full_name")])
+    flat = ExtractResult(rows=_rows(GEN, [({"full_name": "Bo"}, {})], "doc"))
+    # "generic" is high confidence but not in list_templates() -> fallback.
+    cls = FakeClassifier([ClassifyResult("generic", 0.95)])
+    te = FakeTemplateExtractor([])
+    fb = FakeFallbackExtractor([flat])
+    df, report = ingest_documents([a], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    doc_id = df["_doc_id"][0]
+    assert df["_doctype"][0] == "generic"
+    assert report.vlm_calls == 3
+    assert report.classify_confidence[doc_id] == 0.95
+    assert te.calls == 0 and fb.calls == 1
+
+
+def test_auto_classify_template_override_skips_classifier(tmp_path):
+    a = tmp_path / "inv.png"; _img(a)
+    header = _erow(INV.header, {"invoice_number": "INV-2"})
+    te = FakeTemplateExtractor([StructuredResult(header=header, line_items=[], error=None)])
+    cls = FakeClassifier([ClassifyResult("invoice", 0.9)])   # injected but unused
+    df, report = ingest_documents([a], template="invoice", template_extractor=te,
+                                  classifier=cls, return_report=True)
+    assert cls.calls == 0
+    assert report.vlm_calls == 1
+    assert report.doctypes[df["_doc_id"][0]] == "invoice"
+
+
+def test_auto_classify_classify_raises_falls_back(tmp_path):
+    a = tmp_path / "doc.png"; _img(a)
+    GEN = TargetSchema([Field("full_name")])
+    flat = ExtractResult(rows=_rows(GEN, [({"full_name": "Cy"}, {})], "doc"))
+    cls = _RaisingClassifier()
+    te = FakeTemplateExtractor([])
+    fb = FakeFallbackExtractor([flat])
+    df, report = ingest_documents([a], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    doc_id = df["_doc_id"][0]
+    assert df["_doctype"][0] == "generic"
+    assert report.vlm_calls == 3   # classify (issued, raised) + suggest + extract
+    assert report.classify_confidence[doc_id] == 0.0
+    assert cls.calls == 1 and te.calls == 0 and fb.calls == 1
+
+
+def test_auto_classify_structured_error_recorded_batch_continues(tmp_path):
+    good, bad = tmp_path / "good.png", tmp_path / "bad.png"
+    _img(good); _img(bad)
+    header = _erow(INV.header, {"invoice_number": "INV-3"})
+    cls = FakeClassifier([ClassifyResult("invoice", 0.9), ClassifyResult("invoice", 0.9)])
+    te = FakeTemplateExtractor([
+        StructuredResult(header=header, line_items=[], error=None),
+        StructuredResult(header=None, line_items=[], error="parse blew up"),
+    ])
+    fb = FakeFallbackExtractor([])
+    df, report = ingest_documents([good, bad], classifier=cls, template_extractor=te,
+                                  fallback_extractor=fb, return_report=True)
+    assert df.height == 1   # only the good doc produced a row
+    assert any("parse blew up" == msg for _, msg in report.errors)
+    assert report.vlm_calls == 4   # both docs classify+extract (2 each), even the errored one
+
+
+def test_auto_classify_does_not_resolve_when_all_injected_no_key(tmp_path, monkeypatch):
+    """The auto path must not touch resolve_structured (=> no api key needed) when
+    all three collaborators are injected."""
+    monkeypatch.delenv("OPENAI_API_KEY_PERSONAL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    a = tmp_path / "inv.png"; _img(a)
+    header = _erow(INV.header, {"invoice_number": "INV-4"})
+    cls = FakeClassifier([ClassifyResult("invoice", 0.9)])
+    te = FakeTemplateExtractor([StructuredResult(header=header, line_items=[], error=None)])
+    fb = FakeFallbackExtractor([])
+    df = ingest_documents([a], classifier=cls, template_extractor=te, fallback_extractor=fb)
+    assert df.height == 1
