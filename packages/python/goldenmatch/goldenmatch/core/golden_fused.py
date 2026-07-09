@@ -146,10 +146,8 @@ def run_golden_fused_arrow(
 
     # Drop singletons (size <= 1), mirroring _multi_df_from_frames' size > 1
     # filter. A plain cluster frame carries no oversized flag, so ~oversized is
-    # trivially satisfied here.
-    sizes = sdf.group_by("__cluster_id__", maintain_order=True).agg(pl.len().alias("__size__"))
-    keep_ids = sizes.filter(pl.col("__size__") > 1).get_column("__cluster_id__")
-    sdf = sdf.filter(pl.col("__cluster_id__").is_in(keep_ids))
+    # trivially satisfied here. The window filter preserves the sort order.
+    sdf = sdf.filter(pl.len().over("__cluster_id__") > 1)
 
     user_cols = [c for c in sdf.columns if not _is_internal(c) and c != "__cluster_id__"]
 
