@@ -137,6 +137,12 @@ class StructuredResult:
     error: str | None = None
 
 
+# A single document's extraction is either flat (generic schema) or structured
+# (header + line items against a template). The dispatch/assemble layers key on
+# this union.
+DocResult = ExtractResult | StructuredResult
+
+
 @dataclass
 class IngestReport:
     n_files: int = 0

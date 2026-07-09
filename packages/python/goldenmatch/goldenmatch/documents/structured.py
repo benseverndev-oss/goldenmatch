@@ -13,10 +13,16 @@ from __future__ import annotations
 
 import json
 
+from goldenmatch.documents._openai import (
+    Transport,
+    image_blocks,
+    parse_message_text,
+)
 from goldenmatch.documents.templates import _template_to_dict
 from goldenmatch.documents.types import (
     DocTemplate,
     ExtractedRow,
+    PageImage,
     StructuredResult,
     normalize_row_pure,
 )
@@ -103,3 +109,86 @@ def parse_structured(text: str, template: DocTemplate) -> StructuredResult:
         for v, c in items
     ]
     return StructuredResult(header=header, line_items=line_items, error=None)
+
+
+def _structured_instruction(template: DocTemplate) -> str:
+    """Build the structured-extract instruction for a template. Python-only (its
+    OUTPUT is NOT parity-locked -- only `parse_structured` is), so a plain f-string
+    is fine; it names the header + line-item fields so the VLM returns the
+    `{"header": {...}, "line_items": [...]}` shape the parser expects."""
+    def _lines(schema) -> str:
+        return "\n".join(
+            f'- "{f.name}" ({f.kind})' + (f": {f.hint}" if f.hint else "")
+            for f in schema.fields
+        )
+
+    header_cols = ", ".join(template.header.column_names())
+    body = (
+        f"Extract the {template.doctype} in the attached document image(s) into a "
+        "single header record plus its line items.\n"
+        "Header fields:\n" + _lines(template.header) + "\n"
+    )
+    if template.line_items.fields:
+        item_cols = ", ".join(template.line_items.column_names())
+        body += (
+            "Line-item fields (one object per row in the document's line-item table):\n"
+            + _lines(template.line_items) + "\n\n"
+            'Return ONLY a JSON object of the form:\n'
+            '{"header": {"values": {<field>: <string or null>, ...}, '
+            '"confidence": {<field>: <0..1>, ...}}, '
+            '"line_items": [{"values": {<field>: ...}, "confidence": {...}}, ...]}\n'
+            f"Header keys: {header_cols}. Line-item keys: {item_cols}. "
+            "Omit a field if absent. No prose."
+        )
+    else:
+        body += (
+            "\nReturn ONLY a JSON object of the form:\n"
+            '{"header": {"values": {<field>: <string or null>, ...}, '
+            '"confidence": {<field>: <0..1>, ...}}, "line_items": []}\n'
+            f"Header keys: {header_cols}. Omit a field if absent. No prose."
+        )
+    return body
+
+
+class VLMTemplateExtractor:
+    """One OpenAI vision call per document, template-directed: extract a header
+    record + line items against a `DocTemplate`. Network I/O is an injectable
+    `transport` so the class tests offline. Batch-continues: transport/parse
+    failures return `StructuredResult(error=...)` rather than raising."""
+
+    def __init__(self, *, transport: Transport, model: str = "gpt-4o",
+                 max_attempts: int = 3):
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+        self._send = transport
+        self._model = model
+        self._max_attempts = max_attempts
+
+    def _payload(self, pages: list[PageImage], template: DocTemplate) -> dict:
+        content = [{"type": "text", "text": _structured_instruction(template)}] + image_blocks(pages)
+        return {"model": self._model, "temperature": 0, "max_tokens": 8000,
+                "messages": [{"role": "user", "content": content}]}
+
+    def extract_structured(
+        self, pages: list[PageImage], template: DocTemplate
+    ) -> StructuredResult:
+        payload = self._payload(pages, template)
+        last_err = "no response"
+        resp = None
+        for _ in range(self._max_attempts):
+            try:
+                resp = self._send(payload)
+                break
+            except Exception as e:  # transport/network error: retry (non-deterministic)
+                last_err = f"{type(e).__name__}: {e}"
+        else:
+            return StructuredResult(header=None, line_items=[], error=last_err)
+
+        # Response received: parsing is deterministic (temperature=0), so a parse
+        # failure is not retried. parse_structured already WRAPS malformed
+        # responses into StructuredResult(error=...) -- never raises.
+        try:
+            text = parse_message_text(resp)
+        except ValueError as e:
+            return StructuredResult(header=None, line_items=[], error=str(e))
+        return parse_structured(text, template)
