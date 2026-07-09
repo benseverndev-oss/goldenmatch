@@ -368,20 +368,30 @@ def run_golden_fused_arrow(
     quality_scores: dict[tuple[int, str], float] | None = None,
     cluster_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None,
     provenance: bool = False,
-) -> pl.DataFrame | None:
+) -> pl.DataFrame | tuple[pl.DataFrame, list[dict]] | None:
     """Build golden records for a cluster frame via the fused Arrow kernel.
 
-    Returns a golden ``pl.DataFrame`` (one row per multi-member cluster: every
-    user column at its native dtype + ``__cluster_id__`` + ``__golden_confidence__``)
-    or ``None`` to decline -- when the config is not covered
-    (`golden_fused_ready` False), when the config+`quality_scores` would route
-    the reference to the polars-native fast columnar path
+    Returns (one row per multi-member cluster: every user column at its native
+    dtype + ``__cluster_id__`` + ``__golden_confidence__``):
+
+    - ``provenance=False`` (default): a golden ``pl.DataFrame``.
+    - ``provenance=True``: a ``(golden_df, records)`` tuple, mirroring
+      ``build_golden_records_from_frames``'s ``(df, list[dict])`` shape. ``records``
+      is byte-identical at the FIELD level to
+      ``build_golden_records_batch(..., provenance=True)`` -- each user-column field
+      dict carries ``{value, confidence, source_row_id}`` alongside
+      ``__cluster_id__`` / ``__golden_confidence__``. ``source_row_id`` is the
+      winning record's ``__row_id__`` (``None`` when the field is all-null / has no
+      winner). NOTE: it does NOT reproduce the slow path's ``__survivorship_prov__``
+      ``ClusterProvenance`` object (per-field ``source_row_id`` is the derivable,
+      kernel-change-free provenance surface; the full object carries a group ``tie``
+      flag and a conditional's fired-clause strategy that the kernel doesn't emit).
+
+    Returns ``None`` to decline (in BOTH provenance modes) -- when the config is
+    not covered (`golden_fused_ready` False), when the config+`quality_scores`
+    would route the reference to the polars-native fast columnar path
     (`golden.py::_polars_native_eligible`), or when the native kernel is absent.
     The caller then falls back to `build_golden_records_batch`.
-
-    Stage 0 covers the `most_complete` strategy only; remaining strategies /
-    features return `None` today until their stage lands (they still pass the
-    gate, so this is a temporary decline, not the final boundary).
     """
     from goldenmatch.core.golden import _polars_native_eligible
 
@@ -419,7 +429,8 @@ def run_golden_fused_arrow(
         empty = {c: pl.Series(c, [], dtype=sdf[c].dtype) for c in user_cols}
         empty["__cluster_id__"] = pl.Series("__cluster_id__", [], dtype=pl.Int64)
         empty["__golden_confidence__"] = pl.Series("__golden_confidence__", [], dtype=pl.Float64)
-        return pl.DataFrame(empty)
+        empty_df = pl.DataFrame(empty)
+        return (empty_df, []) if provenance else empty_df
 
     # ── Stage 5: identify group-owned columns (resolved as a unit, NOT via the
     # per-column scalar dispatch). Every group column must be a present user
@@ -815,4 +826,49 @@ def run_golden_fused_arrow(
         for k in range(n_clusters)
     ]
     result = result.with_columns(pl.Series("__golden_confidence__", gconf, dtype=pl.Float64))
-    return result
+
+    if not provenance:
+        return result
+
+    # ── Stage 8: per-field provenance. Build records byte-identical (at the field
+    # level) to build_golden_records_batch(provenance=True): each user-col field
+    # dict carries {value, confidence, source_row_id}. source_row_id = the SORTED
+    # frame's __row_id__ at the kernel's winner_idx (or None when winner_idx = -1,
+    # matching merge_field's idx=None). This is derivable Python-side from data the
+    # kernel already returns -- no kernel change. A group column's winner_idx
+    # already reflects the group winner row (or the per-column FILLED row under
+    # allow_fill), and the kernel pins the winner position (not -1) for a
+    # null-pinned group cell, so source_row_id = the winner/filled id, matching
+    # resolve.py's `filled_ids.get(c, wid)`. Per-column confidence: a grouped
+    # column takes its GROUP's single confidence (the kernel writes field_conf=0.0
+    # for grouped cols and the real value into group_conf), a scalar column its own
+    # field_conf -- mirroring resolve_cluster, which stamps res.confidence on every
+    # group column's field dict.
+    if "__row_id__" in sdf.columns:
+        row_ids_sorted = sdf.get_column("__row_id__").cast(pl.Int64).to_list()
+    else:
+        row_ids_sorted = list(range(n))
+    col_to_group: dict[int, int] = {}
+    for g_idx, gspec in enumerate(group_specs):
+        for ci in gspec.col_indices:
+            col_to_group[ci] = g_idx
+    col_value_lists = {c: out[c].to_list() for c in user_cols}
+    records: list[dict] = []
+    for k in range(n_clusters):
+        rec: dict = {}
+        for ci, c in enumerate(user_cols):
+            wi = winner_idx[ci][k]
+            src_row = row_ids_sorted[wi] if wi is not None and wi >= 0 else None
+            if ci in col_to_group:
+                conf = group_conf[col_to_group[ci]][k]
+            else:
+                conf = field_conf[ci][k]
+            rec[c] = {
+                "value": col_value_lists[c][k],
+                "confidence": conf,
+                "source_row_id": src_row,
+            }
+        rec["__golden_confidence__"] = gconf[k]
+        rec["__cluster_id__"] = cluster_ids_out[k]
+        records.append(rec)
+    return result, records

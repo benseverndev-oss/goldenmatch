@@ -8,7 +8,10 @@ the exact `merge_field` survivorship path, which is the byte-parity oracle. See
 
 from __future__ import annotations
 
+import datetime as _dt
+
 import polars as pl
+import pytest
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenGroupRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_records_batch
 from goldenmatch.core.golden_fused import (
@@ -1383,3 +1386,662 @@ def test_cluster_overrides_conflicting_source_priority_lists_declines():
     # per-column channel conflict.
     assert golden_fused_ready(rules) is True
     assert run_golden_fused_arrow(df, rules) is None
+
+
+# ─── provenance output (Task 8.1) ────────────────────────────────────────────
+#
+# With provenance=True, run_golden_fused_arrow returns a (golden_df, records)
+# TUPLE -- mirroring build_golden_records_from_frames' (df, list[dict]) shape.
+# `records` is byte-identical at the field level to
+# build_golden_records_batch(provenance=True): each user-col field dict carries
+# {value, confidence, source_row_id}, plus __cluster_id__ / __golden_confidence__.
+# provenance source_row_id = the sorted frame's __row_id__ at the kernel's
+# winner_idx (or None when winner_idx = -1) -- derivable Python-side, no kernel
+# change. Groups: every group column's source_row_id is the group winner id, or
+# the per-column FILLED row id under allow_fill (winner_idx already reflects it).
+
+
+def _assert_provenance_parity(
+    df, rules, cols, *, quality_scores=None, cluster_pair_scores=None
+):
+    """Run BOTH paths with provenance=True on the identical frame + config and
+    assert per-(cluster, col) value + confidence + source_row_id equality against
+    build_golden_records_batch(provenance=True). Also asserts the returned frame
+    equals the provenance=False frame (values + dtypes)."""
+    ref = build_golden_records_batch(
+        df, rules, quality_scores=quality_scores,
+        cluster_pair_scores=cluster_pair_scores, provenance=True,
+    )
+    out = run_golden_fused_arrow(
+        df, rules, quality_scores=quality_scores,
+        cluster_pair_scores=cluster_pair_scores, provenance=True,
+    )
+    assert out is not None, "fused path declined on a provenance-eligible config"
+    assert isinstance(out, tuple) and len(out) == 2, "provenance=True must return a (df, records) tuple"
+    got_df, got_records = out
+    assert got_df is not None
+
+    # The provenance=True frame must be identical to the provenance=False frame
+    # (values + dtypes). assert_frame_equal is unreliable on Object dtype, so
+    # compare schema (dtype preservation) + per-column Python-value lists.
+    plain = run_golden_fused_arrow(
+        df, rules, quality_scores=quality_scores,
+        cluster_pair_scores=cluster_pair_scores,
+    )
+    assert plain is not None
+    assert got_df.schema == plain.schema
+    for c in got_df.columns:
+        assert got_df[c].to_list() == plain[c].to_list(), f"frame col {c} differs"
+
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    got_map = {r["__cluster_id__"]: r for r in got_records}
+    assert set(got_map) == set(ref_map)
+    for cid, grec in got_map.items():
+        rrec = ref_map[cid]
+        for c in cols:
+            assert grec[c]["value"] == rrec[c]["value"], f"value cid={cid} col={c}"
+            assert grec[c]["source_row_id"] == rrec[c]["source_row_id"], (
+                f"source_row_id cid={cid} col={c}: "
+                f"got {grec[c]['source_row_id']!r} ref {rrec[c]['source_row_id']!r}"
+            )
+            assert abs(grec[c]["confidence"] - rrec[c]["confidence"]) < 1e-12, (
+                f"confidence cid={cid} col={c}"
+            )
+        assert abs(grec["__golden_confidence__"] - rrec["__golden_confidence__"]) < 1e-12
+    return got_map, ref_map
+
+
+def test_provenance_returns_df_records_tuple():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "name": ["Bob", "Robert", "Bob", "Sue", "Suzanne"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    # provenance=False -> bare DataFrame (unchanged contract).
+    assert isinstance(run_golden_fused_arrow(df, rules), pl.DataFrame)
+    # provenance=True -> (df, records) tuple.
+    out = run_golden_fused_arrow(df, rules, provenance=True)
+    assert isinstance(out, tuple) and len(out) == 2
+    got_df, records = out
+    assert isinstance(got_df, pl.DataFrame)
+    assert isinstance(records, list)
+    # every record carries per-field source_row_id.
+    for rec in records:
+        assert "source_row_id" in rec["name"]
+
+
+def test_provenance_source_row_id_most_complete():
+    # cluster 1: "Robert" unique-longest at row_id 1. cluster 2: "Suzanne" row 11.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "name": ["Bob", "Robert", "Bob", "Sue", "Suzanne"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["name"])
+    assert got[1]["name"]["source_row_id"] == 1  # Robert's row_id
+    assert got[2]["name"]["source_row_id"] == 11  # Suzanne's row_id
+
+
+def test_provenance_null_winner_source_row_id_is_none():
+    # unanimous_or_null disagreement -> null winner -> source_row_id None
+    # (kernel -1 sentinel maps to None, matching merge_field idx=None).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11, 12],
+            "__cluster_id__": [1, 1, 2, 2, 2],
+            "v": ["a", "b", "z", None, "z"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="unanimous_or_null",
+        field_rules={"v": GoldenFieldRule(strategy="unanimous_or_null")},
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["v"])
+    assert got[1]["v"]["value"] is None
+    assert got[1]["v"]["source_row_id"] is None  # disagreement -> null winner
+    assert got[2]["v"]["source_row_id"] == 10  # first agreeing "z"
+
+
+def test_provenance_majority_vote():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 1, 2, 2, 2],
+            "v": ["a", "b", "a", "b", "x", "x", "y"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="majority_vote",
+        field_rules={"v": GoldenFieldRule(strategy="majority_vote")},
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["v"])
+    # cluster 1 tie -> first-appearance "a" at row 0.
+    assert got[1]["v"]["source_row_id"] == 0
+
+
+def test_provenance_source_priority():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "__source__": ["crm", "web", "crm", "web"],
+            "name": ["Bob", "Bobby", "Sue", "Susan"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(strategy="source_priority", source_priority=["web", "crm"]),
+        },
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["name"])
+    assert got[1]["name"]["source_row_id"] == 1  # the web row
+
+
+def test_provenance_source_priority_no_match_none():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "__source__": ["crm", "web"],
+            "name": ["Bob", "Bobby"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(strategy="source_priority", source_priority=["mdm", "erp"]),
+        },
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["name"])
+    assert got[1]["name"]["value"] is None
+    assert got[1]["name"]["source_row_id"] is None
+
+
+def test_provenance_most_recent():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "name": ["Bob", "Robert", "Bobby"],
+            "dt": [_dt.date(2020, 1, 1), _dt.date(2022, 6, 15), _dt.date(2021, 3, 3)],
+        },
+        schema_overrides={"dt": pl.Date},
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["name", "dt"])
+    assert got[1]["name"]["source_row_id"] == 1  # 2022 is latest
+
+
+def test_provenance_quality_weight_tie():
+    df = pl.DataFrame(
+        {"__row_id__": [0, 1], "__cluster_id__": [1, 1], "name": ["aa", "bb"]}
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    qs = {(0, "name"): 0.5, (1, "name"): 0.9}
+    got, _ = _assert_provenance_parity(df, rules, ["name"], quality_scores=qs)
+    assert got[1]["name"]["source_row_id"] == 1  # higher-weight row wins
+
+
+def test_provenance_confidence_majority():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 4],
+            "__cluster_id__": [1, 1, 1, 1, 1],
+            "v": ["Apple", "Apple", "Apple", "Banana", "Banana"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    cps = {1: {(0, 1): 0.1, (1, 2): 0.1, (0, 2): 0.1, (3, 4): 0.91}}
+    got, _ = _assert_provenance_parity(df, rules, ["v"], cluster_pair_scores=cps)
+    assert got[1]["v"]["value"] == "Banana"
+    # source_row_id is the first-agreeing-edge endpoint for the winning value.
+    assert got[1]["v"]["source_row_id"] == got[1]["v"]["source_row_id"]  # matches ref (checked in helper)
+
+
+def test_provenance_group_lockstep_winner_id():
+    # Every group column's source_row_id is the SAME group winner id.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "street": ["123 Main", "456 Oak", "9 Elm", "5 Ash"],
+            "city": ["Springfield", None, None, "Shelbyville"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])],
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["street", "city"])
+    # cluster 1 winner row0; both group columns pin to row_id 0.
+    assert got[1]["street"]["source_row_id"] == 0
+    assert got[1]["city"]["source_row_id"] == 0
+    # cluster 2 winner row11.
+    assert got[2]["street"]["source_row_id"] == 11
+    assert got[2]["city"]["source_row_id"] == 11
+
+
+def test_provenance_group_allow_fill_uses_filled_row_id():
+    # Under allow_fill, the back-filled column's source_row_id is the DONOR row's
+    # id (the filled row), NOT the group winner id -- winner_idx already reflects
+    # the filled position.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "a": ["A0", "A1", None],
+            "b": [None, None, "B2"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="pair", columns=["a", "b"], allow_fill=True)],
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["a", "b"])
+    assert got[1]["a"]["source_row_id"] == 0  # winner row0
+    assert got[1]["b"]["source_row_id"] == 2  # filled from row2 (donor)
+
+
+def test_provenance_group_null_pin_no_backfill_uses_winner_id():
+    # The winner row's OWN null cell: value None but source_row_id is the WINNER
+    # id (filled_ids.get(c, wid) -> wid), NOT None. Pins that the kernel emits the
+    # winner position (not -1) for a null-pinned group cell.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "a": ["A0", None],
+            "b": ["B0", None],
+            "c": [None, "C1"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="trip", columns=["a", "b", "c"])],
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["a", "b", "c"])
+    assert got[1]["c"]["value"] is None
+    assert got[1]["c"]["source_row_id"] == 0  # winner row0's id, NOT None
+
+
+def test_provenance_conditional():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "country": ["US", "US", "CA", "CA"],
+            "dt": [1, 2, 3, 4],
+            "phone": ["111", "222", "5", "55555"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="dt", when='country == "US"'),
+                GoldenFieldRule(strategy="most_complete"),
+            ]
+        },
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["country", "dt", "phone"])
+    assert got[1]["phone"]["source_row_id"] == 1  # most_recent picked dt=2 (row1)
+    assert got[2]["phone"]["source_row_id"] == 11  # most_complete "55555" (row11)
+
+
+def test_provenance_cluster_overrides():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 20, 21, 22],
+            "__cluster_id__": [1, 1, 1, 3, 3, 3],
+            "v": ["short", "longestval", "mid", "x", "yyyy", "z"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={1: {"v": GoldenFieldRule(strategy="first_non_null")}},
+    )
+    got, _ = _assert_provenance_parity(df, rules, ["v"])
+    assert got[1]["v"]["value"] == "short"  # override first_non_null
+    assert got[1]["v"]["source_row_id"] == 0  # first non-null row
+    assert got[3]["v"]["value"] == "yyyy"  # base most_complete
+    assert got[3]["v"]["source_row_id"] == 21
+
+
+# ─── full parity matrix + mixed-type fixtures (Task 8.2) ─────────────────────
+#
+# Each case builds a frame + config that routes the reference to the EXACT
+# survivorship/merge_field oracle (never the approximating fast path). The matrix
+# sweeps every covered strategy family x {provenance on/off}; each case asserts
+# FRAME equality (values + DTYPES via assert_frame_equal) and, when provenance is
+# on, per-field source_row_id parity vs build_golden_records_batch.
+
+
+def _case_most_complete():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "name": ["Bob", "Robert", "Bob", "Sue", "Suzanne"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    return df, rules, ["name"], {}
+
+
+def _case_majority_mixed_type():
+    # MIXED-TYPE column under majority_vote (the factorization edge end-to-end):
+    # int 1 and float 1.0 are raw-value-equal -> one code; string "1" is distinct.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3],
+            "__cluster_id__": [1, 1, 1, 1],
+            "v": pl.Series("v", [1, 1.0, "1", 1], dtype=pl.Object),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="majority_vote",
+        field_rules={"v": GoldenFieldRule(strategy="majority_vote")},
+    )
+    return df, rules, ["v"], {}
+
+
+def _case_unanimous_mixed_type():
+    # MIXED-TYPE under unanimous_or_null: int 1 vs float 1.0 are raw-value-equal
+    # (short-circuit -> unanimous), so the winner is int 1 at conf 1.0.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "v": pl.Series("v", [1, 1.0], dtype=pl.Object),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="unanimous_or_null",
+        field_rules={"v": GoldenFieldRule(strategy="unanimous_or_null")},
+    )
+    return df, rules, ["v"], {}
+
+
+def _case_first_non_null():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": [None, "b", "c"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="first_non_null",
+        field_rules={"v": GoldenFieldRule(strategy="first_non_null")},
+    )
+    return df, rules, ["v"], {}
+
+
+def _case_longest_value():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": ["aa", "bbb", "c"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="longest_value",
+        field_rules={"v": GoldenFieldRule(strategy="longest_value")},
+    )
+    return df, rules, ["v"], {}
+
+
+def _case_source_priority():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "__source__": ["crm", "web"],
+            "name": ["Bob", "Bobby"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "name": GoldenFieldRule(strategy="source_priority", source_priority=["web", "crm"]),
+        },
+    )
+    return df, rules, ["name"], {}
+
+
+def _case_most_recent_float_and_datetime():
+    # Float64 + Datetime user columns round-trip at their native dtype (the whole
+    # point of the index-return design). `amount` (Float64) and `ts` (Datetime)
+    # ride through as default most_complete scalar columns.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "name": ["Bob", "Robert", "Bobby"],
+            "dt": [_dt.date(2020, 1, 1), _dt.date(2022, 6, 15), _dt.date(2021, 3, 3)],
+            "amount": pl.Series("amount", [1.5, 2.5, 3.5], dtype=pl.Float64),
+            "ts": pl.Series(
+                "ts",
+                [
+                    _dt.datetime(2020, 1, 1),
+                    _dt.datetime(2022, 6, 15),
+                    _dt.datetime(2021, 3, 3),
+                ],
+                dtype=pl.Datetime,
+            ),
+        },
+        schema_overrides={"dt": pl.Date},
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_recent", date_column="dt")},
+    )
+    return df, rules, ["name", "dt", "amount", "ts"], {}
+
+
+def _case_int_and_none_empty_string():
+    # Int64 column round-trip + None mixed with "" (distinct values, not conflated).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "code": pl.Series("code", [10, 20, 20], dtype=pl.Int64),
+            "s": [None, "", "x"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="majority_vote",
+        field_rules={
+            "code": GoldenFieldRule(strategy="majority_vote"),
+            "s": GoldenFieldRule(strategy="first_non_null"),
+        },
+    )
+    return df, rules, ["code", "s"], {}
+
+
+def _case_group():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "street": ["123 Main", "456 Oak"],
+            "city": ["Springfield", None],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="addr", columns=["street", "city"])],
+    )
+    return df, rules, ["street", "city"], {}
+
+
+def _case_conditional():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "country": ["US", "US", "CA", "CA"],
+            "dt": [1, 2, 3, 4],
+            "phone": ["111", "222", "5", "55555"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="dt", when='country == "US"'),
+                GoldenFieldRule(strategy="most_complete"),
+            ]
+        },
+    )
+    return df, rules, ["country", "dt", "phone"], {}
+
+
+def _case_confidence_majority():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 4],
+            "__cluster_id__": [1, 1, 1, 1, 1],
+            "v": ["Apple", "Apple", "Apple", "Banana", "Banana"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    cps = {1: {(0, 1): 0.1, (1, 2): 0.1, (0, 2): 0.1, (3, 4): 0.91}}
+    return df, rules, ["v"], {"cluster_pair_scores": cps}
+
+
+def _case_confidence_majority_with_quality_scores():
+    # THE GAP: confidence_majority + a non-None quality_scores. The cluster's edges
+    # all span DISAGREEING values, so _confidence_majority falls back to the
+    # WEIGHTED count-majority (quality_weights) -- the weighted-fallback
+    # composition untested through Stage 4. Weights flip the winner from the count
+    # majority "A" (rows 0,2) to "B" (row1, weight 0.9 vs A's 0.2).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": ["A", "B", "A"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="confidence_majority",
+        field_rules={"v": GoldenFieldRule(strategy="confidence_majority")},
+    )
+    cps = {1: {(0, 1): 0.9, (1, 2): 0.8}}  # both edges disagree -> weighted fallback
+    qs = {(0, "v"): 0.1, (1, "v"): 0.9, (2, "v"): 0.1}
+    return df, rules, ["v"], {"cluster_pair_scores": cps, "quality_scores": qs}
+
+
+def _case_quality_weighted():
+    df = pl.DataFrame(
+        {"__row_id__": [0, 1], "__cluster_id__": [1, 1], "name": ["aa", "bb"]}
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    qs = {(0, "name"): 0.5, (1, "name"): 0.9}
+    return df, rules, ["name"], {"quality_scores": qs}
+
+
+def _case_cluster_overrides():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 20, 21, 22],
+            "__cluster_id__": [1, 1, 1, 3, 3, 3],
+            "v": ["short", "longestval", "mid", "x", "yyyy", "z"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={1: {"v": GoldenFieldRule(strategy="first_non_null")}},
+    )
+    return df, rules, ["v"], {}
+
+
+_MATRIX_CASES = {
+    "most_complete": _case_most_complete,
+    "majority_mixed_type": _case_majority_mixed_type,
+    "unanimous_mixed_type": _case_unanimous_mixed_type,
+    "first_non_null": _case_first_non_null,
+    "longest_value": _case_longest_value,
+    "source_priority": _case_source_priority,
+    "most_recent_float_datetime": _case_most_recent_float_and_datetime,
+    "int_and_none_empty_string": _case_int_and_none_empty_string,
+    "group": _case_group,
+    "conditional": _case_conditional,
+    "confidence_majority": _case_confidence_majority,
+    "confidence_majority_with_quality_scores": _case_confidence_majority_with_quality_scores,
+    "quality_weighted": _case_quality_weighted,
+    "cluster_overrides": _case_cluster_overrides,
+}
+
+
+@pytest.mark.parametrize("case_name", list(_MATRIX_CASES))
+@pytest.mark.parametrize("provenance", [False, True])
+def test_parity_matrix(case_name, provenance):
+    df, rules, cols, kwargs = _MATRIX_CASES[case_name]()
+    quality_scores = kwargs.get("quality_scores")
+    cluster_pair_scores = kwargs.get("cluster_pair_scores")
+
+    if not provenance:
+        # FRAME parity (values + DTYPES). Build the reference records and compare
+        # the fused frame column-by-column, and separately assert the fused frame's
+        # dtypes match the SOURCE column dtypes (native-dtype preservation).
+        ref = build_golden_records_batch(
+            df, rules, quality_scores=quality_scores,
+            cluster_pair_scores=cluster_pair_scores,
+        )
+        got = run_golden_fused_arrow(
+            df, rules, quality_scores=quality_scores,
+            cluster_pair_scores=cluster_pair_scores,
+        )
+        assert got is not None, f"{case_name}: fused path declined"
+        ref_map = {r["__cluster_id__"]: r for r in ref}
+        got_map = {row["__cluster_id__"]: row for row in got.iter_rows(named=True)}
+        assert set(got_map) == set(ref_map)
+        for cid, row in got_map.items():
+            r = ref_map[cid]
+            for c in cols:
+                assert row[c] == r[c]["value"], f"{case_name} cid={cid} col={c}"
+            assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12
+        # DTYPE preservation: each user column keeps its source dtype.
+        for c in cols:
+            assert got.schema[c] == df.schema[c], (
+                f"{case_name} col={c}: dtype {got.schema[c]} != source {df.schema[c]}"
+            )
+    else:
+        _assert_provenance_parity(
+            df, rules, cols,
+            quality_scores=quality_scores,
+            cluster_pair_scores=cluster_pair_scores,
+        )
