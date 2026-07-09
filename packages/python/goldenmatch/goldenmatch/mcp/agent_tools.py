@@ -100,8 +100,14 @@ AGENT_TOOLS = [
             "type": "object",
             "properties": {
                 "file_path": {"type": "string"},
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -118,8 +124,14 @@ AGENT_TOOLS = [
                 "file_path": {"type": "string"},
                 "constraints": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -143,8 +155,14 @@ AGENT_TOOLS = [
                 "file_path": {"type": "string"},
                 "config": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -157,8 +175,13 @@ AGENT_TOOLS = [
                 "file_b": {"type": "string"},
                 "config": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
+                "file_a_name": {"type": "string"},
+                "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
+                "file_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_a", "file_b"],
+            "required": [],
         },
     ),
     Tool(
@@ -221,8 +244,16 @@ AGENT_TOOLS = [
             "properties": {
                 "file_path": {"type": "string"},
                 "ground_truth": {"type": "string"},
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "ground_truth_content": {"type": "string", "description": "Alternative to ground_truth: base64/text bytes"},
+                "ground_truth_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -232,8 +263,14 @@ AGENT_TOOLS = [
             "type": "object",
             "properties": {
                 "file_path": {"type": "string"},
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -254,8 +291,14 @@ AGENT_TOOLS = [
                     "type": "string",
                     "description": "Optional domain hint (healthcare, finance, ecommerce)",
                 },
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -286,8 +329,14 @@ AGENT_TOOLS = [
                     "type": "string",
                     "description": "Optional path to save the fixed CSV. If omitted, returns summary only.",
                 },
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -309,8 +358,14 @@ AGENT_TOOLS = [
                     "type": "string",
                     "description": "Optional path to save the transformed CSV. If omitted, returns summary only.",
                 },
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -338,8 +393,14 @@ AGENT_TOOLS = [
                     "type": "integer",
                     "description": "Optional: randomly sample N records before sweeping",
                 },
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path", "sweep"],
+            "required": ["sweep"],
         },
     ),
     Tool(
@@ -357,8 +418,13 @@ AGENT_TOOLS = [
                 "new_records": {"type": "string", "description": "New records file to match in"},
                 "config": {"type": "string", "description": "Optional config YAML path"},
                 "threshold": {"type": "number", "description": "Optional threshold override"},
+                "base_file_content": {"type": "string", "description": "Alternative to base_file: base64/text bytes"},
+                "base_file_name": {"type": "string"},
+                "new_records_content": {"type": "string", "description": "Alternative to new_records: base64/text bytes"},
+                "new_records_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["base_file", "new_records"],
+            "required": [],
         },
     ),
     Tool(
@@ -375,8 +441,14 @@ AGENT_TOOLS = [
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "Dataset to dedupe + certify"},
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -411,8 +483,14 @@ AGENT_TOOLS = [
                     "type": "object",
                     "description": "Optional {column: value} equality pre-filter applied before embedding",
                 },
+                "file_content": {
+                    "type": "string",
+                    "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
+                },
+                "filename": {"type": "string", "description": "Original filename when using file_content"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["file_path", "query", "column"],
+            "required": ["query", "column"],
         },
     ),
     Tool(
