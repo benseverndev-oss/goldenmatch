@@ -666,8 +666,19 @@ def run_golden_fused_arrow(
             try:
                 ir = lower_predicate(clause.when, col_index, _code_of)
             except Exception:
-                # The gate already checked predicate_lowerable; decline defensively
-                # rather than risk a non-byte-identical result.
+                # The gate already vetted this predicate via predicate_lowerable,
+                # so an exception HERE is a real lowering regression, not an
+                # expected decline -- log it (a silent classic-path fallback would
+                # surface only as an unexplained perf decline) but keep the safety
+                # fallback: decline rather than risk a non-byte-identical result.
+                import logging
+
+                logging.getLogger(__name__).debug(
+                    "golden_fused: lower_predicate failed for a vetted when: %r; "
+                    "declining to the classic path",
+                    clause.when,
+                    exc_info=True,
+                )
                 return None
             clauses_spec.append(
                 _GoldenFusedClause(ir=ir, strategy=_GOLDEN_STRATEGY_IDS[clause.strategy])

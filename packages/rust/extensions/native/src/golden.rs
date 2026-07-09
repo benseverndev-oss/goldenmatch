@@ -658,21 +658,25 @@ fn eval_ir(ir: &[PredInstr], resolved_code: &[i64]) -> u8 {
     for ins in ir {
         match ins.op {
             OP_EQ => {
-                let rc = resolved_code[ins.col_index as usize];
-                stack.push(if rc == ins.codes[0] {
-                    TRI_TRUE
-                } else {
-                    TRI_FALSE
-                });
+                // `codes.first()` (not `codes[0]`) so a malformed EQ with no
+                // literal degrades to MISS instead of panicking -- symmetric with
+                // the col_index range-check; unreachable via the Python emitter,
+                // which always emits exactly one code for EQ/NE.
+                match ins.codes.first() {
+                    Some(&lit) => {
+                        let rc = resolved_code[ins.col_index as usize];
+                        stack.push(if rc == lit { TRI_TRUE } else { TRI_FALSE });
+                    }
+                    None => stack.push(TRI_MISS),
+                }
             }
-            OP_NE => {
-                let rc = resolved_code[ins.col_index as usize];
-                stack.push(if rc != ins.codes[0] {
-                    TRI_TRUE
-                } else {
-                    TRI_FALSE
-                });
-            }
+            OP_NE => match ins.codes.first() {
+                Some(&lit) => {
+                    let rc = resolved_code[ins.col_index as usize];
+                    stack.push(if rc != lit { TRI_TRUE } else { TRI_FALSE });
+                }
+                None => stack.push(TRI_MISS),
+            },
             OP_IN => {
                 let rc = resolved_code[ins.col_index as usize];
                 stack.push(if ins.codes.contains(&rc) {
@@ -724,6 +728,21 @@ fn eval_ir(ir: &[PredInstr], resolved_code: &[i64]) -> u8 {
         }
     }
     stack.pop().unwrap_or(TRI_MISS)
+}
+
+/// The strategy id for a conditional (list-form) field_rule, given the current
+/// cluster's resolved winner codes: the first clause whose IR holds (`TRI_TRUE`),
+/// else the when-less default. Mirrors `conditions.select_conditional_strategy`
+/// (named after it). Kept a free fn (not inlined in the span loop) so the loop --
+/// which already carries group resolution + scalar dispatch -- stays readable as
+/// later stages (cluster_overrides) touch it.
+fn select_conditional_strategy(cs: &ConditionalSpec, resolved_code: &[i64]) -> u8 {
+    for clause in &cs.clauses {
+        if eval_ir(&clause.ir, resolved_code) == TRI_TRUE {
+            return clause.strategy;
+        }
+    }
+    cs.default_strategy
 }
 
 /// Kernel result: `(winner_idx, field_conf, group_conf, cluster_ids_out)`.
@@ -1235,19 +1254,7 @@ pub fn golden_fused(
                     continue;
                 }
                 let strat = match cond_index[col] {
-                    Some(ci) => {
-                        // First clause whose IR holds picks the strategy, else the
-                        // when-less default (select_conditional_strategy).
-                        let cs = &conditionals[ci];
-                        let mut s = cs.default_strategy;
-                        for clause in &cs.clauses {
-                            if eval_ir(&clause.ir, &resolved_code) == TRI_TRUE {
-                                s = clause.strategy;
-                                break;
-                            }
-                        }
-                        s
-                    }
+                    Some(ci) => select_conditional_strategy(&conditionals[ci], &resolved_code),
                     None => strategy_ids[col],
                 };
                 let non_null = span_non_null(&code_vals[col], off, size);
