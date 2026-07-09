@@ -815,6 +815,14 @@ pub struct GoldenFusedSideChannels {
     // by `col_order`, since scalar columns are mutually independent then).
     col_order: Vec<i64>,
     conditionals: Vec<ConditionalSpec>,
+    // Stage 7: per-(cluster, col) strategy overrides, flattened to
+    // `(cluster_id, col_index, strategy_code)`. Bucketed by cluster id (like
+    // `pair_edges`); when resolving a scalar column for that cluster, the override
+    // strategy is dispatched instead of the column's static `strategy_ids` entry.
+    // A column without an override for a cluster keeps its base strategy. Empty
+    // unless the Python caller determined overrides apply (cluster_overrides set
+    // AND survivorship inactive) -- so it is inert for every Stage 0-6 config.
+    overrides: Vec<(i64, i64, u8)>,
 }
 
 /// One field_group's kernel spec, extracted from a Python `_GoldenFusedGroupSpec`
@@ -862,6 +870,7 @@ pub fn golden_fused(
         group_specs,
         col_order,
         conditionals,
+        overrides,
     } = side;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
@@ -1114,6 +1123,15 @@ pub fn golden_fused(
             )));
         }
     }
+    // Stage 7: validate every override's target column index up front so the
+    // per-cluster lookup below can index `override_strat` without a bounds check.
+    for &(_, col, _) in &overrides {
+        if col < 0 || col as usize >= n_output_cols {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: override col index {col} out of range"
+            )));
+        }
+    }
 
     let cluster_vals: Vec<i64> = cluster_ids.values().to_vec();
 
@@ -1158,6 +1176,20 @@ pub fn golden_fused(
         }
         let no_edges: Vec<(usize, usize, f64)> = Vec::new();
 
+        // Stage 7: bucket per-(cluster, col) strategy overrides by cluster id.
+        // Each cluster gets a `col_index -> strategy` map; a scalar column with an
+        // entry dispatches that strategy instead of `strategy_ids[col]`. Empty for
+        // every Stage 0-6 config (the Python caller only fills it when overrides
+        // apply). Col indices were range-checked before `py.detach`.
+        let mut overrides_by_cluster: std::collections::HashMap<i64, Vec<(usize, u8)>> =
+            std::collections::HashMap::new();
+        for (cid, col, strat) in overrides {
+            overrides_by_cluster
+                .entry(cid)
+                .or_default()
+                .push((col as usize, strat));
+        }
+
         // A resolved-code sentinel meaning "not yet resolved this cluster". No
         // referenced column can carry it once resolution order is honored (every
         // present column resolves before a conditional referencing it); it's a
@@ -1172,6 +1204,16 @@ pub fn golden_fused(
             let mut resolved_code = vec![RC_UNRESOLVED; n_output_cols];
 
             let edges = edges_by_cluster.get(&cid).unwrap_or(&no_edges);
+
+            // Stage 7: this cluster's per-column strategy overrides (col -> strat),
+            // if any. `override_strat[col]` = Some(s) means dispatch strategy `s`
+            // for that column INSTEAD of `strategy_ids[col]` (or a conditional).
+            let mut override_strat: Vec<Option<u8>> = vec![None; n_output_cols];
+            if let Some(ovs) = overrides_by_cluster.get(&cid) {
+                for &(col, strat) in ovs {
+                    override_strat[col] = Some(strat);
+                }
+            }
 
             // Resolve a scalar column under an explicit strategy id -> (local idx,
             // conf). Shared by the non-conditional pass and the conditional pass
@@ -1253,9 +1295,17 @@ pub fn golden_fused(
                 if group_col_idx[col].is_some() {
                     continue;
                 }
-                let strat = match cond_index[col] {
-                    Some(ci) => select_conditional_strategy(&conditionals[ci], &resolved_code),
-                    None => strategy_ids[col],
+                // Stage 7: a per-cluster override wins over the column's base
+                // strategy (and over a conditional -- though the Python caller
+                // never sends both, since overrides only fire when survivorship is
+                // inactive, i.e. no conditionals exist). Else fall to the
+                // conditional IR-selected strategy, else the static base strategy.
+                let strat = match override_strat[col] {
+                    Some(s) => s,
+                    None => match cond_index[col] {
+                        Some(ci) => select_conditional_strategy(&conditionals[ci], &resolved_code),
+                        None => strategy_ids[col],
+                    },
                 };
                 let non_null = span_non_null(&code_vals[col], off, size);
                 let (li, conf) = resolve_scalar(col, strat, &non_null);

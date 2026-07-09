@@ -1239,3 +1239,120 @@ def test_conditional_membership_in_list_matches_reference():
     got = _assert_value_conf_parity(df, rules, ["state", "v"])
     assert got[1]["v"] == "a"  # majority_vote fired
     assert got[2]["v"] == "p"  # first_non_null default fired
+
+
+# ─── cluster_overrides (Task 7.1) ────────────────────────────────────────────
+
+
+def test_cluster_overrides_per_cluster_strategy_differs():
+    # Two clusters override the SAME column to DIFFERENT strategies; a third has
+    # no override and falls back to the base default. Each cluster's effective
+    # strategy produces a value the OTHER strategies would not, so a fused path
+    # that ignored overrides (the Stage-6 gap this stage closes) diverges from the
+    # reference and reddens the parity assertion.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 12, 20, 21, 22],
+            "__cluster_id__": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+            # cluster 1 (override first_non_null): "short" wins (base most_complete
+            #   would pick the unique-longest "longestval").
+            # cluster 2 (override longest_value): "qq" wins (base most_complete
+            #   also picks longest, but the confidence rule differs, and the point
+            #   is a per-cluster DIFFERENT strategy than cluster 1).
+            # cluster 3 (no override -> base most_complete): unique-longest "yyyy".
+            "v": ["short", "longestval", "mid", "p", "qq", "r", "x", "yyyy", "z"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={
+            1: {"v": GoldenFieldRule(strategy="first_non_null")},
+            2: {"v": GoldenFieldRule(strategy="longest_value")},
+        },
+    )
+    assert golden_fused_ready(rules) is True
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    # Effective strategy per cluster (proves the override was applied, not ignored):
+    assert got[1]["v"] == "short"  # first_non_null (base most_complete -> "longestval")
+    assert got[2]["v"] == "qq"  # longest_value
+    assert got[3]["v"] == "yyyy"  # base most_complete (no override)
+
+
+def test_cluster_overrides_value_differs_from_base_closes_gap():
+    # A single-cluster override whose golden VALUE differs from the base strategy's
+    # -- the direct regression guard for the Stage-6-flagged gap (a gate-True
+    # override config silently applying the DEFAULT strategy).
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            # base most_complete -> unique-longest "longestval"; override
+            # first_non_null -> "short". Different winning value.
+            "v": ["short", "longestval", "mid"],
+        }
+    )
+    base_rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        # Force the reference off the fast path via an explicit field_rule so we can
+        # read the BASE winner for the contrast assertion.
+        field_rules={"v": GoldenFieldRule(strategy="most_complete")},
+    )
+    base = run_golden_fused_arrow(df, base_rules)
+    assert base is not None
+    assert base.row(0, named=True)["v"] == "longestval"
+
+    override_rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={1: {"v": GoldenFieldRule(strategy="first_non_null")}},
+    )
+    got = _assert_value_conf_parity(df, override_rules, ["v"])
+    assert got[1]["v"] == "short"  # override applied; != base "longestval"
+
+
+def test_cluster_overrides_source_priority_needs_source_column():
+    # An override to source_priority pulls in the shared __source__ channel; parity
+    # against the reference's classic per-cluster merge_field path.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 2, 2, 2],
+            "__source__": ["crm", "erp", "web", "crm", "erp", "web"],
+            # cluster 1 override source_priority [erp, crm] -> "b" (erp's value).
+            # cluster 2 no override -> base most_complete -> unique-longest "zzz".
+            "v": ["a", "b", "c", "x", "zzz", "y"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        cluster_overrides={
+            1: {"v": GoldenFieldRule(strategy="source_priority", source_priority=["erp", "crm"])},
+        },
+    )
+    assert golden_fused_ready(rules) is True
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    assert got[1]["v"] == "b"  # erp wins via override
+    assert got[2]["v"] == "zzz"  # base most_complete
+
+
+def test_cluster_overrides_ignored_when_survivorship_active():
+    # Precedence: when a field_group (or conditional) is present, survivorship is
+    # active and the reference (resolve_cluster) NEVER reads cluster_overrides. The
+    # fused path must match -- ignore the override and resolve the group normally.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 2, 2, 2],
+            "first": ["Bob", "Bob", "Robert", "Sue", "Sue", "Suzanne"],
+            "last": ["Lee", "Lee", "Li", "Ng", "Ng", "Nguyen"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_groups=[GoldenGroupRule(name="nm", columns=["first", "last"], strategy="most_complete")],
+        # This override would change cluster 1's `first` if honored -- but the
+        # reference ignores it under an active field_group, so the parity oracle
+        # pins the "ignored" behavior.
+        cluster_overrides={1: {"first": GoldenFieldRule(strategy="first_non_null")}},
+    )
+    assert golden_fused_ready(rules) is True
+    _assert_value_conf_parity(df, rules, ["first", "last"])

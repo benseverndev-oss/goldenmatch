@@ -225,6 +225,17 @@ class _GoldenFusedSideChannels:
     # order is immaterial for the mutually-independent non-conditional columns).
     col_order: list[int] = field(default_factory=list)
     conditionals: list[_GoldenFusedConditional] = field(default_factory=list)
+    # Stage 7: per-(cluster, col) strategy overrides, flattened to
+    # `(cluster_id, col_index, strategy_code)` tuples. The kernel buckets by
+    # `cluster_id` and, when resolving a scalar column for that cluster, dispatches
+    # the override strategy instead of the column's base `strategy_ids` entry. A
+    # column with NO override for a cluster keeps its base strategy. Empty when no
+    # cluster_overrides apply -- which, matching the reference EXACTLY, is whenever
+    # cluster_overrides is unset OR survivorship is active (see run_golden_fused_arrow
+    # for the precedence rationale). The extra channels an override strategy needs
+    # (source_code / date) are built via the shared per-column candidate_rules fold,
+    # so no per-(cluster,col) side data is required here -- only the strategy code.
+    overrides: list[tuple[int, int, int]] = field(default_factory=list)
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -443,6 +454,42 @@ def run_golden_fused_arrow(
             return None  # temporary decline until the strategy's stage lands
         strategy_ids.append(_GOLDEN_STRATEGY_IDS[strat])
         candidate_rules.append([rule])
+
+    # ── Stage 7: cluster_overrides. Precedence matched to the reference EXACTLY.
+    # `cluster_overrides` is honored by build_golden_records_batch ONLY on the
+    # classic slow path (golden.py:981-987, `per_cluster[col]` REPLACES the
+    # column's base field_rule for that cluster) -- and that path is reached only
+    # when survivorship is INACTIVE (no field_groups, no conditional/list-form
+    # field_rules). When survivorship IS active the reference routes through
+    # resolve_cluster, which NEVER reads cluster_overrides (it walks
+    # field_rules/groups/default), so the overrides are silently ignored. So:
+    # build the override channel ONLY when survivorship is inactive; otherwise
+    # leave it empty and let the fused group/conditional passes resolve normally
+    # (also ignoring the overrides) -- byte-identical to the reference either way.
+    from goldenmatch.core.golden import _survivorship_active
+
+    override_specs: list[tuple[int, int, int]] = []
+    if rules.cluster_overrides and not _survivorship_active(rules):
+        for ov_cid, per_col in rules.cluster_overrides.items():
+            for ov_col, ov_rule in per_col.items():
+                ci = col_index.get(ov_col)
+                if ci is None:
+                    # Override targets a column not in user_cols. The reference's
+                    # classic loop iterates user_cols only, so `per_cluster[col]`
+                    # for a non-user column is never consulted -> a no-op there.
+                    # Skip it here to match (no divergence).
+                    continue
+                if ov_rule.strategy not in _KERNEL_COVERED_STRATEGIES:
+                    return None  # temporary decline until the strategy's stage lands
+                # Fold the override rule into candidate_rules[ci] so the shared
+                # source_priority / most_recent channel builders below construct
+                # the channel this override's strategy needs (and decline on a
+                # per-column channel conflict, e.g. two clusters overriding the
+                # same column to source_priority with different priority lists).
+                candidate_rules[ci].append(ov_rule)
+                override_specs.append(
+                    (int(ov_cid), ci, _GOLDEN_STRATEGY_IDS[ov_rule.strategy])
+                )
 
     import pyarrow as pa
 
@@ -701,6 +748,7 @@ def run_golden_fused_arrow(
         group_specs=group_specs,
         col_order=col_order,
         conditionals=conditionals,
+        overrides=override_specs,
     )
     winner_idx, field_conf, group_conf, cluster_ids_out = fn(
         row_ids_arr,
