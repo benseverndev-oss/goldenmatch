@@ -587,3 +587,143 @@ def test_most_recent_integer_date_matches_reference():
     )
     got = _assert_value_conf_parity(df, rules, ["name"])
     assert got[1]["name"] == "Robert"  # dt 305 is the max
+
+
+# ─── quality-weight tie-breaks (Task 3.1) ────────────────────────────────────
+
+
+def _assert_value_conf_parity_q(df, rules, cols, quality_scores):
+    """Like ``_assert_value_conf_parity`` but threads ``quality_scores`` into BOTH
+    paths. A non-None ``quality_scores`` forces the reference off the fast columnar
+    path (``_polars_native_eligible`` returns False), so the fused path does not
+    decline on the fast-path gate either -- both run the exact weighted oracle."""
+    ref = build_golden_records_batch(df, rules, quality_scores=quality_scores)
+    got = run_golden_fused_arrow(df, rules, quality_scores=quality_scores)
+    assert got is not None
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    got_map = {row["__cluster_id__"]: row for row in got.iter_rows(named=True)}
+    assert set(got_map) == set(ref_map)
+    for cid, row in got_map.items():
+        r = ref_map[cid]
+        for c in cols:
+            assert row[c] == r[c]["value"], f"cluster {cid} col {c}"
+        assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12
+    return got_map, ref_map
+
+
+def test_quality_scores_forces_off_fast_path():
+    # A bare most_complete default declines (fast-path eligible); adding a non-None
+    # quality_scores makes it exact-path-eligible, so the fused path RUNS (does not
+    # decline) even without a field_rule -- confirms the _polars_native_eligible
+    # reuse with quality_scores in scope.
+    df = pl.DataFrame(
+        {"__row_id__": [0, 1], "__cluster_id__": [1, 1], "name": ["aa", "bb"]}
+    )
+    rules = GoldenRulesConfig(default_strategy="most_complete")
+    assert run_golden_fused_arrow(df, rules) is None  # no quality_scores -> fast path
+    qs = {(0, "name"): 0.5, (1, "name"): 0.9}
+    assert run_golden_fused_arrow(df, rules, quality_scores=qs) is not None
+
+
+def test_most_complete_weighted_tie_matches_reference():
+    # Length tie "aa"/"bb"; weights 0.5 vs 0.9 -> the higher-weight row (row 1,
+    # "bb") wins at conf min(1.0, 0.7*0.9) = 0.63.
+    df = pl.DataFrame(
+        {"__row_id__": [0, 1], "__cluster_id__": [1, 1], "name": ["aa", "bb"]}
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"name": GoldenFieldRule(strategy="most_complete")},
+    )
+    qs = {(0, "name"): 0.5, (1, "name"): 0.9}
+    got, _ = _assert_value_conf_parity_q(df, rules, ["name"], qs)
+    assert got[1]["name"] == "bb"
+    assert abs(got[1]["__golden_confidence__"] - min(1.0, 0.7 * 0.9)) < 1e-12
+
+
+def test_longest_value_weighted_tie_conf_is_flat_07():
+    # THE DIVERGENCE: identical fixture to most_complete above, but longest_value's
+    # weighted tie confidence is a FLAT 0.7 (NOT min(1.0, 0.7*0.9)=0.63). Same
+    # winner ("bb", higher weight), different confidence.
+    df = pl.DataFrame(
+        {"__row_id__": [0, 1], "__cluster_id__": [1, 1], "name": ["aa", "bb"]}
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="longest_value",
+        field_rules={"name": GoldenFieldRule(strategy="longest_value")},
+    )
+    qs = {(0, "name"): 0.5, (1, "name"): 0.9}
+    got, _ = _assert_value_conf_parity_q(df, rules, ["name"], qs)
+    assert got[1]["name"] == "bb"
+    assert abs(got[1]["__golden_confidence__"] - 0.7) < 1e-12  # flat, NOT 0.63
+
+
+def test_majority_vote_weighted_matches_reference():
+    # Count-majority = "a" (2 of 3). Weights 0.1/0.1/0.9 flip the winner to "b"
+    # (weight-sum a=0.2, b=0.9) at conf 0.9/1.1 -- confirms the WEIGHTED winner,
+    # not the count winner.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": ["a", "a", "b"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="majority_vote",
+        field_rules={"v": GoldenFieldRule(strategy="majority_vote")},
+    )
+    qs = {(0, "v"): 0.1, (1, "v"): 0.1, (2, "v"): 0.9}
+    got, _ = _assert_value_conf_parity_q(df, rules, ["v"], qs)
+    assert got[1]["v"] == "b"  # weighted winner, NOT the count winner "a"
+    assert abs(got[1]["__golden_confidence__"] - 0.9 / 1.1) < 1e-12
+
+
+def test_first_non_null_weighted_matches_reference():
+    # Leading null; non-null rows 1 ("b") and 2 ("c") with weights 0.3 vs 0.8 ->
+    # highest-weight "c" wins (unweighted would pick "b"), conf stays 0.6.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2],
+            "__cluster_id__": [1, 1, 1],
+            "v": [None, "b", "c"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="first_non_null",
+        field_rules={"v": GoldenFieldRule(strategy="first_non_null")},
+    )
+    qs = {(1, "v"): 0.3, (2, "v"): 0.8}
+    got, _ = _assert_value_conf_parity_q(df, rules, ["v"], qs)
+    assert got[1]["v"] == "c"  # highest-weight non-null
+    assert abs(got[1]["__golden_confidence__"] - 0.6) < 1e-12
+
+
+def test_quality_scores_none_unweighted_path_unchanged():
+    # Regression: quality_scores=None must be byte-identical to omitting it AND to
+    # the unweighted reference -- the empty qweight channel takes the unweighted
+    # kernel branch. Uses a length-tie fixture that the weighted path would resolve
+    # differently.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "v": ["aa", "bb", "c", "z", "zzz"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"v": GoldenFieldRule(strategy="most_complete")},
+    )
+    ref = build_golden_records_batch(df, rules)
+    got_omitted = run_golden_fused_arrow(df, rules)
+    got_none = run_golden_fused_arrow(df, rules, quality_scores=None)
+    assert got_omitted is not None and got_none is not None
+    from polars.testing import assert_frame_equal
+
+    assert_frame_equal(got_omitted, got_none)
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    for row in got_none.iter_rows(named=True):
+        r = ref_map[row["__cluster_id__"]]
+        assert row["v"] == r["v"]["value"]
+        assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12

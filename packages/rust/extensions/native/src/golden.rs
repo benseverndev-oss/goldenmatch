@@ -16,7 +16,7 @@
 //!
 //! Design: `docs/superpowers/specs/2026-07-08-fused-golden-record-kernel-design.md`.
 
-use arrow::array::{ArrayData, Int64Array};
+use arrow::array::{ArrayData, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
 use pyo3::exceptions::PyValueError;
@@ -74,12 +74,41 @@ fn char_len(text: &StrCol, off: usize, local: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// Weighted length-tie confidence rule -- the ONE behavioral divergence between
+/// `most_complete` and `longest_value` on the QUALITY-WEIGHTED tie path (they
+/// share the pick, NOT the confidence):
+/// - `most_complete` (`golden.py:134`) -> `min(1.0, 0.7 * w_winner)`.
+/// - `longest_value` (`golden.py:233`) -> a FLAT `0.7`, ignoring the weight.
+///
+/// Do NOT collapse these into one rule -- conflating them ships a silently-wrong
+/// confidence on the weighted tie (the plan's Stage 3 warning). The unweighted
+/// length-tie confidences ALSO differ (0.7 vs 0.5), carried by `tie_conf`.
+#[derive(Clone, Copy)]
+enum WeightedTieConf {
+    /// most_complete: `min(1.0, 0.7 * w_winner)`.
+    ScaledPointSeven,
+    /// longest_value: flat `0.7`.
+    FlatPointSeven,
+}
+
 /// Shared "longest `str(v)` wins" pick for `most_complete` / `longest_value`.
-/// Unique longest -> conf 1.0; a length tie -> first-in-order member at
-/// `tie_conf` (0.7 for most_complete, 0.5 for longest_value -- the ONLY
-/// difference between the two strategies on the unweighted path). Quality-weight
-/// tie-break is Stage 3.
-fn longest_pick(text: &StrCol, non_null: &[(usize, i64)], off: usize, tie_conf: f64) -> (i64, f64) {
+/// Unique longest -> conf 1.0 (weights irrelevant). On a LENGTH tie:
+/// - unweighted (`weights` None) -> first-in-order member at `tie_conf`
+///   (0.7 most_complete, 0.5 longest_value).
+/// - weighted (`weights` Some) -> the highest-`qweight` member among the longest
+///   (first-max on a weight tie, preserving span order, matching Python `max`),
+///   at the confidence dictated by `wtie` (the ONLY most_complete/longest_value
+///   divergence on this path). Missing-index weight falls back to `1.0`
+///   (`x[0] < len(quality_weights)`); with full-length per-column weights this
+///   never fires, but is kept faithful to the reference.
+fn longest_pick(
+    text: &StrCol,
+    non_null: &[(usize, i64)],
+    off: usize,
+    tie_conf: f64,
+    weights: Option<&[f64]>,
+    wtie: WeightedTieConf,
+) -> (i64, f64) {
     let max_len = non_null
         .iter()
         .map(|&(l, _)| char_len(text, off, l))
@@ -91,29 +120,104 @@ fn longest_pick(text: &StrCol, non_null: &[(usize, i64)], off: usize, tie_conf: 
         .map(|&(l, _)| l)
         .collect();
     if longest.len() == 1 {
-        (longest[0] as i64, 1.0)
-    } else {
-        (longest[0] as i64, tie_conf)
+        return (longest[0] as i64, 1.0);
+    }
+    match weights {
+        None => (longest[0] as i64, tie_conf),
+        Some(w) => {
+            let wt = |l: usize| w.get(off + l).copied().unwrap_or(1.0);
+            // First-max on a weight tie (strict `>` from the earliest longest
+            // member) == Python `max(longest, key=...)`, which keeps the FIRST
+            // maximal element -- i.e. span order among equal weights.
+            let mut best = longest[0];
+            for &l in &longest[1..] {
+                if wt(l) > wt(best) {
+                    best = l;
+                }
+            }
+            let conf = match wtie {
+                WeightedTieConf::ScaledPointSeven => (0.7 * wt(best)).min(1.0),
+                WeightedTieConf::FlatPointSeven => 0.7,
+            };
+            (best as i64, conf)
+        }
     }
 }
 
 /// `_most_complete` (`golden.py:125`), sans the short-circuit (handled
-/// universally): longest `str(v)`, length tie -> first-in-order at conf 0.7.
-fn most_complete(text: &StrCol, non_null: &[(usize, i64)], off: usize) -> (i64, f64) {
-    longest_pick(text, non_null, off, 0.7)
+/// universally): longest `str(v)`, length tie -> first-in-order at conf 0.7
+/// (unweighted) or the highest-weight longest at `min(1.0, 0.7*w)` (weighted).
+fn most_complete(
+    text: &StrCol,
+    non_null: &[(usize, i64)],
+    off: usize,
+    weights: Option<&[f64]>,
+) -> (i64, f64) {
+    longest_pick(
+        text,
+        non_null,
+        off,
+        0.7,
+        weights,
+        WeightedTieConf::ScaledPointSeven,
+    )
 }
 
-/// `_longest_value` (`golden.py:209`), unweighted branch: same pick as
-/// `most_complete` but a length tie yields conf 0.5 (not 0.7).
-fn longest_value(text: &StrCol, non_null: &[(usize, i64)], off: usize) -> (i64, f64) {
-    longest_pick(text, non_null, off, 0.5)
+/// `_longest_value` (`golden.py:209`): same pick as `most_complete` but a length
+/// tie yields conf 0.5 unweighted, and a FLAT 0.7 on the weighted tie (NOT
+/// `min(1.0, 0.7*w)` -- the most_complete/longest_value divergence).
+fn longest_value(
+    text: &StrCol,
+    non_null: &[(usize, i64)],
+    off: usize,
+    weights: Option<&[f64]>,
+) -> (i64, f64) {
+    longest_pick(
+        text,
+        non_null,
+        off,
+        0.5,
+        weights,
+        WeightedTieConf::FlatPointSeven,
+    )
 }
 
-/// `_majority_vote` (`golden.py:153`), unweighted branch. Highest code count
-/// wins; a count tie resolves to the code encountered FIRST in span order (the
-/// `Counter.most_common` stable-order tie-break). `conf = count / n_non_null`;
-/// the winner index is the winning code's first occurrence.
-fn majority_vote(non_null: &[(usize, i64)]) -> (i64, f64) {
+/// `_majority_vote` (`golden.py:139`). Unweighted (`weights` None): highest code
+/// COUNT wins; a count tie resolves to the code encountered FIRST in span order
+/// (the `Counter.most_common` stable-order tie-break); `conf = count / n_non_null`.
+/// Weighted (`weights` Some, `golden.py:140`): sum each code's per-member qweight;
+/// highest WEIGHT-SUM wins (first-appearance tie-break); `conf = winner_weight /
+/// total_weight` (0.0 when total is 0). In both, the winner index is the winning
+/// code's first occurrence.
+fn majority_vote(non_null: &[(usize, i64)], off: usize, weights: Option<&[f64]>) -> (i64, f64) {
+    if let Some(w) = weights {
+        let wt = |l: usize| w.get(off + l).copied().unwrap_or(1.0);
+        // (code, first_local_idx, weight_sum) in first-appearance order -- mirrors
+        // the reference's insertion-ordered `value_weights` dict, so both the
+        // winner tie-break (first max) and the per-code summation order match.
+        let mut order: Vec<(i64, usize, f64)> = Vec::new();
+        for &(l, c) in non_null {
+            let wl = wt(l);
+            if let Some(e) = order.iter_mut().find(|e| e.0 == c) {
+                e.2 += wl;
+            } else {
+                order.push((c, l, wl));
+            }
+        }
+        let mut best = 0usize;
+        for i in 1..order.len() {
+            if order[i].2 > order[best].2 {
+                best = i;
+            }
+        }
+        let total: f64 = order.iter().map(|e| e.2).sum();
+        let conf = if total > 0.0 {
+            order[best].2 / total
+        } else {
+            0.0
+        };
+        return (order[best].1 as i64, conf);
+    }
     // (code, first_local_idx, count) in first-appearance order.
     let mut order: Vec<(i64, usize, usize)> = Vec::new();
     for &(l, c) in non_null {
@@ -151,10 +255,24 @@ fn unanimous_or_null(non_null: &[(usize, i64)]) -> (i64, f64) {
     }
 }
 
-/// `_first_non_null` (`golden.py:198`), unweighted branch: first non-null in
-/// span order, conf 0.6.
-fn first_non_null(non_null: &[(usize, i64)]) -> (i64, f64) {
-    (non_null[0].0 as i64, 0.6)
+/// `_first_non_null` (`golden.py:198`). Unweighted (`weights` None): first
+/// non-null in span order. Weighted (`weights` Some, `golden.py:199`): the
+/// highest-`qweight` non-null (first-max on a weight tie == span order, matching
+/// Python `max`). Conf is `0.6` either way.
+fn first_non_null(non_null: &[(usize, i64)], off: usize, weights: Option<&[f64]>) -> (i64, f64) {
+    match weights {
+        None => (non_null[0].0 as i64, 0.6),
+        Some(w) => {
+            let wt = |l: usize| w.get(off + l).copied().unwrap_or(1.0);
+            let mut best = non_null[0].0;
+            for &(l, _) in &non_null[1..] {
+                if wt(l) > wt(best) {
+                    best = l;
+                }
+            }
+            (best as i64, 0.6)
+        }
+    }
 }
 
 /// `_source_priority` (`golden.py:142`). Records the FIRST row per source
@@ -272,14 +390,23 @@ type GoldenFusedResult = (Vec<Vec<i64>>, Vec<Vec<f64>>, Vec<i64>);
 ///   most_recent columns (empty arrays otherwise); the mask is 1 = null-date,
 ///   0 = present.
 ///
-/// Future stages append fields here (qweights, pair scores, group specs,
-/// predicate IR, cluster-override codes) — same one-field-per-stage rule.
+/// Stage 3 field:
+/// - `qweights[col]`: per-column Float64 quality weights (len n_rows), aligned
+///   to the sorted frame — present (all columns, even all-`1.0`) ONLY when the
+///   caller passed a non-None `quality_scores`; an EMPTY array signals the
+///   unweighted branch (byte-identical to Stages 0-2). Mirrors `merge_field`'s
+///   `quality_weights`: only most_complete/majority_vote/first_non_null/
+///   longest_value consult it; source_priority/most_recent/unanimous ignore it.
+///
+/// Future stages append fields here (pair scores, group specs, predicate IR,
+/// cluster-override codes) — same one-field-per-stage rule.
 #[derive(FromPyObject)]
 pub struct GoldenFusedSideChannels {
     source_code: PyArrowType<ArrayData>,
     priority_codes: Vec<Vec<i64>>,
     date_cols: Vec<PyArrowType<ArrayData>>,
     date_null_masks: Vec<PyArrowType<ArrayData>>,
+    qweights: Vec<PyArrowType<ArrayData>>,
 }
 
 #[pyfunction]
@@ -305,6 +432,7 @@ pub fn golden_fused(
         priority_codes,
         date_cols,
         date_null_masks,
+        qweights,
     } = side;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
@@ -410,6 +538,7 @@ pub fn golden_fused(
         ("priority_codes", priority_codes.len()),
         ("date_cols", date_cols.len()),
         ("date_null_masks", date_null_masks.len()),
+        ("qweights", qweights.len()),
     ] {
         if len != n_output_cols {
             return Err(PyValueError::new_err(format!(
@@ -451,6 +580,29 @@ pub fn golden_fused(
         date_null_vals.push(v);
     }
 
+    // qweights: per-column Float64 (len n_rows) when quality_scores was passed,
+    // else an EMPTY array = "unweighted this column". An empty inner Vec below
+    // maps to `weights: None` at the dispatch site, so quality_scores=None stays
+    // byte-identical to the unweighted Stages 0-2.
+    let mut qweight_vals: Vec<Vec<f64>> = Vec::with_capacity(n_output_cols);
+    for (c, p) in qweights.into_iter().enumerate() {
+        let d = p.0;
+        if d.data_type() != &DataType::Float64 {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: qweight col {c} must be float64, got {:?}",
+                d.data_type()
+            )));
+        }
+        let v = Float64Array::from(d).values().to_vec();
+        if !v.is_empty() && v.len() != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: qweight col {c} length {} != row count {n_rows}",
+                v.len()
+            )));
+        }
+        qweight_vals.push(v);
+    }
+
     let cluster_vals: Vec<i64> = cluster_ids.values().to_vec();
 
     Ok(py.detach(|| {
@@ -478,13 +630,20 @@ pub fn golden_fused(
         for &(off, size, _) in &spans {
             for col in 0..n_output_cols {
                 let non_null = span_non_null(&code_vals[col], off, size);
+                // Per-column quality weights: an empty channel (quality_scores
+                // was None) -> None -> the unweighted branch.
+                let wcol: Option<&[f64]> = if qweight_vals[col].is_empty() {
+                    None
+                } else {
+                    Some(&qweight_vals[col])
+                };
                 // Universal decisions first (all-null / all-agree), on codes.
                 let (li, conf) = if let Some(sc) = universal_short_circuit(&non_null) {
                     sc
                 } else {
                     match strategy_ids[col] {
-                        STRAT_MOST_COMPLETE => most_complete(&text[col], &non_null, off),
-                        STRAT_MAJORITY_VOTE => majority_vote(&non_null),
+                        STRAT_MOST_COMPLETE => most_complete(&text[col], &non_null, off, wcol),
+                        STRAT_MAJORITY_VOTE => majority_vote(&non_null, off, wcol),
                         STRAT_SOURCE_PRIORITY => source_priority(
                             &source_vals,
                             &code_vals[col],
@@ -499,8 +658,8 @@ pub fn golden_fused(
                             off,
                             size,
                         ),
-                        STRAT_FIRST_NON_NULL => first_non_null(&non_null),
-                        STRAT_LONGEST_VALUE => longest_value(&text[col], &non_null, off),
+                        STRAT_FIRST_NON_NULL => first_non_null(&non_null, off, wcol),
+                        STRAT_LONGEST_VALUE => longest_value(&text[col], &non_null, off, wcol),
                         STRAT_UNANIMOUS_OR_NULL => unanimous_or_null(&non_null),
                         // confidence_majority (Stage 4) still declines in Python
                         // before reaching here; null sentinel defensively.
@@ -557,28 +716,84 @@ mod tests {
     fn most_complete_unique_longest_conf_1() {
         // ["Bob","Robert","Bob"] -> "Robert" unique longest -> local idx 1, conf 1.0
         let col = strcol(&[Some("Bob"), Some("Robert"), Some("Bob")]);
-        assert_eq!(most_complete(&col, &nn(&[0, 1, 0], 0, 3), 0), (1, 1.0));
+        assert_eq!(
+            most_complete(&col, &nn(&[0, 1, 0], 0, 3), 0, None),
+            (1, 1.0)
+        );
     }
 
     #[test]
     fn most_complete_length_tie_first_in_order_conf_07() {
         // "aa","bb" tie at length 2 -> first, conf 0.7
         let col = strcol(&[Some("aa"), Some("bb")]);
-        assert_eq!(most_complete(&col, &nn(&[0, 1], 0, 2), 0), (0, 0.7));
+        assert_eq!(most_complete(&col, &nn(&[0, 1], 0, 2), 0, None), (0, 0.7));
     }
 
     #[test]
     fn most_complete_respects_span_offset() {
         // span [2,4): "z","zzz" -> local idx 1, conf 1.0
         let col = strcol(&[Some("a"), Some("a"), Some("z"), Some("zzz")]);
-        assert_eq!(most_complete(&col, &nn(&[0, 0, 1, 2], 2, 2), 2), (1, 1.0));
+        assert_eq!(
+            most_complete(&col, &nn(&[0, 0, 1, 2], 2, 2), 2, None),
+            (1, 1.0)
+        );
     }
 
     #[test]
     fn most_complete_skips_null_members() {
         // "a", null, "bbb" -> "bbb" unique longest at local idx 2, conf 1.0.
         let col = strcol(&[Some("a"), None, Some("bbb")]);
-        assert_eq!(most_complete(&col, &nn(&[0, -1, 1], 0, 3), 0), (2, 1.0));
+        assert_eq!(
+            most_complete(&col, &nn(&[0, -1, 1], 0, 3), 0, None),
+            (2, 1.0)
+        );
+    }
+
+    // ── most_complete weighted tie-break (Stage 3) ───────────────────────────
+
+    #[test]
+    fn most_complete_weighted_tie_highest_weight_conf_scaled() {
+        // "aa","bb" length tie; weights [0.5, 0.9] -> pick local 1 (higher weight),
+        // conf = min(1.0, 0.7*0.9) = 0.63.
+        let col = strcol(&[Some("aa"), Some("bb")]);
+        let w = [0.5f64, 0.9];
+        assert_eq!(
+            most_complete(&col, &nn(&[0, 1], 0, 2), 0, Some(&w)),
+            (1, 0.7 * 0.9)
+        );
+    }
+
+    #[test]
+    fn most_complete_weighted_tie_conf_clamped_to_1() {
+        // weight 2.0 -> 0.7*2.0 = 1.4 clamps to 1.0. Tie -> higher-weight local 1.
+        let col = strcol(&[Some("aa"), Some("bb")]);
+        let w = [1.0f64, 2.0];
+        assert_eq!(
+            most_complete(&col, &nn(&[0, 1], 0, 2), 0, Some(&w)),
+            (1, 1.0)
+        );
+    }
+
+    #[test]
+    fn most_complete_weighted_unique_longest_ignores_weight() {
+        // Unique longest wins at conf 1.0 regardless of a lower weight.
+        let col = strcol(&[Some("Bob"), Some("Robert")]);
+        let w = [0.9f64, 0.1];
+        assert_eq!(
+            most_complete(&col, &nn(&[0, 1], 0, 2), 0, Some(&w)),
+            (1, 1.0)
+        );
+    }
+
+    #[test]
+    fn most_complete_weighted_tie_first_max_on_weight_tie() {
+        // Equal weights on a length tie -> first-in-order (local 0) via first-max.
+        let col = strcol(&[Some("aa"), Some("bb")]);
+        let w = [0.8f64, 0.8];
+        assert_eq!(
+            most_complete(&col, &nn(&[0, 1], 0, 2), 0, Some(&w)),
+            (0, 0.7 * 0.8)
+        );
     }
 
     // ── longest_value (tie conf 0.5, else 1.0) ───────────────────────────────
@@ -586,13 +801,25 @@ mod tests {
     #[test]
     fn longest_value_unique_longest_conf_1() {
         let col = strcol(&[Some("z"), Some("zzz")]);
-        assert_eq!(longest_value(&col, &nn(&[0, 1], 0, 2), 0), (1, 1.0));
+        assert_eq!(longest_value(&col, &nn(&[0, 1], 0, 2), 0, None), (1, 1.0));
     }
 
     #[test]
     fn longest_value_length_tie_first_conf_05() {
         let col = strcol(&[Some("aa"), Some("bb")]);
-        assert_eq!(longest_value(&col, &nn(&[0, 1], 0, 2), 0), (0, 0.5));
+        assert_eq!(longest_value(&col, &nn(&[0, 1], 0, 2), 0, None), (0, 0.5));
+    }
+
+    #[test]
+    fn longest_value_weighted_tie_conf_flat_07() {
+        // The DIVERGENCE: longest_value's weighted tie is a FLAT 0.7, NOT
+        // min(1.0, 0.7*w) like most_complete. weights [0.5, 0.9] -> local 1, 0.7.
+        let col = strcol(&[Some("aa"), Some("bb")]);
+        let w = [0.5f64, 0.9];
+        assert_eq!(
+            longest_value(&col, &nn(&[0, 1], 0, 2), 0, Some(&w)),
+            (1, 0.7)
+        );
     }
 
     // ── majority_vote ────────────────────────────────────────────────────────
@@ -600,13 +827,36 @@ mod tests {
     #[test]
     fn majority_vote_clear_winner() {
         // codes [x,x,y] -> x wins 2/3 at first-occurrence idx 0.
-        assert_eq!(majority_vote(&nn(&[5, 5, 9], 0, 3)), (0, 2.0 / 3.0));
+        assert_eq!(
+            majority_vote(&nn(&[5, 5, 9], 0, 3), 0, None),
+            (0, 2.0 / 3.0)
+        );
     }
 
     #[test]
     fn majority_vote_count_tie_first_appearance() {
         // codes [a,b,a,b] tie 2/2 -> first-appearance code `a` at idx 0, conf 0.5.
-        assert_eq!(majority_vote(&nn(&[3, 8, 3, 8], 0, 4)), (0, 0.5));
+        assert_eq!(majority_vote(&nn(&[3, 8, 3, 8], 0, 4), 0, None), (0, 0.5));
+    }
+
+    #[test]
+    fn majority_vote_weighted_beats_count_majority() {
+        // codes [a,a,b]: count-majority = a (2/3). Weights [0.1,0.1,0.9] flip it:
+        // weight-sums a=0.2, b=0.9 -> winner b at local 2, conf 0.9/1.1.
+        let w = [0.1f64, 0.1, 0.9];
+        let (idx, conf) = majority_vote(&nn(&[0, 0, 1], 0, 3), 0, Some(&w));
+        assert_eq!(idx, 2);
+        assert!((conf - 0.9 / 1.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn majority_vote_weighted_tie_first_appearance() {
+        // codes [a,b]; equal weights -> weight-sum tie -> first-appearance a at
+        // local 0, conf 0.5.
+        let w = [0.5f64, 0.5];
+        let (idx, conf) = majority_vote(&nn(&[0, 1], 0, 2), 0, Some(&w));
+        assert_eq!(idx, 0);
+        assert!((conf - 0.5).abs() < 1e-12);
     }
 
     // ── unanimous_or_null ────────────────────────────────────────────────────
@@ -626,7 +876,25 @@ mod tests {
     #[test]
     fn first_non_null_leading_null_picks_first_present() {
         // null, "b", "c" -> first present at local idx 1, conf 0.6.
-        assert_eq!(first_non_null(&nn(&[-1, 1, 2], 0, 3)), (1, 0.6));
+        assert_eq!(first_non_null(&nn(&[-1, 1, 2], 0, 3), 0, None), (1, 0.6));
+    }
+
+    #[test]
+    fn first_non_null_weighted_picks_highest_weight() {
+        // non-null locals 1,2 with weights [_, 0.3, 0.8] -> highest-weight local 2,
+        // conf 0.6 (weights don't change the confidence).
+        let w = [0.0f64, 0.3, 0.8];
+        assert_eq!(
+            first_non_null(&nn(&[-1, 1, 2], 0, 3), 0, Some(&w)),
+            (2, 0.6)
+        );
+    }
+
+    #[test]
+    fn first_non_null_weighted_tie_first_max() {
+        // Equal weights -> first-max keeps the first non-null (local 0).
+        let w = [0.5f64, 0.5];
+        assert_eq!(first_non_null(&nn(&[0, 1], 0, 2), 0, Some(&w)), (0, 0.6));
     }
 
     // ── source_priority ──────────────────────────────────────────────────────

@@ -122,6 +122,10 @@ class _GoldenFusedSideChannels:
     priority_codes: list[list[int]] = field(default_factory=list)
     date_cols: list[Any] = field(default_factory=list)  # per-col pa.Int64Array
     date_null_masks: list[Any] = field(default_factory=list)  # per-col pa.Int64Array
+    # Stage 3: per-column pa.Float64Array quality weights (len n_rows) aligned to
+    # the sorted frame -- populated (every column) ONLY when quality_scores is not
+    # None; an empty array per column signals the kernel's unweighted branch.
+    qweights: list[Any] = field(default_factory=list)
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -349,11 +353,30 @@ def run_golden_fused_arrow(
         date_cols[ci] = pa.array(date_vals, type=pa.int64())
         date_null_masks[ci] = pa.array(mask_vals, type=pa.int64())
 
+    # ── Stage 3: per-column quality weights ──────────────────────────────────
+    # Mirror the reference (resolve.py:124 / golden.py:999): per column, the
+    # weight for a sorted-frame row is quality_scores.get((row_id, col), 1.0).
+    # Present (every column, even all-1.0) ONLY when quality_scores is not None,
+    # so the reference is off the fast path (_polars_native_eligible False) and
+    # runs merge_field's `quality_weights is not None` branch. When None, empty
+    # arrays => the kernel's unweighted branch => byte-identical to Stages 0-2.
+    empty_f64 = pa.array([], type=pa.float64())
+    qweights: list[Any] = [empty_f64 for _ in user_cols]
+    if quality_scores is not None:
+        if "__row_id__" in sdf.columns:
+            row_ids_list = sdf.get_column("__row_id__").to_list()
+        else:
+            row_ids_list = list(range(n))
+        for ci, c in enumerate(user_cols):
+            w = [float(quality_scores.get((rid, c), 1.0)) for rid in row_ids_list]
+            qweights[ci] = pa.array(w, type=pa.float64())
+
     side = _GoldenFusedSideChannels(
         source_code=source_code_arr,
         priority_codes=priority_codes,
         date_cols=date_cols,
         date_null_masks=date_null_masks,
+        qweights=qweights,
     )
     winner_idx, field_conf, cluster_ids_out = fn(
         row_ids_arr,
