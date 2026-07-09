@@ -128,3 +128,23 @@ def test_column_filter_outside():
     # values < 5 or > 50 -> [1, 100], original order preserved
     assert col.filter_outside(5, 50).to_list() == s.filter((s < 5) | (s > 50)).to_list()
     assert col.filter_outside(5, 50).to_list() == [1, 100]
+
+
+def test_column_slice_positional_halves():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    s = pl.Series("x", [10, 20, 30, 40, 50])
+    col = to_frame(pl.DataFrame({"x": s})).column("x")
+    mid = 5 // 2   # 2
+    # first half == s[:mid], second half == s[mid:]
+    assert col.slice(0, mid).to_list() == s.slice(0, mid).to_list() == [10, 20]
+    assert col.slice(mid).to_list() == s.slice(mid).to_list() == [30, 40, 50]
+    # slice(mid) with no length runs to the end (matches s[mid:])
+    assert col.slice(mid).to_list() == s[mid:].to_list()
+
+def test_column_cast_str():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"x": [1, 2, 3]})).column("x")
+    assert col.cast("str", strict=True).to_list() == pl.Series([1, 2, 3]).cast(pl.String).to_list()
+    assert col.cast("str", strict=True).to_list() == ["1", "2", "3"]
