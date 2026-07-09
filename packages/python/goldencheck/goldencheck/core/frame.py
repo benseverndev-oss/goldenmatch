@@ -37,6 +37,10 @@ class Column(Protocol):
     def count_eq(self, value: Any) -> int: ...
     def filter_outside(self, lower: Any, upper: Any) -> Column: ...
     def slice(self, offset: int, length: int | None = None) -> Column: ...
+    def str_replace_all(self, pattern: str, value: str) -> Column: ...
+    def value_counts_desc(self) -> list[tuple[Any, int]]: ...
+    def eq(self, value: Any) -> Column: ...
+    def filter_by(self, mask: Column) -> Column: ...
 
 
 @runtime_checkable
@@ -143,6 +147,19 @@ class PolarsColumn:
 
     def slice(self, offset: int, length: int | None = None) -> PolarsColumn:
         return PolarsColumn(self._s.slice(offset, length))
+
+    def str_replace_all(self, pattern: str, value: str) -> PolarsColumn:
+        return PolarsColumn(self._s.str.replace_all(pattern, value))
+
+    def value_counts_desc(self) -> list[tuple[Any, int]]:
+        vc = self._s.value_counts().sort("count", descending=True)
+        return list(zip(vc[self._s.name].to_list(), vc["count"].to_list()))
+
+    def eq(self, value: Any) -> PolarsColumn:
+        return PolarsColumn(self._s == value)
+
+    def filter_by(self, mask: Column) -> PolarsColumn:
+        return PolarsColumn(self._s.filter(mask._s))
 
 
 class PolarsFrame:

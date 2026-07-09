@@ -148,3 +148,36 @@ def test_column_cast_str():
     col = to_frame(pl.DataFrame({"x": [1, 2, 3]})).column("x")
     assert col.cast("str", strict=True).to_list() == pl.Series([1, 2, 3]).cast(pl.String).to_list()
     assert col.cast("str", strict=True).to_list() == ["1", "2", "3"]
+
+
+def test_column_str_replace_all_chain():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    s = pl.Series("x", ["A1", "bc23", "Z9z"])
+    col = to_frame(pl.DataFrame({"x": s})).column("x")
+    # letters -> L, then digits -> D (letters first, matching _generalize_series)
+    got = col.str_replace_all(r"\p{L}", "L").str_replace_all(r"\d", "D").to_list()
+    assert got == s.str.replace_all(r"\p{L}", "L").str.replace_all(r"\d", "D").to_list()
+    assert got == ["LD", "LLDD", "LDL"]
+
+def test_column_value_counts_desc():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    s = pl.Series("x", ["a", "a", "a", "b", "b", "c"])
+    col = to_frame(pl.DataFrame({"x": s})).column("x")
+    got = col.value_counts_desc()
+    raw = s.value_counts().sort("count", descending=True)
+    assert got == list(zip(raw["x"].to_list(), raw["count"].to_list()))
+    assert got[0] == ("a", 3)   # most frequent first
+    assert all(isinstance(cnt, int) for _, cnt in got)
+
+def test_column_eq_and_filter_by():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    frame = to_frame(pl.DataFrame({"val": ["keep1", "drop", "keep2"], "pat": ["A", "B", "A"]}))
+    val = frame.column("val")
+    pat = frame.column("pat")
+    # eq -> boolean mask; filter_by selects val rows where pat == "A"
+    assert val.filter_by(pat.eq("A")).to_list() == ["keep1", "keep2"]
+    # equivalence to the raw cross-column filter
+    assert val.filter_by(pat.eq("A")).to_list() == val._s.filter(pat._s == "A").to_list()
