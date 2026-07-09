@@ -1385,6 +1385,8 @@ class AutoConfigController:
         # be dead under native-default-on autoconfig. `needs_artifacts` folds the
         # caller-intent hint (`fused_match_allowed`, threaded from _api.py; absent
         # => default-deny) with the config-driven divergence gate.
+        import dataclasses
+
         from goldenmatch.core.fused_routing import (
             config_needs_artifacts,
             maybe_route_fused_match,
@@ -1408,7 +1410,11 @@ class AutoConfigController:
             plan = dataclasses.replace(
                 plan,
                 use_fused_match=True,
-                rule_name=(plan.rule_name or "") + "+fused_match_post_step",
+                rule_name=(
+                    f"{plan.rule_name}+fused_match_post_step"
+                    if plan.rule_name
+                    else "fused_match_post_step"
+                ),
             )
             plan.apply_to(committed_config)
             history.execution_plan = plan

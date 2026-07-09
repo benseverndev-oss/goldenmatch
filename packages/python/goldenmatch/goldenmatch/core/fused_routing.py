@@ -192,8 +192,6 @@ def maybe_route_fused_match(
     ``profile.blocking.estimated_pair_count`` (property) + ``block_sizes_max``
     (field) carry the full-scale blocking signals (extrapolated or measured).
     """
-    import os
-
     if os.environ.get("GOLDENMATCH_MATCH_FUSED", "").lower() in {"0", "false", "off"}:
         return False
     if needs_artifacts:
