@@ -157,7 +157,7 @@ def test_memory_tools_op_error_returns_structured_error(tmp_path, monkeypatch):
 
 
 def test_server_card_description_count():
-    """server.py description string advertises 69 MCP tools."""
+    """server.py description string advertises 75 MCP tools."""
     server_path = (
         Path(__file__).resolve().parent.parent / "goldenmatch" / "mcp" / "server.py"
     )

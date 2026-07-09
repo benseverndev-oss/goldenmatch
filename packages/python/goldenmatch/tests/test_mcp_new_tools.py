@@ -16,7 +16,7 @@ import pytest
 # ── Registration ──────────────────────────────────────────────────────────────
 
 
-def test_total_tool_count_is_69():
+def test_total_tool_count_is_77():
     from goldenmatch.mcp.agent_tools import AGENT_TOOLS
     from goldenmatch.mcp.identity_tools import IDENTITY_TOOLS
     from goldenmatch.mcp.memory_tools import MEMORY_TOOLS
