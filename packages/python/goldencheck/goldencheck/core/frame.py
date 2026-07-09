@@ -36,6 +36,7 @@ class Column(Protocol):
     def count_gt(self, value: Any) -> int: ...
     def count_eq(self, value: Any) -> int: ...
     def filter_outside(self, lower: Any, upper: Any) -> Column: ...
+    def slice(self, offset: int, length: int | None = None) -> Column: ...
 
 
 @runtime_checkable
@@ -65,7 +66,7 @@ def _neutral_dtype(dt: Any) -> str:
     return "other"
 
 
-_CAST_KIND = {"float": "Float64", "int": "Int64"}   # strings only; resolved via getattr in cast()
+_CAST_KIND = {"float": "Float64", "int": "Int64", "str": "String"}   # strings only; resolved via getattr in cast()
 
 
 class PolarsColumn:
@@ -139,6 +140,9 @@ class PolarsColumn:
 
     def filter_outside(self, lower: Any, upper: Any) -> PolarsColumn:
         return PolarsColumn(self._s.filter((self._s < lower) | (self._s > upper)))
+
+    def slice(self, offset: int, length: int | None = None) -> PolarsColumn:
+        return PolarsColumn(self._s.slice(offset, length))
 
 
 class PolarsFrame:
