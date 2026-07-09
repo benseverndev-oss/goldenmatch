@@ -132,8 +132,9 @@ sibling builds the structured collaborators:
 
 ```python
 def resolve_structured(backend: str, model: str
-                       ) -> tuple[Classifier, TemplateExtractor]:
+                       ) -> tuple[Classifier, TemplateExtractor, FallbackExtractor]:
     # backend != "vlm" -> ValueError, same as resolve_extractor
+    # all three share one resolved transport (see "Fallback seam" below)
 ```
 
 `ingest_documents` calls `resolve_extractor` for the flat path and
