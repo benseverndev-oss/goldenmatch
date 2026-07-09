@@ -42,6 +42,26 @@ const GROUP_SOURCE_PRIORITY: u8 = 1;
 const GROUP_MOST_RECENT: u8 = 2;
 const GROUP_ANCHOR: u8 = 3;
 
+// Predicate-IR opcodes (Stage 6) — shared with Python `golden_fused_predicate`.
+// EQ/NE/IN/NOT_IN are comparison leaves (read a referenced column's resolved
+// winner code); AND/OR pop `arity` operands; NOT pops 1; MISS pushes the miss
+// state. Evaluation is THREE-VALUED (True/False/Miss) to match
+// `conditions.eval_predicate`: a MISS propagates through NOT and is a False arm
+// inside AND/OR and at the top level.
+const OP_EQ: u8 = 0;
+const OP_NE: u8 = 1;
+const OP_IN: u8 = 2;
+const OP_NOT_IN: u8 = 3;
+const OP_AND: u8 = 4;
+const OP_OR: u8 = 5;
+const OP_NOT: u8 = 6;
+const OP_MISS: u8 = 7;
+
+// Tri-state predicate values.
+const TRI_FALSE: u8 = 0;
+const TRI_TRUE: u8 = 1;
+const TRI_MISS: u8 = 2;
+
 /// The non-null members of one cluster span as `(local_idx, code)`, in span
 /// order. `code == -1` (the Python-side factorization null sentinel) is a null.
 fn span_non_null(code: &[i64], off: usize, size: usize) -> Vec<(usize, i64)> {
@@ -585,6 +605,127 @@ fn resolve_group(
     (per_col_idx, conf)
 }
 
+/// One RPN predicate instruction, extracted from a Python
+/// `golden_fused_predicate.PredInstr`. `op` is an `OP_*` code; `col_index` is the
+/// referenced output-column index (comparison ops); `codes` holds the literal
+/// code(s) — one for EQ/NE, the list for IN/NOT_IN, resolved into the referenced
+/// column's code space on the Python side (null literal -> -1, absent -> -2);
+/// `arity` is the operand count popped by AND/OR (NOT always pops 1).
+#[derive(FromPyObject)]
+pub struct PredInstr {
+    op: u8,
+    col_index: i64,
+    codes: Vec<i64>,
+    arity: i64,
+}
+
+/// One conditional clause: a lowered `when:` predicate (RPN IR) + the scalar
+/// strategy id to apply when it holds. Extracted from a Python
+/// `_GoldenFusedClause`.
+#[derive(FromPyObject)]
+pub struct ConditionalClause {
+    ir: Vec<PredInstr>,
+    strategy: u8,
+}
+
+/// A conditional (list-form) field_rule for one output column: the ordered
+/// non-default clauses + the when-less default strategy id. Extracted from a
+/// Python `_GoldenFusedConditional`. The kernel evaluates each clause's IR (in
+/// order) against the already-resolved winner codes and applies the first
+/// holding clause's strategy, else `default_strategy` — mirroring
+/// `conditions.select_conditional_strategy`.
+#[derive(FromPyObject)]
+pub struct ConditionalSpec {
+    col_index: i64,
+    clauses: Vec<ConditionalClause>,
+    default_strategy: u8,
+}
+
+/// Evaluate a lowered predicate (RPN) against `resolved_code` (the resolved
+/// winner code per output column for the CURRENT cluster). Returns a tri-state
+/// (`TRI_*`). Byte-parity target: `conditions.eval_predicate`.
+///
+/// - EQ/NE/IN/NOT_IN compare the referenced column's resolved code to the literal
+///   code(s); these never MISS (an unknown name lowers to an explicit `OP_MISS`
+///   leaf on the Python side, and `==`/`in` don't raise on null/mismatched types).
+/// - NOT propagates a MISS (`not miss == miss`); AND/OR treat a MISS operand as a
+///   False arm (`all`/`any` over the popped operands, MISS counting False).
+/// - The final stack value is the predicate's tri-state; the caller treats
+///   anything but `TRI_TRUE` as "clause does not hold" (matching the top-level
+///   `except _Miss: return False` + `bool(...)`).
+fn eval_ir(ir: &[PredInstr], resolved_code: &[i64]) -> u8 {
+    let mut stack: Vec<u8> = Vec::with_capacity(ir.len());
+    for ins in ir {
+        match ins.op {
+            OP_EQ => {
+                let rc = resolved_code[ins.col_index as usize];
+                stack.push(if rc == ins.codes[0] {
+                    TRI_TRUE
+                } else {
+                    TRI_FALSE
+                });
+            }
+            OP_NE => {
+                let rc = resolved_code[ins.col_index as usize];
+                stack.push(if rc != ins.codes[0] {
+                    TRI_TRUE
+                } else {
+                    TRI_FALSE
+                });
+            }
+            OP_IN => {
+                let rc = resolved_code[ins.col_index as usize];
+                stack.push(if ins.codes.contains(&rc) {
+                    TRI_TRUE
+                } else {
+                    TRI_FALSE
+                });
+            }
+            OP_NOT_IN => {
+                let rc = resolved_code[ins.col_index as usize];
+                stack.push(if ins.codes.contains(&rc) {
+                    TRI_FALSE
+                } else {
+                    TRI_TRUE
+                });
+            }
+            OP_MISS => stack.push(TRI_MISS),
+            OP_NOT => {
+                let x = stack.pop().unwrap_or(TRI_MISS);
+                stack.push(match x {
+                    TRI_TRUE => TRI_FALSE,
+                    TRI_FALSE => TRI_TRUE,
+                    _ => TRI_MISS, // not miss == miss (propagates)
+                });
+            }
+            OP_AND => {
+                let n = ins.arity.max(0) as usize;
+                let mut all_true = true;
+                for _ in 0..n {
+                    // A MISS operand counts as a False arm (eval_predicate's
+                    // per-arm `except _Miss: results.append(False)`).
+                    if stack.pop().unwrap_or(TRI_MISS) != TRI_TRUE {
+                        all_true = false;
+                    }
+                }
+                stack.push(if all_true { TRI_TRUE } else { TRI_FALSE });
+            }
+            OP_OR => {
+                let n = ins.arity.max(0) as usize;
+                let mut any_true = false;
+                for _ in 0..n {
+                    if stack.pop().unwrap_or(TRI_MISS) == TRI_TRUE {
+                        any_true = true;
+                    }
+                }
+                stack.push(if any_true { TRI_TRUE } else { TRI_FALSE });
+            }
+            _ => stack.push(TRI_MISS),
+        }
+    }
+    stack.pop().unwrap_or(TRI_MISS)
+}
+
 /// Kernel result: `(winner_idx, field_conf, group_conf, cluster_ids_out)`.
 /// `winner_idx[col][k]` is the GLOBAL pre-sorted-frame row index whose value
 /// survives for column `col` in cluster `k` (`-1` = null); `field_conf[col][k]`
@@ -646,6 +787,15 @@ pub struct GoldenFusedSideChannels {
     qweights: Vec<PyArrowType<ArrayData>>,
     pair_edges: Vec<(i64, i64, i64, f64)>,
     group_specs: Vec<GroupSpec>,
+    // Stage 6: scalar-column resolution order (non-group output-column indices,
+    // in the topological `build_resolution_order` order) + the conditional
+    // (list-form field_rule) specs. `col_order` covers EVERY non-group column
+    // exactly once; conditional columns among them are resolved via
+    // `conditionals` (IR eval -> strategy), the rest via `strategy_ids`. Empty
+    // `conditionals` => no conditional columns (Stages 0-5 behavior, unaffected
+    // by `col_order`, since scalar columns are mutually independent then).
+    col_order: Vec<i64>,
+    conditionals: Vec<ConditionalSpec>,
 }
 
 /// One field_group's kernel spec, extracted from a Python `_GoldenFusedGroupSpec`
@@ -691,6 +841,8 @@ pub fn golden_fused(
         qweights,
         pair_edges,
         group_specs,
+        col_order,
+        conditionals,
     } = side;
     // `row_ids` is validated (int64, right length) to enforce the caller's
     // (cluster_id, row_id) pre-sort contract, but Stage 0 does NOT read its
@@ -904,6 +1056,46 @@ pub fn golden_fused(
         qweight_vals.push(v);
     }
 
+    // ── Stage 6: conditional (list-form) field_rules + scalar resolution order.
+    // `cond_index[col]` = the index of this column's `ConditionalSpec` (resolved
+    // via IR eval, not the static `strategy_ids[col]`) or None. `col_order` is
+    // the resolution order over non-group scalar columns; validate every index +
+    // (defensively) each predicate's referenced column index. The kernel resolves
+    // scalar columns in `col_order`, so a conditional's referenced columns (which
+    // Python topologically sorts before it) are already resolved.
+    let mut cond_index: Vec<Option<usize>> = vec![None; n_output_cols];
+    for (ci, cs) in conditionals.iter().enumerate() {
+        if cs.col_index < 0 || cs.col_index as usize >= n_output_cols {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: conditional col index {} out of range",
+                cs.col_index
+            )));
+        }
+        for clause in &cs.clauses {
+            for ins in &clause.ir {
+                // Comparison ops carry a referenced column index that the IR
+                // reads from `resolved_code`; validate it up front so eval can't
+                // panic on an out-of-range index.
+                if matches!(ins.op, OP_EQ | OP_NE | OP_IN | OP_NOT_IN)
+                    && (ins.col_index < 0 || ins.col_index as usize >= n_output_cols)
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "golden_fused: predicate col index {} out of range",
+                        ins.col_index
+                    )));
+                }
+            }
+        }
+        cond_index[cs.col_index as usize] = Some(ci);
+    }
+    for &c in &col_order {
+        if c < 0 || c as usize >= n_output_cols {
+            return Err(PyValueError::new_err(format!(
+                "golden_fused: col_order index {c} out of range"
+            )));
+        }
+    }
+
     let cluster_vals: Vec<i64> = cluster_ids.values().to_vec();
 
     Ok(py.detach(|| {
@@ -947,10 +1139,66 @@ pub fn golden_fused(
         }
         let no_edges: Vec<(usize, usize, f64)> = Vec::new();
 
+        // A resolved-code sentinel meaning "not yet resolved this cluster". No
+        // referenced column can carry it once resolution order is honored (every
+        // present column resolves before a conditional referencing it); it's a
+        // defensive marker distinct from the null (-1) / absent (-2) literal
+        // codes.
+        const RC_UNRESOLVED: i64 = i64::MIN;
+
         for &(off, size, cid) in &spans {
-            // Resolve field_groups first: pin each group's lock-step winner index
-            // per group column and record the group's single confidence. A group
-            // column's winner index overrides the per-column scalar dispatch below.
+            // Per-column resolved winner CODE for THIS cluster (for conditional IR
+            // eval). Set as each column resolves; conditionals read only
+            // already-resolved columns (groups + non-conditional scalars first).
+            let mut resolved_code = vec![RC_UNRESOLVED; n_output_cols];
+
+            let edges = edges_by_cluster.get(&cid).unwrap_or(&no_edges);
+
+            // Resolve a scalar column under an explicit strategy id -> (local idx,
+            // conf). Shared by the non-conditional pass and the conditional pass
+            // (which supplies the IR-selected strategy). Universal short-circuit
+            // first (all-null / all-agree), then per-strategy dispatch.
+            let resolve_scalar = |col: usize, strat: u8, non_null: &[(usize, i64)]| -> (i64, f64) {
+                let wcol: Option<&[f64]> = if qweight_vals[col].is_empty() {
+                    None
+                } else {
+                    Some(&qweight_vals[col])
+                };
+                if let Some(sc) = universal_short_circuit(non_null) {
+                    return sc;
+                }
+                match strat {
+                    STRAT_MOST_COMPLETE => most_complete(&text[col], non_null, off, wcol),
+                    STRAT_MAJORITY_VOTE => majority_vote(non_null, off, wcol),
+                    STRAT_SOURCE_PRIORITY => source_priority(
+                        &source_vals,
+                        &code_vals[col],
+                        &priority_codes[col],
+                        off,
+                        size,
+                    ),
+                    STRAT_MOST_RECENT => most_recent(
+                        &code_vals[col],
+                        &date_vals[col],
+                        &date_null_vals[col],
+                        off,
+                        size,
+                    ),
+                    STRAT_FIRST_NON_NULL => first_non_null(non_null, off, wcol),
+                    STRAT_LONGEST_VALUE => longest_value(&text[col], non_null, off, wcol),
+                    STRAT_UNANIMOUS_OR_NULL => unanimous_or_null(non_null),
+                    STRAT_CONFIDENCE_MAJORITY => {
+                        confidence_majority(&code_vals[col], non_null, edges, off, wcol)
+                    }
+                    // Unknown strategy id: Python declines before reaching here;
+                    // null sentinel defensively.
+                    _ => (-1i64, 0.0),
+                }
+            };
+
+            // 1. field_groups first: pin each group's lock-step winner index per
+            // group column and record the group's single confidence. A group
+            // column's winner index overrides the per-column scalar dispatch.
             let mut group_col_idx: Vec<Option<i64>> = vec![None; n_output_cols];
             for (g, prep) in group_preps.iter().enumerate() {
                 let (per_col, conf) = resolve_group(prep, off, size, &code_vals, &source_vals);
@@ -959,63 +1207,59 @@ pub fn golden_fused(
                 }
                 group_conf[g].push(conf);
             }
-
             for col in 0..n_output_cols {
-                // Group-owned column: winner index came from the group pass; the
-                // group's confidence is in group_conf, so push a placeholder here
-                // (Python excludes group columns from the scalar-confidence sum).
                 if let Some(gi) = group_col_idx[col] {
                     winner_idx[col].push(gi);
                     field_conf[col].push(0.0);
+                    // Group winner index is a valid global position (never -1);
+                    // its cell may be null -> code -1, which the IR compares fine.
+                    resolved_code[col] = if gi < 0 {
+                        -1
+                    } else {
+                        code_vals[col][gi as usize]
+                    };
+                }
+            }
+
+            // 2. Scalar (non-group) columns in resolution order (`col_order`,
+            // topologically sorted by Python so a conditional's referenced columns
+            // resolve first). A conditional column picks its strategy via IR eval
+            // over `resolved_code`; a plain column uses its static `strategy_ids`.
+            // Column order is immaterial for NON-conditional columns (mutually
+            // independent), so Stages 0-5 stay byte-identical.
+            for &col_i in &col_order {
+                let col = col_i as usize;
+                // col_order excludes group columns; skip defensively if a group
+                // owns it (it was already pushed in pass 1).
+                if group_col_idx[col].is_some() {
                     continue;
                 }
-                let non_null = span_non_null(&code_vals[col], off, size);
-                // Per-column quality weights: an empty channel (quality_scores
-                // was None) -> None -> the unweighted branch.
-                let wcol: Option<&[f64]> = if qweight_vals[col].is_empty() {
-                    None
-                } else {
-                    Some(&qweight_vals[col])
-                };
-                // Universal decisions first (all-null / all-agree), on codes.
-                let (li, conf) = if let Some(sc) = universal_short_circuit(&non_null) {
-                    sc
-                } else {
-                    match strategy_ids[col] {
-                        STRAT_MOST_COMPLETE => most_complete(&text[col], &non_null, off, wcol),
-                        STRAT_MAJORITY_VOTE => majority_vote(&non_null, off, wcol),
-                        STRAT_SOURCE_PRIORITY => source_priority(
-                            &source_vals,
-                            &code_vals[col],
-                            &priority_codes[col],
-                            off,
-                            size,
-                        ),
-                        STRAT_MOST_RECENT => most_recent(
-                            &code_vals[col],
-                            &date_vals[col],
-                            &date_null_vals[col],
-                            off,
-                            size,
-                        ),
-                        STRAT_FIRST_NON_NULL => first_non_null(&non_null, off, wcol),
-                        STRAT_LONGEST_VALUE => longest_value(&text[col], &non_null, off, wcol),
-                        STRAT_UNANIMOUS_OR_NULL => unanimous_or_null(&non_null),
-                        STRAT_CONFIDENCE_MAJORITY => {
-                            // Per-cluster edges (shared across this cluster's
-                            // confidence_majority columns); absent -> majority
-                            // fallback inside confidence_majority.
-                            let edges = edges_by_cluster.get(&cid).unwrap_or(&no_edges);
-                            confidence_majority(&code_vals[col], &non_null, edges, off, wcol)
+                let strat = match cond_index[col] {
+                    Some(ci) => {
+                        // First clause whose IR holds picks the strategy, else the
+                        // when-less default (select_conditional_strategy).
+                        let cs = &conditionals[ci];
+                        let mut s = cs.default_strategy;
+                        for clause in &cs.clauses {
+                            if eval_ir(&clause.ir, &resolved_code) == TRI_TRUE {
+                                s = clause.strategy;
+                                break;
+                            }
                         }
-                        // Unknown strategy id: Python declines before reaching
-                        // here; null sentinel defensively.
-                        _ => (-1i64, 0.0),
+                        s
                     }
+                    None => strategy_ids[col],
                 };
+                let non_null = span_non_null(&code_vals[col], off, size);
+                let (li, conf) = resolve_scalar(col, strat, &non_null);
                 let global = if li < 0 { -1 } else { off as i64 + li };
                 winner_idx[col].push(global);
                 field_conf[col].push(conf);
+                resolved_code[col] = if global < 0 {
+                    -1
+                } else {
+                    code_vals[col][global as usize]
+                };
             }
         }
         (winner_idx, field_conf, group_conf, cluster_out)

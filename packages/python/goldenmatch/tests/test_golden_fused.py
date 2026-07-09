@@ -1073,3 +1073,169 @@ def test_group_mixed_with_scalar_field_rule_denominator():
     assert got[1]["name"] == "Robert"
     assert got[1]["street"] == "S0" and got[1]["city"] == "C0"
     assert abs(got[1]["__golden_confidence__"] - 0.85) < 1e-12
+
+
+# ─── conditional field_rules / predicate IR (Task 6.2) ───────────────────────
+
+
+def test_gate_accepts_lowerable_conditional():
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="dt", when='country == "US"'),
+                GoldenFieldRule(strategy="most_complete"),
+            ]
+        },
+    )
+    assert golden_fused_ready(rules) is True
+
+
+def test_gate_declines_unlowerable_ordering_predicate():
+    # an ordering comparator (<) does not lower to the equality/membership IR ->
+    # the gate declines the whole config to the classic path.
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_complete", when="score < 5"),
+                GoldenFieldRule(strategy="majority_vote"),
+            ]
+        },
+    )
+    assert golden_fused_ready(rules) is False
+
+
+def test_run_declines_unlowerable_predicate_returns_none():
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "phone": ["111", "222"],
+            "score": [3, 7],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_complete", when="score < 5"),
+                GoldenFieldRule(strategy="majority_vote"),
+            ]
+        },
+    )
+    assert run_golden_fused_arrow(df, rules) is None
+
+
+def test_conditional_true_and_false_branches_match_reference():
+    # phone: `when country == "US"` -> most_recent(dt), else default most_complete.
+    # cluster 1 (US): most_recent picks the latest-dt row (dt=2 -> "222"); a plain
+    # most_complete would tie the two len-3 phones and pick the first ("111"), so
+    # "222" proves the conditional fired. cluster 2 (CA): default most_complete
+    # picks the unique-longest "55555".
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "country": ["US", "US", "CA", "CA"],
+            "dt": [1, 2, 3, 4],
+            "phone": ["111", "222", "5", "55555"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="dt", when='country == "US"'),
+                GoldenFieldRule(strategy="most_complete"),
+            ]
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["country", "dt", "phone"])
+    assert got[1]["phone"] == "222"  # most_recent fired
+    assert got[2]["phone"] == "55555"  # default most_complete fired
+
+
+def test_conditional_null_referenced_value_falls_to_default():
+    # cluster 1's country is all-null -> the winner value is None, so
+    # `country == "US"` is False (matches eval_predicate: None == "US" is False,
+    # not a raise) -> default most_complete on phone -> tie -> first "111".
+    # A most_recent (dt=2) would have picked "222", so "111" proves the default.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "country": [None, None, "US", "US"],
+            "dt": [1, 2, 4, 3],
+            "phone": ["111", "222", "7", "7777"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="dt", when='country == "US"'),
+                GoldenFieldRule(strategy="most_complete"),
+            ]
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["country", "dt", "phone"])
+    assert got[1]["phone"] == "111"  # default fired (null referenced value)
+    # cluster 2: country US -> most_recent, latest dt=4 is row 10 ("7") not the
+    # longer "7777" most_complete would choose -> proves the conditional fired.
+    assert got[2]["phone"] == "7"
+
+
+def test_conditional_resolution_order_reorders_columns():
+    # The conditional column `phone` (references `country`) is declared BEFORE
+    # `country` in column order. build_resolution_order must reorder so `country`
+    # resolves first; if the kernel used column order, phone would read an
+    # unresolved country and mis-select. Same expected output as the true/false
+    # test above -> parity proves col_order is honored.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11],
+            "__cluster_id__": [1, 1, 2, 2],
+            "phone": ["111", "222", "5", "55555"],  # conditional col FIRST
+            "country": ["US", "US", "CA", "CA"],  # referenced col AFTER
+            "dt": [1, 2, 3, 4],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "phone": [
+                GoldenFieldRule(strategy="most_recent", date_column="dt", when='country == "US"'),
+                GoldenFieldRule(strategy="most_complete"),
+            ]
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["country", "dt", "phone"])
+    assert got[1]["phone"] == "222"
+    assert got[2]["phone"] == "55555"
+
+
+def test_conditional_membership_in_list_matches_reference():
+    # `state in ["NY", "NJ"]` -> majority_vote, else default first_non_null.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 2, 2, 2],
+            "state": ["NY", "NY", "NY", "CA", "CA", "CA"],
+            # cluster 1 (NY in list): majority_vote -> "a" (2/3)
+            # cluster 2 (CA not in list): first_non_null -> "p"
+            "v": ["a", "a", "b", "p", "q", "r"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={
+            "v": [
+                GoldenFieldRule(strategy="majority_vote", when='state in ["NY", "NJ"]'),
+                GoldenFieldRule(strategy="first_non_null"),
+            ]
+        },
+    )
+    got = _assert_value_conf_parity(df, rules, ["state", "v"])
+    assert got[1]["v"] == "a"  # majority_vote fired
+    assert got[2]["v"] == "p"  # first_non_null default fired

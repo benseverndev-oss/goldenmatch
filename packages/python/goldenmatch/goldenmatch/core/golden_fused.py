@@ -157,6 +157,32 @@ class _GoldenFusedGroupSpec:
 
 
 @dataclass
+class _GoldenFusedClause:
+    """One conditional clause (Stage 6): a lowered ``when:`` predicate (RPN IR, a
+    list of ``golden_fused_predicate.PredInstr``) + the scalar strategy id to
+    apply when it holds. A Rust ``#[derive(FromPyObject)]`` struct reads ``ir`` /
+    ``strategy``."""
+
+    ir: list  # list[golden_fused_predicate.PredInstr]
+    strategy: int
+
+
+@dataclass
+class _GoldenFusedConditional:
+    """One conditional (list-form) field_rule (Stage 6): the ordered non-default
+    clauses + the when-less default strategy id, for the output column
+    ``col_index``. The kernel evaluates each clause's IR against the resolved
+    winner codes (in resolution order) and applies the first holding clause's
+    strategy, else ``default_strategy`` -- mirroring
+    ``conditions.select_conditional_strategy``. A Rust ``#[derive(FromPyObject)]``
+    struct reads these attrs."""
+
+    col_index: int
+    clauses: list  # list[_GoldenFusedClause]
+    default_strategy: int
+
+
+@dataclass
 class _GoldenFusedSideChannels:
     """Per-column side channels handed to the ``golden_fused`` kernel as ONE
     carrier arg (a Rust ``#[derive(FromPyObject)]`` struct reads these attrs).
@@ -191,6 +217,14 @@ class _GoldenFusedSideChannels:
     # confidence (folded into the cluster mean ONCE), plus the winner index for
     # every group column. Empty when no field_groups are configured.
     group_specs: list[_GoldenFusedGroupSpec] = field(default_factory=list)
+    # Stage 6: scalar-column resolution order (non-group output-column indices, in
+    # build_resolution_order topological order -- covers EVERY non-group column
+    # exactly once) + the conditional (list-form field_rule) specs (in resolution
+    # order, so a conditional's referenced columns resolve first). Empty
+    # `conditionals` => no list-form field_rules (Stages 0-5 behavior; `col_order`
+    # order is immaterial for the mutually-independent non-conditional columns).
+    col_order: list[int] = field(default_factory=list)
+    conditionals: list[_GoldenFusedConditional] = field(default_factory=list)
 
 
 def _rule_covered(rule: GoldenFieldRule) -> bool:
@@ -368,29 +402,47 @@ def run_golden_fused_arrow(
         group_col_lists.append(gcols)
         grouped_col_idx.update(gcols)
 
-    # Per-column effective strategy + rule (default or field_rule). Group-owned
-    # columns get a benign most_complete placeholder: their winner index +
-    # confidence come from the group pass, so the kernel never runs the scalar
-    # dispatch for them (and the placeholder never triggers scalar source/date
-    # channel building below). Stage 6/7 extend this with conditionals / overrides.
-    _group_placeholder = GoldenFieldRule(strategy="most_complete")
-    strategy_ids: list[int] = []
-    effective_rules: list[GoldenFieldRule] = []
+    # Per-column effective strategy(-ies). Group-owned columns get a benign
+    # most_complete placeholder (their winner + confidence come from the group
+    # pass). A plain column has one rule; a CONDITIONAL (list-form) field_rule has
+    # a list of clauses -- `conditional_cols[ci]` records the clause list and the
+    # kernel picks a clause via IR eval (Stage 6). `candidate_rules[ci]` is every
+    # rule whose extra channels (source/date) must be built for that column (one
+    # for a plain column; all clauses for a conditional), so the right channel is
+    # present whichever clause fires. Stage 7 extends this with cluster_overrides.
     default_rule = GoldenFieldRule(strategy=rules.default_strategy)
+    strategy_ids: list[int] = []
+    candidate_rules: list[list[GoldenFieldRule]] = []
+    conditional_cols: dict[int, list[GoldenFieldRule]] = {}
     for ci, c in enumerate(user_cols):
         if ci in grouped_col_idx:
             strategy_ids.append(_GOLDEN_STRATEGY_IDS["most_complete"])
-            effective_rules.append(_group_placeholder)
+            candidate_rules.append([])  # resolved by the group pass; no scalar channels
             continue
-        rule = rules.field_rules.get(c)
-        rule = rule if isinstance(rule, GoldenFieldRule) else default_rule
+        entry = rules.field_rules.get(c)
+        if isinstance(entry, list):
+            # Conditional field_rule: every clause's strategy must be a covered
+            # kernel scalar branch. The when-less default's strategy is the
+            # placeholder strategy_id (the kernel ignores it once cond_index is set,
+            # but keep it sane).
+            for clause in entry:
+                if clause.strategy not in _KERNEL_COVERED_STRATEGIES:
+                    return None
+            default_clause = next((r for r in entry if r.when is None), None)
+            if default_clause is None:
+                return None  # schema guarantees exactly one; decline defensively
+            conditional_cols[ci] = list(entry)
+            strategy_ids.append(_GOLDEN_STRATEGY_IDS[default_clause.strategy])
+            candidate_rules.append(list(entry))
+            continue
+        rule = entry if isinstance(entry, GoldenFieldRule) else default_rule
         strat = rule.strategy
         # Kernel branches covered today: scalar strategies + source_priority /
         # most_recent (Stage 2) + confidence_majority (Stage 4).
         if strat not in _KERNEL_COVERED_STRATEGIES:
             return None  # temporary decline until the strategy's stage lands
         strategy_ids.append(_GOLDEN_STRATEGY_IDS[strat])
-        effective_rules.append(rule)
+        candidate_rules.append([rule])
 
     import pyarrow as pa
 
@@ -410,10 +462,15 @@ def run_golden_fused_arrow(
     # text only matters for most_complete/longest_value but is cheap to carry.
     text_cols: list[Any] = []
     code_cols: list[Any] = []
+    # Per-column raw value -> code map (Stage 6): reused by the conditional
+    # predicate lowering's `code_of` so a `when:` literal resolves to the SAME
+    # code space as the referenced column's factorized winner value.
+    col_maps: dict[str, dict] = {}
     for c in user_cols:
         values = sdf.get_column(c).to_list()
         text = [None if v is None else str(v) for v in values]
-        codes = _factorize_codes(values)
+        codes, vmap = _factorize_with_map(values)
+        col_maps[c] = vmap
         text_cols.append(pa.array(text, type=pa.string()))
         code_cols.append(pa.array(codes, type=pa.int64()))
 
@@ -428,30 +485,42 @@ def run_golden_fused_arrow(
     priority_codes: list[list[int]] = [[] for _ in user_cols]
     source_code_arr: Any = empty_i64
     src_map: dict = {}
-    need_source = any(r.strategy == "source_priority" for r in effective_rules) or any(
-        g.strategy == "source_priority" for g in rules.field_groups
-    )
+    need_source = any(
+        r.strategy == "source_priority" for rlist in candidate_rules for r in rlist
+    ) or any(g.strategy == "source_priority" for g in rules.field_groups)
     if need_source:
         if "__source__" not in sdf.columns:
             return None
         src_values = sdf.get_column("__source__").to_list()
         src_codes, src_map = _factorize_with_map(src_values)
         source_code_arr = pa.array(src_codes, type=pa.int64())
-        for ci, rule in enumerate(effective_rules):
-            if rule.strategy == "source_priority":
-                # A priority source absent from the column -> negative sentinel
-                # the kernel skips (never collides with a >=0 real source code
-                # nor the -1 null-source group, both excluded by the < 0 guard).
-                priority_codes[ci] = [src_map.get(s, -1) for s in (rule.source_priority or [])]
+        for ci, rlist in enumerate(candidate_rules):
+            sp_lists = [r.source_priority or [] for r in rlist if r.strategy == "source_priority"]
+            if not sp_lists:
+                continue
+            # A conditional column may hold >1 source_priority clause but only ONE
+            # per-column priority channel exists -- decline on conflicting lists.
+            if any(sp != sp_lists[0] for sp in sp_lists[1:]):
+                return None
+            # A priority source absent from the column -> negative sentinel the
+            # kernel skips (never collides with a >=0 real source code nor the -1
+            # null-source group, both excluded by the < 0 guard).
+            priority_codes[ci] = [src_map.get(s, -1) for s in sp_lists[0]]
 
     # most_recent: per-column date i64 (order-preserving physical) + null mask
-    # (1 = null-date). Non-most_recent columns get empty arrays.
+    # (1 = null-date). Non-most_recent columns get empty arrays. A conditional
+    # column may hold >1 most_recent clause but only ONE per-column date channel
+    # exists -- decline on conflicting date columns.
     date_cols: list[Any] = [empty_i64 for _ in user_cols]
     date_null_masks: list[Any] = [empty_i64 for _ in user_cols]
-    for ci, rule in enumerate(effective_rules):
-        if rule.strategy != "most_recent":
+    for ci, rlist in enumerate(candidate_rules):
+        mr = [r for r in rlist if r.strategy == "most_recent"]
+        if not mr:
             continue
-        built = _build_date_arrays(sdf, rule.date_column)
+        date_columns = {r.date_column for r in mr}
+        if len(date_columns) != 1:
+            return None
+        built = _build_date_arrays(sdf, mr[0].date_column)
         if built is None:
             # Absent (merge_field would raise) or non-order-preserving physical
             # repr (string/float dates): decline so the caller falls back.
@@ -489,7 +558,7 @@ def run_golden_fused_arrow(
     if (
         cluster_pair_scores
         and "__row_id__" in sdf.columns
-        and any(r.strategy == "confidence_majority" for r in effective_rules)
+        and any(r.strategy == "confidence_majority" for rlist in candidate_rules for r in rlist)
     ):
         cid_list = sdf.get_column("__cluster_id__").to_list()
         rid_list = sdf.get_column("__row_id__").to_list()
@@ -552,6 +621,65 @@ def run_golden_fused_arrow(
             )
         )
 
+    # ── Stage 6: scalar resolution order + conditional (list-form) specs.
+    # `build_resolution_order` topologically sorts units so a conditional `when:`
+    # referencing another field/group resolves after it. `col_order` = the
+    # non-group scalar columns in that order (covers every non-group user column
+    # exactly once; group columns are resolved by the group pass). `conditionals`
+    # = one spec per conditional column, in resolution order, with each clause's
+    # `when:` lowered into the referenced columns' code space.
+    from goldenmatch.core.golden_fused_predicate import _ABSENT_CODE, lower_predicate
+    from goldenmatch.core.survivorship.conditions import (
+        ResolutionError,
+        build_resolution_order,
+    )
+
+    def _code_of(name: str, lit: Any) -> int:
+        # None literal -> the null code (-1) so `x == None` reproduces the
+        # reference's `value == None`; a present value -> its factorization code;
+        # an absent literal -> the reserved absent sentinel (distinct from -1).
+        if lit is None:
+            return -1
+        return col_maps.get(name, {}).get(lit, _ABSENT_CODE)
+
+    try:
+        order = build_resolution_order(rules.field_rules, rules.field_groups, user_cols)
+    except ResolutionError:
+        return None  # circular when: dependency -> decline to the classic path
+
+    col_order = [col_index[u] for u in order if not u.startswith("group:") and u in col_index]
+
+    conditionals: list[_GoldenFusedConditional] = []
+    for u in order:
+        if u.startswith("group:") or u not in col_index:
+            continue
+        ci = col_index[u]
+        clause_list = conditional_cols.get(ci)
+        if clause_list is None:
+            continue
+        clauses_spec: list[_GoldenFusedClause] = []
+        default_strat: int | None = None
+        for clause in clause_list:
+            if clause.when is None:
+                default_strat = _GOLDEN_STRATEGY_IDS[clause.strategy]
+                continue
+            try:
+                ir = lower_predicate(clause.when, col_index, _code_of)
+            except Exception:
+                # The gate already checked predicate_lowerable; decline defensively
+                # rather than risk a non-byte-identical result.
+                return None
+            clauses_spec.append(
+                _GoldenFusedClause(ir=ir, strategy=_GOLDEN_STRATEGY_IDS[clause.strategy])
+            )
+        if default_strat is None:
+            return None
+        conditionals.append(
+            _GoldenFusedConditional(
+                col_index=ci, clauses=clauses_spec, default_strategy=default_strat
+            )
+        )
+
     side = _GoldenFusedSideChannels(
         source_code=source_code_arr,
         priority_codes=priority_codes,
@@ -560,6 +688,8 @@ def run_golden_fused_arrow(
         qweights=qweights,
         pair_edges=pair_edges,
         group_specs=group_specs,
+        col_order=col_order,
+        conditionals=conditionals,
     )
     winner_idx, field_conf, group_conf, cluster_ids_out = fn(
         row_ids_arr,
