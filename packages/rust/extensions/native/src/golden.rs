@@ -74,11 +74,26 @@ fn char_len(text: &StrCol, off: usize, local: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// The FIRST index in `0..n` whose `key` is maximal. Strict `>` keeps the
+/// earliest maximal element on a tie -- byte-parity with Python `max(...)` (first
+/// max), NOT `max_by_key` (which returns the LAST max and would silently flip a
+/// weight/count tie to the wrong representative). Single-sources every hand-rolled
+/// first-max scan (weighted longest tie-break / majority_vote / first_non_null).
+fn first_max_idx(n: usize, key: impl Fn(usize) -> f64) -> usize {
+    let mut best = 0usize;
+    for i in 1..n {
+        if key(i) > key(best) {
+            best = i;
+        }
+    }
+    best
+}
+
 /// Weighted length-tie confidence rule -- the ONE behavioral divergence between
 /// `most_complete` and `longest_value` on the QUALITY-WEIGHTED tie path (they
 /// share the pick, NOT the confidence):
-/// - `most_complete` (`golden.py:134`) -> `min(1.0, 0.7 * w_winner)`.
-/// - `longest_value` (`golden.py:233`) -> a FLAT `0.7`, ignoring the weight.
+/// - `most_complete` (`golden.py:134`) -> `min(1.0, 0.7 * w_winner)` (`ScaledByWeight`).
+/// - `longest_value` (`golden.py:233`) -> a FLAT `0.7`, ignoring the weight (`Flat`).
 ///
 /// Do NOT collapse these into one rule -- conflating them ships a silently-wrong
 /// confidence on the weighted tie (the plan's Stage 3 warning). The unweighted
@@ -86,9 +101,9 @@ fn char_len(text: &StrCol, off: usize, local: usize) -> usize {
 #[derive(Clone, Copy)]
 enum WeightedTieConf {
     /// most_complete: `min(1.0, 0.7 * w_winner)`.
-    ScaledPointSeven,
+    ScaledByWeight,
     /// longest_value: flat `0.7`.
-    FlatPointSeven,
+    Flat,
 }
 
 /// Shared "longest `str(v)` wins" pick for `most_complete` / `longest_value`.
@@ -126,18 +141,13 @@ fn longest_pick(
         None => (longest[0] as i64, tie_conf),
         Some(w) => {
             let wt = |l: usize| w.get(off + l).copied().unwrap_or(1.0);
-            // First-max on a weight tie (strict `>` from the earliest longest
-            // member) == Python `max(longest, key=...)`, which keeps the FIRST
-            // maximal element -- i.e. span order among equal weights.
-            let mut best = longest[0];
-            for &l in &longest[1..] {
-                if wt(l) > wt(best) {
-                    best = l;
-                }
-            }
+            // Highest-weight member among the longest; first-max on a weight tie
+            // (span order preserved, since `longest` is in span order) matches
+            // Python `max(longest, key=...)`.
+            let best = longest[first_max_idx(longest.len(), |i| wt(longest[i]))];
             let conf = match wtie {
-                WeightedTieConf::ScaledPointSeven => (0.7 * wt(best)).min(1.0),
-                WeightedTieConf::FlatPointSeven => 0.7,
+                WeightedTieConf::ScaledByWeight => (0.7 * wt(best)).min(1.0),
+                WeightedTieConf::Flat => 0.7,
             };
             (best as i64, conf)
         }
@@ -159,7 +169,7 @@ fn most_complete(
         off,
         0.7,
         weights,
-        WeightedTieConf::ScaledPointSeven,
+        WeightedTieConf::ScaledByWeight,
     )
 }
 
@@ -172,14 +182,7 @@ fn longest_value(
     off: usize,
     weights: Option<&[f64]>,
 ) -> (i64, f64) {
-    longest_pick(
-        text,
-        non_null,
-        off,
-        0.5,
-        weights,
-        WeightedTieConf::FlatPointSeven,
-    )
+    longest_pick(text, non_null, off, 0.5, weights, WeightedTieConf::Flat)
 }
 
 /// `_majority_vote` (`golden.py:139`). Unweighted (`weights` None): highest code
@@ -204,12 +207,10 @@ fn majority_vote(non_null: &[(usize, i64)], off: usize, weights: Option<&[f64]>)
                 order.push((c, l, wl));
             }
         }
-        let mut best = 0usize;
-        for i in 1..order.len() {
-            if order[i].2 > order[best].2 {
-                best = i;
-            }
-        }
+        // First-appearance tie-break (see `first_max_idx`): keeps the EARLIEST
+        // code on a weight-sum tie, matching the reference's insertion-ordered
+        // `max(value_weights, key=...)`.
+        let best = first_max_idx(order.len(), |i| order[i].2);
         let total: f64 = order.iter().map(|e| e.2).sum();
         let conf = if total > 0.0 {
             order[best].2 / total
@@ -227,17 +228,10 @@ fn majority_vote(non_null: &[(usize, i64)], off: usize, weights: Option<&[f64]>)
             order.push((c, l, 1));
         }
     }
-    // First-appearance tie-break: strict `>` keeps the EARLIEST-appearing code
-    // on a count tie (matching `Counter.most_common`'s stable order). Do NOT
-    // rewrite to `max_by_key` -- it returns the LAST max, silently flipping the
-    // tie to the last occurrence and picking the wrong representative index.
-    #[allow(clippy::needless_range_loop)]
-    let mut best = 0usize;
-    for i in 1..order.len() {
-        if order[i].2 > order[best].2 {
-            best = i;
-        }
-    }
+    // First-appearance tie-break keeps the EARLIEST-appearing code on a count tie
+    // (matching `Counter.most_common`'s stable order); `first_max_idx`'s strict
+    // `>` encodes it -- NOT `max_by_key` (returns the LAST max, wrong index).
+    let best = first_max_idx(order.len(), |i| order[i].2 as f64);
     let conf = order[best].2 as f64 / non_null.len() as f64;
     (order[best].1 as i64, conf)
 }
@@ -264,12 +258,9 @@ fn first_non_null(non_null: &[(usize, i64)], off: usize, weights: Option<&[f64]>
         None => (non_null[0].0 as i64, 0.6),
         Some(w) => {
             let wt = |l: usize| w.get(off + l).copied().unwrap_or(1.0);
-            let mut best = non_null[0].0;
-            for &(l, _) in &non_null[1..] {
-                if wt(l) > wt(best) {
-                    best = l;
-                }
-            }
+            // Highest-weight non-null; first-max on a tie == span order (the
+            // reference's `max(non_null, key=...)`).
+            let best = non_null[first_max_idx(non_null.len(), |i| wt(non_null[i].0))].0;
             (best as i64, 0.6)
         }
     }
