@@ -161,6 +161,7 @@ git commit -m "feat(goldencheck): add scalar-reduction + comparison ops to the F
   - Future-dated Finding UNCHANGED.
   - Staleness block UNCHANGED except `affected_rows=non_null.len()` → `affected_rows=len(non_null)`. The date math on `newest` (`.date()`, `isinstance(newest, _dt.datetime)`, `(today - newest_date).days`) is pure Python — UNCHANGED.
   - Remove `from goldencheck._polars_lazy import pl`. Keep `to_frame`, `Finding`, `Severity`, `BaseProfiler`, `import datetime as _dt`.
+  - **Module docstring touch-up:** the last docstring line reads `Pure-Polars: `dt.max()` + a vectorized future-count. ...`. After the port that's stale. Change it to `Routes through the Frame seam (`max()` + `count_gt()`); no native kernel -- date arithmetic is already vectorized and cheap.` (Keep it capital-P-free of a bare `polars`/`pl.` token so the grep gate stays clean.)
 
 - [ ] **Step 2: Run the existing test UNEDITED (parity gate).**
 ```bash
