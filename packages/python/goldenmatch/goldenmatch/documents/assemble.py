@@ -74,14 +74,30 @@ def assemble(results: list[ExtractResult], schema: TargetSchema, *,
     return df, report
 
 
+class _ColUnion:
+    """First-appearance-ordered column union. Keeps the `seen` set and the ordered
+    list in lockstep so the header and line-item bookkeeping can't drift."""
+
+    def __init__(self) -> None:
+        self.cols: list[str] = []
+        self._seen: set[str] = set()
+
+    def add(self, names) -> None:
+        for name in names:
+            if name not in self._seen:
+                self._seen.add(name)
+                self.cols.append(name)
+
+
 def _frame_from_records(records: list[dict], data_cols: list[str],
                         sidecar_specs: list[tuple[str, object]]) -> pl.DataFrame:
     """Build a frame from heterogeneous-keyed records with a DETERMINISTIC column
     order. `data_cols` is the caller's pre-computed first-appearance union; each
-    record is padded with the missing cols = None before one `pl.DataFrame` call
-    (a plain ragged `pl.DataFrame(list_of_dicts)` raises). The final select list
-    is built from `data_cols` (NOT `df.columns`) so a polars dict-key reshuffle
-    can't reorder the output."""
+    record is padded IN PLACE with the missing cols = None before one `pl.DataFrame`
+    call (a plain ragged `pl.DataFrame(list_of_dicts)` raises). The in-place fill is
+    intentional -- `records` is a throwaway list this function owns. The final
+    select list is built from `data_cols` (NOT `df.columns`) so a polars dict-key
+    reshuffle can't reorder the output."""
     for rec in records:
         for c in data_cols:
             rec.setdefault(c, None)
@@ -116,42 +132,53 @@ def assemble_structured(outcomes: list[_DocOutcome], *, drop_empty: bool = True
     report = IngestReport(n_files=len(deduped))
 
     header_records: list[dict] = []
-    header_cols: list[str] = []
-    header_seen: set[str] = set()
+    header_union = _ColUnion()
     item_records: list[dict] = []
-    item_cols: list[str] = []
-    item_seen: set[str] = set()
+    item_union = _ColUnion()
 
-    def _add_header(row, o: _DocOutcome) -> None:
+    def _add_header(row, o: _DocOutcome) -> bool:
+        """Emit a header row unless drop_empty removes an all-null-match-field row.
+        Returns True iff a row was actually emitted (the caller gates line items +
+        report keys on this so no orphaned child can ever be produced)."""
         if drop_empty and all(v is None for v in row.values.values()):
-            return
+            return False
+        header_union.add(row.values)
         rec = dict(row.values)
-        for name in row.values:
-            if name not in header_seen:
-                header_seen.add(name)
-                header_cols.append(name)
         rec["_source_file"] = o.source_file
         rec["_source_page"] = row.source_page
         rec["_extract_confidence"] = row.row_confidence()
         rec["_doc_id"] = o.doc_id
         rec["_doctype"] = o.doctype
         header_records.append(rec)
+        return True
+
+    def _register(o: _DocOutcome) -> None:
+        # doctypes and classify_confidence key on EXACTLY the docs that emitted a
+        # header row -- keeps the two report maps' key-sets identical + well-defined.
+        report.doctypes[o.doc_id] = o.doctype
+        report.classify_confidence[o.doc_id] = o.confidence
 
     for o in deduped:
         res = o.result
         if res.error is not None:
             report.errors.append((o.source_file, res.error))
             continue
-        report.doctypes[o.doc_id] = o.doctype
         if isinstance(res, StructuredResult):
-            if res.header is not None:
-                _add_header(res.header, o)
+            emitted = res.header is not None and _add_header(res.header, o)
+            if not emitted:
+                # Header absent or dropped: its line items would be orphans (a
+                # `_doc_id` FK with no header row). Discard them, but surface the
+                # loss so a failed-entity doc isn't silently swallowed.
+                if res.line_items:
+                    report.errors.append((
+                        o.source_file,
+                        f"header empty/dropped; {len(res.line_items)} line item(s) discarded",
+                    ))
+                continue
+            _register(o)
             for line_no, item in enumerate(res.line_items):
+                item_union.add(item.values)
                 rec = dict(item.values)
-                for name in item.values:
-                    if name not in item_seen:
-                        item_seen.add(name)
-                        item_cols.append(name)
                 rec["_doc_id"] = o.doc_id
                 rec["_line_no"] = line_no
                 rec["_source_file"] = o.source_file
@@ -159,17 +186,19 @@ def assemble_structured(outcomes: list[_DocOutcome], *, drop_empty: bool = True
                 rec["_extract_confidence"] = item.row_confidence()
                 item_records.append(rec)
         else:  # flat ExtractResult -> each row is a header row, no line items
-            for row in res.rows:
-                _add_header(row, o)
+            # list (not any/generator) so EVERY row is emitted, not just up to the
+            # first survivor.
+            if any([_add_header(row, o) for row in res.rows]):
+                _register(o)
 
     if header_records:
-        df = _frame_from_records(header_records, header_cols, _HEADER_SIDECAR_SPECS)
+        df = _frame_from_records(header_records, header_union.cols, _HEADER_SIDECAR_SPECS)
     else:
         df = _empty_header_frame()
     report.n_rows = df.height
 
     if item_records:
-        report.line_items = _frame_from_records(item_records, item_cols, _ITEM_SIDECAR_SPECS)
+        report.line_items = _frame_from_records(item_records, item_union.cols, _ITEM_SIDECAR_SPECS)
     else:
         report.line_items = None
 

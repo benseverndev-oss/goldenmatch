@@ -118,6 +118,68 @@ def test_empty_batch_yields_empty_header_frame():
     assert report.line_items is None
 
 
+def _items(*descs):
+    return [_erow(INV.line_items, {"description": d, "quantity": "1"}) for d in descs]
+
+
+def test_header_none_with_items_is_discarded_and_recorded():
+    o = _DocOutcome(doc_id="dn", source_file="noheader.pdf", doctype="invoice",
+                    confidence=0.9, vlm_calls=2,
+                    result=StructuredResult(header=None, line_items=_items("W", "G"), error=None))
+    df, report = assemble_structured([o], drop_empty=True)
+    assert df.height == 0
+    assert report.line_items is None                 # no orphaned children
+    assert "dn" not in report.doctypes
+    assert len(report.errors) == 1
+    assert report.errors[0][0] == "noheader.pdf" and "2 line item" in report.errors[0][1]
+
+
+def test_null_header_dropped_discards_its_items():
+    header = _erow(INV.header, {})  # all-null header
+    o = _DocOutcome(doc_id="db", source_file="null.pdf", doctype="invoice",
+                    confidence=0.9, vlm_calls=2,
+                    result=StructuredResult(header=header, line_items=_items("W", "G"), error=None))
+    df, report = assemble_structured([o], drop_empty=True)
+    assert df.height == 0
+    assert report.line_items is None
+    assert report.doctypes == {}
+    assert len(report.errors) == 1 and "2 line item" in report.errors[0][1]
+
+
+def test_null_header_kept_when_not_drop_empty_keeps_items():
+    header = _erow(INV.header, {})
+    o = _DocOutcome(doc_id="dc", source_file="null2.pdf", doctype="invoice",
+                    confidence=0.9, vlm_calls=2,
+                    result=StructuredResult(header=header, line_items=_items("W", "G"), error=None))
+    df, report = assemble_structured([o], drop_empty=False)
+    assert df.height == 1                             # all-null header row IS emitted
+    assert report.line_items is not None and report.line_items.height == 2
+    assert report.line_items["_doc_id"].to_list() == ["dc", "dc"]
+    assert report.errors == []
+
+
+def test_mixed_good_and_null_header_produces_no_orphans():
+    good = _invoice_outcome(doc_id="A", src="a.pdf")
+    header = _erow(INV.header, {})
+    bad = _DocOutcome(doc_id="B", source_file="b.pdf", doctype="invoice",
+                      confidence=0.9, vlm_calls=2,
+                      result=StructuredResult(header=header, line_items=_items("X"), error=None))
+    df, report = assemble_structured([good, bad], drop_empty=True)
+    assert set(df["_doc_id"].to_list()) == {"A"}      # only A's header survives
+    li = report.line_items
+    assert li is not None and set(li["_doc_id"].to_list()) == {"A"}  # no B orphan
+    assert any("discarded" in m for _, m in report.errors)
+
+
+def test_report_key_sets_are_aligned():
+    good = _invoice_outcome(doc_id="A")
+    err = _DocOutcome(doc_id="E", source_file="e.pdf", doctype="invoice",
+                      confidence=1.0, vlm_calls=1,
+                      result=StructuredResult(header=None, line_items=[], error="boom"))
+    _, report = assemble_structured([good, err], drop_empty=True)
+    assert set(report.classify_confidence) == set(report.doctypes) == {"A"}
+
+
 def test_exact_columns_for_mixed_batch():
     df, _ = assemble_structured([_invoice_outcome(), _receipt_outcome()], drop_empty=True)
     expected = [

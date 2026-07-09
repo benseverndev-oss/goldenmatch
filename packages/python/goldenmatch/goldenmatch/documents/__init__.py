@@ -119,7 +119,9 @@ def ingest_documents(paths, schema: TargetSchema | None = None, *,
     ]
 
     df, report = assemble_structured(outcomes, drop_empty=drop_empty)
-    # Flow facts assemble can't derive from the results alone.
+    # vlm_calls is the TOTAL transport cost across every doc (incl. errored/dropped
+    # ones -- the call still went out). classify_confidence is keyed by
+    # assemble_structured on exactly the docs that emitted a header row (same
+    # key-set as report.doctypes), so it is NOT rebuilt here.
     report.vlm_calls = sum(o.vlm_calls for o in outcomes)
-    report.classify_confidence = {o.doc_id: o.confidence for o in outcomes}
     return (df, report) if return_report else df
