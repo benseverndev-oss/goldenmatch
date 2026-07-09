@@ -25,7 +25,6 @@ Heuristic for a "PK candidate":
 """
 from __future__ import annotations
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
@@ -82,10 +81,7 @@ def _looks_like_pk_column(name: str) -> bool:
     return False
 
 
-def _column_qualifies_as_pk(
-    df: pl.DataFrame,
-    column: str,
-) -> tuple[bool, str]:
+def _column_qualifies_as_pk(frame, column: str) -> tuple[bool, str]:
     """Return (qualifies, why_or_disqualifier).
 
     A column qualifies as a stable PK candidate when:
@@ -97,10 +93,9 @@ def _column_qualifies_as_pk(
     """
     if _looks_like_value_column(column):
         return False, "value-shaped name (email/name/address/etc.)"
-    col = df[column]
-    dtype = col.dtype
-    if dtype.is_float() or dtype == pl.Boolean:
-        return False, f"unsuitable dtype ({dtype})"
+    col = frame.column(column)
+    if col.dtype in ("float", "bool"):
+        return False, f"unsuitable dtype ({col.dtype_repr()})"
     n_rows = len(col)
     if n_rows == 0:
         return False, "empty sample"
@@ -121,18 +116,17 @@ class IdentitySafePkProfiler:
     Graph without explicit `source_pk_column`.
     """
 
-    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
-        if df.width == 0:
+        if len(frame.columns) == 0:
             return []
 
         candidates: list[str] = []
         disqualifiers: dict[str, str] = {}
         named_pk_disqualifiers: dict[str, str] = {}
 
-        for column in df.columns:
-            qualifies, reason = _column_qualifies_as_pk(df, column)
+        for column in frame.columns:
+            qualifies, reason = _column_qualifies_as_pk(frame, column)
             if qualifies:
                 candidates.append(column)
             else:
@@ -162,7 +156,7 @@ class IdentitySafePkProfiler:
                     f"will fall back to payload-hash record_ids, which "
                     f"silently collide on duplicate raw rows."
                 ),
-                affected_rows=len(df),
+                affected_rows=frame.height,
                 sample_values=[],
                 suggestion=(
                     f"Either fix the column ('{target}' should be "
@@ -176,8 +170,8 @@ class IdentitySafePkProfiler:
 
         # No named-PK column either. Generic warning -- treat as
         # dataset-level (no specific column anchor).
-        sample_cols = ", ".join(df.columns[:5])
-        if df.width > 5:
+        sample_cols = ", ".join(frame.columns[:5])
+        if len(frame.columns) > 5:
             sample_cols += ", ..."
         return [Finding(
             severity=Severity.WARNING,
@@ -188,7 +182,7 @@ class IdentitySafePkProfiler:
                 f"({sample_cols}) have nulls, duplicates, or look "
                 "like editable value columns (email/name/address)."
             ),
-            affected_rows=len(df),
+            affected_rows=frame.height,
             sample_values=[],
             suggestion=(
                 "If feeding this dataset to goldenmatch's Identity "
