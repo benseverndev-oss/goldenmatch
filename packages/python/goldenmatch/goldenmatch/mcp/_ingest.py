@@ -120,3 +120,74 @@ def resolve_input_source(
     if file_path:
         return file_path
     raise ValueError("provide file_path or file_content")
+
+
+# (path_param, content_param, name_param). A side with no content and no
+# path is left untouched (optional side). encoding is read from a shared
+# "encoding" arg (default base64) across all sides of a call.
+INGEST_PARAMS: dict[str, list[tuple[str, str, str]]] = {
+    "analyze_data": [("file_path", "file_content", "filename")],
+    "auto_configure": [("file_path", "file_content", "filename")],
+    "agent_deduplicate": [("file_path", "file_content", "filename")],
+    "suggest_pprl": [("file_path", "file_content", "filename")],
+    "scan_quality": [("file_path", "file_content", "filename")],
+    "fix_quality": [("file_path", "file_content", "filename")],
+    "run_transforms": [("file_path", "file_content", "filename")],
+    "sensitivity": [("file_path", "file_content", "filename")],
+    "certify_recall": [("file_path", "file_content", "filename")],
+    "retrieve_similar": [("file_path", "file_content", "filename")],
+    "agent_compare_strategies": [
+        ("file_path", "file_content", "filename"),
+        ("ground_truth", "ground_truth_content", "ground_truth_name"),
+    ],
+    "agent_match_sources": [
+        ("file_a", "file_a_content", "file_a_name"),
+        ("file_b", "file_b_content", "file_b_name"),
+    ],
+    "incremental": [
+        ("base_file", "base_file_content", "base_file_name"),
+        ("new_records", "new_records_content", "new_records_name"),
+    ],
+    "pprl_link": [
+        ("file_a", "file_a_content", "file_a_name"),
+        ("file_b", "file_b_content", "file_b_name"),
+    ],
+    "schema_match": [
+        ("file_a", "file_a_content", "file_a_name"),
+        ("file_b", "file_b_content", "file_b_name"),
+    ],
+    "compare_clusters": [
+        ("clusters_a_path", "clusters_a_content", "clusters_a_name"),
+        ("clusters_b_path", "clusters_b_content", "clusters_b_name"),
+    ],
+}
+
+
+def resolve_ingest_args(name: str, args: dict) -> dict | None:
+    """Resolve inline content params for tool *name* in place.
+
+    For each (path, content, name) side of the tool, if content is present
+    it is materialized and args[path] is rewritten with the server path.
+    A side with neither content nor an existing path is left untouched
+    (supports optional sides). Returns None on success, or an
+    ``{"error": str}`` dict if any side fails to resolve.
+    """
+    sides = INGEST_PARAMS.get(name)
+    if not sides:
+        return None
+    encoding = args.get("encoding", "base64")
+    for path_param, content_param, name_param in sides:
+        content = args.get(content_param)
+        if not content:
+            continue  # no inline content for this side; leave path as-is
+        try:
+            resolved = resolve_input_source(
+                file_path=None,
+                file_content=content,
+                filename=args.get(name_param),
+                encoding=encoding,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        args[path_param] = resolved
+    return None

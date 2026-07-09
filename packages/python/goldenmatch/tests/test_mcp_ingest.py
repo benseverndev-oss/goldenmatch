@@ -109,3 +109,46 @@ def test_reaper_deletes_aged_keeps_fresh(tmp_path, monkeypatch):
     _ingest._reap(tmp_path, ttl=1)
     assert not old.exists()
     assert new.exists()
+
+
+def test_resolve_ingest_args_rewrites_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
+    args = {"file_content": _b64(b"a,b\n1,2\n"), "filename": "d.csv"}
+    err = _ingest.resolve_ingest_args("analyze_data", args)
+    assert err is None
+    assert "file_path" in args and Path(args["file_path"]).exists()
+
+
+def test_resolve_ingest_args_two_sided(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
+    args = {
+        "file_a_content": _b64(b"a\n1\n"),
+        "file_b_content": _b64(b"b\n2\n"),
+        "fields": ["a"],
+    }
+    err = _ingest.resolve_ingest_args("schema_match", args)
+    assert err is None
+    assert Path(args["file_a"]).exists() and Path(args["file_b"]).exists()
+
+
+def test_resolve_ingest_args_unknown_tool_noop():
+    args = {"foo": 1}
+    assert _ingest.resolve_ingest_args("get_stats", args) is None
+    assert args == {"foo": 1}
+
+
+def test_resolve_ingest_args_optional_side_skipped(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
+    # compare_strategies: only the dataset side supplied, ground_truth omitted
+    args = {"file_content": _b64(b"a\n1\n"), "filename": "d.csv"}
+    err = _ingest.resolve_ingest_args("agent_compare_strategies", args)
+    assert err is None
+    assert Path(args["file_path"]).exists()
+    assert "ground_truth" not in args  # untouched when neither path nor content
+
+
+def test_resolve_ingest_args_bad_content_returns_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_ALLOWED_ROOT", str(tmp_path))
+    args = {"file_content": "not*b64*!!"}
+    err = _ingest.resolve_ingest_args("analyze_data", args)
+    assert err is not None and "error" in err
