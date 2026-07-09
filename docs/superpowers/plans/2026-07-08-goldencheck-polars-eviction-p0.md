@@ -42,8 +42,8 @@ Run tests: `$PY -m pytest packages/python/goldencheck/tests/<path> -v`. Ruff (10
 | 7 modules with module-level dtype tuples | Modify | defer the constant so it's not evaluated at import |
 | `goldencheck/core/frame.py` | Create | `Frame`/`Column` Protocols + `PolarsFrame`/`PolarsColumn` + `to_frame()` |
 | `goldencheck/profilers/base.py` | Modify | `BaseProfiler.profile(df: pl.DataFrame …)` → `(frame: Frame …)` |
-| `goldencheck/engine/scanner.py` | Modify | wrap sample in `to_frame()`, pass `Frame` to profiler fan-outs |
-| 10 unported column profilers + 9 relation profilers | Modify | one-line `df = frame.native` shim |
+| `goldencheck/engine/scanner.py` | UNCHANGED | profiles coerce their own arg via `to_frame`; no scanner change |
+| 9 unported column profilers + 9 relation profilers | Modify | `frame = to_frame(frame)` + one-line `df = frame.native` shim |
 | `profilers/{nullability,cardinality,uniqueness}.py` | Modify | port bodies onto the `Column` seam |
 | `tests/core/test_frame.py`, `tests/test_import_no_polars.py` | Create | seam unit tests + import-graph gate |
 
@@ -232,25 +232,29 @@ def to_frame(native) -> Frame:
 
 ---
 
-## Task 4: Route `scanner.py` + all `profile()` methods through `Frame`
+## Task 4: Thread the `Frame` seam through every `profile()` via boundary-coercion
 
-**Files:** Modify `goldencheck/profilers/base.py`; Modify `goldencheck/engine/scanner.py`; Modify the 10 unported column profilers + 9 relation profilers (`df = frame.native` shim)
+**KEY DESIGN (from plan review):** ~20 existing test files call `profile(<raw pl.DataFrame>, column)` positionally, and `scanner.py:379` calls the out-of-scope `DenialConstraintProfiler().profile(target)` with a raw frame. So each `profile()` **coerces its first arg through the idempotent `to_frame()`** — `to_frame` accepts both a raw `pl.DataFrame` (test/denial callers) AND a `PolarsFrame`, so every caller keeps working with **zero test edits and zero scanner change**. Do NOT wrap anything in `scanner.py`; do NOT touch `scanner.py:379` (the denial profiler stays on raw Polars).
 
-- [ ] **Step 1: Change the signatures (two passes).**
-  - **Pass A — 13 column profilers (`BaseProfiler`):** in `profilers/base.py`, change `profile(self, df: pl.DataFrame, column, *, context=None)` → `profile(self, frame: Frame, column, *, context=None)` (import `Frame` from `goldencheck.core.frame`). In each of the 13 column profiler subclasses, change the signature the same way; for the 10 you are NOT porting in Task 5, add `df = frame.native` as the first body line (body unchanged). The 3 ported ones (nullability/cardinality/uniqueness) get their `frame:` signature here but are fully ported in Task 5 — for now give them `df = frame.native` too so this task stays byte-identical and self-contained.
-  - **Pass B — 9 relation profilers (`relations/*.py`, NOT `BaseProfiler`):** signature is `profile(self, df: pl.DataFrame)` (no column/context). Change `df` → `frame`, add `df = frame.native`. All 9 stay on `.native` in P0.
+**Counts (corrected):** `profilers/base.py` is the abstract `BaseProfiler` ABC (body `...`); there are **12** concrete column-profiler subclasses (`COLUMN_PROFILERS`, `scanner.py:44-60`) and **9** relation profilers (`relations/*.py`, do NOT inherit `BaseProfiler`, signature `profile(self, df)` — no column/context). = 21 concrete methods + the ABC signature.
 
-- [ ] **Step 2: Wrap the sample in `scanner.py`.** Find where `scanner.py` holds the sampled `pl.DataFrame` (`sample: pl.DataFrame`, ~line 84) and where it calls `profiler.profile(sample, col, ...)` / `relation.profile(sample)`. Wrap once: `frame = to_frame(sample)` (import `to_frame`), and pass `frame` to both fan-outs. (If other call sites construct profilers — `engine/scanner.py` `scan_dataframe`, the LLM path — thread `to_frame` there too. Grep `.profile(` across `goldencheck/` to find every call site.)
+**Files:** Modify `goldencheck/profilers/base.py`; the 12 column profilers; the 9 relation profilers. Do NOT modify `scanner.py`.
 
-- [ ] **Step 3: Run the FULL suite → byte-identical green.**
+- [ ] **Step 1: The ABC.** In `profilers/base.py`, change `profile(self, df: pl.DataFrame, column, *, context=None)` → `profile(self, frame, column, *, context=None)` (drop the now-unused `pl` import; optionally annotate `frame: "Frame | pl.DataFrame"` but the body is `...` so keep it simple). No `to_frame` here (abstract).
+
+- [ ] **Step 2: The 12 concrete column profilers.** For each, change the signature `df` → `frame` and make the FIRST body line `frame = to_frame(frame)` (import `from goldencheck.core.frame import to_frame`). For the **9** you are NOT porting in Task 5, then add `df = frame.native` and leave the body untouched. For the **3** to-be-ported (nullability/cardinality/uniqueness), also add `df = frame.native` here (clean byte-identical intermediate; Task 5 replaces it with the seam).
+
+- [ ] **Step 3: The 9 relation profilers.** Signature `profile(self, df)` → `profile(self, frame)`; first body line `frame = to_frame(frame)`; then `df = frame.native`; body untouched. Import `to_frame`.
+
+- [ ] **Step 4: Run the FULL suite → byte-identical green (tests UNEDITED).**
 ```bash
 cd /d/show_case/gc-polars-evict && <preamble>
 $PY -m pytest packages/python/goldencheck/tests -q
 $PY -m pytest packages/python/goldencheck/tests/test_import_no_polars.py -v   # still green
 ```
-Expected: same pass/skip counts as before (every profiler now takes a `Frame` but behaves identically via `.native`). Ruff clean.
+Expected: SAME pass/skip counts as before — every profiler coerces raw-`DataFrame` test callers via `to_frame`, behaves identically via `.native`. If ANY test errors with `AttributeError: 'DataFrame' object has no attribute 'native'/'column'`, a profiler is missing its `frame = to_frame(frame)` first line — fix it (do NOT edit the test). Ruff clean. Confirm `scanner.py` is unchanged (`git diff --stat packages/python/goldencheck/goldencheck/engine/scanner.py` → empty).
 
-- [ ] **Step 4: Commit.** `git add -A packages/python/goldencheck && git commit -m "refactor(goldencheck): route scanner + all profile() methods through the Frame seam (via .native)"`
+- [ ] **Step 5: Commit.** `git add -A packages/python/goldencheck && git commit -m "refactor(goldencheck): coerce profile() first arg through to_frame seam (via .native)"`
 
 ---
 
@@ -258,11 +262,11 @@ Expected: same pass/skip counts as before (every profiler now takes a `Frame` bu
 
 **Files:** Modify `profilers/nullability.py`, `cardinality.py`, `uniqueness.py`
 
-- [ ] **Step 1:** Port each body from `df[column]` → `frame.column(column)`, removing the `df = frame.native` shim (Task 4) and the now-unused `from goldencheck._polars_lazy import pl` import. The ops map 1:1:
-  - `nullability.py`: `col = frame.column(column)`; `total = len(col)`; `null_count = col.null_count()` — rest unchanged.
-  - `uniqueness.py`: `col = frame.column(column)`; `len(col)`; `non_null = col.drop_nulls()`; `len(non_null)`; `non_null.n_unique()` — rest unchanged.
-  - `cardinality.py`: `col = frame.column(column)`; `len(col)`; `col.n_unique()`; `col.drop_nulls().unique().sort().to_list()` — rest unchanged.
-  These profilers do NO dtype checks and had NO module-level `pl.` refs, so after porting they import no polars at all.
+- [ ] **Step 1:** Port each body. KEEP the `frame = to_frame(frame)` first line from Task 4 (it coerces raw-`DataFrame` test callers); REMOVE the `df = frame.native` shim and the now-unused `from goldencheck._polars_lazy import pl` import; replace `df[column]` with `frame.column(column)`. The ops map 1:1:
+  - `nullability.py`: `frame = to_frame(frame)`; `col = frame.column(column)`; `total = len(col)`; `null_count = col.null_count()` — rest unchanged.
+  - `uniqueness.py`: `frame = to_frame(frame)`; `col = frame.column(column)`; `len(col)`; `non_null = col.drop_nulls()`; `len(non_null)`; `non_null.n_unique()` — rest unchanged.
+  - `cardinality.py`: `frame = to_frame(frame)`; `col = frame.column(column)`; `len(col)`; `col.n_unique()`; `col.drop_nulls().unique().sort().to_list()` — rest unchanged.
+  These profilers do NO dtype checks and had NO module-level `pl.` refs, so after porting their only import from the seam is `to_frame` (no `pl`).
 
 - [ ] **Step 2: Run the 3 profilers' existing tests UNCHANGED → PASS (the parity gate).**
 ```bash
@@ -284,7 +288,7 @@ $PY -m pytest packages/python/goldencheck/tests/test_import_no_polars.py -v
 ## Done criteria (P0 complete)
 
 - [ ] `import goldencheck` loads zero Polars (`tests/test_import_no_polars.py` green).
-- [ ] `Frame`/`Column` seam exists (`core/frame.py`) with a `PolarsColumn` backend; `scanner.py` + all 22 `profile()` methods route through it.
+- [ ] `Frame`/`Column` seam exists (`core/frame.py`) with a `PolarsColumn` backend; all 21 concrete `profile()` methods (12 column + 9 relation) coerce their arg through `to_frame`; `scanner.py` is unchanged; the out-of-scope denial profiler (scanner.py:379) stays on raw Polars.
 - [ ] `nullability`/`cardinality`/`uniqueness` are ported onto the seam and import no polars; their existing tests pass with zero edits.
 - [ ] Full existing goldencheck suite green (same pass/skip counts) — byte-identical, no version bump.
 - [ ] No P1+ scope crept in (no reader eviction, no other profiler ports, no substrate/backend beyond PolarsColumn, no nopolars CI lane, no deps flip).
