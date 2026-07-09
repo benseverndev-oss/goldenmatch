@@ -1,8 +1,8 @@
 """Temporal order profiler — checks that start-like date columns precede end-like columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # Pairs of (start-pattern, end-pattern) — matched against lowercased column names
@@ -72,7 +72,9 @@ def _try_cast_to_date(series: pl.Series) -> pl.Series:
 class TemporalOrderProfiler:
     """Checks that start-like date columns are <= end-like date columns."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
 
         # Keyword-matched pairs (high confidence)

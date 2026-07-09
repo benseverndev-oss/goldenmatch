@@ -20,9 +20,11 @@ grouping columns qualify.
 """
 from __future__ import annotations
 
-import polars as pl
+from functools import lru_cache
 
+from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 100
@@ -30,19 +32,23 @@ _MIN_CONFIDENCE = 0.95
 _MIN_AVG_GROUP = 3  # must match goldencheck_core::MIN_AVG_GROUP
 _MAX_CANDIDATES = 12
 _MAX_FINDINGS = 8
-_SUPPORTED = (
-    pl.Utf8,
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Boolean,
-)
+
+
+@lru_cache(maxsize=1)
+def _supported() -> tuple:
+    return (
+        pl.Utf8,
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+        pl.Boolean,
+    )
 
 
 def _select_candidates(df: pl.DataFrame) -> list[str]:
     scored: list[tuple[int, str]] = []
     for col in df.columns:
         series = df[col]
-        if series.dtype not in _SUPPORTED:
+        if series.dtype not in _supported():
             continue
         nu = series.n_unique()
         if nu <= 1:
@@ -110,7 +116,9 @@ def _discover_python(cols_ids: list[list[int]], n_rows: int, min_conf: float) ->
 class ApproximateFDProfiler:
     """Dataset-level relation profiler: near-FD violations (likely errors)."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         n_rows = df.height
         if n_rows < _MIN_ROWS or df.width < 2:
             return []

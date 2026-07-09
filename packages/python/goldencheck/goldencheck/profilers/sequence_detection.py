@@ -1,15 +1,20 @@
 """Sequence gap detection profiler — detects gaps in sequential integer columns."""
 from __future__ import annotations
 
-import polars as pl
+from functools import lru_cache
 
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
-INTEGER_DTYPES = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-)
+
+@lru_cache(maxsize=1)
+def _integer_dtypes() -> tuple:
+    return (
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+    )
 
 # Minimum fraction of consecutive diffs == 1 to consider column sequential.
 # We use this threshold on columns where the values increment exactly by 1 most of the time.
@@ -19,11 +24,13 @@ SEQUENTIAL_THRESHOLD = 0.90
 
 
 class SequenceDetectionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
         col = df[column]
 
-        if col.dtype not in INTEGER_DTYPES:
+        if col.dtype not in _integer_dtypes():
             return findings
 
         non_null = col.drop_nulls()

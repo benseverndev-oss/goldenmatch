@@ -25,8 +25,7 @@ from __future__ import annotations
 
 import datetime as _dt
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.profilers.fuzzy_values import _MAX_DISTINCT as _FUZZY_MAX_DISTINCT
 from goldencheck.profilers.fuzzy_values import (

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import datetime
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # Words that contain "age" but are NOT age columns
@@ -38,7 +38,9 @@ def _try_parse_dates(series: pl.Series) -> pl.Series:
 class AgeValidationProfiler:
     """Cross-validates age columns against date-of-birth columns."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
 
         age_cols = [c for c in df.columns if _is_age_column(c)]

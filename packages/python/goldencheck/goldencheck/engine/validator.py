@@ -4,8 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.config.schema import ColumnRule, GoldenCheckConfig
 from goldencheck.engine.reader import read_file
 from goldencheck.models.finding import Finding, Severity

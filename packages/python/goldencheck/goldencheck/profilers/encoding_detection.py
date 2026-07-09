@@ -1,8 +1,8 @@
 """Encoding detection profiler — detects encoding anomalies in string columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -27,7 +27,9 @@ CONTROL_CHAR_PATTERN = r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]"
 
 
 class EncodingDetectionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
         col = df[column]
 

@@ -5,8 +5,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding
 
 __all__ = ["apply_fixes", "FixReport", "FixEntry"]

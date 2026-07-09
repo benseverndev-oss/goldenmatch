@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import BaselineProfile
 
 __all__ = ["create_baseline", "load_baseline"]

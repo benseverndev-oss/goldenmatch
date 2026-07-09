@@ -25,8 +25,8 @@ Heuristic for a "PK candidate":
 """
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # Column-name prefixes/substrings that imply "this is data the user
@@ -121,7 +121,9 @@ class IdentitySafePkProfiler:
     Graph without explicit `source_pk_column`.
     """
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         if df.width == 0:
             return []
 

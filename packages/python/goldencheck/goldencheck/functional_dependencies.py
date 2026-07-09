@@ -17,8 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.relations import approx_fd as _afd
 from goldencheck.relations import functional_dependency as _fd

@@ -22,8 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.denial.constants import MAX_LITERAL_CARD, MAX_PREDICATES, MIN_SUPPORT
 from goldencheck.denial.models import Op, Predicate
 

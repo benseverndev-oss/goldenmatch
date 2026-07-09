@@ -5,7 +5,7 @@ import random
 import tempfile
 from pathlib import Path
 
-import polars as pl
+from goldencheck._polars_lazy import pl
 
 
 def generate_demo_csv(path: Path | None = None) -> Path:

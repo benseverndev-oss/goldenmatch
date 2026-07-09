@@ -1,24 +1,31 @@
 """Range and distribution profiler — detects outliers and reports min/max for numeric columns."""
 from __future__ import annotations
 
-import polars as pl
+from functools import lru_cache
 
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
-NUMERIC_DTYPES = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Float32, pl.Float64,
-)
+
+@lru_cache(maxsize=1)
+def _numeric_dtypes() -> tuple:
+    return (
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+        pl.Float32, pl.Float64,
+    )
 
 
 class RangeDistributionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
         col = df[column]
         dtype = col.dtype
-        is_numeric = dtype in NUMERIC_DTYPES
+        is_numeric = dtype in _numeric_dtypes()
 
         # Chain: if type inference flagged as mostly numeric, cast and run
         if not is_numeric and context and context.get(column, {}).get("mostly_numeric"):
@@ -27,7 +34,7 @@ class RangeDistributionProfiler(BaseProfiler):
         elif not is_numeric:
             return findings
 
-        non_null = col.drop_nulls() if is_numeric and dtype in NUMERIC_DTYPES else col
+        non_null = col.drop_nulls() if is_numeric and dtype in _numeric_dtypes() else col
         total = len(non_null)
         if total < 2:
             return findings

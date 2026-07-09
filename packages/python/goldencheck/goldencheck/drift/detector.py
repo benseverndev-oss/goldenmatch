@@ -14,8 +14,7 @@ try:
 except ImportError:
     _SCIPY_AVAILABLE = False
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.baseline.correlation import _cramers_v
 from goldencheck.baseline.models import BaselineProfile
 from goldencheck.baseline.patterns import _induce_column_grammars

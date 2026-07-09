@@ -57,8 +57,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.denial.constants import (
     DEFAULT_EPS,
     DEFAULT_SAMPLE,

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from itertools import combinations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _DEFAULT_THRESHOLD = 0.90
@@ -48,7 +48,9 @@ class NullCorrelationProfiler:
     def __init__(self, threshold: float = _DEFAULT_THRESHOLD) -> None:
         self.threshold = threshold
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
         columns = df.columns
         n_rows = len(df)
