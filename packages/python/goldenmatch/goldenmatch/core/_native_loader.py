@@ -171,7 +171,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "pprl_bloom": ("bloom_clk_batch",),
     "perceptual": ("perceptual_phash_image",),
     "documents": ("documents_parse_message_text", "documents_schema_validate",
-                  "documents_extract_instruction", "documents_normalize_record"),
+                  "documents_extract_instruction", "documents_normalize_record",
+                  "documents_template", "documents_template_list"),
     # "sail_scoring" is intentionally absent -> _FALLBACK_ONLY below.
 }
 

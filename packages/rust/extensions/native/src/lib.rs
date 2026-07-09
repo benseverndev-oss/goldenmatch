@@ -76,5 +76,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(documents::documents_extract_instruction, m)?)?;
     m.add_function(wrap_pyfunction!(documents::documents_suggest_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(documents::documents_normalize_record, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_template, m)?)?;
+    m.add_function(wrap_pyfunction!(documents::documents_template_list, m)?)?;
     Ok(())
 }

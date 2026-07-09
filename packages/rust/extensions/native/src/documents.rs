@@ -21,6 +21,12 @@ pub fn documents_extract_instruction(schema_json: &str) -> PyResult<String> {
 #[pyfunction]
 pub fn documents_suggest_prompt() -> String { core::prompt::suggest_prompt().to_string() }
 #[pyfunction]
+pub fn documents_template(doctype: &str) -> PyResult<String> {
+    core::templates::template_json(doctype).map_err(PyValueError::new_err)
+}
+#[pyfunction]
+pub fn documents_template_list() -> String { core::templates::template_list_json() }
+#[pyfunction]
 pub fn documents_normalize_record(values_json: &str, confidence_json: &str, schema_json: &str) -> PyResult<String> {
     let s = core::schema::schema_from_json(schema_json).map_err(PyValueError::new_err)?;
     let row = core::normalize::normalize_record(values_json, confidence_json, &s).map_err(PyValueError::new_err)?;

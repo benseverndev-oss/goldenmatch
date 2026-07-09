@@ -29,7 +29,8 @@ sys.path.insert(0, str(REPO))
 from goldenmatch.documents._openai import parse_message_text  # noqa: E402
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict  # noqa: E402
 from goldenmatch.documents.suggest import _PROMPT  # noqa: E402
-from goldenmatch.documents.types import ExtractedRow  # noqa: E402
+from goldenmatch.documents.templates import _ORDER, get_template  # noqa: E402
+from goldenmatch.documents.types import DocTemplate, ExtractedRow  # noqa: E402
 from goldenmatch.documents.vlm_backend import _instruction  # noqa: E402
 
 rows: list[dict] = []
@@ -132,6 +133,22 @@ for c in norm_cases:
             "confidence": [[col, row.confidence[col]] for col in cols],
         }},
     )
+
+# --- template --------------------------------------------------------------
+# expected `ok` = the same JSON dict the native shim (documents_template) emits:
+# {"doctype", "header_fields":[{name,kind,hint},...], "line_item_fields":[...]}.
+# Generated from _PURE (via get_template under GOLDENMATCH_NATIVE=0) so pure and
+# corpus can't disagree at generation time.
+def _template_to_dict(t: DocTemplate) -> dict:
+    def fields(schema):
+        return [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]
+    return {"doctype": t.doctype, "header_fields": fields(t.header),
+            "line_item_fields": fields(t.line_items)}
+
+
+for name in _ORDER:
+    add("template", {"doctype": name}, {"ok": _template_to_dict(get_template(name))})
+add("template", {"doctype": "nope"}, {"error": True})
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 with OUT.open("w", encoding="utf-8") as f:

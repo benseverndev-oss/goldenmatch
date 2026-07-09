@@ -21,6 +21,13 @@ class TargetSchema:
 
 
 @dataclass(frozen=True)
+class DocTemplate:
+    doctype: str
+    header: TargetSchema
+    line_items: TargetSchema      # .fields == [] for flat doctypes (receipt)
+
+
+@dataclass(frozen=True)
 class PageImage:
     png_bytes: bytes            # normalized PNG
     width: int

@@ -5,6 +5,7 @@ pub mod normalize;
 pub mod parse;
 pub mod prompt;
 pub mod schema;
+pub mod templates;
 
 #[cfg(test)]
 mod tests {

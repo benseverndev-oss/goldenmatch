@@ -29,10 +29,18 @@ from goldenmatch.core._native_loader import native_module
 from goldenmatch.documents._openai import parse_message_text
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
 from goldenmatch.documents.suggest import _PROMPT
-from goldenmatch.documents.types import ExtractedRow
+from goldenmatch.documents.templates import get_template
+from goldenmatch.documents.types import DocTemplate, ExtractedRow
 from goldenmatch.documents.vlm_backend import _instruction
 
 CORPUS = Path(__file__).parent / "documents_corpus.jsonl"
+
+
+def _template_to_dict(t: DocTemplate) -> dict:
+    def fields(schema):
+        return [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]
+    return {"doctype": t.doctype, "header_fields": fields(t.header),
+            "line_item_fields": fields(t.line_items)}
 
 
 def _load_corpus() -> list[dict]:
@@ -71,6 +79,8 @@ def _run_pure(kernel: str, input_: object):
             "values": [[c, row.values[c]] for c in cols],
             "confidence": [[c, row.confidence[c]] for c in cols],
         }
+    if kernel == "template":
+        return _template_to_dict(get_template(input_["doctype"]))
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -101,6 +111,8 @@ def _run_native(kernel: str, input_: object, symbol: str):
             "values": [[c, pv.get(c)] for c in cols],
             "confidence": [[c, float(pc.get(c, 0.0))] for c in cols],
         }
+    if kernel == "template":
+        return json.loads(nm.documents_template(input_["doctype"]))
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -110,6 +122,7 @@ _KERNEL_SYMBOL = {
     "prompt_extract": "documents_extract_instruction",
     "prompt_suggest": "documents_suggest_prompt",
     "normalize": "documents_normalize_record",
+    "template": "documents_template",
 }
 
 
