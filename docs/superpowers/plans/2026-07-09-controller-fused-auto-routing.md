@@ -117,30 +117,32 @@ def test_apply_to_sets_use_fused_match():
 
 ---
 
-## Stage C — needs_artifacts / divergence detection
+## Stage C — config-driven divergence detection
 
-### Task C.1: `_needs_artifacts_or_diverges`
+### Task C.1: `config_needs_artifacts` (the config-driven, single-source gate)
+
+This helper covers ONLY the CONFIG-driven conditions — the ones both the controller AND the pipeline can read authoritatively (spec §4.3). The caller-intent conditions (lineage/review/explain/anomaly requested) are NOT here; they ride the `_api.py` `fused_match_allowed` hint (Task D.3). This split is the reviewer's finding: caller-intent flags aren't in pipeline scope, so they can't be re-checked there.
 
 **Files:** Modify `core/fused_routing.py`; Test: `tests/test_fused_routing.py`.
 
-- [ ] **Step 1: failing tests** — one per blocking condition (each individually forces True), and an all-clear case forcing False. Read the config surfaces for each signal FIRST:
-  - `golden_rules.auto_split` (default True) — read `GoldenRulesConfig.auto_split`.
-  - `config.identity.enabled` — read `IdentityConfig.enabled`.
-  - output-lineage / review / explain / returned scored_pairs / anomaly — these are `_run_dedupe_pipeline` output flags; determine the exact kwargs/config fields at call time (Task D.2 threads them). For C.1, take them as explicit boolean params.
-  - golden `confidence_majority` — scan `golden_rules` field_rules/default/overrides + groups for a `confidence_majority` strategy.
+- [ ] **Step 1: failing tests** — one per config condition forcing True, an all-clear forcing False. Confirm each config surface FIRST:
+  - `golden_rules.auto_split` (default True) — `GoldenRulesConfig.auto_split`.
+  - `config.identity.enabled` — `IdentityConfig.enabled` (guard for `config.identity is None`).
+  - golden `confidence_majority` — scan `golden_rules` default_strategy + field_rules (incl. list-form clauses) + field_groups + cluster_overrides.
+  - full provenance — `config.output.lineage_provenance` (guard for missing `output`).
 
 ```python
-from goldenmatch.core.fused_routing import needs_artifacts_or_diverges
+from goldenmatch.core.fused_routing import config_needs_artifacts
 
-def test_auto_split_on_blocks(): assert needs_artifacts_or_diverges(auto_split=True, ...) is True
+def test_auto_split_on_blocks(): assert config_needs_artifacts(cfg_auto_split_on) is True
 def test_identity_enabled_blocks(): ...
 def test_confidence_majority_golden_blocks(): ...
-def test_lineage_review_explain_pairs_anomaly_each_block(): ...
-def test_all_clear_returns_false(): assert needs_artifacts_or_diverges(auto_split=False, identity_enabled=False, ...) is False
+def test_lineage_provenance_blocks(): ...
+def test_all_clear_returns_false(): assert config_needs_artifacts(cfg_clean) is False  # auto_split off, identity off, no CM, no lineage-prov
 ```
 
 - [ ] **Step 2: run → fail.**
-- [ ] **Step 3: implement** `needs_artifacts_or_diverges(*, auto_split, identity_enabled, wants_lineage, wants_review, wants_explain, wants_scored_pairs, wants_anomaly, golden_uses_confidence_majority) -> bool` = OR of all. A helper `_golden_uses_confidence_majority(golden_rules) -> bool` scans default_strategy + field_rules (incl. list-form clauses) + field_groups + cluster_overrides.
+- [ ] **Step 3: implement** `config_needs_artifacts(config) -> bool` = OR of (auto_split on, identity enabled, golden uses confidence_majority, lineage_provenance on), with a `_golden_uses_confidence_majority(golden_rules)` sub-helper. Pure config reads, no pipeline/caller state.
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
 ---
@@ -167,10 +169,10 @@ def test_kill_switch(monkeypatch): monkeypatch.setenv("GOLDENMATCH_MATCH_FUSED",
 ```
 
 - [ ] **Step 2: run → fail.**
-- [ ] **Step 3: implement:**
+- [ ] **Step 3: implement.** Take **`n_rows` as an explicit param** (the controller has the authoritative full-data count as the local `n_rows` at the insertion point — it's passed as `n_rows_full=n_rows` to `apply_planner_rules`). Do NOT read `profile.meta.n_rows_full` (it defaults to 0 on `profile_for_planner`, which is a `dataclasses.replace` of the sample profile). `estimated_pair_count` (property) + `block_sizes_max` (field) on `profile.blocking` are correct.
 
 ```python
-def maybe_route_fused_match(*, config, profile, runtime, needs_artifacts) -> bool:
+def maybe_route_fused_match(*, config, profile, runtime, n_rows, needs_artifacts) -> bool:
     import os
     if os.environ.get("GOLDENMATCH_MATCH_FUSED", "").lower() in {"0", "false", "off"}:
         return False
@@ -180,17 +182,16 @@ def maybe_route_fused_match(*, config, profile, runtime, needs_artifacts) -> boo
     if not (match_fused_ready(config) or match_fused_multipass_ready(config)):
         return False  # FS branch out of v1 (no EMResult at decision time)
     frac = float(os.environ.get("GOLDENMATCH_FUSED_PRESSURE_FRACTION", "0.65"))
-    n_cols = _count_score_cols(config)
     est = estimate_classic_match_peak_rss_gb(
-        n_rows=profile.meta.n_rows_full_or_similar,  # confirm the field for full n_rows
+        n_rows=n_rows,
         est_pairs=profile.blocking.estimated_pair_count,
         block_max=profile.blocking.block_sizes_max,
-        n_score_cols=n_cols,
+        n_score_cols=_count_score_cols(config),
     )
     return est > runtime.available_ram_gb * frac
 ```
 
-Confirm the exact profile field for full-data `n_rows` and `n_score_cols` derivation from the config's matchkey fields at Step 3 (read the profile + config).
+`_count_score_cols(config)` derives the number of matchkey comparison fields from the covered weighted/multipass matchkey (read `config.get_matchkeys()` at Step 3 — confirm the field-list attribute).
 
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
@@ -209,17 +210,43 @@ Confirm the exact profile field for full-data `n_rows` and `n_score_cols` deriva
 # orthogonal to backend selection; the chosen backend is the fallback if fused
 # declines. Not a DEFAULT_RULES rule (the native autoconfig kernel short-circuits
 # those).
-from goldenmatch.core.fused_routing import maybe_route_fused_match
-_needs_art = _needs_artifacts_for_run(committed_config, output_flags=...)  # thread the run's output flags
+from goldenmatch.core.fused_routing import maybe_route_fused_match, config_needs_artifacts
+# fused_match_allowed threaded from _api.py (Task D.3); default-deny if absent.
+_needs_art = (not fused_match_allowed) or config_needs_artifacts(committed_config)
 if maybe_route_fused_match(config=committed_config, profile=profile_for_planner,
-                           runtime=runtime, needs_artifacts=_needs_art):
-    plan = dataclasses.replace(plan, use_fused_match=True, rule_name=(plan.rule_name or "") + "+fused_match_post_step")
+                           runtime=runtime, n_rows=n_rows, needs_artifacts=_needs_art):
+    plan = dataclasses.replace(plan, use_fused_match=True,
+                               rule_name=(plan.rule_name or "") + "+fused_match_post_step")
     plan.apply_to(committed_config)
     history.execution_plan = plan
 ```
 
-Thread the run's output flags (lineage/review/explain/scored_pairs/anomaly) into the controller decision. If those flags aren't in the controller's scope, pass conservative defaults (treat unknown as needs_artifacts=True) and re-check them at the pipeline seam (Stage F) — the pipeline has the authoritative flags, so the pipeline short-circuit re-validates `needs_artifacts` before actually using fused. Document which layer is authoritative.
+`config_needs_artifacts(config)` is the config-driven OR (auto_split/identity/confidence_majority/lineage_provenance) — the SAME helper the pipeline re-checks in F.1 (single source of truth). `fused_match_allowed` reaches `AutoConfigController.run` as a new keyword param (Task D.3); default `False`.
 
+**The `needs_artifacts` sourcing is split by where each signal actually lives (pin exactly — this is a correctness gate, not a nicety):**
+
+| signal | authoritative home | how to read |
+|---|---|---|
+| `auto_split` (default True) | config | `golden_rules.auto_split` — re-checkable at controller AND pipeline |
+| `identity.enabled` | config | `config.identity.enabled` |
+| golden `confidence_majority` | config | scan `golden_rules` (default/field_rules/groups/overrides) |
+| full provenance (`__survivorship_prov__`) | config | `config.output.lineage_provenance` |
+| lineage / review / explain / anomaly requested | **caller (`_api.py`)** — NOT in `_run_dedupe_pipeline` scope | thread a hint from `_api.py` |
+| `scored_pairs` | **always built into the result dict unconditionally** | see capacity-mode note below |
+
+**Capacity-mode contract (the scored_pairs finding).** `_run_dedupe_pipeline` builds `scored_pairs` into the result dict unconditionally, so it cannot be gated on "was it requested." A fused-match-routed run therefore returns **empty `scored_pairs` + absent cluster confidence/bottleneck/lineage** — this is the documented capacity-survival tradeoff, acceptable ONLY because match routing fires exclusively under est-RSS pressure (where the classic path would likely OOM: clusters+golden beats a crash). This is byte-identical where present (clusters + golden), absent where fused can't produce. Mark it in telemetry (`match_fused_capacity_mode=True`, Stage G) so it is never silent. The config-driven divergence conditions (auto_split/identity/confidence_majority/full-provenance) still hard-block routing — those would produce WRONG output, not merely absent artifacts.
+
+**Threading (add to Stage D):** thread a `fused_match_allowed: bool` hint from `_api.py::dedupe_df`/`match_df` (the entry points that know what the caller asked for) → the controller. Set it True only when the call does NOT request lineage / review / explain / anomaly. The controller computes `needs_artifacts = (not fused_match_allowed) OR <config-driven conditions>`; absent the hint, `fused_match_allowed=False` (**default-deny**). The pipeline re-checks ONLY the config-driven conditions (authoritative there); the caller-intent conditions are already folded into the hint.
+
+- [ ] **Step 4: run → pass. Step 5: commit.**
+
+### Task D.3: thread the `fused_match_allowed` hint from `_api.py`
+
+**Files:** Modify `_api.py` (`dedupe_df`/`match_df`) + the controller signature; Test: `tests/test_api_fused_routing.py`.
+
+- [ ] **Step 1: failing test** — `dedupe_df(df, lineage=True)` (or explain/review/anomaly) sets `fused_match_allowed=False` reaching the controller (assert via a spy/patch on `maybe_route_fused_match`); a plain `dedupe_df(df)` under pressure sets it True.
+- [ ] **Step 2: run → fail.**
+- [ ] **Step 3:** compute `fused_match_allowed` in `_api.py` from the caller's kwargs (no lineage/review/explain/anomaly requested), thread it through to `AutoConfigController.run` / the pipeline call, into the post-step's `needs_artifacts`. Default-deny when the entry point can't determine it (e.g. file-based `dedupe()`/CLI paths that don't thread it → fused match simply never routes there in v1; document as a follow-up).
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
 ---
@@ -252,7 +279,11 @@ def _try_fused_golden(...):
         return None
 ```
 
-Call it at BOTH the frames path and the dict slow path; on non-`None`, use its output (set `golden_fused_used=True`); on `None`, fall through to the classic builder unchanged. The multi_df is the same clustered frame the classic path builds — do not build a second one.
+Call it at BOTH branches; on non-`None`, use its output (set `golden_fused_used=True`); on `None`, fall through to the classic builder unchanged. **The two branches source the `multi_df` differently:**
+- **Dict slow path (~2536):** `multi_df` (with `__row_id__`+`__cluster_id__`) is a live local — pass it directly.
+- **Frames path (~2386):** there is NO `multi_df` local; the classic path passes `cluster_frames` + `_golden_source` into `build_golden_records_from_frames`, which builds it internally via `_multi_df_from_frames`. So the fused wiring here must call `_multi_df_from_frames(_golden_source, cluster_frames)` itself to get the frame `run_golden_fused_arrow` needs (it takes a `(__row_id__, __cluster_id__, cols)` frame and drops singletons/oversized itself).
+
+**`wants_full_provenance` signal (pin, spec §3):** `= config.output.lineage_provenance` (the single flag that drives `__survivorship_prov__` on the classic path). When it's on, decline fused golden (field-level `source_row_id` would be a silent richness loss).
 
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
@@ -268,21 +299,27 @@ Call it at BOTH the frames path and the dict slow path; on non-`None`, use its o
 
 - [ ] **Step 2: run → fail.**
 
-- [ ] **Step 3: implement** — before the block-build loop (~1657), add:
+- [ ] **Step 3: implement.** Insert the whole-stage short-circuit **BEFORE the scoring stage** — before the `with stage("fuzzy_scoring"): for mk in matchkeys:` loop (~line 1513) and the exact-matching block (~1490), NOT at ~1657 (which is mid-loop, after blocks are built). Covered configs have no exact matchkeys so exact is a no-op, but the short-circuit must precede the whole block/score/cluster sequence.
+
+Two concrete sub-problems the plan pins:
+
+1. **`columns` Mapping is NOT in scope** — `run_match_fused_arrow(columns, config, n_rows)` wants `columns: Mapping[str, pyarrow.Array]`, but the pipeline has a Polars `collected_df`. Build it: `columns = {c: collected_df[c].to_arrow() for c in _fused_needed_src_cols(config)}` (the blocking key + matchkey source columns), `n_rows = collected_df.height`.
+2. **Route the fused clusters to golden via the multi_df, NOT a synthetic clusters dict** — the fused table is `(__row_id__, __cluster_id__)` only. Join `__cluster_id__` onto `collected_df` to build the same `multi_df` the dict path uses, then let the golden seam (Stage E) run on it (fused golden or classic). `run_golden_fused_arrow` takes exactly that frame and drops singletons itself, so no `cluster_frames`/oversized metadata and no `pair_scores` are needed (the `needs_artifacts` gate already excluded `confidence_majority`).
 
 ```python
-if getattr(config, "_use_fused_match", False) and not _run_needs_artifacts(...):  # authoritative re-check
+if getattr(config, "_use_fused_match", False) and not _config_needs_artifacts(config, golden_rules):
     from goldenmatch.core.fused_match import run_match_fused_arrow, run_match_fused_multipass_arrow
-    fused_tbl = run_match_fused_arrow(columns, config, n_rows=n_rows) \
-        or run_match_fused_multipass_arrow(columns, config, n_rows=n_rows)
+    columns = {c: collected_df[c].to_arrow() for c in _fused_needed_src_cols(config)}
+    fused_tbl = run_match_fused_arrow(columns, config, n_rows=collected_df.height) \
+        or run_match_fused_multipass_arrow(columns, config, n_rows=collected_df.height)
     if fused_tbl is not None:
-        clusters = _clusters_from_fused_table(fused_tbl)  # (row_id, cluster_id) -> the cluster shape the golden seam consumes
-        # skip block->score->cluster; feed clusters into the golden seam
-        ... (jump to golden with pair_scores=None, cluster confidence absent)
-    # else fall through to classic
+        multi_df = collected_df.join(pl.from_arrow(fused_tbl), on="__row_id__", how="inner")  # attach __cluster_id__
+        # -> jump to the golden seam on multi_df (dict-path shape); scored_pairs empty, confidence absent (capacity mode)
+        clusters, cluster_frames, scored_pairs = None, None, []  # capacity-mode: no pairs/confidence
+    # else fall through to the classic block->score->cluster path unchanged
 ```
 
-The pipeline re-checks `needs_artifacts` here (authoritative — it has the real output flags), so even if the controller over-set the flag, the pipeline declines when artifacts are actually needed. Wire the fused clusters into the golden seam in the shape it consumes (build the cluster_frames / multi_df from the fused `(row_id, cluster_id)` table). Do NOT produce lineage/pairs/review (the gate ensured they're not needed).
+The pipeline re-checks the **config-driven** `needs_artifacts` conditions here (`_config_needs_artifacts` = auto_split/identity/confidence_majority/lineage_provenance — authoritative in config scope). The caller-intent conditions (lineage/review/explain/anomaly) are already folded into the controller flag via the `_api.py` hint (Task D.3), so they are NOT re-checked here (they aren't in pipeline scope — the reason for the hint). Set `match_fused_capacity_mode=True` for telemetry (Stage G). The exact control-flow to "jump to the golden seam" (a helper that runs the golden branch on `multi_df` and returns the result dict) is the implementer's to structure cleanly — do NOT duplicate the golden branch; factor it or set the locals so the existing golden seam consumes `multi_df`.
 
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
@@ -299,9 +336,9 @@ The pipeline re-checks `needs_artifacts` here (authoritative — it has the real
 
 **Files:** Modify the result-dict assembly + `web/controller_telemetry.py` serializer; Test: `tests/test_fused_telemetry.py`.
 
-- [ ] **Step 1: failing test** — a fused-golden-routed run surfaces `golden_fused_used=True` in the result/telemetry; a fused-match-routed run surfaces `use_fused_match` / `rule_name` containing `fused_match_post_step`.
+- [ ] **Step 1: failing test** — a fused-golden-routed run surfaces `golden_fused_used=True`; a fused-match-routed run surfaces `use_fused_match` / `rule_name` containing `fused_match_post_step` AND `match_fused_capacity_mode=True` (the marker that this run shed scored_pairs/confidence/lineage), so the capacity tradeoff is never silent.
 - [ ] **Step 2: run → fail.**
-- [ ] **Step 3:** add `golden_fused_used: bool` to the `_run_dedupe_pipeline` result dict (set in E.1); confirm `serialize_telemetry` already carries `rule_name` (it does). Surface `golden_fused_used` through the telemetry serializer.
+- [ ] **Step 3:** add `golden_fused_used: bool` + `match_fused_capacity_mode: bool` to the `_run_dedupe_pipeline` result dict (set in E.1 / F.1); confirm `serialize_telemetry` already carries `rule_name` (it does). Surface both new flags through the telemetry serializer.
 - [ ] **Step 4: run → pass. Step 5: commit.**
 
 ### Task G.2: end-to-end integration
