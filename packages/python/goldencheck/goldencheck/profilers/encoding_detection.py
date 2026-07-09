@@ -1,7 +1,6 @@
 """Encoding detection profiler — detects encoding anomalies in string columns."""
 from __future__ import annotations
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
@@ -27,13 +26,12 @@ CONTROL_CHAR_PATTERN = r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]"
 
 
 class EncodingDetectionProfiler(BaseProfiler):
-    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
 
-        if col.dtype not in (pl.Utf8, pl.String):
+        if col.dtype != "str":
             return findings
 
         non_null = col.drop_nulls()
@@ -42,10 +40,9 @@ class EncodingDetectionProfiler(BaseProfiler):
             return findings
 
         # 1. Zero-width Unicode characters (confidence: 0.8 — almost always wrong)
-        zw_mask = non_null.str.contains(ZERO_WIDTH_PATTERN)
-        zw_count = zw_mask.sum()
+        zw_count = non_null.str_match_count(ZERO_WIDTH_PATTERN)
         if zw_count > 0:
-            sample = non_null.filter(zw_mask).head(5).to_list()
+            sample = non_null.str_filter(ZERO_WIDTH_PATTERN, matching=True).to_list()[:5]
             findings.append(Finding(
                 severity=Severity.WARNING,
                 column=column,
@@ -61,10 +58,9 @@ class EncodingDetectionProfiler(BaseProfiler):
             ))
 
         # 2. Smart/curly quotes (confidence: 0.6 — could be intentional)
-        sq_mask = non_null.str.contains(SMART_QUOTES_PATTERN)
-        sq_count = sq_mask.sum()
+        sq_count = non_null.str_match_count(SMART_QUOTES_PATTERN)
         if sq_count > 0:
-            sample = non_null.filter(sq_mask).head(5).to_list()
+            sample = non_null.str_filter(SMART_QUOTES_PATTERN, matching=True).to_list()[:5]
             findings.append(Finding(
                 severity=Severity.INFO,
                 column=column,
@@ -80,12 +76,11 @@ class EncodingDetectionProfiler(BaseProfiler):
             ))
 
         # 3. Non-ASCII characters (confidence: 0.5 — could be valid international text)
-        na_mask = non_null.str.contains(NON_ASCII_PATTERN)
-        na_count = na_mask.sum()
+        na_count = non_null.str_match_count(NON_ASCII_PATTERN)
         if na_count > 0:
             # Only flag if zero-width chars were NOT already found for the same rows
             # (avoid duplicate noise), but still report non-ASCII separately
-            sample = non_null.filter(na_mask).head(5).to_list()
+            sample = non_null.str_filter(NON_ASCII_PATTERN, matching=True).to_list()[:5]
             findings.append(Finding(
                 severity=Severity.INFO,
                 column=column,
@@ -101,10 +96,9 @@ class EncodingDetectionProfiler(BaseProfiler):
             ))
 
         # 4. Control characters (confidence: 0.8 — rarely valid in data)
-        ctrl_mask = non_null.str.contains(CONTROL_CHAR_PATTERN)
-        ctrl_count = ctrl_mask.sum()
+        ctrl_count = non_null.str_match_count(CONTROL_CHAR_PATTERN)
         if ctrl_count > 0:
-            sample = non_null.filter(ctrl_mask).head(5).to_list()
+            sample = non_null.str_filter(CONTROL_CHAR_PATTERN, matching=True).to_list()[:5]
             findings.append(Finding(
                 severity=Severity.WARNING,
                 column=column,
