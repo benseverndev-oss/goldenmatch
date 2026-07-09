@@ -166,14 +166,25 @@ classify_parse_ok = [
     '{"doctype":"generic","confidence":0.2}',                 # generic escape hatch
     '{"doctype":"po","confidence":1.5}',                      # out-of-range -> clamp to 1.0
     '{"doctype":"po","confidence":-0.3}',                     # out-of-range -> clamp to 0.0
+    '{"doctype":"po","confidence":1}',                        # integer coerces to 1.0
+    '{"doctype":"po","confidence":0}',                        # direct 0 -> 0.0 (not via clamp)
 ]
 for text in classify_parse_ok:
     r = _pure_parse(text)
     add("classify_parse", text, {"ok": {"doctype": r.doctype, "confidence": r.confidence}})
 
+# Coercion + strictness boundaries the native leg (CI-only) must match. serde
+# `as_f64()` returns None for null/string/bool -> Err; serde_json REJECTS the bare
+# NaN token (Python json.loads accepts it) -> Err. The `input` here is the raw
+# TEXT the kernel parses (a JSON string value in the jsonl), so a literal `NaN`
+# token rides inside that string and is parsed at kernel time on both legs.
 classify_parse_err = [
-    '{"doctype":"nope","confidence":0.9}',  # unknown doctype
-    '{"doctype":"invoice"}',                # missing confidence
+    '{"doctype":"nope","confidence":0.9}',      # unknown doctype
+    '{"doctype":"invoice"}',                    # missing confidence
+    '{"doctype":"po","confidence":null}',       # present-but-null -> not a number
+    '{"doctype":"po","confidence":"0.9"}',      # string -> not a number
+    '{"doctype":"po","confidence":true}',       # bool -> not a number
+    '{"doctype": "po", "confidence": NaN}',     # non-finite: pure clamps unless guarded, serde rejects
 ]
 for text in classify_parse_err:
     add("classify_parse", text, {"error": True})

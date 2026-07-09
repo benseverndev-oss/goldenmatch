@@ -45,3 +45,21 @@ def test_missing_confidence_raises():
 def test_out_of_range_confidence_clamps():
     assert parse_classify('{"doctype":"po","confidence":1.5}').confidence == 1.0
     assert parse_classify('{"doctype":"po","confidence":-0.3}').confidence == 0.0
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_confidence_raises(token):
+    # Python json.loads accepts bare NaN/Infinity tokens; Rust serde_json rejects
+    # them (strict JSON). Match Rust -- both legs must error, not silently clamp.
+    with pytest.raises(ValueError):
+        parse_classify('{"doctype":"po","confidence":%s}' % token)
+
+
+def test_confidence_coercion_boundaries():
+    # integer confidence coerces to float; direct 0/1 are valid (not via clamp)
+    assert parse_classify('{"doctype":"po","confidence":1}').confidence == 1.0
+    assert parse_classify('{"doctype":"po","confidence":0}').confidence == 0.0
+    # present-but-null, string, and bool confidence all error (parity with as_f64)
+    for bad in ("null", '"0.9"', "true"):
+        with pytest.raises(ValueError):
+            parse_classify('{"doctype":"po","confidence":%s}' % bad)

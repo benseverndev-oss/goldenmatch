@@ -6,6 +6,7 @@ deterministic prompt string + response parsing.
 from __future__ import annotations
 
 import json
+import math
 
 from goldenmatch.documents.types import ClassifyResult
 
@@ -50,7 +51,13 @@ def _pure_parse(text: str) -> ClassifyResult:
     conf = obj["confidence"]
     if isinstance(conf, bool) or not isinstance(conf, (int, float)):
         raise ValueError("confidence is not a number")
-    conf = max(0.0, min(1.0, float(conf)))
+    conf = float(conf)
+    # Python json.loads accepts bare NaN/Infinity/-Infinity; Rust serde_json is
+    # strict-JSON and REJECTS those tokens (-> Err). Match Rust: reject non-finite
+    # BEFORE the clamp (else NaN->1.0 / Infinity->1.0 / -Infinity->0.0 diverges).
+    if not math.isfinite(conf):
+        raise ValueError("confidence is not finite")
+    conf = max(0.0, min(1.0, conf))
     return ClassifyResult(doctype=doctype, confidence=conf)
 
 

@@ -40,5 +40,11 @@
 {"expected": {"ok": {"confidence": 0.2, "doctype": "generic"}}, "input": "{\"doctype\":\"generic\",\"confidence\":0.2}", "kernel": "classify_parse"}
 {"expected": {"ok": {"confidence": 1.0, "doctype": "po"}}, "input": "{\"doctype\":\"po\",\"confidence\":1.5}", "kernel": "classify_parse"}
 {"expected": {"ok": {"confidence": 0.0, "doctype": "po"}}, "input": "{\"doctype\":\"po\",\"confidence\":-0.3}", "kernel": "classify_parse"}
+{"expected": {"ok": {"confidence": 1.0, "doctype": "po"}}, "input": "{\"doctype\":\"po\",\"confidence\":1}", "kernel": "classify_parse"}
+{"expected": {"ok": {"confidence": 0.0, "doctype": "po"}}, "input": "{\"doctype\":\"po\",\"confidence\":0}", "kernel": "classify_parse"}
 {"expected": {"error": true}, "input": "{\"doctype\":\"nope\",\"confidence\":0.9}", "kernel": "classify_parse"}
 {"expected": {"error": true}, "input": "{\"doctype\":\"invoice\"}", "kernel": "classify_parse"}
+{"expected": {"error": true}, "input": "{\"doctype\":\"po\",\"confidence\":null}", "kernel": "classify_parse"}
+{"expected": {"error": true}, "input": "{\"doctype\":\"po\",\"confidence\":\"0.9\"}", "kernel": "classify_parse"}
+{"expected": {"error": true}, "input": "{\"doctype\":\"po\",\"confidence\":true}", "kernel": "classify_parse"}
+{"expected": {"error": true}, "input": "{\"doctype\": \"po\", \"confidence\": NaN}", "kernel": "classify_parse"}
