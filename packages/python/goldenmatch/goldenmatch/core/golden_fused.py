@@ -28,6 +28,13 @@ _GOLDEN_STRATEGY_IDS = {
 }
 _COVERED_STRATEGIES = frozenset(_GOLDEN_STRATEGY_IDS)
 
+# Strategies the kernel implements as pure-scalar branches (needing only the
+# per-column text/code keys, no extra gathered column). Stage 2 adds
+# source_priority/most_recent; Stage 4 adds confidence_majority.
+_KERNEL_SCALAR_STRATEGIES = frozenset(
+    {"most_complete", "majority_vote", "first_non_null", "longest_value", "unanimous_or_null"}
+)
+
 
 def _factorize_codes(values: list) -> list[int]:
     """Map raw values to integer codes in first-occurrence order.
@@ -118,6 +125,10 @@ def _gather_with_nulls(series: pl.Series, idx: list[int]) -> pl.Series:
     """Gather ``series`` at positional ``idx`` (per output cluster), mapping the
     ``-1`` sentinel to null while preserving the source column's native dtype."""
     idx_s = pl.Series("__idx__", idx, dtype=pl.Int64)
+    if (idx_s >= 0).all():
+        # No null sentinel -> a plain gather preserves the source dtype exactly
+        # (and avoids a when/then that Object-dtype columns can't round-trip).
+        return series.gather(idx_s)
     safe = idx_s.clip(lower_bound=0)  # -1 -> 0 (masked out below)
     gathered = series.gather(safe)
     keep = idx_s >= 0
@@ -193,8 +204,10 @@ def run_golden_fused_arrow(
     for c in user_cols:
         rule = rules.field_rules.get(c)
         strat = rule.strategy if isinstance(rule, GoldenFieldRule) else rules.default_strategy
-        # Stage 0: only most_complete is implemented in the kernel.
-        if strat != "most_complete":
+        # Stage 0/1 kernel branches: the pure-scalar strategies (no extra
+        # gathered column). source_priority/most_recent/confidence_majority land
+        # in Stages 2/4 -- decline them until then.
+        if strat not in _KERNEL_SCALAR_STRATEGIES:
             covered = False
         strategy_ids.append(_GOLDEN_STRATEGY_IDS[strat])
     if not covered:
@@ -208,8 +221,22 @@ def run_golden_fused_arrow(
     else:
         row_ids_arr = pa.array(range(n), type=pa.int64())
     cluster_ids_arr = sdf.get_column("__cluster_id__").cast(pl.Int64).to_arrow()
-    text_cols = [sdf.get_column(c).cast(pl.Utf8).to_arrow() for c in user_cols]
-    code_cols: list[Any] = []  # Stage 1 wires factorization codes
+
+    # Build the comparable keys per column from the RAW Python values:
+    #   text = Python `str(v)` (byte-identical to the reference's `str(v)`;
+    #          polars' Utf8 cast can format numbers/dates differently),
+    #   code = `_factorize_codes(v)` (raw-value equality, the grouping key for
+    #          the short-circuit / majority / unanimous).
+    # Codes are passed for EVERY column (the universal short-circuit needs them),
+    # text only matters for most_complete/longest_value but is cheap to carry.
+    text_cols: list[Any] = []
+    code_cols: list[Any] = []
+    for c in user_cols:
+        values = sdf.get_column(c).to_list()
+        text = [None if v is None else str(v) for v in values]
+        codes = _factorize_codes(values)
+        text_cols.append(pa.array(text, type=pa.string()))
+        code_cols.append(pa.array(codes, type=pa.int64()))
 
     winner_idx, field_conf, cluster_ids_out = fn(
         row_ids_arr,

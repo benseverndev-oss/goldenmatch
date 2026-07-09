@@ -9,7 +9,6 @@ the exact `merge_field` survivorship path, which is the byte-parity oracle. See
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
 from goldenmatch.core.golden import build_golden_records_batch
 from goldenmatch.core.golden_fused import (
@@ -17,7 +16,6 @@ from goldenmatch.core.golden_fused import (
     golden_fused_ready,
     run_golden_fused_arrow,
 )
-
 
 # ─── Gate tests (Task 0.1) ───────────────────────────────────────────────────
 
@@ -186,3 +184,123 @@ def test_most_complete_tie_null_and_multicolumn():
         assert row["name"] == r["name"]["value"]
         assert row["extra"] == r["extra"]["value"]
         assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12
+
+
+# ─── remaining pure-scalar strategies (Task 1.2) ─────────────────────────────
+
+
+def _assert_value_conf_parity(df: pl.DataFrame, rules: GoldenRulesConfig, cols: list[str]):
+    """Run both paths on the identical frame + config and assert per-cluster
+    value + confidence equality on every requested user column."""
+    ref = build_golden_records_batch(df, rules)
+    got = run_golden_fused_arrow(df, rules)
+    assert got is not None
+    ref_map = {r["__cluster_id__"]: r for r in ref}
+    got_map = {row["__cluster_id__"]: row for row in got.iter_rows(named=True)}
+    assert set(got_map) == set(ref_map)
+    for cid, row in got_map.items():
+        r = ref_map[cid]
+        for c in cols:
+            assert row[c] == r[c]["value"], f"cluster {cid} col {c}"
+        assert abs(row["__golden_confidence__"] - r["__golden_confidence__"]) < 1e-12
+    return got_map
+
+
+def test_majority_vote_matches_reference():
+    # cluster 1: count tie a/b (2 each) -> winner = first-appearance "a", conf 0.5
+    # cluster 2: clear majority x (2/3), conf 2/3
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 3, 10, 11, 12],
+            "__cluster_id__": [1, 1, 1, 1, 2, 2, 2],
+            "v": ["a", "b", "a", "b", "x", "x", "y"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="majority_vote",
+        field_rules={"v": GoldenFieldRule(strategy="majority_vote")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    # sanity: the tie resolved to the first-appearance value at conf 0.5.
+    assert got[1]["v"] == "a"
+    assert abs(got[1]["__golden_confidence__"] - 0.5) < 1e-12
+
+
+def test_unanimous_or_null_matches_reference():
+    # cluster 1: disagreement -> emits null, conf 0.0
+    # cluster 2: unanimous non-null (a real null ignored) -> value, conf 1.0
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 10, 11, 12],
+            "__cluster_id__": [1, 1, 2, 2, 2],
+            "v": ["a", "b", "z", None, "z"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="unanimous_or_null",
+        field_rules={"v": GoldenFieldRule(strategy="unanimous_or_null")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    assert got[1]["v"] is None
+    assert abs(got[1]["__golden_confidence__"] - 0.0) < 1e-12
+    assert got[2]["v"] == "z"
+
+
+def test_first_non_null_matches_reference():
+    # cluster 1: leading null -> first non-null "b", conf 0.6
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "v": [None, "b", "c", "p", "q"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="first_non_null",
+        field_rules={"v": GoldenFieldRule(strategy="first_non_null")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    assert got[1]["v"] == "b"
+    assert abs(got[1]["__golden_confidence__"] - 0.6) < 1e-12
+
+
+def test_longest_value_matches_reference():
+    # cluster 1: length tie (aa/bb, len 2) -> first-in-order "aa", conf 0.5
+    # cluster 2: unique longest "zzz" -> conf 1.0
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11],
+            "__cluster_id__": [1, 1, 1, 2, 2],
+            "v": ["aa", "bb", "c", "z", "zzz"],
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="longest_value",
+        field_rules={"v": GoldenFieldRule(strategy="longest_value")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    assert got[1]["v"] == "aa"
+    assert abs(got[1]["__golden_confidence__"] - 0.5) < 1e-12
+    assert got[2]["v"] == "zzz"
+
+
+def test_mixed_type_short_circuit_uses_raw_value_equality():
+    # Object column mixing int 1 and float 1.0: they are == (and hash-equal) in
+    # Python, so the reference's raw-value short-circuit (set(v) len 1) fires and
+    # returns the FIRST value (int 1) at conf 1.0. A text-based short-circuit
+    # ("1" != "1.0") would instead run most_complete and return 1.0 -- the bug
+    # the code-factorization short-circuit fixes.
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 1],
+            "v": pl.Series("v", [1, 1.0], dtype=pl.Object),
+        }
+    )
+    rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"v": GoldenFieldRule(strategy="most_complete")},
+    )
+    got = _assert_value_conf_parity(df, rules, ["v"])
+    assert got[1]["v"] == 1
+    assert abs(got[1]["__golden_confidence__"] - 1.0) < 1e-12
