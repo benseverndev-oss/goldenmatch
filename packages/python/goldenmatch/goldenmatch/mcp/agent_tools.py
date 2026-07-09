@@ -415,6 +415,39 @@ AGENT_TOOLS = [
             "required": ["file_path", "query", "column"],
         },
     ),
+    Tool(
+        name="upload_dataset",
+        description=(
+            "Upload a local file's bytes to the server and get back a "
+            "server-side path to reuse across other tools (analyze_data, "
+            "auto_configure, agent_deduplicate, ...). No hosting needed. "
+            "Send base64 (default) or raw text via `encoding`. Uploaded "
+            "files are ephemeral scratch, reaped after "
+            "GOLDENMATCH_MCP_UPLOAD_TTL (default 24h); re-upload if you "
+            "need a path older than that. Max size "
+            "GOLDENMATCH_MCP_MAX_UPLOAD_BYTES (default 64MB) -- above it, "
+            "pass a public http(s) URL as file_path instead."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_content": {
+                    "type": "string",
+                    "description": "File bytes, base64-encoded (or raw text with encoding='text')",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Original filename (extension preserved for format sniffing)",
+                },
+                "encoding": {
+                    "type": "string",
+                    "enum": ["base64", "text"],
+                    "description": "Encoding of file_content (default base64)",
+                },
+            },
+            "required": ["file_content", "filename"],
+        },
+    ),
 ]
 
 _AGENT_TOOL_NAMES = frozenset(t.name for t in AGENT_TOOLS)
@@ -473,6 +506,26 @@ def _dispatch(
     dataset: str | None = None,
 ) -> dict:
     """Dispatch to the appropriate handler by tool name."""
+
+    from goldenmatch.mcp import _ingest
+
+    if name == "upload_dataset":
+        path = _ingest.resolve_input_source(
+            file_path=None,
+            file_content=args["file_content"],
+            filename=args.get("filename"),
+            encoding=args.get("encoding", "base64"),
+        )
+        import os as _os
+        return {
+            "path": path,
+            "bytes": _os.path.getsize(path),
+            "filename": _ingest._safe_filename(args.get("filename")),
+        }
+
+    _ingest_err = _ingest.resolve_ingest_args(name, args)
+    if _ingest_err is not None:
+        return _ingest_err
 
     if name == "analyze_data":
         session = session_cls()
