@@ -63,6 +63,17 @@ def _from_native_json(doc: dict) -> DocTemplate:
     return DocTemplate(doc["doctype"], sch(doc["header_fields"]), sch(doc["line_item_fields"]))
 
 
+def _template_to_dict(t: DocTemplate) -> dict:
+    """Inverse of `_from_native_json`: DocTemplate -> the same JSON dict the native
+    `documents_template` shim emits (`{"doctype","header_fields","line_item_fields"}`).
+    The single importable serializer (was copy-pasted across structured/parity/gen)."""
+    def fields(schema: TargetSchema) -> list[dict]:
+        return [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]
+
+    return {"doctype": t.doctype, "header_fields": fields(t.header),
+            "line_item_fields": fields(t.line_items)}
+
+
 def list_templates() -> list[str]:
     from goldenmatch.core._native_loader import native_enabled, native_module
     if native_enabled("documents") and (nm := native_module()) is not None and hasattr(

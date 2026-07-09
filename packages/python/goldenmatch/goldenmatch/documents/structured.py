@@ -13,23 +13,13 @@ from __future__ import annotations
 
 import json
 
+from goldenmatch.documents.templates import _template_to_dict
 from goldenmatch.documents.types import (
     DocTemplate,
     ExtractedRow,
     StructuredResult,
-    TargetSchema,
+    normalize_row_pure,
 )
-
-
-def _template_to_dict(t: DocTemplate) -> dict:
-    def fields(schema: TargetSchema) -> list[dict]:
-        return [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]
-
-    return {
-        "doctype": t.doctype,
-        "header_fields": fields(t.header),
-        "line_item_fields": fields(t.line_items),
-    }
 
 
 def _record_parts(obj: object) -> tuple[dict, dict]:
@@ -47,27 +37,16 @@ def _record_parts(obj: object) -> tuple[dict, dict]:
     return {}, {}
 
 
-def _pure_normalize(values: object, confidence: object, schema: TargetSchema) -> tuple[dict, dict]:
-    """Pure-Python normalize -- NEVER dispatches to native. Mirrors the pure
-    branch of `ExtractedRow.from_partial` (str-coerce non-null, missing->None,
-    confidence default 0.0) with schema-column order re-imposed."""
-    cols = schema.column_names()
-    vals = values if isinstance(values, dict) else {}
-    conf = confidence if isinstance(confidence, dict) else {}
-    v = {c: (str(vals[c]) if vals.get(c) is not None else None) for c in cols}
-    cf = {c: float(conf.get(c, 0.0)) for c in cols}
-    return v, cf
-
-
 def _pure_structured_parsed(text: str, template: DocTemplate) -> tuple[dict, dict, list[tuple[dict, dict]]]:
     """Pure-only parse. RAISES ValueError on malformed input (missing/absent
-    header, invalid JSON), mirroring the Rust kernel's `Err`. Used by the parity
-    harness and by `parse_structured`'s pure branch."""
+    header, invalid JSON), mirroring the Rust kernel's `Err`. Coercion routes
+    through the shared `normalize_row_pure` (single source of truth vs Rust). Used
+    by the parity harness and by `parse_structured`'s pure branch."""
     obj = json.loads(text)  # json.JSONDecodeError is a ValueError subclass
     if not isinstance(obj, dict) or "header" not in obj:
         raise ValueError("structured response missing 'header'")
     hv, hc = _record_parts(obj["header"])
-    header_v, header_c = _pure_normalize(hv, hc, template.header)
+    header_v, header_c = normalize_row_pure(hv, hc, template.header)
 
     items: list[tuple[dict, dict]] = []
     # Flat doctypes (empty line_item fields, e.g. receipt) force [] regardless.
@@ -76,7 +55,7 @@ def _pure_structured_parsed(text: str, template: DocTemplate) -> tuple[dict, dic
         if isinstance(raw, list):
             for it in raw:
                 iv, ic = _record_parts(it)
-                items.append(_pure_normalize(iv, ic, template.line_items))
+                items.append(normalize_row_pure(iv, ic, template.line_items))
     return header_v, header_c, items
 
 

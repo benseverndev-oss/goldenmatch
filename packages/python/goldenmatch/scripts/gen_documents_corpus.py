@@ -31,7 +31,11 @@ from goldenmatch.documents.classify import _pure_parse, _pure_prompt  # noqa: E4
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict  # noqa: E402
 from goldenmatch.documents.structured import _pure_structured_parsed  # noqa: E402
 from goldenmatch.documents.suggest import _PROMPT  # noqa: E402
-from goldenmatch.documents.templates import _ORDER, _pure_template  # noqa: E402
+from goldenmatch.documents.templates import (  # noqa: E402
+    _ORDER,
+    _pure_template,
+    _template_to_dict,
+)
 from goldenmatch.documents.types import DocTemplate, ExtractedRow  # noqa: E402
 from goldenmatch.documents.vlm_backend import _instruction  # noqa: E402
 
@@ -140,14 +144,8 @@ for c in norm_cases:
 # expected `ok` = the same JSON dict the native shim (documents_template) emits:
 # {"doctype", "header_fields":[{name,kind,hint},...], "line_item_fields":[...]}.
 # Generated from _PURE (via get_template under GOLDENMATCH_NATIVE=0) so pure and
-# corpus can't disagree at generation time.
-def _template_to_dict(t: DocTemplate) -> dict:
-    def fields(schema):
-        return [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]
-    return {"doctype": t.doctype, "header_fields": fields(t.header),
-            "line_item_fields": fields(t.line_items)}
-
-
+# corpus can't disagree at generation time. `_template_to_dict` is imported from
+# templates.py (single serializer shared with structured.py + the parity harness).
 for name in _ORDER:
     add("template", {"doctype": name}, {"ok": _template_to_dict(_pure_template(name))})
 add("template", {"doctype": "nope"}, {"error": True, "substring": "unknown doctype"})
@@ -233,6 +231,21 @@ structured_ok_cases = [
     ('{"header": {"values": {"invoice_number": "INV-4"}}, "line_items": []}', _invoice_tpl),
     # receipt template ignores stray line_items -> []
     ('{"header": {"values": {"merchant_name": "Shop"}}, "line_items": [{"values": {"x": 1}}]}', _receipt_tpl),
+    # --- coercion edges: pin native (CI-only) == pure against the Rust reference ---
+    # confidence null / string / bool on header fields -> 0.0 (as_f64().unwrap_or(0.0))
+    (
+        '{"header": {"values": {"invoice_number": "X"},'
+        ' "confidence": {"invoice_number": null, "total_amount": "0.9", "currency": true}}}',
+        _invoice_tpl,
+    ),
+    # container VALUES -> serde compact JSON (NOT Python repr)
+    ('{"header": {"values": {"invoice_number": [1, 2, 3], "vendor_name": {"a": 1}}}}', _invoice_tpl),
+    # header `values` present-but-non-object -> treated as bare map (all fields null)
+    ('{"header": {"values": 5}}', _invoice_tpl),
+    # header null (key present) -> all-null header row, no error
+    ('{"header": null}', _invoice_tpl),
+    # bare-scalar line item -> one all-null item row
+    ('{"header": {"values": {"invoice_number": "X"}}, "line_items": [5]}', _invoice_tpl),
 ]
 for text, tpl in structured_ok_cases:
     add(

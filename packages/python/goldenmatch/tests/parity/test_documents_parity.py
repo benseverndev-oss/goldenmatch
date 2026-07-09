@@ -31,18 +31,16 @@ from goldenmatch.documents.classify import _pure_parse, _pure_prompt
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
 from goldenmatch.documents.structured import _pure_structured_parsed
 from goldenmatch.documents.suggest import _PROMPT
-from goldenmatch.documents.templates import _from_native_json, _pure_list, _pure_template
+from goldenmatch.documents.templates import (
+    _from_native_json,
+    _pure_list,
+    _pure_template,
+    _template_to_dict,
+)
 from goldenmatch.documents.types import DocTemplate, ExtractedRow
 from goldenmatch.documents.vlm_backend import _instruction
 
 CORPUS = Path(__file__).parent / "documents_corpus.jsonl"
-
-
-def _template_to_dict(t: DocTemplate) -> dict:
-    def fields(schema):
-        return [{"name": f.name, "kind": f.kind, "hint": f.hint} for f in schema.fields]
-    return {"doctype": t.doctype, "header_fields": fields(t.header),
-            "line_item_fields": fields(t.line_items)}
 
 
 def _structured_pairs(header_v: dict, header_c: dict, items: list, template: DocTemplate) -> dict:

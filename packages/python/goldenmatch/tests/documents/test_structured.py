@@ -79,3 +79,40 @@ def test_invalid_json_wraps_error():
     r = parse_structured("not json", INVOICE)
     assert r.header is None
     assert r.error is not None
+
+
+def test_null_confidence_coerces_to_zero_no_crash():
+    # C1: a JSON null confidence must NOT crash (TypeError escapes the ValueError
+    # catch); Rust as_f64().unwrap_or(0.0) -> 0.0. never-raise contract holds.
+    text = '{"header": {"values": {"invoice_number": "X"}, "confidence": {"invoice_number": null}}}'
+    r = parse_structured(text, INVOICE)
+    assert r.error is None
+    assert r.header.confidence["invoice_number"] == 0.0
+
+
+def test_non_numeric_confidence_coerces_to_zero():
+    # I2: string/bool confidence -> 0.0 (Rust as_f64 -> None -> 0.0), NOT float("0.9")/float(True).
+    text = (
+        '{"header": {"values": {"invoice_number": "X"},'
+        ' "confidence": {"invoice_number": "0.9", "total_amount": true}}}'
+    )
+    r = parse_structured(text, INVOICE)
+    assert r.header.confidence["invoice_number"] == 0.0
+    assert r.header.confidence["total_amount"] == 0.0
+
+
+def test_container_values_render_compact_json():
+    # I3: list/dict value -> serde compact JSON, matching Rust py_str, NOT Python repr.
+    text = '{"header": {"values": {"invoice_number": [1, 2, 3], "vendor_name": {"a": 1}}}}'
+    r = parse_structured(text, INVOICE)
+    assert r.header.values["invoice_number"] == "[1,2,3]"
+    assert r.header.values["vendor_name"] == '{"a":1}'
+
+
+def test_scalar_value_coercion_unchanged():
+    # Regression: bool -> "True"/"False", int -> str, null -> None still hold.
+    text = '{"header": {"values": {"invoice_number": 42, "vendor_name": true, "buyer_name": null}}}'
+    r = parse_structured(text, INVOICE)
+    assert r.header.values["invoice_number"] == "42"
+    assert r.header.values["vendor_name"] == "True"
+    assert r.header.values["buyer_name"] is None

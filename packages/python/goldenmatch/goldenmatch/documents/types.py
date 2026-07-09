@@ -20,6 +20,43 @@ class TargetSchema:
         return [f.name for f in self.fields]
 
 
+def _coerce_value(v: object) -> str | None:
+    """Pure-Python mirror of documents-core `normalize::py_str` (the REFERENCE):
+    null/missing -> None; bool -> "True"/"False"; list/dict -> serde-style compact
+    JSON (NOT Python repr); everything else -> str(). Kept byte-identical to Rust."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "True" if v else "False"
+    if isinstance(v, (list, dict)):
+        return json.dumps(v, separators=(",", ":"))
+    return str(v)
+
+
+def _coerce_confidence(c: object) -> float:
+    """Pure-Python mirror of documents-core `normalize_record` confidence:
+    `as_f64().unwrap_or(0.0)` -- a real number (NOT bool) -> its float; null,
+    string, bool, or missing -> 0.0 (coerce, does NOT raise)."""
+    if isinstance(c, bool):
+        return 0.0
+    if isinstance(c, (int, float)):
+        return float(c)
+    return 0.0
+
+
+def normalize_row_pure(values: object, confidence: object, schema: TargetSchema
+                       ) -> tuple[dict[str, str | None], dict[str, float]]:
+    """Pure-only normalize (NEVER dispatches to native). The single source of
+    coercion truth shared by `ExtractedRow.from_partial` and the structured parse
+    path so they can't re-drift from the Rust reference."""
+    cols = schema.column_names()
+    vals = values if isinstance(values, dict) else {}
+    conf = confidence if isinstance(confidence, dict) else {}
+    v = {c: _coerce_value(vals.get(c)) for c in cols}
+    cf = {c: _coerce_confidence(conf.get(c)) for c in cols}
+    return v, cf
+
+
 @dataclass(frozen=True)
 class DocTemplate:
     doctype: str
@@ -70,11 +107,13 @@ class ExtractedRow:
             conf = {c: float(pc.get(c, 0.0)) for c in cols}
             return cls(values=v, confidence=conf,
                        source_file=source_file, source_page=source_page)
-        # coerce non-null values to str: a VLM may return a bare number (phone/zip),
-        # and mixed int/str across rows would make pl.DataFrame(records) raise before
-        # the downstream cast in assemble. Keep None as None.
-        v = {c: (str(values[c]) if values.get(c) is not None else None) for c in cols}
-        conf = {c: float(confidence.get(c, 0.0)) for c in cols}
+        # Pure fallback -- routed through the ONE shared coercion helper so it can't
+        # drift from the Rust reference (str-coerce scalars incl. bool/int, compact
+        # JSON for containers, missing/null value -> None, non-numeric confidence
+        # -> 0.0 without raising). A VLM may return a bare number (phone/zip); mixed
+        # int/str across rows would make pl.DataFrame(records) raise before the
+        # downstream cast in assemble, so scalars are stringified here.
+        v, conf = normalize_row_pure(values, confidence, schema)
         return cls(values=v, confidence=conf,
                    source_file=source_file, source_page=source_page)
 

@@ -183,6 +183,55 @@ mod tests {
     }
 
     #[test]
+    fn confidence_non_numeric_coerces_to_zero() {
+        // Rust reference: `as_f64().unwrap_or(0.0)` -- null/string/bool -> 0.0
+        // (coerce, NOT error; distinct from the classify kernel which errors).
+        let t = invoice();
+        let text = r#"{"header": {"values": {"invoice_number": "X"},
+            "confidence": {"invoice_number": null, "total_amount": "0.9", "currency": true}}}"#;
+        let p = parse_structured(text, &t).unwrap();
+        assert_eq!(p.header.confidence["invoice_number"], 0.0);
+        assert_eq!(p.header.confidence["total_amount"], 0.0);
+        assert_eq!(p.header.confidence["currency"], 0.0);
+    }
+
+    #[test]
+    fn container_values_render_compact_json() {
+        // Rust reference: non-scalar value -> serde compact JSON, NOT a repr.
+        let t = invoice();
+        let text = r#"{"header": {"values": {"invoice_number": [1,2,3], "vendor_name": {"a":1}}}}"#;
+        let p = parse_structured(text, &t).unwrap();
+        assert_eq!(p.header.values["invoice_number"], Some("[1,2,3]".into()));
+        assert_eq!(p.header.values["vendor_name"], Some("{\"a\":1}".into()));
+    }
+
+    #[test]
+    fn header_null_is_all_null_row() {
+        // "header": null -> key present, so NOT missing; record_parts collapses a
+        // non-object to empty maps -> all fields null / 0.0 (no Err).
+        let t = invoice();
+        let p = parse_structured(r#"{"header": null}"#, &t).unwrap();
+        assert_eq!(p.header.values["invoice_number"], None);
+        assert_eq!(p.header.confidence["invoice_number"], 0.0);
+    }
+
+    #[test]
+    fn header_values_non_object_falls_through_to_bare() {
+        // {"values": 5} -- `values` present but not an object -> treated as bare map.
+        let t = invoice();
+        let p = parse_structured(r#"{"header": {"values": 5}}"#, &t).unwrap();
+        assert_eq!(p.header.values["invoice_number"], None);
+    }
+
+    #[test]
+    fn bare_scalar_line_item_is_all_null() {
+        let t = invoice();
+        let p = parse_structured(r#"{"header": {"values": {}}, "line_items": [5]}"#, &t).unwrap();
+        assert_eq!(p.line_items.len(), 1);
+        assert_eq!(p.line_items[0].values["description"], None);
+    }
+
+    #[test]
     fn missing_header_errs() {
         let t = invoice();
         assert!(parse_structured(r#"{"line_items": []}"#, &t).is_err());
