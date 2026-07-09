@@ -1,7 +1,6 @@
 """Format detection profiler — detects email, phone, and URL patterns in string columns."""
 from __future__ import annotations
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
@@ -18,13 +17,12 @@ FORMATS = [
 
 
 class FormatDetectionProfiler(BaseProfiler):
-    def profile(self, frame: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
 
-        if col.dtype not in (pl.Utf8, pl.String):
+        if col.dtype != "str":
             return findings
 
         non_null = col.drop_nulls()
@@ -33,8 +31,7 @@ class FormatDetectionProfiler(BaseProfiler):
             return findings
 
         for fmt_name, pattern in FORMATS:
-            matches = non_null.str.contains(pattern)
-            match_count = matches.sum()
+            match_count = non_null.str_match_count(pattern)
             match_pct = match_count / total
 
             if match_pct > 0.70:
@@ -50,8 +47,7 @@ class FormatDetectionProfiler(BaseProfiler):
                 ))
                 non_match_count = total - match_count
                 if non_match_count > 0:
-                    non_matching = non_null.filter(~matches)
-                    sample = non_matching.head(5).to_list()
+                    sample = non_null.str_filter(pattern, matching=False).to_list()[:5]
                     # Non-matching findings inherit same confidence as detection
                     findings.append(Finding(
                         severity=Severity.WARNING,
@@ -74,8 +70,7 @@ class FormatDetectionProfiler(BaseProfiler):
                 }
                 for other_fmt, other_pattern in CROSS_FORMAT_CHECKS.get(fmt_name, []):
                     if non_match_count > 0:
-                        wrong_fmt_matches = non_null.filter(~matches).str.contains(other_pattern)
-                        wrong_fmt_count = wrong_fmt_matches.sum()
+                        wrong_fmt_count = non_null.str_filter(pattern, matching=False).str_match_count(other_pattern)
                         if wrong_fmt_count > 0:
                             wrong_pct = wrong_fmt_count / total
                             findings.append(Finding(

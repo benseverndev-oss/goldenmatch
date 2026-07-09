@@ -25,6 +25,8 @@ class Column(Protocol):
     def dtype(self) -> str: ...
     def cast(self, kind: str, *, strict: bool = False) -> Column: ...
     def member_count(self, values: list) -> int: ...
+    def str_match_count(self, pattern: str) -> int: ...
+    def str_filter(self, pattern: str, *, matching: bool) -> Column: ...
 
 
 @runtime_checkable
@@ -94,6 +96,13 @@ class PolarsColumn:
 
     def member_count(self, values: list) -> int:
         return int(self._s.is_in(values).sum())
+
+    def str_match_count(self, pattern: str) -> int:
+        return int(self._s.str.contains(pattern).sum())
+
+    def str_filter(self, pattern: str, *, matching: bool) -> PolarsColumn:
+        mask = self._s.str.contains(pattern)
+        return PolarsColumn(self._s.filter(mask if matching else ~mask))
 
 
 class PolarsFrame:

@@ -62,3 +62,21 @@ def test_column_member_count():
     from goldencheck.core.frame import to_frame
     col = to_frame(pl.DataFrame({"x": ["a", "b", "a", "c", None]})).column("x")
     assert col.member_count(["a", "c"]) == 3   # a,a,c ; matches int(s.is_in(v).sum())
+
+
+def test_column_str_match_count():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"x": ["a@b.com", "nope", "c@d.org"]})).column("x")
+    assert col.str_match_count(r"@") == 2
+    assert col.str_match_count(r"^z") == 0
+
+
+def test_column_str_filter_matching_and_complement():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"x": ["a@b", "nope", "c@d"]})).column("x")
+    assert col.str_filter(r"@", matching=True).to_list() == ["a@b", "c@d"]
+    assert col.str_filter(r"@", matching=False).to_list() == ["nope"]
+    col2 = to_frame(pl.DataFrame({"x": ["http://x", "e@f.com", "plain"]})).column("x")
+    assert col2.str_filter(r"^https?://", matching=False).str_match_count(r"@") == 1
