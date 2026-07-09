@@ -30,11 +30,27 @@ import {
   extractInstruction,
   suggestPrompt,
   normalizeRecord,
+  documentsTemplate,
+  documentsTemplateList,
+  documentsClassifyPrompt,
+  documentsParseClassify,
+  documentsParseStructured,
   type TargetSchema,
+  type DocTemplate,
 } from "../../src/core/documentsWasm.js";
 
 interface Row {
-  kernel: "schema" | "parse" | "prompt_extract" | "prompt_suggest" | "normalize";
+  kernel:
+    | "schema"
+    | "parse"
+    | "prompt_extract"
+    | "prompt_suggest"
+    | "normalize"
+    | "template"
+    | "template_list"
+    | "classify_prompt"
+    | "classify_parse"
+    | "parse_structured";
   input: any;
   expected: { ok?: unknown; error?: boolean; substring?: string };
 }
@@ -63,6 +79,30 @@ function normalizeToPairs(input: any): {
   };
 }
 
+// Reshape the parse_structured kernel's {header:{values,confidence},
+// line_items:[{values,confidence}]} output into ordered [col,val] pairs
+// (template field order for header + line items) — mirrors the Python oracle's
+// `_structured_pairs`. expected.ok is ordered pairs, NOT the raw object.
+function structuredToPairs(input: any): {
+  header: { values: [string, unknown][]; confidence: [string, number][] };
+  line_items: { values: [string, unknown][]; confidence: [string, number][] }[];
+} {
+  const template = input.template as DocTemplate;
+  const hcols: string[] = template.header_fields.map((f) => f.name);
+  const icols: string[] = template.line_item_fields.map((f) => f.name);
+  const out = documentsParseStructured(input.text as string, template);
+  return {
+    header: {
+      values: hcols.map((c) => [c, out.header.values[c] ?? null]),
+      confidence: hcols.map((c) => [c, Number(out.header.confidence[c] ?? 0)]),
+    },
+    line_items: out.line_items.map((it) => ({
+      values: icols.map((c) => [c, it.values[c] ?? null]),
+      confidence: icols.map((c) => [c, Number(it.confidence[c] ?? 0)]),
+    })),
+  };
+}
+
 // Run one kernel for the SUCCESS path; returns a value shaped like expected.ok.
 function runOk(row: Row): unknown {
   switch (row.kernel) {
@@ -76,6 +116,16 @@ function runOk(row: Row): unknown {
       return suggestPrompt();
     case "normalize":
       return normalizeToPairs(row.input);
+    case "template":
+      return documentsTemplate(row.input.doctype);
+    case "template_list":
+      return documentsTemplateList();
+    case "classify_prompt":
+      return documentsClassifyPrompt();
+    case "classify_parse":
+      return documentsParseClassify(row.input);
+    case "parse_structured":
+      return structuredToPairs(row.input);
   }
 }
 

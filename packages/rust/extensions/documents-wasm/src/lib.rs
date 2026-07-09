@@ -28,6 +28,32 @@ pub fn suggest_prompt() -> String {
 }
 
 #[wasm_bindgen]
+pub fn documents_template(doctype: &str) -> Result<String, JsError> {
+    core::templates::template_json(doctype).map_err(|e| JsError::new(&e))
+}
+
+#[wasm_bindgen]
+pub fn documents_template_list() -> String {
+    core::templates::template_list_json()
+}
+
+#[wasm_bindgen]
+pub fn documents_classify_prompt() -> String {
+    core::classify::classify_prompt().to_string()
+}
+
+#[wasm_bindgen]
+pub fn documents_parse_classify(text: &str) -> Result<String, JsError> {
+    core::classify::parse_classify_json(text).map_err(|e| JsError::new(&e))
+}
+
+#[wasm_bindgen]
+pub fn documents_parse_structured(text: &str, template_json: &str) -> Result<String, JsError> {
+    let t = core::templates::template_from_json(template_json).map_err(|e| JsError::new(&e))?;
+    core::extract_structured::parse_structured_json(text, &t).map_err(|e| JsError::new(&e))
+}
+
+#[wasm_bindgen]
 pub fn normalize_record(
     values_json: &str,
     confidence_json: &str,
