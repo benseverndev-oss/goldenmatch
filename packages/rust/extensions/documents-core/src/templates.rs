@@ -4,9 +4,9 @@
 //! (doctype, header_fields, line_item_fields) -- see `schema.rs` for the
 //! "serialize the STRUCT not json!/BTreeMap" discipline.
 use crate::schema::Field;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocTemplate {
     pub doctype: String,
     pub header_fields: Vec<Field>,
@@ -60,6 +60,14 @@ pub fn template_list_json() -> String {
     serde_json::to_string(&template_list()).expect("list serializes")
 }
 
+/// Deserialize the exact bytes `template_json`/`documents_template` emit
+/// (`{"doctype","header_fields","line_item_fields"}`) back into a `DocTemplate`.
+/// The ONLY new parse path for the structured kernel -- lets it accept ANY
+/// template JSON (incl. a custom one a caller injects), keeping native/pure parity.
+pub fn template_from_json(s: &str) -> Result<DocTemplate, String> {
+    serde_json::from_str(s).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,6 +91,15 @@ mod tests {
     #[test]
     fn list_is_stable_order() {
         assert_eq!(template_list(), vec!["invoice","po","statement","receipt"]);
+    }
+    #[test]
+    fn template_from_json_round_trips() {
+        for name in template_list() {
+            let j = template_json(&name).unwrap();
+            let t = template_from_json(&j).unwrap();
+            assert_eq!(t, template(&name).unwrap());
+        }
+        assert!(template_from_json("not json").is_err());
     }
     #[test]
     fn template_json_key_order_is_declaration_order() {

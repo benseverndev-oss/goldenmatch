@@ -173,7 +173,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "documents": ("documents_parse_message_text", "documents_schema_validate",
                   "documents_extract_instruction", "documents_normalize_record",
                   "documents_template", "documents_template_list",
-                  "documents_classify_prompt", "documents_parse_classify"),
+                  "documents_classify_prompt", "documents_parse_classify",
+                  "documents_parse_structured"),
     # "sail_scoring" is intentionally absent -> _FALLBACK_ONLY below.
 }
 

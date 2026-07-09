@@ -40,6 +40,11 @@ pub fn documents_parse_classify(text: &str) -> PyResult<String> {
     core::classify::parse_classify_json(text).map_err(PyValueError::new_err)
 }
 #[pyfunction]
+pub fn documents_parse_structured(text: &str, template_json: &str) -> PyResult<String> {
+    let t = core::templates::template_from_json(template_json).map_err(PyValueError::new_err)?;
+    core::extract_structured::parse_structured_json(text, &t).map_err(PyValueError::new_err)
+}
+#[pyfunction]
 pub fn documents_normalize_record(
     values_json: &str,
     confidence_json: &str,

@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO))
 from goldenmatch.documents._openai import parse_message_text  # noqa: E402
 from goldenmatch.documents.classify import _pure_parse, _pure_prompt  # noqa: E402
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict  # noqa: E402
+from goldenmatch.documents.structured import _pure_structured_parsed  # noqa: E402
 from goldenmatch.documents.suggest import _PROMPT  # noqa: E402
 from goldenmatch.documents.templates import _ORDER, _pure_template  # noqa: E402
 from goldenmatch.documents.types import DocTemplate, ExtractedRow  # noqa: E402
@@ -188,6 +189,70 @@ classify_parse_err = [
 ]
 for text in classify_parse_err:
     add("classify_parse", text, {"error": True})
+
+# --- parse_structured ------------------------------------------------------
+# Keyed by {"text":..., "template": <DocTemplate dict>} (NOT doctype -- the kernel
+# takes the FULL template JSON). `ok` = header + per-item ordered [col,val] pairs
+# (mirrors the `normalize` reshape); column order is re-imposed downstream so the
+# raw alphabetical native map isn't asserted directly. Generated from the pure-only
+# kernel so pure and corpus can't disagree at generation time.
+def _structured_ok(text: str, template: DocTemplate) -> dict:
+    hv, hc, items = _pure_structured_parsed(text, template)
+    hcols = template.header.column_names()
+    icols = template.line_items.column_names()
+    return {
+        "header": {
+            "values": [[c, hv[c]] for c in hcols],
+            "confidence": [[c, hc[c]] for c in hcols],
+        },
+        "line_items": [
+            {
+                "values": [[c, iv[c]] for c in icols],
+                "confidence": [[c, ic[c]] for c in icols],
+            }
+            for iv, ic in items
+        ],
+    }
+
+
+_invoice_tpl = _pure_template("invoice")
+_receipt_tpl = _pure_template("receipt")
+structured_ok_cases = [
+    # header wrapped shape + 2 line items
+    (
+        '{"header": {"values": {"invoice_number": "INV-1", "total_amount": 42,'
+        ' "currency": "USD"}, "confidence": {"invoice_number": 0.9}},'
+        ' "line_items": [{"values": {"description": "Widget", "quantity": 2,'
+        ' "unit_price": 10, "line_total": 20}, "confidence": {"description": 0.8}},'
+        ' {"values": {"description": "Gadget", "quantity": 1}}]}',
+        _invoice_tpl,
+    ),
+    # bare header shape + missing field -> null + extra key dropped, no items
+    ('{"header": {"invoice_number": "INV-B", "currency": "EUR", "junk": "x"}}', _invoice_tpl),
+    # explicitly empty line_items -> []
+    ('{"header": {"values": {"invoice_number": "INV-4"}}, "line_items": []}', _invoice_tpl),
+    # receipt template ignores stray line_items -> []
+    ('{"header": {"values": {"merchant_name": "Shop"}}, "line_items": [{"values": {"x": 1}}]}', _receipt_tpl),
+]
+for text, tpl in structured_ok_cases:
+    add(
+        "parse_structured",
+        {"text": text, "template": _template_to_dict(tpl)},
+        {"ok": _structured_ok(text, tpl)},
+    )
+
+# malformed: missing header / invalid JSON -> Err (both legs)
+structured_err_cases = [
+    ('{"line_items": []}', _invoice_tpl),      # no header
+    ("not json", _invoice_tpl),                # invalid JSON
+    ("[1, 2, 3]", _invoice_tpl),               # JSON but not an object
+]
+for text, tpl in structured_err_cases:
+    add(
+        "parse_structured",
+        {"text": text, "template": _template_to_dict(tpl)},
+        {"error": True},
+    )
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 with OUT.open("w", encoding="utf-8") as f:

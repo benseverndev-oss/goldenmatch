@@ -88,6 +88,16 @@ class ExtractResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class StructuredResult:
+    """One structured document: a header row + linked line-item rows. On a
+    malformed response the flow RECORDS the error (report.errors) rather than
+    raising, so parse helpers WRAP failures here instead of throwing."""
+    header: ExtractedRow | None
+    line_items: list[ExtractedRow] = field(default_factory=list)
+    error: str | None = None
+
+
 @dataclass
 class IngestReport:
     n_files: int = 0
