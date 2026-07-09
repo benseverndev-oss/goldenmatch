@@ -5,7 +5,18 @@ exercise it in isolation.
 """
 
 import pytest
-from goldenmatch.core.fused_routing import estimate_classic_match_peak_rss_gb
+from goldenmatch.config.schemas import (
+    GoldenFieldRule,
+    GoldenGroupRule,
+    GoldenMatchConfig,
+    GoldenRulesConfig,
+    IdentityConfig,
+    OutputConfig,
+)
+from goldenmatch.core.fused_routing import (
+    config_needs_artifacts,
+    estimate_classic_match_peak_rss_gb,
+)
 
 
 def test_est_rss_monotonic_and_components():
@@ -117,3 +128,122 @@ def test_est_rss_calibrated_to_bench_1m_5m(
 ):
     est = estimate_classic_match_peak_rss_gb(n_rows, est_pairs, block_max, n_cols)
     assert 0.7 * measured <= est <= 1.3 * measured, f"{est} vs {measured}"
+
+
+# --- Stage C: config_needs_artifacts (config-driven divergence gate) -----------
+#
+# `config_needs_artifacts` is the OR of the CONFIG-driven conditions that make
+# bare-connected-component match_fused diverge from classic or drop consumed
+# artifacts. NOTE the auto_split narrowness (see the fn docstring): auto_split
+# DEFAULTS True, so nearly every default config returns True here -- the all-clear
+# case must explicitly set auto_split=False to route match at all.
+
+
+def _clean_golden_rules(**overrides) -> GoldenRulesConfig:
+    """A golden_rules with EVERY divergence condition off (auto_split=False,
+    a non-CM default_strategy, no CM anywhere) so a single override isolates the
+    condition under test."""
+    kwargs = {"default_strategy": "most_complete", "auto_split": False}
+    kwargs.update(overrides)
+    return GoldenRulesConfig(**kwargs)
+
+
+def test_auto_split_on_blocks():
+    # auto_split=True (the DEFAULT) forces needs_artifacts True on its own.
+    cfg = GoldenMatchConfig(golden_rules=_clean_golden_rules(auto_split=True))
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_none_golden_rules_defaults_to_needs_artifacts():
+    # A None golden_rules resolves to the pipeline default auto_split=True
+    # (pipeline.py ~2126), so it is default-DENY (needs artifacts).
+    cfg = GoldenMatchConfig(golden_rules=None)
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_identity_enabled_blocks():
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(),
+        identity=IdentityConfig(enabled=True),
+    )
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_confidence_majority_default_strategy_blocks():
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(default_strategy="confidence_majority"),
+    )
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_confidence_majority_field_rule_blocks():
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(
+            field_rules={"name": GoldenFieldRule(strategy="confidence_majority")},
+        ),
+    )
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_confidence_majority_list_form_clause_blocks():
+    # list-form field_rules: exactly one when-less default clause, last. The CM
+    # strategy lives in a when-guarded clause -- the helper must scan all clauses.
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(
+            field_rules={
+                "name": [
+                    GoldenFieldRule(strategy="confidence_majority", when="size > 3"),
+                    GoldenFieldRule(strategy="most_complete"),
+                ],
+            },
+        ),
+    )
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_field_group_non_cm_does_not_block():
+    # A field_group CANNOT carry confidence_majority (its validator restricts
+    # group strategies to {most_complete, source_priority, most_recent, anchor}).
+    # The helper still scans field_groups defensively per spec, so a valid
+    # (non-CM) group must NOT trip the gate on its own.
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(
+            field_groups=[
+                GoldenGroupRule(
+                    name="addr",
+                    columns=["street", "city"],
+                    strategy="most_complete",
+                )
+            ],
+        ),
+    )
+    assert config_needs_artifacts(cfg) is False
+
+
+def test_confidence_majority_cluster_override_blocks():
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(
+            cluster_overrides={
+                7: {"name": GoldenFieldRule(strategy="confidence_majority")}
+            },
+        ),
+    )
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_lineage_provenance_blocks():
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(),
+        output=OutputConfig(lineage_provenance=True),
+    )
+    assert config_needs_artifacts(cfg) is True
+
+
+def test_all_clear_returns_false():
+    # auto_split OFF, identity off, no confidence_majority, no lineage-provenance.
+    cfg = GoldenMatchConfig(
+        golden_rules=_clean_golden_rules(),
+        identity=IdentityConfig(enabled=False),
+        output=OutputConfig(lineage_provenance=False),
+    )
+    assert config_needs_artifacts(cfg) is False

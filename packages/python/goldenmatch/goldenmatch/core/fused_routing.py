@@ -59,3 +59,81 @@ def estimate_classic_match_peak_rss_gb(
     pairs_b = est_pairs * _BYTES_PER_PAIR
     block_b = (block_max**2) * 8 * _BLOCK_CONCURRENCY
     return _RSS_SCALE * (frame_b + pairs_b + block_b) / 1e9
+
+
+def _golden_uses_confidence_majority(golden_rules) -> bool:
+    """True if the golden rules select ``confidence_majority`` anywhere.
+
+    Scans all four strategy locations on ``GoldenRulesConfig``:
+    ``default_strategy`` (which the validator also resolves from ``default``),
+    ``field_rules`` (each value is a single ``GoldenFieldRule`` OR a list of
+    when-guarded clauses), ``field_groups`` (``GoldenGroupRule.strategy`` --
+    scanned defensively, though its validator currently forbids CM there), and
+    ``cluster_overrides`` (``dict[int, dict[field, GoldenFieldRule]]``).
+
+    ``confidence_majority`` survivorship needs per-pair scores, which bare
+    connected-component match_fused can't supply -> divergence.
+    """
+    if golden_rules is None:
+        return False
+    if golden_rules.default_strategy == "confidence_majority":
+        return True
+    for rule in golden_rules.field_rules.values():
+        clauses = rule if isinstance(rule, list) else [rule]
+        if any(clause.strategy == "confidence_majority" for clause in clauses):
+            return True
+    if any(g.strategy == "confidence_majority" for g in golden_rules.field_groups):
+        return True
+    if golden_rules.cluster_overrides:
+        for field_map in golden_rules.cluster_overrides.values():
+            if any(r.strategy == "confidence_majority" for r in field_map.values()):
+                return True
+    return False
+
+
+def config_needs_artifacts(config) -> bool:
+    """Config-driven divergence gate for match routing (spec §4.3).
+
+    Returns True when the CONFIG alone forces the classic (block->score->cluster)
+    path -- i.e. bare-connected-component ``match_fused`` would either DIVERGE
+    from classic output or drop artifacts a consumer needs. OR of:
+
+    - ``golden_rules.auto_split`` (DEFAULT True) -- classic MST-splits oversized
+      clusters + downgrades weak clusters; bare CCs don't.
+    - ``config.identity.enabled`` -- builds evidence edges from pair scores
+      match_fused can't produce.
+    - golden uses ``confidence_majority`` anywhere -- needs pair scores.
+    - ``config.output.lineage_provenance`` -- full ``__survivorship_prov__``
+      the fused golden path can't reproduce.
+
+    This is the CONFIG-only half of ``needs_artifacts`` (both the controller and
+    the pipeline read it authoritatively -- single source of truth). Caller-intent
+    flags (lineage/review/explain/anomaly requested) are threaded separately via
+    the ``_api.py`` ``fused_match_allowed`` hint, NOT here.
+
+    NONE-guards: ``golden_rules`` None resolves to the pipeline default where
+    ``auto_split=True`` (``pipeline.py`` ~2126), so a None golden_rules is
+    default-DENY (returns True). ``config.identity`` / ``config.output`` None are
+    treated as the feature being off.
+
+    NARROWNESS (spec §4.3, important for a future reader): because
+    ``auto_split`` DEFAULTS True, this returns True for almost every default
+    config -- so match routing rarely fires. It fires ONLY when the user
+    explicitly set ``golden_rules.auto_split=False`` (and the other three
+    conditions are clear). This narrowness is intended: match routing is a
+    capacity-survival escape hatch under memory pressure, not a broad default.
+    """
+    golden_rules = config.golden_rules
+    # None golden_rules -> pipeline default auto_split=True -> default-DENY.
+    auto_split = True if golden_rules is None else golden_rules.auto_split
+    if auto_split:
+        return True
+    identity = config.identity
+    if identity is not None and identity.enabled:
+        return True
+    if _golden_uses_confidence_majority(golden_rules):
+        return True
+    output = config.output
+    if output is not None and output.lineage_provenance:
+        return True
+    return False
