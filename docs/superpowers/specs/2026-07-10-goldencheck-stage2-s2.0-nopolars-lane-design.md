@@ -51,7 +51,8 @@ This spec designs **S2.0** — the smallest real first piece — and locks the S
    non-Polars backend yet — that arrives with S2.1).
 3. An **advisory** `goldencheck_nopolars` CI lane in `.github/workflows/ci.yml`: a `changes`-job output +
    filter block (goldencheck paths + the workflow file) + a job that `uv pip uninstall polars`, verifies
-   it's gone, and runs `pytest tests/nopolars --no-sync --noconftest`. NOT in `ci-required`.
+   it's gone, and runs `pytest tests/nopolars --no-sync --noconftest` (`--noconftest` a defensive
+   parity carry-over — goldencheck has no `tests/conftest.py` today). NOT in `ci-required`.
 4. This roadmap doc.
 
 ### Explicitly NOT in scope
@@ -126,6 +127,11 @@ path-filter rules):
          - name: Polars-absent proof (tests/nopolars)
            run: uv run --no-sync python -m pytest packages/python/goldencheck/tests/nopolars --noconftest -v
    ```
+   `--no-sync` so uv doesn't reinstall polars before the run. `--noconftest` is a **defensive parity
+   carry-over** from goldenflow's lane: goldencheck currently has NO `tests/conftest.py` (verified), so
+   `--noconftest` is a harmless no-op today; it keeps the lane robust if a polars-importing conftest is
+   ever added above `tests/nopolars/`. The nopolars tests use only builtin fixtures, so `--noconftest`
+   never removes anything they need.
    Use the EXACT action SHA pins the surrounding ci.yml already uses (do not introduce new/unpinned
    actions). Advisory: do NOT add `goldencheck_nopolars` to any `ci-required` / required-status
    aggregation job.
@@ -154,8 +160,10 @@ and the weight-payoff-only-at-P4 reality.
 - **ci.yml wiring** — the highest-risk part. Must add the `changes` output + filter + job consistently,
   reuse existing action SHAs, keep it advisory, and re-validate the YAML (0-job trap). Follow the
   monorepo CLAUDE.md's CI-path-filter section exactly.
-- **`--noconftest` scope** — the parent `tests/conftest.py` imports polars, so the lane runs the nopolars
-  dir with `--noconftest`; the nopolars tests must therefore use only builtin fixtures (they use none).
+- **`--noconftest` is defensive, not load-bearing** — goldencheck has NO `tests/conftest.py` today
+  (unlike goldenflow, whose conftest imports polars), so `--noconftest` is a harmless no-op carried over
+  for parity + future-robustness. The nopolars tests use only builtin fixtures, so it never removes
+  anything they need.
 - **No covered scan yet** — S2.0 deliberately proves less than goldenflow's lane (no reduced scan). This
   is honest: goldencheck has no non-Polars backend until S2.1. Documented in the module docstring + here.
 
