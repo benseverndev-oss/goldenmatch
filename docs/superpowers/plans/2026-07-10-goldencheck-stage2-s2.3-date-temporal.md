@@ -190,14 +190,15 @@ def test_pycolumn_str_to_date_and_date_ops_match_polars():
     # date ops on two date columns
     dd = {"a": ["2021-05-01", "2021-01-01", None], "b": ["2021-01-01", "2021-06-01", "2021-01-01"]}
     pa = PolarsFrame(pl.DataFrame(dd)); ya = PyFrame.from_columns(dd)
-    for fr in (pa, ya):
+    results = {}
+    for tag, fr in (("pol", pa), ("py", ya)):
         A = fr.column("a").str_to_date("%Y-%m-%d", strict=False)
         B = fr.column("b").str_to_date("%Y-%m-%d", strict=False)
         mask = A.gt_mask(B).fill_null(False)
-        fr._vc = (mask.to_list(), mask.sum(), A.filter_by(mask).cast("str").to_list())
-    assert pa._vc == ya._vc
+        results[tag] = (mask.to_list(), mask.sum(), A.filter_by(mask).cast("str").to_list())
+    assert results["pol"] == results["py"]
 ```
-(The `fr._vc` stash is a test-local hack to compare both backends' mask/sum/cast in one loop; fine for a test.)
+(Use a local dict keyed by backend — do NOT stash onto the frame instance: `PolarsFrame`/`PyFrame` use `__slots__`, so `fr._vc = ...` would raise `AttributeError` and false-RED the test.)
 
 - [ ] **Step 2: Run → FAIL** (`AttributeError: 'PyColumn' object has no attribute 'str_to_date'`):
 ```bash
@@ -331,6 +332,7 @@ def test_scan_columns_includes_temporal(data):
     expected.extend(TemporalOrderProfiler().profile(pol))
     assert scan_columns(data) == expected
 ```
+(This `expected` uses `_HARD_PROFILERS` unconditionally + temporal gated on `native_enabled("str_to_date")`. Assumption: regex + str_to_date ship in the SAME native module, so both symbols are always present together — matches the S2.2 hardops test's unconditional `_HARD_PROFILERS`. If the symbols were ever split across separate native builds, these `expected` builders would need per-component gates.)
 
 - [ ] **Step 2: Run → FAIL** (temporal findings missing from `scan_columns`):
 ```bash
