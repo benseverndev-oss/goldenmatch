@@ -235,11 +235,119 @@ fn build_graph(
     })
 }
 
+// ---------------------------------------------------------------------------
+// JSON-boundary functions (cross-surface parity surface).
+//
+// These mirror the `goldengraph-wasm` `*_impl` functions EXACTLY: `(json,
+// args...) -> json`, marshaled by the same `serde_json` over the same
+// `goldengraph-core`. So the Python native output is byte-identical to the
+// TS/WASM output and the C-ABI output by construction -- all four surfaces
+// share one kernel and one JSON boundary. The pyclass API above (PyGraph /
+// PyStore) is the ergonomic in-process surface; these are the gate-able,
+// parity-checkable symbols the `_native_loader` probes and
+// `tests/test_native_parity.py` asserts against the shared `queries.json`
+// oracle (the same fixture the TS `goldengraph-wasm.parity.test.ts` uses).
+// ---------------------------------------------------------------------------
+
+fn err(e: impl std::fmt::Display) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// Parse the `resolution` JSON: a `{mention_id: entity_id}` object (Provided)
+/// or a `["native", scorer_id, threshold]` array. Mirrors the wasm parser.
+fn parse_resolution_json(resolution_json: &str) -> PyResult<ResolutionMode> {
+    if let Ok(map) = serde_json::from_str::<HashMap<MentionId, EntityId>>(resolution_json) {
+        return Ok(ResolutionMode::Provided(map));
+    }
+    if let Ok((tag, scorer_id, threshold)) =
+        serde_json::from_str::<(String, u8, f64)>(resolution_json)
+    {
+        if tag == "native" {
+            return Ok(ResolutionMode::Native(NativeConfig {
+                scorer_id,
+                threshold,
+            }));
+        }
+    }
+    Err(err(
+        "resolution must be a JSON object {mention:entity} or [\"native\",scorer_id,threshold]",
+    ))
+}
+
+/// `(mentions_json, edges_json, resolution_json) -> graph_json`.
+#[pyfunction]
+fn build_graph_json(mentions_json: &str, edges_json: &str, resolution_json: &str) -> PyResult<String> {
+    let mentions: Vec<Mention> = serde_json::from_str(mentions_json).map_err(err)?;
+    let edges: Vec<MentionEdge> = serde_json::from_str(edges_json).map_err(err)?;
+    let mode = parse_resolution_json(resolution_json)?;
+    let g = core_build_graph(&mentions, &edges, mode);
+    serde_json::to_string(&g).map_err(err)
+}
+
+/// `(graph_json, seeds_json, hops) -> subgraph_json`.
+#[pyfunction]
+fn neighborhood_json(graph_json: &str, seeds_json: &str, hops: u8) -> PyResult<String> {
+    let g: Graph = serde_json::from_str(graph_json).map_err(err)?;
+    let seeds: Vec<EntityId> = serde_json::from_str(seeds_json).map_err(err)?;
+    serde_json::to_string(&neighborhood(&g, &seeds, hops)).map_err(err)
+}
+
+/// `(graph_json, name) -> ids_json`.
+#[pyfunction]
+fn seeds_by_name_json(graph_json: &str, name: &str) -> PyResult<String> {
+    let g: Graph = serde_json::from_str(graph_json).map_err(err)?;
+    serde_json::to_string(&core_seeds_by_name(&g, name)).map_err(err)
+}
+
+/// `(graph_json) -> communities_json`.
+#[pyfunction]
+fn communities_json(graph_json: &str) -> PyResult<String> {
+    let g: Graph = serde_json::from_str(graph_json).map_err(err)?;
+    serde_json::to_string(&core_communities(&g)).map_err(err)
+}
+
+/// `(snapshot_json_or_empty, batch_json) -> snapshot_json`. Empty snapshot ("")
+/// opens a fresh store; chaining calls == repeated `append`.
+#[pyfunction]
+fn store_append_json(snapshot_json: &str, batch_json: &str) -> PyResult<String> {
+    let snap = if snapshot_json.is_empty() {
+        None
+    } else {
+        Some(snapshot_json)
+    };
+    let mut store = GraphStore::open(snap).map_err(|e| err(format!("open: {e:?}")))?;
+    let batch: StoreBatch = serde_json::from_str(batch_json).map_err(err)?;
+    store.append(batch);
+    Ok(store.snapshot())
+}
+
+/// `(snapshot_json, valid_t, tx_t) -> graph_json` (bi-temporal slice).
+#[pyfunction]
+fn store_as_of_json(snapshot_json: &str, valid_t: i64, tx_t: i64) -> PyResult<String> {
+    let store = GraphStore::open(Some(snapshot_json)).map_err(|e| err(format!("open: {e:?}")))?;
+    serde_json::to_string(&store.as_of(valid_t, tx_t)).map_err(err)
+}
+
+/// `(snapshot_json, id) -> history_events_json`.
+#[pyfunction]
+fn store_history_json(snapshot_json: &str, id: u64) -> PyResult<String> {
+    let store = GraphStore::open(Some(snapshot_json)).map_err(|e| err(format!("open: {e:?}")))?;
+    serde_json::to_string(&store.history(id)).map_err(err)
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyGraph>()?;
     m.add_class::<PyStore>()?;
     m.add_function(wrap_pyfunction!(build_graph, m)?)?;
+    // Cross-surface JSON boundary (parity with goldengraph-wasm / -cabi).
+    m.add_function(wrap_pyfunction!(build_graph_json, m)?)?;
+    m.add_function(wrap_pyfunction!(neighborhood_json, m)?)?;
+    m.add_function(wrap_pyfunction!(seeds_by_name_json, m)?)?;
+    m.add_function(wrap_pyfunction!(communities_json, m)?)?;
+    m.add_function(wrap_pyfunction!(store_append_json, m)?)?;
+    m.add_function(wrap_pyfunction!(store_as_of_json, m)?)?;
+    m.add_function(wrap_pyfunction!(store_history_json, m)?)?;
     Ok(())
 }

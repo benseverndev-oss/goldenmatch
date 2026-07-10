@@ -44,6 +44,12 @@ one of two camps:
   goldenprofile, goldengraph, goldenanalysis.
   (**goldencheck** left this camp — see P5 below.)
   → close by adding a native DuckDB kernel + a pgrx `#[pg_extern]`.
+  (**goldengraph** stays in this camp on *surface count* — SQL is P8, still open,
+  KG isn't SQL-UDF-shaped — but its Python↔edge↔C-ABI parity is now **gate-locked**
+  (2026-07-07): `goldengraph-native` exposes the 7 JSON-boundary symbols mirroring
+  `goldengraph-wasm`, and the `goldengraph_native` cross-surface parity lane (vs the
+  shared `queries.json` oracle) is in `ci-required`. It is native-authoritative —
+  no pure-Python fallback for the store/resolution engine.)
   (**goldenflow** left this camp: the compiled `goldenflow-duckdb` extension
   shipped as `v0.1.1` (74 transforms native in DuckDB, ADR 0032) — only the
   pgrx `#[pg_extern]` side remains.)

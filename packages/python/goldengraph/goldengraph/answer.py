@@ -177,6 +177,82 @@ def _hybrid_filter_mode() -> str:
     return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
 
 
+def _local_filter_mode() -> str:
+    """`GOLDENGRAPH_LOCAL_FILTER` selector, read at call time. "" / "none" / unset = off
+    (pass the full ball -- byte-identical to the pre-2026-07-07 local path). "path" =
+    anchor-to-anchor path prune (`subgraph_filter.filter_subgraph_to_paths`, Lever A -- REFUTED,
+    see results/RESULTS_PATH_AWARE_RETRIEVAL.md). "candidate" = answer-candidate-scored prune
+    (`retrieve_paths.prune_to_candidate_paths`, Lever C). Both localize the ER-answer ablation's
+    multi-hop miss to PATH-SELECTION in the local ball -- the answer is present but buried among
+    distractor edges. Both are predicate-blind (dodge the 2026-06-22 predicate-focus revert)."""
+    import os
+
+    return os.environ.get("GOLDENGRAPH_LOCAL_FILTER", "").strip().lower()
+
+
+def _local_filter_halo() -> int:
+    """`GOLDENGRAPH_LOCAL_FILTER_HALO` (default 1). Non-int -> 1."""
+    import os
+
+    try:
+        return int(os.environ.get("GOLDENGRAPH_LOCAL_FILTER_HALO", "1"))
+    except ValueError:
+        return 1
+
+
+def _local_filter_topc() -> int:
+    """`GOLDENGRAPH_LOCAL_FILTER_TOPC` (default 3) -- Lever C's #candidate paths. Non-int -> 3."""
+    import os
+
+    try:
+        return int(os.environ.get("GOLDENGRAPH_LOCAL_FILTER_TOPC", "3"))
+    except ValueError:
+        return 3
+
+
+def _local_filter_khops() -> int:
+    """`GOLDENGRAPH_LOCAL_FILTER_KHOPS` (default 4) -- Lever C's candidate reach. Non-int -> 4."""
+    import os
+
+    try:
+        return int(os.environ.get("GOLDENGRAPH_LOCAL_FILTER_KHOPS", "4"))
+    except ValueError:
+        return 4
+
+
+def _apply_local_filter(subgraph: dict, seeds, *, question=None, embedder=None) -> dict:
+    """Gated path-selection prune of the local retrieval ball.
+
+    Off (default) -> `subgraph` unchanged (byte-identical local path). `GOLDENGRAPH_LOCAL_FILTER`:
+    - `path` -> Lever A: seeds + anchor-to-anchor shortest paths + `halo` (REFUTED -- recall-safe
+      only where the answer sits on an anchor-to-anchor path or within halo of a seed; a single
+      seed makes the bridge inert; measured to strand the chain on the multi-seed regime).
+    - `candidate` -> Lever C: seeds + halo + seed->top-`c` query-relevant candidate paths
+      (`prune_to_candidate_paths`). Needs `question` + `embedder`; if either is None it no-ops
+      safely (a caller without an embedder degrades to the full ball, never crashes).
+    Worth is decided by the bench bridge-recall guard on the MULTI-seed regime, not asserted here."""
+    mode = _local_filter_mode()
+    if mode == "path":
+        from .subgraph_filter import filter_subgraph_to_paths
+
+        return filter_subgraph_to_paths(subgraph, list(seeds), halo=_local_filter_halo())
+    if mode == "candidate":
+        if question is None or embedder is None:
+            return subgraph
+        from .retrieve_paths import prune_to_candidate_paths
+
+        return prune_to_candidate_paths(
+            subgraph,
+            list(seeds),
+            question,
+            embedder,
+            k_hops=_local_filter_khops(),
+            top_c=_local_filter_topc(),
+            halo=_local_filter_halo(),
+        )
+    return subgraph
+
+
 def _bridge_enabled() -> bool:
     """`GOLDENGRAPH_RETRIEVAL_BRIDGE` gate (default off). On -> the local/hybrid retrieval ball is
     built with `_retrieve_local_bridged` (same-name under-merge bridging) instead of `_retrieve_local`."""
@@ -342,7 +418,14 @@ def ask(
         return synthesize_hybrid(
             query, subgraph, passage_texts, llm, seed_names=seed_names
         )
-    _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the retrieval ball
+    # Gated path-preserving prune of the ball (default off = byte-identical). The
+    # ER-answer ablation localized the multi-hop miss to path-selection in this ball.
+    subgraph = _apply_local_filter(subgraph, seeds, question=query, embedder=embedder)
+    id_to_name = {
+        e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
+    }
+    seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
+    _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the (filtered) ball
     return synthesize_local(query, subgraph, llm, seed_names=seed_names)
 
 
