@@ -9,11 +9,33 @@ from pathlib import Path
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.core._paths import safe_path
+from goldenmatch.core.frame import resolve_frame_backend
 
 logger = logging.getLogger(__name__)
 
 # Text-file extensions that should route through smart_load
 _TEXT_SUFFIXES = {".csv", ".txt", ".tsv", ".dat", ".tab", ".psv", ".log", ".asc"}
+
+
+def _arrow_route_eligible(suffix: str, parse_mode: str, delimiter: str | None) -> bool:
+    """True when ``suffix``/``parse_mode``/``delimiter`` hit a branch this
+    function's polars path handles WITHOUT delegating to ``smart_load``.
+
+    Mirrors the exact dispatch below: ``.parquet`` and ``.xlsx`` are always
+    covered; text suffixes (or no suffix) are covered only in the same
+    ``parse_mode == "auto"`` fast-path condition the polars branch uses --
+    anything else (fixed_width/key_value/block/entity_extract parse modes,
+    or auto mode on a non-.csv text file with no explicit delimiter) falls
+    through to ``smart_load``, which ``io_arrow`` does not implement, so the
+    arrow route must not intercept it.
+    """
+    if suffix == ".parquet":
+        return True
+    if suffix == ".xlsx":
+        return True
+    if suffix in _TEXT_SUFFIXES or suffix == "":
+        return parse_mode == "auto" and (delimiter is not None or suffix == ".csv")
+    return False
 
 
 def _is_probably_utf8(path: Path | str, sample_bytes: int = 1 << 16) -> bool:
@@ -74,6 +96,24 @@ def load_file(
         raise FileNotFoundError(f"File not found: {path}")
 
     suffix = path.suffix.lower()
+
+    if resolve_frame_backend() == "arrow" and _arrow_route_eligible(
+        suffix, parse_mode, delimiter
+    ):
+        # Lazy import -- keeps the W0 import-gate posture (io_arrow itself
+        # also imports pyarrow lazily inside each function).
+        from goldenmatch.core.io_arrow import read_table_arrow
+
+        sep = delimiter or ","
+        tbl = read_table_arrow(path, separator=sep, encoding=encoding, sheet=sheet)
+        # Sanitize the user-provided path for logging (py/log-injection):
+        # escape newlines so a crafted filename can't forge log records.
+        safe_log_path = str(path).replace("\r", "\\r").replace("\n", "\\n")
+        logger.info(
+            "GOLDENMATCH_FRAME=arrow: reading %s via pyarrow (experimental)",
+            safe_log_path,
+        )
+        return pl.from_arrow(tbl).lazy()
 
     if suffix == ".parquet":
         return pl.scan_parquet(path)

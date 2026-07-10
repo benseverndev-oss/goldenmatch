@@ -1,0 +1,10 @@
+{
+  "pairwise_f1_macro": 0.0,
+  "pairwise_precision_macro": 0.0,
+  "pairwise_recall_macro": 0.0,
+  "pairwise_f1_micro": 0.0,
+  "n_names": 80,
+  "engine": "all_singletons",
+  "split": "valid",
+  "wall_s": 10.2
+}

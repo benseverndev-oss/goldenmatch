@@ -1,0 +1,5 @@
+# Re-DocRED raw splits (fetched on demand from tonytan48/Re-DocRED) + Modal artifacts
+data/
+_out/
+__pycache__/
+*.pyc

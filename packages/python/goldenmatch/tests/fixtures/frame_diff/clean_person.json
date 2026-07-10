@@ -1,0 +1,255 @@
+{
+  "clusters": [
+    [
+      "r000",
+      "r001"
+    ],
+    [
+      "r002",
+      "r003"
+    ],
+    [
+      "r004",
+      "r005"
+    ],
+    [
+      "r006",
+      "r007"
+    ],
+    [
+      "r008",
+      "r009"
+    ],
+    [
+      "r010",
+      "r011"
+    ],
+    [
+      "r012",
+      "r013"
+    ],
+    [
+      "r014",
+      "r015"
+    ],
+    [
+      "r016",
+      "r017"
+    ],
+    [
+      "r018",
+      "r019"
+    ],
+    [
+      "r020",
+      "r021"
+    ],
+    [
+      "r022",
+      "r023"
+    ],
+    [
+      "r024",
+      "r025"
+    ],
+    [
+      "r026",
+      "r027",
+      "r028"
+    ],
+    [
+      "r029",
+      "r030",
+      "r031"
+    ]
+  ],
+  "golden": {
+    "r000,r001": {
+      "external_id": "IDA1001",
+      "first_name": "Michael",
+      "last_name": "Smith",
+      "zip": "30301"
+    },
+    "r002,r003": {
+      "external_id": null,
+      "first_name": "Patricia",
+      "last_name": "Johnson",
+      "zip": "60601"
+    },
+    "r004,r005": {
+      "external_id": "IDA1002",
+      "first_name": "Robert",
+      "last_name": "Brown",
+      "zip": "10001"
+    },
+    "r006,r007": {
+      "external_id": null,
+      "first_name": "Maria",
+      "last_name": "Garcia",
+      "zip": "85001"
+    },
+    "r008,r009": {
+      "external_id": "IDA1003",
+      "first_name": "David",
+      "last_name": "Rhee",
+      "zip": "94101"
+    },
+    "r010,r011": {
+      "external_id": null,
+      "first_name": "Linda",
+      "last_name": "Nguyen",
+      "zip": "77001"
+    },
+    "r012,r013": {
+      "external_id": null,
+      "first_name": "James",
+      "last_name": "Patel",
+      "zip": "20001"
+    },
+    "r014,r015": {
+      "external_id": "IDA1004",
+      "first_name": "Susann",
+      "last_name": "Kim",
+      "zip": "33101"
+    },
+    "r016,r017": {
+      "external_id": null,
+      "first_name": "William",
+      "last_name": "Rossi",
+      "zip": "2101"
+    },
+    "r018,r019": {
+      "external_id": null,
+      "first_name": "Karen",
+      "last_name": "Andersen",
+      "zip": "55401"
+    },
+    "r020,r021": {
+      "external_id": null,
+      "first_name": "Thomas",
+      "last_name": "Muller",
+      "zip": "97201"
+    },
+    "r022,r023": {
+      "external_id": null,
+      "first_name": "Nancey",
+      "last_name": "Fernandez",
+      "zip": "78701"
+    },
+    "r024,r025": {
+      "external_id": null,
+      "first_name": "Daniel",
+      "last_name": "Petrov",
+      "zip": "19102"
+    },
+    "r026,r027,r028": {
+      "external_id": null,
+      "first_name": "Anna",
+      "last_name": "Silva",
+      "zip": "27601"
+    },
+    "r029,r030,r031": {
+      "external_id": "IDA1006",
+      "first_name": "Kenji",
+      "last_name": "Yamamoto",
+      "zip": "96813"
+    }
+  },
+  "pairs": [
+    [
+      "r000",
+      "r001",
+      1.0
+    ],
+    [
+      "r002",
+      "r003",
+      0.991249978542
+    ],
+    [
+      "r004",
+      "r005",
+      1.0
+    ],
+    [
+      "r006",
+      "r007",
+      0.967333316803
+    ],
+    [
+      "r008",
+      "r009",
+      1.0
+    ],
+    [
+      "r010",
+      "r011",
+      0.958000004292
+    ],
+    [
+      "r012",
+      "r013",
+      0.986000001431
+    ],
+    [
+      "r014",
+      "r015",
+      1.0
+    ],
+    [
+      "r016",
+      "r017",
+      0.990000009537
+    ],
+    [
+      "r018",
+      "r019",
+      0.983666658401
+    ],
+    [
+      "r020",
+      "r021",
+      0.982499957085
+    ],
+    [
+      "r022",
+      "r023",
+      0.988333284855
+    ],
+    [
+      "r024",
+      "r025",
+      0.976666629314
+    ],
+    [
+      "r026",
+      "r027",
+      0.976666629314
+    ],
+    [
+      "r026",
+      "r028",
+      0.979583323002
+    ],
+    [
+      "r027",
+      "r028",
+      0.953333318233
+    ],
+    [
+      "r029",
+      "r030",
+      1.0
+    ],
+    [
+      "r029",
+      "r031",
+      1.0
+    ],
+    [
+      "r030",
+      "r031",
+      0.972000002861
+    ]
+  ]
+}

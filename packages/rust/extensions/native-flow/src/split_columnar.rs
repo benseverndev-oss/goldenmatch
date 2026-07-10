@@ -117,10 +117,8 @@ pub fn resolve_split(ops: &[(String, Vec<String>)]) -> Option<SplitPlan> {
             splitter = Some((name.clone(), s));
         } else {
             let refs: Vec<&str> = params.iter().map(String::as_str).collect();
-            match NullableKernel::from_op(name, &refs) {
-                Some(k) => string_ops.push((name.clone(), k)),
-                None => return None,
-            }
+            let k = NullableKernel::from_op(name, &refs)?;
+            string_ops.push((name.clone(), k));
         }
     }
     Some(SplitPlan {

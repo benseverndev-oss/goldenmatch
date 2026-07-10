@@ -1,0 +1,5 @@
+# WhoIsWho / OAG-Bench corpus is research-use, redistribution-restricted --
+# NEVER commit it. Fetched on demand into data/ (see fetch.py).
+data/
+*.json.gz
+*.parquet

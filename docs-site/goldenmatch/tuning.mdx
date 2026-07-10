@@ -309,6 +309,7 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | Variable | Used by | Notes |
 |----------|---------|-------|
 | `GOLDENMATCH_MCP_TOKEN` | MCP server | Required on non-loopback binds. `/.well-known/` card stays public. |
+| `GOLDENMATCH_MCP_ALLOW_PUBLIC` | MCP server | Opt-out of the fail-closed default: set `1`/`true` to intentionally run an **open, unauthenticated public** MCP server (e.g. a showcase deployment) without `GOLDENMATCH_MCP_TOKEN`. Unset/`0` = fail closed (a non-loopback bind without a token is refused). A set `GOLDENMATCH_MCP_TOKEN` still takes precedence. |
 | `GOLDENMATCH_API_TOKEN` | REST API | Required on non-loopback binds (all except `/health`). |
 | `GOLDENMATCH_AGENT_TOKEN` | A2A agent | Required on non-loopback binds (except `/health` + agent card). |
 | `GOLDENMATCH_WEB_TOKEN` | Web UI | Required on non-loopback binds (except `/api/v1/healthz`). |
@@ -506,6 +507,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 |----------|---------|--------|--------|
 | `GOLDENMATCH_NATIVE` | `auto` | `auto` / `1` / `0` | Native kernel gate. `1` requires native (raises if missing); `0` forces Python. |
 | `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | off | `1` | Polars-native address-normalize fast path. |
+| `GOLDENMATCH_FRAME` | `polars` | `polars`/`arrow` | Frame backend for file ingest. `arrow` is EXPERIMENTAL: file ingest via pyarrow, part of the Polars-eviction program. Output-equivalence enforced by a differential harness + frozen fixtures. |
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | `0`/`1` | Cross-run auto-config memory. `0` for reproducible/CI runs. |
 | `GOLDENMATCH_PLANNING_EFFORT` | `normal` | `fast`/`normal`/`thinking`/`einstein` | Auto-config iteration budget. |
 | `GOLDENMATCH_DISTRIBUTED_PIPELINE` | unset | `1`/`2` | Distributed execution phase. `2` = real streaming (needs `__row_id__`, writes to `output_path`). |

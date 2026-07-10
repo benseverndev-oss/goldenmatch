@@ -75,6 +75,7 @@ jobs:
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenflow_nopolars: ${{ steps.filter.outputs.goldenflow_nopolars }}
       goldencheck_nopolars: ${{ steps.filter.outputs.goldencheck_nopolars }}
+      goldenmatch_frame_diff: ${{ steps.filter.outputs.goldenmatch_frame_diff }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
@@ -682,6 +683,17 @@ jobs:
               - 'packages/python/goldencheck/goldencheck/**'
               - 'packages/python/goldencheck/tests/nopolars/**'
               - 'packages/python/goldencheck/pyproject.toml'
+            goldenmatch_frame_diff:
+              # Polars-eviction Wave 1 proof lane: runs the file-based dedupe
+              # entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
+              # frozen fixture datasets and diffs the canonicalized output
+              # (clusters/golden/pairs), failing on any mismatch. Proves the
+              # experimental pyarrow ingest lane (core/io_arrow.py + ArrowFrame)
+              # is output-equivalent to the classic Polars path. Advisory (not
+              # ci-required) -- the arrow lane is opt-in via env var, not the
+              # default.
+              - 'packages/python/goldenmatch/**'
+              - 'scripts/diff_frame_backends.py'
             goldenflow_duckdb:
               # goldenflow-duckdb: the compiled zero-Python DuckDB extension over
               # goldenflow-core. A core change must re-gate its bundled parity
@@ -2280,6 +2292,16 @@ jobs:
         # import/marshalling failure fails the lane instead of silently skipping.
         env:
           GOLDENMATCH_BRIDGE_REQUIRE_PY: "1"
+          # pyarrow's bundled mimalloc allocator SIGSEGVs in mi_thread_init on the
+          # worker threads goldenmatch's pipeline spawns (polars / ThreadPoolExecutor
+          # workers call pyarrow.array() -> ConvertPySequence) under this embedded
+          # CPython. Reproduces ~deterministically across the 46-test aggregate run
+          # (each test in isolation is fine; the accumulated thread churn trips
+          # mimalloc's per-thread heap init), NOT a test-thread race -- it segfaults
+          # even at --test-threads=1. Force pyarrow onto the system memory pool (the
+          # documented Arrow remedy). Verified locally: 20/20 clean with this set vs
+          # 20/20 SIGSEGV without. See packages/rust/extensions/CLAUDE.md.
+          ARROW_DEFAULT_MEMORY_POOL: system
       - run: cargo clippy --workspace -- -D warnings
       # The standalone pyo3-free sibling crates (graph-core, score-core) are
       # each their own [workspace], so `cargo test --workspace` above (which
@@ -2839,6 +2861,30 @@ jobs:
         run: uv run --no-sync python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('polars') is None else 'polars still present')"
       - name: Polars-absent proof (tests/nopolars)
         run: uv run --no-sync python -m pytest packages/python/goldencheck/tests/nopolars --noconftest -v
+
+  # Polars-eviction Wave 1 proof lane (goldenmatch): runs the file-based
+  # dedupe entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
+  # frozen fixture datasets and diffs the canonicalized clusters/golden/pairs
+  # output, failing on any mismatch. Proves the experimental pyarrow ingest
+  # front (core/io_arrow.py + ArrowFrame) reproduces the classic Polars path
+  # byte-for-byte. Advisory (not ci-required) -- GOLDENMATCH_FRAME=arrow is
+  # opt-in, not the default.
+  goldenmatch_frame_diff:
+    needs: changes
+    if: needs.changes.outputs.goldenmatch_frame_diff == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Frame-backend differential (polars vs arrow)
+        run: uv run python scripts/diff_frame_backends.py
 
   # goldenpipe planner kernel: pyo3-free goldenpipe-core is the REFERENCE. This lane
   # is goldenpipe-core's ONLY CI coverage (it had no consumer to hang a lane on before
