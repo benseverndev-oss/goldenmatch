@@ -265,3 +265,66 @@ def test_csv_junk_row_error_parity(tmp_path: Path) -> None:
 
     with pytest.raises(Exception):
         read_table_arrow(path)
+
+
+# --------------------------------------------------------------------------
+# Parquet + Excel (Task 3)
+# --------------------------------------------------------------------------
+
+
+def _case_parquet(tmp_path: Path) -> tuple[Path, dict]:
+    """Parquet case -- mirrors conftest.py's ``sample_parquet`` fixture."""
+    path = tmp_path / "sample.parquet"
+    df = pl.DataFrame({
+        "id": [1, 2, 3],
+        "first_name": ["John", "Jane", "Bob"],
+        "last_name": ["Smith", "Doe", "Jones"],
+        "email": ["john@example.com", "jane@test.com", "bob@test.com"],
+        "zip": ["19382", "10001", "90210"],
+    })
+    df.write_parquet(path)
+    return path, {}
+
+
+def test_parquet_parity(tmp_path: Path) -> None:
+    path, kwargs = _case_parquet(tmp_path)
+    polars_df = load_file(path, **kwargs).collect()
+    arrow_table = read_table_arrow(path)
+    _assert_parity(arrow_table, polars_df)
+
+
+def _build_sample_xlsx(tmp_path: Path):
+    """Two-sheet workbook: Sheet1 (active/default) has a numeric + text
+    column; Sheet2 exercises ``sheet=`` selection."""
+    import openpyxl
+
+    path = tmp_path / "sample.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["id", "name", "amount"])
+    ws.append([1, "Alice", 19382])
+    ws.append([2, "Bob", 10001])
+    ws.append([3, "Carol", 90210])
+
+    ws2 = wb.create_sheet("Sheet2")
+    ws2.append(["id", "note"])
+    ws2.append([10, "from sheet two"])
+    ws2.append([20, "another row"])
+
+    wb.save(path)
+    return path
+
+
+def test_excel_parity_default_sheet(tmp_path: Path) -> None:
+    path = _build_sample_xlsx(tmp_path)
+    polars_df = load_file(path).collect()
+    arrow_table = read_table_arrow(path)
+    _assert_parity(arrow_table, polars_df)
+
+
+def test_excel_parity_named_sheet(tmp_path: Path) -> None:
+    path = _build_sample_xlsx(tmp_path)
+    polars_df = load_file(path, sheet="Sheet2").collect()
+    arrow_table = read_table_arrow(path, sheet="Sheet2")
+    _assert_parity(arrow_table, polars_df)

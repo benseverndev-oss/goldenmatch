@@ -161,13 +161,47 @@ def _temporal_override_types(schema) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Parquet / Excel (Task 3 -- not yet implemented)
+# Parquet
 # --------------------------------------------------------------------------
 
 
 def _read_parquet_arrow(path: Path):
-    raise NotImplementedError("parquet support lands in Task 3")
+    import pyarrow.parquet as pa_parquet
+
+    return pa_parquet.read_table(str(path))
+
+
+# --------------------------------------------------------------------------
+# Excel
+# --------------------------------------------------------------------------
 
 
 def _read_excel_arrow(path: Path, *, sheet: str | None):
-    raise NotImplementedError("excel support lands in Task 3")
+    import openpyxl
+    import pyarrow as pa
+
+    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    try:
+        # sheet=None -> the active sheet, matching pl.read_excel's default
+        # (its first/active sheet, not necessarily the workbook's index-0
+        # sheet if a different one was made active when the file was saved).
+        ws = wb[sheet] if sheet is not None else wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    finally:
+        wb.close()
+
+    if not rows:
+        return pa.table({})
+
+    header = [str(c) for c in rows[0]]
+    data_rows = rows[1:]
+    columns = {
+        name: [row[i] for row in data_rows] for i, name in enumerate(header)
+    }
+    # pa.array's own type inference already promotes mixed int/float ->
+    # double and recognizes datetime.date/datetime.datetime -> timestamp,
+    # matching pl.read_excel's per-column inference on the same openpyxl
+    # values (both engines read the same cell values; the parity is in
+    # letting Arrow's/Polars' own inference run rather than second-guessing
+    # it here).
+    return pa.table({name: pa.array(values) for name, values in columns.items()})
