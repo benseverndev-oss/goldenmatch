@@ -349,3 +349,119 @@ def test_multipass_equals_single_pass_when_one_pass():
     got_single = _table_to_clusters(fused_match.run_match_fused_arrow(columns, single))
     got_mp = _table_to_clusters(fused_match.run_match_fused_multipass_arrow(columns, mp))
     assert got_mp == got_single
+
+
+# ---- W2a: arrow-backend prep (polars-free covered spine) -----------------
+#
+# Twins of the three brute-oracle tests under GOLDENMATCH_FRAME=arrow: the
+# fused prep derives the key/score columns via ArrowFrame + arrow_derive
+# instead of the Polars expressions; the oracle and expectations are
+# UNCHANGED, so any derivation drift fails here exactly like it would on the
+# polars backend.
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_fused_arrow_backend_matches_brute_oracle(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    keys = ["a", "a", "a", "b", "b", "c", None, "NULL", "nan", "d", "d"]
+    names = [
+        "jonathan", "jonathon", "michael",
+        "sarah", "sarah",
+        "lone",
+        "dropme1", "dropme2", "dropme3",
+        "kevin", "kevni",
+    ]
+    config = _covered_config(threshold=0.85)
+    columns = {"blk": pa.array(keys), "name": pa.array(names)}
+
+    tbl = fused_match.run_match_fused_arrow(columns, config)
+    assert tbl is not None
+    assert _table_to_clusters(tbl) == _brute_clusters(keys, names, 0.85)
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_fused_arrow_backend_matches_brute_oracle_with_transforms(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    keys = [" Smith ", "smith", "SMITH", "jones", "Jones ", "lee"]
+    names = ["Jonathan", "jonathon ", " JONATHAN", "sarah", "SARAH", "solo"]
+    config = _covered_config(threshold=0.85)
+    config.blocking.keys[0].transforms = ["lowercase", "strip"]
+    config.matchkeys[0].fields[0].transforms = ["lowercase", "strip"]
+    columns = {"blk": pa.array(keys), "name": pa.array(names)}
+
+    tbl = fused_match.run_match_fused_arrow(columns, config)
+    assert tbl is not None
+    assert _table_to_clusters(tbl) == _brute_clusters(
+        keys, names, 0.85,
+        key_transforms=["lowercase", "strip"], score_transforms=["lowercase", "strip"],
+    )
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_fused_arrow_backend_soundex_block_key(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    keys = ["Smith", "Smyth", "Smithe", "Jones", "Jonez", "Zzzz"]
+    names = ["robert", "robbert", "roberto", "alice", "alicia", "solo"]
+    config = _covered_config(threshold=0.80)
+    config.blocking.keys[0].transforms = ["lowercase", "soundex"]
+    columns = {"blk": pa.array(keys), "name": pa.array(names)}
+
+    tbl = fused_match.run_match_fused_arrow(columns, config)
+    assert tbl is not None
+    assert _table_to_clusters(tbl) == _brute_clusters(
+        keys, names, 0.80, key_transforms=["lowercase", "soundex"]
+    )
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused not built")
+def test_fused_arrow_backend_polars_free_tripwire():
+    # The W2a spine proof: under GOLDENMATCH_FRAME=arrow, pyarrow-in ->
+    # match_fused -> clusters-out must not import polars AT ALL. The
+    # _LazyPolars proxy guarantees any real pl.* touch lands in sys.modules,
+    # so the check can genuinely fail. Scope: the fused-prep call itself (the
+    # pipeline CALLER still materializes via Polars until W2c/W2d).
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "import pyarrow as pa\n"
+        "from goldenmatch.config.schemas import (\n"
+        "    BlockingConfig, BlockingKeyConfig, GoldenMatchConfig,\n"
+        "    MatchkeyConfig, MatchkeyField,\n"
+        ")\n"
+        "from goldenmatch.core import fused_match\n"
+        "config = GoldenMatchConfig(\n"
+        "    blocking=BlockingConfig(strategy='static',\n"
+        "        keys=[BlockingKeyConfig(fields=['blk'], transforms=['lowercase', 'soundex'])]),\n"
+        "    matchkeys=[MatchkeyConfig(name='mk', type='weighted', threshold=0.85,\n"
+        "        fields=[MatchkeyField(field='name', scorer='jaro_winkler', weight=1.0,\n"
+        "                              transforms=['lowercase', 'strip'])])],\n"
+        ")\n"
+        "columns = {'blk': pa.array(['Smith', 'Smyth', 'Jones']),\n"
+        "           'name': pa.array(['Robert ', 'robert', 'alice'])}\n"
+        "tbl = fused_match.run_match_fused_arrow(columns, config)\n"
+        "assert tbl is not None, 'kernel declined; tripwire needs the fused symbol'\n"
+        "assert tbl.num_rows == 3\n"
+        "assert 'polars' not in sys.modules, 'fused arrow prep imported polars'\n"
+    )
+    env = {"GOLDENMATCH_FRAME": "arrow"}
+    import os
+    for k in (
+        "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "PYTHONPATH", "VIRTUAL_ENV",
+        "PYTHONIOENCODING", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME",
+        "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR",
+    ):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=180, env=env
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_fused_arrow_backend_declines_uncovered(monkeypatch):
+    # The decline contract is backend-independent.
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    c = _covered_config()
+    c.matchkeys[0].fields[0].scorer = "soundex_match"
+    assert fused_match.run_match_fused_arrow({"blk": pa.array(["a"]), "name": pa.array(["x"])}, c) is None
