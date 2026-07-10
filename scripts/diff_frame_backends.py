@@ -395,6 +395,26 @@ def run_single(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# Environment allowlist for the subprocess. A plain ``os.environ.copy()``
+# would leak ambient ``GOLDENMATCH_*`` overrides (rayon thresholds, prepared-
+# record-store dirs, planning effort, ...) into the run, contradicting the
+# isolation this harness claims. Only OS/interpreter plumbing passes through;
+# every goldenmatch-relevant var is set EXPLICITLY in run_one.
+_ENV_PASSTHROUGH = (
+    # Windows process plumbing (subprocess spawn + DLL loading need
+    # SYSTEMROOT; COMSPEC/PATHEXT for any shell-outs).
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+    "PATH", "TEMP", "TMP", "TMPDIR",
+    # Home resolution (Path.home() reads these per-OS).
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME",
+    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+    # POSIX locale (CI runners are Linux).
+    "LANG", "LC_ALL",
+    # CPU topology hints some numeric libs read.
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+)
+
+
 def run_one(name: str, backend: str) -> tuple[dict, float, int]:
     """Run one dataset under one frame backend in a fresh subprocess.
 
@@ -402,7 +422,7 @@ def run_one(name: str, backend: str) -> tuple[dict, float, int]:
     """
     import psutil
 
-    env = os.environ.copy()
+    env = {k: os.environ[k] for k in _ENV_PASSTHROUGH if k in os.environ}
     env["GOLDENMATCH_FRAME"] = backend
     env["GOLDENMATCH_NATIVE"] = "0"
     env["POLARS_SKIP_CPU_CHECK"] = "1"

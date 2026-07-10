@@ -11,14 +11,12 @@ engines and compared on:
   - per-cell values, each engine cast to its own string type (nulls as None)
   - a coarse "neutral dtype class" (str/int/float/bool/date/datetime/other)
 
-Known reader deltas (documented, not test-suppressed): NONE as of this
-writing. The one real divergence found during development -- pyarrow's CSV
-reader infers ``date32``/``timestamp`` for ISO-date-shaped strings while
-polars' ``scan_csv``/``read_csv`` never auto-parses dates (no
-``try_parse_dates`` is ever passed by ``load_file``) -- was fixed at the
-reader: ``io_arrow`` probes the inferred schema and forces any temporal
-column back to string via ``ConvertOptions(column_types=...)`` before the
-real read, so the raw source text passes through unparsed on both engines.
+Known reader deltas and their fixes live in ONE place: the ``io_arrow.py``
+module docstring (currently: pyarrow's temporal auto-inference forced back
+to string, and pyarrow's empty-string-cell / default-NA-list null handling
+narrowed to polars' bare-empty-field-only semantics). Cases here PIN those
+fixes (``iso_dates``, ``empty_cells``, ``na_literals``); keep that docstring
+authoritative rather than restating deltas per-test.
 
 Error-parity case (``junk_row``): ``load_file``'s default CSV path passes no
 ``ignore_errors``/``truncate_ragged_lines`` knob, so a wrong-column-count row
@@ -217,6 +215,34 @@ def _case_custom_separator(tmp_path: Path) -> tuple[Path, dict]:
     return path, {"delimiter": "|"}
 
 
+def _case_empty_cells(tmp_path: Path) -> tuple[Path, dict]:
+    """Empty cell in a STRING column and in an otherwise-NUMERIC column --
+    both must come back null on both engines. Pins the empty-string fix the
+    Task 6 differential harness caught (pyarrow defaulted an empty
+    string-typed cell to ``""``; polars nulls it; numeric columns nulled it
+    on both engines even before the fix)."""
+    path = tmp_path / "empty_cells.csv"
+    path.write_text(
+        "id,age,name\n1,,Alice\n2,30,\n3,25,Bob\n",
+        encoding="utf-8",
+    )
+    return path, {}
+
+
+def _case_na_literals(tmp_path: Path) -> tuple[Path, dict]:
+    """Literal ``NA``/``NULL``/``null``/``NaN`` in a string column must STAY
+    strings on both engines. Polars only nulls a BARE empty field; pyarrow's
+    ConvertOptions default ``null_values`` list would null all of these --
+    guards ``io_arrow``'s narrowed ``null_values=[""]`` from ever widening
+    back to the pyarrow default."""
+    path = tmp_path / "na_literals.csv"
+    path.write_text(
+        "id,note\n1,NA\n2,NULL\n3,null\n4,NaN\n5,ok\n",
+        encoding="utf-8",
+    )
+    return path, {}
+
+
 def _case_latin1_iso_dates(tmp_path: Path) -> tuple[Path, dict]:
     """Explicit latin-1 codec + an ISO-date column: gates the probe-then-
     force-string temporal override on the BufferReader (decoded-text) path,
@@ -243,6 +269,8 @@ _VALUE_PARITY_CASES = [
     ("explicit_utf8_lossy", _case_explicit_utf8_lossy),
     ("explicit_utf8_strict", _case_explicit_utf8_strict),
     ("custom_separator", _case_custom_separator),
+    ("empty_cells", _case_empty_cells),
+    ("na_literals", _case_na_literals),
     ("latin1_explicit_iso_dates", _case_latin1_iso_dates),
 ]
 
@@ -261,6 +289,35 @@ def test_csv_parity(tmp_path: Path, case_builder) -> None:
     arrow_table = read_table_arrow(path, separator=delimiter, encoding=encoding)
 
     _assert_parity(arrow_table, polars_df)
+
+
+def test_empty_cells_null_on_both_engines(tmp_path: Path) -> None:
+    """Behavioral pin (not just arrow==polars): a bare empty field is NULL
+    on BOTH engines, in a string column and in a numeric column alike. The
+    parametrized parity case alone couldn't catch both engines drifting to
+    the same wrong answer."""
+    path, _ = _case_empty_cells(tmp_path)
+    polars_df = load_file(path).collect()
+    arrow_table = read_table_arrow(path)
+
+    assert polars_df["age"].to_list() == [None, 30, 25]
+    assert polars_df["name"].to_list() == ["Alice", None, "Bob"]
+    assert arrow_table.column("age").to_pylist() == [None, 30, 25]
+    assert arrow_table.column("name").to_pylist() == ["Alice", None, "Bob"]
+
+
+def test_na_literals_stay_strings_on_both_engines(tmp_path: Path) -> None:
+    """Behavioral pin: literal NA/NULL/null/NaN survive as strings on BOTH
+    engines (polars never nulls them; io_arrow narrows pyarrow's default
+    null_values list to [""] so it doesn't either)."""
+    path, _ = _case_na_literals(tmp_path)
+    expected = ["NA", "NULL", "null", "NaN", "ok"]
+
+    polars_df = load_file(path).collect()
+    arrow_table = read_table_arrow(path)
+
+    assert polars_df["note"].to_list() == expected
+    assert arrow_table.column("note").to_pylist() == expected
 
 
 def test_csv_junk_row_error_parity(tmp_path: Path) -> None:
