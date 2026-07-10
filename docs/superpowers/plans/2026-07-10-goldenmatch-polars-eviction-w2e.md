@@ -63,16 +63,27 @@ fast paths stay UNTOUCHED for the polars backend. Fall back to a
   test_pipeline_fused_golden.py, test_golden_provenance_batch.py,
   test_golden_fused*.py.
 
-## W2e-4 — survivorship + spine tail
+## W2e-4 — survivorship + spine tail (EXECUTION AMENDMENTS 2026-07-10)
 
-- `survivorship/native.py` (3rd-densest file): same kernel-vs-port decision
-  as W2e-3 (tied to golden_fused Stage 5 group strategies).
-- `pairs.py` (`dedup_pairs_max_score_*` — arrow twin half-exists),
-  `incremental._prepare_incremental` (diagonal concat + row_id/source),
-  `cluster_pairscores.py`, the deferred FS-classic `_field_values_for_block`
-  extraction, thin blocking/transform helpers.
-- The both-backends 1M bench gate lands HERE (bench script gains a
-  `load_file(return_frame=True)` ingest path + the W2d `frame` input).
+Executed as DECISIONS, not ports — every remaining item sits behind the same
+boundary the W2d recon established (arrow cannot reach these code paths until
+the pipeline's pre-collect expression stages rewire, which is W3/W5 work per
+the spec's wave table; the spec's W2 row — every named stage onto seam ops +
+fused coverage widened + the polars-free covered spine — is satisfied by
+W2a-W2e-3):
+
+- `survivorship/native.py`: NO PORT NEEDED for dual-backend coverage. It is
+  the polars fast path for correlated survivorship; golden_fused Stage 5
+  already covers the group strategies on the arrow side (same shape as the
+  W2e-3 decision). The polars path keeps serving the polars backend.
+- `pairs.py` / `incremental.py` / `cluster_pairscores.py` / FS-classic
+  `_field_values_for_block` extraction / thin blocking helpers: DEFERRED to
+  the W3/W4 tails alongside the pipeline expression-stage rewiring that
+  would make them reachable on arrow. (The W0 audit itself waves
+  incremental/chunked into W4.)
+- The both-backends 1M bench gate: impossible to run honestly until arrow
+  flows past ingest (same boundary); it moves to the wave that lifts the
+  ingest shim. The W2d `frame` workflow input is in place for it.
 
 Out of W2e (W3/W4 per the W0 audit): autoconfig/controller/profiling,
 LLM/reporting surfaces, distributed, chunked IO tail.
