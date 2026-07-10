@@ -1309,18 +1309,18 @@ def score_probabilistic(
     return results
 
 
-def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | None]:
-    """Transformed per-field values for a block, matching comparison_vector.
-
-    str()-coerces non-null values then applies field transforms, exactly as
-    ``comparison_vector`` does per pair — but once per column instead of once
-    per (pair, field). Missing column -> all-null (slow path: level 0).
-    """
+def _field_values_from_list(raw: list | None, f, n: int) -> list[str | None]:
+    """Transformed per-field values from an already-extracted value list,
+    matching comparison_vector: str()-coerce non-null values then apply the
+    field transforms, once per column instead of once per (pair, field).
+    ``raw is None`` = missing column -> all-null (slow path: level 0).
+    Backend-neutral (W2a): the fused FS prep feeds it from either Frame
+    backend's ``utf8_values``; ``_field_values_for_block`` feeds it from the
+    classic Polars block frame."""
     from goldenmatch.utils.transforms import apply_transforms
 
-    if f.field not in block_df.columns:
+    if raw is None:
         return [None] * n
-    raw = block_df[f.field].to_list()
     out: list[str | None] = []
     for v in raw:
         if v is None:
@@ -1331,6 +1331,13 @@ def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | Non
             s = apply_transforms(s, f.transforms)
         out.append(s)
     return out
+
+
+def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | None]:
+    """Transformed per-field values for a block, matching comparison_vector.
+    Missing column -> all-null (slow path: level 0)."""
+    raw = block_df[f.field].to_list() if f.field in block_df.columns else None
+    return _field_values_from_list(raw, f, n)
 
 
 def _levels_from_similarity(sim: np.ndarray, levels: int, partial_threshold: float) -> np.ndarray:

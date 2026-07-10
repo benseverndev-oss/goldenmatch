@@ -208,9 +208,55 @@ def _rows_dirty_variant() -> list[dict[str, str]]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Dataset (c): fused covered-config spine (W2a). The full-pipeline datasets
+# above never reach `run_match_fused_arrow` (the pipeline's fused-match
+# short-circuit is controller/RSS-gated), so the fused prep derivation --
+# the surface W2a moved onto the Frame seam -- gets its own direct-entry
+# dataset: soundex block key + lowercase/strip score transforms + an int64
+# zip column (exercises the Utf8-cast stringification parity) + null and
+# sentinel block keys. Runs `run_match_fused_arrow` under both backends and
+# diffs the canonicalized cluster partition.
+# ---------------------------------------------------------------------------
+
+
+def _rows_fused_covered() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def _add(first: str, last: str | None, zip_: int | None) -> None:
+        rows.append(
+            {"row_key": f"F{len(rows):04d}", "first_name": first, "last_name": last, "zip": zip_}
+        )
+
+    # Soundex blocks with case/whitespace noise on the score field.
+    _add(" Michael ", "Smith", 30301)
+    _add("michael", "Smyth", 30301)   # same soundex block, near-exact first name
+    _add("MICHEAL", "Smithe", 30301)  # typo, still above threshold
+    _add("Patricia", "Jones", 60601)
+    _add("patrica ", "Jonez", 60601)
+    _add("Robert", "Muller", 97201)
+    _add("Roberta", "Mueller", 97201)
+    # Sentinel/null block keys: dropped identically on both backends.
+    _add("Dropped", None, 11111)
+    _add("Dropped2", "NULL", 11111)
+    _add("Dropped3", "nan", 11111)
+    # Different zip breaks the exact-zip component of the weighted score.
+    _add("Linda", "Nguyen", 77001)
+    _add("Lynda", "Nguyen", 77002)
+    # Null zip: the int64 -> Utf8 cast must null-propagate identically.
+    _add("Susan", "Kim", None)
+    _add("Susann", "Kim", None)
+    # Singletons across distinct soundex codes.
+    _add("Youssef", "Haddad", 48201)
+    _add("Hiro", "Nakamura", 94043)
+    _add("Rachel", "Zimmerman", 10011)
+    return rows
+
+
 DATASETS: dict[str, Any] = {
-    "clean_person": {"rows": _rows_clean_person, "latin1": False},
-    "dirty_variant": {"rows": _rows_dirty_variant, "latin1": True},
+    "clean_person": {"rows": _rows_clean_person, "latin1": False, "mode": "dedupe"},
+    "dirty_variant": {"rows": _rows_dirty_variant, "latin1": True, "mode": "dedupe"},
+    "fused_covered": {"rows": _rows_fused_covered, "latin1": False, "mode": "fused"},
 }
 
 _COLUMNS = ["row_key", "external_id", "first_name", "last_name", "zip"]
@@ -373,7 +419,84 @@ def _row_keys_in_order(name: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _build_fused_config():
+    """Covered fused config: static soundex block key + one weighted matchkey
+    with lowercase/strip transforms -- the exact shape `match_fused_ready`
+    accepts, so the run exercises the W2a seam derivation, not the pipeline."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["last_name"], transforms=["lowercase", "soundex"])],
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk",
+                type="weighted",
+                threshold=0.82,
+                rerank=False,
+                fields=[
+                    MatchkeyField(
+                        field="first_name",
+                        scorer="jaro_winkler",
+                        weight=0.7,
+                        transforms=["lowercase", "strip"],
+                    ),
+                    MatchkeyField(field="zip", scorer="exact", weight=0.3),
+                ],
+            )
+        ],
+    )
+
+
+def run_single_fused(name: str) -> dict:
+    """Direct `run_match_fused_arrow` run over the dataset's columns (int64
+    zip included -- the Utf8-cast parity surface). Fails LOUDLY when the
+    kernel is absent: a silent skip would let the lane claim coverage it
+    doesn't have."""
+    import pyarrow as pa
+    from goldenmatch.core.fused_match import run_match_fused_arrow
+
+    rows = DATASETS[name]["rows"]()
+    columns = {
+        "first_name": pa.array([r["first_name"] for r in rows], type=pa.string()),
+        "last_name": pa.array([r["last_name"] for r in rows], type=pa.string()),
+        "zip": pa.array(
+            [None if r["zip"] is None else int(r["zip"]) for r in rows], type=pa.int64()
+        ),
+    }
+    tbl = run_match_fused_arrow(columns, _build_fused_config())
+    if tbl is None:
+        raise RuntimeError(
+            "run_match_fused_arrow declined or the native match_fused kernel is "
+            "absent -- the fused differential dataset requires goldenmatch-native"
+        )
+
+    row_keys = [r["row_key"] for r in rows]
+    comps: dict[int, list[int]] = {}
+    for r, c in zip(
+        tbl.column("__row_id__").to_pylist(), tbl.column("__cluster_id__").to_pylist()
+    ):
+        comps.setdefault(c, []).append(r)
+    multi = sorted(
+        sorted(row_keys[m] for m in members)
+        for members in comps.values()
+        if len(members) > 1
+    )
+    return {"clusters": multi, "golden": {}, "pairs": []}
+
+
 def run_single(name: str) -> dict:
+    if DATASETS[name].get("mode") == "fused":
+        return run_single_fused(name)
+
     from goldenmatch.core.pipeline import run_dedupe
 
     with tempfile.TemporaryDirectory() as td:
@@ -412,6 +535,10 @@ _ENV_PASSTHROUGH = (
     "LANG", "LC_ALL",
     # CPU topology hints some numeric libs read.
     "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    # Interpreter plumbing: lets a worktree run point the subprocess at the
+    # worktree package (goldenmatch-relevant OVERRIDES stay excluded -- the
+    # isolation contract is about GOLDENMATCH_* env, not module resolution).
+    "PYTHONPATH",
 )
 
 
@@ -424,7 +551,10 @@ def run_one(name: str, backend: str) -> tuple[dict, float, int]:
 
     env = {k: os.environ[k] for k in _ENV_PASSTHROUGH if k in os.environ}
     env["GOLDENMATCH_FRAME"] = backend
-    env["GOLDENMATCH_NATIVE"] = "0"
+    if DATASETS[name].get("mode") != "fused":
+        # The dedupe datasets pin the pure path; the fused dataset IS a native
+        # entry point (run_match_fused_arrow), so native stays on auto there.
+        env["GOLDENMATCH_NATIVE"] = "0"
     env["POLARS_SKIP_CPU_CHECK"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
 

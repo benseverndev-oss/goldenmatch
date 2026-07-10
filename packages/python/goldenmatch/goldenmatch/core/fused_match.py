@@ -107,6 +107,25 @@ def _match_fused_symbol() -> Any | None:
     return getattr(mod, "match_fused", None)
 
 
+def _prep_frame(columns: Mapping[str, Any], src_cols: list[str]) -> Any:
+    """The fused prep's Frame, selected EXPLICITLY by `resolve_frame_backend()`.
+
+    Default (`polars`): today's exact round-trip -- `pl.DataFrame` from the
+    Arrow columns, frame-wide Utf8 cast -- zero behavior change. `arrow`: an
+    ArrowFrame over `pa.table` (the seam ops cast per-column). `to_frame()` is
+    deliberately NOT the selector here: its dict coercion is unconditionally
+    Arrow, which would silently flip the default fused path.
+    """
+    from goldenmatch.core.frame import ArrowFrame, PolarsFrame, resolve_frame_backend
+
+    if resolve_frame_backend() == "arrow":
+        return ArrowFrame(pa.table({c: columns[c] for c in src_cols}))
+
+    import polars as pl
+
+    return PolarsFrame(pl.DataFrame({c: columns[c] for c in src_cols}).cast(pl.Utf8))
+
+
 def run_match_fused_arrow(
     columns: Mapping[str, Any],
     config: Any,
@@ -126,11 +145,6 @@ def run_match_fused_arrow(
     field), so any configured transform is applied byte-identically before the
     kernel groups/scores. Row ids are 0..n in input order.
     """
-    import polars as pl
-
-    from goldenmatch.core.blocker import _build_block_key_expr
-    from goldenmatch.core.scorer import _get_transformed_values
-
     fn = _match_fused_symbol()
     if fn is None or not match_fused_ready(config):
         return None
@@ -144,14 +158,15 @@ def run_match_fused_arrow(
     # pipeline would (blocking pre-casts every column to Utf8; mirror that). This
     # does NOT reintroduce the block/pairs/dedup materialization the fusion
     # eliminates -- it's a few string columns, not the O(k^2) match state.
-    frame = pl.DataFrame({c: columns[c] for c in src_cols}).cast(pl.Utf8)
+    # W2a: derivation runs through the Frame seam -- polars-free end to end
+    # under GOLDENMATCH_FRAME=arrow, byte-identical Polars delegation otherwise.
+    frame = _prep_frame(columns, src_cols)
 
-    block_key = (
-        frame.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
-    )
-    key_arrs = [block_key.to_arrow()]  # already transformed + "||"-concatenated
+    key_arrs = [
+        frame.derive_block_key(key_cfg.fields, key_cfg.transforms or []).to_arrow()
+    ]  # already transformed + "||"-concatenated
     score_arrs = [
-        pl.Series(f.field, _get_transformed_values(frame, f), dtype=pl.Utf8).to_arrow()
+        frame.derive_transformed_column(f.field, f.transforms or []).to_arrow()
         for f in mk.fields
     ]
 
@@ -283,12 +298,9 @@ def run_match_fused_fs_arrow(
     Returns a `(__row_id__, __cluster_id__)` Table, or None if uncovered / native
     absent.
     """
-    import polars as pl
-
-    from goldenmatch.core.blocker import _build_block_key_expr
     from goldenmatch.core.probabilistic import (
         _NATIVE_FS_SCORER_IDS,
-        _field_values_for_block,
+        _field_values_from_list,
         _fs_calibration_mode,
         compute_thresholds,
         prior_weight,
@@ -302,12 +314,9 @@ def run_match_fused_fs_arrow(
     mk = config.get_matchkeys()[0]
     src_cols = list(dict.fromkeys([*key_cfg.fields, *[f.field for f in mk.fields]]))
     n = n_rows if n_rows is not None else len(columns[src_cols[0]])
-    frame = pl.DataFrame({c: columns[c] for c in src_cols}).cast(pl.Utf8)
+    frame = _prep_frame(columns, src_cols)
 
-    block_key = (
-        frame.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
-    )
-    key_arrs = [block_key.to_arrow()]
+    key_arrs = [frame.derive_block_key(key_cfg.fields, key_cfg.transforms or []).to_arrow()]
 
     # FS kernel args — mirrors score_probabilistic_native exactly.
     calibrated = _fs_calibration_mode() == "posterior"
@@ -323,10 +332,14 @@ def run_match_fused_fs_arrow(
     levels = [int(f.levels) for f in mk.fields]
     partials = [float(f.partial_threshold) for f in mk.fields]
     weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
-    score_arrs = [
-        pl.Series(f.field, _field_values_for_block(frame, f, n), dtype=pl.Utf8).to_arrow()
-        for f in mk.fields
-    ]
+    # FS prep: extraction goes through the seam (`utf8_values` = Utf8 cast +
+    # to_list on either backend); the transform loop is the same pure-Python
+    # `_field_values_from_list` the classic FS block scorer uses.
+    score_arrs = []
+    for f in mk.fields:
+        raw = frame.utf8_values(f.field) if f.field in frame.columns else None
+        vals = _field_values_from_list(raw, f, n)
+        score_arrs.append(pa.array(vals, type=pa.large_string()))
 
     row_ids = pa.array(range(n), type=pa.int64())
     clusters = fn(
