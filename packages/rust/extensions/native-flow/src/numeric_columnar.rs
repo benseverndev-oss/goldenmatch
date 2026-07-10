@@ -195,15 +195,13 @@ pub fn resolve_numeric(ops: &[(String, Vec<String>)]) -> Option<NumericPlan> {
                 parser = Some((String::new(), NumericParser::AsFloat));
                 synthetic = true;
                 f64_ops.push((name.clone(), k));
-            } else if let Some(k) = NullableKernel::from_op(name, &refs) {
-                string_ops.push((name.clone(), k));
             } else {
-                return None;
+                let k = NullableKernel::from_op(name, &refs)?;
+                string_ops.push((name.clone(), k));
             }
-        } else if let Some(k) = NumericKernel::from_op(name, &refs) {
-            f64_ops.push((name.clone(), k));
         } else {
-            return None;
+            let k = NumericKernel::from_op(name, &refs)?;
+            f64_ops.push((name.clone(), k));
         }
     }
     Some(NumericPlan {
