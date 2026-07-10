@@ -75,6 +75,7 @@ jobs:
       goldengraph_native: ${{ steps.filter.outputs.goldengraph_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenflow_nopolars: ${{ steps.filter.outputs.goldenflow_nopolars }}
+      goldencheck_nopolars: ${{ steps.filter.outputs.goldencheck_nopolars }}
       goldenmatch_frame_diff: ${{ steps.filter.outputs.goldenmatch_frame_diff }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
@@ -689,6 +690,15 @@ jobs:
               - 'packages/python/goldenflow/tests/nopolars/**'
               - 'packages/python/goldenflow/pyproject.toml'
               - 'packages/python/goldenflow/scripts/build_native.py'
+            goldencheck_nopolars:
+              # Stage-2 S2.0 (Polars eviction) proof lane: installs goldencheck with polars
+              # UNINSTALLED and runs the polars-absent tests (tests/nopolars). Proves `import
+              # goldencheck` survives + the uncovered tail raises cleanly with polars gone, so
+              # the P4 base-deps flip is de-risked. Advisory (not ci-required). No covered scan
+              # yet (goldencheck has no non-Polars backend until S2.1).
+              - 'packages/python/goldencheck/goldencheck/**'
+              - 'packages/python/goldencheck/tests/nopolars/**'
+              - 'packages/python/goldencheck/pyproject.toml'
             goldenmatch_frame_diff:
               # Polars-eviction Wave 1 proof lane: runs the file-based dedupe
               # entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
@@ -2899,6 +2909,27 @@ jobs:
         # polars-importing parent tests/conftest.py isn't collected (the nopolars tests
         # are self-contained, only the builtin tmp_path fixture).
         run: uv run --no-sync python -m pytest packages/python/goldenflow/tests/nopolars --noconftest -v
+
+  goldencheck_nopolars:
+    needs: changes
+    if: needs.changes.outputs.goldencheck_nopolars == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Uninstall polars (simulate the P4 base-deps flip)
+        run: uv pip uninstall polars polars-runtime-32 polars-runtime-64 || true
+      - name: Confirm polars is gone
+        run: uv run --no-sync python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('polars') is None else 'polars still present')"
+      - name: Polars-absent proof (tests/nopolars)
+        run: uv run --no-sync python -m pytest packages/python/goldencheck/tests/nopolars --noconftest -v
 
   # Polars-eviction Wave 1 proof lane (goldenmatch): runs the file-based
   # dedupe entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
