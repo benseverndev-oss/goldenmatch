@@ -12,6 +12,7 @@
 //! plain slices and delegate to `goldencheck-core`.
 use pyo3::prelude::*;
 
+mod date;
 mod dc;
 mod fuzzy;
 mod keys;
@@ -32,5 +33,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(regex::str_contains_count, m)?)?;
     m.add_function(wrap_pyfunction!(regex::str_filter_mask, m)?)?;
     m.add_function(wrap_pyfunction!(regex::str_replace_all, m)?)?;
+    m.add_function(wrap_pyfunction!(date::str_to_date, m)?)?;
     Ok(())
 }
