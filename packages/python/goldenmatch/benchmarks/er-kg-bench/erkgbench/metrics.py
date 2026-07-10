@@ -15,8 +15,16 @@ forms) measure how often a resolver wrongly merges them.
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 from itertools import combinations
+
+_WS = re.compile(r"\s+")
+
+
+def _norm_surface(s: str) -> str:
+    return _WS.sub(" ", s.strip().casefold())
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,64 @@ def score_by_class(
         scope = {i for i, c in enumerate(failure_classes) if c == cls}
         out[cls] = score(entity_ids, clustering, scope=scope)
     return out
+
+
+@dataclass(frozen=True)
+class SplitRate:
+    """Homograph split-rate (the CLEAR-KG headline sub-metric).
+
+    Of gold pairs that share a normalized SURFACE FORM but belong to DIFFERENT
+    entities (real homographs), the fraction the resolver correctly keeps in
+    different clusters. Goes to ~0 for every ``if similar: merge`` mechanism
+    (they resolve on the string, so two identical surfaces always merge); stays
+    high for neighborhood/collective ER. Complements the per-class precision on
+    ``same_name_collision`` by scoring the merge decision *pairwise on the
+    surface collision itself*, independent of the failure-class labelling.
+    """
+
+    split: int
+    confusable: int
+
+    @property
+    def rate(self) -> float:
+        return self.split / self.confusable if self.confusable else 1.0
+
+
+def homograph_split_rate(
+    mentions: list[str],
+    entity_ids: list[str],
+    clustering: list[list[int]],
+) -> SplitRate:
+    """Fraction of same-surface / different-entity pairs kept apart.
+
+    Records absent from every listed cluster are treated as singletons (their
+    own predicted cluster), matching the pairwise convention in :func:`score`.
+    """
+    cid: dict[int, int] = {}
+    for k, cluster in enumerate(clustering):
+        for i in cluster:
+            cid[i] = k
+    next_id = len(clustering)
+
+    def pred(i: int) -> int:
+        nonlocal next_id
+        if i not in cid:
+            cid[i] = next_id
+            next_id += 1
+        return cid[i]
+
+    by_surface: dict[str, list[int]] = defaultdict(list)
+    for i, m in enumerate(mentions):
+        by_surface[_norm_surface(m)].append(i)
+
+    split = confusable = 0
+    for idxs in by_surface.values():
+        for a, b in combinations(idxs, 2):
+            if entity_ids[a] != entity_ids[b]:  # a homograph-confusable pair
+                confusable += 1
+                if pred(a) != pred(b):
+                    split += 1
+    return SplitRate(split=split, confusable=confusable)
 
 
 def clusterings_equal(a: list[list[int]], b: list[list[int]]) -> bool:

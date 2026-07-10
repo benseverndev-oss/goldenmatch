@@ -1,0 +1,10 @@
+{
+  "pairwise_f1_macro": 0.3754506026818921,
+  "pairwise_precision_macro": 0.2562809815356974,
+  "pairwise_recall_macro": 1.0,
+  "pairwise_f1_micro": 0.3031429072203163,
+  "n_names": 80,
+  "engine": "all_one",
+  "split": "valid",
+  "wall_s": 10.2
+}
