@@ -330,3 +330,34 @@ def test_pycolumn_dtype_matches_polars_inference():
         pol = PolarsFrame(pl.DataFrame(d)).column(col).dtype
         pyf = PyFrame.from_columns(d).column(col).dtype
         assert pyf == pol, (d, pyf, pol)
+
+
+import pytest
+from goldencheck.core._native_loader import native_enabled
+
+
+@pytest.mark.skipif(not native_enabled("regex"), reason="needs native regex kernel")
+def test_pycolumn_regex_ops_match_polars():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    d = {"s": ["aX1", "bY2", None, "Z", "cc"]}
+    pol = PolarsFrame(pl.DataFrame(d)).column("s")
+    pyf = PyFrame.from_columns(d).column("s")
+    assert pyf.str_match_count(r"\d") == pol.str_match_count(r"\d")
+    assert pyf.str_filter(r"\d", matching=True).to_list() == pol.str_filter(r"\d", matching=True).to_list()
+    # matching=False MUST drop nulls (three-valued filter) -- the parity trap
+    assert pyf.str_filter(r"\d", matching=False).to_list() == pol.str_filter(r"\d", matching=False).to_list()
+    assert pyf.str_replace_all(r"\p{L}", "L").to_list() == pol.str_replace_all(r"\p{L}", "L").to_list()
+
+
+def test_value_counts_desc_deterministic_and_backend_identical():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    d = {"s": ["b", "a", "b", "a", "c", "b"]}   # counts b=3,a=2,c=1
+    pol = PolarsFrame(pl.DataFrame(d)).column("s").value_counts_desc()
+    pyf = PyFrame.from_columns(d).column("s").value_counts_desc()
+    assert pyf == pol
+    # tie: a & b both 2 -> (count DESC, value ASC) => a before b, on BOTH backends
+    d2 = {"s": ["b", "a", "b", "a"]}
+    assert PolarsFrame(pl.DataFrame(d2)).column("s").value_counts_desc() == [("a", 2), ("b", 2)]
+    assert PyFrame.from_columns(d2).column("s").value_counts_desc() == [("a", 2), ("b", 2)]
