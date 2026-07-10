@@ -106,8 +106,12 @@ def load_file(
 
         sep = delimiter or ","
         tbl = read_table_arrow(path, separator=sep, encoding=encoding, sheet=sheet)
+        # Sanitize the user-provided path for logging (py/log-injection):
+        # escape newlines so a crafted filename can't forge log records.
+        safe_log_path = str(path).replace("\r", "\\r").replace("\n", "\\n")
         logger.info(
-            "GOLDENMATCH_FRAME=arrow: reading %s via pyarrow (experimental)", path
+            "GOLDENMATCH_FRAME=arrow: reading %s via pyarrow (experimental)",
+            safe_log_path,
         )
         return pl.from_arrow(tbl).lazy()
 
