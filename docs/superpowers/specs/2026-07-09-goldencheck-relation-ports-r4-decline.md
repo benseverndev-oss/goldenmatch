@@ -75,6 +75,12 @@ import gate, which stays green.)
   lazy proxy. The scanner that dispatches profilers may also want to skip declined profilers when Polars
   is absent. A grep-able sentinel (e.g. a shared marker constant) could enumerate the Polars-only files
   for that tooling — deferred until a consumer exists (YAGNI now).
+- **Orthogonal pre-existing coupling (not a polars concern):** `baseline/correlation.py` additionally
+  imports `numpy`/`scipy` eagerly at module top (raising a clear `ImportError` if absent — the
+  `[baseline]` extra). It is import-safe for the goldencheck import gate only because
+  `baseline/correlation` is imported lazily (inside functions), not on the `import goldencheck` path.
+  This is separate from the polars eviction and unchanged by R4; noted here for completeness so a P4
+  effort doesn't conflate the two extras.
 
 ## Scope
 

@@ -1,4 +1,13 @@
-"""Correlation analyzer — Pearson (numeric-numeric) and Cramer's V (categorical-categorical)."""
+"""Correlation analyzer — Pearson (numeric-numeric) and Cramer's V (categorical-categorical).
+
+**Polars-accelerator-only (declined from the seam eviction, R4).** The core is a
+``group_by([a, b]).agg(pl.len()).pivot(on=b, index=a, values=...)`` plus a hard ``numpy``/``scipy``
+dependency (``pearsonr``, ``chi2_contingency``, ``.to_numpy()``) -- a ``group_by().agg()`` + real
+``.pivot()`` the ``Frame``/``Column`` seam does not model. It is NOT routed through the seam; it stays
+import-safe for the goldencheck import gate (lazy ``pl``; ``baseline`` is imported lazily) but requires
+Polars (and the ``[baseline]`` numpy/scipy extra) at runtime. See
+``docs/superpowers/specs/2026-07-09-goldencheck-relation-ports-r4-decline.md``.
+"""
 from __future__ import annotations
 
 import itertools
