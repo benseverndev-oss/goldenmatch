@@ -578,6 +578,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_BLOCKING_PRUNE_PASSES` / `_PASS_MIN_WEAKPOS` | `0` / `1` | Weak-positive multi-pass pruning. |
 | `GOLDENMATCH_QUALITY_AWARE_BLOCKING` | `0` | Add fuzzy passes for noisy columns (GoldenCheck door #1). |
 | `GOLDENMATCH_FD_NEGATIVE_EVIDENCE` | `0` | FD-driven negative evidence (GoldenCheck door #3). |
+| `GOLDENMATCH_FACILITY_NAME_NE` | `0` | On company/location-mode data (shared phone/address/company demoted because the sharers don't co-agree on the person name), add the person full name (first+last) as `token_sort` negative evidence so distinct colleagues at one facility don't fuse. Opt-in; only fires when facility mode is detected, so person datasets (e.g. Febrl) are unaffected even when set. |
 | `GOLDENMATCH_QUALITY_GATED_REVIEW` | `0` | Downgrade auto-merge on low-quality records. |
 
 ### Probabilistic / Fellegi-Sunter (advanced)
