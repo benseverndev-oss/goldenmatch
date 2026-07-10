@@ -31,3 +31,22 @@ class TestHealthEndpoint:
         client = await a2a_client
         resp = await client.get("/health")
         assert resp.status == 200
+
+
+class TestRunPipelineSkill:
+    async def test_inline_records_dispatch(self, a2a_client):
+        # A2A dispatches run-pipeline to the SAME run_pipeline_tool the MCP server
+        # uses, so it inherits the enriched surface: inline `records` input and the
+        # full per-stage result. `stages: []` keeps it hermetic (load only).
+        client = await a2a_client
+        resp = await client.post("/tasks", json={
+            "skill": "run-pipeline",
+            "params": {"records": [{"a": 1}, {"a": 2}], "stages": []},
+        })
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["status"] == "completed"
+        result = body["result"]
+        assert result["status"] == "success"
+        assert result["input_rows"] == 2
+        assert "load" in result["stages"]
