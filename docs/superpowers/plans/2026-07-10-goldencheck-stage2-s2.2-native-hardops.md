@@ -55,7 +55,7 @@ Verify each new symbol appears in that `dir()` list before relying on it. If the
 
 **INVARIANTS:**
 - Byte-identical: each hard profiler produces IDENTICAL `Finding`s via the native-backed `PyColumn` path vs the `PolarsFrame` path (the parity gate). `Finding` is a plain `@dataclass` — compare with `==`.
-- Existing tests pass UNEDITED (regression gate): `encoding_detection`, `format_detection`, `pattern_consistency` test files + `tests/core/test_native_parity.py` + the S2.1 tests. If `value_counts_desc`'s new order changes a `pattern_consistency` assertion, that test relied on nondeterministic tie-order → investigate, do NOT loosen.
+- Existing PROFILER-BEHAVIOR tests pass UNEDITED (regression gate): `encoding_detection`, `format_detection`, `pattern_consistency` test files + `tests/core/test_native_parity.py`. If `value_counts_desc`'s new order changes a `pattern_consistency` assertion, that test relied on nondeterministic tie-order → investigate, do NOT loosen. (EXCEPTION — one deliberate test-infra edit: the S2.1 `test_scan_columns_parity.py::test_scan_columns_matches_polars_covered_output` MUST be updated to mirror `scan_columns`' new native gate — see Task 4 Step 3. That is not a behavior regression; it tracks `scan_columns`' expanded contract.)
 - `import goldencheck` loads ZERO polars (the S2.1 import gate stays green). `scan_dataframe` (Polars path) unchanged except `value_counts_desc`'s deterministic secondary sort (guarded by the unedited-tests check).
 - Commit per task; do NOT push.
 
@@ -219,7 +219,8 @@ Expected: the 4 new tests pass, `test result: ok`. Then `rustfmt src/regex.rs` a
 ```rust
 //! PyO3 shims over `goldencheck_core::regex`. Input arrives as a Python
 //! `list[str | None]` (auto -> `Vec<Option<String>>`); a bad pattern -> ValueError.
-use goldencheck_core::{str_contains_count, str_filter_mask, str_replace_all};
+//! NOTE: do NOT `use goldencheck_core::str_contains_count` etc. -- the shim fns
+//! share those names; the bodies call them fully-qualified to avoid an E0255 clash.
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -238,7 +239,7 @@ pub fn str_replace_all(values: Vec<Option<String>>, pattern: &str, replacement: 
     goldencheck_core::str_replace_all(&values, pattern, replacement).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 ```
-(If Rust name-collision between the `use goldencheck_core::str_contains_count` import and the local `#[pyfunction] str_contains_count` is a problem, drop the `use` and fully-qualify as shown in the bodies. Prefer fully-qualified calls — remove the `use goldencheck_core::{...}` line.)
+(The snippet above compiles as-is — the `#[pyfunction]` names are fully-qualified at the call site, no `use` of the core fns.)
 
 - [ ] **Step 6: `goldencheck-native/src/lib.rs`** — add `mod regex;` (with the other `mod` lines) and inside `#[pymodule] fn _native`, register:
 ```rust
@@ -275,8 +276,12 @@ git commit -m "feat(goldencheck-native): S2.2 regex kernel (str_contains_count/f
 - Modify: `packages/python/goldencheck/goldencheck/core/frame.py` (PyColumn ops, `_VC_KEY`, rewrite `PolarsColumn.value_counts_desc`, `NativeRequiredError`)
 - Test: `packages/python/goldencheck/tests/core/test_frame.py`
 
-- [ ] **Step 1: Write failing backend tests** (append to `tests/core/test_frame.py`). These need native built (Task 2):
+- [ ] **Step 1: Write failing backend tests** (append to `tests/core/test_frame.py`). The regex-ops test needs native built (Task 2), so it SKIPS cleanly when native is absent (a failed Windows build must not turn it red); the `value_counts_desc` test is pure-Python and needs no guard:
 ```python
+import pytest
+from goldencheck.core._native_loader import native_enabled
+
+@pytest.mark.skipif(not native_enabled("regex"), reason="needs native regex kernel")
 def test_pycolumn_regex_ops_match_polars():
     import polars as pl
     from goldencheck.core.frame import PolarsFrame, PyFrame
@@ -449,7 +454,23 @@ def scan_columns(columns: dict[str, list]) -> list[Finding]:
             findings.extend(profiler.profile(frame, name))
     return findings
 ```
-Keep `scan_columns` in `__all__`. (The S2.1 name `_COVERED_COLUMN_PROFILERS` is removed; grep the package for other references first — there should be none outside scanner.py + its S2.1 parity test. If the S2.1 parity test `tests/engine/test_scan_columns_parity.py` imports `_COVERED_COLUMN_PROFILERS`, update that import to `_MECHANICAL_PROFILERS` — that is a test-infra rename, not a behavior change; the S2.1 assertions themselves stay.)
+Keep `scan_columns` in `__all__`. The S2.1 name `_COVERED_COLUMN_PROFILERS` is removed; grep the package for references first (`grep -rn _COVERED_COLUMN_PROFILERS packages/python/goldencheck`) — there should be none outside scanner.py + the S2.1 parity test.
+
+**REQUIRED S2.1-test update (not just a rename — a real gate-mirror):** `tests/engine/test_scan_columns_parity.py::test_scan_columns_matches_polars_covered_output` builds `expected` from the covered profilers then asserts `scan_columns(data) == expected`. Since `scan_columns` now ALSO runs `_HARD_PROFILERS` when `native_enabled("regex")`, and the S2.1 datasets (the `email`/`phone` columns) DO trigger `pattern_consistency`, that assertion will FAIL when native is present unless `expected` mirrors the same gate. Update that test's `expected` loop to:
+```python
+from goldencheck.core._native_loader import native_enabled
+from goldencheck.engine.scanner import _MECHANICAL_PROFILERS, _HARD_PROFILERS
+# ...
+    covered = list(_MECHANICAL_PROFILERS)
+    if native_enabled("regex"):
+        covered += _HARD_PROFILERS
+    expected = []
+    for name in data:
+        for profiler in covered:
+            expected.extend(profiler.profile(pol, name))
+    assert scan_columns(data) == expected
+```
+The other S2.1 test (`test_covered_profilers_backend_parity`) instantiates the 3 mechanical profilers by name and does NOT call `scan_columns`, so it is unaffected — leave it. This test-infra update is necessitated by `scan_columns`' expanded contract; it is NOT a byte-identity regression (see the INVARIANTS nuance).
 
 - [ ] **Step 4: Run → PASS** (new parity test + S2.1 parity test + import gate):
 ```bash
