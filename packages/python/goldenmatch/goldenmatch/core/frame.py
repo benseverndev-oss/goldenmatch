@@ -15,6 +15,8 @@ parity test.
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from goldenmatch._polars_lazy import pl
@@ -62,6 +64,11 @@ class Frame(Protocol):
     def native(self) -> Any: ...
     def column(self, name: str) -> Column: ...
     def to_arrow_columns(self, names: list[str]) -> dict[str, Any]: ...
+    def derive_block_key(
+        self, fields: Sequence[str], transforms: Sequence[str], sep: str = "||"
+    ) -> Column: ...
+    def derive_transformed_column(self, field: str, transforms: Sequence[str]) -> Column: ...
+    def utf8_values(self, field: str) -> list[str | None]: ...
 
 
 class PolarsColumn:
@@ -113,6 +120,47 @@ class PolarsFrame:
         # The fused-kernel FFI boundary: dict[str, pa.Array/ChunkedArray],
         # exactly the `collected_df[c].to_arrow()` shape pipeline.py builds today.
         return {n: self._df[n].to_arrow() for n in names}
+
+    def derive_block_key(
+        self, fields: Sequence[str], transforms: Sequence[str], sep: str = "||"
+    ) -> PolarsColumn:
+        # Byte-identical by construction: delegates to the pipeline's own
+        # _build_block_key_expr over a Utf8 pre-cast frame (the fused prep's
+        # frame-wide cast; the map_elements fallback branch relies on it).
+        from types import SimpleNamespace
+
+        from goldenmatch.core.blocker import _build_block_key_expr
+
+        key_cfg = SimpleNamespace(fields=list(fields), transforms=list(transforms))
+        df = self._df.with_columns([pl.col(f).cast(pl.Utf8) for f in fields])
+        s = df.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
+        return PolarsColumn(s)
+
+    def derive_transformed_column(self, field: str, transforms: Sequence[str]) -> PolarsColumn:
+        # Cast-then-chain (op contract): the same derivation
+        # scorer._get_transformed_values performs on the fused prep's pre-cast
+        # frame -- native expr chain when fully expressible, else per-value
+        # apply_transforms on the cast strings (nulls preserved). The list
+        # round-trip through pl.Series mirrors the fused caller exactly.
+        from goldenmatch.core.matchkey import _try_native_chain
+        from goldenmatch.utils.transforms import apply_transforms
+
+        df = self._df.with_columns(pl.col(field).cast(pl.Utf8))
+        chain = list(transforms)
+        native = _try_native_chain(field, chain) if chain else None
+        if native is not None:
+            values = df.select(native.alias("__tmp__"))["__tmp__"].to_list()
+        elif chain:
+            values = [
+                apply_transforms(v, chain) if v is not None else None
+                for v in df[field].to_list()
+            ]
+        else:
+            values = df[field].to_list()
+        return PolarsColumn(pl.Series(field, values, dtype=pl.Utf8))
+
+    def utf8_values(self, field: str) -> list[str | None]:
+        return self._df[field].cast(pl.Utf8).to_list()
 
 
 class ArrowColumn:
@@ -173,16 +221,47 @@ class ArrowFrame:
     def to_arrow_columns(self, names: list[str]) -> dict[str, Any]:
         return {n: self._tbl.column(n) for n in names}
 
+    def derive_block_key(
+        self, fields: Sequence[str], transforms: Sequence[str], sep: str = "||"
+    ) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        arrs = [self._tbl.column(f) for f in fields]
+        return ArrowColumn(arrow_derive.block_key(arrs, list(transforms), sep=sep))
+
+    def derive_transformed_column(self, field: str, transforms: Sequence[str]) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        return ArrowColumn(arrow_derive.transformed_column(self._tbl.column(field), list(transforms)))
+
+    def utf8_values(self, field: str) -> list[str | None]:
+        from goldenmatch.core import arrow_derive
+
+        return arrow_derive.cast_utf8(self._tbl.column(field)).to_pylist()
+
 
 def to_frame(obj: Any) -> Frame:
-    """Idempotent coercion: raw ``pl.DataFrame``/``pa.Table`` or ``Frame`` -> ``Frame``."""
+    """Idempotent coercion: raw ``pl.DataFrame``/``pa.Table``, a
+    ``dict[str, pa.Array]`` (the fused-FFI column shape), or a ``Frame``.
+
+    Ordering matters: the Arrow branches run BEFORE the ``pl.DataFrame``
+    isinstance, and that check only fires when polars is already imported --
+    the ``_LazyPolars`` proxy would otherwise import polars just to answer the
+    isinstance, defeating the arrow lane's polars-free guarantee (a real
+    ``pl.DataFrame`` input implies polars is in ``sys.modules`` already).
+    """
     if isinstance(obj, (PolarsFrame, ArrowFrame)):
         return obj
-    if isinstance(obj, pl.DataFrame):
-        return PolarsFrame(obj)
 
     import pyarrow as pa
 
     if isinstance(obj, pa.Table):
         return ArrowFrame(obj)
-    raise TypeError(f"to_frame expects a polars DataFrame, pyarrow Table, or Frame, got {type(obj)!r}")
+    if isinstance(obj, dict):
+        return ArrowFrame(pa.table(obj))
+    if "polars" in sys.modules and isinstance(obj, pl.DataFrame):
+        return PolarsFrame(obj)
+    raise TypeError(
+        f"to_frame expects a polars DataFrame, pyarrow Table, dict of arrow "
+        f"columns, or Frame, got {type(obj)!r}"
+    )
