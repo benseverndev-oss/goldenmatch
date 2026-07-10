@@ -44,3 +44,19 @@ def test_uncovered_path_raises_clean_error_without_polars() -> None:
 
     with pytest.raises(ModuleNotFoundError):
         _ = pl.DataFrame
+
+
+def test_covered_scan_columns_without_polars() -> None:
+    from goldencheck import scan_columns
+
+    findings = scan_columns({
+        "pk": list(range(120)),
+        "grade": ["A", "B", "C"] * 40,
+        "note": [None] * 120,
+    })
+    checks = sorted({f.check for f in findings})
+    # covered structural checks fire; nothing polars-only ran
+    assert "uniqueness" in checks      # pk is 100% unique
+    assert "cardinality" in checks     # grade is low-cardinality
+    assert "nullability" in checks     # note is entirely null
+    assert "polars" not in sys.modules
