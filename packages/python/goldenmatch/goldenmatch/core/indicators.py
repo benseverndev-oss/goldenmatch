@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from functools import lru_cache
 from typing import Any
 
 import polars as pl
@@ -40,8 +41,10 @@ _IDENTITY_NAME_PATTERNS = [
     (re.compile(r"^(id|uuid|guid|user_id|account_id)$", re.I), 0.90),
 ]
 
-_BOOLEAN_DTYPES = {pl.Boolean}
-_NON_IDENTITY_DTYPES = {pl.Boolean, pl.Date, pl.Datetime, pl.Time}
+@lru_cache(maxsize=1)
+def _non_identity_dtypes() -> set:
+    """Deferred: evaluating pl dtypes at module level would defeat _polars_lazy."""
+    return {pl.Boolean, pl.Date, pl.Datetime, pl.Time}
 
 
 def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
@@ -88,7 +91,7 @@ def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
 
 def _compute_identity_score(df: pl.DataFrame, col: str) -> float:
     """Identity-score heuristic. Name match > dtype match > cardinality."""
-    if df.schema.get(col) in _NON_IDENTITY_DTYPES:
+    if df.schema.get(col) in _non_identity_dtypes():
         return 0.0
     for pattern, score in _IDENTITY_NAME_PATTERNS:
         if pattern.match(col):
