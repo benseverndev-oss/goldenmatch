@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.complexity_profile import FieldStats, MatchkeyProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter

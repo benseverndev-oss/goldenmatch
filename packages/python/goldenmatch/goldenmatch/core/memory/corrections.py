@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.memory.store import Correction, _canon_pair
 
 if TYPE_CHECKING:

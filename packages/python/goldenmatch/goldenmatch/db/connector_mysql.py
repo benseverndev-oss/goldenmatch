@@ -15,7 +15,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.db.connector import DatabaseConnector
 
 logger = logging.getLogger(__name__)

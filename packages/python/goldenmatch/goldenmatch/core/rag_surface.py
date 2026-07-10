@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.llm_canonicalize import CanonicalRecord, canonicalize_cluster
 from goldenmatch.core.retrieval import RetrievedRecord, retrieve_similar_records
 

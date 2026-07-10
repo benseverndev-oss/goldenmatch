@@ -15,7 +15,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.db.connector import DatabaseConnector
 
 logger = logging.getLogger(__name__)

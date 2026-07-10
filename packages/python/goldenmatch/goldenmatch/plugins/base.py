@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
+
 from goldenmatch._polars_lazy import pl
 
 

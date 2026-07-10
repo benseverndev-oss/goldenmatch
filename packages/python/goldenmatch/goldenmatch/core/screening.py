@@ -23,7 +23,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.match_one import match_one
 from goldenmatch.core.scorer import apply_transforms, score_field
 

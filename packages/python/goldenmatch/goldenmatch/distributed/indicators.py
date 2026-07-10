@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.complexity_profile import ColumnPrior, SparsityVerdict
 
 if TYPE_CHECKING:

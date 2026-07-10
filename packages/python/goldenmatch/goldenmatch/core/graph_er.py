@@ -30,7 +30,6 @@ import logging
 from dataclasses import dataclass, field
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.pipeline import run_dedupe

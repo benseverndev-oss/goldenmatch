@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.documents.types import (
     ExtractResult,
     IngestReport,

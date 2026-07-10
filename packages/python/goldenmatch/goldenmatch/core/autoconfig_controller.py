@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage

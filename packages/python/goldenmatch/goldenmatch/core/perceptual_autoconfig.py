@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     GoldenMatchConfig,

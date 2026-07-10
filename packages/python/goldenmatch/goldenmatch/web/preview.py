@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import (
     GoldenMatchConfig,
     MatchkeyConfig,

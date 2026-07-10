@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from goldenmatch._polars_lazy import pl
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.tui.engine import EngineResult
 from goldenmatch.tui.widgets.threshold_slider import ThresholdSlider
 

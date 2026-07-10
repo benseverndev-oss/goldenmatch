@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from goldenmatch._polars_lazy import pl
 from rich.panel import Panel
 from rich.table import Table
+
+from goldenmatch._polars_lazy import pl
 
 # ── Heuristic type detection helpers ────────────────────────────────────────
 

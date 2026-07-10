@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from itertools import combinations
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import BlockingKeyConfig
 
 logger = logging.getLogger(__name__)

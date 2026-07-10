@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)

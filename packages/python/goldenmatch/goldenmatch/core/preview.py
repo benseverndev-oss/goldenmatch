@@ -5,10 +5,10 @@ and score histograms using Rich tables and console capture.
 """
 from __future__ import annotations
 
-from goldenmatch._polars_lazy import pl
 from rich.console import Console
 from rich.table import Table
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.tui.engine import EngineStats
 
 

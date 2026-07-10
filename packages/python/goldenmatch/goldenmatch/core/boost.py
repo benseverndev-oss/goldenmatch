@@ -11,10 +11,10 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from goldenmatch._polars_lazy import pl
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.llm_labeler import (
     detect_context,
     detect_provider,

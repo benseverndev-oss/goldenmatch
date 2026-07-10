@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
 
 _GOLDEN_STRATEGY_IDS = {

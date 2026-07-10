@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from goldenmatch._polars_lazy import pl
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Button, DataTable, Static
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.tui.engine import EngineResult
 
 logger = logging.getLogger(__name__)

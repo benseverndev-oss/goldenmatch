@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from goldenmatch.distributed.record_store import PreparedRecordStore
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe
 from goldenmatch.core.bench import record_metric, record_metrics, stage

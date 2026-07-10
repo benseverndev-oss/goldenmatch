@@ -28,7 +28,6 @@ from datetime import datetime
 from threading import Event
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.cluster import add_to_cluster
 from goldenmatch.core.match_one import match_one

@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.review_queue import ReviewQueue, gate_pairs
 
 logger = logging.getLogger(__name__)

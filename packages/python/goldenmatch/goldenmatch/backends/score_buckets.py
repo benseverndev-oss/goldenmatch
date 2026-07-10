@@ -37,7 +37,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage

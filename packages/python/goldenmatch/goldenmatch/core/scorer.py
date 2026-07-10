@@ -9,11 +9,11 @@ from typing import Any
 
 import jellyfish
 import numpy as np
-from goldenmatch._polars_lazy import pl
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
 from rapidfuzz.process import cdist
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core._profile_helpers import (
     hartigan_dip,

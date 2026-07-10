@@ -39,7 +39,6 @@ import logging
 import os
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.connectors._sql_common import (
     df_to_rows,
     require_mode,

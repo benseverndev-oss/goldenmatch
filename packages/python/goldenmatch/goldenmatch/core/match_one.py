@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core.scorer import score_pair
 

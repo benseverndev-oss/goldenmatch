@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import BlockingConfig, PerceptualKeyConfig
 
 

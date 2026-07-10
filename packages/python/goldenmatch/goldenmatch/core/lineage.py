@@ -15,7 +15,6 @@ from datetime import datetime
 from pathlib import Path
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core._logging import sanitize_for_log
 from goldenmatch.core._paths import safe_path

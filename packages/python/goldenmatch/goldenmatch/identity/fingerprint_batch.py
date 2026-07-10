@@ -145,7 +145,7 @@ def canonicalize_records_df(df: pl.DataFrame):
         elif dtype == pl.Float32:
             exprs.append(pl.col(col).cast(pl.Float64))
         elif isinstance(dtype, _int_upcast_dtypes()) or dtype == pl.UInt64:
-            # UInt64 handled here not in _INT_UPCAST: its overflow rows are already masked out above
+            # UInt64 handled here not in _int_upcast_dtypes(): its overflow rows are already masked out above
             exprs.append(pl.col(col).cast(pl.Int64))
         elif isinstance(dtype, (pl.Categorical, pl.Enum)):
             exprs.append(pl.col(col).cast(pl.Utf8))

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 
 def test_proxy_returns_real_polars_attributes():
-    from goldenmatch._polars_lazy import pl
     import polars as real_pl
+    from goldenmatch._polars_lazy import pl
 
     assert pl.DataFrame is real_pl.DataFrame
     assert pl.Utf8 is real_pl.Utf8

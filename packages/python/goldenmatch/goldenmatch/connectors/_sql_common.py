@@ -19,7 +19,6 @@ from collections.abc import Iterable
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.connectors.base import ConnectorError
 
 logger = logging.getLogger(__name__)

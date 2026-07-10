@@ -15,7 +15,6 @@ import logging
 from collections import defaultdict
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import LLMScorerConfig
 from goldenmatch.core.llm_budget import BudgetTracker
 

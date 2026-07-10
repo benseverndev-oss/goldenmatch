@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.config_edits import (
     _PERTURBABLE_TYPES,

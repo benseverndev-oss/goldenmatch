@@ -5,7 +5,6 @@ from __future__ import annotations
 
 def test_non_identity_dtypes_is_lazy_function_with_expected_members():
     import polars as pl
-
     from goldenmatch.core.indicators import _non_identity_dtypes
 
     assert _non_identity_dtypes() == {pl.Boolean, pl.Date, pl.Datetime, pl.Time}

@@ -16,8 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from goldenmatch._polars_lazy import pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, SimHashKeyConfig
 from goldenmatch.core import sketch
 

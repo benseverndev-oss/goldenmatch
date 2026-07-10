@@ -8,7 +8,6 @@ from dataclasses import field as dataclass_field
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
 
 

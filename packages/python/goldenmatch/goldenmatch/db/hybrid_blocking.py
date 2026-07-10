@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from goldenmatch._polars_lazy import pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig
 from goldenmatch.db.ann_index import PersistentANNIndex
 from goldenmatch.db.blocking import build_blocking_query

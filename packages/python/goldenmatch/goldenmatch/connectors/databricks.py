@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.connectors.base import BaseConnector, ConnectorError
 
 logger = logging.getLogger(__name__)

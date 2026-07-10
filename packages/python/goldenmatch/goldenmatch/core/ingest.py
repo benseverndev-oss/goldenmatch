@@ -8,7 +8,6 @@ import logging
 from pathlib import Path
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core._paths import safe_path
 
 logger = logging.getLogger(__name__)

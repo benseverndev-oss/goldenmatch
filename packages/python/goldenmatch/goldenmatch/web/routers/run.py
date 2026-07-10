@@ -32,10 +32,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from goldenmatch._polars_lazy import pl
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import (
     GoldenMatchConfig,
     LLMScorerConfig,

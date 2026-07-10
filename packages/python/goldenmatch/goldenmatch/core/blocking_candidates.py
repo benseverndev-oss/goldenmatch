@@ -23,7 +23,6 @@ import os
 from dataclasses import dataclass
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.quality_exclusions import ColumnProfile
 
 logger = logging.getLogger(__name__)

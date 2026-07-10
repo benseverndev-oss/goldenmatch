@@ -6,7 +6,6 @@ import json
 import logging
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.db.connector import DatabaseConnector, _quote_ident
 
 logger = logging.getLogger(__name__)

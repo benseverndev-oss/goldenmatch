@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.db.connector import DatabaseConnector
 from goldenmatch.db.metadata import (

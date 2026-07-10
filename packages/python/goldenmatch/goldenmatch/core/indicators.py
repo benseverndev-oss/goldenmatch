@@ -15,7 +15,6 @@ from functools import lru_cache
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
-
 from goldenmatch.core.complexity_profile import (
     ColumnPrior,
     SparsityVerdict,
