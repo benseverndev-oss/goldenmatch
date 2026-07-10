@@ -312,3 +312,52 @@ def test_to_frame_pyframe_is_polars_free():
     env["POLARS_SKIP_CPU_CHECK"] = "1"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_pycolumn_dtype_matches_polars_inference():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    datasets = [
+        {"s": ["a", "b", None, "c"]},         # str + null   -> "str"
+        {"s": ["a", "b", "c"]},               # str          -> "str"
+        {"i": [1, 2, None, 3]},               # int + null   -> "int"
+        {"f": [1.0, 2.5, 3.0]},               # float        -> "float"
+        {"b": [True, False, True]},           # bool         -> "bool"
+        {"n": [None, None]},                  # all-null      -> "other" (pl.Null)
+    ]
+    for d in datasets:
+        col = next(iter(d))
+        pol = PolarsFrame(pl.DataFrame(d)).column(col).dtype
+        pyf = PyFrame.from_columns(d).column(col).dtype
+        assert pyf == pol, (d, pyf, pol)
+
+
+import pytest
+from goldencheck.core._native_loader import native_enabled
+
+
+@pytest.mark.skipif(not native_enabled("regex"), reason="needs native regex kernel")
+def test_pycolumn_regex_ops_match_polars():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    d = {"s": ["aX1", "bY2", None, "Z", "cc"]}
+    pol = PolarsFrame(pl.DataFrame(d)).column("s")
+    pyf = PyFrame.from_columns(d).column("s")
+    assert pyf.str_match_count(r"\d") == pol.str_match_count(r"\d")
+    assert pyf.str_filter(r"\d", matching=True).to_list() == pol.str_filter(r"\d", matching=True).to_list()
+    # matching=False MUST drop nulls (three-valued filter) -- the parity trap
+    assert pyf.str_filter(r"\d", matching=False).to_list() == pol.str_filter(r"\d", matching=False).to_list()
+    assert pyf.str_replace_all(r"\p{L}", "L").to_list() == pol.str_replace_all(r"\p{L}", "L").to_list()
+
+
+def test_value_counts_desc_deterministic_and_backend_identical():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    d = {"s": ["b", "a", "b", "a", "c", "b"]}   # counts b=3,a=2,c=1
+    pol = PolarsFrame(pl.DataFrame(d)).column("s").value_counts_desc()
+    pyf = PyFrame.from_columns(d).column("s").value_counts_desc()
+    assert pyf == pol
+    # tie: a & b both 2 -> (count DESC, value ASC) => a before b, on BOTH backends
+    d2 = {"s": ["b", "a", "b", "a"]}
+    assert PolarsFrame(pl.DataFrame(d2)).column("s").value_counts_desc() == [("a", 2), ("b", 2)]
+    assert PyFrame.from_columns(d2).column("s").value_counts_desc() == [("a", 2), ("b", 2)]

@@ -20,6 +20,7 @@ mod benford;
 mod dc;
 mod fuzzy;
 mod keys;
+mod regex;
 
 pub use benford::benford_leading_digits;
 pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
@@ -28,3 +29,4 @@ pub use keys::{
     composite_key_search, discover_approximate_fds, discover_functional_dependencies,
     fd_violation_rows, functional_dependency_holds, tuple_distinct_count,
 };
+pub use regex::{str_contains_count, str_filter_mask, str_replace_all};

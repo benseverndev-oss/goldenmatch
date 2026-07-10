@@ -10,6 +10,7 @@ from goldencheck._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
+from goldencheck.core._native_loader import native_enabled
 from goldencheck.core.frame import PyFrame
 from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.engine.reader import read_file
@@ -243,17 +244,28 @@ def _post_classification_checks(
     return new_findings
 
 
-_COVERED_COLUMN_PROFILERS = [NullabilityProfiler(), UniquenessProfiler(), CardinalityProfiler()]
+_MECHANICAL_PROFILERS = [NullabilityProfiler(), UniquenessProfiler(), CardinalityProfiler()]
+_HARD_PROFILERS = [EncodingDetectionProfiler(), FormatDetectionProfiler(), PatternConsistencyProfiler()]
 
 
 def scan_columns(columns: dict[str, list]) -> list[Finding]:
-    """Polars-free reduced scan of the covered STRUCTURAL checks (nullability,
-    uniqueness, cardinality) over in-memory columns. The regex/format/encoding/
-    date/value-count checks need Polars -- use scan_dataframe for a full scan."""
+    """Polars-free reduced scan of the covered column checks over in-memory columns.
+    The mechanical checks (nullability/uniqueness/cardinality) always run; the regex
+    checks (encoding/format/pattern_consistency) run when the native regex kernel is
+    available (`pip install goldencheck[native]`) and are skipped-with-a-log otherwise.
+    Date/relational checks still need Polars -- use scan_dataframe for a full scan."""
     frame = PyFrame.from_columns(columns)
+    profilers = list(_MECHANICAL_PROFILERS)
+    if native_enabled("regex"):
+        profilers += _HARD_PROFILERS
+    else:
+        logger.info(
+            "scan_columns: native regex kernel unavailable; skipping encoding/format/"
+            "pattern_consistency checks. Install with `pip install goldencheck[native]`."
+        )
     findings: list[Finding] = []
     for name in columns:
-        for profiler in _COVERED_COLUMN_PROFILERS:
+        for profiler in profilers:
             findings.extend(profiler.profile(frame, name))
     return findings
 

@@ -2242,6 +2242,11 @@ jobs:
             uv.lock
             **/pyproject.toml
       - run: uv sync --all-packages
+      - name: Build goldencheck native (regex kernel, so hard-op checks run covered not skipped)
+        # No --offline: same idiom as the goldencheck_native lane. Mirrors goldenflow_nopolars'
+        # build-before-uninstall ordering. If this ever fails, the nopolars tests still pass --
+        # test_hard_checks_run_without_polars self-skips when native isn't enabled.
+        run: uv run python scripts/build_goldencheck_native.py
       - name: Uninstall polars (simulate the P4 base-deps flip)
         run: uv pip uninstall polars polars-runtime-32 polars-runtime-64 || true
       - name: Confirm polars is gone

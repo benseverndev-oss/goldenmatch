@@ -20,6 +20,9 @@ name = "goldencheck_core"
 # is already in the dependency graph (pulled by the goldenmatch native stack),
 # so this adds no new crates.io fetch.
 rustc-hash = "2"
+# Same engine Polars uses for str.contains/replace_all, so regex ops are
+# byte-identical. Already resolved transitively (1.12.x) in the native lock.
+regex = "1"
 
 [dev-dependencies]
 # Property/parity checks for the Benford leading-digit extraction, plus the

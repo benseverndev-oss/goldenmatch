@@ -7,9 +7,11 @@ caller may pass either a raw ``pl.DataFrame`` or an already-wrapped ``Frame``.
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Protocol, runtime_checkable
 
 from goldencheck._polars_lazy import pl
+from goldencheck.core._native_loader import native_enabled, native_module
 
 
 @runtime_checkable
@@ -82,6 +84,25 @@ def _neutral_dtype(dt: Any) -> str:
 
 
 _CAST_KIND = {"float": "Float64", "int": "Int64", "str": "String"}   # strings only; resolved via getattr in cast()
+
+
+class NativeRequiredError(RuntimeError):
+    """A covered hard op needs the native regex kernel. Install it with
+    `pip install goldencheck[native]` (or build it in-tree)."""
+
+
+def _VC_KEY(kv: tuple[Any, int]) -> tuple[int, bool, Any]:
+    value, count = kv
+    return (-count, value is None, value if value is not None else "")   # count DESC, nulls-last, value ASC
+
+
+def _regex_kernel():
+    if not native_enabled("regex"):
+        raise NativeRequiredError(
+            "goldencheck native regex kernel unavailable; the encoding/format/"
+            "pattern_consistency checks need `pip install goldencheck[native]`."
+        )
+    return native_module()
 
 
 class PolarsColumn:
@@ -172,8 +193,9 @@ class PolarsColumn:
         return PolarsColumn(self._s.str.replace_all(pattern, value))
 
     def value_counts_desc(self) -> list[tuple[Any, int]]:
-        vc = self._s.value_counts().sort("count", descending=True)
-        return list(zip(vc[self._s.name].to_list(), vc["count"].to_list()))
+        vc = self._s.value_counts()
+        pairs = zip(vc[self._s.name].to_list(), vc["count"].to_list())   # (value, count)
+        return sorted(pairs, key=_VC_KEY)
 
     def eq(self, value: Any) -> PolarsColumn:
         return PolarsColumn(self._s == value)
@@ -223,8 +245,10 @@ class PolarsFrame:
 
 
 class PyColumn:
-    """Pure-Python column wrapping a ``list`` — the 7 mechanical, dtype-free ops
-    used by the simple column profilers (nullability/cardinality/uniqueness).
+    """Pure-Python column wrapping a ``list`` — the mechanical, dtype-free ops used
+    by the simple column profilers (nullability/cardinality/uniqueness), plus the
+    native-regex-backed string ops (str_match_count/str_filter/str_replace_all) and
+    eq/filter_by used by the hard profilers (encoding/format/pattern_consistency).
     Deliberately does NOT implement the full ``Column`` Protocol.
     """
 
@@ -253,6 +277,41 @@ class PyColumn:
 
     def to_list(self) -> list:
         return list(self._v)
+
+    @property
+    def dtype(self) -> str:
+        non_null = [v for v in self._v if v is not None]
+        if not non_null:
+            return "other"                      # Polars infers pl.Null -> _neutral_dtype -> "other"
+        first = non_null[0]
+        if isinstance(first, bool):
+            return "bool"
+        if isinstance(first, int):
+            return "int"
+        if isinstance(first, float):
+            return "float"
+        if isinstance(first, str):
+            return "str"
+        return "other"
+
+    def str_match_count(self, pattern: str) -> int:
+        return _regex_kernel().str_contains_count(self._v, pattern)
+
+    def str_filter(self, pattern: str, *, matching: bool) -> PyColumn:
+        mask = _regex_kernel().str_filter_mask(self._v, pattern)   # list[bool | None]
+        return PyColumn([v for v, m in zip(self._v, mask) if m is not None and m == matching])
+
+    def str_replace_all(self, pattern: str, value: str) -> PyColumn:
+        return PyColumn(_regex_kernel().str_replace_all(self._v, pattern, value))
+
+    def value_counts_desc(self) -> list[tuple[Any, int]]:
+        return sorted(Counter(self._v).items(), key=_VC_KEY)
+
+    def eq(self, value: Any) -> PyColumn:
+        return PyColumn([v == value if v is not None else None for v in self._v])
+
+    def filter_by(self, mask: PyColumn) -> PyColumn:
+        return PyColumn([v for v, m in zip(self._v, mask._v) if m])
 
 
 class PyFrame:
