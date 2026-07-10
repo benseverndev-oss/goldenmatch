@@ -254,6 +254,22 @@ class PyColumn:
     def to_list(self) -> list:
         return list(self._v)
 
+    @property
+    def dtype(self) -> str:
+        non_null = [v for v in self._v if v is not None]
+        if not non_null:
+            return "other"                      # Polars infers pl.Null -> _neutral_dtype -> "other"
+        first = non_null[0]
+        if isinstance(first, bool):
+            return "bool"
+        if isinstance(first, int):
+            return "int"
+        if isinstance(first, float):
+            return "float"
+        if isinstance(first, str):
+            return "str"
+        return "other"
+
 
 class PyFrame:
     """Pure-Python frame wrapping a ``dict[str, list]`` — no Polars import."""

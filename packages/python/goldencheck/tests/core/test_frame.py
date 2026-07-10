@@ -312,3 +312,21 @@ def test_to_frame_pyframe_is_polars_free():
     env["POLARS_SKIP_CPU_CHECK"] = "1"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_pycolumn_dtype_matches_polars_inference():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    datasets = [
+        {"s": ["a", "b", None, "c"]},         # str + null   -> "str"
+        {"s": ["a", "b", "c"]},               # str          -> "str"
+        {"i": [1, 2, None, 3]},               # int + null   -> "int"
+        {"f": [1.0, 2.5, 3.0]},               # float        -> "float"
+        {"b": [True, False, True]},           # bool         -> "bool"
+        {"n": [None, None]},                  # all-null      -> "other" (pl.Null)
+    ]
+    for d in datasets:
+        col = next(iter(d))
+        pol = PolarsFrame(pl.DataFrame(d)).column(col).dtype
+        pyf = PyFrame.from_columns(d).column(col).dtype
+        assert pyf == pol, (d, pyf, pol)
