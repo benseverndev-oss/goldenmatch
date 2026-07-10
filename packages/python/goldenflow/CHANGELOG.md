@@ -1,6 +1,91 @@
 # Changelog
 
+## 2.0.0 (2026-07-08)
+
+**BREAKING — Polars is no longer a base dependency.** `pip install goldenflow` no longer
+pulls Polars (dropping ~185 MB installed); it now runs **Polars-free by default** on
+`goldenflow-native` (the ~5 MB abi3 kernel, now a base dependency). Every one of the 113
+transforms, all file/DB readers, and zero-config run without Polars, byte-identical to the
+Polars engine. Polars becomes an **optional bulk-vectorized backend** — `pip install
+goldenflow[polars]`.
+
+### Migration
+
+- **If you use `transform_df(pl.DataFrame)`, `read_file`, `write_file`, or otherwise pass
+  Polars objects:** `pip install goldenflow[polars]`. You already have Polars installed to
+  construct a `pl.DataFrame`, so in practice this is only a dependency-declaration change.
+- **New code should prefer `goldenflow.transform(data, config=...)`** — the Polars-free
+  primary. It takes a `dict[str, list]` or a `.csv` / `.parquet` / `.xlsx` path and returns
+  a `ColumnarResult` (`.columns` + `.manifest`, with an opt-in `.to_polars()` bridge).
+- **`goldenflow-native` is now installed by default** (was the `[native]` extra). A bare
+  install works out of the box, Polars-free. The `[native]` extra now only adds `pyarrow`
+  (the zero-copy Series bridge for the Polars fused-numeric fast path); it still resolves
+  for back-compat.
+- **Parquet read** needs `goldenflow[parquet]` (pyarrow); **Excel** needs
+  `goldenflow[excel]` (openpyxl); **CSV/DB** read Polars-free out of the box.
+- **CSV zero-config** (`transform("<x>.csv", config=None)`) now profiles columns *as text*
+  (so `"01234"` stays a zip, not `1234`) — an intentional, data-cleaning-correct divergence
+  from `pl.read_csv`'s numeric coercion. Cleaned text values are unchanged.
+
+### Details
+
+- **Polars-free public `transform()`.** `goldenflow.transform(data, config=...)` accepts a
+  `dict[str, list]` OR a file path and returns a `ColumnarResult` (`.columns` + `.manifest`,
+  with an opt-in `.to_polars()` bridge) — with **Polars never imported** for a covered
+  config. `transform_df(pl.DataFrame)` stays as the Polars-backend adapter (it needs a
+  `pl.DataFrame`, which needs Polars).
+- **Every transform on the columnar path (9/9 gaps closed).** A `scalar=` / `scalar_dtype`
+  / `scalar_factory` registry mechanism plus new columnar op-shapes (multi-input
+  `merge_name`, flag-only `initial_expand`, whole-column `category_auto_correct`, and a
+  synthetic-coerce numeric-INPUT path for `round`/`clamp`/`abs_value`/`fill_zero`) bring the
+  full transform surface onto the Polars-free path. Owned by `goldenflow-native>=0.26.0`
+  (adds `format_f64` + the numeric-input `AsFloat` parser).
+- **Polars-free file readers.** `transform("<x>.csv")` (stdlib csv), `"<x>.parquet"`
+  (pyarrow `to_pydict`, byte-identical to `pl.read_parquet`), and `"<x>.xlsx"` (openpyxl)
+  all read without Polars. `connectors.database.read_database_columns(conn, query)` reads
+  any PEP-249 (DBAPI) connection into a dict, no connectorx/polars.
+- **Polars-free zero-config.** `transform(data, config=None)` profiles + auto-selects over
+  plain lists (`profiler_bridge.profile_columns`), Polars-free. For a **dict / Parquet /
+  Excel** input it is byte-identical to `transform_df(..., config=None)`; for **CSV** it
+  profiles columns *as text* (so `"01234"` stays a zip, not `1234`) — an intentional
+  data-cleaning-correct divergence from `pl.read_csv`'s numeric coercion.
+- **New extras.** `goldenflow[polars]` (the optional Polars bulk-vectorized backend +
+  `transform_df` + `pl.read_*` I/O) and `goldenflow[parquet]` (pyarrow, for Polars-free
+  Parquet read). `goldenflow[native]` floor bumped to `goldenflow-native>=0.26.0`.
+
+## 1.17.0 (2026-07-07)
+
+Polars-eviction Phases 2-3: a config's owned transforms now run entirely on the native/Arrow substrate (no Polars, no pyarrow) on both the whole-file CSV path and the in-memory path, byte-identical (data + manifest) to the Polars engine. Needs `goldenflow-native>=0.24.0`. Opt in with `GOLDENFLOW_ENGINE=columnar`; anything the columnar path does not cover declines to the Polars engine, so behavior is never wrong.
+
+- **Native CSV pipeline.** `goldenflow transform data.csv` (and `transform_file`) runs read -> transform -> write in ONE Rust call for an owned-transform config: the CSV is parsed into Rust-owned Arrow string columns, the owned chain runs, and the CSV is written back, with parallel read/write across record-boundary chunks. No `pl.DataFrame` is constructed.
+- **Native Arrow `Column` (pyarrow-free).** The in-memory columnar path holds columns as Rust-owned Arrow buffers ingested from Polars over the C-Data / PyCapsule interface (`__arrow_c_stream__`) -- pyarrow-free -- and runs the owned chain zero-copy.
+- **Auto-routed string chains.** A run auto-routes between the total (never-null) and nullable (`Option`-returning URL/company/email) fused chains.
+- **Numeric columnar execution.** A `string* parser f64*` config (the f64 parsers `currency_strip`/`percentage_normalize`/`comma_decimal`/`scientific_to_decimal`/`fraction_to_decimal` and the i64 parsers `to_integer`/`roman_to_int`/`ordinal_to_int`, plus the array ops `round`/`clamp`/`abs_value`/`fill_zero`) runs natively, with a Polars-matching f64 formatter so the output + manifest match Polars byte-for-byte. An f64 op promotes an Int64 column to Float64, exactly as Polars does.
+- **Multi-output splits.** `split_name`/`split_name_reverse` (-> `first_name`+`last_name`) and `split_address` (-> `street`+`city`+`state`+`zip`) append the fixed-name output columns, exactly as Polars' dataframe-mode `with_columns`.
+- **CSV empty-string fix.** The native CSV writer now quotes an empty-string value as `""` (distinct from a null empty field), matching Polars' `write_csv`, so any empty-string transform output round-trips correctly.
+- `goldenflow[native]` floor bumped to `goldenflow-native>=0.24.0` (the wheel carrying the columnar symbols).
+
+## 1.16.0 (2026-07-06)
+
+Pillar-1 (evict Polars from the transform execution path): the fused columnar apply now covers a **third kernel shape** — the `Option`-returning URL / company / email families — so those chains fuse too. Needs `goldenflow-native>=0.14.0`.
+
+- **Nullable (`Option<String>`) fused chains.** A run of owned URL (`url_normalize`/`url_strip_tracking`/`url_strip_www`/`url_canonical`/`url_extract_domain`), company (`company_normalize`/`company_strip_legal`/`company_extract_legal`), and email (`email_mask`/`email_extract_domain`) transforms now fuses into ONE native pass (`goldenflow_core::chain::apply_chain_nullable` → native `apply_chain_nullable_arrow`). A value a kernel can't parse becomes a null cell that passes through the rest of the run — exactly as the per-transform path does (each transform's `map_str_to_str` skips null input, nulls on `None`). Byte-identical output frame (nulls included) AND audit manifest; the per-kernel affected count matches Polars' `(before != after).sum()`, which counts a row only when both sides are non-null and differ (a non-null→null row isn't counted).
+- **Mixed runs.** A nullable run may include the total/parameterized string kernels (`strip`/`lowercase`/`truncate`/…) alongside the `Option`-returning ones — e.g. `strip → lowercase → url_normalize → url_strip_www` fuses as a single pass. Symbol-aware: a pre-0.14.0 wheel keeps fusing the total + numeric families and only the nullable ops break a run (no regression).
+
+## 1.15.0 (2026-07-06)
+
+Pillar-1 (evict Polars from the transform execution path): the fused columnar apply now covers a **second dtype and the parameterized string ops**, so more real chains collapse into one native Arrow pass (byte-identical output, lower peak RSS). Needs `goldenflow-native>=0.13.0` (republished with the new kernel symbols).
+
+- **Numeric (f64) fused chains.** A maximal run of owned `round` / `clamp` / `abs_value` / `fill_zero` transforms on a `Float64` column now fuses into ONE native pass (`goldenflow_core::chain::apply_chain_f64` → native `apply_chain_f64_arrow`), instead of N per-transform Arrow round-trips + N column rebuilds. Each kernel dispatches to the SAME `numeric::*` core fn the per-transform path uses, so a fused run is byte-identical — output frame AND audit manifest (the per-kernel affected count matches Polars' `(before != after).sum()`, which excludes null-`before` rows, so `fill_zero`'s null→0.0 fills but isn't counted).
+- **Parameterized string ops fuse.** `truncate` / `pad_left` / `pad_right` (and, on the numeric side, `round` / `clamp`) now join a fusable run via the superset native symbol `apply_chain_ops_arrow` / `apply_chain_f64_arrow` (`(name, params)` tuples). Symbol-aware: an older 0.12.0 wheel keeps fusing the no-arg families and only these break a run — no regression.
+- **Mixed-dtype chains.** The engine recomputes the fusable set as a run advances, so a parser that changes the column dtype mid-chain (e.g. `currency_strip`: str→f64) lets the string head and the numeric tail each fuse in their own dtype.
+- Fixed a sample-replay bug for parameterized `expr`-mode ops (the audit's before/after replay int-cast `pad_left`'s pad char; now passes `expr` params raw, exactly like the per-transform path).
+
 ## Unreleased
+
+## 1.14.0 (2026-07-06)
+
+**Fused columnar apply (Pillar-1, default-on).** A column's run of owned no-arg total string→string transforms (25 kernels: text/email/name) now fuses into ONE native pass over the Arrow buffer instead of crossing the Python/Polars/Arrow boundary once per transform. Output and the audit trail are byte-identical to the per-transform path; the win is lower memory — measured **~22% lower peak RSS at 5M rows** (fusion avoids materializing one intermediate column per transform), plus a modest wall speedup. On by default when the native kernel is available (needs `goldenflow-native >= 0.12.0`); opt out with `GOLDENFLOW_FUSED_APPLY=0`; pre-0.12.0 wheels and pure-Python installs fall back gracefully. See ADR 0034.
 
 Owned-kernel depth (Waves 2-6): 21 NEW transforms, each an owned Rust kernel in `goldenflow-core` fanned out byte-for-byte to all six surfaces (native wheel, WASM/TS, pure-Python fallback, DuckDB extension, Postgres). Registry count 92 → 113; goldenflow-duckdb UDFs 74 → 98.
 

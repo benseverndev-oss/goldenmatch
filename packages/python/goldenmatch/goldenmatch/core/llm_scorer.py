@@ -26,7 +26,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldenmatch.core.memory.store import MemoryStore

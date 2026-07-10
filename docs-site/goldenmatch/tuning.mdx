@@ -251,6 +251,19 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 
 ---
 
+## Fused kernel auto-routing
+
+The pipeline can route covered slow-path runs to the fused Arrow-native kernels, byte-identically, with no config change. There are two seams with very different maturity: **golden routing is a broad default-on win; match routing is a dormant capacity-survival scaffold that effectively never fires by default.**
+
+| Variable | Default | Effect | When to change |
+|----------|---------|--------|----------------|
+| `GOLDENMATCH_GOLDEN_FUSED` | on | **Golden seam auto-routing (default-on, byte-identical).** Tries the fused Arrow-native golden kernel on every covered slow-path config, reaching golden output at ~2x lower peak RSS. Declines to the classic builder (unchanged output) when the config is uncovered, the native kernel is absent, full `ClusterProvenance` lineage is requested, or the run is fast-path-eligible. Surfaced on `DedupeResult.golden_fused_used`. | `0` / `false` / `off` is the kill-switch (forces the classic golden builder everywhere). |
+| `GOLDENMATCH_MATCH_FUSED` | on (but dormant) | **Match seam auto-routing - a narrow capacity-survival path, dormant by default.** A controller post-step can short-circuit the match stage to the fused match kernel, but only under a memory-pressure gate AND a narrow config profile (`auto_split=False`, no identity/adaptive/memory/llm_boost/confidence_majority/full-provenance, not across-files-only, a covered weighted matchkey). Zero-config auto-config commits `auto_split=True` and explicit configs bypass the controller, so it effectively **never fires by default**. When it does fire it is a capacity mode that sheds `scored_pairs` / cluster-confidence / lineage to survive; marked `DedupeResult.match_fused_capacity_mode` + telemetry `rule_name` `+fused_match_post_step`. | `0` / `false` / `off` is the kill-switch. Leave on; the wake-up path (a postflight threshold or explicit opt-in) is a follow-up. |
+| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | Fraction of available RAM the estimated classic-path peak RSS must exceed before match routing's pressure gate fires. Only relevant to the (dormant) match seam. | Lower to make the capacity path trip earlier; raise toward `1.0` to make it trip only under extreme pressure. |
+| `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | Calibration coefficients for the est-peak-RSS model that drives the match pressure gate. Defaults are fit against measured runs. | Only when re-calibrating the est-RSS model against a new box/workload; leave alone otherwise. |
+
+---
+
 ## Auto-config & planning
 
 | Variable | Default | Effect | When to set |
@@ -296,11 +309,14 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | Variable | Used by | Notes |
 |----------|---------|-------|
 | `GOLDENMATCH_MCP_TOKEN` | MCP server | Required on non-loopback binds. `/.well-known/` card stays public. |
+| `GOLDENMATCH_MCP_ALLOW_PUBLIC` | MCP server | Opt-out of the fail-closed default: set `1`/`true` to intentionally run an **open, unauthenticated public** MCP server (e.g. a showcase deployment) without `GOLDENMATCH_MCP_TOKEN`. Unset/`0` = fail closed (a non-loopback bind without a token is refused). A set `GOLDENMATCH_MCP_TOKEN` still takes precedence. |
 | `GOLDENMATCH_API_TOKEN` | REST API | Required on non-loopback binds (all except `/health`). |
 | `GOLDENMATCH_AGENT_TOKEN` | A2A agent | Required on non-loopback binds (except `/health` + agent card). |
 | `GOLDENMATCH_WEB_TOKEN` | Web UI | Required on non-loopback binds (except `/api/v1/healthz`). |
 | `GOLDENMATCH_API_CORS_ORIGINS` | REST API | Comma-separated allow-list; replaces wildcard CORS. |
 | `GOLDENMATCH_ALLOWED_ROOT` | All file-taking surfaces | Opt-in path sandbox. When set, every user-supplied path must resolve under this root or the call is rejected. Recommended for deployed/shared instances (e.g. the Railway MCP server sets it to `/data`). Unset = no containment (correct local-first default). |
+| `GOLDENMATCH_MCP_MAX_UPLOAD_BYTES` | MCP server (inline upload) | Max decoded size for `file_content` / `upload_dataset` inline uploads. Default `67108864` (64 MB). Over the cap the call is rejected — pass a public `http(s)://` URL as `file_path` for larger datasets. |
+| `GOLDENMATCH_MCP_UPLOAD_TTL` | MCP server (inline upload) | Age in seconds after which an inline-uploaded temp file is reaped. Default `86400` (24 h). Uploaded paths are ephemeral scratch; re-upload if you need one older than this. |
 
 **Storage / persistence:**
 
@@ -491,6 +507,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 |----------|---------|--------|--------|
 | `GOLDENMATCH_NATIVE` | `auto` | `auto` / `1` / `0` | Native kernel gate. `1` requires native (raises if missing); `0` forces Python. |
 | `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | off | `1` | Polars-native address-normalize fast path. |
+| `GOLDENMATCH_FRAME` | `polars` | `polars`/`arrow` | Frame backend for file ingest. `arrow` is EXPERIMENTAL: file ingest via pyarrow, part of the Polars-eviction program. Output-equivalence enforced by a differential harness + frozen fixtures. |
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | `0`/`1` | Cross-run auto-config memory. `0` for reproducible/CI runs. |
 | `GOLDENMATCH_PLANNING_EFFORT` | `normal` | `fast`/`normal`/`thinking`/`einstein` | Auto-config iteration budget. |
 | `GOLDENMATCH_DISTRIBUTED_PIPELINE` | unset | `1`/`2` | Distributed execution phase. `2` = real streaming (needs `__row_id__`, writes to `output_path`). |
@@ -528,6 +545,10 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 |----------|---------|--------|
 | `GOLDENMATCH_BUCKET_SLIM_PROJECTION` | `1` (on) | Drop unneeded columns after bucket scoring. |
 | `GOLDENMATCH_GOLDEN_SLIM_MULTIDF` | `1` (on) | Slim internal columns before golden build. |
+| `GOLDENMATCH_GOLDEN_FUSED` | on | Golden-seam fused auto-routing (default-on, byte-identical, ~2x lower peak RSS). `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
+| `GOLDENMATCH_MATCH_FUSED` | on (dormant) | Match-seam fused auto-routing - a narrow capacity-survival path that effectively never fires by default. `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
+| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | RAM-fraction pressure gate for the (dormant) match-seam routing. |
+| `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | est-peak-RSS calibration coefficients for the match pressure gate. |
 | `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Batch no-PK identity hashing. |
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |

@@ -1,15 +1,9 @@
 """Sequence gap detection profiler — detects gaps in sequential integer columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
-
-INTEGER_DTYPES = (
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-)
 
 # Minimum fraction of consecutive diffs == 1 to consider column sequential.
 # We use this threshold on columns where the values increment exactly by 1 most of the time.
@@ -19,11 +13,12 @@ SEQUENTIAL_THRESHOLD = 0.90
 
 
 class SequenceDetectionProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
 
-        if col.dtype not in INTEGER_DTYPES:
+        if col.dtype not in ("int", "uint"):
             return findings
 
         non_null = col.drop_nulls()
@@ -41,8 +36,8 @@ class SequenceDetectionProfiler(BaseProfiler):
         #   - >=90% of diffs are exactly 1 (tight sequential), OR
         #   - >=90% of diffs are positive AND the values are sorted ascending
         #     (sequential with gaps — still clearly an ID/sequence column)
-        unit_diffs = int((diffs == 1).sum())
-        positive_diffs = int((diffs > 0).sum())
+        unit_diffs = diffs.count_eq(1)
+        positive_diffs = diffs.count_gt(0)
         sequential_ratio = unit_diffs / n_diffs
         positive_ratio = positive_diffs / n_diffs
 
@@ -63,12 +58,11 @@ class SequenceDetectionProfiler(BaseProfiler):
             return findings
 
         # Find the actual gaps
-        full_range = pl.Series("expected", range(col_min, col_max + 1))
-        present = non_null.unique().sort()
-        gaps = full_range.filter(~full_range.is_in(present))
+        present = set(non_null.unique().to_list())
+        gaps = [v for v in range(col_min, col_max + 1) if v not in present]
         gap_count = len(gaps)
 
-        sample_gaps = gaps.head(10).to_list()
+        sample_gaps = gaps[:10]
         findings.append(Finding(
             severity=Severity.WARNING,
             column=column,

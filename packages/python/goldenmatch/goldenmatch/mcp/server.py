@@ -33,6 +33,11 @@ from mcp.types import (
 
 from goldenmatch.core._paths import PathOutsideAllowedRootError, safe_path
 from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
+from goldenmatch.mcp.document_tools import (
+    DOCUMENT_TOOL_NAMES,
+    DOCUMENT_TOOLS,
+    handle_document_tool,
+)
 from goldenmatch.mcp.identity_tools import (
     IDENTITY_TOOL_NAMES,
     IDENTITY_TOOLS,
@@ -417,6 +422,11 @@ _BASE_TOOLS = [
                     "type": "string",
                     "description": "Path to party B's CSV file",
                 },
+                "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
+                "file_a_name": {"type": "string"},
+                "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
+                "file_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
                 "fields": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -432,7 +442,7 @@ _BASE_TOOLS = [
                     "default": "high",
                 },
             },
-            "required": ["file_a", "file_b", "fields"],
+            "required": ["fields"],
         },
     ),
     Tool(
@@ -486,8 +496,13 @@ _BASE_TOOLS = [
             "properties": {
                 "clusters_a_path": {"type": "string", "description": "Baseline clusters JSON"},
                 "clusters_b_path": {"type": "string", "description": "Comparison clusters JSON"},
+                "clusters_a_content": {"type": "string", "description": "Alternative to clusters_a_path: base64/text bytes (JSON, use encoding='text')"},
+                "clusters_a_name": {"type": "string"},
+                "clusters_b_content": {"type": "string", "description": "Alternative to clusters_b_path: base64/text bytes (JSON, use encoding='text')"},
+                "clusters_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
             },
-            "required": ["clusters_a_path", "clusters_b_path"],
+            "required": [],
         },
     ),
     Tool(
@@ -503,9 +518,14 @@ _BASE_TOOLS = [
             "properties": {
                 "file_a": {"type": "string"},
                 "file_b": {"type": "string"},
+                "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
+                "file_a_name": {"type": "string"},
+                "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
+                "file_b_name": {"type": "string"},
+                "encoding": {"type": "string", "enum": ["base64", "text"], "description": "Encoding of *_content (default base64)"},
                 "min_score": {"type": "number", "default": 0.5},
             },
-            "required": ["file_a", "file_b"],
+            "required": [],
         },
     ),
     Tool(
@@ -618,7 +638,7 @@ def _build_alias_tools() -> list[Tool]:
 _BASE_TOOLS += _build_alias_tools()
 
 # TOOLS is the union of agent tools + memory tools + base tools, in the same order list_tools returns.
-TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
+TOOLS = AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS + DOCUMENT_TOOLS
 
 
 def dispatch(name: str, args: dict) -> dict:
@@ -641,6 +661,8 @@ def dispatch(name: str, args: dict) -> dict:
         return _identity_dispatch(name, args)
     if name in ROUTING_TOOL_NAMES:
         return handle_routing_tool(name, args)
+    if name in DOCUMENT_TOOL_NAMES:
+        return handle_document_tool(name, args)
     return _handle_tool(name, args)
 
 
@@ -654,7 +676,7 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS
+        return AGENT_TOOLS + MEMORY_TOOLS + IDENTITY_TOOLS + ROUTING_TOOLS + _BASE_TOOLS + DOCUMENT_TOOLS
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
@@ -913,7 +935,9 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
         if name in IDENTITY_TOOL_NAMES:
             return await handle_identity_tool(name, arguments)
         try:
-            if name in ROUTING_TOOL_NAMES:
+            if name in DOCUMENT_TOOL_NAMES:
+                result = handle_document_tool(name, arguments)
+            elif name in ROUTING_TOOL_NAMES:
                 result = handle_routing_tool(name, arguments)
             else:
                 result = _handle_tool(name, arguments)
@@ -926,6 +950,10 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
 def _handle_tool(name: str, args: dict) -> dict:
     """Dispatch tool calls."""
+    from goldenmatch.mcp import _ingest
+    _ingest_err = _ingest.resolve_ingest_args(name, args)
+    if _ingest_err is not None:
+        return _ingest_err
     if name == "get_stats":
         return _tool_get_stats()
     elif name == "find_duplicates":
@@ -1679,15 +1707,27 @@ def resolve_http_auth_token(host: str) -> str | None:
     ``GOLDENMATCH_MCP_TOKEN`` set, so an exposed server is never started
     unauthenticated by accident. Returns the token (or ``None`` for an
     intentionally-open loopback bind).
+
+    Escape hatch: set ``GOLDENMATCH_MCP_ALLOW_PUBLIC=1`` to intentionally
+    run an open, unauthenticated public server (e.g. a showcase deployment).
+    This opts out of the fail-closed default; a set ``GOLDENMATCH_MCP_TOKEN``
+    still takes precedence and is enforced when present.
     """
     import os
 
     token = os.environ.get("GOLDENMATCH_MCP_TOKEN")
     is_loopback = host in ("127.0.0.1", "localhost", "::1")
-    if not token and not is_loopback:
+    allow_public = os.environ.get("GOLDENMATCH_MCP_ALLOW_PUBLIC", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if not token and not is_loopback and not allow_public:
         raise RuntimeError(
             f"Refusing to start an unauthenticated MCP HTTP server on host {host!r}. "
-            "Set GOLDENMATCH_MCP_TOKEN, or bind to 127.0.0.1 for local use."
+            "Set GOLDENMATCH_MCP_TOKEN, bind to 127.0.0.1 for local use, or set "
+            "GOLDENMATCH_MCP_ALLOW_PUBLIC=1 to intentionally run an open public server."
         )
     return token
 
@@ -1743,7 +1783,7 @@ async def run_server_http(
     async def server_card(request):
         return JSONResponse({
             "name": "GoldenMatch",
-            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 74 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, and privacy-preserving linkage. Built on Polars. 97.2% F1 on DBLP-ACM.",
+            "description": "Entity resolution toolkit — deduplicate records, match across datasets, and create golden records using fuzzy, probabilistic, and LLM-powered scoring. Zero-config mode auto-detects your data. 75 MCP tools for matching, semantic retrieval, explaining, reviewing, evaluating, blocking analysis, config critique, config healing, lineage, data quality, transforms, identity graph, distributed-routing config, privacy-preserving linkage, and inline file upload. Built on Polars. 97.2% F1 on DBLP-ACM.",
             "homepage": "https://github.com/benseverndev-oss/goldenmatch",
             "iconUrl": "https://avatars.githubusercontent.com/u/192581748"
         })

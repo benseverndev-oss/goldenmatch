@@ -18,7 +18,7 @@ AGENT_CARD = {
         {
             "id": "run-pipeline",
             "name": "Run Pipeline",
-            "description": "Execute a data quality pipeline",
+            "description": "Execute a pipeline (file or inline data) and return per-stage results + the deduped output",
             "inputModes": ["text"],
             "outputModes": ["text"],
         },

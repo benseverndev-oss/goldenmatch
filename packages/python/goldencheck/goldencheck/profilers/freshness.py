@@ -11,15 +11,14 @@ Two checks, both designed to be low-noise on ordinary (historical) data:
   a pipeline has stalled. Gating + the generous threshold keep historical
   datasets (which are legitimately old) from tripping it.
 
-Pure-Polars: `dt.max()` + a vectorized future-count. No native kernel -- date
+Routes through the Frame seam (`max()` + `count_gt()`); no native kernel -- date
 arithmetic is already vectorized and cheap.
 """
 from __future__ import annotations
 
 import datetime as _dt
 
-import polars as pl
-
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -39,22 +38,23 @@ def _looks_like_update_column(name: str) -> bool:
 
 
 class FreshnessProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
-        col = df[column]
-        is_datetime = col.dtype == pl.Datetime
-        is_date = col.dtype == pl.Date
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        col = frame.column(column)
+        is_datetime = col.dtype == "datetime"
+        is_date = col.dtype == "date"
         if not (is_datetime or is_date):
             return []
 
         non_null = col.drop_nulls()
-        if non_null.len() == 0:
+        if len(non_null) == 0:
             return []
 
         # "now" in the column's own granularity. Datetime cols may be tz-aware;
         # comparison against a naive `now` raises -> skip gracefully.
         now: _dt.date | _dt.datetime = _dt.date.today() if is_date else _dt.datetime.now()
         try:
-            future_count = int((non_null > now).sum())
+            future_count = non_null.count_gt(now)
             newest = non_null.max()
         except Exception:  # noqa: BLE001 - tz-aware vs naive, exotic dtype, etc.
             return []
@@ -91,7 +91,7 @@ class FreshnessProfiler(BaseProfiler):
                         f"Newest '{column}' is {age_days} days old ({newest_date}) — "
                         f"this update/event timestamp suggests the data may be stale."
                     ),
-                    affected_rows=non_null.len(),
+                    affected_rows=len(non_null),
                     sample_values=[str(newest_date)],
                     suggestion="Confirm the pipeline feeding this table is still running.",
                     confidence=0.5,

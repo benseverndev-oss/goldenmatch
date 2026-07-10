@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _PHONE_RE = re.compile(r"^[\+\(]?[\d][\d\(\)\-\.\s]{6,18}\d$")
@@ -140,6 +140,66 @@ def _profile_column(series: pl.Series) -> ColumnProfile:
         unique_count=unique_count,
         unique_pct=unique_count / row_count if row_count > 0 else 0.0,
         sample_values=sample,
+    )
+
+
+def _infer_type_list(values: list) -> str:
+    """Polars-free twin of :func:`_infer_type` over a plain list. A column of Python
+    ``int``/``float`` (the dtype a ``pl.DataFrame`` would infer as numeric) is
+    ``numeric``; all-``bool`` is ``boolean``; else the SAME regex heuristics on the first
+    100 non-null stripped values. (No ``pl.Date`` case — a list column is never a
+    Polars temporal dtype; date-looking STRINGS still match ``_DATE_RE``.)"""
+    non_null = [v for v in values if v is not None]
+    if non_null and all(isinstance(v, bool) for v in non_null):
+        return "boolean"
+    if non_null and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
+        return "numeric"
+
+    sample = non_null[:100]
+    sample_stripped = [str(s).strip() for s in sample if str(s) and str(s).strip()]
+    if not sample_stripped:
+        return "string"
+    checks = [
+        ("email", _EMAIL_RE, 0.7),
+        ("zip", _ZIP_RE, 0.7),
+        ("date", _DATE_RE, 0.5),
+        ("phone", _PHONE_RE, 0.6),
+        ("name", _NAME_RE, 0.5),
+    ]
+    for type_name, pattern, threshold in checks:
+        match_pct = sum(1 for v in sample_stripped if pattern.match(v)) / len(sample_stripped)
+        if match_pct >= threshold:
+            return type_name
+    return "string"
+
+
+def profile_columns(cols: dict[str, list], file_path: str = "") -> DatasetProfile:
+    """Profile a ``dict[str, list]`` **Polars-free** — the built-in profiler over plain
+    lists (byte-identical selection to :func:`profile_dataframe`'s built-in fallback,
+    which is what a dict/no-file-path input uses anyway; the GoldenCheck path is
+    file-path-only). Powers zero-config ``transform(dict, config=None)`` with Polars
+    uninstalled. ``inferred_type`` + ``unique_pct`` — the only fields
+    :func:`select_transforms` reads — match the Polars profiler exactly."""
+    columns = []
+    row_count = len(next(iter(cols.values()))) if cols else 0
+    for name, values in cols.items():
+        n = len(values)
+        null_count = sum(1 for v in values if v is None)
+        non_null = [v for v in values if v is not None]
+        unique_count = len(set(non_null))
+        inferred = _override_type_by_column_name(name, _infer_type_list(values))
+        columns.append(ColumnProfile(
+            name=name,
+            inferred_type=inferred,
+            row_count=n,
+            null_count=null_count,
+            null_pct=null_count / n if n > 0 else 0.0,
+            unique_count=unique_count,
+            unique_pct=unique_count / n if n > 0 else 0.0,
+            sample_values=[str(v) for v in non_null[:5]],
+        ))
+    return DatasetProfile(
+        file_path=file_path, row_count=row_count, column_count=len(cols), columns=columns,
     )
 
 

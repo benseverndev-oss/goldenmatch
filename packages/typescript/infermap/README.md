@@ -244,6 +244,23 @@ npx infermap validate ./crm.csv --config mapping.json --required email,id --stri
 
 The CLI uses only `node:util/parseArgs` — no extra runtime deps.
 
+## WASM acceleration (Rust kernels)
+
+The scorers have a pyo3-free Rust core (`infermap-core`) shared with the Python
+package. The TS surface runs it via an opt-in WASM backend:
+
+- **MCP server** (`infermap-mcp`): enables the WASM backend automatically at
+  startup, best-effort. When the built WASM artifact is bundled, the scorers run
+  the Rust kernels; otherwise they fall back to the pure-TS reference. Results are
+  **byte-identical** either way (enforced by the `infermap_wasm` CI parity gate) —
+  the WASM path is an anti-drift guarantee + speedup, never a behavior change. Read
+  the `infermap://scorer-info` MCP resource to see the active `backend`
+  (`"wasm"` or `"pure-ts"`).
+- **Library use**: call `await enableInfermapWasm()` once at startup to activate
+  the Rust kernels for your own `MapEngine` usage (import from
+  `infermap/core/wasm`). It returns `false` and leaves pure-TS active when the
+  artifact isn't present.
+
 ## Parity with Python
 
 This package is a faithful port of [`infermap` on PyPI](https://pypi.org/project/infermap/). Mapping decisions, confidence scores, and unmapped lists are verified to agree with the Python engine to 4 decimal places via shared golden tests that run on every CI build.

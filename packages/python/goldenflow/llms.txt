@@ -7,7 +7,7 @@
 - Remote MCP: https://goldenflow-mcp-production.up.railway.app/mcp/ (10 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenflow)
 - A2A Server: `goldenflow agent-serve --port 8150` (6 skills)
 - CLI: `goldenflow transform`, `goldenflow map`, + 12 more commands
-- Python API: `from goldenflow import transform_file, transform_df`
+- Python API: `from goldenflow import transform, transform_df, transform_file`. `transform(data, config)` is Polars-free (native/Arrow substrate; `import goldenflow` imports no Polars) and takes a `dict[str, list]` or a `.csv`/`.parquet`/`.xlsx` path; `transform_df(pl.DataFrame)` is the optional Polars-backend adapter (`pip install goldenflow[polars]`).
 - REST API: `goldenflow serve` on port 8000
 - SQL (DuckDB): `goldenflow-duckdb` — compiled zero-Python DuckDB extension, 98 transforms as `goldenflow_<kernel>` SQL functions (release tag `goldenflow-duckdb-v*`, loads on DuckDB >= 1.3.0)
 

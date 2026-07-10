@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Compiled Rust scorer kernels** (`pip install infermap[native]`). The five scorers (exact, fuzzy-name, initialism, profile, pattern-type) and `detect_domain` now share a pyo3-free Rust core (`infermap-core`), wrapped by the abi3 `infermap-native` wheel. Under the default `INFERMAP_NATIVE=auto` the scorers auto-dispatch to the compiled kernels when the wheel is importable, else the pure-Python reference — byte-identical, CI parity-gated. `INFERMAP_NATIVE=1` requires native (raises if absent); `=0` forces pure Python.
+- **TypeScript WASM backend** — the same `infermap-core` kernels compiled to WASM (`infermap-wasm`), exposed as an opt-in backend via `enableInfermapWasm()`. Pure-TS stays the default + byte-identical fallback. The MCP servers enable it best-effort at startup and report the active backend through the `infermap://scorer-info` resource (Python: `native`/`pure-python`; TS: `wasm`/`pure-ts`).
+- Top-level re-export of `detect_domain_detailed` on the TypeScript surface (parity with Python).
+
 ## [0.5.1] - 2026-06-24
 
 ### Security

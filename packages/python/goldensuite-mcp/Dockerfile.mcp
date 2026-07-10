@@ -19,11 +19,13 @@ COPY . /app
 # Use uv for workspace-aware install; fall back to pip if uv isn't present.
 RUN pip install --no-cache-dir uv \
     && uv pip install --system --no-cache \
+        ./packages/python/goldencheck-types \
         ./packages/python/goldenmatch \
         ./packages/python/goldencheck \
         ./packages/python/goldenflow \
         ./packages/python/goldenpipe \
         ./packages/python/infermap \
+        ./packages/python/goldenanalysis \
         ./packages/python/goldensuite-mcp \
     && apt-get purge -y build-essential cmake gcc g++ \
     && apt-get autoremove -y \

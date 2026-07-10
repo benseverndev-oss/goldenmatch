@@ -1,6 +1,9 @@
 //! InferMap kernels (pyo3-free). Single source of truth mirrored value-for-value by
 //! `infermap/detect.py::_detect_core_pure` and `packages/typescript/infermap` `detect.ts`.
 
+use regex::Regex;
+use std::sync::OnceLock;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Detection {
     pub domain: Option<String>,
@@ -298,6 +301,49 @@ pub fn profile_score(
     total
 }
 
+const N_SEMANTIC_TYPES: usize = 8;
+
+/// The 8 semantic-type regexes, in SEMANTIC_TYPES insertion order (bit index).
+/// currency drops the non-ASCII backslash-escapes (`\£`/`\€` fail to compile in
+/// the `regex` crate; `£`/`€` are literal codepoints either way).
+fn semantic_patterns() -> &'static [Regex; N_SEMANTIC_TYPES] {
+    static PATS: OnceLock<[Regex; N_SEMANTIC_TYPES]> = OnceLock::new();
+    PATS.get_or_init(|| {
+        [
+            Regex::new(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$").unwrap(),
+            Regex::new(
+                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            )
+            .unwrap(),
+            Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap(),
+            Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").unwrap(),
+            Regex::new(r"^https?://[^\s]+$").unwrap(),
+            Regex::new(r"^[\+\d]?(\d[\s\-\.]?){7,14}\d$").unwrap(),
+            Regex::new(r"^\d{5}(-\d{4})?$").unwrap(),
+            Regex::new(r"^[$£€]\s?\d[\d,]*(\.\d{1,2})?$").unwrap(),
+        ]
+    })
+}
+
+/// Byte-parity reference: infermap.scorers.pattern_type._match_types_pure (per element).
+/// bit i (LSB=0) set iff the (host-pre-stripped) sample matches SEMANTIC_TYPES[i].
+/// Boolean membership only; `^...$` on a newline-free string == Python `.match` full-match.
+pub fn pattern_match_types(samples: &[String]) -> Vec<u32> {
+    let pats = semantic_patterns();
+    samples
+        .iter()
+        .map(|s| {
+            let mut mask = 0u32;
+            for (i, re) in pats.iter().enumerate() {
+                if re.is_match(s) {
+                    mask |= 1 << i;
+                }
+            }
+            mask
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +462,20 @@ mod tests {
     #[test]
     fn ascii_case_insensitive() {
         assert!(hint_matches("NPI", "provider_npi"));
+    }
+
+    #[test]
+    fn pattern_match_types_bits() {
+        let mk = |x: &str| x.to_string();
+        let out = pattern_match_types(&[
+            mk("user@example.com"), // email          -> bit 0
+            mk("2026-07-06"),       // date_iso + phone -> bits 2|5 (co-match by construction)
+            mk("hello world"),      // none            -> 0
+            mk("$5"),               // currency        -> bit 7
+        ]);
+        assert_eq!(
+            out,
+            vec![1u32 << 0, (1u32 << 2) | (1u32 << 5), 0u32, 1u32 << 7]
+        );
     }
 }

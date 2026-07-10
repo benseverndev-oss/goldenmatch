@@ -18,6 +18,10 @@ export interface PipeWasmBackend {
   evaluateBuiltinJson(input: string): string;
   autoConfigJson(input: string): string;
   skipIfFalsyJson(input: string): string;
+  planPipelineJson(input: string): string;
+  applyScaleHintsJson(input: string): string;
+  bandOfJson(input: string): string;
+  buildRepairPlanJson(input: string): string;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

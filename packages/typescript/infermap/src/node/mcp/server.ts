@@ -30,6 +30,8 @@ import type { MapResultReport } from "../../core/types.js";
 import type { SchemaInfo } from "../../core/types.js";
 import { availableDomains } from "../../core/dictionaries/index.js";
 import { defaultScorers } from "../../core/scorers/registry.js";
+import { enableInfermapWasm } from "../../core/wasm/index.js";
+import { getInfermapBackend } from "../../core/wasm/backend.js";
 import { parseCsv } from "../../core/util/csv.js";
 import { extractSchemaFromFile } from "../fs.js";
 import { extractDbSchema } from "../db/provider.js";
@@ -382,7 +384,16 @@ export function readResource(uri: string): string {
   }
   if (uri === "infermap://scorer-info") {
     const scorers = defaultScorers().map((s) => ({ name: s.name, weight: s.weight }));
-    return JSON.stringify({ scorers }, null, 2);
+    // Report the active backend so humans + agents can see whether the Rust
+    // infermap-core kernels are running. The server enables the WASM backend
+    // best-effort at startup; with the artifact bundled the scorers dispatch to
+    // the Rust kernels (byte-identical to pure-TS), else pure-TS.
+    const backend = getInfermapBackend() ? "wasm" : "pure-ts";
+    const note =
+      backend === "wasm"
+        ? "Scorers run the Rust infermap-core kernels via WASM; byte-identical to the pure-TS reference."
+        : "Scorers run the pure-TS reference (WASM artifact not bundled). Identical results; the built WASM artifact activates the Rust kernels automatically.";
+    return JSON.stringify({ scorers, backend, note }, null, 2);
   }
   if (uri === "infermap://last-mapping/report") {
     if (_lastMappingReport === null) {
@@ -532,6 +543,15 @@ function writeMessage(msg: Record<string, unknown>): void {
 export function startMcpServer(): void {
   const rl = createInterface({ input: process.stdin, terminal: false });
 
+  // Best-effort: activate the Rust infermap-core kernels via the opt-in WASM
+  // backend when the artifact is bundled. enableInfermapWasm() resolves false
+  // (pure-TS stays active + identical results) when the artifact is absent — it
+  // never throws here (no `require`), and the extra .catch is belt-and-suspenders.
+  // Mirrors the Python MCP server auto-dispatching to the native wheel under
+  // INFERMAP_NATIVE=auto. Awaited before each request (below) so the backend state
+  // is settled + consistent for every tool call and resource read.
+  const wasmReady: Promise<boolean> = enableInfermapWasm().catch(() => false);
+
   rl.on("line", (line: string) => {
     if (line.trim() === "") return;
     let req: JsonRpcRequest;
@@ -546,6 +566,7 @@ export function startMcpServer(): void {
 
     void (async () => {
       try {
+        await wasmReady;
         if (req.method === "initialize") {
           writeMessage({
             jsonrpc: "2.0",

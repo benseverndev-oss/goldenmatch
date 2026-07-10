@@ -34,7 +34,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - DB tests (`test_db.py`, `test_reconcile.py`) need PostgreSQL — skip with `--ignore` if not available
 - `import torch` hangs on this machine — tests mocking GPU must patch `_has_cuda`/`_has_mps` at module level
 - `testing.postgresql` teardown errors on Windows (SIGINT) are harmless — tests still pass
-- CI workflow: `.github/workflows/ci.yml` -- test matrix (3.11/3.12/3.13), ruff lint (E9/F63/F7 only), smoke test. Ignores test_db, test_reconcile, test_mcp_and_watch
+- CI workflow: `.github/workflows/ci.yml` -- test matrix (3.11/3.12/3.13), ruff lint (the FULL root-pyproject select incl. import-sort `I` -- CI runs plain `ruff check packages/python/goldenmatch`; the old "E9/F63/F7 only" note was stale and nearly shipped 79 I001s in the W0 polars sweep), smoke test. Ignores test_db, test_reconcile, test_mcp_and_watch
 - Ray tests require `ray` optional dep -- use `pytest.mark.skipif(not HAS_RAY)` pattern
 - Windows drive letter tests must use `@pytest.mark.skipif(sys.platform != "win32")` -- Path.stem behaves differently on Linux
 - sdist includes benchmark datasets (can bloat to 500MB+) -- add large data dirs to `.gitignore` before building

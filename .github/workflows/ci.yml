@@ -74,6 +74,8 @@ jobs:
       infermap_native: ${{ steps.filter.outputs.infermap_native }}
       goldengraph_native: ${{ steps.filter.outputs.goldengraph_native }}
       native_flow: ${{ steps.filter.outputs.native_flow }}
+      goldenflow_nopolars: ${{ steps.filter.outputs.goldenflow_nopolars }}
+      goldenmatch_frame_diff: ${{ steps.filter.outputs.goldenmatch_frame_diff }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
       goldenembed: ${{ steps.filter.outputs.goldenembed }}
@@ -86,10 +88,12 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       wasm_score: ${{ steps.filter.outputs.wasm_score }}
       analysis_wasm: ${{ steps.filter.outputs.analysis_wasm }}
+      infermap_wasm: ${{ steps.filter.outputs.infermap_wasm }}
       ts_parity: ${{ steps.filter.outputs.ts_parity }}
       throughput: ${{ steps.filter.outputs.throughput }}
       autoconfig_wasm: ${{ steps.filter.outputs.autoconfig_wasm }}
       suggest_wasm: ${{ steps.filter.outputs.suggest_wasm }}
+      documents_wasm: ${{ steps.filter.outputs.documents_wasm }}
       goldencheck_wasm: ${{ steps.filter.outputs.goldencheck_wasm }}
       perceptual_wasm: ${{ steps.filter.outputs.perceptual_wasm }}
       goldenprofile_wasm: ${{ steps.filter.outputs.goldenprofile_wasm }}
@@ -239,6 +243,20 @@ jobs:
               - 'packages/typescript/goldenanalysis/src/core/aggregate.ts'
               - 'packages/typescript/goldenanalysis/tests/parity/wasm-aggregate.test.ts'
               - 'packages/typescript/goldenmatch-wasm-runtime/**'
+            infermap_wasm:
+              - 'packages/rust/extensions/infermap-wasm/**'
+              - 'packages/rust/extensions/infermap-core/**'
+              - 'packages/typescript/goldenmatch-wasm-runtime/**'
+              - 'packages/typescript/infermap/src/core/wasm/**'
+              - 'packages/typescript/infermap/src/core/detect.ts'
+              - 'packages/typescript/infermap/src/core/scorers/exact.ts'
+              - 'packages/typescript/infermap/src/core/scorers/fuzzy-name.ts'
+              - 'packages/typescript/infermap/src/core/scorers/initialism.ts'
+              - 'packages/typescript/infermap/src/core/scorers/profile.ts'
+              - 'packages/typescript/infermap/src/core/scorers/pattern-type.ts'
+              - 'packages/typescript/infermap/tests/parity/infermap-wasm.parity.test.ts'
+              - 'packages/typescript/infermap/scripts/copy_wasm_artifact.mjs'
+              - 'packages/typescript/infermap/tsup.config.ts'
             wasm_flow:
               # Opt-in GoldenFlow WASM lane (Wave 0c): the wasm-bindgen wrapper,
               # the shared -core kernel it wraps, the TS wasm/loader + identifier
@@ -290,6 +308,17 @@ jobs:
               - 'packages/typescript/goldenmatch/scripts/build_suggest_wasm.mjs'
               - 'packages/typescript/goldenmatch/src/core/suggest*.ts'
               - 'packages/typescript/goldenmatch/src/core/_wasm/suggestWasm*'
+            documents_wasm:
+              # Gates the (rust-toolchain-heavy) documents wasm rebuild + drift
+              # guard inside the typescript lane. Fires on the shared documents
+              # core, the wasm wrapper, the embed script, the TS surface, or the
+              # Python-authored corpus the build script copies.
+              - 'packages/rust/extensions/documents-core/**'
+              - 'packages/rust/extensions/documents-wasm/**'
+              - 'packages/typescript/goldenmatch/scripts/build_documents_wasm.mjs'
+              - 'packages/typescript/goldenmatch/src/core/documentsWasm.ts'
+              - 'packages/typescript/goldenmatch/src/core/_wasm/documentsWasm*'
+              - 'packages/python/goldenmatch/tests/parity/documents_corpus.jsonl'
             goldencheck_wasm:
               # Gates the (rust-toolchain-heavy) goldencheck wasm rebuild + drift
               # guard inside the typescript lane. Only fires when the shared
@@ -610,6 +639,8 @@ jobs:
               - 'packages/python/infermap/infermap/_native_loader.py'
               - 'packages/python/infermap/infermap/detect.py'
               - 'packages/python/infermap/tests/test_native_parity.py'
+              - 'packages/python/infermap/infermap/scorers/pattern_type.py'
+              - 'packages/python/infermap/tests/pattern_type_corpus.jsonl'
               - 'scripts/build_infermap_native.py'
             goldengraph_native:
               # GoldenGraph's knowledge-graph engine (goldengraph-core/native, PyO3,
@@ -645,6 +676,30 @@ jobs:
               - 'packages/python/goldenflow/tests/transforms/test_native_parity.py'
               - 'packages/python/goldenflow/tests/transforms/test_fastpath_parity.py'
               - 'packages/python/goldenflow/scripts/build_native.py'
+            goldenflow_nopolars:
+              # Phase 4f (Polars eviction) proof lane: builds the native in-memory
+              # core, then installs goldenflow with polars UNINSTALLED and runs the
+              # polars-absent covered-path tests (tests/nopolars). Proves `import
+              # goldenflow` + covered transform() work with polars gone, so the 2.0
+              # base-deps flip is already de-risked. Advisory (not ci-required).
+              - 'packages/rust/extensions/native-flow/**'
+              - 'packages/rust/extensions/goldenflow-core/**'
+              - 'packages/rust/extensions/Cargo.toml'
+              - 'packages/python/goldenflow/goldenflow/**'
+              - 'packages/python/goldenflow/tests/nopolars/**'
+              - 'packages/python/goldenflow/pyproject.toml'
+              - 'packages/python/goldenflow/scripts/build_native.py'
+            goldenmatch_frame_diff:
+              # Polars-eviction Wave 1 proof lane: runs the file-based dedupe
+              # entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
+              # frozen fixture datasets and diffs the canonicalized output
+              # (clusters/golden/pairs), failing on any mismatch. Proves the
+              # experimental pyarrow ingest lane (core/io_arrow.py + ArrowFrame)
+              # is output-equivalent to the classic Polars path. Advisory (not
+              # ci-required) -- the arrow lane is opt-in via env var, not the
+              # default.
+              - 'packages/python/goldenmatch/**'
+              - 'scripts/diff_frame_backends.py'
             goldenflow_duckdb:
               # goldenflow-duckdb: the compiled zero-Python DuckDB extension over
               # goldenflow-core. A core change must re-gate its bundled parity
@@ -946,6 +1001,10 @@ jobs:
       # optional `datafusion` extra; install it so the parity tests RUN rather
       # than importorskip-SKIP (a false green). Cheap (wheel download).
       - run: uv pip install 'datafusion>=53,<54'
+      # Document/image ingest (goldenmatch.documents) tests need Pillow + PyMuPDF from the
+      # optional `documents` extra; install it so tests/documents RUN rather than error at
+      # collection (missing PIL/fitz). Same rationale as the datafusion extra above.
+      - run: uv pip install -e 'packages/python/goldenmatch[documents]'
       # Suite-wide lints run once (shard 1), not per shard.
       - if: matrix.shard == 1
         run: uv run ruff check packages/python/goldenmatch
@@ -1668,6 +1727,25 @@ jobs:
             exit 1
           fi
           npx vitest run tests/parity/suggest-wasm.parity.test.ts
+      # Same drift-guard pattern for the documents-core kernels. Rebuild the
+      # inlined wasm + bindings, copy the Python-authored corpus, diff ONLY the
+      # corpus JSONL (deterministic; NOT the toolchain-variant wasm bytes), then
+      # prove the committed wasm reproduces it.
+      - name: Rebuild + verify embedded documents wasm
+        if: needs.changes.outputs.documents_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+        working-directory: packages/typescript/goldenmatch
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null 2>&1 || curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          node scripts/build_documents_wasm.mjs
+          if ! git diff --exit-code -- tests/parity/fixtures/documents/documents_corpus.jsonl; then
+            echo "::error::documents corpus fixture is stale. Regenerate it \
+              ('python packages/python/goldenmatch/scripts/gen_documents_corpus.py'), \
+              run 'node scripts/build_documents_wasm.mjs' in \
+              packages/typescript/goldenmatch, and commit the result." >&2
+            exit 1
+          fi
+          npx vitest run tests/parity/documents-core.parity.test.ts
       # Same drift-guard pattern for the goldencheck deep-profiling wasm core.
       # Rebuild the inlined wasm + bindings + copy the golden fixture from the
       # live goldencheck-core, diff ONLY the deterministic golden JSON (not the
@@ -1955,6 +2033,39 @@ jobs:
           pnpm --filter goldenanalysis build
           node packages/typescript/goldenanalysis/scripts/bench_wasm_aggregate.mjs 1000000
 
+  infermap_wasm:
+    needs: changes
+    if: needs.changes.outputs.infermap_wasm == 'true' || needs.changes.outputs.force_all == 'true'
+    # Opt-in WASM detect lane: builds the infermap-wasm artifact, then runs the
+    # detect parity test UN-skipped (skips elsewhere with no artifact). Advisory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/infermap-wasm
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build WASM artifact (installs the matching wasm-bindgen-cli)
+        run: bash packages/rust/extensions/infermap-wasm/build_wasm.sh
+      - name: Build shared wasm-runtime (the parity test imports goldenmatch-wasm-runtime)
+        run: pnpm --filter goldenmatch-wasm-runtime build
+      - name: Build infermap's sibling deps (detect.ts imports goldencheck-types)
+        run: pnpm --filter "infermap^..." build
+      - name: WASM detect parity (un-skipped — artifact now present) [THE GATE]
+        run: pnpm --filter infermap exec vitest run tests/parity/infermap-wasm.parity.test.ts
+      - name: dist-path validation (enableInfermapWasm() must resolve the bundled artifact)
+        run: |
+          pnpm --filter infermap build
+
   wasm_flow:
     needs: changes
     if: needs.changes.outputs.wasm_flow == 'true' || needs.changes.outputs.force_all == 'true'
@@ -2017,8 +2128,8 @@ jobs:
             --target web --out-dir "$OUT_DIR" --out-name goldenflow_wasm
       - name: Build shared wasm-runtime (the loader imports goldenmatch-wasm-runtime)
         run: pnpm --filter goldenmatch-wasm-runtime build
-      - name: WASM identifier parity (un-skipped — artifact now present) [THE GATE]
-        run: pnpm --filter goldenflow exec vitest run tests/parity/identifiers.parity.test.ts
+      - name: WASM identifier + fused-chain parity (un-skipped — artifact now present) [THE GATE]
+        run: pnpm --filter goldenflow exec vitest run tests/parity/identifiers.parity.test.ts tests/parity/fused_chain.parity.test.ts
 
   goldenpipe_wasm:
     needs: changes
@@ -2187,6 +2298,16 @@ jobs:
         # import/marshalling failure fails the lane instead of silently skipping.
         env:
           GOLDENMATCH_BRIDGE_REQUIRE_PY: "1"
+          # pyarrow's bundled mimalloc allocator SIGSEGVs in mi_thread_init on the
+          # worker threads goldenmatch's pipeline spawns (polars / ThreadPoolExecutor
+          # workers call pyarrow.array() -> ConvertPySequence) under this embedded
+          # CPython. Reproduces ~deterministically across the 46-test aggregate run
+          # (each test in isolation is fine; the accumulated thread churn trips
+          # mimalloc's per-thread heap init), NOT a test-thread race -- it segfaults
+          # even at --test-threads=1. Force pyarrow onto the system memory pool (the
+          # documented Arrow remedy). Verified locally: 20/20 clean with this set vs
+          # 20/20 SIGSEGV without. See packages/rust/extensions/CLAUDE.md.
+          ARROW_DEFAULT_MEMORY_POOL: system
       - run: cargo clippy --workspace -- -D warnings
       # The standalone pyo3-free sibling crates (graph-core, score-core) are
       # each their own [workspace], so `cargo test --workspace` above (which
@@ -2727,6 +2848,71 @@ jobs:
             packages/python/goldenflow/tests/transforms/test_phone.py \
             packages/python/goldenflow/tests/transforms/test_dates.py \
             -v
+
+  # Phase 4f (Polars eviction) proof lane. Builds the native in-memory core, then
+  # UNINSTALLS polars and runs the polars-absent covered-path tests. This is the
+  # living proof that `import goldenflow` + a covered config's transform() work with
+  # polars gone — so the 2.0 major that moves `polars` out of the base deps is already
+  # de-risked. Advisory (NOT in ci-required); a red here means the polars-free surface
+  # regressed (a module grew a top-level `import polars`, or a covered transform now
+  # needs the Polars engine), not that main is broken.
+  goldenflow_nopolars:
+    needs: changes
+    if: needs.changes.outputs.goldenflow_nopolars == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native-flow
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Build native in-memory core into the package
+        run: uv run python packages/python/goldenflow/scripts/build_native.py
+      - name: Uninstall polars (simulate the 2.0 base-deps flip)
+        # The covered config path runs on the native in-memory core alone; polars is
+        # the OPTIONAL Polars engine for the uncovered tail. Remove it (and its split
+        # runtime) so the tests below prove the polars-absent surface for real. NO
+        # pyarrow either — the covered in-memory path is pyarrow-free.
+        run: uv pip uninstall polars polars-runtime-32 polars-runtime-64 || true
+      - name: Confirm polars is gone
+        run: uv run --no-sync python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('polars') is None else 'polars still present')"
+      - name: Polars-absent covered-path proof (tests/nopolars)
+        # --no-sync so uv doesn't reinstall polars before the run; --noconftest so the
+        # polars-importing parent tests/conftest.py isn't collected (the nopolars tests
+        # are self-contained, only the builtin tmp_path fixture).
+        run: uv run --no-sync python -m pytest packages/python/goldenflow/tests/nopolars --noconftest -v
+
+  # Polars-eviction Wave 1 proof lane (goldenmatch): runs the file-based
+  # dedupe entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
+  # frozen fixture datasets and diffs the canonicalized clusters/golden/pairs
+  # output, failing on any mismatch. Proves the experimental pyarrow ingest
+  # front (core/io_arrow.py + ArrowFrame) reproduces the classic Polars path
+  # byte-for-byte. Advisory (not ci-required) -- GOLDENMATCH_FRAME=arrow is
+  # opt-in, not the default.
+  goldenmatch_frame_diff:
+    needs: changes
+    if: needs.changes.outputs.goldenmatch_frame_diff == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Frame-backend differential (polars vs arrow)
+        run: uv run python scripts/diff_frame_backends.py
 
   # goldenpipe planner kernel: pyo3-free goldenpipe-core is the REFERENCE. This lane
   # is goldenpipe-core's ONLY CI coverage (it had no consumer to hang a lane on before

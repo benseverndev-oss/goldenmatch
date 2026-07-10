@@ -15,6 +15,15 @@ ingestion, and unresolved or wrongly-merged entities poison every downstream
 answer (accuracy decays as `(ER_accuracy)^hops`). Yet there is no shared
 benchmark for how good that built-in dedup actually is. This is one.
 
+> **Companion board:** [`../clear-kg`](../clear-kg) (CLEAR-KG) measures the *doc→KG
+> construction* axes on controlled + real-Wikipedia corpora — corpus-level ER
+> (the homograph **split-rate**, a metric now first-class here too via
+> `erkgbench/metrics.py::homograph_split_rate`), span-grounded **faithfulness**,
+> and an end-to-end **CLEAR composite**. This board scores the real frameworks'
+> ER on real reference data; CLEAR-KG proves the mechanisms and supplies the
+> neighborhood-structured corpus needed to actually *separate* real homographs
+> (see `../clear-kg/RESULTS.md`).
+
 ## Quick start
 
 ```bash

@@ -1,8 +1,17 @@
 """Emit cross-language parity fixtures for the goldenpipe TS port.
 
-Runs the Python ``goldenpipe.run`` (file path → full check→flow→dedupe chain)
-on small CSV fixtures and dumps the stable, cross-language-robust invariants of
-the resulting ``PipeResult`` to JSON under the TS package's fixtures dir.
+Runs the Python goldenpipe on small CSV fixtures and dumps the stable,
+cross-language-robust invariants of the resulting ``PipeResult`` to JSON under
+the TS package's fixtures dir.
+
+This fixture pins the **brain path** -- ``goldenpipe.run()``, which flows
+through the auto-config brain (``Pipeline._plan_config``) that DECIDES the
+stage set from the data (e.g. drops dedupe for a single-row input). Both the
+Python and TS surfaces now implement the same rule table + scale hints
+(TS: ``planConfig`` in ``pipeline.ts``), so running the real public entry
+point on both sides is exactly what this cross-surface fixture is for: the
+fixture pins Python ``run()`` output; the TS parity test asserts TS
+``run()`` reaches the same stage set on the same inputs.
 
 The TS siblings are version-skewed from the Python ones, so we deliberately
 emit only the invariants that survive the skew:
@@ -74,10 +83,15 @@ def _row_count(artifact: object) -> int | None:
         return None
 
 
-def emit_case(case_id: str, csv_text: str, tmp_dir: Path) -> dict:
+def emit_case(
+    case_id: str,
+    csv_text: str,
+    tmp_dir: Path,
+) -> dict:
     csv_path = tmp_dir / f"{case_id}.csv"
     csv_path.write_text(csv_text)
 
+    # Run the BRAIN path (the public default) -- see the module docstring.
     result = goldenpipe.run(str(csv_path))
 
     golden = result.artifacts.get("golden")
@@ -102,6 +116,7 @@ def main() -> None:
     import tempfile
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
     cases: list[dict] = []
     with tempfile.TemporaryDirectory() as td:
         tmp_dir = Path(td)

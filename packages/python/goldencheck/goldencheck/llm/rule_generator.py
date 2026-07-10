@@ -6,9 +6,9 @@ import logging
 import os
 from pathlib import Path
 
-import polars as pl
 from pydantic import BaseModel
 
+from goldencheck._polars_lazy import pl
 from goldencheck.models.finding import Finding
 
 logger = logging.getLogger(__name__)

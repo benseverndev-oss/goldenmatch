@@ -11,6 +11,20 @@ import json
 from typing import Any
 
 from goldenpipe import decisions as _dec
+from goldenpipe import repair as _repair
+from goldenpipe.autoconfig_planner import (
+    ComplexityProfile,
+    PipePlan,
+    PipeProfile,
+    PlannerInput,
+    apply_scale_hints,
+    band_of,
+    plan_pipeline,
+)
+from goldenpipe.autoconfig_planner import (
+    PlannedStage as PlanStage,
+)
+from goldenpipe.compiler import ir as _ir
 from goldenpipe.engine.resolver import (
     AmbiguousProducerError,
     CycleError,
@@ -154,3 +168,66 @@ def auto_config_json(input_str: str) -> str:
 
 def skip_if_falsy_json(input_str: str) -> str:
     return json.dumps(not json.loads(input_str))
+
+
+def _profile_from_dict(d: dict) -> PipeProfile:
+    return PipeProfile(
+        n_rows=d["n_rows"], n_cols=d["n_cols"],
+        column_names=tuple(d["column_names"]), dtypes=tuple(d["dtypes"]),
+        inferred_domain=d["inferred_domain"], domain_confidence=d["domain_confidence"],
+    )
+
+
+def _plan_to_dict(plan: PipePlan) -> dict:
+    return {
+        "stages": [{"name": s.name, "config": s.config} for s in plan.stages],
+        "rule_name": plan.rule_name,
+        "confidence": plan.confidence,
+        "evidence": plan.evidence,
+    }
+
+
+def _plan_from_dict(d: dict) -> PipePlan:
+    return PipePlan(
+        stages=tuple(PlanStage(s["name"], s["config"]) for s in d["stages"]),
+        rule_name=d["rule_name"], confidence=d["confidence"], evidence=d["evidence"],
+    )
+
+
+def plan_pipeline_json(input_str: str) -> str:
+    arg = json.loads(input_str)
+    inp = PlannerInput(
+        runtime=_profile_from_dict(arg["runtime"]),
+        complexity=ComplexityProfile(**arg["complexity"]),
+    )
+    return json.dumps(_plan_to_dict(plan_pipeline(inp)))
+
+
+def apply_scale_hints_json(input_str: str) -> str:
+    arg = json.loads(input_str)
+    plan = _plan_from_dict(arg["plan"])
+    runtime = _profile_from_dict(arg["runtime"])
+    return json.dumps(_plan_to_dict(apply_scale_hints(plan, runtime)))
+
+
+def band_of_json(input_str: str) -> str:
+    return json.dumps(band_of(json.loads(input_str)))
+
+
+def build_repair_plan_json(s: str) -> str:
+    arg = json.loads(s)
+    out = _repair.build_repair_plan(arg.get("findings", []), arg.get("columns", []))
+    return json.dumps(out)
+
+
+def lower_json(s: str) -> str:
+    a = json.loads(s)
+    nodes, nid = _ir.lower(
+        a["origin_stage"], a["kind_hint"], a.get("concrete", {}), a.get("next_id", 0), a.get("resolved", False)
+    )
+    return json.dumps({"nodes": nodes, "next_id": nid})
+
+
+def provenance_json(s: str) -> str:
+    from goldenpipe.compiler.provenance import provenance
+    return json.dumps(provenance(json.loads(s)))

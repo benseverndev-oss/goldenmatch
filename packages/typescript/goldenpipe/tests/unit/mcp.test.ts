@@ -56,6 +56,7 @@ describe("MCP server — handleTool dispatcher", () => {
       "goldencheck.scan",
       "goldenflow.transform",
       "goldenmatch.dedupe",
+      "infer_schema",
       "load",
     ]);
     expect(result["load"]!.produces).toContain("df");

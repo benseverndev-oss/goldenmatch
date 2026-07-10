@@ -1,16 +1,16 @@
 """Nullability profiler — detects required vs. optional columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
 
 class NullabilityProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
         findings: list[Finding] = []
-        col = df[column]
+        col = frame.column(column)
         total = len(col)
         null_count = col.null_count()
         null_pct = null_count / total if total > 0 else 0

@@ -7,8 +7,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.explainer import MatchExplanation, explain_pair
 
 logger = logging.getLogger(__name__)

@@ -44,11 +44,15 @@ suite("Leg B — goldenpipe-wasm == golden vectors", () => {
       evaluate_builtin: b.evaluateBuiltinJson,
       auto_config: b.autoConfigJson,
       skip_if: b.skipIfFalsyJson,
+      plan_pipeline: b.planPipelineJson,
+      apply_scale_hints: b.applyScaleHintsJson,
+      band_of: b.bandOfJson,
+      build_repair_plan: b.buildRepairPlanJson,
     };
     return dispatch[family]!(input);
   };
 
-  for (const family of ["resolve", "apply_decision", "evaluate_builtin", "auto_config", "skip_if"]) {
+  for (const family of ["resolve", "apply_decision", "evaluate_builtin", "auto_config", "skip_if", "plan_pipeline", "apply_scale_hints", "band_of", "build_repair_plan"]) {
     it(`${family} vectors`, () => {
       for (const { input, expected } of load(family)) {
         expect(JSON.parse(call(family, JSON.stringify(input)))).toEqual(expected);

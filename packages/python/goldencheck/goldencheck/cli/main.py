@@ -6,12 +6,12 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-import polars as pl
 import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
 from goldencheck import __version__
+from goldencheck._polars_lazy import pl
 from goldencheck.config.loader import load_config
 from goldencheck.config.writer import save_config
 from goldencheck.engine.confidence import apply_confidence_downgrade
@@ -115,12 +115,15 @@ def main(
     baseline_path = None
     no_baseline = False
     deep = False
+    denial = False
     while args:
         arg = args.pop(0)
         if arg == "--no-tui":
             no_tui = True
         elif arg == "--deep":
             deep = True
+        elif arg == "--denial":
+            denial = True
         elif arg == "--json":
             json_output = True
         elif arg == "--llm-boost":
@@ -178,7 +181,7 @@ def main(
             file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
             llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
             no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
-            baseline_path=baseline_path, no_baseline=no_baseline, deep=deep,
+            baseline_path=baseline_path, no_baseline=no_baseline, deep=deep, denial=denial,
         )
 
 
@@ -199,6 +202,7 @@ def scan(
     baseline_path: Path | None = typer.Option(None, "--baseline", help="Path to baseline YAML"),
     no_baseline: bool = typer.Option(False, "--no-baseline", help="Ignore baseline files"),
     deep: bool = typer.Option(False, "--deep", help="Profile the full dataset (skip the 100K sample cap)."),
+    denial: bool = typer.Option(False, "--denial", help="Also mine denial constraints (opt-in; slower)."),
 ) -> None:
     """Profile one or more data files and report findings."""
     if smart and guided:
@@ -209,7 +213,7 @@ def scan(
             file, no_tui=no_tui, json_output=json_output, llm_boost=llm_boost,
             llm_provider=llm_provider, domain=domain, smart=smart, guided=guided,
             no_history=no_history, webhook=webhook, notify_on=notify_on, html=html,
-            baseline_path=baseline_path, no_baseline=no_baseline, deep=deep,
+            baseline_path=baseline_path, no_baseline=no_baseline, deep=deep, denial=denial,
         )
 
 
@@ -512,6 +516,50 @@ def refs(
 
         exit_code = report_ci(findings, fail_on)
         raise typer.Exit(code=exit_code)
+
+
+@app.command(name="denial-constraints")
+def denial_constraints(
+    file: Path = typer.Argument(..., help="Data file to mine for denial constraints."),
+    min_confidence: float | None = typer.Option(
+        None, "--min-confidence",
+        help="Fraction of rows/pairs a DC must hold for (default: engine default).",
+    ),
+    sample_size: int | None = typer.Option(
+        None, "--sample-size", help="Bound the cross-tuple (pairwise) pass."),
+    max_constraints: int | None = typer.Option(
+        None, "--max-constraints", help="Cap the ranked number of DCs reported."),
+) -> None:
+    """Discover denial constraints — cross-column invariants of the form
+    'if A then not-B' — directly from the data.
+
+        goldencheck denial-constraints orders.csv --min-confidence 0.98
+    """
+    from goldencheck.denial.mine import discover_denial_constraints
+    from goldencheck.engine.reader import read_file
+
+    with _cli_error_handler():
+        df = read_file(file)
+        dcs = discover_denial_constraints(
+            df,
+            min_confidence=min_confidence,
+            sample_size=sample_size,
+            max_constraints=max_constraints,
+        )
+
+        if not dcs:
+            console.print("No denial constraints discovered.")
+            raise typer.Exit(code=0)
+
+        console.print(f"Discovered {len(dcs)} denial constraint(s):", highlight=False)
+        for dc in dcs:
+            held = 1.0 - dc.g1
+            console.print(f"  {dc.render()}", highlight=False)
+            console.print(
+                f"    holds {held:.1%} (g1={dc.g1:.4f}, {dc.tuple_scope}-tuple)",
+                style="dim", highlight=False,
+            )
+        raise typer.Exit(code=0)
 
 
 @app.command()
@@ -834,6 +882,7 @@ def _do_scan(
     baseline_path: Path | None = None,
     no_baseline: bool = False,
     deep: bool = False,
+    denial: bool = False,
 ) -> None:
     """Run scan and output results."""
     with _cli_error_handler():
@@ -853,7 +902,7 @@ def _do_scan(
         if llm_boost:
             findings, profile = scan_file_with_llm(file, provider=llm_provider, domain=domain, deep=deep)
         else:
-            findings, profile = scan_file(file, domain=domain, baseline=baseline, deep=deep)
+            findings, profile = scan_file(file, domain=domain, baseline=baseline, deep=deep, denial=denial)
             findings = apply_confidence_downgrade(findings, llm_boost=False)
 
         # Progress message (to stderr so it doesn't pollute --json)

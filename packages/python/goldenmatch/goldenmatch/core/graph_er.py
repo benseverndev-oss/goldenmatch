@@ -29,8 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.core.pipeline import run_dedupe

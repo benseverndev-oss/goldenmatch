@@ -5,7 +5,7 @@
 ## Interfaces
 - MCP Server: `goldenmatch mcp-serve` (16 agent tools + 24 data tools + 7 memory tools + 7 identity tools = 54 total)
 - Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (54 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
-- A2A Server: `goldenmatch agent-serve --port 8200` (38 skills advertised in the agent card)
+- A2A Server: `goldenmatch agent-serve --port 8200` (40 skills advertised in the agent card)
 - CLI: `goldenmatch dedupe`, `goldenmatch autoconfig`, `goldenmatch match`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
 - Python API: `import goldenmatch` -- `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, `AgentSession.autoconfigure()`, `add_correction()`, `learn()`, `memory_stats()`, `get_memory()`, ~106 exports
 - TypeScript / Edge: `npm install goldenmatch` -- same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel (pure-TS stays the default + byte-identical fallback); `enableSuggestWasm()` brings the config-suggestion "healer" (`dedupe({ suggest, heal })`) to TS via the suggest-core kernel (graceful-empty without it)
@@ -16,9 +16,13 @@
 
 Every interface above returns the same JSON shape from `goldenmatch.web.controller_telemetry.serialize_telemetry`: `{stop_reason, health, scoring, blocking, cluster, column_priors, decisions, committed_matchkeys, negative_evidence}`. Write one parser, reuse across web / TUI / CLI / SQL / MCP / A2A / REST.
 
+## Document ingest (run on unstructured input)
+GoldenMatch doesn't require structured data. Extract matchable records from PDFs/images against a schema you control, then dedupe them: `suggest_schema_from_file(sample)` proposes a schema (review it), `ingest_documents(paths, schema)` returns a DataFrame -> `dedupe_df(df, exclude_columns=["_source_file","_source_page","_extract_confidence"])`. Python `from goldenmatch.documents import ingest_documents`; CLI `goldenmatch ingest-docs {suggest-schema, run}`; MCP tools + A2A skills `documents_suggest_schema` / `documents_ingest`; REST `POST /api/v1/documents/{suggest-schema, ingest}`; Web UI `/documents`. Needs `goldenmatch[documents]` + an OpenAI vision key (`OPENAI_API_KEY_PERSONAL`, default `gpt-4o`). Docs: https://docs.bensevern.dev/goldenmatch/documents
+
 ## Install
 - `pip install goldenmatch` (native acceleration ships by default on common platforms)
 - TypeScript: `npm install goldenmatch`
+- Document ingest (PDF/image -> records): `pip install goldenmatch[documents]`
 - Quality scanning: `pip install goldenmatch[quality]`
 - Data transforms: `pip install goldenmatch[transform]`
 - Embeddings: `pip install goldenmatch[embeddings]`

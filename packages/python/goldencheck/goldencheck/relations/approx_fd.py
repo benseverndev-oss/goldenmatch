@@ -20,9 +20,8 @@ grouping columns qualify.
 """
 from __future__ import annotations
 
-import polars as pl
-
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import _neutral_dtype, to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 100
@@ -30,19 +29,15 @@ _MIN_CONFIDENCE = 0.95
 _MIN_AVG_GROUP = 3  # must match goldencheck_core::MIN_AVG_GROUP
 _MAX_CANDIDATES = 12
 _MAX_FINDINGS = 8
-_SUPPORTED = (
-    pl.Utf8,
-    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-    pl.Boolean,
-)
+
+_SUPPORTED = frozenset({"str", "int", "uint", "bool"})
 
 
-def _select_candidates(df: pl.DataFrame) -> list[str]:
+def _select_candidates(df) -> list[str]:
     scored: list[tuple[int, str]] = []
     for col in df.columns:
         series = df[col]
-        if series.dtype not in _SUPPORTED:
+        if _neutral_dtype(series.dtype) not in _SUPPORTED:
             continue
         nu = series.n_unique()
         if nu <= 1:
@@ -110,9 +105,11 @@ def _discover_python(cols_ids: list[list[int]], n_rows: int, min_conf: float) ->
 class ApproximateFDProfiler:
     """Dataset-level relation profiler: near-FD violations (likely errors)."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         n_rows = df.height
-        if n_rows < _MIN_ROWS or df.width < 2:
+        if n_rows < _MIN_ROWS or len(frame.columns) < 2:
             return []
         cols = _select_candidates(df)
         if len(cols) < 2:
@@ -122,7 +119,7 @@ class ApproximateFDProfiler:
         violations_of: dict[tuple[int, int], list[int]] = {}
         if native_enabled("approximate_fd"):
             try:
-                arrays = [df[c].to_arrow() for c in cols]
+                arrays = [frame.column(c).to_arrow() for c in cols]
                 triples = native_module().discover_approximate_fds(arrays, _MIN_CONFIDENCE)
                 triples.sort(key=lambda t: t[2])  # fewest violations (highest conf) first
                 for i, j, _v in triples[:_MAX_FINDINGS]:
@@ -141,8 +138,10 @@ class ApproximateFDProfiler:
             det, dep = cols[i], cols[j]
             confidence = 1.0 - viol / n_rows
             rows = violations_of.get((i, j), [])[:5]
+            det_col = frame.column(det)
+            dep_col = frame.column(dep)
             samples = [
-                f"{det}={df[det][r]!r} has {dep}={df[dep][r]!r}" for r in rows
+                f"{det}={det_col.get(r)!r} has {dep}={dep_col.get(r)!r}" for r in rows
             ]
             findings.append(Finding(
                 severity=Severity.WARNING,
@@ -171,7 +170,7 @@ class ApproximateFDProfiler:
         return findings
 
     def _python(
-        self, df: pl.DataFrame, cols: list[str], n_rows: int
+        self, df, cols: list[str], n_rows: int
     ) -> tuple[list[tuple[int, int, int]], dict[tuple[int, int], list[int]]]:
         cols_ids = [_intern(df[c].to_list()) for c in cols]
         triples = _discover_python(cols_ids, n_rows, _MIN_CONFIDENCE)

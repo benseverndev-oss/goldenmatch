@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldenmatch.config.schemas import ChannelStitchConfig

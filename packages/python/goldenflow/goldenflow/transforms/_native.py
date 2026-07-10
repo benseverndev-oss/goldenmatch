@@ -15,8 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.core._native_loader import native_enabled, native_module
 
 _DEFAULT_REGION = "US"

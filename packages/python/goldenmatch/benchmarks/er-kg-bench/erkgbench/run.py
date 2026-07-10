@@ -114,6 +114,7 @@ def run(embedder_kind: str | None, dataset_cfg: dict | None = None) -> dict:
     records, entity_ids, failure_classes = load_records(
         dataset_cfg["records"], dataset_cfg["build_hint"]
     )
+    mentions = [r.mention for r in records]
     embed_fn = make_embedder(embedder_kind)
 
     # Dogfood: goldenmatch runs zero-config (auto-config picks the strategy),
@@ -167,11 +168,17 @@ def run(embedder_kind: str | None, dataset_cfg: dict | None = None) -> dict:
             continue
         by_class = metrics.score_by_class(entity_ids, failure_classes, clustering)
         overall = by_class["__overall__"]
+        hsr = metrics.homograph_split_rate(mentions, entity_ids, clustering)
         rows.append(
             {
                 "name": ad.name,
                 "defaults": ad.defaults,
                 "fidelity": getattr(ad, "fidelity", "modeled"),
+                "homograph_split_rate": {
+                    "rate": round(hsr.rate, 3),
+                    "confusable": hsr.confusable,
+                    "split": hsr.split,
+                },
                 "overall": {
                     "precision": round(overall.precision, 3),
                     "recall": round(overall.recall, 3),
@@ -284,6 +291,28 @@ def to_markdown(report: dict) -> str:
             str(r["per_class_f1"].get(c, "-")) for c in CLASS_ORDER
         )
         lines.append(f"| {r['name']} | {cells} |")
+
+    # Homograph split-rate (the CLEAR-KG headline sub-metric) -- pairwise on the
+    # surface collision itself, independent of the failure-class labelling.
+    hsr_rows = [r for r in report["results"] if "homograph_split_rate" in r]
+    if hsr_rows:
+        n = hsr_rows[0]["homograph_split_rate"]["confusable"]
+        lines += [
+            "",
+            "## Homograph split-rate",
+            "",
+            f"Of the **{n}** gold pairs that share a surface form but are DIFFERENT "
+            "entities (real homographs in this corpus), the fraction the resolver "
+            "keeps in different clusters. ~0 for every `if similar: merge` mechanism; "
+            "high for neighborhood/collective ER. (The CLEAR-KG headline metric, "
+            "reported here on the real frameworks; grows with the Wikidata seed set.)",
+            "",
+            "| System | split-rate | confusable |",
+            "|---|---|---|",
+        ]
+        for r in hsr_rows:
+            h = r["homograph_split_rate"]
+            lines.append(f"| {r['name']} | {h['rate']} | {h['confusable']} |")
 
     lines += ["", "## Documented defaults (what each row runs)", ""]
     for r in report["results"]:

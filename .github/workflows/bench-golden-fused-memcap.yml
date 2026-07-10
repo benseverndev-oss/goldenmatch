@@ -1,0 +1,157 @@
+# Memory-capped peak-RSS bench for the fused GOLDEN-record stage -- workflow_dispatch.
+#
+# Proves the CAPACITY win: on IDENTICAL clusters, the fused Arrow kernel
+# (run_golden_fused_arrow, Rust-Vec intermediates) builds the same golden records
+# at materially lower peak RSS than build_golden_records_batch (wide multi_df +
+# one dict per cluster). Each (path, n) runs in its OWN `systemd-run -p
+# MemoryMax=<cap>` scope so the cgroup `memory.peak` reflects that path alone; the
+# HEADLINE metric is the peak-RSS ratio (reference / fused). Wall is reported
+# (min-of-N) but expected to be a wash and is NOT gated. A path that OOM-kills at
+# the cap where the other completes is ITSELF a capacity signal (recorded).
+#
+# Dispatch after this lands on main:
+#   gh workflow run bench-golden-fused-memcap.yml --ref main -f source_ref=main
+name: bench-golden-fused-memcap
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch/ref to build + bench (has golden_fused + the memcap script)"
+        required: true
+        default: "main"
+      cap:
+        description: "cgroup MemoryMax (e.g. 24G) -- the fixed RAM ceiling"
+        required: false
+        default: "24G"
+      n:
+        description: "Space-separated clustered-row counts to sweep"
+        required: false
+        default: "1000000 5000000 10000000"
+      repeats:
+        description: "Measured runs per (path, n) for min-of-N wall"
+        required: false
+        default: "3"
+      runner:
+        description: "Runner label (physical RAM must exceed the cap)"
+        required: false
+        default: "large-new-64GB"
+      per_run_timeout:
+        description: "Hard per-run cap (s)"
+        required: false
+        default: "1200"
+
+permissions:
+  contents: read
+
+jobs:
+  memcap:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (from source_ref)
+        run: uv run python scripts/build_native.py
+
+      - name: Sweep both paths under a fixed RAM cap
+        working-directory: packages/python/goldenmatch
+        run: |
+          set +e
+          : > memcap.jsonl
+          PY=$(uv run python -c "import sys;print(sys.executable)")
+          echo "python: $PY  cap: ${{ inputs.cap }}  n: ${{ inputs.n }}"
+          for n in ${{ inputs.n }}; do
+            for p in reference golden_fused; do
+              echo "::group::path=$p n=$n cap=${{ inputs.cap }}"
+              out=$(sudo systemd-run --scope --quiet \
+                    -p MemoryMax=${{ inputs.cap }} -p MemorySwapMax=0 \
+                    --setenv=POLARS_SKIP_CPU_CHECK=1 \
+                    --setenv=GOLDENMATCH_AUTOCONFIG_MEMORY=0 \
+                    -- timeout ${{ inputs.per_run_timeout }} \
+                    "$PY" scripts/bench_golden_fused_memcap.py \
+                        --path "$p" --n "$n" --repeats ${{ inputs.repeats }})
+              rc=$?
+              if [ $rc -eq 0 ] && [ -n "$out" ]; then
+                echo "$out"; echo "$out" >> memcap.jsonl
+              else
+                # non-zero = OOM-kill at the cap (or timeout). Itself a capacity signal.
+                echo "{\"path\":\"$p\",\"n\":$n,\"status\":\"OOM_OR_FAIL\",\"exit\":$rc}" | tee -a memcap.jsonl
+              fi
+              echo "::endgroup::"
+            done
+          done
+
+      - name: Summarize
+        working-directory: packages/python/goldenmatch
+        run: |
+          uv run python - <<'PY'
+          import json
+          rows = [json.loads(l) for l in open("memcap.jsonl") if l.strip()]
+          by = {}
+          for r in rows:
+              by.setdefault(r["n"], {})[r["path"]] = r
+          print("\n=== fused golden-record peak RSS under a fixed RAM cap ===")
+          print("(headline = peak-RSS ratio reference/fused; wall is a reported wash, not gated)\n")
+          ratios = []
+          for n in sorted(by):
+              d = by[n]
+              print(f"n={n:,} rows:")
+              for path in ("reference", "golden_fused"):
+                  r = d.get(path)
+                  if r is None:
+                      print(f"  {path:>13}: (no result)")
+                  elif r.get("status") == "ok":
+                      peak = r.get("cgroup_peak_mb") or r.get("maxrss_mb")
+                      print(f"  {path:>13}: peak={peak}MB  wall={r['wall_s']}s  "
+                            f"clusters={r.get('clusters'):,}  records={r.get('golden_records'):,}")
+                  else:
+                      print(f"  {path:>13}: OOM/FAIL at the cap (exit {r.get('exit')})")
+              ref, fus = d.get("reference"), d.get("golden_fused")
+              if (ref and ref.get("status") == "ok" and fus and fus.get("status") == "ok"):
+                  rp = ref.get("cgroup_peak_mb") or ref.get("maxrss_mb")
+                  fp = fus.get("cgroup_peak_mb") or fus.get("maxrss_mb")
+                  if rp and fp:
+                      ratio = rp / fp
+                      ratios.append(ratio)
+                      print(f"  -> peak-RSS ratio reference/fused = {ratio:.2f}x "
+                            f"(>1 = fused uses less RAM)")
+              elif ref and ref.get("status") != "ok" and fus and fus.get("status") == "ok":
+                  print("  -> reference OOM'd at the cap where fused COMPLETED "
+                        "(the capacity win in its starkest form)")
+              print()
+          print("=== VERDICT ===")
+          if ratios:
+              import statistics
+              print(f"median peak-RSS ratio (reference/fused): {statistics.median(ratios):.2f}x")
+              print("(>1 confirms the fused kernel's lower-RSS capacity win; wall is a wash)")
+          else:
+              print("no head-to-head pair completed -- widen the cap or shrink n")
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: bench-golden-fused-memcap-results
+          path: packages/python/goldenmatch/memcap.jsonl

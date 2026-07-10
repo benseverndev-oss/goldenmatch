@@ -14,7 +14,7 @@ import os
 from difflib import SequenceMatcher
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 _IDENTITY_BASKET_TYPES = frozenset({"name", "multi_name", "email", "phone", "identifier"})
 # Basket types compared FUZZILY (a true duplicate's name is often corrupted --

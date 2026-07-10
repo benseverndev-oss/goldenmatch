@@ -87,6 +87,8 @@ mcp_tools:
   - compare_clusters
   - config_weaknesses
   - create_domain
+  - documents_ingest
+  - documents_suggest_schema
   - explain_routing
   - export_results
   - get_cluster
@@ -119,6 +121,7 @@ mcp_tools:
   - shatter_cluster
   - test_domain
   - unmerge_record
+  - upload_dataset
   ts_only:
   - build_clusters
   - find_exact_matches
@@ -152,6 +155,7 @@ cli_commands:
   - config
   - explain
   - incremental
+  - ingest-docs
   - init
   - interactive
   - label
@@ -197,6 +201,8 @@ a2a_skills:
   - analyze_blocking
   - compare_clusters
   - configure
+  - documents_ingest
+  - documents_suggest_schema
   - identity_audit
   - identity_audit_seal
   - identity_audit_verify

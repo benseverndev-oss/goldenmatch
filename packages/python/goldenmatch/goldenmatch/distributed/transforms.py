@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 Op = Literal["lower", "upper", "strip_punctuation", "strip", "nfkc"]
 

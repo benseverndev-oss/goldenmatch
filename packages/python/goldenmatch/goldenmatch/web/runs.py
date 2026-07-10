@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 
 @dataclass(frozen=True)

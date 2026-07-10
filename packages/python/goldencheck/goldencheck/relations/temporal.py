@@ -1,8 +1,7 @@
 """Temporal order profiler — checks that start-like date columns precede end-like columns."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # Pairs of (start-pattern, end-pattern) — matched against lowercased column names
@@ -62,45 +61,45 @@ def _find_date_pairs(columns: list[str]) -> list[tuple[str, str]]:
     return unique
 
 
-def _try_cast_to_date(series: pl.Series) -> pl.Series:
+def _try_cast_to_date(col):
     """Attempt to cast a series to Date if stored as strings."""
-    if series.dtype == pl.Utf8 or series.dtype == pl.String:
-        return series.str.to_date(format="%Y-%m-%d", strict=False)
-    return series
+    if col.dtype == "str":
+        return col.str_to_date("%Y-%m-%d", strict=False)
+    return col
 
 
 class TemporalOrderProfiler:
     """Checks that start-like date columns are <= end-like date columns."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
+        frame = to_frame(frame)
         findings: list[Finding] = []
 
         # Keyword-matched pairs (high confidence)
-        kw_pairs = _find_date_pairs(df.columns)
+        kw_pairs = _find_date_pairs(frame.columns)
         kw_pair_set: set[tuple[str, str]] = set(kw_pairs)
 
         checked_pairs: set[tuple[str, str]] = set()
 
         for start_col, end_col in kw_pairs:
             checked_pairs.add((start_col, end_col))
-            result = self._check_pair(df, start_col, end_col, confidence=0.9)
+            result = self._check_pair(frame, start_col, end_col, confidence=0.9)
             if result:
                 findings.append(result)
 
         # Any-date-pair fallback: find all Date-typed columns
         # Guard: skip if >10 date columns
         date_cols = []
-        for col in df.columns:
-            s = df[col]
-            dtype = s.dtype
-            if dtype in (pl.Date, pl.Datetime):
-                date_cols.append(col)
-            elif dtype in (pl.Utf8, pl.String):
+        for col_name in frame.columns:
+            col = frame.column(col_name)
+            if col.dtype in ("date", "datetime"):
+                date_cols.append(col_name)
+            elif col.dtype == "str":
                 # Try casting to check if it's a date column
                 try:
-                    casted = s.str.to_date(format="%Y-%m-%d", strict=False)
-                    if casted.drop_nulls().len() > 0:
-                        date_cols.append(col)
+                    casted = col.str_to_date("%Y-%m-%d", strict=False)
+                    if len(casted.drop_nulls()) > 0:
+                        date_cols.append(col_name)
                 except Exception:
                     pass
 
@@ -110,7 +109,7 @@ class TemporalOrderProfiler:
                 if (col_a, col_b) not in kw_pair_set and (col_b, col_a) not in kw_pair_set:
                     if (col_a, col_b) not in checked_pairs:
                         checked_pairs.add((col_a, col_b))
-                        result = self._check_pair(df, col_a, col_b, confidence=0.4)
+                        result = self._check_pair(frame, col_a, col_b, confidence=0.4)
                         if result:
                             findings.append(result)
 
@@ -118,13 +117,13 @@ class TemporalOrderProfiler:
 
     def _check_pair(
         self,
-        df: pl.DataFrame,
+        frame,
         start_col: str,
         end_col: str,
         confidence: float,
     ) -> Finding | None:
-        start_series = df[start_col]
-        end_series = df[end_col]
+        start_series = frame.column(start_col)
+        end_series = frame.column(end_col)
 
         # Attempt to cast to Date if stored as strings
         try:
@@ -133,16 +132,16 @@ class TemporalOrderProfiler:
         except Exception:
             return None
 
-        if start_series.dtype not in (pl.Date, pl.Datetime) or end_series.dtype not in (pl.Date, pl.Datetime):
+        if start_series.dtype not in ("date", "datetime") or end_series.dtype not in ("date", "datetime"):
             return None
 
         # Find rows where start > end (ignoring nulls)
-        violation_mask = (start_series > end_series).fill_null(False)
+        violation_mask = start_series.gt_mask(end_series).fill_null(False)
         violation_count = violation_mask.sum()
 
         if violation_count > 0:
-            sample_starts = start_series.filter(violation_mask).head(3).cast(pl.String).to_list()
-            sample_ends = end_series.filter(violation_mask).head(3).cast(pl.String).to_list()
+            sample_starts = start_series.filter_by(violation_mask).cast("str").to_list()[:3]
+            sample_ends = end_series.filter_by(violation_mask).cast("str").to_list()[:3]
             samples = [f"{s} > {e}" for s, e in zip(sample_starts, sample_ends)]
 
             return Finding(

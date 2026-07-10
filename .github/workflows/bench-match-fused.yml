@@ -1,0 +1,137 @@
+# Fused Arrow-native match stage bench -- workflow_dispatch only.
+#
+# Measures `match_fused` (block+score+dedup+cluster in ONE Rust call) vs the
+# per-stage pipeline (Polars block + score_arrow + dedup_arrow + cc_arrow) at
+# scale, on a real box. Two axes the local (memory-starved) box can't measure:
+#   - peak RSS per path (does fusion avoid materializing the pairs list +
+#     per-block frames the pipeline builds?)
+#   - the 5M/10M shape where the materializing pipeline OOMs (exit 137) and the
+#     fused kernel survives at flat memory.
+# Each (path, n) runs in its OWN process so an OOM-kill of the pipeline doesn't
+# take down the fused run. Scoring forced parallel on BOTH
+# (GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS=0) so the dominant compute is held equal
+# and the delta is purely the fusion (grouping + eliminated conversions).
+#
+# Dispatch against the branch that has match_fused + the bench script:
+#   gh workflow run bench-match-fused.yml --ref main \
+#     -f source_ref=feat/native-block-formation-kernel
+name: bench-match-fused
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch/ref to build + bench (has match_fused + scripts/bench_match_fused_scale.py)"
+        required: true
+        default: "feat/native-block-formation-kernel"
+      row_counts:
+        description: "Space-separated row counts"
+        required: false
+        default: "1000000 5000000 10000000"
+      keycard:
+        description: "Avg rows per block (n/keycard distinct keys)"
+        required: false
+        default: "20"
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+      per_run_timeout:
+        description: "Hard per-run cap (s) so an OOM/hang can't blow the budget"
+        required: false
+        default: "1800"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (from source_ref)
+        run: uv run python scripts/build_native.py
+
+      - name: Run fused-vs-pipeline scale bench
+        working-directory: packages/python/goldenmatch
+        run: |
+          set +e
+          : > results.jsonl
+          for n in ${{ inputs.row_counts }}; do
+            for path in fused pipeline; do
+              echo "::group::n=$n path=$path"
+              out=$(GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS=0 \
+                timeout ${{ inputs.per_run_timeout }} \
+                uv run python scripts/bench_match_fused_scale.py \
+                  --path "$path" --n "$n" --keycard ${{ inputs.keycard }})
+              rc=$?
+              if [ $rc -eq 0 ]; then
+                echo "$out"
+                echo "$out" >> results.jsonl
+              else
+                # 124 = timeout; 137 = OOM-kill (SIGKILL); other = crash
+                echo "{\"path\":\"$path\",\"n\":$n,\"status\":\"FAIL\",\"exit\":$rc}" | tee -a results.jsonl
+              fi
+              echo "::endgroup::"
+            done
+          done
+
+      - name: Summarize
+        working-directory: packages/python/goldenmatch
+        run: |
+          uv run python - <<'PY'
+          import json
+          rows = [json.loads(l) for l in open("results.jsonl") if l.strip()]
+          by = {}
+          for r in rows:
+              by.setdefault(r["n"], {})[r["path"]] = r
+          print("\n=== fused vs pipeline (scoring forced parallel on both) ===")
+          hdr = f"{'n':>10} {'fused_wall':>10} {'pipe_wall':>10} {'speedup':>8} {'fused_rss':>10} {'pipe_rss':>10} {'rss_x':>7} {'parity':>8}"
+          print(hdr)
+          for n in sorted(by):
+              f = by[n].get("fused", {})
+              p = by[n].get("pipeline", {})
+              def g(d, k): return d.get(k)
+              fw, pw = g(f, "wall_s"), g(p, "wall_s")
+              fr, pr = g(f, "peak_rss_mb"), g(p, "peak_rss_mb")
+              speed = f"{pw/fw:.2f}x" if (fw and pw) else "-"
+              rssx = f"{pr/fr:.2f}x" if (fr and pr) else "-"
+              if "cluster_fp" in f and "cluster_fp" in p:
+                  parity = "PASS" if f["cluster_fp"] == p["cluster_fp"] else "FAIL"
+              else:
+                  parity = f"f={f.get('status','ok')}/p={p.get('status','ok')}"
+              def s(v, suf=""): return (f"{v}{suf}" if v is not None else "OOM/FAIL")
+              print(f"{n:>10} {s(fw,'s'):>10} {s(pw,'s'):>10} {speed:>8} {s(fr,'M'):>10} {s(pr,'M'):>10} {rssx:>7} {parity:>8}")
+          print("\nspeedup = pipeline_wall / fused_wall (>1 = fused faster)")
+          print("rss_x   = pipeline_rss  / fused_rss  (>1 = fused leaner)")
+          print("OOM/FAIL in a pipeline cell where fused succeeds = the scale win.")
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: bench-match-fused-results
+          path: packages/python/goldenmatch/results.jsonl

@@ -9,15 +9,16 @@ pub mod address;
 pub mod autocorrect;
 pub mod categorical;
 pub mod company;
-/// Fused columnar apply (a whole owned-kernel chain in one pass) — only when
-/// built with `--features arrow`. Pillar-1 of the Rust cutover.
-#[cfg(feature = "arrow")]
+/// Fused apply — a whole owned-kernel chain in one pass (Pillar-1). The `Kernel`
+/// enums + the arrow-free `apply_chain_str` (WASM/pure surfaces) are always
+/// compiled; the Arrow-columnar executors inside are `#[cfg(feature = "arrow")]`.
 pub mod chain;
 /// Arrow-columnar apply paths — only when built with `--features arrow`
 /// (native-flow enables it; wasm/pure surfaces stay arrow-free).
 #[cfg(feature = "arrow")]
 pub mod columnar;
 pub mod email;
+pub mod float_fmt;
 pub mod identifiers;
 pub mod names;
 pub mod numeric;

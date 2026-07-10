@@ -5,7 +5,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 

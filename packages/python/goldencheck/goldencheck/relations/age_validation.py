@@ -1,10 +1,19 @@
-"""Age vs DOB cross-validation profiler."""
+"""Age vs DOB cross-validation profiler.
+
+**Polars-accelerator-only (declined from the seam eviction, R4).** This profiler's core is a Polars
+expression tree -- ``df.select(actual=pl.col(age_col).cast(...), expected=((pl.lit(reference_date)
+.cast(pl.Date) - pl.col(dob_col).str.to_date(...)).dt.total_days() / 365.25))`` -- with no
+byte-identical ``Frame``/``Column``-seam equivalent (the seam models per-column reductions +
+element-wise ops, not ``pl.col``/``pl.lit``/``.dt`` expression trees or date arithmetic). It is NOT
+routed through the seam; it stays import-safe (lazy ``pl``) but requires Polars at runtime. See
+``docs/superpowers/specs/2026-07-09-goldencheck-relation-ports-r4-decline.md``.
+"""
 from __future__ import annotations
 
 import datetime
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # Words that contain "age" but are NOT age columns
@@ -38,7 +47,9 @@ def _try_parse_dates(series: pl.Series) -> pl.Series:
 class AgeValidationProfiler:
     """Cross-validates age columns against date-of-birth columns."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         findings: list[Finding] = []
 
         age_cols = [c for c in df.columns if _is_age_column(c)]

@@ -22,6 +22,15 @@ npm install infermap
 
 Python database extras: `infermap[postgres]`, `infermap[mysql]`, `infermap[duckdb]`, `infermap[all]`. The TypeScript package requires Node 20+ and is edge-runtime compatible.
 
+<Note>
+**Native acceleration.** The scorers + domain detection share a pyo3-free Rust
+core (`infermap-core`). Install `infermap[native]` to auto-dispatch to the
+compiled kernels — byte-identical output (CI parity-gated), governed by
+`INFERMAP_NATIVE` (`auto` / `1` / `0`). The TypeScript package runs the same
+kernels via an opt-in WASM backend (`enableInfermapWasm()`); the MCP
+`infermap://scorer-info` resource reports the active backend.
+</Note>
+
 ## Quickstart
 
 ```python

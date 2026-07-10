@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     email_canonical_native,
@@ -204,6 +203,8 @@ def email_extract_domain(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=60,
     mode="series",
+    scalar=_email_validate_py,
+    scalar_dtype="bool",
 )
 def email_validate(series: pl.Series) -> pl.Series:
     """Validate email format. Returns True/False/None.

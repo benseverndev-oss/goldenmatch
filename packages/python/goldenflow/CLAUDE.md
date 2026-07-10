@@ -57,8 +57,18 @@ npx goldenflow-js transform data.csv  # CLI
 - Tests: `tests/smoke.test.ts`, `tests/parity/`, `tests/unit/`
 - npm package name: `goldenflow`
 - CLI binary: `goldenflow-js`
-- Publish: tag `goldenflow-js-vX.Y.Z` triggers `.github/workflows/npm-publish.yml`
+- Publish: tag `goldenflow-js-vX.Y.Z` triggers `publish-goldenflow-js.yml` -> `_publish-js.yml`
 - `NPM_TOKEN` secret is set on the GitHub repo
+- **WASM ships in the npm package (since 0.14.0) — it did NOT before.** The
+  `goldenflow-wasm` artifact is gitignored (CI-built), and the publish flow never
+  built it, so **every tarball <=0.13.0 carried ZERO `.wasm`** — `enableWasm()`
+  silently fell back to pure-TS for all published users (the whole opt-in WASM
+  backend was inert on npm). Fixed by `scripts/build_wasm.sh` + the `build_wasm: true`
+  input on `_publish-js.yml` (runs `cargo build wasm32` + version-pinned
+  `wasm-bindgen` before tsup, so `copy_wasm_artifact.mjs` lands it in `dist/`). The
+  dry-run Pack step asserts `tar tzf *.tgz | grep .wasm` (fails loud if dropped).
+  **Always `dry_run: true` first + verify the published tarball has `.wasm`** on any
+  wasm-affecting release. Verified: 0.14.0 tarball has 3 `.wasm` (dist/{,core/,core/wasm/}artifacts).
 
 ## Architecture
 
@@ -539,6 +549,35 @@ Hosted on Railway, registered on Smithery:
 - **Dockerfile:** `Dockerfile.mcp` (Python 3.12-slim, installs `.[mcp]`)
 - **Railway project:** `golden-suite-mcp` (service: `goldenflow-mcp`, port 8150)
 - **Local HTTP:** `goldenflow mcp-serve --transport http --port 8150`
+
+## Polars eviction — FUNCTIONALLY COMPLETE (Phase 4, 2026-07-08)
+
+The columnar path (`engine/columnar.py`) is the DEFAULT for the public `transform()` and
+runs **Polars-free**: `import goldenflow` imports no Polars, all 113 transforms + CSV/
+Parquet/Excel/DB read + dict/file zero-config run without Polars. Only the 2.0 base-deps
+flip remains (drop `polars` from `[project.dependencies]` -> the `[polars]` extra).
+- **`transform(data, config)`** (Polars-free primary) takes a `dict[str, list]` or a path
+  (`.csv`/`.parquet`/`.xlsx`) -> `ColumnarResult`. Readers: `read_csv_columns` (stdlib
+  csv), `read_parquet_columns` (pyarrow `to_pydict`), `read_excel_columns` (openpyxl),
+  `connectors.database.read_database_columns` (any DBAPI). `transform_df(pl.DataFrame)` is
+  the Polars-backend adapter (tautologically needs Polars).
+- **Coverage mechanism.** `register_transform(scalar=, scalar_dtype=, scalar_factory=)`
+  covers per-element str/int/bool/float/parameterized; `_apply_special` covers the 3
+  odd shapes (multi-input `merge_name`, flag-only `initial_expand`, whole-column
+  `category_auto_correct`); numeric-INPUT (`round`/`clamp`/`abs_value`/`fill_zero`) via a
+  synthetic `AsFloat` parser in native-flow. Needs `goldenflow-native>=0.26.0` (adds
+  `format_f64` + AsFloat).
+- **CSV zero-config OWNS its inference** (a deliberate `pl.read_csv` divergence, like the
+  dates fix): profiles CSV columns AS TEXT so `"01234"` stays a zip, not `1234`. Cleaned
+  text values match `transform_df(pl.read_csv)`; numeric columns keep their string dtype.
+- **When adding a transform, wire it onto the columnar path** (scalar / fused kernel /
+  special-shape) or it silently declines to `[polars]`. And **grep `domains/` for a
+  same-name registration** — a domain pack re-registering a core name clobbers its
+  scalar/native (see `feedback_domain_pack_reregister_clobber`).
+- **Latent bug (pre-existing, masked by native):** `clamp:0:100` with INTEGER bounds
+  errors in the PURE-PYTHON path (`SchemaError` Int64->Float64 in `map_elements`) ->
+  clamp silently no-ops; only bites a no-native install. One-line fix: `float()` the
+  bounds in `transforms/numeric.py::clamp`.
 
 ## Gotchas
 

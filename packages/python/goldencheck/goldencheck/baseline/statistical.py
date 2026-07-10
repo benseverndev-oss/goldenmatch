@@ -15,8 +15,7 @@ except ImportError as _err:  # pragma: no cover
         "Install them with: pip install 'goldencheck[baseline]'"
     ) from _err
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import StatProfile
 from goldencheck.core._native_loader import native_enabled, native_module
 

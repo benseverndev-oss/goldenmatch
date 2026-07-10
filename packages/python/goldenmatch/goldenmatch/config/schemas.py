@@ -1202,6 +1202,11 @@ class GoldenMatchConfig(BaseModel):
     _strict_autoconfig: bool = PrivateAttr(default=False)
     _domain_profile: Any = PrivateAttr(default=None)
     _throughput_plan: Any = PrivateAttr(default=None)
+    # Fused-match routing flag (see goldenmatch/core/fused_routing.py). Set by
+    # the controller post-step via ExecutionPlan.apply_to; read by the pipeline
+    # to short-circuit block->score->cluster. Default-False keeps every plan
+    # byte-identical when unset. Mirrors _throughput_plan's hand-off contract.
+    _use_fused_match: bool = PrivateAttr(default=False)
 
     @model_validator(mode="after")
     def _validate_fuzzy_needs_blocking(self) -> GoldenMatchConfig:

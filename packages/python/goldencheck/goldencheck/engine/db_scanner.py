@@ -5,8 +5,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.engine.confidence import apply_confidence_downgrade
 from goldencheck.engine.scanner import scan_file
 from goldencheck.models.finding import Finding

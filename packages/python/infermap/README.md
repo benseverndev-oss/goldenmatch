@@ -62,7 +62,17 @@ pip install infermap[postgres]   # psycopg2-binary
 pip install infermap[mysql]      # mysql-connector-python
 pip install infermap[duckdb]     # duckdb
 pip install infermap[all]        # all extras
+pip install infermap[native]     # compiled Rust scorer kernels (faster, identical results)
 ```
+
+**Native acceleration.** InferMap's scorers (exact, fuzzy-name, initialism,
+profile, pattern-type) and domain detection share a pyo3-free Rust core
+(`infermap-core`). With `infermap[native]` installed, they auto-dispatch to the
+compiled kernels — no code change, byte-identical output (CI parity-gated). This
+is governed by `INFERMAP_NATIVE`: `auto` (default; use the native wheel when
+importable, else pure Python), `1` (require native, raise if absent), `0` (force
+pure Python). The TypeScript package runs the same kernels via an opt-in WASM
+backend (`enableInfermapWasm()`).
 
 ### TypeScript / Next.js
 

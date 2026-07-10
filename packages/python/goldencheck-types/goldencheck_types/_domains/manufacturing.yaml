@@ -1,0 +1,24 @@
+description: "Manufacturing — parts, work orders, batches/lots, BOM, quality"
+
+types:
+  part:
+    name_hints: ["part_number", "part_id"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency"]
+
+  production:
+    name_hints: ["work_order", "batch_number", "lot_number", "serial_number"]
+    value_signals:
+      min_unique_pct: 0.80
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  bom:
+    name_hints: ["bom", "bill_of_materials", "assembly_id"]
+    suppress: ["pattern_consistency"]
+
+  quality:
+    name_hints: ["defect_rate", "yield_rate", "production_date", "machine_id", "shift"]
+    value_signals:
+      max_unique: 50
+    suppress: ["uniqueness", "range_distribution"]

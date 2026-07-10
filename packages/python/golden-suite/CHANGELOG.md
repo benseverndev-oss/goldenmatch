@@ -4,6 +4,71 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.9] - 2026-07-08
+
+### Changed
+- Bumped the goldenflow floor to **`goldenflow>=2.0.0`** (was `>=1.17.0`) and the
+  goldenflow-native floor to **`goldenflow-native>=0.26.0`** (was `>=0.24.0`), per the
+  lockstep policy. goldenflow 2.0.0 completes the Polars eviction: **Polars is no longer a
+  base dependency** — `pip install goldenflow` runs Polars-free by default on
+  goldenflow-native (now a base dep of goldenflow), and Polars moved to the optional
+  `goldenflow[polars]` backend. All 113 transforms + CSV/Parquet/Excel/DB read + zero-config
+  run without Polars. goldenflow-native 0.26.0 carries the full columnar surface
+  (`format_f64` + the numeric-input `AsFloat` parser).
+
+## [0.1.8] - 2026-07-07
+
+### Changed
+- Bumped the goldenflow floor to **`goldenflow>=1.17.0`** (was `>=1.16.0`) and the
+  goldenflow-native floor to **`goldenflow-native>=0.24.0`** (was `>=0.15.0`), per the
+  lockstep policy. goldenflow 1.17.0 + goldenflow-native 0.24.0 ship the Polars-eviction
+  columnar engine (Phases 2-3): owned transforms run on the native/Arrow substrate (no
+  Polars, no pyarrow) on both the whole-file CSV path and the in-memory path, covering
+  string, phonetic, nullable URL/company/email, numeric (f64 + i64 parsers + array ops
+  with a Polars-matching float formatter), and multi-output splits — byte-identical (data
+  + manifest) to the Polars engine, opt-in via `GOLDENFLOW_ENGINE=columnar`.
+
+## [0.1.7] - 2026-07-07
+
+### Changed
+- Bumped the goldenflow-native floor to **`goldenflow-native>=0.15.0`** (was
+  `>=0.14.0`), per the lockstep policy. goldenflow-native 0.15.0 ships 3-8×
+  faster hot transform kernels (name/URL/number families) — measured, byte-identical
+  (native == pure-Python == the pinned parity corpus), so it's a pure speed
+  improvement with no output change.
+
+## [0.1.6] - 2026-07-06
+
+### Changed
+- Bumped the goldenflow-family floors after the nullable fused-apply release
+  (lockstep policy): **`goldenflow>=1.16.0`** (was `>=1.15.0`) and
+  **`goldenflow-native>=0.14.0`** (was `>=0.13.0`). goldenflow 1.16.0 extends the
+  fused columnar apply to the `Option`-returning URL / company / email families
+  (`url_normalize`, `company_normalize`, `email_mask`, …) — a run of those fuses
+  into one native Arrow pass, byte-identical output (nulls included); goldenflow-native
+  0.14.0 ships the `apply_chain_nullable_arrow` kernel symbol they need.
+
+## [0.1.5] - 2026-07-06
+
+### Changed
+- Bumped the goldenflow-family floors after the numeric + parameterized fused-apply
+  release (lockstep policy): **`goldenflow>=1.15.0`** (was `>=1.14.0`) and
+  **`goldenflow-native>=0.13.0`** (was `>=0.12.0`). goldenflow 1.15.0 extends the
+  fused columnar apply to f64 numeric chains (`round`/`clamp`/`abs_value`/`fill_zero`)
+  and the parameterized string ops (`truncate`/`pad`), byte-identical output with
+  lower peak RSS at scale; goldenflow-native 0.13.0 republishes with the
+  `apply_chain_ops_arrow` + `apply_chain_f64_arrow` kernel symbols they need.
+
+## [0.1.4] - 2026-07-06
+
+### Changed
+- Bumped the goldenflow-family floors after the fused-columnar-apply release
+  (lockstep policy): **`goldenflow>=1.14.0`** (was `>=1.13.0`) and
+  **`goldenflow-native>=0.12.0`** (was `>=0.11.0`). goldenflow 1.14.0 flips
+  fused columnar apply on by default (a run of owned string transforms fuses
+  into one native Arrow pass — byte-identical output, ~22% lower peak RSS at
+  scale); goldenflow-native 0.12.0 ships the `apply_chain_arrow` kernel it needs.
+
 ## [0.1.3] - 2026-07-05
 
 ### Changed

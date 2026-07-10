@@ -1,0 +1,147 @@
+# Memory-capped throughput bench for the fused match stage -- workflow_dispatch.
+#
+# Tests the "RSS -> speed" hypothesis: under a FIXED cgroup RAM cap, does fused's
+# ~2x lower per-job working set let it sustain ~2x the concurrent dedup jobs
+# before the cap OOM-kills it -> ~2x aggregate throughput? This is the
+# MEMORY-BOUND regime the earlier 64GB wall bench (CPU-bound, a wash) couldn't
+# show. Each (path, workers) runs W concurrent dedup PROCESSES (no GIL confound)
+# inside `systemd-run -p MemoryMax=<cap>`; OOM-kill at the cap is the RSS signal.
+# The path that fits more workers before the cap has the higher throughput
+# ceiling at that RAM budget.
+#
+# Dispatch after this lands on main:
+#   gh workflow run bench-match-fused-memcap.yml --ref main -f source_ref=main
+name: bench-match-fused-memcap
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch/ref to build + bench (has match_fused + the memcap script)"
+        required: true
+        default: "main"
+      cap:
+        description: "cgroup MemoryMax (e.g. 24G) -- the fixed RAM ceiling"
+        required: false
+        default: "24G"
+      n:
+        description: "Rows per concurrent dedup job (sized so working set > interpreter base)"
+        required: false
+        default: "5000000"
+      workers:
+        description: "Space-separated worker counts to sweep"
+        required: false
+        default: "2 4 6 8 10 12"
+      runner:
+        description: "Runner label (physical RAM must exceed the cap; cores >= max workers)"
+        required: false
+        default: "large-new-64GB"
+      per_run_timeout:
+        description: "Hard per-run cap (s)"
+        required: false
+        default: "1200"
+
+permissions:
+  contents: read
+
+jobs:
+  memcap:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (from source_ref)
+        run: uv run python scripts/build_native.py
+
+      - name: Sweep workers under a fixed RAM cap
+        working-directory: packages/python/goldenmatch
+        run: |
+          set +e
+          : > memcap.jsonl
+          PY=$(uv run python -c "import sys;print(sys.executable)")
+          echo "python: $PY  cap: ${{ inputs.cap }}  n: ${{ inputs.n }}"
+          for p in fused pipeline; do
+            for w in ${{ inputs.workers }}; do
+              echo "::group::path=$p workers=$w cap=${{ inputs.cap }}"
+              out=$(sudo systemd-run --scope --quiet \
+                    -p MemoryMax=${{ inputs.cap }} -p MemorySwapMax=0 \
+                    --setenv=POLARS_SKIP_CPU_CHECK=1 \
+                    --setenv=GOLDENMATCH_AUTOCONFIG_MEMORY=0 \
+                    -- timeout ${{ inputs.per_run_timeout }} \
+                    "$PY" scripts/bench_match_fused_memcap.py --path "$p" --n ${{ inputs.n }} --workers "$w")
+              rc=$?
+              if [ $rc -eq 0 ] && [ -n "$out" ]; then
+                echo "$out"; echo "$out" >> memcap.jsonl
+              else
+                # non-zero = OOM-kill at the cap (or timeout). This is the ceiling signal.
+                echo "{\"path\":\"$p\",\"n\":${{ inputs.n }},\"workers\":$w,\"status\":\"OOM_OR_FAIL\",\"exit\":$rc}" | tee -a memcap.jsonl
+              fi
+              echo "::endgroup::"
+            done
+          done
+
+      - name: Summarize
+        working-directory: packages/python/goldenmatch
+        run: |
+          uv run python - <<'PY'
+          import json
+          rows = [json.loads(l) for l in open("memcap.jsonl") if l.strip()]
+          by = {}
+          for r in rows:
+              by.setdefault(r["path"], {})[r["workers"]] = r
+          print(f"\n=== memory-capped throughput (fixed RAM cap; W concurrent dedup jobs) ===")
+          for path in ("fused", "pipeline"):
+              d = by.get(path, {})
+              print(f"\n{path}:")
+              best = 0
+              best_w = None
+              for w in sorted(d):
+                  r = d[w]
+                  if r.get("status") == "ok":
+                      tp = r["rows_per_s"]
+                      peak = r.get("cgroup_peak_mb")
+                      print(f"  W={w:>3}  rows/s={tp:>12,}  peak={peak}MB  (total {r['total_rows']:,} rows)")
+                      if tp > best:
+                          best, best_w = tp, w
+                  else:
+                      print(f"  W={w:>3}  OOM/FAIL at the cap (ceiling)")
+              if best_w is not None:
+                  print(f"  -> peak sustained throughput: {best:,} rows/s at W={best_w}")
+              by[path]["_best"] = best
+          fb = by.get("fused", {}).get("_best", 0)
+          pb = by.get("pipeline", {}).get("_best", 0)
+          print("\n=== VERDICT ===")
+          if pb and fb:
+              print(f"peak throughput at the cap: fused {fb:,} rows/s vs pipeline {pb:,} rows/s = {fb/pb:.2f}x")
+              print("(>1 = fused converts its RSS headroom into throughput in the memory-bound regime)")
+          else:
+              print(f"fused_best={fb} pipeline_best={pb} (one path OOM'd at every W -- widen the sweep or cap)")
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        if: always()
+        with:
+          name: bench-match-fused-memcap-results
+          path: packages/python/goldenmatch/memcap.jsonl

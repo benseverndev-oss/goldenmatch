@@ -1,0 +1,42 @@
+/**
+ * backend.ts — opt-in WASM detect backend registry. Edge-safe: no node:* here.
+ * Mirrors goldenanalysis's wasm/backend.ts (module-singleton registry).
+ */
+import { createBackendRegistry } from "goldenmatch-wasm-runtime";
+import type { DetectionResult } from "goldencheck-types";
+
+/** A WASM-backed detect kernel. Dictionary resolution stays host; this scores a
+ *  resolved [name, hints[]] domain list. */
+export interface InfermapBackend {
+  detectDomain(
+    columns: string[],
+    domains: Array<[string, string[]]>,
+    minScore: number,
+  ): DetectionResult;
+  exactScore(a: string, b: string): number;
+  fuzzyNameScore(a: string, b: string): number;
+  initialismScore(a: string, b: string): number | null;
+  profileScore(
+    srcDtype: string,
+    tgtDtype: string,
+    srcNull: number,
+    tgtNull: number,
+    srcUniq: number,
+    tgtUniq: number,
+    srcValCount: number,
+    tgtValCount: number,
+    srcAvgLen: number,
+    tgtAvgLen: number,
+  ): number;
+  patternMatchTypes(samples: string[]): number[];
+}
+
+const _registry = createBackendRegistry<InfermapBackend>();
+
+export function setInfermapBackend(b: InfermapBackend | null): void {
+  _registry.set(b);
+}
+
+export function getInfermapBackend(): InfermapBackend | null {
+  return _registry.get();
+}

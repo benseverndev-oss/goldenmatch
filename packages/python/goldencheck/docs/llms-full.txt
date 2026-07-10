@@ -92,6 +92,19 @@ from goldencheck import (
 # Built-in domains: healthcare, finance, ecommerce
 ```
 
+## Denial Constraints (opt-in, not in default scan)
+
+```python
+from goldencheck import (
+    discover_denial_constraints,  # discover_denial_constraints(df, *, min_confidence=None, sample_size=None, max_constraints=None, arity_bound=2, require_order_comparison=True, seed=0) -> list[DenialConstraint]
+    DenialConstraint,             # DenialConstraint: predicates, g1, support, tuple_scope, exact; .render(), .columns()
+)
+# Mines denial constraints ¬(p1 ∧ … ∧ pm) — if-then / cross-tuple invariants like
+# ¬(status=shipped ∧ ship_date<order_date) — from one table, listing violating rows.
+# CLI: `goldencheck denial-constraints data.csv` or `goldencheck scan data.csv --denial`.
+# Findings surface as check="denial_constraint" (WARNING violated / INFO strict).
+```
+
 ## Agent (optional, requires goldencheck[agent])
 
 ```python
@@ -205,6 +218,7 @@ goldencheck data.csv --domain healthcare       # Domain-specific scan
 goldencheck scan data.csv --no-tui             # Scan without TUI
 goldencheck validate data.csv                  # Validate against goldencheck.yml
 goldencheck fix data.csv                       # Auto-fix safe issues
+goldencheck denial-constraints data.csv        # Mine denial constraints (opt-in)
 goldencheck diff old.csv new.csv               # Compare two files
 goldencheck learn data.csv -o config.yml       # Learn rules from data
 goldencheck watch data/                        # Poll directory for changes

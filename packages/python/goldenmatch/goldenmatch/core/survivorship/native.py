@@ -5,8 +5,7 @@ strategy-by-strategy, each gated by a parity test in test_native_parity.py.
 """
 from __future__ import annotations
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.golden import _is_internal, _stable_value_expr
 from goldenmatch.core.survivorship.conditions import select_conditional_strategy
 from goldenmatch.core.survivorship.validate import goldenflow_filter

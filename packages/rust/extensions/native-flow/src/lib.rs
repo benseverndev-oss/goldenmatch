@@ -15,13 +15,17 @@ mod address;
 mod autocorrect;
 mod categorical;
 mod chain;
+mod column;
 mod company;
+mod csvio;
 mod email;
 mod identifiers;
 mod names;
 mod numeric;
+mod numeric_columnar;
 mod phone;
 mod phonetic;
+mod split_columnar;
 mod text;
 mod url;
 mod util;
@@ -29,8 +33,23 @@ mod util;
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_class::<column::Column>()?;
     m.add_function(wrap_pyfunction!(chain::apply_chain_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::apply_chain_ops_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::apply_chain_str_list, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::chain_supports_nullable, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        numeric_columnar::columnar_numeric_ready,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(numeric_columnar::format_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(split_columnar::columnar_split_ready, m)?)?;
+    m.add_function(wrap_pyfunction!(csvio::transform_csv, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::apply_chain_f64_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::apply_chain_nullable_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(chain::fusable_kernel_names, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::fusable_f64_kernel_names, m)?)?;
+    m.add_function(wrap_pyfunction!(chain::fusable_nullable_kernel_names, m)?)?;
     m.add_function(wrap_pyfunction!(company::company_normalize_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(company::company_strip_legal_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(company::company_extract_legal_arrow, m)?)?;

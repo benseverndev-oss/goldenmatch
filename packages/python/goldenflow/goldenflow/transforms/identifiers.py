@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     aba_validate_native,
@@ -128,6 +127,8 @@ def _cc_mask_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_cc_validate_py,
+    scalar_dtype="bool",
 )
 def cc_validate(series: pl.Series) -> pl.Series:
     """Validate a payment-card number via the Luhn checksum."""
@@ -143,6 +144,7 @@ def cc_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_cc_format_py,
 )
 def cc_format(series: pl.Series) -> pl.Series:
     """Group a valid payment-card number (Amex 4-6-5, else 4-4-4-4...);
@@ -159,6 +161,7 @@ def cc_format(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_cc_mask_py,
 )
 def cc_mask(series: pl.Series) -> pl.Series:
     """Mask a payment-card number to stars + last 4 digits."""
@@ -230,6 +233,8 @@ def _iban_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_iban_validate_py,
+    scalar_dtype="bool",
 )
 def iban_validate(series: pl.Series) -> pl.Series:
     """Validate an IBAN via structural checks + the ISO 7064 mod-97 check."""
@@ -245,6 +250,7 @@ def iban_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_iban_format_py,
 )
 def iban_format(series: pl.Series) -> pl.Series:
     """Group a valid IBAN into 4-char blocks; ``null`` for invalid input."""
@@ -340,6 +346,8 @@ def _isbn_normalize_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_isbn_validate_py,
+    scalar_dtype="bool",
 )
 def isbn_validate(series: pl.Series) -> pl.Series:
     """Validate an ISBN-10 or ISBN-13 via its checksum."""
@@ -355,6 +363,7 @@ def isbn_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_isbn_normalize_py,
 )
 def isbn_normalize(series: pl.Series) -> pl.Series:
     """Canonicalize a valid ISBN-10/13 to its 13-digit form; ``null`` for
@@ -403,6 +412,8 @@ def _ean_validate_py(val: str | None) -> bool | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ean_validate_py,
+    scalar_dtype="bool",
 )
 def ean_validate(series: pl.Series) -> pl.Series:
     """Validate an EAN-8, UPC-A, or EAN-13 via its GTIN mod-10 checksum."""
@@ -462,6 +473,8 @@ def _swift_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_swift_validate_py,
+    scalar_dtype="bool",
 )
 def swift_validate(series: pl.Series) -> pl.Series:
     """Validate a SWIFT/BIC code via structural checks (length 8/11 +
@@ -478,6 +491,7 @@ def swift_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_swift_format_py,
 )
 def swift_format(series: pl.Series) -> pl.Series:
     """Normalize a valid SWIFT/BIC code to uppercase (spaces stripped);
@@ -637,6 +651,8 @@ def _vat_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_vat_validate_py,
+    scalar_dtype="bool",
 )
 def vat_validate(series: pl.Series) -> pl.Series:
     """Validate an EU VAT number: structural check (country prefix + length +
@@ -655,6 +671,7 @@ def vat_validate(series: pl.Series) -> pl.Series:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_vat_format_py,
 )
 def vat_format(series: pl.Series) -> pl.Series:
     """Normalize a valid EU VAT number to its compact uppercase form (prefix
@@ -680,6 +697,7 @@ def _ssn_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ssn_format_py,
 )
 def ssn_format(series: pl.Series) -> pl.Series:
     """Normalize SSN to XXX-XX-XXXX format. Native-first over goldenflow-core."""
@@ -704,6 +722,7 @@ def _ssn_mask_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ssn_mask_py,
 )
 def ssn_mask(series: pl.Series) -> pl.Series:
     """Mask SSN to ***-**-XXXX (last 4 visible). Native-first."""
@@ -728,6 +747,7 @@ def _ein_format_py(val: str | None) -> str | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_ein_format_py,
 )
 def ein_format(series: pl.Series) -> pl.Series:
     """Normalize EIN to XX-XXXXXXX format. Native-first."""
@@ -763,6 +783,8 @@ def _aba_validate_py(val: str | None) -> bool | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_aba_validate_py,
+    scalar_dtype="bool",
 )
 def aba_validate(series: pl.Series) -> pl.Series:
     """Validate a US ABA bank routing number: exactly 9 digits plus the
@@ -798,6 +820,8 @@ def _imei_validate_py(val: str | None) -> bool | None:
     auto_apply=False,
     priority=50,
     mode="series",
+    scalar=_imei_validate_py,
+    scalar_dtype="bool",
 )
 def imei_validate(series: pl.Series) -> pl.Series:
     """Validate an IMEI: exactly 15 digits plus the Luhn checksum."""
@@ -909,7 +933,9 @@ def _cc_brand_py(val: str | None) -> str | None:
 
 
 @register_transform(
-    name="isin_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+    name="isin_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series",
+    scalar=_isin_validate_py,
+    scalar_dtype="bool",
 )
 def isin_validate(series: pl.Series) -> pl.Series:
     """Validate an ISIN (ISO 6166). Native-first over goldenflow-core."""
@@ -920,7 +946,9 @@ def isin_validate(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="cusip_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+    name="cusip_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series",
+    scalar=_cusip_validate_py,
+    scalar_dtype="bool",
 )
 def cusip_validate(series: pl.Series) -> pl.Series:
     """Validate a CUSIP. Native-first over goldenflow-core."""
@@ -931,7 +959,9 @@ def cusip_validate(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="npi_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+    name="npi_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series",
+    scalar=_npi_validate_py,
+    scalar_dtype="bool",
 )
 def npi_validate(series: pl.Series) -> pl.Series:
     """Validate a US NPI. Native-first over goldenflow-core."""
@@ -942,7 +972,9 @@ def npi_validate(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="luhn_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series"
+    name="luhn_validate", input_types=["identifier", "string"], auto_apply=False, priority=50, mode="series",
+    scalar=_luhn_validate_py,
+    scalar_dtype="bool",
 )
 def luhn_validate(series: pl.Series) -> pl.Series:
     """Generic Luhn check-digit validation. Native-first over goldenflow-core."""
@@ -953,7 +985,7 @@ def luhn_validate(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="cc_brand", input_types=["identifier", "string"], auto_apply=False, priority=40, mode="series"
+    name="cc_brand", input_types=["identifier", "string"], auto_apply=False, priority=40, mode="series", scalar=_cc_brand_py
 )
 def cc_brand(series: pl.Series) -> pl.Series:
     """Detect the card brand (visa/mastercard/amex/...) or null. Native-first."""

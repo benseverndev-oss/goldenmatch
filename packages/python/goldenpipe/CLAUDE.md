@@ -116,6 +116,33 @@ load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
 ## A2A Port Convention
 - GoldenCheck: 8100, GoldenFlow: 8150, GoldenMatch: 8200, GoldenPipe: 8250
 
+## MCP / A2A orchestration surface (`mcp/server.py`, `a2a/server.py`)
+
+4 MCP tools (`list_stages`, `validate_pipeline`, `explain_pipeline`, `run_pipeline`);
+the A2A `handle_task` dispatches the 4 hyphenated skill ids to the SAME tool
+functions, so both surfaces stay in lockstep (and `parity/goldenpipe.yaml` gates the
+name set — a tool/skill add/rename/remove must update it in the same PR).
+- **`run_pipeline` is the real orchestration tool** — an LLM can drive a pipeline
+  end-to-end through it, not just fire-and-forget:
+  - **Input** (precedence): `records` (list of row dicts) > `csv_text` (raw CSV) >
+    `source` (server file path). So data can come **inline over the wire**, not only
+    from a file on the server.
+  - **Config:** `stages` (inline chain, e.g. `["goldencheck.scan","goldenmatch.dedupe"]`;
+    an explicit `[]` = load-only) OR `config_path` (YAML) OR omit both for zero-config
+    auto. `identity_opts` forwards the Identity Graph knobs.
+  - **Returns the FULL result** (`_result_to_dict`): per-stage `status`/`reasoning`/
+    `timing`, `skipped`, `errors`, AND an **`output`** block with the deduped result —
+    `golden_records` count + a `golden_preview` (first `preview_rows`, max 100),
+    `unique_records`/`duplicate_records`, `cluster_count`, `match_stats`. This is why
+    the tool exists: the caller can SEE what the pipeline produced and branch on it.
+  - **How the output is sourced:** the golden/unique frames come from
+    `result.artifacts["golden"|"unique"|"clusters"|"match_stats"]` (populated by
+    `adapters/match.py::DedupeStage`) — the DedupeStage casts every column to string,
+    so `to_dicts()` is JSON-safe. No core-API change was needed (contrast the gotcha
+    below: `PipeResult` still doesn't expose `ctx.df`, but the dedupe ARTIFACTS carry
+    the golden output, which is what the tool returns). Tests: `tests/test_mcp.py`
+    (serialization + inline input + real dedupe), `tests/test_a2a.py` (dispatch parity).
+
 ## Remote MCP Server
 
 Hosted on Railway, registered on Smithery:

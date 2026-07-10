@@ -85,3 +85,27 @@ def auto_config_json(input: str) -> str:
 
 def skip_if_falsy_json(input: str) -> str:
     return _native.skip_if_falsy_json(input)
+
+
+def plan_pipeline_json(input: str) -> str:
+    return _native.plan_pipeline_json(input)
+
+
+def apply_scale_hints_json(input: str) -> str:
+    return _native.apply_scale_hints_json(input)
+
+
+def band_of_json(input: str) -> str:
+    return _native.band_of_json(input)
+
+
+def build_repair_plan_json(input: str) -> str:
+    return _native.build_repair_plan_json(input)
+
+
+def lower_json(input: str) -> str:
+    return _native.lower_json(input)
+
+
+def provenance_json(input: str) -> str:
+    return _native.provenance_json(input)

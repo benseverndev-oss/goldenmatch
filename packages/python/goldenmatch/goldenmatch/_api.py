@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 # Imported at module level so tests can patch goldenmatch._api.auto_configure_df.
 # The lazy import guard inside each function is kept for cycle safety — this
@@ -177,6 +177,17 @@ class DedupeResult:
     # when heal=True (else None).
     suggestions: list = field(default_factory=list)
     heal_trail: list | None = None
+    # Fused-routing run-outcome markers (spec 2026-07-09). Originate in the
+    # pipeline result dict; surfaced here (not in serialize_telemetry, which
+    # never receives the result dict) so a caller/telemetry can observe the
+    # fused path. `golden_fused_used`: the fused golden kernel genuinely built
+    # this run's golden records (vs a silent decline to classic).
+    # `match_fused_capacity_mode`: the run short-circuited to the fused match
+    # kernel under est-RSS pressure and therefore SHED scored_pairs + cluster
+    # confidence/bottleneck/lineage (clusters + golden stay byte-identical to
+    # classic). The marker makes that capacity-survival tradeoff never silent.
+    golden_fused_used: bool = False
+    match_fused_capacity_mode: bool = False
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -394,6 +405,8 @@ def dedupe(
             result.get("postflight_report"), _mem
         ),
         memory_stats=_mem,
+        golden_fused_used=bool(result.get("golden_fused_used", False)),
+        match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
 
 
@@ -507,6 +520,19 @@ def dedupe_df(
                         allow_red_config=allow_red_config,
                         planning_effort=planning_effort,
                         throughput=throughput,
+                        # dedupe_df has no lineage/review/explain/anomaly kwargs and
+                        # passes no output dir to run_dedupe_df, so it can NEVER
+                        # request one of THOSE caller-intent artifacts. BUT
+                        # certify/suggest/heal DO consume the run's pairs/findings
+                        # that bare-CC match_fused (capacity mode) empties -- suggest
+                        # reads DedupeResult.scored_pairs directly; heal is a
+                        # full-artifact repair loop; certify annotates the returned
+                        # result with a recall certificate the user expects
+                        # transparent. So deny the hint when any is requested. The
+                        # config-driven divergence gate still hard-blocks in the
+                        # controller regardless; file-based dedupe()/CLI/MCP paths
+                        # don't thread this at all -> default-deny.
+                        fused_match_allowed=not (certify or suggest or heal),
                     )
                 _used_controller = True
 
@@ -650,6 +676,8 @@ def dedupe_df(
             else None
         ),
         throughput_posture=result.get("throughput_posture"),
+        golden_fused_used=bool(result.get("golden_fused_used", False)),
+        match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
 
     # Config-suggestion (healer) surface. ADVISORY — wrapped so a healer failure
@@ -761,6 +789,11 @@ def match_df(
                         confidence_required=confidence_required,
                         allow_red_config=allow_red_config,
                         planning_effort=planning_effort,
+                        # No lineage/review/explain/anomaly kwargs on match_df ->
+                        # caller-intent artifacts can't be requested -> fused match
+                        # allowed (config-driven gate still hard-blocks). Non-DF
+                        # entry points default-deny (never route in v1).
+                        fused_match_allowed=True,
                     )
                 _used_controller = True
 

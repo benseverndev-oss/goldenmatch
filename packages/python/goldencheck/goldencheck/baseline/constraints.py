@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import logging
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import FunctionalDependency, TemporalOrder
 
 __all__ = ["mine_constraints"]

@@ -150,8 +150,9 @@ A **column-context pipeline** carries semantic metadata across stages: GoldenChe
 ## Deferred (not in this v1 port)
 
 - **`identity_resolve` stage** — GoldenMatch-JS Identity Graph wiring through the pipeline. The edge-safe `InMemoryIdentityStore` exists in `goldenmatch`, but the pipeline-driven `resolveClusters` population is not yet exposed.
-- **`infer_schema` stage** — InferMap-based schema inference is not ported.
 - **Textual TUI** — the Python Textual TUI is not ported. (The MCP, A2A, and REST servers **are** ported — see above.)
+
+> **`infer_schema` is now ported** — InferMap-based domain detection + schema mapping runs as an opt-in TS stage (`infer_schema`, registered but not in the default stage order, matching Python). It produces the shared `inferred_schema` artifact and, because it calls the InferMap scorers, inherits their Rust-kernel WASM path when `enableInfermapWasm()` is active.
 
 ### Sibling version-skew artifacts
 

@@ -17,6 +17,7 @@ keywords: ["goldencheck", "cli", "commands", "domains", "config"]
 | `goldencheck watch <dir>` | Poll a directory and re-scan on change (`--interval 30`). |
 | `goldencheck fix <file>` | Auto-fix issues (`--mode safe\|moderate\|aggressive`, `--dry-run`). |
 | `goldencheck baseline <file>` | Deep-profile and save a statistical baseline to YAML. |
+| `goldencheck denial-constraints <file>` | Mine denial constraints — if-then / cross-tuple invariants — and list the rows that violate them (`--min-confidence`, `--sample-size`, `--max-constraints`). |
 | `goldencheck learn <file>` | Generate LLM validation rules. |
 | `goldencheck history` | Show scan history and trends. |
 | `goldencheck serve` | Start the REST API server (`--port 8000`). |
@@ -38,6 +39,7 @@ The TypeScript CLI mirrors the core commands under `goldencheck-js` (`scan`, `va
 | `--llm-provider` | `anthropic` (default), `openai` | Choose the LLM provider. |
 | `--mode` | `safe`, `moderate`, `aggressive` | Fix mode (for `fix`). |
 | `--smart` | — | Auto-triage: pin high-confidence, dismiss low. |
+| `--denial` | — | Opt-in: also mine denial constraints during `scan` (slower). `--deep` on top widens the DC engine's row-level pass to the full population. |
 | `--webhook` | URL | POST findings to Slack, PagerDuty, or a custom endpoint. |
 | `--baseline` | path | Baseline YAML for drift detection. |
 

@@ -16,8 +16,8 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-import polars as pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.cluster import build_clusters
 from goldenmatch.utils.transforms import bloom_clk_batch
 

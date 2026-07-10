@@ -1,7 +1,7 @@
 """Smart sampling for large datasets."""
 from __future__ import annotations
 
-import polars as pl
+from goldencheck._polars_lazy import pl
 
 
 def maybe_sample(df: pl.DataFrame, max_rows: int = 100_000) -> pl.DataFrame:

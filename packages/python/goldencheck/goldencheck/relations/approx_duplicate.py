@@ -18,11 +18,17 @@ already the fast path -- the gate is "beat Polars", and here it wouldn't.
 True edit-distance fuzzy matching (typos that survive normalization, e.g.
 ``Jon``/``John``) needs blocking + pairwise scoring and is a heavier follow-up;
 this profiler is the deterministic normalize-and-group tier.
+
+**Polars-accelerator-only (declined from the seam eviction, R4).** The core is a ``pl.concat_str`` +
+``str.*`` expression chain inside ``df.select`` followed by ``group_by(...).len()`` + two real
+``.join()``s -- relational-engine ops the ``Frame``/``Column`` seam does not expose. It is NOT routed
+through the seam; it stays import-safe (lazy ``pl``) but requires Polars at runtime. See
+``docs/superpowers/specs/2026-07-09-goldencheck-relation-ports-r4-decline.md``.
 """
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck._polars_lazy import pl
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _SEP = "\x1f"  # unit separator -- won't appear in normal data
@@ -53,7 +59,9 @@ def _exact_signature(df: pl.DataFrame) -> pl.Series:
 class ApproxDuplicateProfiler:
     """Dataset-level relation profiler: exact + near-duplicate rows."""
 
-    def profile(self, df: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+        frame = to_frame(frame)
+        df = frame.native
         n_rows = df.height
         if n_rows < 2 or df.width == 0:
             return []

@@ -4,10 +4,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig
 from goldenflow.connectors.file import read_file, write_file
+from goldenflow.engine.frame import Frame, to_frame
 from goldenflow.engine.manifest import Manifest, TransformRecord
 from goldenflow.engine.profiler_bridge import profile_dataframe
 from goldenflow.engine.selector import select_transforms
@@ -67,44 +67,58 @@ class TransformEngine:
         df: pl.DataFrame,
         source: str = "<dataframe>",
     ) -> TransformResult:
-        """Transform a DataFrame."""
+        """Transform a DataFrame. The public API takes/returns ``pl.DataFrame``; the
+        engine operates on a backend-agnostic :class:`Frame` internally (the seam for
+        making Polars optional — see the Polars-eviction design doc)."""
+        # Phase 1: the columnar (Polars-free) engine. When opted in via
+        # GOLDENFLOW_ENGINE=columnar AND the config is fully owned-string, the
+        # transform EXECUTION runs on the native arrow-free chain with no Polars
+        # (only the boundary column extract/assemble touches it — Phase 2 removes
+        # that). Byte-identical to the Polars engine; anything it can't handle yet
+        # declines here and falls through to the Polars path.
+        from goldenflow.engine import columnar as _columnar
+        if _columnar.columnar_engine_selected() and _columnar.config_is_columnar_ready(self.config):
+            out, manifest = _columnar.transform(df, self.config, source=source)
+            return TransformResult(df=out, manifest=manifest)
+
         manifest = Manifest(source=source)
+        frame: Frame = to_frame(df)
 
         if self.config.transforms:
-            df = self._apply_config_transforms(df, manifest)
+            frame = self._apply_config_transforms(frame, manifest)
         else:
-            df = self._apply_auto_transforms(df, manifest, source=source)
+            frame = self._apply_auto_transforms(frame, manifest, source=source)
 
-        # Apply splits
+        # Apply splits (dataframe-mode, multi-column output)
         for split in self.config.splits:
-            if split.source not in df.columns:
+            if split.source not in frame.columns:
                 continue
             info = get_transform(split.method)
             if info and info.mode == "dataframe":
-                df = info.func(df, split.source)
+                frame = frame.replace_native(info.func(frame.native, split.source))
 
         # Apply renames
         for old, new in self.config.renames.items():
-            if old in df.columns:
-                df = df.rename({old: new})
+            if old in frame.columns:
+                frame = frame.rename({old: new})
 
         # Apply drops
-        drop_cols = [c for c in self.config.drop if c in df.columns]
+        drop_cols = [c for c in self.config.drop if c in frame.columns]
         if drop_cols:
-            df = df.drop(drop_cols)
+            frame = frame.drop(drop_cols)
 
         # Apply filters
         for filt in self.config.filters:
-            if filt.column in df.columns:
-                df = self._apply_filter(df, filt.column, filt.condition)
+            if filt.column in frame.columns:
+                frame = self._apply_filter(frame, filt.column, filt.condition)
 
         # Apply dedup
         if self.config.dedup:
-            dedup_cols = [c for c in self.config.dedup.columns if c in df.columns]
+            dedup_cols = [c for c in self.config.dedup.columns if c in frame.columns]
             if dedup_cols:
-                before = df.shape[0]
-                df = df.unique(subset=dedup_cols, keep=self.config.dedup.keep)
-                after = df.shape[0]
+                before = frame.height
+                frame = frame.unique(subset=dedup_cols, keep=self.config.dedup.keep)
+                after = frame.height
                 if before != after:
                     manifest.add_record(TransformRecord(
                         column=",".join(dedup_cols),
@@ -113,11 +127,11 @@ class TransformEngine:
                         total_rows=before,
                     ))
 
-        return TransformResult(df=df, manifest=manifest)
+        return TransformResult(df=frame.native, manifest=manifest)
 
     def _apply_config_transforms(
-        self, df: pl.DataFrame, manifest: Manifest
-    ) -> pl.DataFrame:
+        self, frame: Frame, manifest: Manifest
+    ) -> Frame:
         """Apply transforms specified in config."""
         from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -137,7 +151,7 @@ class TransformEngine:
             task = progress.add_task("Transforming...", total=len(self.config.transforms))
             for spec in self.config.transforms:
                 progress.update(task, description=f"Transforming {spec.column}...")
-                if spec.column not in df.columns:
+                if spec.column not in frame.columns:
                     progress.advance(task)
                     continue
                 ops: list[tuple[TransformInfo, list[str]]] = []
@@ -151,20 +165,20 @@ class TransformEngine:
                         )
                         continue
                     ops.append((info, params))
-                df = self._apply_column_ops(df, spec.column, ops, manifest)
+                frame = self._apply_column_ops(frame, spec.column, ops, manifest)
                 progress.advance(task)
-        return df
+        return frame
 
     def _apply_auto_transforms(
-        self, df: pl.DataFrame, manifest: Manifest, source: str = ""
-    ) -> pl.DataFrame:
+        self, frame: Frame, manifest: Manifest, source: str = ""
+    ) -> Frame:
         """Auto-detect and apply transforms based on column profiling."""
         import os
 
         from rich.progress import Progress, SpinnerColumn, TextColumn
 
         file_path = source if source and source != "<dataframe>" else ""
-        profile = profile_dataframe(df, file_path=file_path)
+        profile = profile_dataframe(frame.native, file_path=file_path)
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -175,7 +189,7 @@ class TransformEngine:
                 progress.update(task, description=f"Auto-transforming {col_profile.name}...")
                 selected = select_transforms(col_profile)
                 ops = [(info, []) for info in selected]
-                df = self._apply_column_ops(df, col_profile.name, ops, manifest)
+                frame = self._apply_column_ops(frame, col_profile.name, ops, manifest)
                 progress.advance(task)
 
         if os.environ.get("GOLDENFLOW_LLM") == "1":
@@ -185,55 +199,74 @@ class TransformEngine:
                 if llm_info:
                     for col_profile in profile.columns:
                         if col_profile.inferred_type == "string" and col_profile.unique_pct <= 0.1:
-                            df = self._apply_single_transform(df, col_profile.name, llm_info, [], manifest)
+                            frame = self._apply_single_transform(frame, col_profile.name, llm_info, [], manifest)
             except ImportError:
                 pass
 
-        return df
+        return frame
 
     def _apply_column_ops(
         self,
-        df: pl.DataFrame,
+        frame: Frame,
         column: str,
         ops: list[tuple[TransformInfo, list[str]]],
         manifest: Manifest,
-    ) -> pl.DataFrame:
-        """Apply an ordered list of ``(info, params)`` to ``column``. When
-        ``GOLDENFLOW_FUSED_APPLY`` is on (and native is available and the column is
-        string), maximal runs of owned string->string no-arg kernels are fused into
-        ONE native Arrow round-trip (Pillar-1 of the Rust cutover); everything else
-        takes the per-transform path unchanged. Default-off, so behavior is
-        byte-identical to the per-transform path until opted in."""
-        from goldenflow.transforms._chain import FUSABLE_KERNELS, fused_enabled
+    ) -> Frame:
+        """Apply an ordered list of ``(info, params)`` to ``column``. When fusion is
+        on (default; native available), maximal runs of owned kernels of a single
+        dtype are fused into ONE native Arrow round-trip (Pillar-1 of the Rust
+        cutover): string->string kernels on a Utf8 column, or f64->f64 numeric
+        kernels (round/clamp/abs_value/fill_zero) on a Float64 column. Everything
+        else takes the per-transform path unchanged. The fusable set is
+        dtype-aware AND symbol-aware, and is recomputed as the run advances so a
+        parser that changes the column dtype mid-chain (e.g. currency_strip:
+        str->f64) lets the following numeric ops fuse too."""
+        from goldenflow.transforms._chain import (
+            fusable_f64_names,
+            fusable_names,
+            fused_enabled,
+            is_fusable,
+        )
 
-        fuse = fused_enabled() and df.schema.get(column) in (pl.String, pl.Utf8)
+        fused_on = fused_enabled()
+
+        def _available_for(dtype) -> frozenset[str]:
+            if not fused_on:
+                return frozenset()
+            if dtype in (pl.String, pl.Utf8):
+                return fusable_names()
+            if dtype == pl.Float64:
+                return fusable_f64_names()
+            return frozenset()
+
         n = len(ops)
         i = 0
         while i < n:
+            available = _available_for(frame.dtype(column))
             info, params = ops[i]
-            if fuse and not params and info.name in FUSABLE_KERNELS:
+            if is_fusable(info.name, params, available):
                 # Extend the maximal fusable run starting at i.
                 j = i
-                while j < n and not ops[j][1] and ops[j][0].name in FUSABLE_KERNELS:
+                while j < n and is_fusable(ops[j][0].name, ops[j][1], available):
                     j += 1
                 if j - i >= 2:
-                    applied = self._apply_fused_run(df, column, ops[i:j], manifest)
+                    applied = self._apply_fused_run(frame, column, ops[i:j], manifest)
                     if applied is not None:
-                        df = applied
+                        frame = applied
                         i = j
                         continue
                     # native declined (e.g. no pyarrow) -> fall through per-op.
-            df = self._apply_single_transform(df, column, info, params, manifest)
+            frame = self._apply_single_transform(frame, column, info, params, manifest)
             i += 1
-        return df
+        return frame
 
     def _apply_fused_run(
         self,
-        df: pl.DataFrame,
+        frame: Frame,
         column: str,
         run: list[tuple[TransformInfo, list[str]]],
         manifest: Manifest,
-    ) -> pl.DataFrame | None:
+    ) -> Frame | None:
         """Apply a run of fusable ops via one native chain pass. Emits one audit
         record per op with the EXACT affected-row count from the kernel and
         per-step before/after samples from a cheap head(3) replay through the SAME
@@ -243,19 +276,26 @@ class TransformEngine:
         declined (caller falls back to the per-op path)."""
         from goldenflow.transforms._chain import apply_chain_native
 
-        names = [info.name for info, _ in run]
-        res = apply_chain_native(df[column], names)
+        ops_spec = [(info.name, [str(p) for p in params]) for info, params in run]
+        res = apply_chain_native(frame.column(column), ops_spec)
         if res is None:
             return None
         new_series, changed = res
-        total_rows = df.shape[0]
-        sample = df.head(3).select(pl.col(column))
-        for (info, _params), n_changed in zip(run, changed):
+        total_rows = frame.height
+        # Per-step samples come from a cheap 3-row replay through the transform
+        # funcs (Polars dispatch — the `.native` escape hatch).
+        sample = frame.native.head(3).select(pl.col(column))
+        for (info, params), n_changed in zip(run, changed):
             before = sample[column].head(3).cast(pl.Utf8).to_list()
+            # Match the per-transform param handling EXACTLY: series-mode casts
+            # params (round n=int, clamp bounds=float), expr-mode passes them raw
+            # (pad_left's pad char "0" must stay a str, not be int-cast). Mixing
+            # these up breaks the sample replay for parameterized expr ops.
             if info.mode == "series":
-                sample = sample.with_columns(info.func(sample[column]).alias(column))
-            else:  # expr
-                sample = sample.with_columns(info.func(column).alias(column))
+                typed = self._cast_params(params) if params else []
+                sample = sample.with_columns(info.func(sample[column], *typed).alias(column))
+            else:  # expr — raw string params, exactly like _apply_single_transform_body
+                sample = sample.with_columns(info.func(column, *params).alias(column))
             after = sample[column].head(3).cast(pl.Utf8).to_list()
             manifest.add_record(TransformRecord(
                 column=column,
@@ -265,16 +305,16 @@ class TransformEngine:
                 sample_before=before,
                 sample_after=after,
             ))
-        return df.with_columns(new_series.alias(column))
+        return frame.with_column(column, new_series)
 
     def _apply_single_transform(
         self,
-        df: pl.DataFrame,
+        frame: Frame,
         column: str,
         info: TransformInfo,
         params: list[str],
         manifest: Manifest,
-    ) -> pl.DataFrame:
+    ) -> Frame:
         """Apply a single transform to a column, recording results in manifest."""
         # Optional cross-package bench instrumentation: when goldenmatch is
         # installed AND a bench_capture is currently active, wrap each
@@ -294,32 +334,35 @@ class TransformEngine:
 
         with _stage_cm:
             return self._apply_single_transform_body(
-                df, column, info, params, manifest,
+                frame, column, info, params, manifest,
             )
 
     def _apply_single_transform_body(
         self,
-        df: pl.DataFrame,
+        frame: Frame,
         column: str,
         info: TransformInfo,
         params: list[str],
         manifest: Manifest,
-    ) -> pl.DataFrame:
+    ) -> Frame:
         """Inner body of _apply_single_transform, factored out so the bench
         stage wrapper can clamp around the actual work without adding
-        indentation to the existing logic."""
-        before_sample = df[column].head(3).cast(pl.Utf8).to_list()
-        total_rows = df.shape[0]
+        indentation to the existing logic. The transform DISPATCH (expr / series /
+        dataframe) is the remaining Polars coupling, reached via ``frame.native``."""
+        before_sample = frame.column(column).head(3).cast(pl.Utf8).to_list()
+        total_rows = frame.height
 
         try:
             if info.mode == "expr":
                 expr = info.func(column, *params) if params else info.func(column)
-                new_df = df.with_columns(expr.alias(column))
+                new_frame: Frame = frame.replace_native(
+                    frame.native.with_columns(expr.alias(column))
+                )
             elif info.mode == "dataframe":
                 # DataFrame-mode transforms (split_name, split_address, etc.)
-                new_df = info.func(df, column)
+                new_frame = frame.replace_native(info.func(frame.native, column))
             else:
-                series = df[column]
+                series = frame.column(column)
                 typed_params = self._cast_params(params)
                 new_series = info.func(series, *typed_params) if typed_params else info.func(series)
                 if isinstance(new_series, tuple):
@@ -331,13 +374,15 @@ class TransformEngine:
                                 column=column, transform=info.name, row=row_idx,
                                 error="Flagged for review",
                             )
-                new_df = df.with_columns(new_series.alias(column))
+                new_frame = frame.with_column(column, new_series)
 
-            after_sample = new_df[column].head(3).cast(pl.Utf8).to_list()
+            after_sample = new_frame.column(column).head(3).cast(pl.Utf8).to_list()
 
             # Count affected rows
             try:
-                changed = (df[column].cast(pl.Utf8) != new_df[column].cast(pl.Utf8)).sum()
+                changed = (
+                    frame.column(column).cast(pl.Utf8) != new_frame.column(column).cast(pl.Utf8)
+                ).sum()
             except Exception:
                 changed = total_rows
 
@@ -349,13 +394,13 @@ class TransformEngine:
                 sample_before=before_sample,
                 sample_after=after_sample,
             ))
-            return new_df
+            return new_frame
 
         except Exception as e:
             manifest.add_error(
                 column=column, transform=info.name, row=-1, error=str(e)
             )
-            return df  # preserve original on failure
+            return frame  # preserve original on failure
 
     @staticmethod
     def _cast_params(params: list[str]) -> list:
@@ -372,13 +417,11 @@ class TransformEngine:
         return result
 
     @staticmethod
-    def _apply_filter(df: pl.DataFrame, column: str, condition: str) -> pl.DataFrame:
+    def _apply_filter(frame: Frame, column: str, condition: str) -> Frame:
         if condition == "not_null":
-            return df.filter(pl.col(column).is_not_null())
+            return frame.filter_not_null(column)
         if condition.startswith("after:"):
-            date_str = condition.split(":", 1)[1]
-            return df.filter(pl.col(column) > date_str)
+            return frame.filter_cmp(column, ">", condition.split(":", 1)[1])
         if condition.startswith("before:"):
-            date_str = condition.split(":", 1)[1]
-            return df.filter(pl.col(column) < date_str)
-        return df
+            return frame.filter_cmp(column, "<", condition.split(":", 1)[1])
+        return frame

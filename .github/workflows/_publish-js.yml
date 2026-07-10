@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      build_wasm:
+        description: "Build the package's opt-in WASM artifact (packages/typescript/<pkg>/scripts/build_wasm.sh) before typecheck/build so it ships in dist/"
+        required: false
+        type: boolean
+        default: false
       ref:
         description: "Tag or commit to build (default: the triggering ref)"
         required: false
@@ -69,6 +74,18 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: pnpm turbo run build --filter=${{ inputs.package }}^...
 
+      # Build the opt-in WASM artifact into src/core/wasm/artifacts/ so tsup's
+      # copy step ships it in dist/. Without this the artifact is gitignored /
+      # CI-only and enableWasm() falls back to pure-TS for published users.
+      # ubuntu-latest ships rustup/cargo; the script pins wasm-bindgen from the
+      # crate's Cargo.lock. Runs before Typecheck/Test so those also see it.
+      - name: Build WASM artifact
+        if: inputs.build_wasm
+        working-directory: ${{ github.workspace }}
+        run: |
+          rustup target add wasm32-unknown-unknown
+          bash "packages/typescript/${{ inputs.package }}/scripts/build_wasm.sh"
+
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
@@ -91,7 +108,23 @@ jobs:
 
       - name: Pack (dry-run validation)
         if: inputs.dry_run == 'true'
-        run: pnpm pack
+        run: |
+          pnpm pack
+          # When build_wasm is on, PROVE the artifact actually made it into the
+          # packed tarball (the whole point — a gitignored artifact silently
+          # dropped means enableWasm() is inert for published users).
+          if [ "${{ inputs.build_wasm }}" = "true" ]; then
+            TGZ="$(ls -1 *.tgz | head -1)"
+            echo "Tarball: $TGZ"
+            if tar tzf "$TGZ" | grep -qE '\.wasm$'; then
+              echo "OK: .wasm present in the tarball:"
+              tar tzf "$TGZ" | grep -E '\.wasm(\.js)?$' || true
+            else
+              echo "ERROR: build_wasm=true but NO .wasm in the packed tarball" >&2
+              tar tzf "$TGZ" | grep -i wasm || echo "(no wasm-related files at all)"
+              exit 1
+            fi
+          fi
 
       - name: Publish to npm
         if: inputs.dry_run != 'true'

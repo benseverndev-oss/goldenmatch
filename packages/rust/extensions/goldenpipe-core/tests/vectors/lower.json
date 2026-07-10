@@ -1,0 +1,22 @@
+[
+  {
+    "input": {"origin_stage": "load", "kind_hint": "source", "concrete": {}, "next_id": 0, "resolved": false},
+    "expected": {"nodes": [{"kind": "Source", "id": 0, "origin_stage": "load", "resolved": false, "produces": ["df"]}], "next_id": 1}
+  },
+  {
+    "input": {"origin_stage": "goldenflow.transform", "kind_hint": "map", "concrete": {"transforms": [{"column": "email", "ops": ["email_normalize", "email_canonical"]}]}, "next_id": 5, "resolved": true},
+    "expected": {"nodes": [{"kind": "Map", "id": 5, "origin_stage": "goldenflow.transform", "resolved": true, "column": "email", "op": "email_normalize"}, {"kind": "Map", "id": 6, "origin_stage": "goldenflow.transform", "resolved": true, "column": "email", "op": "email_canonical"}], "next_id": 7}
+  },
+  {
+    "input": {"origin_stage": "goldencheck.scan", "kind_hint": "scan", "concrete": {"columns": [{"column": "name", "ops": ["nullability", "pattern_consistency"]}]}, "next_id": 0, "resolved": true},
+    "expected": {"nodes": [{"kind": "Scan", "id": 0, "origin_stage": "goldencheck.scan", "resolved": true, "column": "name", "ops": ["nullability", "pattern_consistency"]}], "next_id": 1}
+  },
+  {
+    "input": {"origin_stage": "goldenmatch.dedupe", "kind_hint": "match", "concrete": {"keys": ["email"], "scorer": {"name": "jaro"}, "method": {"name": "connected_components"}}, "next_id": 0, "resolved": true},
+    "expected": {"nodes": [{"kind": "Partition", "id": 0, "origin_stage": "goldenmatch.dedupe", "resolved": true, "keys": ["email"]}, {"kind": "PairScore", "id": 1, "origin_stage": "goldenmatch.dedupe", "resolved": true, "scorer": {"name": "jaro"}}, {"kind": "Connected", "id": 2, "origin_stage": "goldenmatch.dedupe", "resolved": true, "method": {"name": "connected_components"}}], "next_id": 3}
+  },
+  {
+    "input": {"origin_stage": "infer_schema", "kind_hint": "barrier", "concrete": {"foo": 1}, "next_id": 3, "resolved": false},
+    "expected": {"nodes": [{"kind": "Barrier", "id": 3, "origin_stage": "infer_schema", "resolved": false, "raw_config": {"foo": 1}}], "next_id": 4}
+  }
+]

@@ -1,7 +1,7 @@
 ---
 title: "Native acceleration & deep profiling"
 description: "GoldenCheck's optional Rust/Arrow runtime and the deep-profiling checks it powers: composite keys, functional dependencies, fuzzy values, approximate-FD violations, plus --deep, referential integrity, and freshness."
-keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "functional dependency", "composite key", "fuzzy", "referential integrity", "freshness"]
+keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "functional dependency", "composite key", "fuzzy", "referential integrity", "freshness", "denial constraint"]
 ---
 
 GoldenCheck is pure-Python and Polars-native, so the everyday sampled scan is
@@ -33,6 +33,7 @@ duplicate-row detection, referential integrity, freshness — stay pure-Polars.
 | Functional-dependency discovery | 12.8× | `zip → city`-style redundant / lookup columns |
 | Approximate-FD violations | 15.5× | the few rows that break a near-perfect dependency (likely data-entry errors) |
 | Fuzzy value clustering | 76× | inconsistent categorical encodings (`California` / `Californa` / `CALIFORNIA`) |
+| Denial-constraint evidence | ~1.5–1.8× vs a Polars cross-join (~60–96× vs pure Python) | violating rows for if-then / cross-tuple invariants (`dc.rs`) |
 
 ## New deep-profiling checks
 
@@ -45,6 +46,12 @@ duplicate-row detection, referential integrity, freshness — stay pure-Polars.
   normalization.
 - **Freshness / staleness** — future-dated timestamps (always on) and
   name-gated staleness (`updated_at` that hasn't advanced).
+- **Denial constraints** (opt-in) — if-then / cross-tuple invariants like
+  `¬(status=shipped ∧ ship_date<order_date)`, with the violating rows. The
+  `dc.rs` evidence kernel is gated on `GOLDENCHECK_NATIVE`, set/byte-parity
+  tested against the pure-Python fallback, and cleared the same measure-first
+  gate (~1.5–1.8× over a Polars cross-join, ~60–96× over pure Python at m=1500)
+  before defaulting on.
 
 ## `--deep` — profile the full population
 

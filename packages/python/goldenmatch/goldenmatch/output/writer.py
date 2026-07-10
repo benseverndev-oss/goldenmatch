@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 
 def write_output(

@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import polars as pl
 import yaml
+
+from goldencheck._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 

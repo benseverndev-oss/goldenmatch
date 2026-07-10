@@ -44,3 +44,27 @@ fn vec_auto_config() {
 fn vec_skip_if() {
     run("skip_if", skip_if_falsy_json);
 }
+#[test]
+fn vec_plan_pipeline() {
+    run("plan_pipeline", plan_pipeline_json);
+}
+#[test]
+fn vec_apply_scale_hints() {
+    run("apply_scale_hints", apply_scale_hints_json);
+}
+#[test]
+fn vec_band_of() {
+    run("band_of", band_of_json);
+}
+#[test]
+fn vec_build_repair_plan() {
+    run("build_repair_plan", build_repair_plan_json);
+}
+#[test]
+fn vec_lower() {
+    run("lower", lower_json);
+}
+#[test]
+fn vec_provenance() {
+    run("provenance", provenance_json);
+}

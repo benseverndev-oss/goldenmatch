@@ -84,12 +84,34 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 
 ## Why GoldenMatch?
 
+- **Runs on unstructured input** — extract matchable records from PDFs and images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. `pip install goldenmatch[documents]`; see [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
 - **Zero-config that beats hand-tuned** — the introspective controller auto-detects columns, picks scorers, iterates on complexity signals, and converges on a defensible config. No training data, no rules to write. (v1.8.0)
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
 - **68 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
+
+### Run on unstructured input (document ingest)
+
+GoldenMatch doesn't require structured data. Extract records from PDFs/images against a
+schema you control, then dedupe them (`pip install "goldenmatch[documents]"`, set
+`OPENAI_API_KEY_PERSONAL`):
+
+```python
+from goldenmatch.documents import ingest_documents
+from goldenmatch.documents.suggest import suggest_schema_from_file
+from goldenmatch import dedupe_df
+
+schema = suggest_schema_from_file("samples/card.png")   # propose, then review
+df = ingest_documents(["cards/*.png", "forms/intake.pdf"], schema)
+result = dedupe_df(df, exclude_columns=["_source_file", "_source_page", "_extract_confidence"])
+```
+
+Also available as `goldenmatch ingest-docs {suggest-schema, run}` (CLI), the
+`documents_suggest_schema` / `documents_ingest` MCP tools and A2A skills,
+`POST /api/v1/documents/{suggest-schema, ingest}` (REST), and the `/documents` Web UI page.
+Full guide: [Document ingest](https://docs.bensevern.dev/goldenmatch/documents).
 
 ### Auto-config & scale safeguards
 
@@ -179,7 +201,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 
 ### Integration
 - **REST API + MCP Server** — 68 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
-- **A2A Agent** — 38 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
+- **A2A Agent** — 40 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
 - **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
 - **Enterprise connectors** — Snowflake, Databricks, BigQuery, HubSpot, Salesforce
@@ -1249,7 +1271,16 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-69 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+75 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+
+### Local files with the remote server
+
+The hosted server resolves `file_path` on the *server's* filesystem, so a remote client's local paths (`C:\...`, `/home/...`) aren't visible to it. Two ways to feed it a local file without hosting it anywhere:
+
+- **Inline `file_content`** — every file-taking tool (`analyze_data`, `auto_configure`, `agent_deduplicate`, `scan_quality`, `schema_match`, ...) accepts `file_content` (base64 by default, or raw with `encoding: "text"`) as an alternative to `file_path`. The server materializes it to a temp file and proceeds.
+- **`upload_dataset`** — upload the bytes once (`upload_dataset(file_content, filename)`) and get back a server path to reuse across any number of tool calls.
+
+Uploads are ephemeral scratch, capped at 64 MB (`GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`) and reaped after 24 h (`GOLDENMATCH_MCP_UPLOAD_TTL`). For larger datasets, pass a public `http(s)://` URL as `file_path` instead — the server reads those directly.
 
 ## Architecture
 

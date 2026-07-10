@@ -344,5 +344,11 @@ def _execution_plan(history: Any) -> dict[str, Any] | None:
         # getattr defaults keep pre-routing plans serializable.
         "scoring_distributed": getattr(plan, "scoring_distributed", False),
         "golden_distributed": getattr(plan, "golden_distributed", False),
+        # Fused-match routing marker (spec 2026-07-09). Plan-reachable, so it
+        # rides the telemetry blob alongside rule_name (…+fused_match_post_step).
+        # The run-outcome flags golden_fused_used / match_fused_capacity_mode
+        # originate in the pipeline RESULT dict, which serialize_telemetry never
+        # receives -- those surface on DedupeResult instead.
+        "use_fused_match": getattr(plan, "use_fused_match", False),
         "routing": [asdict(d) for d in getattr(plan, "routing_decisions", ())],
     }

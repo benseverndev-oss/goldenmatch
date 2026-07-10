@@ -11,6 +11,10 @@ const fake: PipeWasmBackend = {
   evaluateBuiltinJson: () => "null",
   autoConfigJson: () => "{}",
   skipIfFalsyJson: () => "true",
+  planPipelineJson: () => "{}",
+  applyScaleHintsJson: () => "{}",
+  bandOfJson: () => '"red"',
+  buildRepairPlanJson: () => '{"repairs":[]}',
 };
 
 describe("PipeWasmBackend registry", () => {

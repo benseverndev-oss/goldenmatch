@@ -22,10 +22,10 @@ old pure-Python DP), so the two paths agree.
 """
 from __future__ import annotations
 
-import polars as pl
 from rapidfuzz.distance import Levenshtein as _RFLevenshtein
 
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -106,14 +106,15 @@ def _python_clusters(values: list[str], min_similarity: float) -> list[list[int]
 
 
 class FuzzyValuesProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
-        if df.height < _MIN_ROWS:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        if frame.height < _MIN_ROWS:
             return []
-        col = df[column]
-        if col.dtype != pl.Utf8:
+        col = frame.column(column)
+        if col.dtype != "str":
             return []
         distinct = col.drop_nulls().unique()
-        n_distinct = distinct.len()
+        n_distinct = len(distinct)
         if n_distinct < _MIN_DISTINCT or n_distinct > _MAX_DISTINCT:
             return []
 
@@ -146,7 +147,7 @@ class FuzzyValuesProfiler(BaseProfiler):
                     f"like variants of one another: {', '.join(repr(v) for v in shown)}"
                     f"{' …' if len(variants) > len(shown) else ''}."
                 ),
-                affected_rows=int(col.is_in(variants).sum()),
+                affected_rows=col.member_count(variants),
                 sample_values=[str(v) for v in shown],
                 suggestion=(
                     "Standardize these to a single canonical value (casing/spelling), "

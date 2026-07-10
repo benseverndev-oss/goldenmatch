@@ -4,7 +4,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import polars as pl
+from goldenflow._polars_lazy import pl
 
 
 def read_s3(uri: str, **kwargs) -> pl.DataFrame:

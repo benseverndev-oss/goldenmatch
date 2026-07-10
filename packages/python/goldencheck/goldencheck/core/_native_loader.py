@@ -94,21 +94,28 @@ def native_enabled(component: str) -> bool:
     return _native is not None and _has_symbol(component)
 
 
-# Component name -> the native symbol that backs it. A component is only usable
-# when its symbol is actually present on the loaded module.
-_COMPONENT_SYMBOLS: dict[str, str] = {
-    "benford": "benford_leading_digits",
-    "composite_keys": "composite_key_search",
-    "functional_dependencies": "discover_functional_dependencies",
-    "fuzzy_values": "near_duplicate_value_clusters",
-    "approximate_fd": "discover_approximate_fds",
+# Component name -> the native symbol(s) that back it. A component is only usable
+# when ALL its symbols are present on the loaded module. Most components need one
+# symbol; ``approximate_fd`` needs two -- its call site (``relations/approx_fd.py``)
+# calls BOTH ``discover_approximate_fds`` and ``fd_violation_rows``, so a stale
+# wheel carrying only the former would pass a single-symbol probe, run the first
+# call, then ``AttributeError`` on the second and fall fully back to Python -- a
+# silent redundant native pass (the goldenmatch #688 footgun). Requiring every
+# symbol makes such a wheel cleanly decline up front.
+_COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "benford": ("benford_leading_digits",),
+    "composite_keys": ("composite_key_search",),
+    "functional_dependencies": ("discover_functional_dependencies",),
+    "fuzzy_values": ("near_duplicate_value_clusters",),
+    "approximate_fd": ("discover_approximate_fds", "fd_violation_rows"),
+    "denial_constraint": ("denial_constraint_evidence",),
 }
 
 
 def _has_symbol(component: str) -> bool:
     if _native is None:
         return False
-    symbol = _COMPONENT_SYMBOLS.get(component)
-    if symbol is None:
+    symbols = _COMPONENT_SYMBOLS.get(component)
+    if not symbols:
         return False
-    return hasattr(_native, symbol)
+    return all(hasattr(_native, s) for s in symbols)

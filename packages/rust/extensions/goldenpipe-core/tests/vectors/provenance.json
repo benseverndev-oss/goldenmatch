@@ -1,0 +1,39 @@
+[
+  {
+    "input": {"nodes": [
+      {"kind": "Scan", "id": 0, "origin_stage": "goldencheck.scan", "resolved": true, "column": "email", "ops": ["pattern_consistency"]},
+      {"kind": "Map", "id": 1, "origin_stage": "goldenflow.transform", "resolved": true, "column": "email", "op": "email_normalize"},
+      {"kind": "Map", "id": 2, "origin_stage": "goldenflow.transform", "resolved": true, "column": "email", "op": "email_canonical"}
+    ], "edges": []},
+    "expected": {"fields": [
+      {"column": "email", "origin": "source", "checks": ["pattern_consistency"], "transforms": ["email_normalize", "email_canonical"], "blocking_key": false, "scorer_input": false, "node_ids": [0, 1, 2]}
+    ], "unmapped": []}
+  },
+  {
+    "input": {"nodes": [
+      {"kind": "Map", "id": 0, "origin_stage": "goldenflow.transform", "resolved": true, "column": "last_name", "op": "name_proper"},
+      {"kind": "Partition", "id": 1, "origin_stage": "goldenmatch.dedupe", "resolved": true, "keys": ["last_name"]},
+      {"kind": "PairScore", "id": 2, "origin_stage": "goldenmatch.dedupe", "resolved": true, "scorer": {"columns": ["email", "last_name"]}}
+    ], "edges": []},
+    "expected": {"fields": [
+      {"column": "last_name", "origin": "source", "checks": [], "transforms": ["name_proper"], "blocking_key": true, "scorer_input": true, "node_ids": [0]},
+      {"column": "email", "origin": "source", "checks": [], "transforms": [], "blocking_key": false, "scorer_input": true, "node_ids": []}
+    ], "unmapped": []}
+  },
+  {
+    "input": {"nodes": [
+      {"kind": "Source", "id": 0, "origin_stage": "load", "resolved": false, "produces": ["df"]},
+      {"kind": "Connected", "id": 1, "origin_stage": "goldenmatch.dedupe", "resolved": true, "method": {"name": "cc"}},
+      {"kind": "Barrier", "id": 2, "origin_stage": "infer_schema", "resolved": false, "raw_config": {}}
+    ], "edges": []},
+    "expected": {"fields": [], "unmapped": [
+      {"node_id": 0, "kind": "Source", "note": "data loaded"},
+      {"node_id": 1, "kind": "Connected", "note": "clustering"},
+      {"node_id": 2, "kind": "Barrier", "note": "opaque stage"}
+    ]}
+  },
+  {
+    "input": {"nodes": [], "edges": []},
+    "expected": {"fields": [], "unmapped": []}
+  }
+]

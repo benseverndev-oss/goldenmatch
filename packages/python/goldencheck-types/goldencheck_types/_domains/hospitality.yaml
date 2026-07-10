@@ -1,0 +1,22 @@
+description: "Hospitality / travel — reservations, bookings, stays, rooms, guests"
+
+types:
+  reservation:
+    name_hints: ["reservation_id", "reservation_number", "booking_id", "booking_reference"]
+    value_signals:
+      min_unique_pct: 0.90
+    suppress: ["cardinality", "pattern_consistency", "drift_detection"]
+
+  stay:
+    name_hints: ["check_in", "check_out"]
+    suppress: ["pattern_consistency"]
+
+  room:
+    name_hints: ["room_type", "room_number", "guest_name"]
+    value_signals:
+      max_unique: 100
+    suppress: ["uniqueness"]
+
+  billing:
+    name_hints: ["nights", "occupancy", "rate_per_night", "confirmation_number"]
+    suppress: ["pattern_consistency"]

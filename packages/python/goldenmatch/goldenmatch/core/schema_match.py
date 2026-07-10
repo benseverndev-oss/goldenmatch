@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import logging
 
-import polars as pl
 from rapidfuzz.fuzz import partial_ratio, ratio
+
+from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 

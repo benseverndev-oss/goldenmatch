@@ -14,8 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, LSHKeyConfig
 from goldenmatch.core import sketch
 

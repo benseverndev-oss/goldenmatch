@@ -10,8 +10,7 @@ import re
 import statistics
 from pathlib import Path
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core._paths import safe_path
 
 # ---------------------------------------------------------------------------

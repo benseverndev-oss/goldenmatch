@@ -33,6 +33,10 @@ const fakeBackend = {
   evaluateBuiltinJson: pure.evaluateBuiltinJsonPure,
   autoConfigJson: pure.autoConfigJsonPure,
   skipIfFalsyJson: pure.skipIfFalsyJsonPure,
+  planPipelineJson: pure.planPipelineJsonPure,
+  applyScaleHintsJson: pure.applyScaleHintsJsonPure,
+  bandOfJson: pure.bandOfJsonPure,
+  buildRepairPlanJson: pure.buildRepairPlanJsonPure,
 };
 
 /** A trivial stage with the given wiring; `run` is never invoked in these tests. */

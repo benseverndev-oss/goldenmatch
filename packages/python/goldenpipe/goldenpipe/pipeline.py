@@ -32,6 +32,10 @@ class Pipeline:
         # When the caller supplied an explicit PipelineConfig (YAML), the
         # YAML is authoritative and identity_opts is ignored.
         self._identity_opts = identity_opts
+        # Set by _plan_config on each run; exposes the last plan-first
+        # auto-config decision (rule_name, confidence, evidence) for
+        # introspection. None until the brain has planned at least once.
+        self._last_plan = None
 
     def run(
         self,
@@ -41,6 +45,13 @@ class Pipeline:
         duckdb_con=None,
         duckdb_table: str | None = None,
     ) -> PipeResult:
+        """Run the pipeline against a source file, DataFrame, or DuckDB table.
+
+        Raises:
+            PipeNotConfidentError: when auto-config (no explicit config) is not
+                confident on a large input (>= 100k rows). Pass an explicit
+                config to bypass the brain.
+        """
         ctx = PipeContext()
 
         if duckdb_con is not None and duckdb_table is not None:
@@ -99,7 +110,7 @@ class Pipeline:
                 errors=["No source file or DataFrame provided"],
             )
 
-        config = self._config or self._auto_config()
+        config = self._config or self._plan_config(ctx)
 
         try:
             plan = Resolver.resolve(config, self._registry)
@@ -114,6 +125,37 @@ class Pipeline:
         runner = Runner(registry=self._registry)
         stages = runner.run(plan, ctx)
         return Reporter.build(ctx, stages)
+
+    def _plan_config(self, ctx: PipeContext) -> PipelineConfig:
+        """Plan-first auto-config: profile the loaded context, run the rule
+        table, refuse if not confident at scale, and materialize the chosen
+        plan into a PipelineConfig.
+
+        This is the "brain" (parity with GoldenMatch's controller): the shape
+        of the pipeline is DECIDED from the data + InferMap-inferred schema, and
+        a red-confidence plan on a large input raises ``PipeNotConfidentError``
+        rather than running an expensive, likely-wrong pipeline. The portable
+        decision core (``autoconfig_planner``) is kept free of Polars/Pydantic
+        for the later ``goldenpipe-core`` Rust port; this method is the host
+        glue bracket.
+        """
+        from goldenpipe.autoconfig_glue import (
+            build_planner_input,
+            enforce_confidence,
+            plan_to_config,
+        )
+        from goldenpipe.autoconfig_planner import apply_scale_hints, plan_pipeline
+
+        inp = build_planner_input(ctx)
+        plan = plan_pipeline(inp)
+        plan = apply_scale_hints(plan, inp.runtime)
+        self._last_plan = plan
+        enforce_confidence(plan, inp.runtime)  # may raise PipeNotConfidentError
+        return plan_to_config(
+            plan,
+            self._registry.list_all(),
+            self._identity_opts,
+        )
 
     def _auto_config(self) -> PipelineConfig:
         available = self._registry.list_all()

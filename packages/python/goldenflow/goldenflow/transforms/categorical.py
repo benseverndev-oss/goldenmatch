@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 from goldenflow.transforms._native import (
     boolean_normalize_native,
@@ -74,7 +73,8 @@ def _category_normalize_key_series(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="boolean_normalize", input_types=["boolean", "string"], auto_apply=False, priority=50, mode="series"
+    name="boolean_normalize", input_types=["boolean", "string"], auto_apply=False, priority=50,
+    mode="series", scalar=_boolean_normalize_py, scalar_dtype="bool",
 )
 def boolean_normalize(series: pl.Series) -> pl.Series:
     """Parse loose boolean-ish strings (yes/no/y/n/1/0/true/false/t/f).
@@ -90,7 +90,8 @@ def boolean_normalize(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="gender_standardize", input_types=["string"], auto_apply=False, priority=50, mode="series"
+    name="gender_standardize", input_types=["string"], auto_apply=False, priority=50, mode="series",
+    scalar=_gender_standardize_py,
 )
 def gender_standardize(series: pl.Series) -> pl.Series:
     """Standardize gender strings to ``M``/``F``; anything else passes
@@ -107,7 +108,8 @@ def gender_standardize(series: pl.Series) -> pl.Series:
 
 
 @register_transform(
-    name="null_standardize", input_types=["string"], auto_apply=True, priority=80, mode="series"
+    name="null_standardize", input_types=["string"], auto_apply=True, priority=80, mode="series",
+    scalar=_null_standardize_py,
 )
 def null_standardize(series: pl.Series) -> pl.Series:
     """Map null-sentinel strings (n/a, null, none, na, nil, nan, -, empty) to
@@ -123,12 +125,60 @@ def null_standardize(series: pl.Series) -> pl.Series:
     return series.map_elements(_null_standardize_py, return_dtype=pl.Utf8)
 
 
+def _category_passthrough(val: str | None) -> str | None:
+    """Columnar scalar for ``category_standardize``: identity. The variant->canonical
+    mapping is a dict passed only via the direct API (``category_standardize(series,
+    mapping=...)``) — there is NO config/ops-string channel for a dict, so through the
+    config-driven columnar path this transform is a no-op, exactly as the Polars engine
+    is (``mapping=None`` -> ``return series``). Wiring identity makes the config case
+    columnar-ready and byte-identical; the mapping-carrying direct call still runs the
+    Polars body."""
+    return val
+
+
+def _category_from_file_factory(params: list[str]):
+    """Columnar scalar factory for ``category_from_file:<path>``. Loads the
+    variant->canonical mapping Polars-free (stdlib ``csv`` / ``yaml``) ONCE, then returns
+    a per-element closure byte-identical to the Polars engine: ``mapping.get(trim+lower
+    key, original)``. No path (or an unknown suffix) -> identity, matching the engine's
+    ``if not lookup_path: return series``."""
+    import csv
+    from pathlib import Path
+
+    lookup_path = params[0] if params else None
+    if not lookup_path:
+        return _category_passthrough
+    p = Path(lookup_path)
+    mapping: dict[str, str] = {}
+    if p.suffix == ".csv":
+        with open(p, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                mapping[row["variant"].lower()] = row["canonical"]
+    elif p.suffix in (".yaml", ".yml"):
+        import yaml
+        with open(p) as f:
+            raw = yaml.safe_load(f) or {}
+        for canonical, variants in raw.items():
+            for v in variants:
+                mapping[v.lower()] = canonical
+    else:
+        return _category_passthrough
+
+    def _apply(val: str | None) -> str | None:
+        if val is None:
+            return None
+        return mapping.get(_category_normalize_key_py(val), val)
+
+    return _apply
+
+
 @register_transform(
     name="category_standardize",
     input_types=["string"],
     auto_apply=False,
     priority=45,
     mode="series",
+    scalar=_category_passthrough,
 )
 def category_standardize(
     series: pl.Series, mapping: dict[str, list[str]] | None = None
@@ -162,6 +212,7 @@ def category_standardize(
     auto_apply=False,
     priority=45,
     mode="series",
+    scalar_factory=_category_from_file_factory,
 )
 def category_from_file(
     series: pl.Series, lookup_path: str | None = None

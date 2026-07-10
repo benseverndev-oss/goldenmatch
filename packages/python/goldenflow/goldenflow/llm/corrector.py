@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
 
 

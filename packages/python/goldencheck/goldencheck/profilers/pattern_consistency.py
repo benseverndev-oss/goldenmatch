@@ -1,8 +1,7 @@
 """Pattern consistency profiler — detects inconsistent string patterns within a column."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
 
@@ -32,7 +31,7 @@ def _generalize(value: str) -> str:
     return "".join(result)
 
 
-def _generalize_series(s: pl.Series) -> pl.Series:
+def _generalize_series(s):
     """Vectorised equivalent of ``_generalize`` for a Polars string Series.
 
     Pattern: letters (Unicode ``\\p{L}``) → ``L``, then decimal digits
@@ -59,11 +58,12 @@ def _generalize_series(s: pl.Series) -> pl.Series:
 
 
 class PatternConsistencyProfiler(BaseProfiler):
-    def profile(self, df: pl.DataFrame, column: str, *, context: dict | None = None) -> list[Finding]:
+    def profile(self, frame, column: str, *, context: dict | None = None) -> list[Finding]:
+        frame = to_frame(frame)
+        col = frame.column(column)
         findings: list[Finding] = []
-        col = df[column]
 
-        if col.dtype not in (pl.Utf8, pl.String):
+        if col.dtype != "str":
             return findings
 
         non_null = col.drop_nulls()
@@ -71,29 +71,22 @@ class PatternConsistencyProfiler(BaseProfiler):
         if total == 0:
             return findings
 
-        # Build pattern counts via vectorised regex (Polars-native) instead
-        # of `map_elements(_generalize)`. ~10× faster on a 100K column; the
-        # Python UDF was the #3 self-time hotspot in the scale audit's
-        # cProfile of run_dedupe + auto_configure.
-        patterns = _generalize_series(non_null)
-        pattern_counts = (
-            patterns.value_counts()
-            .sort("count", descending=True)
-        )
+        # Generalise each value to its digit/letter skeleton, then tally the skeletons.
+        patterns = non_null.str_replace_all(r"\p{L}", "L").str_replace_all(r"\d", "D")
+        pattern_counts = patterns.value_counts_desc()
 
         n_patterns = len(pattern_counts)
         if n_patterns <= 1:
             # All values share the same pattern — no inconsistency
             return findings
 
-        dominant_count = pattern_counts["count"][0]
-        dominant_pattern = pattern_counts[column][0]
+        dominant_pattern, dominant_count = pattern_counts[0]
 
         # Collect all minority patterns (rarest first — already sorted ascending by reversing)
         minority_candidates = []
         for i in range(1, n_patterns):
-            minority_pattern = pattern_counts[column][i]
-            minority_count = int(pattern_counts["count"][i])
+            minority_pattern, minority_count = pattern_counts[i]
+            minority_count = int(minority_count)
             minority_pct = minority_count / total
 
             if minority_pct < MINORITY_THRESHOLD:
@@ -119,8 +112,7 @@ class PatternConsistencyProfiler(BaseProfiler):
                 severity = Severity.INFO
                 confidence = 0.5
             # Find sample values that match this minority pattern
-            mask = patterns == minority_pattern
-            sample_vals = non_null.filter(mask).head(5).to_list()
+            sample_vals = non_null.filter_by(patterns.eq(minority_pattern)).to_list()[:5]
 
             # Detect structural pattern shift (e.g., letter-first vs digit-first = mixed standards)
             dom_starts_alpha = dominant_pattern and dominant_pattern[0] == "L"

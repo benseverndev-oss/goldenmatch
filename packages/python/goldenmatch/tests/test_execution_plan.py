@@ -63,3 +63,38 @@ def test_execution_plan_apply_to_config_round_trips():
     plan = ExecutionPlan(backend="chunked", chunk_size=250_000)
     plan.apply_to(cfg)
     assert cfg.backend == "chunked"
+
+
+def _minimal_config():
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+    mk = MatchkeyConfig(
+        name="m",
+        type="weighted",
+        threshold=0.5,
+        fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+    )
+    block = BlockingConfig(keys=[BlockingKeyConfig(fields=["name"])], max_block_size=1000)
+    return GoldenMatchConfig(matchkeys=[mk], blocking=block)
+
+
+def test_apply_to_sets_use_fused_match():
+    """ExecutionPlan(use_fused_match=True).apply_to(config) sets the private
+    flag the pipeline reads; the default plan leaves it False/unset
+    (byte-identical to today)."""
+    cfg = _minimal_config()
+    ExecutionPlan(use_fused_match=True).apply_to(cfg)
+    assert getattr(cfg, "_use_fused_match", False) is True
+
+    cfg2 = _minimal_config()
+    ExecutionPlan().apply_to(cfg2)  # default plan
+    assert getattr(cfg2, "_use_fused_match", False) is False
+
+
+def test_use_fused_match_defaults_false():
+    assert ExecutionPlan().use_fused_match is False

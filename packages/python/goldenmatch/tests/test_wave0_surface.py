@@ -147,6 +147,30 @@ class TestMcpFailClosed:
         monkeypatch.setenv("GOLDENMATCH_MCP_TOKEN", "secret")
         assert resolve_http_auth_token("0.0.0.0") == "secret"
 
+    def test_allow_public_flag_permits_public_without_token(self, monkeypatch):
+        from goldenmatch.mcp.server import resolve_http_auth_token
+
+        monkeypatch.delenv("GOLDENMATCH_MCP_TOKEN", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_MCP_ALLOW_PUBLIC", "1")
+        # Opt-in escape hatch: an intentionally-open public server.
+        assert resolve_http_auth_token("0.0.0.0") is None
+
+    def test_allow_public_flag_does_not_override_a_set_token(self, monkeypatch):
+        from goldenmatch.mcp.server import resolve_http_auth_token
+
+        monkeypatch.setenv("GOLDENMATCH_MCP_TOKEN", "secret")
+        monkeypatch.setenv("GOLDENMATCH_MCP_ALLOW_PUBLIC", "1")
+        # The flag only relaxes the no-token case; a set token still applies.
+        assert resolve_http_auth_token("0.0.0.0") == "secret"
+
+    def test_allow_public_disabled_value_still_raises(self, monkeypatch):
+        from goldenmatch.mcp.server import resolve_http_auth_token
+
+        monkeypatch.delenv("GOLDENMATCH_MCP_TOKEN", raising=False)
+        monkeypatch.setenv("GOLDENMATCH_MCP_ALLOW_PUBLIC", "0")
+        with pytest.raises(RuntimeError, match="unauthenticated"):
+            resolve_http_auth_token("0.0.0.0")
+
 
 class TestA2aFailClosed:
     """0.5 -- same posture for the A2A agent server."""

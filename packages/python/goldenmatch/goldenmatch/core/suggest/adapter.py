@@ -41,9 +41,9 @@ import logging
 import os
 from typing import Any
 
-import polars as pl
 import pyarrow as pa
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
 
 logger = logging.getLogger(__name__)

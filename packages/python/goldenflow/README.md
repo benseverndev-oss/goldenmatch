@@ -547,6 +547,39 @@ goldenflow learn data.csv -o config.yaml
 
 ## Python API
 
+### Polars-free `transform()` (the default path)
+
+`goldenflow.transform()` runs on the native/Arrow substrate with **Polars never
+imported** — `import goldenflow` loads no Polars, and every one of the 113 transforms
+runs Polars-free. It accepts a `dict[str, list]` or a file path (`.csv` / `.parquet` /
+`.xlsx`) and returns a `ColumnarResult` (`.columns` + `.manifest`):
+
+```python
+import goldenflow
+from goldenflow import GoldenFlowConfig, TransformSpec
+
+cfg = GoldenFlowConfig(transforms=[TransformSpec(column="phone", ops=["phone_e164"])])
+
+result = goldenflow.transform({"phone": ["212-555-0100"], "id": [1]}, config=cfg)
+result = goldenflow.transform("customers.parquet", config=cfg)   # pyarrow, no Polars
+result = goldenflow.transform("customers.csv", config=None)      # zero-config auto-detect
+result.columns      # dict[str, list] — the cleaned data
+result.to_polars()  # opt-in bridge to a pl.DataFrame (imports Polars on use)
+
+# From a database — any PEP-249 (DBAPI) connection, no connectorx/polars:
+import sqlite3
+from goldenflow.connectors.database import read_database_columns
+cols = read_database_columns(sqlite3.connect("app.db"), "SELECT * FROM customers")
+result = goldenflow.transform(cols, config=cfg)
+```
+
+`transform_df(pl.DataFrame)` remains the Polars-backend adapter (it needs a
+`pl.DataFrame`, which needs Polars). Install the optional backends with
+`pip install goldenflow[polars]` (bulk-vectorized backend + `pl.read_*` I/O) or
+`goldenflow[parquet]` (pyarrow, for Polars-free Parquet read).
+
+### `transform_df` / `transform_file`
+
 ```python
 import goldenflow
 

@@ -4,8 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
-import polars as pl
-
+from goldenflow._polars_lazy import pl
 from goldenflow.config.schema import GoldenFlowConfig
 from goldenflow.engine.transformer import TransformEngine, TransformResult
 

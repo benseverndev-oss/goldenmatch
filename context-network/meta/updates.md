@@ -2,6 +2,56 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-08 -- GoldenCheck: denial-constraint discovery, Stage 1 (ADR 0035)
+- New opt-in discovered-rule family: mines denial constraints `¬(p1 ∧ … ∧ pm)` — if-then /
+  cross-tuple invariants like `¬(status=shipped ∧ ship_date<order_date)` — from a single
+  table and surfaces the violating rows. NOT in the default scan. Public API
+  `discover_denial_constraints(df, ...)` + exported `DenialConstraint`; new
+  `goldencheck denial-constraints` CLI + `--denial` flag on `scan` (`--deep` widens Pass-1
+  to the full population). Findings surface as `check="denial_constraint"` (WARNING violated
+  / INFO strict).
+- LOAD-BEARING: sample-then-validate; two evidence passes (row-level exact O(n) + pairwise
+  sampled over S²); order-preserving RANK encoding (deliberately NOT `intern_column`, whose
+  hash-order breaks `<`/`≤` predicates); null operand ⇒ predicate false; FastDC minimal-cover;
+  native pyo3-free `goldencheck-core::dc.rs` evidence kernel gated on `GOLDENCHECK_NATIVE`,
+  set/byte-parity with pure Python, measure-first (~1.5–1.8× over a Polars cross-join,
+  ~60–96× over pure Python at m=1500 → native default-on). Stage-1 gates: `arity_bound=2`,
+  `require_order_comparison=True` (pure all-equality DCs suppressed), self-column cross dropped.
+- Stage 1 of a 5-stage program; deferred: cross-table DCs, numeric-threshold literals,
+  config/baseline pinning + DC drift, DuckDB/Postgres/WASM/MCP surfaces.
+
+## 2026-07-08 -- GoldenFlow: Polars eviction FUNCTIONALLY COMPLETE (Phase 4, extends ADR 0034)
+- The "Great Polars Eviction" (ADR 0034) is done on the transform + I/O surface. `import
+  goldenflow` imports no Polars; the public `transform(data, config)` runs the native/Arrow
+  substrate by DEFAULT (no `GOLDENFLOW_ENGINE=columnar` opt-in), and ALL 113 transforms are
+  columnar (9/9 gaps closed) via a `scalar=`/`scalar_dtype`/`scalar_factory` registry
+  mechanism + 3 new columnar op-shapes (multi-input `merge_name`, flag-only
+  `initial_expand`, whole-column `category_auto_correct`) + a synthetic-`AsFloat`
+  numeric-INPUT path. `transform()` reads `.csv`/`.parquet`/`.xlsx` + any DBAPI connection
+  Polars-free; zero-config (`config=None`) is Polars-free too.
+- LOAD-BEARING DECISIONS (design doc `docs/design/2026-07-07-phase4-polars-optional-scoping.md`
+  §5a): (1) `transform()` is the Polars-free primary, `transform_df(pl.DataFrame)` the
+  optional Polars-backend adapter (tautological — needs Polars to hold a pl.DataFrame);
+  (2) CSV zero-config OWNS its inference (profiles columns as text, `"01234"` stays a zip)
+  — an intentional `pl.read_csv` divergence, dates-style. New extras `[polars]`/`[parquet]`;
+  `goldenflow-native` republished 0.26.0 (adds `format_f64` + AsFloat). Weight win measured
+  ~185 MB installed / ~35 MB wheel.
+- REMAINING: only the 2.0 major that drops `polars` from base deps -> `[polars]` (fully
+  de-risked: `[polars]` extra + `goldenflow_nopolars` CI lane staged, polars-absent
+  validated).
+
+## 2026-07-06 -- GoldenFlow: fused columnar apply, Pillar-1 execution fusion, default-on (ADR 0034)
+- First real step of the "Great Polars Eviction": fuse a column's run of owned no-arg
+  total string→string kernels (25: text/email/name) into ONE native Arrow pass instead
+  of crossing the Python/Polars/Arrow boundary once per transform. Parity by construction
+  (byte-identical output + audit trail); generic over offset width because Polars exports
+  LargeUtf8. Shipped `goldenflow-native 0.12.0` (fused kernel on PyPI) + `goldenflow 1.14.0`;
+  `GOLDENFLOW_FUSED_APPLY` default-ON (opt-out `=0`).
+- HONEST VERDICT (measured, `bench-goldenflow-fused`): wall 1.07–1.27× (config-dependent,
+  *diluted* by compute-heavy kernels) but **peak RSS −22% at scale** — the durable win.
+  Positioned as a memory play, not a speed play. See ADR 0034 for the two "measure beats
+  intuition" lessons + the two CI footguns (YAML startup failure; stale rust-cache).
+
 ## 2026-07-06 -- GoldenAnalysis: cutover waves + the cut-vs-fixture rule + Wave 1b deferral (ADR 0033)
 - Extended the `analysis-core` cutover across GoldenAnalysis and wrote down **when a
   cutover is the right tool vs a cross-surface parity fixture**: cut only for MUSCLE with

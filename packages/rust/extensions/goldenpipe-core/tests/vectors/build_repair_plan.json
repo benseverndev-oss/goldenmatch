@@ -1,0 +1,55 @@
+[
+  {
+    "input": {
+      "findings": [{"column": "iban", "check": "pattern_consistency", "message": "3 values fail check-digit", "severity": "warning"}],
+      "columns": [{"name": "iban", "coarse_type": "string", "samples": ["GB82WEST12345698765432", "DE89370400440532013000"]}]
+    },
+    "expected": {"repairs": [{"column": "iban", "check": "pattern_consistency", "type_tag": "iban", "suggested_transforms": ["iban_validate"], "reason": "3 values fail check-digit"}]}
+  },
+  {
+    "input": {
+      "findings": [{"column": "signup_date", "check": "future_dated", "message": "12 rows dated after today", "severity": "warning"}],
+      "columns": [{"name": "signup_date", "coarse_type": "date", "samples": ["2020-01-01", "2021-05-05"]}]
+    },
+    "expected": {"repairs": [{"column": "signup_date", "check": "future_dated", "type_tag": "date", "suggested_transforms": ["date_validate"], "reason": "12 rows dated after today"}]}
+  },
+  {
+    "input": {
+      "findings": [{"column": "notes", "check": "encoding_detection", "message": "mojibake detected", "severity": "info"}],
+      "columns": [{"name": "notes", "coarse_type": "string", "samples": ["cafÃ©", "naÃ¯ve"]}]
+    },
+    "expected": {"repairs": [{"column": "notes", "check": "encoding_detection", "type_tag": "*", "suggested_transforms": ["fix_mojibake", "normalize_unicode"], "reason": "mojibake detected"}]}
+  },
+  {
+    "input": {
+      "findings": [{"column": "routing_number", "check": "pattern_consistency", "message": "bad routing", "severity": "warning"}],
+      "columns": [{"name": "routing_number", "coarse_type": "string", "samples": ["021000021", "011401533"]}]
+    },
+    "expected": {"repairs": [{"column": "routing_number", "check": "pattern_consistency", "type_tag": "aba_routing", "suggested_transforms": ["aba_validate"], "reason": "bad routing"}]}
+  },
+  {
+    "input": {
+      "findings": [{"column": "card", "check": "format_detection", "message": "spaced digits", "severity": "info"}],
+      "columns": [{"name": "card", "coarse_type": "string", "samples": ["4539578763621486", "4485275742308327"]}]
+    },
+    "expected": {"repairs": [{"column": "card", "check": "format_detection", "type_tag": "credit_card", "suggested_transforms": ["luhn_validate"], "reason": "spaced digits"}]}
+  },
+  {
+    "input": {
+      "findings": [{"column": "id", "check": "unique", "message": "dupes", "severity": "warning"}],
+      "columns": [{"name": "id", "coarse_type": "string", "samples": ["a", "b"]}]
+    },
+    "expected": {"repairs": []}
+  },
+  {
+    "input": {
+      "findings": [{"column": "ghost", "check": "future_dated", "message": "x", "severity": "info"}],
+      "columns": []
+    },
+    "expected": {"repairs": []}
+  },
+  {
+    "input": {"findings": [], "columns": []},
+    "expected": {"repairs": []}
+  }
+]
