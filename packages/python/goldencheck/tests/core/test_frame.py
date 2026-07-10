@@ -261,3 +261,54 @@ def test_column_str_to_date():
     ).to_list()
     # invalid parses -> null under strict=False
     assert got.to_list()[1] is None
+
+
+def test_pycolumn_mechanical_ops():
+    from goldencheck.core.frame import PyColumn
+    c = PyColumn([3, 1, None, 1, 2])
+    assert len(c) == 5
+    assert c.null_count() == 1
+    assert c.n_unique() == 4                       # {3,1,None,2}
+    assert c.drop_nulls().to_list() == [3, 1, 1, 2]
+    assert c.drop_nulls().unique().sort().to_list() == [1, 2, 3]
+    assert c.to_list() == [3, 1, None, 1, 2]
+
+
+def test_pyframe_surface_and_from_columns():
+    from goldencheck.core.frame import PyFrame, to_frame
+    f = PyFrame.from_columns({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+    assert f.columns == ["a", "b"]
+    assert f.height == 3
+    assert f.native == {"a": [1, 2, 3], "b": ["x", "y", "z"]}
+    assert f.column("a").to_list() == [1, 2, 3]
+    # to_frame is idempotent on a PyFrame and does NOT require polars
+    assert to_frame(f) is f
+    # empty frame
+    assert PyFrame.from_columns({}).height == 0
+    assert PyFrame.from_columns({}).columns == []
+
+
+def test_to_frame_pyframe_is_polars_free():
+    # Building/using a PyFrame must not load polars.
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    code = (
+        "import sys, importlib.abc\n"
+        "class _B(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, n, path=None, target=None):\n"
+        "        if n=='polars' or n.startswith('polars.'):\n"
+        "            raise ModuleNotFoundError(n)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _B())\n"
+        "from goldencheck.core.frame import PyFrame, to_frame\n"
+        "f = to_frame(PyFrame.from_columns({'a':[1,None,2]}))\n"
+        "assert f.column('a').null_count()==1\n"
+        "assert 'polars' not in sys.modules\n"
+    )
+    pkg = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ); env["PYTHONPATH"] = pkg + os.pathsep + env.get("PYTHONPATH","")
+    env["POLARS_SKIP_CPU_CHECK"] = "1"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr

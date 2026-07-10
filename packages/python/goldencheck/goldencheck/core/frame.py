@@ -222,11 +222,72 @@ class PolarsFrame:
         return PolarsColumn(self._df[name])
 
 
+class PyColumn:
+    """Pure-Python column wrapping a ``list`` — the 7 mechanical, dtype-free ops
+    used by the simple column profilers (nullability/cardinality/uniqueness).
+    Deliberately does NOT implement the full ``Column`` Protocol.
+    """
+
+    __slots__ = ("_v",)
+
+    def __init__(self, values: list) -> None:
+        self._v = values
+
+    def __len__(self) -> int:
+        return len(self._v)
+
+    def null_count(self) -> int:
+        return sum(1 for v in self._v if v is None)
+
+    def n_unique(self) -> int:
+        return len(set(self._v))
+
+    def drop_nulls(self) -> PyColumn:
+        return PyColumn([v for v in self._v if v is not None])
+
+    def unique(self) -> PyColumn:
+        return PyColumn(list(set(self._v)))
+
+    def sort(self) -> PyColumn:
+        return PyColumn(sorted(self._v))
+
+    def to_list(self) -> list:
+        return list(self._v)
+
+
+class PyFrame:
+    """Pure-Python frame wrapping a ``dict[str, list]`` — no Polars import."""
+
+    __slots__ = ("_cols",)
+
+    def __init__(self, cols: dict[str, list]) -> None:
+        self._cols = cols
+
+    @classmethod
+    def from_columns(cls, cols: dict[str, list]) -> PyFrame:
+        return cls(cols)
+
+    @property
+    def columns(self) -> list[str]:
+        return list(self._cols.keys())
+
+    @property
+    def height(self) -> int:
+        return len(next(iter(self._cols.values()))) if self._cols else 0
+
+    @property
+    def native(self) -> Any:
+        return self._cols
+
+    def column(self, name: str) -> PyColumn:
+        return PyColumn(self._cols[name])
+
+
 def to_frame(native: Any) -> Frame:
-    if isinstance(native, PolarsFrame):
+    if isinstance(native, (PolarsFrame, PyFrame)):
         return native
     if isinstance(native, pl.DataFrame):
         return PolarsFrame(native)
     raise TypeError(
-        f"to_frame() expects a polars.DataFrame (or PolarsFrame); got {type(native)!r}"
+        f"to_frame() expects a polars.DataFrame, PolarsFrame, or PyFrame; got {type(native)!r}"
     )
