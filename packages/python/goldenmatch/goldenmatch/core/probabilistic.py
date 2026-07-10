@@ -1680,8 +1680,9 @@ def score_probabilistic_blocks_batched(
     Does NOT mutate the caller's ``exclude_pairs``; the caller folds the returned
     pairs into ``matched_pairs`` as before.
     """
-    import polars as pl
     from concurrent.futures import ThreadPoolExecutor
+
+    import polars as pl
 
     if exclude_pairs is None:
         exclude_pairs = set()

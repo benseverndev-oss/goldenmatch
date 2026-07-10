@@ -7,12 +7,10 @@ unit is scored against a frozen exclude snapshot and cross-unit duplicate pairs
 are deduped by canonical key, the emitted pair set — and therefore the clusters —
 must match the sequential (``GOLDENMATCH_FS_WORKERS=1``) path exactly.
 """
-import os
-
-import polars as pl
-import pytest
 
 import goldenmatch as gm
+import polars as pl
+import pytest
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
