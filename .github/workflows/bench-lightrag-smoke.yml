@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads
+  # under a fresh PyPI install; force the system pool (the #1627 rust-lane remedy).
+  ARROW_DEFAULT_MEMORY_POOL: system
+
 jobs:
   lightrag-smoke:
     runs-on: ubuntu-latest
