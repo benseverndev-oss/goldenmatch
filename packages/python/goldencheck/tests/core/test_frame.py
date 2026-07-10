@@ -201,3 +201,23 @@ def test_column_dtype_bool_and_repr():
     assert frame.column("b").dtype_repr() == "Boolean"
     assert frame.column("i").dtype_repr() == "Int64"
     assert frame.column("s").dtype_repr() == "String"
+
+
+def test_column_to_arrow():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    s = pl.Series("x", [1, 2, 3])
+    col = to_frame(pl.DataFrame({"x": s})).column("x")
+    got = col.to_arrow()
+    assert got.to_pylist() == s.to_arrow().to_pylist() == [1, 2, 3]
+
+
+def test_column_get():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    frame = to_frame(pl.DataFrame({"n": [10, 20, 30], "s": ["a", "b", "c"]}))
+    assert frame.column("n").get(0) == 10
+    assert frame.column("n").get(2) == 30
+    assert frame.column("s").get(1) == "b"
+    # byte-identical to raw Series indexing (what df[c][r] does)
+    assert frame.column("s").get(1) == pl.Series(["a", "b", "c"])[1]
