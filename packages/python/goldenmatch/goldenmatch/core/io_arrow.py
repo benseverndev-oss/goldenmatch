@@ -44,6 +44,7 @@ Known reader deltas vs ``load_file`` (documented, not silently tolerated):
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from goldenmatch.core.ingest import _TEXT_SUFFIXES, _is_probably_utf8
 
@@ -55,7 +56,7 @@ _NULL_VALUES = [""]
 
 
 def read_table_arrow(
-    path,
+    path: Path | str,
     *,
     separator: str = ",",
     encoding: str | None = None,
@@ -135,7 +136,7 @@ def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
     return _read_csv_from_text(text, parse_options)
 
 
-def _base_convert_options(**extra):
+def _base_convert_options(**extra: Any):
     """The polars-parity ``ConvertOptions`` every CSV read uses: only a bare
     empty field is null (not pyarrow's wider "NA"/"NULL"/etc default list).
     ``extra`` overlays additional kwargs (e.g. a temporal ``column_types``
@@ -148,7 +149,7 @@ def _base_convert_options(**extra):
     )
 
 
-def _read_csv_direct(path: Path, parse_options):
+def _read_csv_direct(path: Path, parse_options: Any):
     """Read directly from the file path, forcing inferred temporal columns
     back to string (polars never auto-parses CSV dates)."""
     import pyarrow.csv as pa_csv
@@ -168,7 +169,7 @@ def _read_csv_direct(path: Path, parse_options):
     )
 
 
-def _read_csv_from_text(text: str, parse_options):
+def _read_csv_from_text(text: str, parse_options: Any):
     """Read from an in-memory decoded string, forcing inferred temporal
     columns back to string (same rationale as ``_read_csv_direct``)."""
     import pyarrow as pa
@@ -190,7 +191,7 @@ def _read_csv_from_text(text: str, parse_options):
     )
 
 
-def _temporal_override_types(schema) -> dict:
+def _temporal_override_types(schema: Any) -> dict:
     """Map every temporal (date/time/timestamp/duration) column name to
     ``pa.string()``, so a forced re-read takes the raw CSV text as-is
     instead of parsing it -- matching polars' never-auto-parse-dates
@@ -229,6 +230,10 @@ def _read_excel_arrow(path: Path, *, sheet: str | None):
         # (its first/active sheet, not necessarily the workbook's index-0
         # sheet if a different one was made active when the file was saved).
         ws = wb[sheet] if sheet is not None else wb.active
+        if ws is None:
+            # openpyxl types `wb.active` as Optional (a workbook saved with
+            # no active sheet); pl.read_excel would fail on such a file too.
+            raise ValueError(f"sheet {sheet!r} not found in {path}")
         rows = list(ws.iter_rows(values_only=True))
     finally:
         wb.close()
