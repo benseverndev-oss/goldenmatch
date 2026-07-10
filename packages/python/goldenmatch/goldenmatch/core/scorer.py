@@ -375,28 +375,29 @@ def _find_exact_match_ids(
     The legacy ``find_exact_matches`` delegates here for any caller that
     still needs the list[tuple] shape (8 call sites at the time of this
     refactor: chunked, incremental, tui/engine, tests, benchmark scripts)."""
+    # W2c: post-collect work routes through the Frame seam (byte-identical
+    # PolarsFrame delegation on the default backend; dual-backend once W2d
+    # threads Frames past the ingest boundary). The lazy projection stays
+    # raw Polars until W2d.
+    from goldenmatch.core.frame import to_frame
+
     mk_col = f"__mk_{mk.name}__"
     df = lf.select("__row_id__", mk_col).collect()
-    # Exclude null AND empty/blank matchkey values. Two records both missing a
-    # field (e.g. a blanked phone -> "") must NOT be an exact match: otherwise
-    # every blank-valued record joins on "" and Union-Find transitively explodes
-    # the clusters (the DQbench T3 precision collapse, 2026-06-06). Blank != a
-    # shared identity claim.
-    df = df.filter(
-        pl.col(mk_col).is_not_null()
-        & (pl.col(mk_col).cast(pl.Utf8, strict=False).str.strip_chars() != "")
-    )
-    if df.height < 2:
+    # Exclude null AND empty/blank matchkey values (filter_nonblank_key). Two
+    # records both missing a field (e.g. a blanked phone -> "") must NOT be an
+    # exact match: otherwise every blank-valued record joins on "" and
+    # Union-Find transitively explodes the clusters (the DQbench T3 precision
+    # collapse, 2026-06-06). Blank != a shared identity claim.
+    frame = to_frame(df).filter_nonblank_key(mk_col)
+    if frame.height < 2:
         return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
-    joined = df.join(df, on=mk_col, suffix="_right").filter(
-        pl.col("__row_id__") < pl.col("__row_id___right")
-    )
+    joined = frame.self_join_on(mk_col, "__row_id__")
     if joined.height == 0:
         return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
     # to_numpy() on Int64 columns is zero-copy from Arrow. No Python ints
-    # are created; the buffer is the same one Polars allocated for the join.
-    ids_a = joined["__row_id__"].to_numpy()
-    ids_b = joined["__row_id___right"].to_numpy()
+    # are created; the buffer is the same one the engine allocated for the join.
+    ids_a = joined.column("__row_id__").to_numpy()
+    ids_b = joined.column("__row_id___right").to_numpy()
     return ids_a, ids_b
 
 
@@ -1068,7 +1069,7 @@ def find_fuzzy_matches(
     # ``list[tuple]`` path (permanent opt-in, default). These two helpers
     # keep the branch bodies readable and the conversion in one place.
     def _emit_empty() -> list[tuple[int, int, float]] | pl.DataFrame:
-        return pl.DataFrame(schema=_pair_stream_schema()) if _emit_dataframe else []
+        return _empty_pair_stream_df() if _emit_dataframe else []
 
     def _emit_results(
         results: list[tuple[int, int, float]],
@@ -1342,17 +1343,16 @@ def _score_one_block(
     comprehension. Default False keeps the legacy list contract as the
     permanent opt-in alongside the default ``list[tuple]`` path.
 
-    NOTE (Wave 3 convergence): the ``_emit_dataframe=True`` path duplicates the
-    across-files Polars-filter logic in ``_score_one_block_columnar`` below. They
-    are byte-identical today; if you change one, mirror the other until Wave 3
-    retires ``_score_one_block_columnar``.
+    NOTE (W2c): the across-files filter is shared with
+    ``_score_one_block_columnar`` via ``_cross_source_filter_df`` -- the old
+    "mirror any change" rule is retired.
     """
     block_df = block.df.collect()
 
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()
         if len(sources_in_block) < 2:
-            return pl.DataFrame(schema=_pair_stream_schema()) if _emit_dataframe else []
+            return _empty_pair_stream_df() if _emit_dataframe else []
 
     pairs = find_fuzzy_matches(
         block_df, mk,
@@ -1365,22 +1365,9 @@ def _score_one_block(
         # find_fuzzy_matches emits a frame in every branch under the flag.
         assert isinstance(pairs, pl.DataFrame)
         if across_files_only and source_lookup and not pairs.is_empty():
-            # Vectorized cross-source filter: join row_id -> source on
-            # both endpoints, keep pairs whose sources differ. Avoids the
-            # per-pair Python dict lookup the list path does.
-            src_map = pl.DataFrame({
-                "__row_id__": list(source_lookup.keys()),
-                "__src__": list(source_lookup.values()),
-            })
-            pairs = (
-                pairs
-                .join(src_map.rename({"__row_id__": "id_a", "__src__": "src_a"}),
-                      on="id_a", how="left")
-                .join(src_map.rename({"__row_id__": "id_b", "__src__": "src_b"}),
-                      on="id_b", how="left")
-                .filter(pl.col("src_a") != pl.col("src_b"))
-                .drop(["src_a", "src_b"])
-            )
+            # Vectorized cross-source filter (W2c: shared seam-routed helper
+            # with _score_one_block_columnar -- the old mirror rule is retired).
+            pairs = _cross_source_filter_df(pairs, source_lookup)
         return pairs
 
     # Legacy list path (permanent opt-in alongside the default ``list[tuple]`` path).
@@ -1703,10 +1690,14 @@ def _pair_stream_schema() -> dict[str, pl.DataType]:
     """
     global _PAIR_STREAM_SCHEMA_CACHE
     if _PAIR_STREAM_SCHEMA_CACHE is None:
+        # Derived from the backend-neutral spec (W2c): frame.py's
+        # PAIR_STREAM_SCHEMA_SPEC is the single source of truth; this maps it
+        # to Polars dtypes for the Polars-typed consumers.
+        from goldenmatch.core.frame import PAIR_STREAM_SCHEMA_SPEC
+
+        _pl_dtype = {"int64": pl.Int64, "float64": pl.Float64, "utf8": pl.Utf8, "bool": pl.Boolean, "uint32": pl.UInt32}
         _PAIR_STREAM_SCHEMA_CACHE = {
-            "id_a": pl.Int64(),
-            "id_b": pl.Int64(),
-            "score": pl.Float64(),
+            k: _pl_dtype[v]() for k, v in PAIR_STREAM_SCHEMA_SPEC.items()
         }
     return _PAIR_STREAM_SCHEMA_CACHE
 
@@ -1723,6 +1714,20 @@ def __getattr__(name: str) -> dict[str, pl.DataType]:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _empty_pair_stream_df() -> pl.DataFrame:
+    """Zero-row canonical pair-stream frame, via the seam (W2c)."""
+    from goldenmatch.core.frame import PAIR_STREAM_SCHEMA_SPEC, empty_frame
+
+    return empty_frame(PAIR_STREAM_SCHEMA_SPEC, backend="polars").native
+
+
+def _concat_pair_frames(frames: list[pl.DataFrame]) -> pl.DataFrame:
+    """Vertical concat of pair-stream frames, via the seam (W2c)."""
+    from goldenmatch.core.frame import concat_frames, to_frame
+
+    return concat_frames([to_frame(f) for f in frames]).native
+
+
 def pairs_list_to_df(pairs: list[tuple[int, int, float]]) -> pl.DataFrame:
     """Adapter: legacy ``(id_a, id_b, score)`` list -> typed DataFrame.
 
@@ -1730,9 +1735,11 @@ def pairs_list_to_df(pairs: list[tuple[int, int, float]]) -> pl.DataFrame:
     downstream Polars expressions (joins, group_by, with_columns) work
     without an ``if df.is_empty()`` guard at every call site.
     """
-    if not pairs:
-        return pl.DataFrame(schema=_pair_stream_schema())
-    return pl.DataFrame(pairs, schema=_pair_stream_schema(), orient="row")
+    # W2c: routed through the seam's row constructor (explicit spec schema;
+    # backend pinned to polars until W2d threads Frames between stages).
+    from goldenmatch.core.frame import PAIR_STREAM_SCHEMA_SPEC, frame_from_rows
+
+    return frame_from_rows(pairs, PAIR_STREAM_SCHEMA_SPEC, backend="polars").native
 
 
 def pairs_df_to_list(df: pl.DataFrame) -> list[tuple[int, int, float]]:
@@ -1814,16 +1821,16 @@ def _score_one_block_columnar(
     pays before its caller would re-convert. Across-files filtering is
     applied as a Polars expression on the result frame, vectorized.
 
-    NOTE (Wave 3 convergence): the across-files Polars-filter logic here is
-    byte-identical to ``_score_one_block(..., _emit_dataframe=True)``. Mirror any
-    change to both until Wave 3 retires this twin.
+    NOTE (W2c): the across-files filter is shared with
+    ``_score_one_block(..., _emit_dataframe=True)`` via
+    ``_cross_source_filter_df`` -- the old mirror rule is retired.
     """
     block_df = block.df.collect()
 
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()
         if len(sources_in_block) < 2:
-            return pl.DataFrame(schema=_pair_stream_schema())
+            return _empty_pair_stream_df()
 
     pairs_df = find_fuzzy_matches_columnar(
         block_df, mk,
@@ -1832,24 +1839,9 @@ def _score_one_block_columnar(
     )
 
     if across_files_only and source_lookup and not pairs_df.is_empty():
-        # Vectorized: keep pairs where id_a and id_b have DIFFERENT
-        # source labels. Build a small Polars frame of (row_id ->
-        # source) and join twice; cheap at block scale (block_df is
-        # already collected) and avoids the per-pair Python lookup
-        # the list path does.
-        src_map = pl.DataFrame({
-            "__row_id__": list(source_lookup.keys()),
-            "__src__": list(source_lookup.values()),
-        })
-        pairs_df = (
-            pairs_df
-            .join(src_map.rename({"__row_id__": "id_a", "__src__": "src_a"}),
-                  on="id_a", how="left")
-            .join(src_map.rename({"__row_id__": "id_b", "__src__": "src_b"}),
-                  on="id_b", how="left")
-            .filter(pl.col("src_a") != pl.col("src_b"))
-            .drop(["src_a", "src_b"])
-        )
+        # Vectorized cross-source filter (W2c: shared seam-routed helper with
+        # _score_one_block's _emit_dataframe branch -- mirror rule retired).
+        pairs_df = _cross_source_filter_df(pairs_df, source_lookup)
 
     return pairs_df
 
@@ -1899,7 +1891,7 @@ def score_blocks_columnar(
     if max_workers is None:
         max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
-        return pl.DataFrame(schema=_pair_stream_schema())
+        return _empty_pair_stream_df()
 
     # Small block count: skip thread overhead (mirrors
     # score_blocks_parallel's <=2 branch).
@@ -1926,8 +1918,8 @@ def score_blocks_columnar(
                         matched_pairs.add((min(a, b), max(a, b)))
                 frames.append(df_pairs)
         if not frames:
-            return pl.DataFrame(schema=_pair_stream_schema())
-        return pl.concat(frames)
+            return _empty_pair_stream_df()
+        return _concat_pair_frames(frames)
 
     # Parallel path: ThreadPoolExecutor, mirroring score_blocks_parallel.
     # rapidfuzz.cdist + the native scorer release the GIL on the hot
@@ -1971,8 +1963,8 @@ def score_blocks_columnar(
                 )
 
     if not frames:
-        return pl.DataFrame(schema=_pair_stream_schema())
-    return pl.concat(frames)
+        return _empty_pair_stream_df()
+    return _concat_pair_frames(frames)
 
 
 def _filter_target_ids_df(
@@ -1981,10 +1973,38 @@ def _filter_target_ids_df(
     """Vectorized equivalent of the list-path's per-pair
     ``(a in target_ids) != (b in target_ids)`` filter. Match mode
     keeps only pairs where exactly one of (id_a, id_b) is in
-    ``target_ids``."""
+    ``target_ids``. W2c: routed through the seam's filter_target_split."""
     if pairs_df.is_empty():
         return pairs_df
-    target_series = pl.Series("__t__", list(target_ids), dtype=pl.Int64)
-    return pairs_df.filter(
-        pl.col("id_a").is_in(target_series) != pl.col("id_b").is_in(target_series),
+    from goldenmatch.core.frame import to_frame
+
+    return to_frame(pairs_df).filter_target_split("id_a", "id_b", list(target_ids)).native
+
+
+def _cross_source_filter_df(pairs_df: pl.DataFrame, source_lookup: dict[int, str]) -> pl.DataFrame:
+    """The across-files cross-source filter, ONE implementation for both
+    ``_score_one_block(_emit_dataframe=True)`` and
+    ``_score_one_block_columnar`` (they were byte-identical mirror-flagged
+    twins before W2c; sharing the body retires the mirror rule). Join
+    row_id -> source onto both endpoints, keep pairs whose sources differ,
+    drop the helper columns. Null-source rows DROP (columnar-engine
+    semantics; unreachable in-pipeline because source_lookup is total)."""
+    from goldenmatch.core.frame import ArrowFrame, frame_from_columns, to_frame
+
+    pairs_frame = to_frame(pairs_df)
+    src_map = frame_from_columns(
+        {
+            "__row_id__": list(source_lookup.keys()),
+            "__src__": list(source_lookup.values()),
+        },
+        {"__row_id__": "int64", "__src__": "utf8"},
+        backend="arrow" if isinstance(pairs_frame, ArrowFrame) else "polars",
+    )
+    return (
+        pairs_frame
+        .join_left(src_map.rename({"__row_id__": "id_a", "__src__": "src_a"}), on="id_a")
+        .join_left(src_map.rename({"__row_id__": "id_b", "__src__": "src_b"}), on="id_b")
+        .filter_ne_cols("src_a", "src_b")
+        .drop(["src_a", "src_b"])
+        .native
     )

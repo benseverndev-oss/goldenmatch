@@ -100,6 +100,23 @@ class Frame(Protocol):
     def sort(self, keys: Sequence[str]) -> Frame: ...
     def slice(self, offset: int, length: int) -> Frame: ...
     def take_rows(self, indices: Sequence[int]) -> Frame: ...
+    # W2c ops (columnar spine port; contracts pinned in
+    # tests/test_frame_relational_ops.py -- notably: filter_ne_cols null ->
+    # DROP (columnar-engine parity, NOT the list path's dict.get semantics);
+    # filter_nonblank_key includes the strict=False Utf8 cast and DROPS "";
+    # map_column RAISES on unmapped (replace_strict twin); apply_weak_quality
+    # reproduces cluster.py Step-3's when/then including the null-condition
+    # fall-through-to-strong.
+    def select(self, cols: Sequence[str]) -> Frame: ...
+    def filter_eq(self, col: str, value: Any) -> Frame: ...
+    def filter_not_in(self, col: str, values: Sequence[Any]) -> Frame: ...
+    def filter_ne_cols(self, a: str, b: str) -> Frame: ...
+    def filter_nonblank_key(self, col: str) -> Frame: ...
+    def filter_target_split(self, a: str, b: str, values: Sequence[Any]) -> Frame: ...
+    def with_fill_null(self, cols: Sequence[str], value: Any) -> Frame: ...
+    def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> Frame: ...
+    def apply_weak_quality(self, weak_threshold: float) -> Frame: ...
+    def select_eligible_clusters(self) -> Frame: ...
 
 
 class PolarsColumn:
@@ -277,6 +294,82 @@ class PolarsFrame:
     def take_rows(self, indices: Sequence[int]) -> PolarsFrame:
         # blocker ANN/canopy positional selection (blocker.py ~574/~881).
         return PolarsFrame(self._df[list(indices)])
+
+    # -- W2c ops (each delegates to the exact engine call, cited per op) ----
+
+    def select(self, cols: Sequence[str]) -> PolarsFrame:
+        return PolarsFrame(self._df.select(list(cols)))
+
+    def filter_eq(self, col: str, value: Any) -> PolarsFrame:
+        # cluster.py ~651: per-oversized-cluster member extraction.
+        return PolarsFrame(self._df.filter(pl.col(col) == value))
+
+    def filter_not_in(self, col: str, values: Sequence[Any]) -> PolarsFrame:
+        # cluster.py ~706-707: drop split ORIGINAL cluster rows.
+        return PolarsFrame(self._df.filter(~pl.col(col).is_in(list(values))))
+
+    def filter_ne_cols(self, a: str, b: str) -> PolarsFrame:
+        # scorer.py ~1381/~1850 cross-source filter. NULL comparison -> null
+        # mask -> row DROPS (columnar-engine parity; the list path's
+        # dict.get() would KEEP a one-sided unknown -- unreachable in-pipeline
+        # because source_lookup is total; do not "fix" this to keep).
+        return PolarsFrame(self._df.filter(pl.col(a) != pl.col(b)))
+
+    def filter_nonblank_key(self, col: str) -> PolarsFrame:
+        # scorer.py ~385-388 blank-exclusion (DQbench T3): drop null AND
+        # blank/whitespace-only. strict=False cast is part of the contract
+        # (non-string keys stringify; uncastable -> null -> drops). OPPOSITE
+        # of filter_valid_key re "".
+        return PolarsFrame(
+            self._df.filter(
+                pl.col(col).is_not_null()
+                & (pl.col(col).cast(pl.Utf8, strict=False).str.strip_chars() != "")
+            )
+        )
+
+    def filter_target_split(self, a: str, b: str, values: Sequence[Any]) -> PolarsFrame:
+        # scorer.py ~1986-1990 VERBATIM: keep pairs where EXACTLY ONE endpoint
+        # is a target (Int64 series, matching _filter_target_ids_df).
+        s = pl.Series("__t__", list(values), dtype=pl.Int64)
+        return PolarsFrame(self._df.filter(pl.col(a).is_in(s) != pl.col(b).is_in(s)))
+
+    def with_fill_null(self, cols: Sequence[str], value: Any) -> PolarsFrame:
+        # cluster.py ~589-592: coalesce native-bridge null edges.
+        return PolarsFrame(self._df.with_columns([pl.col(c).fill_null(value) for c in cols]))
+
+    def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> PolarsFrame:
+        # cluster.py ~1151-1152: tag pairs with their cluster id.
+        # replace_strict RAISES on unmapped source values (contract).
+        return PolarsFrame(self._df.with_columns(pl.col(src).replace_strict(mapping).alias(dst)))
+
+    def apply_weak_quality(self, weak_threshold: float) -> PolarsFrame:
+        # cluster.py Step-3 (~718-729) VERBATIM: quality recompute (split rows
+        # pass through untouched; weak = size>1 and edge-gap > threshold,
+        # strict >) then 0.7 confidence damp on weak. Null conditions fall
+        # through to "strong" (Polars when() treats null as false).
+        df = self._df.with_columns(
+            pl.when(pl.col("quality") == "split")
+            .then(pl.col("quality"))
+            .when(
+                (pl.col("size") > 1) & ((pl.col("avg_edge") - pl.col("min_edge")) > weak_threshold)
+            )
+            .then(pl.lit("weak"))
+            .otherwise(pl.lit("strong"))
+            .alias("quality"),
+        ).with_columns(
+            pl.when(pl.col("quality") == "weak")
+            .then(pl.col("confidence") * 0.7)
+            .otherwise(pl.col("confidence"))
+            .alias("confidence"),
+        )
+        return PolarsFrame(df)
+
+    def select_eligible_clusters(self) -> PolarsFrame:
+        # golden.py ~1293-1297 VERBATIM: multi-member, not oversized. The
+        # parentheses are load-bearing (& binds tighter than >).
+        return PolarsFrame(
+            self._df.filter((pl.col("size") > 1) & ~pl.col("oversized")).select("cluster_id")
+        )
 
 
 class ArrowColumn:
@@ -471,6 +564,130 @@ class ArrowFrame:
     def take_rows(self, indices: Sequence[int]) -> ArrowFrame:
         return ArrowFrame(self._tbl.take(list(indices)))
 
+    # -- W2c ops (pc twins; Polars-parity semantics pinned by fixtures) -----
+
+    def _filter_nullable_mask(self, mask: Any) -> ArrowFrame:
+        return ArrowFrame(self._tbl.filter(mask, null_selection_behavior="drop"))
+
+    def select(self, cols: Sequence[str]) -> ArrowFrame:
+        return ArrowFrame(self._tbl.select(list(cols)))
+
+    def filter_eq(self, col: str, value: Any) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        # null == value -> null -> drop (matches Polars ==).
+        return self._filter_nullable_mask(pc.equal(self._tbl.column(col), value))
+
+    def filter_not_in(self, col: str, values: Sequence[Any]) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        c = self._tbl.column(col)
+        # Polars ~is_in yields null for null input -> row drops; Arrow is_in
+        # returns FALSE for nulls, so AND with validity to reproduce the drop.
+        keep = pc.and_kleene(
+            pc.invert(pc.is_in(c, value_set=pa.array(list(values)))), pc.is_valid(c)
+        )
+        return self._filter_nullable_mask(keep)
+
+    def filter_ne_cols(self, a: str, b: str) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        # not_equal null-propagates -> drop, same as Polars != (see the
+        # PolarsFrame op note re the list path's differing dict semantics).
+        return self._filter_nullable_mask(pc.not_equal(self._tbl.column(a), self._tbl.column(b)))
+
+    def filter_nonblank_key(self, col: str) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        from goldenmatch.core import arrow_derive
+
+        c = self._tbl.column(col)
+        cast = arrow_derive.cast_utf8(c)  # the strict=False Utf8 cast twin
+        nonblank = pc.not_equal(pc.utf8_trim_whitespace(cast), "")
+        keep = pc.and_kleene(pc.is_valid(c), nonblank)  # null cast -> null -> drop
+        return self._filter_nullable_mask(keep)
+
+    def filter_target_split(self, a: str, b: str, values: Sequence[Any]) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        vs = pa.array(list(values))
+
+        def _mask(col_name: str) -> Any:
+            c = self._tbl.column(col_name)
+            # Preserve null -> null (Polars is_in) so the XOR null-propagates
+            # and the row drops; Arrow is_in alone would emit false.
+            return pc.if_else(
+                pc.is_valid(c), pc.is_in(c, value_set=vs), pa.scalar(None, pa.bool_())
+            )
+
+        return self._filter_nullable_mask(pc.not_equal(_mask(a), _mask(b)))
+
+    def with_fill_null(self, cols: Sequence[str], value: Any) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        tbl = self._tbl
+        for c in cols:
+            idx = tbl.column_names.index(c)
+            tbl = tbl.set_column(idx, c, pc.fill_null(tbl.column(c), value))
+        return ArrowFrame(tbl)
+
+    def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> ArrowFrame:
+        import pyarrow as pa
+
+        vals = self._tbl.column(src).to_pylist()
+        try:
+            mapped = [None if v is None else mapping[v] for v in vals]
+        except KeyError as e:  # replace_strict twin: unmapped RAISES
+            raise ValueError(f"map_column: value {e.args[0]!r} in {src!r} not in mapping") from e
+        return ArrowFrame(self._tbl.append_column(dst, pa.array(mapped, type=_arrow_dtype(dtype))))
+
+    def apply_weak_quality(self, weak_threshold: float) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        tbl = self._tbl
+        q = tbl.column("quality")
+        size = tbl.column("size")
+        gap = pc.subtract(tbl.column("avg_edge"), tbl.column("min_edge"))
+        conf = tbl.column("confidence")
+
+        def _cond(c: Any) -> Any:
+            # Polars when() treats a NULL condition as FALSE (falls through);
+            # pc.if_else would propagate null -- fill to false to match.
+            return pc.fill_null(c, False)
+
+        import pyarrow as pa
+
+        qt = (
+            q.type
+            if not isinstance(q, pa.ChunkedArray)
+            else q.chunk(0).type
+            if q.num_chunks
+            else pa.large_string()
+        )
+        weak_lit = pa.scalar("weak", type=qt)
+        strong_lit = pa.scalar("strong", type=qt)
+        is_split = _cond(pc.equal(q, "split"))
+        is_weak = _cond(pc.and_kleene(pc.greater(size, 1), pc.greater(gap, weak_threshold)))
+        new_q = pc.if_else(is_split, q, pc.if_else(is_weak, weak_lit, strong_lit))
+        new_conf = pc.if_else(_cond(pc.equal(new_q, "weak")), pc.multiply(conf, 0.7), conf)
+        qi = tbl.column_names.index("quality")
+        tbl = tbl.set_column(qi, "quality", new_q)
+        ci = tbl.column_names.index("confidence")
+        return ArrowFrame(tbl.set_column(ci, "confidence", new_conf))
+
+    def select_eligible_clusters(self) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        keep = pc.and_kleene(
+            pc.greater(self._tbl.column("size"), 1),
+            pc.invert(self._tbl.column("oversized")),
+        )
+        return ArrowFrame(
+            self._tbl.filter(keep, null_selection_behavior="drop").select(["cluster_id"])
+        )
+
 
 def to_frame(obj: Any) -> Frame:
     """Idempotent coercion: raw ``pl.DataFrame``/``pa.Table``, a
@@ -577,3 +794,59 @@ def frame_from_columns(
 def empty_frame(schema: dict[str, str], backend: str | None = None) -> Frame:
     """A zero-row Frame with the given schema (same dtype vocabulary)."""
     return frame_from_columns({k: [] for k in schema}, schema, backend=backend)
+
+
+# -- W2c: shared spine schemas + row/column constructors ----------------------
+
+# Backend-neutral schema specs (string dtype vocabulary). Single source of
+# truth: scorer's Polars PAIR_STREAM_SCHEMA derives from the pair-stream spec.
+PAIR_STREAM_SCHEMA_SPEC: dict[str, str] = {"id_a": "int64", "id_b": "int64", "score": "float64"}
+CLUSTER_METADATA_SCHEMA_SPEC: dict[str, str] = {
+    "cluster_id": "int64",
+    "size": "int64",
+    "confidence": "float64",
+    "quality": "utf8",
+    "oversized": "bool",
+    "bottleneck_pair_a": "int64",
+    "bottleneck_pair_b": "int64",
+    "min_edge": "float64",
+    "avg_edge": "float64",
+}
+
+
+def frame_from_rows(
+    rows: Sequence[Any], schema: dict[str, str], backend: str | None = None
+) -> Frame:
+    """Build a Frame from ROW-oriented data -- tuple rows (scorer's pair
+    lists) or dict rows (cluster's split-metadata rows) -- with an EXPLICIT
+    string schema (no inference; where a raw call site infers, the port
+    asserts the explicit dtypes instead)."""
+    _check_schema(schema)
+    names = list(schema)
+    if rows and isinstance(rows[0], dict):
+        data = {n: [r[n] for r in rows] for n in names}
+    else:
+        data = {n: [r[i] for r in rows] for i, n in enumerate(names)}
+    return frame_from_columns(data, schema, backend=backend)
+
+
+def concat_columns(cols: Sequence[Column]) -> Column:
+    """Vertical concat of Columns (cluster.py's all-ids build); backends must
+    match. `.unique()` composes on the result."""
+    if not cols:
+        raise ValueError("concat_columns requires at least one column")
+    if all(isinstance(c, PolarsColumn) for c in cols):
+        return PolarsColumn(pl.concat([c._s for c in cols]))  # noqa: SLF001
+    if all(isinstance(c, ArrowColumn) for c in cols):
+        import pyarrow as pa
+
+        chunks: list[Any] = []
+        for c in cols:
+            arr = c.to_arrow()
+            chunks.extend(arr.chunks if isinstance(arr, pa.ChunkedArray) else [arr])
+        return ArrowColumn(
+            pa.concat_arrays(
+                [ch.combine_chunks() if isinstance(ch, pa.ChunkedArray) else ch for ch in chunks]
+            )
+        )
+    raise TypeError("concat_columns requires all columns on the same backend")

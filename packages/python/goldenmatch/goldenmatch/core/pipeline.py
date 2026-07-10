@@ -2775,10 +2775,12 @@ def _run_dedupe_pipeline(
                 _internal_prefixes = (
                     "__xform_", "__mk_", "__block_key__", "__bucket__",
                 )
-                _golden_source = collected_df.select([
+                from goldenmatch.core.frame import to_frame as _tf_golden
+
+                _golden_source = _tf_golden(collected_df).select([
                     c for c in collected_df.columns
                     if not any(c.startswith(p) for p in _internal_prefixes)
-                ])
+                ]).native
             # Source per-cluster pair scores from the view so the slow builder's
             # confidence_majority survivorship weights by edge confidence instead
             # of degrading to count-majority (the frames-out cluster dict carries

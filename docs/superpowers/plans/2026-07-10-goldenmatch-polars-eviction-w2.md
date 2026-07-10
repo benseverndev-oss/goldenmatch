@@ -240,10 +240,14 @@ order sort explicitly, which the fixtures document).
 - **W2c (columnar spine port)**: `find_fuzzy_matches_columnar` /
   `score_blocks_columnar` (scorer), `build_cluster_frames` + `_columnar_presplit`
   (cluster), `build_golden_records_from_frames` (golden) route through W2b ops;
-  `_columnar_pipeline_enabled` becomes the seam insertion point; the 4
-  scorer/golden joins move to `join_inner`/`join_left`. Exit gate: dispatch
-  `bench-zero-config.yml` at 1M on both backends BEFORE merge (the exact-match
-  self-join is the named perf suspect); >10% -> kernel per spec 4.3.
+  the 4 scorer/golden joins move to `join_inner`/`join_left`.
+  [W2c-execution amendments: `_columnar_pipeline_enabled` is NOT touched (the
+  flag stays 0 per the do-not-flip verdict; W2c only ports call sites), and
+  the 1M `bench-zero-config.yml` exit gate runs the DEFAULT backend only --
+  an arrow e2e 1M is meaningless before W2d moves the ingest boundary; the
+  both-backends 1M is W2d's exit gate. Detailed batch plan:
+  2026-07-10-goldenmatch-polars-eviction-w2c.md.]
+  >10% on a ported op -> kernel per spec 4.3.
 - **W2d (blocker + ingest Frame return)**: `_build_static_blocks` group_by loop,
   sentinel filter, sorted-neighborhood sort/slice onto seam ops; `load_file`
   returns a Frame (callers `load_files`/`apply_column_map`/`validate_columns`

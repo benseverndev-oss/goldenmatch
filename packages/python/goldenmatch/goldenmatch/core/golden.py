@@ -1290,24 +1290,25 @@ def _multi_df_from_frames(
     # parentheses: Polars ``&`` binds tighter than ``>``, so the
     # unparenthesized ``pl.col("size") > 1 & ~pl.col("oversized")``
     # is a different (wrong) predicate.
-    multi_cluster_ids = (
-        frames.metadata
-        .filter((pl.col("size") > 1) & ~pl.col("oversized"))
-        .select("cluster_id")
-    )
+    # W2c: routed through the Frame seam (select_eligible_clusters carries
+    # the load-bearing parenthesization; joins are the W2b named variants).
+    from goldenmatch.core.frame import to_frame
+
+    multi_cluster_ids = to_frame(frames.metadata).select_eligible_clusters()
 
     # Vectorized join: attach __cluster_id__ to each source row whose
     # __row_id__ appears in the assignments frame. ``inner`` join
     # drops rows that aren't members of any eligible cluster.
-    assignments_multi = frames.assignments.join(
-        multi_cluster_ids, on="cluster_id", how="inner",
-    ).rename({"cluster_id": "__cluster_id__"})
+    assignments_multi = (
+        to_frame(frames.assignments)
+        .join_inner(multi_cluster_ids, on="cluster_id")
+        .rename({"cluster_id": "__cluster_id__"})
+    )
 
-    return source_df.join(
-        assignments_multi,
-        left_on="__row_id__",
-        right_on="member_id",
-        how="inner",
+    return (
+        to_frame(source_df)
+        .join_inner(assignments_multi, left_on="__row_id__", right_on="member_id")
+        .native
     )
 
 
