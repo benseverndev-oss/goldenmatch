@@ -14,9 +14,33 @@ parity test.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Protocol, runtime_checkable
 
 from goldenmatch._polars_lazy import pl
+
+_VALID_FRAME_BACKENDS = ("polars", "arrow")
+
+
+def resolve_frame_backend() -> str:
+    """Resolve the ``GOLDENMATCH_FRAME`` env var to a Frame backend name.
+
+    Reads ``GOLDENMATCH_FRAME`` (default ``"polars"``), stripped and
+    lowercased. Valid values are ``"polars"`` (default, byte-identical
+    behavior) and ``"arrow"`` (routes file ingest through pyarrow -- see
+    ``core/ingest.py::load_file``).
+
+    Raises:
+        ValueError: if the env var is set to anything else, naming the bad
+            value and the valid options.
+    """
+    raw = os.environ.get("GOLDENMATCH_FRAME", "polars").strip().lower()
+    if raw not in _VALID_FRAME_BACKENDS:
+        raise ValueError(
+            f"Invalid GOLDENMATCH_FRAME={raw!r}; valid options are "
+            f"{', '.join(sorted(_VALID_FRAME_BACKENDS))!r}"
+        )
+    return raw
 
 
 @runtime_checkable
