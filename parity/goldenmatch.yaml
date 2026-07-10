@@ -121,6 +121,7 @@ mcp_tools:
   - shatter_cluster
   - test_domain
   - unmerge_record
+  - upload_dataset
   ts_only:
   - build_clusters
   - find_exact_matches

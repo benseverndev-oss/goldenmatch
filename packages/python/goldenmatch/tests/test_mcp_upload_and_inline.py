@@ -3,7 +3,10 @@ import base64
 import json
 from pathlib import Path
 
-from goldenmatch.mcp.agent_tools import handle_agent_tool
+import pytest
+from goldenmatch.mcp._ingest import INGEST_PARAMS
+from goldenmatch.mcp.agent_tools import AGENT_TOOLS, handle_agent_tool
+from goldenmatch.mcp.server import TOOLS, _handle_tool
 
 
 def _b64(data: bytes) -> str:
@@ -22,11 +25,6 @@ def test_upload_dataset_returns_path(tmp_path, monkeypatch):
     assert "path" in res and res["bytes"] == len(raw)
     assert Path(res["path"]).read_bytes() == raw
 
-
-import pytest
-
-from goldenmatch.mcp._ingest import INGEST_PARAMS
-from goldenmatch.mcp.agent_tools import AGENT_TOOLS
 
 _PERSON_CSV = (
     "first_name,last_name,city,zip\n"
@@ -57,9 +55,6 @@ def test_agent_schemas_expose_content_params():
         # path param must not be in required anymore
         for path_param, _c, _n in sides:
             assert path_param not in t.inputSchema.get("required", [])
-
-
-from goldenmatch.mcp.server import _handle_tool, TOOLS
 
 
 def _call_server(name, args):
