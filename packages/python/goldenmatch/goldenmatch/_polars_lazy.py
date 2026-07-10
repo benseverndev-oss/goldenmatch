@@ -7,9 +7,9 @@ on the FIRST attribute access, not at import time. Every runtime ``pl.`` use in
 the swept modules keeps working unchanged, but ``import goldenmatch`` no longer
 eagerly imports Polars.
 
-The import-site sweep onto this proxy happens in a LATER W0 task; today this
-module has no consumers. Every module swept onto it must satisfy these FORWARD
-invariants (verified to hold for the planned sweep set as of 2026-07-09):
+All 112 module-level ``import polars as pl`` sites in the package are swept
+onto this proxy (landed in this same wave). Every module swept onto it must
+satisfy these invariants (verified to hold as of 2026-07-09):
 - The module has ``from __future__ import annotations`` (string annotations
   never trigger the import).
 - No module-level ``pl.`` execution (the two dtype-set constants in

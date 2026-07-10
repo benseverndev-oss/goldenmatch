@@ -129,7 +129,7 @@ and are otherwise expression-chain-dominated (W2/W3).
     `__getattr__` (PEP 562) so `from goldenmatch.core.scorer import
     PAIR_STREAM_SCHEMA` still resolves lazily for external consumers.
   - `identity/fingerprint_batch.py`: `_INT_UPCAST` (a tuple of dtypes) --
-    fixed via a cached function (`_int_upcast()`), same pattern as
+    fixed via a cached function (`_int_upcast_dtypes()`), same pattern as
     `indicators.py`.
 - All 112 swept files already had `from __future__ import annotations`
   (no additional forward-ref fixes needed as part of the sweep).

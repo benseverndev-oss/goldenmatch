@@ -42,9 +42,9 @@ _IDENTITY_NAME_PATTERNS = [
 
 @lru_cache(maxsize=1)
 def _non_identity_dtypes() -> frozenset:
-    """Deferred: evaluating pl dtypes at module level would defeat _polars_lazy
-    once this module is swept onto the proxy (today it still imports polars
-    directly; the sweep is a later W0 task)."""
+    """Deferred: this module is swept onto _polars_lazy, so a module-level
+    ``pl.`` evaluation would trigger the polars import at package import time
+    and defeat the lazy proxy."""
     return frozenset({pl.Boolean, pl.Date, pl.Datetime, pl.Time})
 
 
