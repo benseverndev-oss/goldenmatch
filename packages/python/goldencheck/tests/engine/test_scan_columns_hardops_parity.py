@@ -42,4 +42,7 @@ def test_scan_columns_includes_hard_checks(data):
     for name in data:
         for profiler in (*_MECHANICAL_PROFILERS, *_HARD_PROFILERS):
             expected.extend(profiler.profile(pol, name))
+    from goldencheck.relations.temporal import TemporalOrderProfiler
+    if native_enabled("str_to_date"):
+        expected.extend(TemporalOrderProfiler().profile(pol))
     assert scan_columns(data) == expected
