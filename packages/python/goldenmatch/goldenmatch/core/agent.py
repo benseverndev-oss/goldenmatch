@@ -330,6 +330,30 @@ def _decision_to_config(decision: StrategyDecision) -> Any:
 # ── Agent session ────────────────────────────────────────────────────────────
 
 
+def _reasoning_frame(df: pl.DataFrame, config: Any = None) -> pl.DataFrame:
+    """Drop caller-excluded columns before profiling for the ``reasoning`` payload.
+
+    The ``reasoning`` explanation is profiled separately from the actual
+    pipeline. Without this, columns the caller excluded (``exclude_columns`` on
+    the MCP tools -> ``_RUNTIME_EXCLUDE_COLUMNS``, ``config.exclude_columns``,
+    env force-exclude) still surface in ``fuzzy_fields``/``strong_ids`` -- a
+    misleading explanation that lists columns the dedup never matched on.
+    Reuses the pipeline's own resolver so the explanation matches reality.
+    force_include (rescue) columns are never dropped.
+    """
+    try:
+        from goldenmatch.core.autoconfig import (
+            _resolve_effective_exclusion_overrides,
+        )
+
+        force_exclude, force_include = _resolve_effective_exclusion_overrides(config)
+        keep = set(force_include)
+        drop = [c for c in force_exclude if c not in keep and c in df.columns]
+        return df.drop(drop) if drop else df
+    except Exception:
+        return df
+
+
 class AgentSession:
     """Stateful session for autonomous entity resolution.
 
@@ -427,7 +451,7 @@ class AgentSession:
         df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
         self.data = df
 
-        profile = profile_for_agent(df)
+        profile = profile_for_agent(_reasoning_frame(df))
         decision = select_strategy(profile, allow_pprl=allow_pprl)
         alternatives = build_alternatives(decision, profile)
 
@@ -486,7 +510,7 @@ class AgentSession:
         # See PR #169: routing the default path through dedupe_df()'s
         # AutoConfigController gives us the v1.7-v1.12 telemetry that the
         # legacy `_decision_to_config(decision)` heuristic does not.
-        profile = profile_for_agent(df)
+        profile = profile_for_agent(_reasoning_frame(df, config))
         decision = select_strategy(profile, allow_pprl=allow_pprl)
 
         if config is not None:

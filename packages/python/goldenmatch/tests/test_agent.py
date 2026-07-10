@@ -350,6 +350,55 @@ class TestAgentSession:
         result = session.deduplicate(tmp_csv, config=cfg)
         assert result["results"] is not None
 
+    def test_deduplicate_reasoning_honors_runtime_exclude(self, tmp_path):
+        """reasoning.fuzzy_fields must not surface columns the caller excluded.
+
+        Regression for the cosmetic leak where the `reasoning` payload was
+        profiled from the full frame while the pipeline (via
+        `_RUNTIME_EXCLUDE_COLUMNS`) correctly dropped the excluded columns —
+        making the explanation list columns that were never matched on.
+        """
+        from goldenmatch.config.schemas import (
+            GoldenMatchConfig,
+            MatchkeyConfig,
+            MatchkeyField,
+        )
+        from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+
+        # Values chosen so every string column is a fuzzy_candidate
+        # (uniqueness < 0.90, avg_length > 3): this hits the branch that lists
+        # all string columns as fuzzy_fields, where the leak manifests.
+        df = pl.DataFrame({
+            "name": ["John Smith", "John Smith", "Mary Jones", "Mary Jones"],
+            "city": ["New York", "New York", "Boston", "Boston"],
+            "secret_label": ["ENTITY001", "ENTITY001", "ENTITY002", "ENTITY002"],
+        })
+        path = tmp_path / "d.csv"
+        df.write_csv(path)
+
+        # Explicit config keeps dedupe fast + avoids any model bootstrap; the
+        # reasoning profile still runs regardless of config.
+        cfg = GoldenMatchConfig(matchkeys=[
+            MatchkeyConfig(
+                name="exact_name",
+                type="exact",
+                fields=[MatchkeyField(field="name", transforms=["lowercase", "strip"])],
+            ),
+        ])
+        session = AgentSession()
+        token = _RUNTIME_EXCLUDE_COLUMNS.set(["secret_label"])
+        try:
+            result = session.deduplicate(str(path), config=cfg)
+        finally:
+            _RUNTIME_EXCLUDE_COLUMNS.reset(token)
+
+        fuzzy = result["reasoning"]["fuzzy_fields"]
+        assert "secret_label" not in fuzzy, (
+            f"excluded column leaked into reasoning.fuzzy_fields: {fuzzy}"
+        )
+        # A normal string column is still surfaced (the profile still works).
+        assert "name" in fuzzy or "city" in fuzzy
+
     def test_match_sources(self, tmp_csv, tmp_csv_b):
         session = AgentSession()
         result = session.match_sources(tmp_csv, tmp_csv_b)
