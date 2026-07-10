@@ -14,7 +14,7 @@ import time
 from functools import lru_cache
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.core.complexity_profile import (
     ColumnPrior,

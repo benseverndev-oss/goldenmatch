@@ -14,7 +14,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core._logging import sanitize_for_log

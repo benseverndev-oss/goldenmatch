@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 

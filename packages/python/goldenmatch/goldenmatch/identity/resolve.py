@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldenmatch.config.schemas import MatchkeyConfig

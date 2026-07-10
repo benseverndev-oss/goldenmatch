@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 

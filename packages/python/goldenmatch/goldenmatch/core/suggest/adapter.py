@@ -41,7 +41,7 @@ import logging
 import os
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 import pyarrow as pa
 
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired

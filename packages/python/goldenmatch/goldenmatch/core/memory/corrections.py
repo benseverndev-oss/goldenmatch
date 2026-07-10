@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.core.memory.store import Correction, _canon_pair
 

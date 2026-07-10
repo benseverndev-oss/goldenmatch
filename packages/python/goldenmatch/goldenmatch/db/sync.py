@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.db.connector import DatabaseConnector

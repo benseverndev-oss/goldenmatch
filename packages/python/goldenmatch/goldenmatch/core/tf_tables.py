@@ -2,7 +2,7 @@
 weighted name scorer's data-driven downweight (#1207 PR2a)."""
 from __future__ import annotations
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 
 def value_frequencies(

@@ -31,7 +31,7 @@ import random
 from dataclasses import dataclass, field
 from itertools import combinations
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import BlockingKeyConfig
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.complexity_profile import FieldStats, MatchkeyProfile

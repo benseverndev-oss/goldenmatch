@@ -9,7 +9,7 @@ from typing import Any
 
 import jellyfish
 import numpy as np
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
 from rapidfuzz.process import cdist
@@ -1068,7 +1068,7 @@ def find_fuzzy_matches(
     # ``list[tuple]`` path (permanent opt-in, default). These two helpers
     # keep the branch bodies readable and the conversion in one place.
     def _emit_empty() -> list[tuple[int, int, float]] | pl.DataFrame:
-        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
+        return pl.DataFrame(schema=_pair_stream_schema()) if _emit_dataframe else []
 
     def _emit_results(
         results: list[tuple[int, int, float]],
@@ -1315,7 +1315,7 @@ def find_fuzzy_matches(
             "id_a": ids_a if hasattr(ids_a, "astype") else np.asarray(ids_a, dtype=np.int64),
             "id_b": ids_b if hasattr(ids_b, "astype") else np.asarray(ids_b, dtype=np.int64),
             "score": scores if hasattr(scores, "astype") else np.asarray(scores, dtype=np.float64),
-        }, schema=PAIR_STREAM_SCHEMA)
+        }, schema=_pair_stream_schema())
     return [(int(a), int(b), float(s)) for a, b, s in zip(ids_a, ids_b, scores)]
 
 
@@ -1352,7 +1352,7 @@ def _score_one_block(
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()
         if len(sources_in_block) < 2:
-            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA) if _emit_dataframe else []
+            return pl.DataFrame(schema=_pair_stream_schema()) if _emit_dataframe else []
 
     pairs = find_fuzzy_matches(
         block_df, mk,
@@ -1688,13 +1688,39 @@ def rerank_top_pairs(
 # Phase 1c. Spec: docs/superpowers/specs/2026-05-31-arrow-native-roadmap.md
 # (gitignored).
 
-PAIR_STREAM_SCHEMA: dict[str, pl.DataType] = {
-    "id_a": pl.Int64(),
-    "id_b": pl.Int64(),
-    "score": pl.Float64(),
-}
-"""Canonical pair-stream schema. ``id_a < id_b`` invariant maintained by the
-caller (legacy scorers already canonicalize via ``(min, max)``)."""
+_PAIR_STREAM_SCHEMA_CACHE: dict[str, pl.DataType] | None = None
+
+
+def _pair_stream_schema() -> dict[str, pl.DataType]:
+    """Canonical pair-stream schema. ``id_a < id_b`` invariant maintained by the
+    caller (legacy scorers already canonicalize via ``(min, max)``).
+
+    Built lazily -- not a module-level ``pl.`` literal -- so importing this
+    module doesn't import Polars eagerly (W0 polars-eviction gate). Cached
+    after the first call. The public ``PAIR_STREAM_SCHEMA`` name is still
+    importable (module ``__getattr__`` below) for external consumers (tests,
+    ``cluster.py``, ``pairs.py``) that expect a plain dict attribute.
+    """
+    global _PAIR_STREAM_SCHEMA_CACHE
+    if _PAIR_STREAM_SCHEMA_CACHE is None:
+        _PAIR_STREAM_SCHEMA_CACHE = {
+            "id_a": pl.Int64(),
+            "id_b": pl.Int64(),
+            "score": pl.Float64(),
+        }
+    return _PAIR_STREAM_SCHEMA_CACHE
+
+
+def __getattr__(name: str) -> dict[str, pl.DataType]:
+    """PEP 562 module attribute hook: resolves ``PAIR_STREAM_SCHEMA`` lazily
+    for ``from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA`` / attribute
+    access, without executing ``pl.Int64()`` etc. at module import time. Only
+    fires for names not already bound in the module's ``__dict__`` (i.e. not
+    for bare-name references inside this module's own functions, which call
+    ``_pair_stream_schema()`` directly above)."""
+    if name == "PAIR_STREAM_SCHEMA":
+        return _pair_stream_schema()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def pairs_list_to_df(pairs: list[tuple[int, int, float]]) -> pl.DataFrame:
@@ -1705,8 +1731,8 @@ def pairs_list_to_df(pairs: list[tuple[int, int, float]]) -> pl.DataFrame:
     without an ``if df.is_empty()`` guard at every call site.
     """
     if not pairs:
-        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
-    return pl.DataFrame(pairs, schema=PAIR_STREAM_SCHEMA, orient="row")
+        return pl.DataFrame(schema=_pair_stream_schema())
+    return pl.DataFrame(pairs, schema=_pair_stream_schema(), orient="row")
 
 
 def pairs_df_to_list(df: pl.DataFrame) -> list[tuple[int, int, float]]:
@@ -1797,7 +1823,7 @@ def _score_one_block_columnar(
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()
         if len(sources_in_block) < 2:
-            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+            return pl.DataFrame(schema=_pair_stream_schema())
 
     pairs_df = find_fuzzy_matches_columnar(
         block_df, mk,
@@ -1873,7 +1899,7 @@ def score_blocks_columnar(
     if max_workers is None:
         max_workers = _DEFAULT_MAX_WORKERS
     if not blocks:
-        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+        return pl.DataFrame(schema=_pair_stream_schema())
 
     # Small block count: skip thread overhead (mirrors
     # score_blocks_parallel's <=2 branch).
@@ -1900,7 +1926,7 @@ def score_blocks_columnar(
                         matched_pairs.add((min(a, b), max(a, b)))
                 frames.append(df_pairs)
         if not frames:
-            return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+            return pl.DataFrame(schema=_pair_stream_schema())
         return pl.concat(frames)
 
     # Parallel path: ThreadPoolExecutor, mirroring score_blocks_parallel.
@@ -1945,7 +1971,7 @@ def score_blocks_columnar(
                 )
 
     if not frames:
-        return pl.DataFrame(schema=PAIR_STREAM_SCHEMA)
+        return pl.DataFrame(schema=_pair_stream_schema())
     return pl.concat(frames)
 
 

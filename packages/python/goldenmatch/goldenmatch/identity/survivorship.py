@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import GoldenFieldRule
 from goldenmatch.core.golden import _is_internal, merge_field

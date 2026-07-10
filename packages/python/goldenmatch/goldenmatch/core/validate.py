@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 
 @dataclass

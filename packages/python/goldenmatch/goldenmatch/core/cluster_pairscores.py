@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 
 def _bucket_pairs(

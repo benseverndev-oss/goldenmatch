@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical

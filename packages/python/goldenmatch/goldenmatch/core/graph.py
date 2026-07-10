@@ -13,7 +13,7 @@ import json
 import logging
 from pathlib import Path
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.backends.score_buckets import _resolve_score_pair_callable
 

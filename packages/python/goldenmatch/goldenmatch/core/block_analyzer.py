@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from itertools import combinations
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.utils.transforms import apply_transforms
 

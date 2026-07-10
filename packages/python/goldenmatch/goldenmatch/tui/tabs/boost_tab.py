@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message

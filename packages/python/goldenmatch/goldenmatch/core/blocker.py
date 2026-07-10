@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.complexity_profile import BlockingProfile

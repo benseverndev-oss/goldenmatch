@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from rich.panel import Panel
 from rich.table import Table
 

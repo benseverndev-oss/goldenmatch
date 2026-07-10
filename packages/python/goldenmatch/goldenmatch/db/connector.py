@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 

@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 import os
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.connectors._sql_common import (
     df_to_rows,

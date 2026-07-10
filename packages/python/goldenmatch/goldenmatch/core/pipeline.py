@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
     from goldenmatch.distributed.record_store import PreparedRecordStore
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig, GoldenRulesConfig
 from goldenmatch.core.autofix import auto_fix_dataframe

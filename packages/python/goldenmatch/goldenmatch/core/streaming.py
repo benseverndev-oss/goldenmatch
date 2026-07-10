@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from threading import Event
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.cluster import add_to_cluster

@@ -36,7 +36,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module

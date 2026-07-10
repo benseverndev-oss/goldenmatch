@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 

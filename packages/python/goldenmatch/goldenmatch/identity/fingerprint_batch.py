@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -40,11 +40,23 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-# Integer dtypes that up-cast to Int64 without changing the canonical value.
-_INT_UPCAST = (
-    pl.Int8, pl.Int16, pl.Int32,
-    pl.UInt8, pl.UInt16, pl.UInt32,
-)
+_INT_UPCAST_CACHE: tuple[type, ...] | None = None
+
+
+def _int_upcast_dtypes() -> tuple[type, ...]:
+    """Integer dtypes that up-cast to Int64 without changing the canonical
+    value. Built lazily (not a module-level ``pl.`` tuple literal) so
+    importing this module doesn't import Polars eagerly (W0 polars-eviction
+    gate); cached after the first call."""
+    global _INT_UPCAST_CACHE
+    if _INT_UPCAST_CACHE is None:
+        _INT_UPCAST_CACHE = (
+            pl.Int8, pl.Int16, pl.Int32,
+            pl.UInt8, pl.UInt16, pl.UInt32,
+        )
+    return _INT_UPCAST_CACHE
+
+
 _I64_MAX = 2**63 - 1
 
 
@@ -132,7 +144,7 @@ def canonicalize_records_df(df: pl.DataFrame):
             )
         elif dtype == pl.Float32:
             exprs.append(pl.col(col).cast(pl.Float64))
-        elif isinstance(dtype, _INT_UPCAST) or dtype == pl.UInt64:
+        elif isinstance(dtype, _int_upcast_dtypes()) or dtype == pl.UInt64:
             # UInt64 handled here not in _INT_UPCAST: its overflow rows are already masked out above
             exprs.append(pl.col(col).cast(pl.Int64))
         elif isinstance(dtype, (pl.Categorical, pl.Enum)):

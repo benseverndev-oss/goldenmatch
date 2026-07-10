@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import duckdb
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 _TABLE_PREFIX = "prepared_"
 

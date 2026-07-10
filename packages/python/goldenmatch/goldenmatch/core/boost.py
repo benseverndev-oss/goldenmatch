@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-import polars as pl
+from goldenmatch._polars_lazy import pl
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
 

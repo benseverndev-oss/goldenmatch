@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.core.complexity_profile import ColumnPrior, SparsityVerdict
 

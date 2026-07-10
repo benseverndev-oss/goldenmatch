@@ -53,7 +53,7 @@ import logging
 import os
 from typing import Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 from goldenmatch.connectors._sql_common import (
     require_mode,
