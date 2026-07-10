@@ -132,6 +132,19 @@ class TestProfileColumns:
         profiles = profile_columns(df)
         assert all(p.name != "__row_id__" for p in profiles)
 
+    def test_zip_plus_four_stays_zip(self):
+        """ZIP+4 ('10001-3904') is phone-shaped to the data profiler; the 'zip'
+        NAME must win. Otherwise col_type='phone' backs an exact matchkey and
+        over-merges same-practice colleagues. Regression for the colleague
+        over-merge surfaced by the labeled DERM ER test."""
+        df = pl.DataFrame({
+            "zip": ["10001-3904", "07675-2600", "98109-4324", "33324-7005",
+                    "10001-3904", "60601-1234"],
+            "name": ["a", "b", "c", "d", "e", "f"],
+        })
+        types = {p.name: p.col_type for p in profile_columns(df)}
+        assert types["zip"] == "zip", f"ZIP+4 misclassified as {types['zip']!r}"
+
 
 class TestIdentifierNotOverridden:
     """Identifier columns should not be overridden by phone/zip data profiling."""

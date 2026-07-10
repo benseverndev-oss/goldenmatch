@@ -399,10 +399,13 @@ def profile_columns(
             data_type, data_confidence = _classify_by_data(values)
 
             # Combine: name heuristics are authoritative for structural types
-            # (date, geo) because data profiling frequently misclassifies them
-            # (e.g., ISO dates look like phone numbers, city names look like person names).
+            # (date, geo, zip) because data profiling frequently misclassifies them
+            # (e.g., ISO dates look like phone numbers, city names look like person
+            # names, and ZIP+4 codes like '10001-3904' look like phone numbers).
+            # A zip misclassified as phone would back an exact matchkey and
+            # over-merge same-address records, so trust the name.
             # For other types, Phase 2 (data) wins when it contradicts Phase 1 (name).
-            _name_authoritative = {"date", "geo", "identifier", "numeric", "year"}
+            _name_authoritative = {"date", "geo", "identifier", "numeric", "year", "zip"}
             if name_type and name_type in _name_authoritative:
                 # Name pattern is authoritative for date/geo — trust it
                 col_type = name_type

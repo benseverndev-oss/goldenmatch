@@ -480,13 +480,22 @@ pub fn classify_by_data(values: &[std::string::String]) -> (ColType, f64) {
 // ── Task B4: classify_columns ─────────────────────────────────────────────────
 
 /// Column types where the name heuristic overrides data profiling.
-/// Python: `name_authoritative = {Date, Geo, Identifier, Numeric, Year}`.
-const NAME_AUTHORITATIVE: &[ColType] =
-    &[ColType::Date, ColType::Geo, ColType::Identifier, ColType::Numeric, ColType::Year];
+/// Python: `name_authoritative = {Date, Geo, Identifier, Numeric, Year, Zip}`.
+/// Zip is authoritative because ZIP+4 codes ('10001-3904') look phone-shaped to
+/// the data profiler; a zip misclassified as phone would back an exact matchkey
+/// and over-merge same-address records.
+const NAME_AUTHORITATIVE: &[ColType] = &[
+    ColType::Date,
+    ColType::Geo,
+    ColType::Identifier,
+    ColType::Numeric,
+    ColType::Year,
+    ColType::Zip,
+];
 
 /// Port of `autoconfig.py::profile_columns` merge-precedence logic (lines 350-368).
 ///
-/// Authoritative set: `{Date, Geo, Identifier, Numeric, Year}`.
+/// Authoritative set: `{Date, Geo, Identifier, Numeric, Year, Zip}`.
 /// `needs_llm_escalation` implements the predicate from `_llm_classify_columns`
 /// (line 401-405 in autoconfig.py):
 ///   `(confidence < 0.8 || col_type in {String, Numeric})
