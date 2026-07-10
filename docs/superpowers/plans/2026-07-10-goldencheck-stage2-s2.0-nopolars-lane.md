@@ -135,10 +135,11 @@ def test_uncovered_path_raises_clean_error_without_polars() -> None:
 - [ ] **Step 5: Verify locally** — the module collects, is SKIPPED (polars present), and imports polars nowhere:
 ```bash
 $PY -m pytest packages/python/goldencheck/tests/nopolars -v          # expect: 2 skipped
-grep -nE "import polars|from polars|_polars_lazy" packages/python/goldencheck/tests/nopolars/test_polars_absent.py
-# (only the `_polars_lazy` proxy import inside the uncovered-path test is allowed; NO `import polars`)
+# Anchor to statement position so the docstring's prose ("...still `import polars` somewhere...")
+# does NOT match -- only real import STATEMENTS at line start (after optional indent):
+grep -nE "^[[:space:]]*(import polars|from polars)" packages/python/goldencheck/tests/nopolars/test_polars_absent.py || echo "no bare polars import statement"
 ```
-Expected: 2 skipped; grep shows only the `from goldencheck._polars_lazy import pl` line, no bare `import polars`. Ruff clean on both test files.
+Expected: 2 skipped; the anchored grep prints `no bare polars import statement` (the only polars reference is the `from goldencheck._polars_lazy import pl` proxy import inside the uncovered-path test, which does not match `from polars`). Ruff clean on both test files.
 
 - [ ] **Step 6: Commit.**
 ```bash
@@ -212,7 +213,7 @@ cd /d/show_case/gc-s2
 PY=/d/show_case/goldenmatch/.venv/Scripts/python.exe
 $PY -c "import yaml,sys; d=yaml.safe_load(open('.github/workflows/ci.yml',encoding='utf-8')); j=d['jobs']; assert 'goldencheck_nopolars' in j, 'job missing'; assert 'goldenflow_nopolars' in j, 'sibling job vanished'; assert d['jobs']['changes']['outputs'].get('goldencheck_nopolars'), 'changes output missing'; print('ci.yml OK -', len(j), 'jobs')"
 ```
-Expected: prints `ci.yml OK - <N> jobs` with N unchanged-plus-one vs origin/main. If it raises, the YAML is malformed — fix before committing.
+Expected: prints `ci.yml OK - <N> jobs`. Pin the baseline: `git show origin/main:.github/workflows/ci.yml | $PY -c "import yaml,sys; print(len(yaml.safe_load(sys.stdin)['jobs']),'jobs on main')"` — the new count MUST be exactly `main + 1` (only `goldencheck_nopolars` added). If it raises or the count is off, the YAML is malformed — fix before committing. (This local check catches the common 0-job cause — a broken/merged `jobs` map — but not GitHub-specific `if:`/expression schema errors; those are covered by the repo's `workflow_lint` job + merge-queue re-validation.)
 
 - [ ] **Step 6: Full suite still green** (the test files are the only python change; confirm no collection breakage):
 ```bash
