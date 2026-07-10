@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+__all__ = ["pl"]
+
 
 class _LazyPolars:
     """Forwards attribute access to ``polars``, importing it on first use."""
