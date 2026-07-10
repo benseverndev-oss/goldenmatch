@@ -245,8 +245,10 @@ class PolarsFrame:
 
 
 class PyColumn:
-    """Pure-Python column wrapping a ``list`` — the 7 mechanical, dtype-free ops
-    used by the simple column profilers (nullability/cardinality/uniqueness).
+    """Pure-Python column wrapping a ``list`` — the mechanical, dtype-free ops used
+    by the simple column profilers (nullability/cardinality/uniqueness), plus the
+    native-regex-backed string ops (str_match_count/str_filter/str_replace_all) and
+    eq/filter_by used by the hard profilers (encoding/format/pattern_consistency).
     Deliberately does NOT implement the full ``Column`` Protocol.
     """
 
@@ -304,6 +306,12 @@ class PyColumn:
 
     def value_counts_desc(self) -> list[tuple[Any, int]]:
         return sorted(Counter(self._v).items(), key=_VC_KEY)
+
+    def eq(self, value: Any) -> PyColumn:
+        return PyColumn([v == value if v is not None else None for v in self._v])
+
+    def filter_by(self, mask: PyColumn) -> PyColumn:
+        return PyColumn([v for v, m in zip(self._v, mask._v) if m])
 
 
 class PyFrame:
