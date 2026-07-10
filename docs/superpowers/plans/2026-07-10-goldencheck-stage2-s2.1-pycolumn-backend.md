@@ -196,9 +196,9 @@ git commit -m "feat(goldencheck): S2.1 pure-Python PyColumn/PyFrame backend + po
 - Modify: `packages/python/goldencheck/goldencheck/__init__.py`
 - Test: `packages/python/goldencheck/tests/engine/test_scan_columns_parity.py` (new)
 
-- [ ] **Step 1: Add `scan_columns` to `scanner.py`.** Near `scan_dataframe`, add a covered-profiler list + the entry (import `PyFrame` from `core.frame`; the 3 profiler classes are already imported in scanner.py):
+- [ ] **Step 1: Add `scan_columns` to `scanner.py`.** Near `scan_dataframe`, add a covered-profiler list + the entry. `scanner.py` does NOT currently import from `core.frame`, so add a new import line `from goldencheck.core.frame import PyFrame` (the 3 profiler classes + `Finding` are already imported there). Also add `"scan_columns"` to `scanner.py`'s module-level `__all__` (currently `["scan_file", "scan_file_with_llm", "scan_dataframe"]`).
 ```python
-from goldencheck.core.frame import PyFrame  # add to the existing core.frame import if present
+from goldencheck.core.frame import PyFrame  # new import — scanner.py has no core.frame import yet
 
 _COVERED_COLUMN_PROFILERS = [NullabilityProfiler(), UniquenessProfiler(), CardinalityProfiler()]
 
@@ -247,6 +247,9 @@ def _datasets():
         {"user_id": [1, 1, 2, 3] * 30,                             # identifier w/ dups (near-unique? no)
          "email": [f"u{i}" for i in range(120)],                   # 100% unique non-id
          "opt": ([1] * 114) + [None] * 6},                         # ~5% nulls in sizeable col
+        # Exercise the WARNING branches the spec calls out:
+        {"account_id": list(range(119)) + [0],                     # 119 unique of 120, name has 'id' + 1 dup -> uniqueness WARNING
+         "phone": ([f"p{i}" for i in range(118)]) + [None, None]}, # 118/120 non-null (>95%), total>=100 -> nullability WARNING
         {"x": [1, 2, 3]},                                          # tiny frame (<10, <50) -> few/no findings
     ]
 
@@ -290,7 +293,7 @@ git commit -m "feat(goldencheck): S2.1 public scan_columns() -- polars-free cove
 - Modify: `packages/python/goldencheck/tests/nopolars/test_polars_absent.py` (S2.0's module)
 - Modify: `packages/python/goldencheck/tests/test_import_no_polars.py` (extend the import-blocker)
 
-- [ ] **Step 1: Add a covered-scan test to `tests/nopolars/test_polars_absent.py`** (append; the module is `skipif`'d when polars is present, so this runs only in the `goldencheck_nopolars` lane):
+- [ ] **Step 1: Add a covered-scan test to `tests/nopolars/test_polars_absent.py`** (append; the module is `skipif`'d when polars is present, so this runs only in the `goldencheck_nopolars` lane). **First open the file and confirm `import sys` is present at module top (S2.0 added it — but verify; if absent, add it) since the test below uses `sys.modules`.** Then append:
 ```python
 def test_covered_scan_columns_without_polars() -> None:
     from goldencheck import scan_columns
