@@ -249,3 +249,8 @@ point and `CURATED_TOOLS` are present).
 - **`output_path` location.** Generated under the existing uploads/allowed-root
   dir so it passes `safe_path`; never a caller-controlled absolute path unless it
   already resolves under the allowed root.
+- **`clean_and_dedupe` soft dependency.** `run_transforms` returns
+  `{"error": "goldenflow is not installed…"}` when `goldenmatch[transform]` is
+  absent. This is a clean `{"error"}` return, so the composite short-circuits with
+  `ok:false` and a clear message per the error-handling contract — no hang. The
+  plan should note this soft dependency.
