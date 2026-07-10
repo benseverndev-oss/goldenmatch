@@ -47,6 +47,7 @@ cli_commands:
   - watch
   python_only:
   - agent-serve
+  - denial-constraints
   - evaluate
   - history
   - init
