@@ -42,9 +42,11 @@ _IDENTITY_NAME_PATTERNS = [
 ]
 
 @lru_cache(maxsize=1)
-def _non_identity_dtypes() -> set:
-    """Deferred: evaluating pl dtypes at module level would defeat _polars_lazy."""
-    return {pl.Boolean, pl.Date, pl.Datetime, pl.Time}
+def _non_identity_dtypes() -> frozenset:
+    """Deferred: evaluating pl dtypes at module level would defeat _polars_lazy
+    once this module is swept onto the proxy (today it still imports polars
+    directly; the sweep is a later W0 task)."""
+    return frozenset({pl.Boolean, pl.Date, pl.Datetime, pl.Time})
 
 
 def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:

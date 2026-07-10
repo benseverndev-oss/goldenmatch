@@ -7,12 +7,15 @@ on the FIRST attribute access, not at import time. Every runtime ``pl.`` use in
 the swept modules keeps working unchanged, but ``import goldenmatch`` no longer
 eagerly imports Polars.
 
-Safe because (audited 2026-07-09):
-- All swept modules have ``from __future__ import annotations`` (string
-  annotations never trigger the import).
-- No module-level ``pl.`` execution remains (the two dtype-set constants in
-  core/indicators.py were converted in this wave) and no ``def f(x=pl.X)``
-  default arg exists.
+The import-site sweep onto this proxy happens in a LATER W0 task; today this
+module has no consumers. Every module swept onto it must satisfy these FORWARD
+invariants (verified to hold for the planned sweep set as of 2026-07-09):
+- The module has ``from __future__ import annotations`` (string annotations
+  never trigger the import).
+- No module-level ``pl.`` execution (the two dtype-set constants in
+  core/indicators.py were handled in this wave: ``_NON_IDENTITY_DTYPES``
+  converted to a lazy ``lru_cache`` function, the dead ``_BOOLEAN_DTYPES``
+  deleted outright) and no ``def f(x=pl.X)`` default arg.
 - Attribute access returns the REAL Polars object, so ``isinstance(x,
   pl.DataFrame)`` and dtype identity behave identically to ``import polars``.
 
