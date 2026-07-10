@@ -250,7 +250,7 @@
     "expected": {
       "name": "zip_code",
       "dtype": "String",
-      "col_type": "identifier",
+      "col_type": "zip",
       "confidence": 0.9,
       "null_rate": 0.0,
       "cardinality_ratio": 1.0,
