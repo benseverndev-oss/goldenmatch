@@ -42,7 +42,7 @@ Counting is engine-agnostic and exact — `collections.Counter(values)` produces
 6. **nopolars lane / import-blocker:** with polars unimportable + native present, the hard-op profilers run and produce findings (`"polars" not in sys.modules`).
 
 ### Explicitly NOT in scope
-Wiring `PyFrame` into the main `scan_dataframe` (its Polars path is UNCHANGED); the other hard seam ops unused by these 4 profilers (`min`/`max`/`mean`/`std`/`diff`/`cast`/`dtype`/etc. — those serve already-ported relation profilers via the Polars accelerator and are out of the covered-column scan); a `dtype` op on `PyColumn` (pattern_consistency/temporal read `col.dtype` — see Open Question D); the non-Polars reader; the P4 deps-flip; any perf claim (kernels are for byte-identical polars-free COVERAGE, not speed).
+Wiring `PyFrame` into the main `scan_dataframe` (its Polars path is UNCHANGED); the other hard seam ops unused by these 4 profilers (`min`/`max`/`mean`/`std`/`diff`/`cast`/etc. — those serve already-ported relation profilers via the Polars accelerator and are out of the covered-column scan); a FULL type-inference engine on `PyColumn` (only the minimal covered-corpus dtype the profilers gate on is in scope — see the required `PyColumn.dtype` section); the non-Polars reader; the P4 deps-flip; any perf claim (kernels are for byte-identical polars-free COVERAGE, not speed).
 
 ### Success criteria
 - The 4 hard-op profilers produce **byte-identical** Findings on the native-backed `PyColumn` path vs `PolarsFrame` (the parity gate), across data exercising every finding branch.
@@ -66,7 +66,7 @@ Current `goldencheck-native` symbol surface (from `lib.rs`): `benford_leading_di
 
 New kernels (take a Python `list[str | None]`; pyo3 handles list↔Vec):
 - `gc_str_contains_count(values, pattern) -> int` — count of non-null values matching `regex::Regex::new(pattern)` (mirrors `s.str.contains(pattern).sum()`; nulls do not match).
-- `gc_str_filter_mask(values, pattern) -> list[bool]` — per-element match mask (the seam builds the filtered `PyColumn` from the mask, keeping `matching`/`~matching` logic in Python and preserving null handling exactly like `s.filter`). *(Returning a mask, not the filtered list, keeps the Rust surface minimal and lets the seam handle the `matching` flag + null semantics.)*
+- `gc_str_filter_mask(values, pattern) -> list[bool | None]` — per-element **three-valued** match mask: `None` for a null input element, else `True`/`False`. This is required to reproduce Polars' three-valued `filter`: `mask = s.str.contains(pattern)` is null for null elements, and BOTH `s.filter(mask)` and `s.filter(~mask)` DROP null-mask rows. The seam excludes every `None`-mask element unconditionally and keeps a non-null element iff `bool == matching` (see backend). A two-valued `list[bool]` would wrongly INCLUDE nulls in the `matching=False` branch. *(Returning a mask, not the filtered list, keeps the Rust surface minimal and lets the seam handle the `matching` flag + null semantics.)*
 - `gc_str_replace_all(values, pattern, replacement) -> list[str | None]` — element-wise `Regex::replace_all` (nulls pass through as null; mirrors `s.str.replace_all`).
 - `gc_str_to_date(values, fmt) -> list[str | None]` — `chrono::NaiveDate::parse_from_str(v, fmt)`; parse failure → null (matches `strict=False`); success → ISO `%Y-%m-%d` string (the seam wraps into a date-typed `PyColumn`; temporal only needs ordering/non-null on the result — see Open Question D). Nulls pass through.
 
@@ -82,8 +82,8 @@ def str_match_count(self, pattern: str) -> int:
     return _regex_kernel().gc_str_contains_count(self._v, pattern)  # raises NativeRequiredError if disabled
 
 def str_filter(self, pattern: str, *, matching: bool) -> PyColumn:
-    mask = _regex_kernel().gc_str_filter_mask(self._v, pattern)
-    return PyColumn([v for v, m in zip(self._v, mask) if m == matching])
+    mask = _regex_kernel().gc_str_filter_mask(self._v, pattern)   # list[bool | None]
+    return PyColumn([v for v, m in zip(self._v, mask) if m is not None and m == matching])
 
 def str_replace_all(self, pattern: str, value: str) -> PyColumn:
     return PyColumn(_regex_kernel().gc_str_replace_all(self._v, pattern, value))
@@ -93,12 +93,19 @@ def str_to_date(self, fmt: str, *, strict: bool) -> PyColumn:
 
 def value_counts_desc(self) -> list[tuple[Any, int]]:
     counts = Counter(self._v)                       # engine-agnostic exact counts
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))   # (count DESC, value ASC)
+    return sorted(counts.items(), key=_VC_KEY)      # deterministic null-safe total order
 ```
+where the shared, **null-safe** total-order key (used on BOTH backends) is:
+```python
+def _VC_KEY(kv):                                    # (count DESC, nulls-last, value ASC)
+    value, count = kv
+    return (-count, value is None, value if value is not None else "")
+```
+`value is None` as the SECOND key sorts the single `None` group after all non-null groups at the same count, so the third element is never a `None`-vs-`str` comparison — a plain `(-count, value)` key would raise `TypeError` on Python 3 when a `None` skeleton coexists with string skeletons. (In practice `pattern_consistency` calls `col.drop_nulls()` BEFORE `str_replace_all`, so `value_counts_desc` receives a null-free column there — but the key must be null-safe anyway so touching `PolarsColumn.value_counts_desc` stays "strictly an improvement / never a new crash" for any caller.) `value_counts_desc`'s contract: **homogeneous, mutually-comparable non-null values (or `None`)** — holds for its sole caller (skeleton strings). Values are never mixed incomparable types.
 - `_regex_kernel()`/`_date_kernel()` consult the loader (`native_enabled("regex")` / `"str_to_date"`); if disabled, raise `NativeRequiredError` with a message pointing at `pip install goldencheck[native]`.
 - `str_filter`'s `matching`/`~matching` + null handling stay in Python (mask-driven), exactly reproducing `s.filter(mask if matching else ~mask)` — nulls in `s` produce null in the contains-mask → excluded by both `matching` and `~matching`, matching Polars.
 - `str_to_date`'s `strict=False` is the only mode used; the kernel maps parse-failure to null (strict=True is unused — assert-or-`NotImplementedError` if ever passed True, YAGNI).
-- `PolarsColumn.value_counts_desc()` becomes: `vc = s.value_counts(); ... ; sorted(pairs, key=lambda kv: (-kv[1], kv[0]))` (same total order) so the two backends match by construction.
+- `PolarsColumn.value_counts_desc()` becomes: `vc = s.value_counts(); pairs = zip(...); sorted(pairs, key=_VC_KEY)` (the SAME null-safe key) so the two backends match by construction.
 
 `NativeRequiredError` is a new typed exception in `core/frame.py` (or `core/_native_loader.py`).
 
@@ -146,11 +153,17 @@ Extend `tests/nopolars/test_polars_absent.py` (skipif-when-polars-present) with 
 - **`scan_dataframe` unchanged** — S2.2 touches only `scan_columns` + the backend + the native crate; the Polars scan path is untouched (the only behavioral change on the Polars side is `value_counts_desc`'s deterministic secondary sort, gated by the unedited-tests check).
 - **Native build for tests** — the parity gate needs `goldencheck._native` built in-tree (loader discover order). Plan documents the build step; CI parity runs where native is buildable.
 
+## `PyColumn.dtype` — a REQUIRED first design point (not deferrable)
+
+`pattern_consistency` (and the encoding/format profilers' str-gating) early-return on `col.dtype != "str"`; `PyColumn` has no `dtype` (S2.1 excluded it). Without it the hard profilers `AttributeError` and the parity gate can't pass, so this is load-bearing and must be the FIRST implementation task, not a parking-lot item.
+
+Requirement: `PyColumn` gains a `dtype` property returning the SAME neutral string the profilers branch on (`"str"`/`"int"`/`"float"`/…), inferred from the Python values, and **byte-identical to how `_neutral_dtype(pl.DataFrame(d)[col].dtype)` classifies the same `dict[str,list]`**. The plan must specify the inference rule (e.g. all-`str`-or-`None` → `"str"`; all-`int`-or-`None` → `"int"`; etc.) and PROVE it matches Polars' dtype inference over `dict[str,list]` for the covered column shapes (a dedicated parity test: for each dataset, `PyFrame.column(c).dtype == PolarsFrame(pl.DataFrame(d)).column(c).dtype`). This determines which columns even receive the hard profilers, so a divergence here silently changes which Findings fire. Scope the inference to exactly what the covered profilers gate on (str vs non-str primarily) — do NOT build a full type-inference engine (YAGNI); but it MUST agree with Polars on the covered corpus.
+
 ## Open questions (resolve at plan time)
-- **A. `str_filter` return shape** — mask-from-kernel + Python filter (chosen) vs kernel-returns-filtered-list. Mask keeps the Rust surface minimal and null/`matching` semantics in Python; confirm it exactly reproduces `s.filter`.
-- **B. `regex` pin** — exact version to match Polars 1.40.1's bundled major (inspect Polars' lock / the transitively-resolved `regex 1.12.3`).
-- **C. `temporal` in `scan_columns`** — it's a `profile(frame)` relation profiler, not per-column; how it slots into the covered scan (run once vs per-column) — or whether temporal is covered via a separate call. Possibly narrow S2.2's `scan_columns` expansion to the 3 per-column hard profilers (encoding/format/pattern) and cover temporal's `str_to_date` only at the backend+parity level, deferring its scan wiring.
-- **D. `col.dtype` on `PyColumn`** — pattern_consistency and temporal early-return on `col.dtype != "str"` / dtype checks. `PyColumn` has no `dtype` (S2.1 excluded it). Either add a minimal inferred `dtype` to `PyColumn` (all-str/all-None → "str"; else best-effort) sufficient for these profilers' gates, or have `scan_columns` infer per-column dtype. Must stay byte-identical to how the profilers branch on Polars dtype. This is the subtlest wiring point — resolve carefully at plan time; it may warrant its own task.
+- **A. `str_filter` null semantics (now specified as three-valued mask)** — the plan must include an explicit parity case with nulls in a `matching=False` filter to lock the three-valued behavior (the trap the two-valued mask fell into).
+- **B. `regex` pin** — exact version to match Polars 1.40.1's bundled major (inspect Polars' lock / the transitively-resolved `regex 1.12.3`). The pin only aligns majors (the kernel compiles its OWN `regex`, separate from Polars' bundled copy) — the parity corpus is the real guard.
+- **C. `temporal` in `scan_columns`** — it's a `profile(frame)` relation profiler, not per-column; how it slots into the covered scan (run once vs per-column). **Fallback decomposition:** if the wiring proves non-trivial, narrow S2.2's `scan_columns` expansion to the 3 per-column hard profilers (encoding/format/pattern) — which are the guaranteed deliverable — and cover temporal's `str_to_date` at the backend + parity level only (native kernel + byte-parity test), deferring its scan-loop wiring to a follow-up. encoding/format/pattern must not be blocked by temporal's shape.
+- **D. `str_to_date` result representation** — the kernel returns ISO `%Y-%m-%d` strings; this is sound for temporal's use ONLY because `%Y-%m-%d` sorts lexicographically identically to chronological date order (so ordering/`is_sorted`/min/max on the strings match the date-typed column). The plan must CONFIRM `temporal` does ordering / non-null only on the parsed result — NO date arithmetic (diffs, day-deltas). If temporal does arithmetic, the kernel must return date-typed values (or day-ordinals) instead — verify before building.
 
 ## Non-goals (YAGNI)
 `strict=True` date parsing; regex flags beyond Polars' defaults; kernels for hard ops unused by these 4 profilers; `scan_dataframe` wiring; a NaN-aware anything; perf tuning; the reader; the deps-flip.
