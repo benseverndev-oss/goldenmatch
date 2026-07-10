@@ -2265,9 +2265,25 @@ jobs:
             packages/rust/extensions/autoconfig-core
             packages/rust/extensions/suggest-core
             packages/rust/extensions/goldenflow-core
-      - run: cargo test --workspace
-        # Bridge tests now hard-require goldenmatch (installed above) -- a Python
+      # The bridge tests embed CPython (pyo3, initialized ONCE per process) and run
+      # goldenmatch's polars-heavy auto_configure_df. Under a single `cargo test`
+      # binary all 43 tests share that one persistent interpreter; after ~3 autoconfig
+      # runs the accumulated polars/native state corrupts it and the binary SIGSEGVs
+      # (deterministic, goldenmatch-version-independent, NOT test concurrency -- it
+      # crashes single-threaded too; every test passes in isolation). This only bit
+      # the full-matrix merge_group runs that exercise this lane, evicting ci.yml/rust-
+      # touching PRs from the queue. nextest runs each test in its OWN process, so the
+      # interpreter never accumulates that state; non-bridge members ride it for free.
+      - name: Install cargo-nextest
+        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+      - run: cargo nextest run --workspace
+        # Bridge tests hard-require goldenmatch (installed above) -- a Python
         # import/marshalling failure fails the lane instead of silently skipping.
+        env:
+          GOLDENMATCH_BRIDGE_REQUIRE_PY: "1"
+      - run: cargo test --workspace --doc
+        # nextest does not run doctests; run them separately. Each doctest is its own
+        # process, so the embedded-interpreter accumulation above cannot occur here.
         env:
           GOLDENMATCH_BRIDGE_REQUIRE_PY: "1"
       - run: cargo clippy --workspace -- -D warnings
