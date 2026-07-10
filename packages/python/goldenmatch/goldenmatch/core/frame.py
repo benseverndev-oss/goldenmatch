@@ -108,8 +108,14 @@ class ArrowColumn:
     def n_unique(self) -> int:
         # mode="all" folds null into a single distinct group, matching Polars'
         # Series.n_unique() (which counts null as one distinct value).
+        import pyarrow as pa
         import pyarrow.compute as pc
 
+        if pa.types.is_null(self._col.type):
+            # count_distinct has no kernel for null()-typed columns (what
+            # type-inference yields for all-null or untyped-empty data).
+            # Polars: 1 distinct value (null) when non-empty, 0 when empty.
+            return 1 if len(self._col) > 0 else 0
         return pc.count_distinct(self._col, mode="all").as_py()
 
     def to_list(self) -> list:

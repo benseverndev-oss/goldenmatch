@@ -72,6 +72,43 @@ def test_n_unique_null_semantics():
     assert pl_frame.column("name").n_unique() == arrow_frame.column("name").n_unique()
 
 
+def test_n_unique_all_null_untyped_column():
+    """pa.table type-infers all-null data as null(); polars n_unique is 1."""
+    pl_col = to_frame(pl.DataFrame({"x": [None, None, None]})).column("x")
+    arrow_col = to_frame(pa.table({"x": [None, None, None]})).column("x")
+    assert pl_col.n_unique() == 1
+    assert arrow_col.n_unique() == 1
+    assert pl_col.n_unique() == arrow_col.n_unique()
+
+
+def test_n_unique_empty_untyped_column():
+    """Untyped empty columns are null()-typed in arrow; polars n_unique is 0."""
+    pl_col = to_frame(pl.DataFrame({"x": []})).column("x")
+    arrow_col = to_frame(pa.table({"x": pa.array([])})).column("x")
+    assert pl_col.n_unique() == 0
+    assert arrow_col.n_unique() == 0
+    assert pl_col.n_unique() == arrow_col.n_unique()
+
+
+def test_n_unique_empty_typed_column():
+    """Explicitly-typed empty columns have a count_distinct kernel; both agree on 0."""
+    pl_col = to_frame(pl.DataFrame({"x": pl.Series([], dtype=pl.String)})).column("x")
+    arrow_col = to_frame(pa.table({"x": pa.array([], type=pa.string())})).column("x")
+    assert pl_col.n_unique() == 0
+    assert arrow_col.n_unique() == 0
+    assert pl_col.n_unique() == arrow_col.n_unique()
+
+
+def test_n_unique_two_null_column():
+    """Multiple nulls collapse to ONE distinct value on both backends."""
+    data = ["a", None, None, "b"]
+    pl_col = to_frame(pl.DataFrame({"x": data})).column("x")
+    arrow_col = to_frame(pa.table({"x": data})).column("x")
+    assert pl_col.n_unique() == 3
+    assert arrow_col.n_unique() == 3
+    assert pl_col.n_unique() == arrow_col.n_unique()
+
+
 def test_cross_backend_parity():
     """Same logical data via pl.DataFrame->to_frame and pa.table->to_frame agree."""
     pl_frame = to_frame(_pl_df())
