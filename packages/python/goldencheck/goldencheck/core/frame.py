@@ -44,6 +44,12 @@ class Column(Protocol):
     def value_counts_desc(self) -> list[tuple[Any, int]]: ...
     def eq(self, value: Any) -> Column: ...
     def filter_by(self, mask: Column) -> Column: ...
+    def is_null(self) -> Column: ...
+    def gt_mask(self, other: Column) -> Column: ...
+    def eq_mask(self, other: Column) -> Column: ...
+    def fill_null(self, value: Any) -> Column: ...
+    def sum(self) -> Any: ...
+    def str_to_date(self, fmt: str, *, strict: bool) -> Column: ...
 
 
 @runtime_checkable
@@ -174,6 +180,24 @@ class PolarsColumn:
 
     def filter_by(self, mask: Column) -> PolarsColumn:
         return PolarsColumn(self._s.filter(mask._s))
+
+    def is_null(self) -> PolarsColumn:
+        return PolarsColumn(self._s.is_null())
+
+    def gt_mask(self, other: Column) -> PolarsColumn:
+        return PolarsColumn(self._s > other._s)
+
+    def eq_mask(self, other: Column) -> PolarsColumn:
+        return PolarsColumn(self._s == other._s)
+
+    def fill_null(self, value: Any) -> PolarsColumn:
+        return PolarsColumn(self._s.fill_null(value))
+
+    def sum(self) -> Any:
+        return self._s.sum()
+
+    def str_to_date(self, fmt: str, *, strict: bool) -> PolarsColumn:
+        return PolarsColumn(self._s.str.to_date(format=fmt, strict=strict))
 
 
 class PolarsFrame:
