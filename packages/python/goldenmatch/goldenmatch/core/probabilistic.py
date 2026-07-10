@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
-import polars as pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import MatchkeyConfig
 from goldenmatch.core.scorer import score_field
 

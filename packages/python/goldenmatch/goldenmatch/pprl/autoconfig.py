@@ -11,8 +11,8 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-import polars as pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.pprl.protocol import PPRLConfig
 
 logger = logging.getLogger(__name__)

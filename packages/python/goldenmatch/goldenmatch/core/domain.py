@@ -13,8 +13,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.complexity_profile import DomainProfile as PublicDomainProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 

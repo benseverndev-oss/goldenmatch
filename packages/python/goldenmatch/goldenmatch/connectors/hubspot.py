@@ -9,8 +9,7 @@ import json
 import logging
 import urllib.request
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.connectors.base import BaseConnector, ConnectorError
 
 logger = logging.getLogger(__name__)

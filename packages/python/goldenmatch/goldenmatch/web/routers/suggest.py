@@ -19,8 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-import polars as pl
 from fastapi import APIRouter, HTTPException, Request
+
+from goldenmatch._polars_lazy import pl
 
 log = logging.getLogger(__name__)
 

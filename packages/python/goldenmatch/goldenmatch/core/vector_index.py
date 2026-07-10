@@ -36,8 +36,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import polars as pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.ann_blocker import ANNBlocker
 from goldenmatch.core.embedder import get_embedder
 from goldenmatch.core.retrieval import RetrievedRecord

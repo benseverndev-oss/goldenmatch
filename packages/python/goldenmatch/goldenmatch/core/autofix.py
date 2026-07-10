@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 # Strings that should be treated as null
 _NULL_STRINGS = frozenset({

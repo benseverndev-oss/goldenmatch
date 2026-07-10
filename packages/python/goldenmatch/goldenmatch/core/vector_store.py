@@ -36,8 +36,8 @@ import logging
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
-import polars as pl
 
+from goldenmatch._polars_lazy import pl
 from goldenmatch.core.embedder import get_embedder
 from goldenmatch.core.retrieval import RetrievedRecord
 

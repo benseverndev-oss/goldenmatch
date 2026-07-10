@@ -1,8 +1,7 @@
 """Collapse per-document ExtractResults into one records DataFrame + a report."""
 from __future__ import annotations
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.documents.types import (
     ExtractResult,
     IngestReport,

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 # Imported at module level so tests can patch goldenmatch._api.auto_configure_df.
 # The lazy import guard inside each function is kept for cycle safety — this

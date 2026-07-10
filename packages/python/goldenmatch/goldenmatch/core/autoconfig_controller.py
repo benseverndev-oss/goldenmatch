@@ -16,8 +16,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig_history import RunHistory
 from goldenmatch.core.bench import stage

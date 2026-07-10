@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-import polars as pl
+from goldenmatch._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldenmatch.config.schemas import StandardizationConfig
