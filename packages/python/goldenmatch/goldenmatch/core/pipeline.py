@@ -800,7 +800,17 @@ def run_dedupe(
         else:
             file_path, source_name = file_spec[0], file_spec[1]
             column_map = None
-        lf = load_file(file_path)
+        # W2d: opt into the Frame return; shim ArrowFrame -> polars-lazy
+        # IMMEDIATELY (before column_map/validate, which keep receiving
+        # LazyFrames untouched). The conversion is now an EXPLICIT pipeline
+        # boundary instead of being buried in load_file -- its removal point
+        # is W2e, when the expression stages (_add_row_ids, standardize,
+        # matchkeys) port to the seam and arrow can flow past ingest.
+        lf = load_file(file_path, return_frame=True)
+        from goldenmatch.core.frame import ArrowFrame as _ArrowFrame
+
+        if isinstance(lf, _ArrowFrame):
+            lf = pl.from_arrow(lf.native).lazy()
         if column_map:
             lf = apply_column_map(lf, column_map)
         required = _get_required_columns(config)

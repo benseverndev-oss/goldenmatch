@@ -369,11 +369,16 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
             .collect()
         )
 
-        # Group by block key
-        groups = df_with_key.group_by("__block_key__")
+        # Group by block key (W2c/W2d seam: group_partitions is the
+        # hash-grouped twin of group_by iteration -- deterministic
+        # first-appearance order, blocks are an unordered set downstream).
+        # The lazy with_columns+filter+collect ABOVE stays raw Polars: the
+        # fused pipeline is RSS-load-bearing (#375) and this entry can
+        # receive genuinely-lazy frames.
+        from goldenmatch.core.frame import to_frame
 
-        for key, group_df in groups:
-            key_str = key[0]  # group_by returns tuple of key values
+        for key_str, group_frame in to_frame(df_with_key).group_partitions("__block_key__"):
+            group_df = group_frame.native
             if key_str is None:
                 continue
 
@@ -691,14 +696,18 @@ def _auto_split_block(
     best_useful_groups = 0
     best_nunique = 0
 
+    from goldenmatch.core.frame import to_frame
+
+    bframe = to_frame(block_df)
     for col in candidates:
-        nunique = block_df[col].n_unique()
+        nunique = bframe.column(col).n_unique()
         # Estimate: if we split by this column, avg group size = n / nunique
         avg_group = n / nunique if nunique > 0 else n
-        # Count groups that will have >= 2 records (useful for matching)
-        useful_groups = block_df.group_by(pl.col(col).cast(pl.Utf8)).agg(
-            pl.len().alias("cnt")
-        ).filter(pl.col("cnt") >= 2).height
+        # Count groups that will have >= 2 records (useful for matching):
+        # derive the Utf8-cast key via the seam, group, count sizes >= 2.
+        cast_key = bframe.derive_transformed_column(col, [])
+        sized = bframe.with_column("__auto_probe__", cast_key).group_len(["__auto_probe__"])
+        useful_groups = sum(1 for c in sized.column("len").to_list() if c >= 2)
 
         if useful_groups > best_useful_groups or (
             useful_groups == best_useful_groups and avg_group <= max_block_size and nunique > best_nunique
@@ -707,26 +716,25 @@ def _auto_split_block(
             best_nunique = nunique
             best_col = col
 
-    split_expr = pl.col(best_col).cast(pl.Utf8).alias("__auto_split__")
-
-    df_with_key = block_df.with_columns(split_expr)
-    groups = df_with_key.group_by("__auto_split__")
+    # W2d seam: cast-key attach (derive_transformed_column with an empty
+    # chain IS the Utf8 cast) + hash-grouped iteration; null keys skipped
+    # explicitly, exactly as the raw loop did.
+    keyed = bframe.with_column("__auto_split__", bframe.derive_transformed_column(best_col, []))
 
     results: list[BlockResult] = []
-    for key, group_df in groups:
-        key_str = key[0]
+    for key_str, group_frame in keyed.group_partitions("__auto_split__"):
         if key_str is None:
             continue
-        if len(group_df) < 2:
+        if group_frame.height < 2:
             continue
-        if len(group_df) > max_block_size:
+        if group_frame.height > max_block_size:
             logger.warning(
                 "Auto-split sub-block %r of %r has %d records (still oversized). Processing anyway.",
-                key_str, parent_key, len(group_df),
+                key_str, parent_key, group_frame.height,
             )
         results.append(BlockResult(
             block_key=f"{parent_key}||{key_str}",
-            df=group_df.drop("__auto_split__").lazy(),
+            df=group_frame.drop(["__auto_split__"]).native.lazy(),
             strategy="adaptive",
             depth=1,
             parent_key=parent_key,

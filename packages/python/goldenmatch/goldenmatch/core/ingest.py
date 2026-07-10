@@ -6,6 +6,7 @@ import codecs
 import io
 import logging
 from pathlib import Path
+from typing import Any
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.core._paths import safe_path
@@ -60,13 +61,14 @@ def _is_probably_utf8(path: Path | str, sample_bytes: int = 1 << 16) -> bool:
 def load_file(
     path: Path | str,
     delimiter: str | None = None,  # None = auto-detect
-    encoding: str | None = None,   # None = auto-detect
+    encoding: str | None = None,  # None = auto-detect
     sheet: str | None = None,
     parse_mode: str = "auto",
     header_row: int | None = None,
     has_header: bool | None = None,
     skip_rows: list[int] | None = None,
-) -> pl.LazyFrame:
+    return_frame: bool = False,
+) -> pl.LazyFrame | Any:
     """Load a data file as a Polars LazyFrame.
 
     Supports CSV/text files (with smart auto-detection), Parquet, and Excel.
@@ -83,9 +85,17 @@ def load_file(
         header_row: Explicit header row index (``None`` = auto-detect).
         has_header: Whether file has a header row (``None`` = auto-detect).
         skip_rows: Explicit list of row indices to skip.
+        return_frame: W2d opt-in (the pipeline ingest loop sets it). ONLY the
+            arrow-eligible route changes: it returns the seam's
+            ``ArrowFrame`` instead of burying a ``pl.from_arrow`` conversion;
+            every other route still returns the ``pl.LazyFrame`` unchanged
+            (the seam's PolarsFrame is eager-only by contract, so a lazy wrap
+            is deliberately never produced). Default False keeps today's
+            LazyFrame-always contract for every existing call site.
 
     Returns:
-        A Polars LazyFrame.
+        A Polars LazyFrame (or, with ``return_frame=True`` on the arrow
+        route, an ``ArrowFrame``).
 
     Raises:
         FileNotFoundError: If the file does not exist.
@@ -97,9 +107,7 @@ def load_file(
 
     suffix = path.suffix.lower()
 
-    if resolve_frame_backend() == "arrow" and _arrow_route_eligible(
-        suffix, parse_mode, delimiter
-    ):
+    if resolve_frame_backend() == "arrow" and _arrow_route_eligible(suffix, parse_mode, delimiter):
         # Lazy import -- keeps the W0 import-gate posture (io_arrow itself
         # also imports pyarrow lazily inside each function).
         from goldenmatch.core.io_arrow import read_table_arrow
@@ -113,6 +121,13 @@ def load_file(
             "GOLDENMATCH_FRAME=arrow: reading %s via pyarrow (experimental)",
             safe_log_path,
         )
+        if return_frame:
+            from goldenmatch.core.frame import ArrowFrame
+
+            return ArrowFrame(tbl)
+        # Legacy boundary conversion for callers that didn't opt in; the
+        # pipeline's opted-in path shims EXPLICITLY at its ingest loop, with
+        # W2e (expression-stage ports) as the shim's removal point.
         return pl.from_arrow(tbl).lazy()
 
     if suffix == ".parquet":
@@ -176,19 +191,32 @@ def load_file(
     raise ValueError(f"Unsupported file format: {suffix!r}")
 
 
-def load_files(file_specs: list[tuple[Path | str, str]]) -> list[pl.LazyFrame]:
+def load_files(
+    file_specs: list[tuple[Path | str, str]], return_frame: bool = False
+) -> list[pl.LazyFrame | Any]:
     """Load multiple files, adding a __source__ column to each.
 
     Args:
         file_specs: List of (path, source_name) tuples.
+        return_frame: pass-through to :func:`load_file` (W2d) -- with it set,
+            arrow-route entries come back as ``ArrowFrame`` (tagged via the
+            seam's ``with_literal_column``); everything else stays LazyFrame.
 
     Returns:
-        List of LazyFrames, each with a __source__ column.
+        List of LazyFrames (or ArrowFrames on the opted-in arrow route), each
+        with a __source__ column.
     """
     frames = []
     for path, source_name in file_specs:
-        lf = load_file(path)
-        lf = lf.with_columns(pl.lit(source_name).alias("__source__"))
+        lf = load_file(path, return_frame=return_frame)
+        # ArrowFrame check FIRST: an isinstance against the pl proxy would
+        # import polars just to answer it (the to_frame ordering lesson).
+        from goldenmatch.core.frame import ArrowFrame
+
+        if isinstance(lf, ArrowFrame):
+            lf = lf.with_literal_column("__source__", source_name)
+        else:
+            lf = lf.with_columns(pl.lit(source_name).alias("__source__"))
         frames.append(lf)
     return frames
 
@@ -211,8 +239,7 @@ def apply_column_map(lf: pl.LazyFrame, column_map: dict[str, str]) -> pl.LazyFra
     missing = [src for src in column_map if src not in available]
     if missing:
         raise ValueError(
-            f"Column map references columns not in file: {missing}. "
-            f"Available: {sorted(available)}"
+            f"Column map references columns not in file: {missing}. Available: {sorted(available)}"
         )
     return lf.rename(column_map)
 
@@ -282,6 +309,4 @@ def validate_columns(lf: pl.LazyFrame, required: list[str]) -> None:
     available = list(lf.collect_schema().names())
     missing = [c for c in required if c not in available]
     if missing:
-        raise ValueError(
-            f"Missing required columns: {missing}. Available columns: {available}"
-        )
+        raise ValueError(f"Missing required columns: {missing}. Available columns: {available}")
