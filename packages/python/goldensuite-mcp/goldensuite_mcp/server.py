@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -23,6 +24,59 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Curated tool listing
+# ---------------------------------------------------------------------------
+# The aggregator composes ~88 tools across six packages. A flat namespace that
+# large swamps LLM tool-selection, so ``list_tools`` is filtered to a curated
+# headline set by default. Dispatch is NEVER filtered, so every hidden tool
+# stays callable by exact name -- the filter only trims what the client sees
+# when it enumerates tools.
+#
+# The ``GOLDENSUITE_MCP_TOOLS`` env var overrides the listing:
+#   unset / "curated"  -> the headline set below (default)
+#   "full"             -> every aggregated tool (the pre-curation behavior)
+#   "a,b,c"            -> exactly those names (whitespace tolerated)
+#
+# Names are matched AFTER first-wins collision resolution, so each name here
+# resolves to exactly one surviving tool (e.g. ``map`` is goldenflow's,
+# ``validate`` is goldencheck's).
+CURATED_TOOLS: frozenset[str] = frozenset({
+    # goldenmatch -- entity resolution / dedupe (the headline package)
+    "upload_dataset", "analyze_data", "auto_configure",
+    "agent_deduplicate", "agent_match_sources", "find_duplicates",
+    "match_record", "get_golden_record", "list_clusters", "get_cluster",
+    "explain_match", "evaluate", "export_results",
+    # goldencheck -- data quality
+    "scan", "validate", "health_score", "explain_finding",
+    # goldenflow -- transforms / mapping
+    "transform", "map", "list_transforms",
+    # goldenpipe -- pipeline orchestration
+    "run_pipeline", "list_stages",
+    # infermap -- schema mapping (``map`` is goldenflow's; ``apply`` is infermap's)
+    "apply",
+    # goldenanalysis -- read-only run analysis
+    "analyze_frame", "detect_regressions",
+})
+
+
+def _resolve_tool_allowlist() -> frozenset[str] | None:
+    """Parse ``GOLDENSUITE_MCP_TOOLS`` into an allow-set, or None for 'full'."""
+    val = os.environ.get("GOLDENSUITE_MCP_TOOLS", "").strip()
+    if not val or val.lower() == "curated":
+        return CURATED_TOOLS
+    if val.lower() == "full":
+        return None
+    return frozenset(part.strip() for part in val.split(",") if part.strip())
+
+
+def _apply_tool_filter(tools: list[Tool]) -> list[Tool]:
+    """Filter the aggregated tool list for ``list_tools`` per the env profile."""
+    allow = _resolve_tool_allowlist()
+    if allow is None:
+        return tools
+    return [t for t in tools if t.name in allow]
 
 # ---------------------------------------------------------------------------
 # Sub-package adapters
@@ -189,12 +243,19 @@ def _aggregate() -> tuple[list[Tool], dict[str, Callable[[str, dict], dict]]]:
 def create_server() -> Server:
     """Build the aggregated Server."""
     tools, dispatch_by_name = _aggregate()
+    listed = _apply_tool_filter(tools)
+    if len(listed) != len(tools):
+        logger.info(
+            "goldensuite-mcp: listing %d/%d tools (GOLDENSUITE_MCP_TOOLS profile); "
+            "hidden tools remain callable by exact name",
+            len(listed), len(tools),
+        )
 
     server = Server("goldensuite-mcp")
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return tools
+        return listed
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 (2026-07-10)
+
+### Added
+
+- **Curated tool listing (`GOLDENSUITE_MCP_TOOLS`)** — `list_tools` now returns a
+  curated headline set (~25 tools) **by default** instead of the full ~105, so LLM
+  tool-selection isn't swamped by the flat namespace. `GOLDENSUITE_MCP_TOOLS=full`
+  restores the complete listing; a comma-separated value lists exactly those names.
+  Filtering is **list-only** — every hidden tool stays callable by exact name via
+  `dispatch`. The set lives in `CURATED_TOOLS` in `server.py`. (README: "Curated
+  tool listing".)
+
 ## 0.3.0 (2026-06-24)
 
 ### Added
