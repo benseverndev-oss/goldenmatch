@@ -5,6 +5,14 @@ Status: design — approved in brainstorming, pending spec review
 Base: fresh `origin/main` **after S2.1 #1630 merges** (the code tasks EXTEND S2.1's `PyColumn`/`PyFrame`/`scan_columns`, so the code branch must be rebased onto main-with-S2.1; this spec doc is a new file and carries no conflict).
 Parent program: goldencheck Polars eviction — Stage-2 (see `2026-07-10-goldencheck-stage2-s2.0-nopolars-lane-design.md` for the S2.0–S2.2/reader/P4 roadmap, and `...s2.1-pycolumn-backend-design.md` for the covered-subset backend this extends)
 
+## PLANNING AMENDMENT (2026-07-10) — S2.2 scope narrowed; temporal + str_to_date → S2.3
+
+Reading `relations/temporal.py` while writing the plan showed that wiring `temporal` polars-free needs far more than the `str_to_date` kernel: it calls `gt_mask`/`fill_null`/`sum`/`filter_by`/`cast("str")` on **date-typed** columns and requires the parsed result to report `dtype == "date"` (temporal.py:135). That is a whole date-typed backend surface, and `str_to_date` serves ONLY temporal. User confirmed the carve.
+
+**S2.2 (this spec, as executed) = regex kernel (3 ops) + pure-Python `value_counts_desc` + `PyColumn.dtype` + wire `encoding_detection` + `format_detection` + `pattern_consistency` into `scan_columns`.** These 3 profilers are clean — verified they use only `dtype` (str-gate), `drop_nulls`/`len`/`to_list`, the 3 regex ops, and `value_counts_desc`.
+
+**Deferred to S2.3:** the `str_to_date` chrono kernel, the date-typed `PyColumn` surface (`gt_mask`/`fill_null`/`sum`/`filter_by`/`cast`/`dtype=="date"`), and wiring `temporal`. Sections below that mention `date.rs`/`str_to_date`/`temporal` describe the S2.3 follow-up, not S2.2 — the **plan** (`2026-07-10-goldencheck-stage2-s2.2-native-hardops.md`) is the authoritative S2.2 task list. Native symbol naming follows the existing unprefixed convention (`str_contains_count`/`str_filter_mask`/`str_replace_all`), not the `gc_`-prefixed sketch below.
+
 ## Context
 
 S2.1 shipped the first covered non-Polars backend: a pure-Python `PyColumn`/`PyFrame` implementing the 7 *mechanical* dtype-free ops, so `nullability`/`uniqueness`/`cardinality` run polars-free byte-identically via a public `scan_columns(dict)`. S2.2 extends the covered subset to the **4 hard-op profilers** — `encoding_detection`, `format_detection`, `pattern_consistency`, `temporal` — by providing the ops they need without Polars. Pure-Python `re`/`strptime` **cannot** be byte-identical to Polars for the regex/date ops (different engines; the documented `\p{Nd}`-vs-`isdigit` gap), so the byte-identity mechanism is a **native Rust kernel that uses the SAME engine as Polars** (the `regex` crate; `chrono`). This is the goldenflow "covered-subset + byte-identical-or-decline" philosophy, one tier deeper.
