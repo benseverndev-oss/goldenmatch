@@ -45,10 +45,13 @@ and a human gets "CSV in → result out" without chaining.
 
 Two facts about the current tools make calling the dispatchers the correct seam:
 
-1. **Inline-or-path inputs.** Every goldenmatch input tool already accepts inline
-   file bytes (`file_content` + `filename`) *or* a server `file_path` via the
-   shared `_ingest` resolver (PR #1613). So a composite can upload once and thread
-   the returned path to later steps.
+1. **Inline-or-path inputs.** Every goldenmatch input tool accepts inline file
+   bytes (`file_content` + `filename`) *or* a server `file_path` via the shared
+   `_ingest` resolver (PR #1613). So a composite can upload once and thread the
+   returned path to later steps. Cross-package steps (goldencheck `scan`) are *not*
+   in the `_ingest` resolver — they take a bare `file_path` and read it directly;
+   threading the server path still works because the path is readable, the
+   composite just doesn't rely on the resolver for those steps.
 2. **Shared server-side session state.** `agent_deduplicate` / `agent_match_sources`
    populate the server session; `export_results(output_path)` exports the *last
    run*. Calling the dispatchers in order threads this state implicitly — exactly
@@ -139,17 +142,30 @@ returns the profile (`ok:true` overall, degraded).
 
 ### `clean_and_dedupe`
 
-Standardize then dedupe (cross-package). Chain:
+Standardize then dedupe. Chain:
 
 1. `upload_dataset` → `path`
-2. `transform(path, recipe)` → cleaned file/path (goldenflow)
-3. `agent_deduplicate(file_path=cleaned)` → clusters
+2. `run_transforms(file_path=path, output_path=<gen cleaned>)` → `cleaned_path`
+3. `agent_deduplicate(file_path=cleaned_path)` → clusters
 4. `export_results(output_path=<gen>)` → `golden_path`
 
-`transform` gets a **default recipe** (trim / lowercase / standardize
-names+address), overridable via a `transforms` arg. The exact default recipe is
-pinned during implementation against goldenflow's transform names, with a fixture
-test.
+Uses goldenmatch's **`run_transforms`** tool, *not* goldenflow's raw `transform`.
+`run_transforms` is a goldenmatch tool (inline-or-path via `_ingest`) that runs
+goldenflow's normalization under the hood, **writes the cleaned CSV to a caller-
+supplied `output_path`, and returns it** — so there is a concrete cleaned path to
+thread into step 3. (Goldenflow's own `transform` MCP tool takes a YAML config
+*path* and returns a manifest with no output file, so it is the wrong seam here.)
+
+`run_transforms` applies goldenmatch's built-in normalization set
+(`TransformConfig(mode="silent")`: phone → E.164, dates → ISO, categorical
+spelling, Unicode). No caller-supplied recipe in the first cut — the default set
+is the goldenmatch-blessed normalization and avoids changing match semantics
+unexpectedly. A configurable recipe can be a later addition if needed.
+
+Note: because `run_transforms` wraps goldenflow internally, `clean_and_dedupe` is
+effectively a **goldenmatch-only** chain (only `assess_file`'s `scan` step is
+genuinely cross-package), though it still lives in `goldensuite-mcp` per the
+placement decision.
 
 ## Return contract (all four)
 
@@ -226,9 +242,10 @@ point and `CURATED_TOOLS` are present).
   returns for cluster counts, what `auto_configure` exposes as `matchkeys`) are
   read from the real tool returns during implementation; the spec fixes the shape,
   not every leaf field.
-- **`clean_and_dedupe` default recipe.** Pinned against goldenflow's actual
-  transform names with a fixture test; conservative default (trim/lowercase/
-  standardize) to avoid changing match semantics unexpectedly.
+- **`clean_and_dedupe` normalization.** Fixed to `run_transforms`' built-in set
+  (`TransformConfig(mode="silent")`); no caller recipe in the first cut. A fixture
+  test asserts the cleaned file is written to the generated `output_path` and
+  threaded into dedupe.
 - **`output_path` location.** Generated under the existing uploads/allowed-root
   dir so it passes `safe_path`; never a caller-controlled absolute path unless it
   already resolves under the allowed root.
