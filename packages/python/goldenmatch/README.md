@@ -1271,7 +1271,16 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-69 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+75 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+
+### Local files with the remote server
+
+The hosted server resolves `file_path` on the *server's* filesystem, so a remote client's local paths (`C:\...`, `/home/...`) aren't visible to it. Two ways to feed it a local file without hosting it anywhere:
+
+- **Inline `file_content`** — every file-taking tool (`analyze_data`, `auto_configure`, `agent_deduplicate`, `scan_quality`, `schema_match`, ...) accepts `file_content` (base64 by default, or raw with `encoding: "text"`) as an alternative to `file_path`. The server materializes it to a temp file and proceeds.
+- **`upload_dataset`** — upload the bytes once (`upload_dataset(file_content, filename)`) and get back a server path to reuse across any number of tool calls.
+
+Uploads are ephemeral scratch, capped at 64 MB (`GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`) and reaped after 24 h (`GOLDENMATCH_MCP_UPLOAD_TTL`). For larger datasets, pass a public `http(s)://` URL as `file_path` instead — the server reads those directly.
 
 ## Architecture
 
