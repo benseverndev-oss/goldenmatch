@@ -1707,15 +1707,27 @@ def resolve_http_auth_token(host: str) -> str | None:
     ``GOLDENMATCH_MCP_TOKEN`` set, so an exposed server is never started
     unauthenticated by accident. Returns the token (or ``None`` for an
     intentionally-open loopback bind).
+
+    Escape hatch: set ``GOLDENMATCH_MCP_ALLOW_PUBLIC=1`` to intentionally
+    run an open, unauthenticated public server (e.g. a showcase deployment).
+    This opts out of the fail-closed default; a set ``GOLDENMATCH_MCP_TOKEN``
+    still takes precedence and is enforced when present.
     """
     import os
 
     token = os.environ.get("GOLDENMATCH_MCP_TOKEN")
     is_loopback = host in ("127.0.0.1", "localhost", "::1")
-    if not token and not is_loopback:
+    allow_public = os.environ.get("GOLDENMATCH_MCP_ALLOW_PUBLIC", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if not token and not is_loopback and not allow_public:
         raise RuntimeError(
             f"Refusing to start an unauthenticated MCP HTTP server on host {host!r}. "
-            "Set GOLDENMATCH_MCP_TOKEN, or bind to 127.0.0.1 for local use."
+            "Set GOLDENMATCH_MCP_TOKEN, bind to 127.0.0.1 for local use, or set "
+            "GOLDENMATCH_MCP_ALLOW_PUBLIC=1 to intentionally run an open public server."
         )
     return token
 
