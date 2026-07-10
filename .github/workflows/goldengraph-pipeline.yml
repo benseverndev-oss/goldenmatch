@@ -28,6 +28,15 @@ jobs:
   pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # goldenmatch's ER pipeline (score_buckets / dedupe) allocates through pyarrow's
+    # bundled mimalloc on the polars / ThreadPoolExecutor worker threads it spawns;
+    # mimalloc's per-thread heap init SIGSEGVs (exit 139, core dumped) on this runner --
+    # the same crash the `rust` lane hit, whose #1627 fix note anticipated other
+    # pyarrow-invoking lanes needing it too (see packages/rust/extensions/CLAUDE.md).
+    # Force pyarrow onto the system memory pool (the documented Arrow remedy) for every
+    # gate that runs goldenmatch's pipeline.
+    env:
+      ARROW_DEFAULT_MEMORY_POOL: system
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
