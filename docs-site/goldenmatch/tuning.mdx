@@ -506,6 +506,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 |----------|---------|--------|--------|
 | `GOLDENMATCH_NATIVE` | `auto` | `auto` / `1` / `0` | Native kernel gate. `1` requires native (raises if missing); `0` forces Python. |
 | `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | off | `1` | Polars-native address-normalize fast path. |
+| `GOLDENMATCH_FRAME` | `polars` | `polars`/`arrow` | Frame backend for file ingest. `arrow` is EXPERIMENTAL: file ingest via pyarrow, part of the Polars-eviction program. Output-equivalence enforced by a differential harness + frozen fixtures. |
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | `0`/`1` | Cross-run auto-config memory. `0` for reproducible/CI runs. |
 | `GOLDENMATCH_PLANNING_EFFORT` | `normal` | `fast`/`normal`/`thinking`/`einstein` | Auto-config iteration budget. |
 | `GOLDENMATCH_DISTRIBUTED_PIPELINE` | unset | `1`/`2` | Distributed execution phase. `2` = real streaming (needs `__row_id__`, writes to `output_path`). |
