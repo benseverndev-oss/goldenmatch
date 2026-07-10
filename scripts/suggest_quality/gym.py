@@ -27,6 +27,8 @@ Status values
 from __future__ import annotations
 
 import logging
+import math
+import os
 
 import polars as pl
 
@@ -39,6 +41,45 @@ from scripts.suggest_quality.oracle import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Degenerate-ceiling floor ──────────────────────────────────────────────────
+#
+# ``recovery_pct = (recovered - degraded) / (ceiling - degraded)`` is only a
+# meaningful signal when the zero-config CEILING is itself a competent config.
+# On a dataset whose weighted zero-config ceiling is degenerate (e.g.
+# ``historical_50k`` -- heavily-corrupted PII the weighted auto-config path can
+# only reach F1 ~0.26 on; the FS path fares far better but the gym uses the
+# weighted path), the ceiling is broken, the damage gaps are tiny, and the
+# raw-diagnostic convergence (verify=False, no health safety-net) blindly
+# over-applies threshold moves -- so a small F1 wiggle amplifies into a ±10x
+# recovery_pct that swamps the headline mean with noise.
+#
+# There is no meaningful "undo the damage" target when the starting config is
+# already broken, so such a dataset is skipped from the recovery evaluation
+# (the same "skip when not measurable" posture as the no-gt / loader-None
+# skips below). The controller's committed HEALTH is NOT a usable discriminator
+# here -- every gym dataset commits a best-effort RED config under
+# ``confidence_required=False`` (synthetic/anchor reach F1 1.0 yet still log RED),
+# so f1_ceiling is the signal that actually separates competent from degenerate.
+# Well-behaved gym datasets sit at f1_ceiling 0.96-1.0; the 0.50 floor leaves
+# them wide margin while excluding the 0.26 degenerate case. Env-overridable.
+_CEILING_FLOOR_DEFAULT: float = 0.50
+
+
+def _ceiling_floor() -> float:
+    """Min zero-config ceiling F1 for a dataset to be a valid recovery target.
+
+    Override via ``GOLDENMATCH_SUGGEST_GYM_CEILING_FLOOR``; falls back to the
+    blessed default on an unset/unparseable/out-of-range value."""
+    raw = os.environ.get("GOLDENMATCH_SUGGEST_GYM_CEILING_FLOOR", "").strip()
+    if not raw:
+        return _CEILING_FLOOR_DEFAULT
+    try:
+        floor = float(raw)
+    except ValueError:
+        return _CEILING_FLOOR_DEFAULT
+    # A floor outside [0, 1] can't be a valid F1 gate; ignore it.
+    return floor if 0.0 <= floor <= 1.0 else _CEILING_FLOOR_DEFAULT
 
 
 def evaluate_perturbation(
@@ -211,6 +252,21 @@ def run_catalog(datasets, perturbations) -> list[dict]:
         except Exception as exc:
             logger.warning(
                 "gym: ceiling build failed for %r: %s", dataset.name, exc
+            )
+            continue
+
+        # ── Degenerate-ceiling guard ─────────────────────────────────────────
+        # recovery_pct against a broken ceiling is noise, not signal (see the
+        # _CEILING_FLOOR_DEFAULT rationale). Skip the whole dataset so its
+        # raw-diagnostic blow-ups don't poison the headline mean.
+        floor = _ceiling_floor()
+        if math.isnan(f1_ceiling) or f1_ceiling < floor:
+            logger.info(
+                "gym: skipping %r (zero-config ceiling F1=%s < floor %.2f -- "
+                "degenerate ceiling, recovery%% not measurable)",
+                dataset.name,
+                "nan" if math.isnan(f1_ceiling) else f"{f1_ceiling:.4f}",
+                floor,
             )
             continue
 
