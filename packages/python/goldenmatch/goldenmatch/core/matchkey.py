@@ -343,6 +343,10 @@ def precompute_matchkey_transforms(
         is the new caller in the NE fast-path widening, 2026-05-29)."""
         if getattr(field_obj, "scorer", None) == "record_embedding":
             return
+        # A derived NE column whose sources were absent (see derive_from block
+        # above) never got materialized -- skip its xform rather than raise.
+        if field_obj.field not in df.columns:
+            return
         sig = _xform_sig(field_obj)
         if sig in seen or sig in df.columns:
             return
@@ -357,6 +361,31 @@ def precompute_matchkey_transforms(
                 [apply_transforms(v, field_obj.transforms) if v is not None else None
                  for v in values],
             ))
+
+    # Materialize any SYNTHESIZED NE columns (NegativeEvidenceField.derive_from)
+    # before their xform signatures are computed below. A derived NE field
+    # (e.g. a person full name from ['first_name','last_name']) is not in the
+    # raw frame, so space-join the sources into it first; the NE xform loop and
+    # the per-pair scorer then read it like any other column. Missing sources
+    # => skip (the NE no-ops safely rather than raising).
+    _derived_exprs: list[pl.Expr] = []
+    _seen_derived: set[str] = set()
+    for mk in matchkeys:
+        for ne in (getattr(mk, "negative_evidence", None) or []):
+            src = getattr(ne, "derive_from", None)
+            if not src or ne.field in df.columns or ne.field in _seen_derived:
+                continue
+            if not all(c in df.columns for c in src):
+                continue
+            _seen_derived.add(ne.field)
+            _derived_exprs.append(
+                pl.concat_str(
+                    [pl.col(c).cast(pl.Utf8).fill_null("") for c in src],
+                    separator=" ",
+                ).alias(ne.field)
+            )
+    if _derived_exprs:
+        df = df.with_columns(_derived_exprs)
 
     for mk in matchkeys:
         for field in mk.fields:

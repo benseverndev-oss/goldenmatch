@@ -197,9 +197,20 @@ class NegativeEvidenceField(BaseModel):
     scorer: str
     threshold: float = Field(ge=0.0, le=1.0)
     penalty: float = Field(ge=0.0, le=1.0)
+    # When set, ``field`` is a SYNTHESIZED column the pipeline materializes
+    # before scoring by space-joining ``derive_from`` (e.g. a person full name
+    # from ['first_name', 'last_name']). Lets an NE score a composite the raw
+    # frame doesn't carry -- used by the facility full-name NE lever so a
+    # token_sort on the whole name can tell distinct colleagues apart from
+    # nickname/typo duplicates. None => ``field`` must already exist.
+    derive_from: list[str] | None = None
 
     @model_validator(mode="after")
     def _validate_transforms_and_scorer(self) -> NegativeEvidenceField:
+        if self.derive_from is not None and len(self.derive_from) < 2:
+            raise ValueError(
+                "derive_from must name at least 2 source columns to concatenate"
+            )
         for t in self.transforms:
             if t not in VALID_SIMPLE_TRANSFORMS:
                 raise ValueError(

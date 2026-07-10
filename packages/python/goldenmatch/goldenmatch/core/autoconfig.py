@@ -29,6 +29,7 @@ from goldenmatch.config.schemas import (
     MatchkeyConfig,
     MatchkeyField,
     MemoryConfig,
+    NegativeEvidenceField,
     OutputConfig,
 )
 from goldenmatch.core.autoconfig_discriminative import (
@@ -1343,7 +1344,80 @@ def build_matchkeys(
                 fields=fields,
             ))
 
+    _promote_facility_fullname_ne(matchkeys, skipped_exact, _person_name_basket)
     return matchkeys
+
+
+_GIVEN_NAME_RE = re.compile(r"(first[_ ]?name|given[_ ]?name|fname|^first$|forename)", re.I)
+_FAMILY_NAME_RE = re.compile(r"(last[_ ]?name|surname|lname|family[_ ]?name)", re.I)
+_PERSON_FULLNAME_COL = "__gm_person_fullname__"
+
+
+def _facility_name_ne_enabled() -> bool:
+    return os.environ.get("GOLDENMATCH_FACILITY_NAME_NE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _promote_facility_fullname_ne(
+    matchkeys: list[MatchkeyConfig],
+    skipped_exact: list[tuple[str, str]],
+    person_name_basket: list[tuple[str, bool]],
+) -> None:
+    """Opt-in (``GOLDENMATCH_FACILITY_NAME_NE=1``): on company/location-mode
+    data, add the person FULL NAME as negative evidence on weighted matchkeys.
+
+    Rationale: when a workplace attribute (phone/address/company) was demoted
+    because the records sharing it do NOT co-agree on the person name
+    (``should_demote_attribute_field``), the weighted matchkey still carries
+    address/company (deliberately -- load-bearing for corruption-heavy recall),
+    so two distinct colleagues at one clinic can still fuse. A full-name NE
+    penalises a merge when the whole name is clearly different.
+
+    Full name, not the given name: ``jaro_winkler`` on a given name alone can't
+    separate colleagues (jw(mark,laura)=0.63) from nicknames (jw(robert,bob)=0.50).
+    ``token_sort`` on the concatenated name separates cleanly -- colleagues
+    0.48-0.60, every duplicate flavour (nickname 0.76 / truncation 0.71 / typo
+    0.92) at/above 0.65 -- and is corruption-safe (febrl3's typo'd names stay
+    high, so its true duplicates are never penalised). The full name is a
+    synthesized column (``NegativeEvidenceField.derive_from``) materialized by
+    ``precompute_matchkey_transforms``.
+    """
+    if not _facility_name_ne_enabled():
+        return
+    facility_mode = any(
+        "group-attribute" in reason or "facility" in reason
+        for _col, reason in skipped_exact
+    )
+    if not facility_mode:
+        return
+    name_cols = [c for c, _flag in person_name_basket]
+    if len(name_cols) < 2:
+        return
+    family = next((c for c in name_cols if _FAMILY_NAME_RE.search(c)), None)
+    given = next((c for c in name_cols if _GIVEN_NAME_RE.search(c)), None)
+    sources = [given, family] if (given and family) else name_cols[:2]
+    for mk in matchkeys:
+        if mk.type != "weighted":
+            continue
+        if any(n.field == _PERSON_FULLNAME_COL for n in (mk.negative_evidence or [])):
+            continue
+        ne = list(mk.negative_evidence or [])
+        ne.append(NegativeEvidenceField(
+            field=_PERSON_FULLNAME_COL,
+            transforms=["lowercase", "strip"],
+            scorer="token_sort",
+            threshold=0.65,
+            penalty=0.5,
+            derive_from=sources,
+        ))
+        mk.negative_evidence = ne
+        logger.info(
+            "auto-config[facility]: promoted full-name negative evidence "
+            "(token_sort on %s) on weighted matchkey '%s' -- clearly-different "
+            "colleagues at a shared facility should not fuse.",
+            sources, mk.name,
+        )
 
 
 # ── Strong-identifier blocking-union (#1207) ──────────────────────────────
