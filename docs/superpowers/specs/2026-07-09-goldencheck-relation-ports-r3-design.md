@@ -141,6 +141,13 @@ Each: drop `from goldencheck._polars_lazy import pl`; drop `pl.DataFrame`/`pl.Se
 - **Seam growth** — 6 methods, all general primitives (element-wise compare/agg/parse). The two-column
   `gt_mask`/`eq_mask` follow the `filter_by(Column)` precedent. No task-shaped op (no `exceeds`,
   no `null_agreement`).
+- **Preserve every existing `try/except` block VERBATIM in structure** — only swap the op inside:
+  temporal's `_try_cast_to_date` call in `_check_pair` (the `try: … except Exception: return None`
+  around the two `_try_cast_to_date(...)` calls) and profile()'s date-detection string branch
+  (`try: casted = col.str_to_date(...) … except Exception: pass`); numeric_cross's `_check_exceeds`
+  `try: val_series = frame.column(value_col); … except Exception: return None` and the cast-branch
+  `try: … except Exception: return None` (with `violation_mask = …` staying OUTSIDE it). These guard
+  against exotic-dtype raises; byte-identical control flow requires keeping them.
 
 ## Non-goals (YAGNI)
 R4; `_find_max_pairs`/`_find_date_pairs` changes; a `head(n)` seam op (use `.to_list()[:n]`); overloading
