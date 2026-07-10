@@ -27,9 +27,16 @@ OUT = REPO / "tests" / "parity" / "documents_corpus.jsonl"
 sys.path.insert(0, str(REPO))
 
 from goldenmatch.documents._openai import parse_message_text  # noqa: E402
+from goldenmatch.documents.classify import _pure_parse, _pure_prompt  # noqa: E402
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict  # noqa: E402
+from goldenmatch.documents.structured import _pure_structured_parsed  # noqa: E402
 from goldenmatch.documents.suggest import _PROMPT  # noqa: E402
-from goldenmatch.documents.types import ExtractedRow  # noqa: E402
+from goldenmatch.documents.templates import (  # noqa: E402
+    _ORDER,
+    _pure_template,
+    _template_to_dict,
+)
+from goldenmatch.documents.types import DocTemplate, ExtractedRow  # noqa: E402
 from goldenmatch.documents.vlm_backend import _instruction  # noqa: E402
 
 rows: list[dict] = []
@@ -131,6 +138,133 @@ for c in norm_cases:
             "values": [[col, row.values[col]] for col in cols],
             "confidence": [[col, row.confidence[col]] for col in cols],
         }},
+    )
+
+# --- template --------------------------------------------------------------
+# expected `ok` = the same JSON dict the native shim (documents_template) emits:
+# {"doctype", "header_fields":[{name,kind,hint},...], "line_item_fields":[...]}.
+# Generated from _PURE (via get_template under GOLDENMATCH_NATIVE=0) so pure and
+# corpus can't disagree at generation time. `_template_to_dict` is imported from
+# templates.py (single serializer shared with structured.py + the parity harness).
+for name in _ORDER:
+    add("template", {"doctype": name}, {"ok": _template_to_dict(_pure_template(name))})
+add("template", {"doctype": "nope"}, {"error": True, "substring": "unknown doctype"})
+
+# template_list: cross-checks native template_list() (vec in templates.rs) vs the
+# pure _ORDER, so a doctype added to one but not the other can't ship silently.
+add("template_list", {}, {"ok": list(_ORDER)})
+
+# --- classify: prompt (fixed constant, no input) --------------------------
+add("classify_prompt", None, {"ok": _pure_prompt()})
+
+# --- classify: parse -------------------------------------------------------
+# ok = {"doctype", "confidence"} (the same dict the native shim's JSON decodes to).
+classify_parse_ok = [
+    '{"doctype":"invoice","confidence":0.9}',                 # clean
+    '```json\n{"doctype":"receipt","confidence":0.5}\n```',   # fenced
+    '{"doctype":"generic","confidence":0.2}',                 # generic escape hatch
+    '{"doctype":"po","confidence":1.5}',                      # out-of-range -> clamp to 1.0
+    '{"doctype":"po","confidence":-0.3}',                     # out-of-range -> clamp to 0.0
+    '{"doctype":"po","confidence":1}',                        # integer coerces to 1.0
+    '{"doctype":"po","confidence":0}',                        # direct 0 -> 0.0 (not via clamp)
+]
+for text in classify_parse_ok:
+    r = _pure_parse(text)
+    add("classify_parse", text, {"ok": {"doctype": r.doctype, "confidence": r.confidence}})
+
+# Coercion + strictness boundaries the native leg (CI-only) must match. serde
+# `as_f64()` returns None for null/string/bool -> Err; serde_json REJECTS the bare
+# NaN token (Python json.loads accepts it) -> Err. The `input` here is the raw
+# TEXT the kernel parses (a JSON string value in the jsonl), so a literal `NaN`
+# token rides inside that string and is parsed at kernel time on both legs.
+classify_parse_err = [
+    '{"doctype":"nope","confidence":0.9}',      # unknown doctype
+    '{"doctype":"invoice"}',                    # missing confidence
+    '{"doctype":"po","confidence":null}',       # present-but-null -> not a number
+    '{"doctype":"po","confidence":"0.9"}',      # string -> not a number
+    '{"doctype":"po","confidence":true}',       # bool -> not a number
+    '{"doctype": "po", "confidence": NaN}',     # non-finite: pure clamps unless guarded, serde rejects
+]
+for text in classify_parse_err:
+    add("classify_parse", text, {"error": True})
+
+# --- parse_structured ------------------------------------------------------
+# Keyed by {"text":..., "template": <DocTemplate dict>} (NOT doctype -- the kernel
+# takes the FULL template JSON). `ok` = header + per-item ordered [col,val] pairs
+# (mirrors the `normalize` reshape); column order is re-imposed downstream so the
+# raw alphabetical native map isn't asserted directly. Generated from the pure-only
+# kernel so pure and corpus can't disagree at generation time.
+def _structured_ok(text: str, template: DocTemplate) -> dict:
+    hv, hc, items = _pure_structured_parsed(text, template)
+    hcols = template.header.column_names()
+    icols = template.line_items.column_names()
+    return {
+        "header": {
+            "values": [[c, hv[c]] for c in hcols],
+            "confidence": [[c, hc[c]] for c in hcols],
+        },
+        "line_items": [
+            {
+                "values": [[c, iv[c]] for c in icols],
+                "confidence": [[c, ic[c]] for c in icols],
+            }
+            for iv, ic in items
+        ],
+    }
+
+
+_invoice_tpl = _pure_template("invoice")
+_receipt_tpl = _pure_template("receipt")
+structured_ok_cases = [
+    # header wrapped shape + 2 line items
+    (
+        '{"header": {"values": {"invoice_number": "INV-1", "total_amount": 42,'
+        ' "currency": "USD"}, "confidence": {"invoice_number": 0.9}},'
+        ' "line_items": [{"values": {"description": "Widget", "quantity": 2,'
+        ' "unit_price": 10, "line_total": 20}, "confidence": {"description": 0.8}},'
+        ' {"values": {"description": "Gadget", "quantity": 1}}]}',
+        _invoice_tpl,
+    ),
+    # bare header shape + missing field -> null + extra key dropped, no items
+    ('{"header": {"invoice_number": "INV-B", "currency": "EUR", "junk": "x"}}', _invoice_tpl),
+    # explicitly empty line_items -> []
+    ('{"header": {"values": {"invoice_number": "INV-4"}}, "line_items": []}', _invoice_tpl),
+    # receipt template ignores stray line_items -> []
+    ('{"header": {"values": {"merchant_name": "Shop"}}, "line_items": [{"values": {"x": 1}}]}', _receipt_tpl),
+    # --- coercion edges: pin native (CI-only) == pure against the Rust reference ---
+    # confidence null / string / bool on header fields -> 0.0 (as_f64().unwrap_or(0.0))
+    (
+        '{"header": {"values": {"invoice_number": "X"},'
+        ' "confidence": {"invoice_number": null, "total_amount": "0.9", "currency": true}}}',
+        _invoice_tpl,
+    ),
+    # container VALUES -> serde compact JSON (NOT Python repr)
+    ('{"header": {"values": {"invoice_number": [1, 2, 3], "vendor_name": {"a": 1}}}}', _invoice_tpl),
+    # header `values` present-but-non-object -> treated as bare map (all fields null)
+    ('{"header": {"values": 5}}', _invoice_tpl),
+    # header null (key present) -> all-null header row, no error
+    ('{"header": null}', _invoice_tpl),
+    # bare-scalar line item -> one all-null item row
+    ('{"header": {"values": {"invoice_number": "X"}}, "line_items": [5]}', _invoice_tpl),
+]
+for text, tpl in structured_ok_cases:
+    add(
+        "parse_structured",
+        {"text": text, "template": _template_to_dict(tpl)},
+        {"ok": _structured_ok(text, tpl)},
+    )
+
+# malformed: missing header / invalid JSON -> Err (both legs)
+structured_err_cases = [
+    ('{"line_items": []}', _invoice_tpl),      # no header
+    ("not json", _invoice_tpl),                # invalid JSON
+    ("[1, 2, 3]", _invoice_tpl),               # JSON but not an object
+]
+for text, tpl in structured_err_cases:
+    add(
+        "parse_structured",
+        {"text": text, "template": _template_to_dict(tpl)},
+        {"error": True},
     )
 
 OUT.parent.mkdir(parents=True, exist_ok=True)

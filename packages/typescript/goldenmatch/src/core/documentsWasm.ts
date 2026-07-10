@@ -22,6 +22,11 @@ import {
   extract_instruction,
   suggest_prompt,
   normalize_record,
+  documents_template,
+  documents_template_list,
+  documents_classify_prompt,
+  documents_parse_classify,
+  documents_parse_structured,
 } from "./_wasm/documentsWasmBindings.js";
 import { DOCUMENTS_WASM_BASE64 } from "./_wasm/documentsWasmBytes.js";
 
@@ -50,6 +55,22 @@ export interface TargetSchema {
 export interface NormalizedRecord {
   values: Record<string, unknown>;
   confidence: Record<string, number>;
+}
+
+export interface DocTemplate {
+  doctype: string;
+  header_fields: SchemaField[];
+  line_item_fields: SchemaField[];
+}
+
+export interface ClassifyResult {
+  doctype: string;
+  confidence: number;
+}
+
+export interface StructuredParsed {
+  header: NormalizedRecord;
+  line_items: NormalizedRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +138,45 @@ export function normalizeRecord(
       JSON.stringify(schema),
     ),
   ) as NormalizedRecord;
+}
+
+/** Look up a doctype template (invoice|po|statement|receipt). Returns the
+ *  full `DocTemplate` object. Throws on an unknown doctype. */
+export function documentsTemplate(doctype: string): DocTemplate {
+  ensureInit();
+  return JSON.parse(documents_template(doctype)) as DocTemplate;
+}
+
+/** The stable-ordered list of registry doctypes. */
+export function documentsTemplateList(): string[] {
+  ensureInit();
+  return JSON.parse(documents_template_list()) as string[];
+}
+
+/** The (fixed) doctype-classification prompt. Returns the RAW string. */
+export function documentsClassifyPrompt(): string {
+  ensureInit();
+  return documents_classify_prompt();
+}
+
+/** Parse a classify VLM response into `{doctype, confidence}`. Throws on a
+ *  malformed / unknown-doctype / missing-confidence response. */
+export function documentsParseClassify(text: string): ClassifyResult {
+  ensureInit();
+  return JSON.parse(documents_parse_classify(text)) as ClassifyResult;
+}
+
+/** Parse a structured-extract VLM response against a `DocTemplate`. Returns
+ *  `{header, line_items}`, each normalized `{values, confidence}` keyed by
+ *  column name. Throws on a malformed response (e.g. missing `header`). */
+export function documentsParseStructured(
+  text: string,
+  template: DocTemplate,
+): StructuredParsed {
+  ensureInit();
+  return JSON.parse(
+    documents_parse_structured(text, JSON.stringify(template)),
+  ) as StructuredParsed;
 }
 
 /** True if the wasm kernels initialize + run in this environment. Lets the

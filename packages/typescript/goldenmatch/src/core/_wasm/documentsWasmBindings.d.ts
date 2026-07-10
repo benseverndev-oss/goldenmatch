@@ -8,6 +8,14 @@ export function normalize_record(
   confidence_json: string,
   schema_json: string,
 ): string;
+export function documents_template(doctype: string): string;
+export function documents_template_list(): string;
+export function documents_classify_prompt(): string;
+export function documents_parse_classify(text: string): string;
+export function documents_parse_structured(
+  text: string,
+  template_json: string,
+): string;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(
   module: { module: SyncInitInput } | SyncInitInput,

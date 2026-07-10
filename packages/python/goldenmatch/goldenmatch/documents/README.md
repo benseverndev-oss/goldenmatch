@@ -4,7 +4,7 @@ Turn a pile of PDFs/images into a records DataFrame GoldenMatch can dedupe.
 
 ```python
 from goldenmatch import dedupe_df
-from goldenmatch.documents import ingest_documents, TargetSchema, Field
+from goldenmatch.documents import ingest_documents, TargetSchema, Field, DOC_SIDECARS
 
 schema = TargetSchema([
     Field("full_name"), Field("email", kind="email"),
@@ -15,12 +15,25 @@ df = ingest_documents(["forms/*.pdf", "cards/img_01.jpg"], schema)  # backend="v
 clusters = dedupe_df(
     df,
     fuzzy={"full_name": 0.85}, exact=["email"],
-    exclude_columns=["_source_file", "_source_page", "_extract_confidence"],
+    exclude_columns=DOC_SIDECARS,
 )
 ```
 
+Structured docs: pass `template="invoice"` (or `po`/`statement`/`receipt`) instead of
+a flat `schema=` to extract a typed header record plus linked line items. The header
+frame is the return value; line items come back on `report.line_items`
+(`return_report=True`), linked to their header by the `_doc_id` foreign key.
+
 Install the extra: `pip install "goldenmatch[documents]"`. The VLM backend reads
 `OPENAI_API_KEY_PERSONAL` (or `OPENAI_API_KEY`). A local OCR backend is planned (Phase 3).
+
+> **Note (sidecar columns).** The ingest output frame carries five provenance/meta
+> sidecar columns: `_source_file`, `_source_page`, `_extract_confidence`, `_doc_id`,
+> `_doctype`, exported together as `DOC_SIDECARS`. This applies to BOTH the flat
+> (`schema=`) and structured (`template=`) paths -- stamping is uniform. When handing
+> the frame to `dedupe_df`, exclude ALL of them: `exclude_columns=DOC_SIDECARS`.
+> `_doc_id` is unique per document, so treating it as a match field would prevent any
+> two rows from ever matching -- never leave it in the match set.
 
 ## CLI
 
@@ -46,5 +59,6 @@ curl -F files=@a.pdf -F files=@b.jpg -F schema='{"fields":[{"name":"full_name"},
      localhost:8000/api/v1/documents/ingest
 ```
 
-Records carry `_source_file`/`_source_page`/`_extract_confidence`; pass them to
-`dedupe_df(exclude_columns=...)`. Auth: set `GOLDENMATCH_WEB_TOKEN` and send `Authorization: Bearer`.
+Records carry the `DOC_SIDECARS` set (`_source_file`/`_source_page`/`_extract_confidence`/
+`_doc_id`/`_doctype`); pass `exclude_columns=DOC_SIDECARS` to `dedupe_df`. Auth: set
+`GOLDENMATCH_WEB_TOKEN` and send `Authorization: Bearer`.

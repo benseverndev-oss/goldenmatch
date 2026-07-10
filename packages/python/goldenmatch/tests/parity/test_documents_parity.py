@@ -27,12 +27,40 @@ from pathlib import Path
 import pytest
 from goldenmatch.core._native_loader import native_module
 from goldenmatch.documents._openai import parse_message_text
+from goldenmatch.documents.classify import _pure_parse, _pure_prompt
 from goldenmatch.documents.schema_io import schema_from_dict, schema_to_dict
+from goldenmatch.documents.structured import _pure_structured_parsed
 from goldenmatch.documents.suggest import _PROMPT
-from goldenmatch.documents.types import ExtractedRow
+from goldenmatch.documents.templates import (
+    _from_native_json,
+    _pure_list,
+    _pure_template,
+    _template_to_dict,
+)
+from goldenmatch.documents.types import DocTemplate, ExtractedRow
 from goldenmatch.documents.vlm_backend import _instruction
 
 CORPUS = Path(__file__).parent / "documents_corpus.jsonl"
+
+
+def _structured_pairs(header_v: dict, header_c: dict, items: list, template: DocTemplate) -> dict:
+    """Reshape a parsed structured result to ordered [col, val] pairs (mirrors the
+    `normalize` kernel reshape) so a plain dict compare can't miss a reordering."""
+    hcols = template.header.column_names()
+    icols = template.line_items.column_names()
+    return {
+        "header": {
+            "values": [[c, header_v.get(c)] for c in hcols],
+            "confidence": [[c, float(header_c.get(c, 0.0))] for c in hcols],
+        },
+        "line_items": [
+            {
+                "values": [[c, iv.get(c)] for c in icols],
+                "confidence": [[c, float(ic.get(c, 0.0))] for c in icols],
+            }
+            for iv, ic in items
+        ],
+    }
 
 
 def _load_corpus() -> list[dict]:
@@ -71,6 +99,19 @@ def _run_pure(kernel: str, input_: object):
             "values": [[c, row.values[c]] for c in cols],
             "confidence": [[c, row.confidence[c]] for c in cols],
         }
+    if kernel == "template":
+        return _template_to_dict(_pure_template(input_["doctype"]))
+    if kernel == "template_list":
+        return _pure_list()
+    if kernel == "classify_prompt":
+        return _pure_prompt()
+    if kernel == "classify_parse":
+        r = _pure_parse(input_)
+        return {"doctype": r.doctype, "confidence": r.confidence}
+    if kernel == "parse_structured":
+        template = _from_native_json(input_["template"])
+        hv, hc, items = _pure_structured_parsed(input_["text"], template)  # pure-only, raises on error
+        return _structured_pairs(hv, hc, items, template)
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -101,6 +142,21 @@ def _run_native(kernel: str, input_: object, symbol: str):
             "values": [[c, pv.get(c)] for c in cols],
             "confidence": [[c, float(pc.get(c, 0.0))] for c in cols],
         }
+    if kernel == "template":
+        return json.loads(nm.documents_template(input_["doctype"]))
+    if kernel == "template_list":
+        return json.loads(nm.documents_template_list())
+    if kernel == "classify_prompt":
+        return nm.documents_classify_prompt()
+    if kernel == "classify_parse":
+        return json.loads(nm.documents_parse_classify(input_))
+    if kernel == "parse_structured":
+        template = _from_native_json(input_["template"])
+        out = json.loads(
+            nm.documents_parse_structured(input_["text"], json.dumps(input_["template"]))
+        )
+        items = [(it["values"], it["confidence"]) for it in out["line_items"]]
+        return _structured_pairs(out["header"]["values"], out["header"]["confidence"], items, template)
     raise AssertionError(f"unknown kernel {kernel!r}")
 
 
@@ -110,6 +166,11 @@ _KERNEL_SYMBOL = {
     "prompt_extract": "documents_extract_instruction",
     "prompt_suggest": "documents_suggest_prompt",
     "normalize": "documents_normalize_record",
+    "template": "documents_template",
+    "template_list": "documents_template_list",
+    "classify_prompt": "documents_classify_prompt",
+    "classify_parse": "documents_parse_classify",
+    "parse_structured": "documents_parse_structured",
 }
 
 
