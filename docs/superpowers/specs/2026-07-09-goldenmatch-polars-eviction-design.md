@@ -4,8 +4,8 @@
 - **Status:** Approved (design); implementation planned wave-by-wave
 - **Driver:** Full in-house ownership of the data plane (Arrow) and compute plane
   (owned Rust kernels), mirroring the completed goldenflow and in-flight
-  goldencheck evictions. Secondary driver: install footprint (polars is ~130MB
-  of the base install).
+  goldencheck evictions. Secondary driver: install footprint (~185MB, the
+  figure the sibling eviction programs use).
 - **End state (user decision):** ZERO Polars anywhere in the goldenmatch
   package -- not an optional `[polars]` accelerator extra, not a decline class.
   Every module ports.
@@ -80,8 +80,8 @@ Each wave ships independently, parity-gated, branched off fresh origin/main
 
 | Wave | Content | Polars status after |
 | --- | --- | --- |
-| W0 | Lazy-import linchpin (goldenflow's `_LazyPolars` proxy, all 124 imports) + `core/frame.py` seam scaffold with a delegating PolarsFrame backend | Present, but `import goldenmatch` no longer loads it |
-| W1 | Arrow IO (`core/io_arrow.py`: pyarrow csv/parquet; openpyxl direct for Excel) + the fused spine wired end-to-end on ArrowFrame, env-gated `GOLDENMATCH_FRAME=arrow` | Default engine still Polars |
+| W0 | Four deliverables: (1) lazy-import linchpin (goldenflow's `_LazyPolars` proxy, all 124 imports); (2) `core/frame.py` seam scaffold with a delegating PolarsFrame backend; (3) the semantic-op audit (section 4.1); (4) the module-level dtype-constant enumeration (section 7) | Present, but `import goldenmatch` no longer loads it |
+| W1 | Arrow IO (`core/io_arrow.py`: pyarrow csv/parquet; openpyxl direct for Excel) + the fused spine wired end-to-end on ArrowFrame, env-gated `GOLDENMATCH_FRAME=arrow`. The differential CI lane and the frozen pre-port parity fixtures (section 5) land HERE -- they are what makes the env-gated backend mergeable. Pre-W2, a config the fused kernels decline falls back to the Polars classic path with a logged notice, even under `GOLDENMATCH_FRAME=arrow` | Default engine still Polars |
 | W2 | Classic engine port: blocker/scorer/cluster/golden/standardize/matchkey onto seam ops; measured hot spots become kernels; fused coverage widened in parallel | Core engine dual-backend |
 | W3 | Controller/autoconfig front: profiling, indicators, complexity signals -- mostly column reductions (goldencheck-shaped; many map onto already-proven seam ops) | Controller dual-backend |
 | W4 | Tails: distributed (Ray `map_batches(batch_format="pyarrow")` -- Ray's object store is natively Arrow), chunked, db/identity, web, TUI engine, MCP/A2A handlers, in-repo downstream consumers | Polars unreferenced |
