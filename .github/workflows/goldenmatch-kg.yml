@@ -25,6 +25,9 @@ permissions:
 env:
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"  # no cross-run memory writes in CI
   GOLDENMATCH_NATIVE: "0"             # pure-Python path; deterministic for these tiny tests
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads
+  # under a fresh PyPI install; force the system pool (the #1627 rust-lane remedy).
+  ARROW_DEFAULT_MEMORY_POOL: system
 
 jobs:
   core:

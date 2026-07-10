@@ -9,6 +9,11 @@ on:
     - cron: "0 9 * * 1" # Mondays 09:00 UTC
   workflow_dispatch:
 
+env:
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads
+  # under a fresh PyPI install; force the system pool (the #1627 rust-lane remedy).
+  ARROW_DEFAULT_MEMORY_POOL: system
+
 jobs:
   drift:
     runs-on: ubuntu-latest

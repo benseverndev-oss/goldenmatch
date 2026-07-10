@@ -37,6 +37,9 @@ env:
   BENCH_DIR: packages/python/goldenmatch/benchmarks/er-kg-bench
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"  # no cross-run memory writes in CI
   GOLDENMATCH_ANALYTICS: "0"
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads
+  # under a fresh PyPI install; force the system pool (the #1627 rust-lane remedy).
+  ARROW_DEFAULT_MEMORY_POOL: system
 
 jobs:
   bench:
