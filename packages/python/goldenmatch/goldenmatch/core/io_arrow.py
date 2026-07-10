@@ -32,10 +32,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from goldenmatch.core.ingest import _is_probably_utf8
-
-_PARQUET_SUFFIXES = {".parquet", ".pq"}
-_EXCEL_SUFFIXES = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+from goldenmatch.core.ingest import _TEXT_SUFFIXES, _is_probably_utf8
 
 
 def read_table_arrow(
@@ -61,13 +58,21 @@ def read_table_arrow(
     path = Path(path)
     suffix = path.suffix.lower()
 
-    if suffix in _PARQUET_SUFFIXES:
+    # Suffix dispatch mirrors load_file EXACTLY: only ".parquet" is parquet
+    # (not ".pq"), only ".xlsx" is Excel (not ".xlsm"/".xltx"/".xltm"), and
+    # only the ingest text-suffix set (or no suffix) is CSV. Anything else
+    # raises the same ValueError load_file does -- error parity includes
+    # rejecting what the reference rejects.
+    if suffix == ".parquet":
         return _read_parquet_arrow(path)
 
-    if suffix in _EXCEL_SUFFIXES:
+    if suffix == ".xlsx":
         return _read_excel_arrow(path, sheet=sheet)
 
-    return _read_csv_arrow(path, separator=separator, encoding=encoding)
+    if suffix in _TEXT_SUFFIXES or suffix == "":
+        return _read_csv_arrow(path, separator=separator, encoding=encoding)
+
+    raise ValueError(f"Unsupported file format: {suffix!r}")
 
 
 # --------------------------------------------------------------------------

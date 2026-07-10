@@ -217,6 +217,21 @@ def _case_custom_separator(tmp_path: Path) -> tuple[Path, dict]:
     return path, {"delimiter": "|"}
 
 
+def _case_latin1_iso_dates(tmp_path: Path) -> tuple[Path, dict]:
+    """Explicit latin-1 codec + an ISO-date column: gates the probe-then-
+    force-string temporal override on the BufferReader (decoded-text) path,
+    not just the direct-file path the plain ``iso_dates`` case exercises."""
+    path = tmp_path / "latin1_dates.csv"
+    text = (
+        "id,name,signup_date\n"
+        "1,Jos\xe9,2024-01-15\n"
+        "2,Caf\xe9,2024-02-20\n"
+        "3,Mu\xf1oz,2023-12-31\n"
+    )
+    path.write_bytes(text.encode("latin-1"))
+    return path, {"encoding": "latin-1"}
+
+
 _VALUE_PARITY_CASES = [
     ("sample_csv", _case_sample_csv),
     ("sample_csv_b", _case_sample_csv_b),
@@ -228,6 +243,7 @@ _VALUE_PARITY_CASES = [
     ("explicit_utf8_lossy", _case_explicit_utf8_lossy),
     ("explicit_utf8_strict", _case_explicit_utf8_strict),
     ("custom_separator", _case_custom_separator),
+    ("latin1_explicit_iso_dates", _case_latin1_iso_dates),
 ]
 
 
@@ -328,3 +344,19 @@ def test_excel_parity_named_sheet(tmp_path: Path) -> None:
     polars_df = load_file(path, sheet="Sheet2").collect()
     arrow_table = read_table_arrow(path, sheet="Sheet2")
     _assert_parity(arrow_table, polars_df)
+
+
+def test_unsupported_suffix_error_parity(tmp_path: Path) -> None:
+    """Suffix dispatch parity: ``load_file`` only accepts ``.parquet``,
+    ``.xlsx``, and the text-suffix set -- everything else (``.xlsm`` here)
+    raises ValueError. ``read_table_arrow`` must reject the same suffixes,
+    not silently accept a superset.
+    """
+    path = tmp_path / "macro_book.xlsm"
+    path.write_bytes(b"not really a workbook")
+
+    with pytest.raises(ValueError, match="Unsupported file format"):
+        load_file(path)
+
+    with pytest.raises(ValueError, match="Unsupported file format"):
+        read_table_arrow(path)
