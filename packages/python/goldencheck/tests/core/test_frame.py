@@ -221,3 +221,43 @@ def test_column_get():
     assert frame.column("s").get(1) == "b"
     # byte-identical to raw Series indexing (what df[c][r] does)
     assert frame.column("s").get(1) == pl.Series(["a", "b", "c"])[1]
+
+
+def test_column_is_null_and_sum():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"x": [1, None, 3, None]})).column("x")
+    mask = col.is_null()
+    assert mask.to_list() == [False, True, False, True]
+    assert int(mask.sum()) == 2   # sum of a bool column == count of True
+
+
+def test_column_gt_mask_and_eq_mask():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    frame = to_frame(pl.DataFrame({"a": [5, 1, 9], "b": [3, 4, 9]}))
+    a = frame.column("a"); b = frame.column("b")
+    assert a.gt_mask(b).to_list() == (pl.Series([5, 1, 9]) > pl.Series([3, 4, 9])).to_list()
+    assert a.gt_mask(b).to_list() == [True, False, False]
+    assert a.eq_mask(b).to_list() == [False, False, True]
+
+
+def test_column_fill_null():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    # a > comparison with a null operand yields null; fill_null(False) clears it
+    frame = to_frame(pl.DataFrame({"a": [5, None, 9], "b": [3, 4, 9]}))
+    a = frame.column("a"); b = frame.column("b")
+    assert a.gt_mask(b).fill_null(False).to_list() == [True, False, False]
+
+
+def test_column_str_to_date():
+    import polars as pl
+    from goldencheck.core.frame import to_frame
+    col = to_frame(pl.DataFrame({"d": ["2020-01-02", "not-a-date", "2021-12-31"]})).column("d")
+    got = col.str_to_date("%Y-%m-%d", strict=False)
+    assert got.to_list() == pl.Series(["2020-01-02", "not-a-date", "2021-12-31"]).str.to_date(
+        format="%Y-%m-%d", strict=False
+    ).to_list()
+    # invalid parses -> null under strict=False
+    assert got.to_list()[1] is None
