@@ -2270,6 +2270,16 @@ jobs:
         # import/marshalling failure fails the lane instead of silently skipping.
         env:
           GOLDENMATCH_BRIDGE_REQUIRE_PY: "1"
+          # pyarrow's bundled mimalloc allocator SIGSEGVs in mi_thread_init on the
+          # worker threads goldenmatch's pipeline spawns (polars / ThreadPoolExecutor
+          # workers call pyarrow.array() -> ConvertPySequence) under this embedded
+          # CPython. Reproduces ~deterministically across the 46-test aggregate run
+          # (each test in isolation is fine; the accumulated thread churn trips
+          # mimalloc's per-thread heap init), NOT a test-thread race -- it segfaults
+          # even at --test-threads=1. Force pyarrow onto the system memory pool (the
+          # documented Arrow remedy). Verified locally: 20/20 clean with this set vs
+          # 20/20 SIGSEGV without. See packages/rust/extensions/CLAUDE.md.
+          ARROW_DEFAULT_MEMORY_POOL: system
       - run: cargo clippy --workspace -- -D warnings
       # The standalone pyo3-free sibling crates (graph-core, score-core) are
       # each their own [workspace], so `cargo test --workspace` above (which
