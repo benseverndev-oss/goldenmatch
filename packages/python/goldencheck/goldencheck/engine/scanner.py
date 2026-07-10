@@ -10,6 +10,7 @@ from goldencheck._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
+from goldencheck.core.frame import PyFrame
 from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.engine.reader import read_file
 from goldencheck.engine.sampler import maybe_sample
@@ -39,7 +40,7 @@ from goldencheck.relations.temporal import TemporalOrderProfiler
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["scan_file", "scan_file_with_llm", "scan_dataframe"]
+__all__ = ["scan_file", "scan_file_with_llm", "scan_dataframe", "scan_columns"]
 
 COLUMN_PROFILERS = [
     TypeInferenceProfiler(),
@@ -240,6 +241,21 @@ def _post_classification_checks(
             ))
 
     return new_findings
+
+
+_COVERED_COLUMN_PROFILERS = [NullabilityProfiler(), UniquenessProfiler(), CardinalityProfiler()]
+
+
+def scan_columns(columns: dict[str, list]) -> list[Finding]:
+    """Polars-free reduced scan of the covered STRUCTURAL checks (nullability,
+    uniqueness, cardinality) over in-memory columns. The regex/format/encoding/
+    date/value-count checks need Polars -- use scan_dataframe for a full scan."""
+    frame = PyFrame.from_columns(columns)
+    findings: list[Finding] = []
+    for name in columns:
+        for profiler in _COVERED_COLUMN_PROFILERS:
+            findings.extend(profiler.profile(frame, name))
+    return findings
 
 
 def scan_dataframe(
