@@ -13,14 +13,27 @@ even though pyarrow is already a hard base dependency).
 
 Known reader deltas vs ``load_file`` (documented, not silently tolerated):
 
-  - NONE as of this writing. The one real divergence surfaced during
-    development -- pyarrow's CSV reader infers ``date32``/``timestamp`` for
+  - Date inference: pyarrow's CSV reader infers ``date32``/``timestamp`` for
     ISO-date-shaped strings, while polars' ``scan_csv``/``read_csv`` never
     auto-parses dates (``load_file`` never passes ``try_parse_dates``) --
     is resolved below: the CSV reader probes the naturally-inferred schema
     and forces any temporal column back to ``pa.string()`` via
     ``ConvertOptions(column_types=...)`` before the real read, so the raw
     source text passes through unparsed exactly like polars.
+  - Empty string fields (found by the Task 6 output-level differential
+    harness, ``scripts/diff_frame_backends.py``, on a blank ``external_id``
+    column -- the 16-case reader-only corpus had no blank-field case):
+    pyarrow's CSV reader defaults an empty **string**-typed cell to ``""``,
+    not null (``strings_can_be_null`` defaults False; numeric columns
+    already null an empty cell either way, so the divergence is
+    string-column-only). Polars' ``scan_csv``/``read_csv`` always treats a
+    bare empty field as null. Fixed via ``ConvertOptions(strings_can_be_null=
+    True, null_values=[""])`` on every CSV read (not just the temporal
+    second pass) -- ``null_values`` is narrowed to ``[""]`` because
+    pyarrow's own default list additionally treats ``"NA"``/``"NULL"``/
+    ``"null"``/``"NaN"``/etc. as null, which polars does NOT (those stay
+    literal strings) -- the wider default list would trade one divergence
+    for another.
   - Error parity: a CSV row with the wrong column count raises on BOTH
     engines (``load_file``'s default path passes no
     ``ignore_errors``/``truncate_ragged_lines`` knob), so this reader does
@@ -33,6 +46,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from goldenmatch.core.ingest import _TEXT_SUFFIXES, _is_probably_utf8
+
+# Polars' CSV readers only ever null a BARE empty field -- never "NA"/"NULL"/
+# "null"/etc (those stay literal strings). pyarrow's own ConvertOptions
+# default null_values list is much wider, so it must be narrowed explicitly
+# rather than left at the default.
+_NULL_VALUES = [""]
 
 
 def read_table_arrow(
@@ -116,16 +135,32 @@ def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
     return _read_csv_from_text(text, parse_options)
 
 
+def _base_convert_options(**extra):
+    """The polars-parity ``ConvertOptions`` every CSV read uses: only a bare
+    empty field is null (not pyarrow's wider "NA"/"NULL"/etc default list).
+    ``extra`` overlays additional kwargs (e.g. a temporal ``column_types``
+    override) onto the same base.
+    """
+    import pyarrow.csv as pa_csv
+
+    return pa_csv.ConvertOptions(
+        strings_can_be_null=True, null_values=_NULL_VALUES, **extra
+    )
+
+
 def _read_csv_direct(path: Path, parse_options):
     """Read directly from the file path, forcing inferred temporal columns
     back to string (polars never auto-parses CSV dates)."""
     import pyarrow.csv as pa_csv
 
-    probe = pa_csv.read_csv(str(path), parse_options=parse_options)
+    probe = pa_csv.read_csv(
+        str(path), parse_options=parse_options,
+        convert_options=_base_convert_options(),
+    )
     column_types = _temporal_override_types(probe.schema)
     if not column_types:
         return probe
-    convert_options = pa_csv.ConvertOptions(
+    convert_options = _base_convert_options(
         timestamp_parsers=[], column_types=column_types
     )
     return pa_csv.read_csv(
@@ -140,11 +175,14 @@ def _read_csv_from_text(text: str, parse_options):
     import pyarrow.csv as pa_csv
 
     raw = text.encode("utf-8")
-    probe = pa_csv.read_csv(pa.BufferReader(raw), parse_options=parse_options)
+    probe = pa_csv.read_csv(
+        pa.BufferReader(raw), parse_options=parse_options,
+        convert_options=_base_convert_options(),
+    )
     column_types = _temporal_override_types(probe.schema)
     if not column_types:
         return probe
-    convert_options = pa_csv.ConvertOptions(
+    convert_options = _base_convert_options(
         timestamp_parsers=[], column_types=column_types
     )
     return pa_csv.read_csv(
