@@ -22,35 +22,24 @@ reports a bounded number of findings.
 """
 from __future__ import annotations
 
-from functools import lru_cache
-
-from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
-from goldencheck.core.frame import to_frame
+from goldencheck.core.frame import _neutral_dtype, to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 50          # enough support that a strict FD isn't a small-sample fluke
 _MAX_CANDIDATES = 12    # bound the O(k^2) pair space
 _MAX_FINDINGS = 10
 
-
-@lru_cache(maxsize=1)
-def _supported() -> tuple:
-    return (
-        pl.Utf8,
-        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-        pl.Boolean,
-    )
+_SUPPORTED = frozenset({"str", "int", "uint", "bool"})
 
 
-def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
+def _select_candidates(df, n_rows: int) -> list[str]:
     """Supported-dtype, non-constant columns; lowest-cardinality first (the
     interesting determinants), capped."""
     scored: list[tuple[int, str]] = []
     for col in df.columns:
         series = df[col]
-        if series.dtype not in _supported():
+        if _neutral_dtype(series.dtype) not in _SUPPORTED:
             continue
         nu = series.n_unique()
         if nu <= 1:
@@ -60,7 +49,7 @@ def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
     return [c for _nu, c in scored[:_MAX_CANDIDATES]]
 
 
-def _discover_python(df: pl.DataFrame, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
+def _discover_python(df, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
     """Polars-free mirror of the kernel: det->dep holds iff
     n_distinct(det, dep) == n_distinct(det). Skips trivial pairs identically.
 
@@ -87,11 +76,11 @@ def _discover_python(df: pl.DataFrame, cols: list[str], n_rows: int) -> list[tup
 class FunctionalDependencyProfiler:
     """Dataset-level relation profiler: discover strict single-column FDs."""
 
-    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
         df = frame.native
         n_rows = df.height
-        if n_rows < _MIN_ROWS or df.width < 2:
+        if n_rows < _MIN_ROWS or len(frame.columns) < 2:
             return []
 
         cols = _select_candidates(df, n_rows)
@@ -101,7 +90,7 @@ class FunctionalDependencyProfiler:
         pairs: list[tuple[int, int]]
         if native_enabled("functional_dependencies"):
             try:
-                arrays = [df[c].to_arrow() for c in cols]
+                arrays = [frame.column(c).to_arrow() for c in cols]
                 pairs = native_module().discover_functional_dependencies(arrays)
             except Exception:  # noqa: BLE001 - any native failure -> pure-Python path
                 pairs = _discover_python(df, cols, n_rows)

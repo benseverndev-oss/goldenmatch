@@ -19,11 +19,8 @@ information, not a violation.
 """
 from __future__ import annotations
 
-from functools import lru_cache
-
-from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
-from goldencheck.core.frame import to_frame
+from goldencheck.core.frame import _neutral_dtype, to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # A key wider than this is rarely a meaningful natural key and the search space
@@ -35,23 +32,15 @@ MAX_REPORTED_KEYS = 3
 
 # Dtypes the native interner supports; we restrict the Python path to the same
 # set so the two are parity-comparable on identical inputs.
-@lru_cache(maxsize=1)
-def _supported() -> tuple:
-    return (
-        pl.Utf8,
-        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-        pl.Float32, pl.Float64,
-        pl.Boolean,
-    )
+_SUPPORTED = frozenset({"str", "int", "uint", "float", "bool"})
 
 
-def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
+def _select_candidates(df, n_rows: int) -> list[str]:
     """Non-constant, supported-dtype columns, most-discriminative first, capped."""
     scored: list[tuple[int, str]] = []
     for col in df.columns:
         series = df[col]
-        if series.dtype not in _supported():
+        if _neutral_dtype(series.dtype) not in _SUPPORTED:
             continue
         nu = series.n_unique()
         if nu <= 1:  # constant column can never help form a key
@@ -62,7 +51,7 @@ def _select_candidates(df: pl.DataFrame, n_rows: int) -> list[str]:
     return [col for _nu, col in scored[:MAX_CANDIDATE_COLS]]
 
 
-def _has_single_column_key(df: pl.DataFrame, n_rows: int) -> bool:
+def _has_single_column_key(df, n_rows: int) -> bool:
     for col in df.columns:
         series = df[col]
         if series.null_count() == 0 and series.n_unique() == n_rows:
@@ -71,7 +60,7 @@ def _has_single_column_key(df: pl.DataFrame, n_rows: int) -> bool:
 
 
 def _python_search(
-    df: pl.DataFrame, candidates: list[str], n_rows: int, max_size: int
+    df, candidates: list[str], n_rows: int, max_size: int
 ) -> list[list[int]]:
     """Polars-free mirror of goldencheck_core::composite_key_search.
 
@@ -110,11 +99,11 @@ def _python_search(
 class CompositeKeyProfiler:
     """Dataset-level relation profiler: discover minimal composite keys."""
 
-    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
         df = frame.native
         n_rows = df.height
-        if n_rows < 2 or df.width < 2:
+        if n_rows < 2 or len(frame.columns) < 2:
             return []
         # Only interesting when there's no single-column key.
         if _has_single_column_key(df, n_rows):
@@ -131,7 +120,7 @@ class CompositeKeyProfiler:
         keys_idx: list[list[int]]
         if native_enabled("composite_keys"):
             try:
-                arrays = [df[c].to_arrow() for c in candidates]
+                arrays = [frame.column(c).to_arrow() for c in candidates]
                 keys_idx = native_module().composite_key_search(
                     arrays, MAX_KEY_SIZE, single_unique
                 )

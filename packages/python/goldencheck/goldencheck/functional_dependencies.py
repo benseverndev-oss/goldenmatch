@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 from goldencheck.relations import approx_fd as _afd
 from goldencheck.relations import functional_dependency as _fd
 
@@ -34,38 +34,46 @@ class FunctionalDependency:
     confidence: float
 
 
-def _strict_pairs(df: pl.DataFrame, n: int) -> list[tuple[str, str]]:
-    cols = _fd._select_candidates(df, n)
+def _strict_pairs(frame, n: int) -> list[tuple[str, str]]:
+    cols = _fd._select_candidates(frame.native, n)
     if len(cols) < 2:
         return []
     pairs: list[tuple[int, int]]
     if native_enabled("functional_dependencies"):
         try:
-            pairs = native_module().discover_functional_dependencies([df[c].to_arrow() for c in cols])
+            pairs = native_module().discover_functional_dependencies(
+                [frame.column(c).to_arrow() for c in cols]
+            )
         except Exception:  # noqa: BLE001 - native failure -> Python fallback
-            pairs = _fd._discover_python(df, cols, n)
+            pairs = _fd._discover_python(frame.native, cols, n)
     else:
-        pairs = _fd._discover_python(df, cols, n)
+        pairs = _fd._discover_python(frame.native, cols, n)
     return [(cols[i], cols[j]) for i, j in pairs]
 
 
-def _approx_triples(df: pl.DataFrame, n: int, min_conf: float) -> list[tuple[str, str, float]]:
-    cols = _afd._select_candidates(df)
+def _approx_triples(frame, n: int, min_conf: float) -> list[tuple[str, str, float]]:
+    cols = _afd._select_candidates(frame.native)
     if len(cols) < 2:
         return []
     triples: list[tuple[int, int, int]]
     if native_enabled("approximate_fd"):
         try:
-            triples = native_module().discover_approximate_fds([df[c].to_arrow() for c in cols], min_conf)
+            triples = native_module().discover_approximate_fds(
+                [frame.column(c).to_arrow() for c in cols], min_conf
+            )
         except Exception:  # noqa: BLE001 - native failure -> Python fallback
-            triples = _afd._discover_python([_afd._intern(df[c].to_list()) for c in cols], n, min_conf)
+            triples = _afd._discover_python(
+                [_afd._intern(frame.column(c).to_list()) for c in cols], n, min_conf
+            )
     else:
-        triples = _afd._discover_python([_afd._intern(df[c].to_list()) for c in cols], n, min_conf)
+        triples = _afd._discover_python(
+            [_afd._intern(frame.column(c).to_list()) for c in cols], n, min_conf
+        )
     return [(cols[i], cols[j], 1.0 - viol / n) for i, j, viol in triples]
 
 
 def functional_dependencies(
-    df: pl.DataFrame,
+    df,
     *,
     min_confidence: float = 0.95,
 ) -> list[FunctionalDependency]:
@@ -73,15 +81,16 @@ def functional_dependencies(
 
     A determinant is returned when it determines at least one column at
     >= ``min_confidence``. Sorted by confidence desc then name."""
-    n = df.height
-    if n < 2 or df.width < 2:
+    frame = to_frame(df)
+    n = frame.height
+    if n < 2 or len(frame.columns) < 2:
         return []
 
     # determinant -> {dependent: confidence}; strict (1.0) wins ties.
     det_to: dict[str, dict[str, float]] = {}
-    for det, dep in _strict_pairs(df, n):
+    for det, dep in _strict_pairs(frame, n):
         det_to.setdefault(det, {})[dep] = 1.0
-    for det, dep, conf in _approx_triples(df, n, min_confidence):
+    for det, dep, conf in _approx_triples(frame, n, min_confidence):
         deps = det_to.setdefault(det, {})
         if conf > deps.get(dep, 0.0):
             deps[dep] = conf
