@@ -81,14 +81,20 @@ Each wave ships independently, parity-gated, branched off fresh origin/main
 | Wave | Content | Polars status after |
 | --- | --- | --- |
 | W0 | Four deliverables: (1) lazy-import linchpin (goldenflow's `_LazyPolars` proxy, all 124 imports); (2) `core/frame.py` seam scaffold with a delegating PolarsFrame backend; (3) the semantic-op audit (section 4.1); (4) the module-level dtype-constant enumeration (section 7) | Present, but `import goldenmatch` no longer loads it |
-| W1 | Arrow IO (`core/io_arrow.py`: pyarrow csv/parquet; openpyxl direct for Excel) + the fused spine wired end-to-end on ArrowFrame, env-gated `GOLDENMATCH_FRAME=arrow`. The differential CI lane and the frozen pre-port parity fixtures (section 5) land HERE -- they are what makes the env-gated backend mergeable. Pre-W2, a config the fused kernels decline falls back to the Polars classic path with a logged notice, even under `GOLDENMATCH_FRAME=arrow` | Default engine still Polars |
-| W2 | Classic engine port: blocker/scorer/cluster/golden/standardize/matchkey onto seam ops; measured hot spots become kernels; fused coverage widened in parallel | Core engine dual-backend |
+| W1 | Arrow IO (`core/io_arrow.py`: pyarrow csv/parquet; openpyxl for Excel) + ArrowFrame backend + env-gated ingest lane `GOLDENMATCH_FRAME=arrow` + the differential CI harness and frozen pre-port parity fixtures. Pre-W2, arrow mode converts once at the ingest boundary (`pl.from_arrow`) and the engine runs classic; configs the fused kernels decline fall back to the Polars classic path with a logged notice. | Default engine still Polars |
+| W2 | Classic engine port: blocker/scorer/cluster/golden/standardize/matchkey onto seam ops; measured hot spots become kernels; fused coverage widened in parallel; ALSO ports the fused-kernel prep derivation (`_build_block_key_expr`, `_get_transformed_values`, `fused_match.py`'s internal `pl.DataFrame`) so the covered-config spine runs polars-free end-to-end -- moved here from W1 by post-W0 recon (the prep is expression glue, W2's class). | Core engine dual-backend |
 | W3 | Controller/autoconfig front: profiling, indicators, complexity signals -- mostly column reductions (goldencheck-shaped; many map onto already-proven seam ops) | Controller dual-backend |
 | W4 | Tails: distributed (Ray `map_batches(batch_format="pyarrow")` -- Ray's object store is natively Arrow), chunked, db/identity, web, TUI engine, MCP/A2A handlers, in-repo downstream consumers | Polars unreferenced |
 | W5 | The flip: `polars` removed from dependencies, PolarsFrame + `GOLDENMATCH_FRAME` deleted, test assertions migrated to Arrow, ship v3.0.0 | ZERO |
 
 W0-W4 ship as 2.x minor releases; users see no behavior change (Polars remains
 the default backend, Arrow is env-gated experimental). W5 is the major.
+
+**W1 scope note (2026-07-10):** W0 recon found `run_match_fused_arrow`'s prep
+derives block keys and transformed score columns via Polars expressions,
+which this spec assigns to the classic-glue class. The polars-free spine
+therefore lands with W2's expression-glue port; W1 delivered the Arrow IO
+front, the ArrowFrame backend, and the differential harness.
 
 ## 4. The Frame seam
 

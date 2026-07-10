@@ -1,0 +1,210 @@
+{
+  "clusters": [
+    [
+      "r000",
+      "r001"
+    ],
+    [
+      "r002",
+      "r003"
+    ],
+    [
+      "r004",
+      "r005"
+    ],
+    [
+      "r006",
+      "r007"
+    ],
+    [
+      "r008",
+      "r009"
+    ],
+    [
+      "r010",
+      "r011"
+    ],
+    [
+      "r012",
+      "r013"
+    ],
+    [
+      "r014",
+      "r015"
+    ],
+    [
+      "r016",
+      "r017"
+    ],
+    [
+      "r018",
+      "r019"
+    ],
+    [
+      "r020",
+      "r021",
+      "r022"
+    ],
+    [
+      "r023",
+      "r024",
+      "r025"
+    ]
+  ],
+  "golden": {
+    "r000,r001": {
+      "external_id": "IDB2001",
+      "first_name": "Jos\u00e9",
+      "last_name": "Garcia",
+      "zip": "501"
+    },
+    "r002,r003": {
+      "external_id": null,
+      "first_name": "Fran\u00e7ois",
+      "last_name": "Muller",
+      "zip": "1234"
+    },
+    "r004,r005": {
+      "external_id": null,
+      "first_name": "Ren\u00e9e",
+      "last_name": "Dubois",
+      "zip": "950"
+    },
+    "r006,r007": {
+      "external_id": "IDB2002",
+      "first_name": "Bj\u00f6rn",
+      "last_name": "Sorensen",
+      "zip": "2134"
+    },
+    "r008,r009": {
+      "external_id": null,
+      "first_name": "Zo\u00eb",
+      "last_name": "Petrova",
+      "zip": "601"
+    },
+    "r010,r011": {
+      "external_id": "IDB2003",
+      "first_name": "I\u00f1igo",
+      "last_name": "Fernandez",
+      "zip": "602"
+    },
+    "r012,r013": {
+      "external_id": null,
+      "first_name": "Andr\u00e9",
+      "last_name": "Silva",
+      "zip": "1950"
+    },
+    "r014,r015": {
+      "external_id": null,
+      "first_name": "C\u00e9line",
+      "last_name": "Moreau",
+      "zip": "2445"
+    },
+    "r016,r017": {
+      "external_id": null,
+      "first_name": "Sof\u00eda",
+      "last_name": "Alvarez",
+      "zip": "925"
+    },
+    "r018,r019": {
+      "external_id": null,
+      "first_name": "G\u00fcnther",
+      "last_name": "Backer",
+      "zip": "1749"
+    },
+    "r020,r021,r022": {
+      "external_id": null,
+      "first_name": "Haakon",
+      "last_name": "Lovenskiold",
+      "zip": "603"
+    },
+    "r023,r024,r025": {
+      "external_id": null,
+      "first_name": "Aase",
+      "last_name": "Ostergaard",
+      "zip": "1890"
+    }
+  },
+  "pairs": [
+    [
+      "r000",
+      "r001",
+      1.0
+    ],
+    [
+      "r002",
+      "r003",
+      0.982499957085
+    ],
+    [
+      "r004",
+      "r005",
+      0.967333316803
+    ],
+    [
+      "r006",
+      "r007",
+      1.0
+    ],
+    [
+      "r008",
+      "r009",
+      0.937777757645
+    ],
+    [
+      "r010",
+      "r011",
+      1.0
+    ],
+    [
+      "r012",
+      "r013",
+      0.972000002861
+    ],
+    [
+      "r014",
+      "r015",
+      0.964999973774
+    ],
+    [
+      "r016",
+      "r017",
+      0.967333316803
+    ],
+    [
+      "r018",
+      "r019",
+      0.969999969006
+    ],
+    [
+      "r020",
+      "r021",
+      0.958000004292
+    ],
+    [
+      "r020",
+      "r022",
+      0.944000005722
+    ],
+    [
+      "r021",
+      "r022",
+      0.984444439411
+    ],
+    [
+      "r023",
+      "r024",
+      0.922222197056
+    ],
+    [
+      "r023",
+      "r025",
+      0.902777791023
+    ],
+    [
+      "r024",
+      "r025",
+      0.973749995232
+    ]
+  ]
+}
