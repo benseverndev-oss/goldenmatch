@@ -157,25 +157,30 @@ git commit -m "feat(goldenmatch): lazy-Polars proxy module (eviction W0)"
 - [ ] **Step 1: Find every usage of the two constants**
 
 Run: `grep -rn "_BOOLEAN_DTYPES\|_NON_IDENTITY_DTYPES" packages/python/goldenmatch/goldenmatch/ packages/python/goldenmatch/tests/`
-Record every hit; all call sites change from `X` to `X()` in Step 3.
+Expected picture (pre-verified 2026-07-09; re-confirm with the grep): `_NON_IDENTITY_DTYPES` has exactly ONE usage beyond its definition (a membership check at `core/indicators.py:91`); `_BOOLEAN_DTYPES` has ZERO usages beyond its definition -- it is dead code and gets DELETED in Step 4, not converted. An "empty" grep result for `_BOOLEAN_DTYPES` usages is correct, not a mistake.
 
 - [ ] **Step 2: Write the failing test**
 
 ```python
 # tests/test_indicators_dtype_defer.py
-"""The dtype-set constants must be lazy functions, not module-level pl. evaluations."""
+"""The dtype-set constant must be a lazy function, not a module-level pl. evaluation."""
 from __future__ import annotations
 
 
-def test_dtype_sets_are_functions_returning_expected_members():
+def test_non_identity_dtypes_is_lazy_function_with_expected_members():
     import polars as pl
 
-    from goldenmatch.core.indicators import _boolean_dtypes, _non_identity_dtypes
+    from goldenmatch.core.indicators import _non_identity_dtypes
 
-    assert _boolean_dtypes() == {pl.Boolean}
     assert _non_identity_dtypes() == {pl.Boolean, pl.Date, pl.Datetime, pl.Time}
     # lru_cache: same object back on the second call
-    assert _boolean_dtypes() is _boolean_dtypes()
+    assert _non_identity_dtypes() is _non_identity_dtypes()
+
+
+def test_dead_boolean_dtypes_constant_removed():
+    import goldenmatch.core.indicators as indicators
+
+    assert not hasattr(indicators, "_BOOLEAN_DTYPES")
 ```
 
 - [ ] **Step 3: Run test to verify it fails**
@@ -183,7 +188,7 @@ def test_dtype_sets_are_functions_returning_expected_members():
 Run: `RUNPY -m pytest tests/test_indicators_dtype_defer.py -v`
 Expected: FAIL with `ImportError: cannot import name '_boolean_dtypes'`
 
-- [ ] **Step 4: Convert the constants (the goldencheck lru_cache pattern)**
+- [ ] **Step 4: Delete the dead constant, defer the live one (the goldencheck lru_cache pattern)**
 
 In `goldenmatch/core/indicators.py`, replace lines 43-44:
 
@@ -192,20 +197,15 @@ In `goldenmatch/core/indicators.py`, replace lines 43-44:
 _BOOLEAN_DTYPES = {pl.Boolean}
 _NON_IDENTITY_DTYPES = {pl.Boolean, pl.Date, pl.Datetime, pl.Time}
 
-# AFTER (add `from functools import lru_cache` to the imports)
-@lru_cache(maxsize=1)
-def _boolean_dtypes() -> set:
-    """Deferred: evaluating pl.Boolean at module level would defeat _polars_lazy."""
-    return {pl.Boolean}
-
-
+# AFTER (add `from functools import lru_cache` to the imports; _BOOLEAN_DTYPES is
+# deleted outright -- zero usages, dead code)
 @lru_cache(maxsize=1)
 def _non_identity_dtypes() -> set:
-    """Deferred: see _boolean_dtypes."""
+    """Deferred: evaluating pl dtypes at module level would defeat _polars_lazy."""
     return {pl.Boolean, pl.Date, pl.Datetime, pl.Time}
 ```
 
-Update every usage found in Step 1 from `_BOOLEAN_DTYPES` -> `_boolean_dtypes()` and `_NON_IDENTITY_DTYPES` -> `_non_identity_dtypes()`.
+Update the single usage found in Step 1 (`core/indicators.py:91`) from `_NON_IDENTITY_DTYPES` -> `_non_identity_dtypes()`.
 
 - [ ] **Step 5: Run the new test + the indicators tests**
 
@@ -549,7 +549,9 @@ to a curated list of DataFrame/Series/LazyFrame relational methods. The curated
 list makes (b) high-signal: bare method names can collide with non-Polars
 objects, so treat per-file counts as an upper bound to hand-verify per wave.
 
-Usage: python scripts/audit_goldenmatch_polars_ops.py > /tmp/op_audit.md
+Usage: python scripts/audit_goldenmatch_polars_ops.py
+(stdout is markdown; paste under the '## Generated census' heading of
+docs/design/2026-07-09-goldenmatch-polars-op-inventory.md)
 """
 from __future__ import annotations
 
@@ -659,7 +661,7 @@ D:/show_case/goldenmatch/.venv/Scripts/python.exe -m ruff check packages/python/
 D:/show_case/goldenmatch/.venv/Scripts/python.exe -m pyright packages/python/goldenmatch/goldenmatch/_polars_lazy.py packages/python/goldenmatch/goldenmatch/core/frame.py packages/python/goldenmatch/goldenmatch/core/indicators.py 2>&1 | tail -5
 ```
 
-Expected: ruff `All checks passed!`. Pyright: no NEW errors in the three files (local pyright shows pre-existing `reportMissingImports` noise absent on CI -- ignore exactly that class). The full-package pyright gate runs in CI.
+Expected: ruff `All checks passed!`. Pyright: no NEW errors in the three files (local pyright shows pre-existing `reportMissingImports` noise absent on CI -- ignore exactly that class). `python -m pyright` is confirmed working in the main venv (used for the #1609 fix); if it ever goes missing, skip this step and let the required CI pyright gate cover it. The full-package pyright gate runs in CI.
 
 - [ ] **Step 2: Wider targeted test batches (spot the sweep's blast radius)**
 
@@ -712,7 +714,7 @@ GH_TOKEN=$(gh auth token --user benzsevern) gh pr create \
   --body "$(cat <<'EOF'
 ## Summary
 - W0 of the Polars-eviction program (spec: docs/superpowers/specs/2026-07-09-goldenmatch-polars-eviction-design.md)
-- `import goldenmatch` no longer loads Polars: `_polars_lazy` proxy (goldenflow template + TYPE_CHECKING dual-path so pyright keeps real Polars types) swept across all 112 module-level import sites; the 2 module-level dtype-set constants in core/indicators.py deferred via lru_cache
+- `import goldenmatch` no longer loads Polars: `_polars_lazy` proxy (goldenflow template + TYPE_CHECKING dual-path so pyright keeps real Polars types) swept across all 112 module-level import sites; core/indicators.py's live module-level dtype-set constant deferred via lru_cache (the dead one deleted)
 - `core/frame.py` Frame/Column seam scaffold with delegating PolarsFrame backend + idempotent `to_frame()` (no call sites ported -- that is W1+)
 - W0 audits checked in: `scripts/audit_goldenmatch_polars_ops.py` + `docs/design/2026-07-09-goldenmatch-polars-op-inventory.md`
 
