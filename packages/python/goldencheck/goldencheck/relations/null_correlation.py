@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from itertools import combinations
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
@@ -48,21 +47,20 @@ class NullCorrelationProfiler:
     def __init__(self, threshold: float = _DEFAULT_THRESHOLD) -> None:
         self.threshold = threshold
 
-    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
         findings: list[Finding] = []
-        columns = df.columns
-        n_rows = len(df)
+        columns = frame.columns
+        n_rows = frame.height
 
         if n_rows == 0 or len(columns) < 2:
             return findings
 
         # Pre-compute null masks (True where null) as Polars Series
-        null_masks: dict[str, pl.Series] = {
-            col: df[col].is_null() for col in columns
+        null_masks = {
+            col: frame.column(col).is_null() for col in columns
         }
-        null_counts: dict[str, int] = {
+        null_counts = {
             col: int(null_masks[col].sum()) for col in columns
         }
 
@@ -86,7 +84,7 @@ class NullCorrelationProfiler:
             mask_b = null_masks[col_b]
 
             # Agreement: rows where both are null or both are non-null
-            agreement = int((mask_a == mask_b).sum())
+            agreement = int(mask_a.eq_mask(mask_b).sum())
             correlation = agreement / n_rows
 
             if correlation >= _HIGH_THRESHOLD:
