@@ -11,7 +11,7 @@ from goldencheck._polars_lazy import pl
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
 from goldencheck.core._native_loader import native_enabled
-from goldencheck.core.frame import PyFrame
+from goldencheck.core.frame import PyFrame, dtype_category
 from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.engine.reader import read_columns, read_file
 from goldencheck.engine.sampler import maybe_sample
@@ -98,7 +98,7 @@ def _post_classification_checks(
         if col_name not in sample.columns:
             continue
         col = sample[col_name]
-        if col.dtype not in (pl.Utf8, pl.String):
+        if dtype_category(col.dtype) != "str":
             continue
 
         # Detect digit characters in person name columns
@@ -142,7 +142,7 @@ def _post_classification_checks(
         if col_name not in sample.columns:
             continue
         col = sample[col_name]
-        if col.dtype not in (pl.Utf8, pl.String):
+        if dtype_category(col.dtype) != "str":
             continue
         non_null = col.drop_nulls()
         total = len(non_null)
@@ -190,12 +190,9 @@ def _post_classification_checks(
         col = sample[col_name]
 
         # Accept string or numeric columns (numeric IDs are common)
-        is_string = col.dtype in (pl.Utf8, pl.String)
-        is_numeric = col.dtype in (
-            pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-            pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-            pl.Float32, pl.Float64,
-        )
+        _cat = dtype_category(col.dtype)
+        is_string = _cat == "str"
+        is_numeric = _cat in ("int", "uint", "float")
         if not (is_string or is_numeric):
             continue
 

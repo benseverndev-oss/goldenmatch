@@ -58,6 +58,8 @@ def _has_match(s: pl.Series, pattern: str) -> bool:
     return bool(s.str.contains(pattern).fill_null(False).any())
 
 
+# TODO(W-path): route the repeated `s.dtype not in (pl.Utf8, pl.String)` guards
+# in this file (_trim_whitespace..._coerce_numeric) via dtype_category
 def _trim_whitespace(s: pl.Series) -> pl.Series:
     if s.dtype not in (pl.Utf8, pl.String):
         return s

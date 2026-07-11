@@ -169,6 +169,7 @@ def _check_value_signals(non_null: pl.Series, col: pl.Series, signals: dict) -> 
         elif key == "min_match_pct":
             pass  # Used with format_match, handled there
         elif key == "mixed_case":
+            # TODO(W-path): route the dtype gates in this function via dtype_category
             if non_null.dtype not in (pl.Utf8, pl.String):
                 return False
             sample = non_null.head(100).to_list()
