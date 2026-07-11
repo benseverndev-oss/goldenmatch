@@ -155,6 +155,7 @@ AGENT_TOOLS = [
                 "file_path": {"type": "string"},
                 "config": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "output_path": {"type": "string", "description": "Optional. If given, write the golden (deduplicated) records to this CSV path and return golden_path + golden_records. Omit to get the summary only."},
                 "file_content": {
                     "type": "string",
                     "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
@@ -553,6 +554,39 @@ def _serialize_result(result: Any) -> dict:
     return {"value": str(result)}
 
 
+def _write_frame_csv(
+    output_path: str,
+    frame: Any,
+    label: str,
+    *,
+    count_key: str | None = None,
+) -> dict:
+    """Validate *output_path* and write *frame* to CSV, stripping `__` columns.
+
+    Reuses the same ``safe_path`` guard the other file-writing MCP tools use
+    (via ``server._safe_path_or_error``). Returns a dict to merge into the
+    tool response: ``{"<label>_path": str, "<count_key>": height}`` on success,
+    or ``{"<label>_path": None, "<label>_error": ...}`` when no frame exists /
+    the path is rejected.
+    """
+    from goldenmatch.mcp.server import _safe_path_or_error
+
+    path_key = f"{label}_path"
+    error_key = f"{label}_error"
+    records_key = count_key or f"{label}_records"
+
+    if frame is None:
+        return {path_key: None, error_key: f"no {label} frame produced"}
+
+    validated = _safe_path_or_error(output_path)
+    if isinstance(validated, dict):  # {"error": ...} from the guard
+        return {path_key: None, error_key: validated["error"]}
+
+    cols = [c for c in frame.columns if not c.startswith("__")]
+    frame.select(cols).write_csv(str(validated))
+    return {path_key: str(validated), records_key: frame.height}
+
+
 def handle_agent_tool(name: str, arguments: dict) -> list[TextContent]:
     """Route an agent-level MCP tool call to the appropriate handler.
 
@@ -655,7 +689,7 @@ def _dispatch(
             if _excl_token is not None:
                 from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
                 _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
-        return {
+        out = {
             "reasoning": raw.get("reasoning", {}),
             "confidence_distribution": raw.get("confidence_distribution", {}),
             "storage": raw.get("storage", "memory"),
@@ -663,6 +697,11 @@ def _dispatch(
                 or {"available": False, "source": None},
             "results": _serialize_result(raw.get("results")),
         }
+        output_path = args.get("output_path")
+        if output_path:
+            golden = getattr(raw.get("results"), "golden", None)
+            out.update(_write_frame_csv(output_path, golden, "golden"))
+        return out
 
     if name == "agent_match_sources":
         session = session_cls()
