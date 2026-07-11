@@ -112,3 +112,39 @@ def test_read_columns_dispatch_and_guards(tmp_path):
     empty.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="no data"):
         read_columns(empty)
+
+
+def test_read_columns_parquet_excel_are_polars_free(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+    p_pq = _write_parquet(tmp_path)
+    p_xl = _write_xlsx(tmp_path)
+    csv = tmp_path / "c.csv"
+    csv.write_text("a\n1\n", encoding="utf-8")
+    code = textwrap.dedent(f"""
+        import sys, importlib.abc
+        class _B(importlib.abc.MetaPathFinder):
+            def find_spec(self, n, path=None, target=None):
+                if n == 'polars' or n.startswith('polars.'):
+                    raise ModuleNotFoundError(n)
+                return None
+        sys.meta_path.insert(0, _B())
+        from goldencheck.engine.reader import read_columns
+        assert read_columns(r{str(p_pq)!r})
+        assert read_columns(r{str(p_xl)!r})
+        assert 'polars' not in sys.modules, sorted(m for m in sys.modules if 'polar' in m)
+        try:
+            read_columns(r{str(csv)!r})
+            raise SystemExit('csv should have raised ImportError')
+        except ImportError:
+            pass
+    """)
+    pkg = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = pkg + os.pathsep + env.get("PYTHONPATH", "")
+    env["POLARS_SKIP_CPU_CHECK"] = "1"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr

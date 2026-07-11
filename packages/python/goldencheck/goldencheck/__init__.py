@@ -30,8 +30,14 @@ from goldencheck.engine.differ import (
     diff_files,
 )
 from goldencheck.engine.fixer import FixEntry, FixReport, apply_fixes
-from goldencheck.engine.reader import read_file
-from goldencheck.engine.scanner import scan_columns, scan_dataframe, scan_file, scan_file_with_llm
+from goldencheck.engine.reader import read_columns, read_file
+from goldencheck.engine.scanner import (
+    scan_columns,
+    scan_dataframe,
+    scan_file,
+    scan_file_columns,
+    scan_file_with_llm,
+)
 from goldencheck.engine.triage import TriageResult, auto_triage
 
 # Engine: validator, confidence, triage, fixer, differ, reader
@@ -68,6 +74,7 @@ __all__ = [
     "scan_dataframe",
     "scan_columns",
     "scan_file",
+    "scan_file_columns",
     "scan_file_with_llm",
     "cell_quality",
     "functional_dependencies",
@@ -95,6 +102,7 @@ __all__ = [
     "FindingChange",
     "StatChange",
     "read_file",
+    "read_columns",
     # Config
     "GoldenCheckConfig",
     "ColumnRule",
