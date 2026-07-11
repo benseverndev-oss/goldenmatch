@@ -51,14 +51,32 @@ assertions migrate to Arrow, results become `pa.Table`. W0-W4 merged/queued
 - **W5a (2.x)** — close the coverage gap: domain-extraction derive ops or
   arrow twin (fixtures-first, per-domain corpora); `ensure_row_ids` op with
   the #844 reuse branch pinned. Gates: domain suites unedited.
-- **W5b (2.x)** — arrow flows past ingest UNDER THE ENV GATE: eager
-  Frame-based expression-stage path (standardize/matchkey/domain/row-ids) for
-  GOLDENMATCH_FRAME=arrow; polars lazy path UNCHANGED as default. Remove the
-  W2d shim for the arrow lane. Differential harness now proves END-TO-END
-  parity (its controller expectations go per-backend per the W3a sample
-  contract). Wall + RSS both lanes on the 100K gate + 1M dispatch bench
-  (the fused-with_columns loss is measured here; >10% → fuse eagerly via
-  multi-column derive op).
+- **W5b (2.x, SUB-BATCHED; recon 2026-07-11 mapped _run_dedupe_pipeline)** —
+  arrow flows past ingest UNDER THE ENV GATE, boundary moving down in steps:
+  - W5b-1 (SHIPPED #1682): ingest front eager (column_map/validate/__source__/
+    ensure_row_ids); ONE post-ingest shim at pipeline.py:852.
+  - RECON FINDING: the polars-bound PREP BLOCK (quality=goldencheck
+    quality.py:24, transform=goldenflow transform.py:27, autofix, validation
+    validate.py, auto-config) sits BETWEEN ingest and standardize
+    (pipeline.py:1620-1712) — the boundary cannot cross it wholesale. All
+    prep stages are CONFIG-CONDITIONAL (skip when unset).
+  - W5b-2: arrow-eager standardize+matchkeys for the NO-PREP config shape
+    (the default/zero-config path): when the arrow lane is active and
+    quality/transform/autofix/validation/autoconfig are unset, run
+    derive_standardized_column + derive_matchkey/precompute eagerly on the
+    Frame; shim right before build_blocks/block_scorer (blocker already
+    seam-internal, blocker.py:381/737; scorer takes a clean DF handoff).
+    Domain extraction (gated) declines the eager path when enabled.
+  - W5b-3: prep-block integrations rewire to the subsystems' OWN arrow
+    surfaces (goldencheck's covered PyFrame backend; goldenflow's evicted
+    core; autofix/validate get seam twins) — REQUIRED before W5e since
+    polars dies; each integration its own PR with subsystem parity gates.
+  - Prep cache stores pl.DataFrame (pipeline.py:899) — becomes
+    backend-typed at W5b-3.
+  - Differential harness proves END-TO-END parity each step (controller
+    expectations per-backend per the W3a sample contract). Wall + RSS both
+    lanes on the 100K gate + 1M dispatch bench (fused-with_columns loss
+    measured; >10% → multi-column derive op).
 - **W5c (v3.0.0 branch)** — result flip: 5 fields → pa.Table, _repr_html_ /
   to_csv re-render, migration guide (pl.from_arrow one-liner), input
   polymorphism already in place. Fused/golden_fused backend-conditional

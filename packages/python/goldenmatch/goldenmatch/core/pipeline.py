@@ -800,18 +800,38 @@ def run_dedupe(
         else:
             file_path, source_name = file_spec[0], file_spec[1]
             column_map = None
-        # W2d: opt into the Frame return; shim ArrowFrame -> polars-lazy
-        # IMMEDIATELY (before column_map/validate, which keep receiving
-        # LazyFrames untouched). The conversion is now an EXPLICIT pipeline
-        # boundary instead of being buried in load_file -- its removal point
-        # is W2e, when the expression stages (_add_row_ids, standardize,
-        # matchkeys) port to the seam and arrow can flow past ingest.
+        # W5b-1: the shim boundary moved BELOW row-ids. The arrow lane's
+        # ingest front (column_map / validate / __source__ / row-ids) runs
+        # EAGERLY on the seam; conversion to polars-lazy happens once, after
+        # the concat. Removal point: W5b-2+, as standardize/matchkeys/domain
+        # go eager and the boundary keeps moving down.
         lf = load_file(file_path, return_frame=True)
         from goldenmatch.core.frame import ArrowFrame as _ArrowFrame
 
         if isinstance(lf, _ArrowFrame):
-            # from_arrow is typed DataFrame | Series; a Table is always a DataFrame
-            lf = cast("pl.DataFrame", pl.from_arrow(lf.native)).lazy()
+            frame = lf
+            if column_map:
+                # apply_column_map parity: same missing-source check + message.
+                _missing = [src for src in column_map if src not in frame.columns]
+                if _missing:
+                    raise ValueError(
+                        f"Column map references columns not in file: {_missing}. "
+                        f"Available: {sorted(set(frame.columns))}"
+                    )
+                frame = frame.rename(column_map)
+            required = _get_required_columns(config)
+            # validate_columns parity: same message shape.
+            _missing = [c for c in required if c not in frame.columns]
+            if _missing:
+                raise ValueError(
+                    f"Missing required columns: {_missing}. "
+                    f"Available columns: {list(frame.columns)}"
+                )
+            frame = frame.with_literal_column("__source__", source_name)
+            frame = frame.ensure_row_ids(offset=offset)
+            offset += frame.height
+            frames.append(frame)
+            continue
         if column_map:
             lf = apply_column_map(lf, column_map)
         required = _get_required_columns(config)
@@ -822,7 +842,16 @@ def run_dedupe(
         offset += len(collected)
         frames.append(collected.lazy())
 
-    combined_df = pl.concat([f.collect() for f in frames])
+    from goldenmatch.core.frame import ArrowFrame as _AF
+    from goldenmatch.core.frame import concat_frames as _concat_frames
+
+    if frames and all(isinstance(f, _AF) for f in frames):
+        _combined = _concat_frames(frames)
+        # W5b-1 shim (single, post-ingest): the expression stages below are
+        # still polars-lazy; removal point is W5b-2+.
+        combined_df = cast("pl.DataFrame", pl.from_arrow(_combined.native))
+    else:
+        combined_df = pl.concat([f.collect() for f in frames])
     combined_lf = combined_df.lazy()
 
     return _run_dedupe_pipeline(
