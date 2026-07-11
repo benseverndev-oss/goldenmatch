@@ -7,9 +7,14 @@ Base: fresh `origin/main` (has W0-land arrow-in-core + parity harness; CSV wave 
 
 ## Goal
 
-Build a **fused Arrow-native Rust kernel** that computes, in ONE pass over a column, the aggregate stats the four cheapest checks need — **nullability, uniqueness, cardinality, type_inference** — plus the `ColumnProfile` fields. Rust = source of truth; the current Polars/`PyColumn` path is the parity oracle + fallback. Define the **owned neutral dtype vocabulary** + a single `dtype_category()` shim that replaces the ~15 duplicated `pl.Utf8`/numeric-tuple dtype checks. **Shadow discipline:** the fused path is computed + CI-compared but the 2.x output stays authoritative until the Flip.
+Build a **fused Arrow-native Rust kernel** `column_aggregate(&dyn Array)` that computes, in ONE pass over a column, the aggregate stats the cheap column checks need (`null_count`, `n_unique_nonnull`, `dtype`) — feeding **nullability, uniqueness, cardinality** and the `ColumnProfile`. Rust = source of truth; the current Polars/`PyColumn` path is the parity oracle. Define the **owned neutral dtype vocabulary** + a single `dtype_category()` shim that replaces the duplicated `pl.Utf8`/numeric-tuple dtype checks (used by the four checks' dtype gates, incl. `type_inference`'s gate).
 
-These four checks are ALREADY polars-free via `scan_columns`/`PyColumn` (S2.1). W1 is NOT about eviction — it is about (a) FUSING them into one kernel pass (perf/peak-RSS + the pattern for W2-W5), (b) making them Rust-authoritative, (c) landing the dtype vocabulary, (d) wiring the fused kernel into BOTH scan paths (`scan_columns` + the full-scan column loop, which still uses raw `pl.Series` ops).
+**Corrected scope (from spec review):**
+- The three MECHANICAL profilers in `scan_columns` are Nullability/Uniqueness/Cardinality (`_MECHANICAL_PROFILERS`, scanner.py). **`type_inference` is NOT in `scan_columns`** — it's full-scan-only and can't run on a `PyColumn` (it needs `.cast("float")`, which `PyColumn` doesn't implement). W1 touches type_inference only via its **dtype gate** (`dtype_category`), not a scan_columns swap.
+- **`scan_columns` (list-backed `PyColumn` over `dict[str,list]`) is UNCHANGED in W1.** Routing an Arrow-in kernel there would need a per-column `list -> Arrow` build that may be net-negative on small columns AND re-introduce an Arrow-type-inference step that must match `PyColumn.dtype`'s first-non-null heuristic — not worth it now. Leave `scan_columns` on PyColumn (already polars-free).
+- **The fused kernel targets the FULL-SCAN column loop** (`_scan_dataframe_impl`, raw `pl.Series`), in SHADOW: convert each `pl.Series -> Arrow (to_arrow()) -> column_aggregate`, CI-compare to the Polars-computed `ColumnProfile` stats, but the authoritative values stay Polars until the Flip (when the full-scan input becomes Arrow and the `to_arrow()` cost disappears).
+
+So W1 = (a) the fused kernel + the pattern for W2-W5, (b) the neutral dtype vocabulary + `dtype_category` shim (collapsing the dtype-check debt), (c) Rust-authoritative-in-shadow for the full-scan aggregates. **Perf is measure-first**, not asserted — real fusion (one bitmap+hashset pass) is a genuine win over Arrow, but over Python lists it may not beat `set()`/`sum()`; W1's value is the pattern + vocabulary + Rust-authority, and any perf claim is measured before it's made (the repo's measure-wall-clock lesson).
 
 ## The neutral dtype vocabulary (the cross-cutting decision, fixed here)
 
@@ -23,31 +28,35 @@ Adopt the vocabulary the Frame seam's `_neutral_dtype` already uses: **`str`, `i
 `column_aggregate(array: &dyn Array) -> ColumnAgg` in `goldencheck-core` (new `fused.rs` or `aggregate.rs`):
 ```rust
 pub struct ColumnAgg {
-    pub len: usize,          // total rows
-    pub null_count: usize,   // from the Arrow null bitmap (correctness upgrade — bitmap-direct)
-    pub n_unique: usize,     // distinct non-null values (hash set; null counted per the seam: cardinality counts null-as-1, uniqueness post-drop-nulls)
-    pub dtype: DtypeCat,     // the neutral category
+    pub len: usize,               // total rows
+    pub null_count: usize,        // from the Arrow null bitmap (correctness upgrade — bitmap-direct)
+    pub n_unique_nonnull: usize,  // distinct EXCLUDING null (one hash set, non-null only)
+    pub dtype: DtypeCat,          // the neutral category
     // room to grow (min/max land in W2 for range)
 }
 ```
-- **ONE pass**: stream the null bitmap for `null_count`; build a hash set for `n_unique` in the same pass; `dtype` from the array type (O(1)). (n_unique's null-counting must match the seam exactly: `cardinality` uses full-column `n_unique` counting null as 1 distinct; `uniqueness` uses post-`drop_nulls` n_unique. Decide whether the kernel returns both `n_unique_all` and `n_unique_nonnull`, or the caller adjusts by +1 when a null exists — match `PyColumn.n_unique` / `_neutral_dtype` behaviour exactly, verified by parity.)
+- **ONE pass**: stream the null bitmap for `null_count`; build ONE hash set over the non-null values for `n_unique_nonnull`; `dtype` from the array type (O(1)). NO second hash set.
+- **Caller derivations (verified against the profilers):** uniqueness uses `n_unique_nonnull` directly (matches `non_null.n_unique()`); cardinality uses `n_unique_nonnull + (1 if null_count > 0 else 0)` (matches `PyColumn.n_unique() == len(set(self._v))`, which counts null as 1 distinct); nullability uses `len` + `null_count`; the full-scan `ColumnProfile.unique_count` also uses `n_unique_nonnull` (`non_null.n_unique()`). So one `n_unique_nonnull` + `null_count` covers all four — the "+1 in the caller" is the resolution of the flagged null-counting risk.
+- **The kernel replaces the COUNTS + dtype gate ONLY** — not the value passes: cardinality's `sample_values` (`drop_nulls().unique().sort()`) and type_inference's numeric-cast still touch raw values (unchanged). W1 does not eliminate those.
 - Native shim + `_COMPONENT_SYMBOLS["column_aggregate"]`. Arrow-in (reuse W0-land's `arrow_support`).
 
-## Wiring (shadow)
-- **`scan_columns` (polars-free, PyColumn-backed):** the nullability/uniqueness/cardinality/type_inference profilers currently each call `col.null_count()` / `col.n_unique()` / `col.dtype` on `PyColumn`. Route these through `column_aggregate` (one kernel call per column feeding all four) when `native_enabled("column_aggregate")`; PyColumn stays the fallback. This is where the fused kernel becomes REAL + authoritative (scan_columns is already polars-free, so no shadow needed here — it's a direct swap, parity-gated).
-- **Full scan (`_scan_dataframe_impl` column loop, raw `pl.Series`):** compute `column_aggregate` in SHADOW — convert each `pl.Series -> Arrow (to_arrow()) -> column_aggregate`, compare to the Polars-computed `null_count`/`n_unique`/`dtype` via the parity harness, but the **authoritative `ColumnProfile` values stay the Polars ones** until the Flip. (At the Flip, the full scan takes Arrow directly and the fused values become authoritative.)
-- The redundant double-compute (the column loop computes null_count/n_unique for `ColumnProfile` AND the profilers recompute) is noted; fully collapsing it is a Flip-time cleanup, not W1.
+## Wiring
+- **`scan_columns` (list-backed PyColumn): UNCHANGED in W1** (see Goal — no Arrow-in swap over Python lists this wave).
+- **Full scan (`_scan_dataframe_impl` column loop, raw `pl.Series`): compute `column_aggregate` in SHADOW.** Convert each `pl.Series -> Arrow (to_arrow()) -> column_aggregate`; CI-compare (via the parity harness) to the Polars-computed `null_count`/`n_unique_nonnull`/`dtype`; the **authoritative `ColumnProfile` values stay the Polars ones** until the Flip (when the full-scan input becomes Arrow and `to_arrow()` disappears). No user-visible change.
+- **dtype gates -> neutral, NOW, authoritative (output-identical).** `type_inference` (and the column-loop `is_string`/`is_numeric` gates) already branch on the NEUTRAL dtype semantics (`type_inference.py` reads `col.dtype -> _neutral_dtype`, branching on `"str"`/`"int"`/`"float"`; the column loop's `pl.Utf8`/numeric-tuple checks map 1:1 to `str`/`int`/`uint`/`float`). Routing these gates through `dtype_category` is output-identical PROVIDED `dtype_category(arrow) == _neutral_dtype(pl.dtype)` (parity-locked). This is authoritative now (not shadow) because it changes no output.
+- **`ColumnProfile.inferred_type` string -> the ONE deferred divergence.** It is `str(pl.dtype)` (`"Int64"`) today; the neutral form (`"int"`) is a DIFFERENT value from anything the profilers' dtype gates emit. W1 does NOT change `inferred_type` (stays `str(pl.dtype)`, user-visible); the neutral-vs-Polars-string difference is registered for the Flip's dtype-string bucket.
+- The redundant double-compute (loop computes counts for `ColumnProfile` AND profilers recompute) is noted; collapsing it is Flip-time cleanup, not W1.
 
 ## Parity / contract
-- `column_aggregate` (native) == the `PyColumn`/Polars reductions: `null_count` exact, `n_unique` exact (matching the seam's null-counting), `dtype` == `_neutral_dtype`. Registered in the W0-land parity harness, **empty divergence registry** (these are integer/enum-exact).
-- No user-visible change (shadow); the neutral-vs-Polars `inferred_type` string is the only divergence, deferred to the Flip.
-- `import goldencheck` loads zero polars; existing suite green (the swap in `scan_columns` is parity-locked; the full-scan authoritative output unchanged).
+- `column_aggregate` (native, on `pl.Series.to_arrow()`) == the Polars reductions: `null_count` exact, `n_unique_nonnull` == `non_null.n_unique()` exact, `dtype` == `_neutral_dtype(pl.dtype)`. Registered in the W0-land parity harness, **empty divergence registry** (integer/enum-exact).
+- `dtype_category(arrow) == _neutral_dtype(pl.dtype)` — the parity that makes the gate-routing output-identical. Assert across all 8 categories.
+- No user-visible change: `scan_columns` unchanged; the full-scan `ColumnProfile` authoritative values stay Polars; `inferred_type` string unchanged (its neutral-form divergence is deferred to the Flip).
+- `import goldencheck` loads zero polars; existing suite green.
 
 ## Testing
-- Rust: `column_aggregate` + `dtype_category` over Arrow arrays (null/empty/single/all-null; each of the 8 dtype categories; n_unique with + without nulls).
-- Parity harness: native `column_aggregate` == `PyColumn` reductions on random + adversarial columns (register `column_aggregate`, empty divergence).
-- Python: `scan_columns` findings for nullability/uniqueness/cardinality/type_inference are IDENTICAL with the fused kernel routed in (parity-locked — existing `scan_columns` tests pass UNEDITED). The full-scan `ColumnProfile` values unchanged (authoritative Polars path untouched); a shadow test asserts the fused values MATCH the Polars ones on a fixture.
-- `dtype_category` shim: the converted call sites (type_inference + the column-loop dtype gates) behave identically (existing tests unedited).
+- Rust: `column_aggregate` + `dtype_category` over Arrow arrays — null/empty/single/all-null; each of the 8 dtype categories; `n_unique_nonnull` with + without nulls; **NaN-float and heterogeneous inputs** (float NaN counts distinct differently across engines; include so the divergence, if any, is caught).
+- Parity harness: native `column_aggregate` == Polars reductions on random + adversarial columns (register `column_aggregate`, empty divergence).
+- Python: existing `scan_columns` tests pass UNEDITED (scan_columns untouched). The full-scan `ColumnProfile` values unchanged (authoritative Polars path); a SHADOW test asserts `column_aggregate` (on `pl.Series.to_arrow()`) MATCHES the Polars `null_count`/`n_unique`/`dtype` on a corpus. The `dtype_category`-converted gate sites (`type_inference` + the column-loop `is_string`/`is_numeric`) behave identically -> existing profiler/scanner tests pass UNEDITED.
 
 ## Risks
 - **n_unique null-counting mismatch** — the seam's cardinality-counts-null-as-1 vs uniqueness-post-dropnull is subtle; the kernel must expose whatever the callers need + parity-lock it. Top risk (a silent off-by-one in a count).
