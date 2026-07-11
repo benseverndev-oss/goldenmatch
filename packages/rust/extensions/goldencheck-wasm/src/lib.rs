@@ -140,7 +140,7 @@ pub fn gc_benford_leading_digits(values_json: &str) -> Result<String, JsError> {
     let values: Vec<Option<f64>> =
         serde_json::from_str(values_json).map_err(|e| JsError::new(&format!("bad values: {e}")))?;
     let finite: Vec<f64> = values.into_iter().flatten().collect();
-    let out = gc::benford_leading_digits(&finite);
+    let out = gc::benford_leading_digits_slice(&finite);
     serde_json::to_string(&out.to_vec()).map_err(|e| JsError::new(&e.to_string()))
 }
 

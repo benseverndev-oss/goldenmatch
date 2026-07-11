@@ -144,7 +144,7 @@ fn reproduces_golden_vectors() {
         .map(|x| x.as_u64().unwrap())
         .collect();
     assert_eq!(
-        gc::benford_leading_digits(&bvals).to_vec(),
+        gc::benford_leading_digits_slice(&bvals).to_vec(),
         benford_want,
         "benford_leading_digits"
     );

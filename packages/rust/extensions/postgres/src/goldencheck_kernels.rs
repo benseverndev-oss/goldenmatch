@@ -67,7 +67,7 @@ fn interned_columns(flat: &[Option<String>], n_cols: usize) -> Option<Vec<Vec<u6
 /// surfaces produce.
 #[pg_extern]
 pub fn goldencheck_benford(values: Vec<f64>) -> Vec<i64> {
-    goldencheck_core::benford_leading_digits(&values)
+    goldencheck_core::benford_leading_digits_slice(&values)
         .iter()
         .map(|&c| c as i64)
         .collect()
