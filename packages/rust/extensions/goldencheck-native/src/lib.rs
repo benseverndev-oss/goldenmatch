@@ -12,10 +12,12 @@
 //! plain slices and delegate to `goldencheck-core`.
 use pyo3::prelude::*;
 
+mod age;
 mod aggregate;
 mod csv_infer;
 mod date;
 mod dc;
+mod duplicate;
 mod freshness;
 mod fuzzy;
 mod keys;
@@ -45,5 +47,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(regex::str_replace_all, m)?)?;
     m.add_function(wrap_pyfunction!(date::str_to_date, m)?)?;
     m.add_function(wrap_pyfunction!(csv_infer::csv_infer_columns, m)?)?;
+    m.add_function(wrap_pyfunction!(duplicate::duplicate_signatures, m)?)?;
+    m.add_function(wrap_pyfunction!(age::age_mismatch, m)?)?;
     Ok(())
 }
