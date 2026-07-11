@@ -60,6 +60,8 @@ CURATED_TOOLS: frozenset[str] = frozenset({
     "analyze_frame", "detect_regressions",
     # discovery meta-tool -- how a client reaches the ~80 non-headline tools
     "suite_find_tools",
+    # composite workflow tools -- one-call happy paths
+    "dedupe_file", "match_sources", "assess_file", "clean_and_dedupe",
 })
 
 
@@ -312,6 +314,19 @@ def _aggregate() -> tuple[list[Tool], dict[str, Callable[[str, dict], dict]]]:
             )
         else:
             logger.info("goldensuite-mcp: registered %d tools from %s", added, source_name)
+
+    # Register composite workflow tools BEFORE the discovery snapshot so they
+    # appear both in the catalog and in suite_find_tools. They dispatch against
+    # the aggregated real-tool table (name_to_dispatch) built above.
+    from goldensuite_mcp.composites import build_composites
+    composite_tools, composite_dispatch = build_composites(name_to_dispatch)
+    for tool in composite_tools:
+        if tool.name in seen:
+            logger.warning("composite %r shadowed by earlier %s", tool.name, seen[tool.name])
+            continue
+        seen[tool.name] = "goldensuite"
+        all_tools.append(tool)
+        name_to_dispatch[tool.name] = composite_dispatch[tool.name]
 
     # Register the discovery meta-tool over a snapshot of the real tools (it does
     # not list itself). Its name can't collide -- no sub-package ships it -- but

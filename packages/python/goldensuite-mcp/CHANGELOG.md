@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 (2026-07-11)
+
+### Added
+
+- **Composite workflow tools** — four curated one-call tools that orchestrate the
+  granular sub-package tools into a single dispatch: `dedupe_file`
+  (`upload_dataset` -> `auto_configure` -> `agent_deduplicate`), `match_sources`
+  (upload A + upload B -> `agent_match_sources`), `assess_file` (`upload_dataset`
+  -> `analyze_data` -> `scan`, read-only), and `clean_and_dedupe`
+  (`upload_dataset` -> `run_transforms` -> `agent_deduplicate`). Each returns a
+  uniform `{workflow, ok, summary, steps, config?, outputs?}` envelope, short-
+  circuits on the first hard step failure, and dispatches against the same
+  aggregated table so the granular tools stay individually listed and callable.
+  `assess_file`'s `scan` step is degraded-optional — a build without goldencheck
+  still returns `ok: true` with the profile intact. Live registration lives in
+  `composites.py` (`build_composites`), wired into `_aggregate` before the
+  `suite_find_tools` snapshot. (README: "Composite workflows".)
+
 ## 0.4.0 (2026-07-10)
 
 ### Added
