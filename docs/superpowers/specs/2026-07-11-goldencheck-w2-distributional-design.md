@@ -7,42 +7,40 @@ Base: fresh `origin/main` (W0-land + CSV + W1 merged: `arrow_support`, `column_a
 
 ## Goal
 
-Fused Arrow-native Rust kernels for the distributional/format checks — **range_distribution, sequence_detection, freshness** (full-scan-only today, on Polars) + **encoding_detection, format_detection, pattern_consistency** (already polars-free via the S2.2 regex kernel; W2 Arrow-ifies that kernel for uniformity). Rust = source of truth; Polars/list-path = parity oracle + fallback. **Shadow**: no user-visible change; the full-scan authoritative output stays Polars until the Flip.
+Fused Arrow-native Rust kernels for the three **full-scan-only** distributional checks — **range_distribution, sequence_detection, freshness** — which today are Polars-bound: they route through the Frame seam (`to_frame` + `col.min()/max()/mean()/std()/diff()/is_sorted()/count_gt()/count_eq()/filter_outside()`), but `PyColumn` (the polars-free backend) implements ONLY `drop_nulls/unique/cast` — the numeric/sequence/date ops live only on `PolarsColumn`. So these three profilers run only in the full scan on Polars. W2 supplies the fused Arrow kernels that reproduce exactly those ops (Rust = source of truth), shadow-wired: parity vs `PolarsColumn`, authoritative output stays Polars until the Flip. **Deferred (NOT W2):** Arrow-ifying the S2.2 regex / S2.3 date kernels — encoding/format/pattern/temporal are ALREADY polars-free and working; converting their input container from `&[Option<String>]` to Arrow is a uniformity nicety for the WASM/SQL surfaces, not eviction, and rides a later cleanup wave.
 
-## Scope (three coherent pieces)
+## Scope (three fused kernels, one per full-scan check)
 
-### A. Fused numeric-stats kernel (for range_distribution; reused by W4)
-`column_numeric_stats(&dyn Array) -> NumStats { count_nonnull, null_count, min, max, mean, std, sum }` in `goldencheck-core` — ONE pass over a numeric Arrow array (Int*/UInt*/Float*), null-aware. Feeds `range_distribution` (min/max/mean/std bounds + outlier detection). Parity vs the Polars `col.min()/max()/mean()/std()`. **std**: match Polars' default (sample std, ddof=1) EXACTLY — verify + register any float-epsilon divergence. This kernel is reused by W4's distribution-fit/z-score work.
+### A. `column_numeric_stats` (for range_distribution; reused by W4)
+`column_numeric_stats(&dyn Array) -> NumStats { count_nonnull, min, max, mean, std, sum }` in `goldencheck-core` — ONE pass over a numeric Arrow array (Int*/UInt*/Float*), null-aware. Feeds `range_distribution`'s `min/max/mean/std` + the ±3σ outlier bounds. Parity vs `PolarsColumn.min()/max()/mean()/std()`. **std**: match Polars' default (sample std, ddof=1) EXACTLY — verify + register any float-epsilon divergence class. The outlier COUNT + first-5 sample (`filter_outside(lower, upper)`) is a thin follow-on: `count_outside(&dyn Array, lower, upper) -> (count, sample)` (or fold into the stats kernel's caller). This kernel is reused by W4's distribution-fit/z-score work.
 
-### B. Arrow-ify the string + date kernels (encoding/format/pattern/freshness/temporal uniformity)
-The S2.2 `regex` kernel (`str_contains_count`/`str_filter_mask`/`str_replace_all`, currently `&[Option<String>]`) and the S2.3 `date` kernel (`str_to_date`, `&[Option<String>]`) get **Arrow-in** entry points taking `&dyn Array` (StringArray/LargeStringArray), reusing `arrow_support`. Keep the existing list-based fns as thin wrappers (the PyColumn / native-shim callers are UNCHANGED — same behaviour, added Arrow path). This makes the string checks Arrow-in-core uniform (needed for the fused full-scan + WASM/SQL). Behaviour byte-identical (the regex/parse logic is unchanged; only the input container differs). Parity: Arrow path == list path on identical values.
+### B. `sequence_analysis` (for sequence_detection)
+`sequence_analysis(&dyn Array) -> SeqStats { n_diffs, unit_diff_count, positive_diff_count, is_sorted, min, max, present_set_size, gap_count, gap_sample }` over an ORDER-PRESERVED integer array (Int*/UInt* only, matching the profiler's `dtype in ("int","uint")` gate). Reproduces `diff().drop_nulls()` + `count_eq(1)` + `count_gt(0)` + `is_sorted()` + the `range(min,max+1) not in present` gap scan. **Order matters — the kernel iterates in array order, NEVER sorts.** Gap sample = first 10 missing values. Parity vs the profiler's PolarsColumn computation.
 
-### C. Sequence + freshness kernels
-- **sequence_detection**: gap/monotonicity over an ORDER-PRESERVED numeric (or date) column — detects missing values in a sequence / non-monotonic ordering. A kernel `sequence_gaps(&dyn Array) -> {is_monotonic, gap_count, ...}` matching the profiler's current Polars logic (READ `sequence_detection.py` for the exact signal — likely `diff()` + gap detection). Order matters (no sort).
-- **freshness**: future-dated timestamps (always-on) + name-gated staleness. Reuses the (now Arrow) `str_to_date` + a numeric date-compare (max date vs "now"/reference). READ `freshness.py` for the exact checks; the date arithmetic is the kernel.
+### C. `date_freshness` (for freshness)
+`date_freshness(&dyn Array, now_epoch) -> FreshStats { future_count, max_epoch }` over a Date32/Date64/Timestamp array — reproduces `count_gt(now)` + `max()`. The caller keeps the name-gated staleness age-in-days arithmetic + tz-aware `count_gt` fallback (the `except Exception: return []` path stays Python). Parity vs `PolarsColumn.count_gt(now)/max()`.
 
-## Wiring (shadow)
-- **encoding/format/pattern (scan_columns, already polars-free):** route the regex calls through the Arrow entry point when the input is Arrow; the list path stays for PyColumn. Byte-identical (parity-locked) — scan_columns output UNCHANGED.
-- **range/sequence/freshness (full-scan-only, `_scan_dataframe_impl` -> the profilers on `pl.Series`):** compute the new kernels in SHADOW (`col.to_arrow()` -> kernel), CI-compare to the profiler's Polars-computed findings, but the authoritative findings STAY Polars until the Flip. A shadow test per check asserts the kernel's stats/signals match the Polars ones.
-- Register each new kernel in the W0-land parity harness (empty divergence, or register float-epsilon std divergence explicitly).
+## Wiring (shadow — mirrors W1)
+- Each of the three profilers, when `native_enabled(...)`, ALSO computes its fused kernel in SHADOW (`col.to_arrow()` -> kernel) alongside the authoritative PolarsColumn compute. The emitted `Finding`s STAY the Polars-computed ones. A shadow test per check asserts kernel == PolarsColumn on a corpus.
+- Register each new kernel in the W0-land parity harness (empty divergence for the integer/enum signals; register the float-epsilon `std`/`mean` divergence class explicitly if it appears).
 
 ## Contract / parity
-- Numeric stats: `min`/`max`/`sum` exact; `mean`/`std` epsilon (float, order-free reduction — match Polars ddof=1; register the epsilon divergence class for `std`/`mean`).
-- String kernels: Arrow path == list path == Polars regex (byte-identical; the regex crate is unchanged).
-- Sequence/freshness: the integer signals (gap_count, future-dated count) exact; any float compare epsilon.
-- `scan_columns` output UNCHANGED (encoding/format/pattern parity-locked); full-scan authoritative UNCHANGED (shadow); `import goldencheck` zero polars; existing tests UNEDITED.
+- Numeric stats: `min`/`max`/`sum` exact; `mean`/`std` epsilon (float, order-free reduction — match Polars ddof=1; register the epsilon divergence class for `std`/`mean`). Outlier count/sample exact (integer count; sample = first-5 in array order).
+- Sequence: all signals (n_diffs, unit/positive diff counts, is_sorted, gap_count, gap_sample) exact integer/bool — NaN-free (int/uint only).
+- Freshness: `future_count` exact integer; `max_epoch` exact.
+- Full-scan authoritative findings UNCHANGED (shadow); `scan_columns` untouched (these three profilers aren't in it); `import goldencheck` zero polars; existing tests UNEDITED.
 
 ## Testing
-- Rust: each kernel over Arrow arrays (null/empty/single/edge; numeric NaN/inf for stats; string unicode for regex; date valid/invalid for freshness; monotonic/gapped for sequence).
-- Parity harness: each kernel == the Polars/list reference on random+adversarial fixtures (register; std epsilon if needed).
-- Python: encoding/format/pattern `scan_columns` tests UNEDITED (Arrow regex path parity-locked); full-scan range/sequence/freshness findings UNCHANGED (shadow); shadow tests assert kernel==Polars per check.
-- `import goldencheck` zero polars; wasm/clippy clean; all prior native symbols intact.
+- Rust: each kernel over Arrow arrays — numeric (null/empty/single/all-same/NaN/inf for stats + outlier bounds); integer monotonic/gapped/unsorted/duplicate for sequence; Date32/Date64/Timestamp valid/future/all-past for freshness.
+- Parity harness: each kernel == the `PolarsColumn` reference on random + adversarial fixtures (register each; `std`/`mean` epsilon divergence class if it appears).
+- Python: full-scan range/sequence/freshness findings UNCHANGED (shadow); a shadow test per check asserts kernel == PolarsColumn on a corpus. Existing profiler/scanner tests UNEDITED green.
+- `import goldencheck` zero polars; wasm/clippy clean; all prior native symbols (benford/keys/composite/FD/approx-FD/fuzzy/regex/date/csv_infer/column_aggregate) intact.
 
 ## Risks
-- **std/mean float parity** — Polars' ddof + reduction order; match ddof=1, epsilon-tolerance, register the divergence class (this is the first float-stat divergence, a preview of W4).
-- **Arrow-ifying regex/date without breaking the list callers** — keep the list fns as wrappers; parity Arrow==list.
-- **sequence order-preservation** — must NOT sort (the profiler detects order-based gaps); the kernel iterates in array order.
-- **W2 is large (6 checks, 3 pieces)** — if a single PR is unwieldy, split into W2a (numeric-stats + Arrow-ify string/date kernels) and W2b (sequence + freshness); each shadow/additive.
+- **std/mean float parity** — Polars' ddof + reduction order; match ddof=1, epsilon-tolerance, register the divergence class (first float-stat divergence — a preview of W4's statrs work).
+- **sequence order-preservation** — must NOT sort (the profiler detects order-based gaps + `is_sorted`); the kernel iterates in array order. `present_set` for the gap scan is a distinct concern from `is_sorted`.
+- **freshness tz/dtype** — the kernel takes an already-normalized `now_epoch` + operates on the Arrow temporal array's native unit; the tz-aware `count_gt` failure path (`except Exception`) stays Python (kernel only runs when the Polars path would succeed). Match the array's time unit (Date32=days, Timestamp=us/ns) to `now_epoch`.
+- **arrow-rs lockstep** (standing) — same `arrow=59`.
 
 ## Non-goals
-- No histogram/percentile beyond min/max/mean/std (full distribution-fit is W4). No changing user-visible output (shadow). No `scan_columns` behavior change. No new checks.
+- No histogram/percentile beyond min/max/mean/std (full distribution-fit is W4). No Arrow-ifying the regex/date string kernels (deferred cleanup). No changing user-visible output (shadow). No `scan_columns` change. No new checks. No polars-free wiring of these profilers (that flips at the Flip, like W1).
