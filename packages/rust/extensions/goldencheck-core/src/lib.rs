@@ -27,6 +27,7 @@ mod benford;
 mod csv_infer;
 mod date;
 mod dc;
+mod duplicate;
 mod freshness;
 mod fuzzy;
 mod keys;
@@ -40,6 +41,7 @@ pub use benford::{benford_leading_digits, benford_leading_digits_slice};
 pub use csv_infer::{infer_and_type, read_csv_bytes, read_csv_owned_bytes, TypedColumn};
 pub use date::str_to_date;
 pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
+pub use duplicate::{duplicate_signatures, DupStats};
 pub use freshness::{date_freshness, FreshStats};
 pub use fuzzy::{near_duplicate_clusters, near_duplicate_clusters_slice};
 pub use keys::{

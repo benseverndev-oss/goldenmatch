@@ -28,6 +28,7 @@ from goldencheck.profilers import fuzzy_values as fv
 from goldencheck.relations import approx_fd as afd
 from goldencheck.relations import composite_key as ck
 from goldencheck.relations import functional_dependency as fd
+from goldencheck.relations.approx_duplicate import _exact_signature, _normalized_signature
 
 # Reuse the fixture generators + Python-fallback helpers the hard-coded parity
 # test already defines instead of duplicating them.
@@ -612,6 +613,50 @@ def _freshness_fallback(fx: tuple[pl.Series, object]) -> tuple | None:
     return (non_null.filter(non_null > ref).len(), _fresh_epoch(non_null.max(), unit))
 
 
+# ---------------------------------------------------------------------------
+# duplicate_signatures (exact + near duplicate-row signature scan)
+# ---------------------------------------------------------------------------
+def _dupsig_fixtures(seed: int) -> list[pl.DataFrame]:
+    rng = random.Random(seed)
+    names = [
+        "Acme, Inc.", "acme inc", "ACME  Inc", "Beta LLC", "beta llc",
+        "Gamma", "gamma", "Delta", None, "", "!!!",
+    ]
+    n = rng.randint(2, 50)
+    return [
+        pl.DataFrame(
+            {
+                "name": [rng.choice(names) for _ in range(n)],
+                "code": [rng.choice([1, 2, 3, None]) for _ in range(n)],
+                "flag": [rng.choice([True, False, None]) for _ in range(n)],
+            },
+            schema={"name": pl.Utf8, "code": pl.Int64, "flag": pl.Boolean},
+        )
+    ]
+
+
+def _dupsig_native(df: pl.DataFrame) -> tuple[int, int, int, int]:
+    is_string = [dt == pl.Utf8 for dt in df.dtypes]
+    arrays = [df[c].to_arrow() for c in df.columns]
+    return tuple(native_module().duplicate_signatures(arrays, is_string))
+
+
+def _dupsig_fallback(df: pl.DataFrame) -> tuple[int, int, int, int]:
+    work = pl.DataFrame(
+        {"__norm__": _normalized_signature(df), "__exact__": _exact_signature(df)}
+    )
+    norm_counts = work.group_by("__norm__").len().rename({"len": "__nc__"})
+    exact_counts = work.group_by("__exact__").len().rename({"len": "__ec__"})
+    work = work.join(norm_counts, on="__norm__").join(exact_counts, on="__exact__")
+    exact_dups = work.filter(pl.col("__ec__") >= 2)
+    edr = exact_dups.height
+    edg = exact_dups["__exact__"].n_unique() if edr else 0
+    near_dups = work.filter((pl.col("__nc__") >= 2) & (pl.col("__ec__") < 2))
+    ndr = near_dups.height
+    ndg = near_dups["__norm__"].n_unique() if ndr else 0
+    return (edr, edg, ndr, ndg)
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -650,4 +695,5 @@ REGISTERED_COMPONENTS: list[Component] = [
         _freshness_fallback,
         _freshness_fixtures,
     ),
+    Component("duplicate_signatures", _dupsig_native, _dupsig_fallback, _dupsig_fixtures),
 ]
