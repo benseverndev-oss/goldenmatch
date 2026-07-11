@@ -165,6 +165,7 @@ async def match_run(payload: MatchRequest, request: Request) -> dict:
         )
     except HTTPException:
         raise
+    # W5: backend-specific exception surface; goes backend-neutral at the flip.
     except (pl.exceptions.ColumnNotFoundError, ValueError) as exc:
         # KeyError is intentionally NOT caught here — it usually signals a
         # bug inside goldenmatch (renamed dict key, missing internal field)

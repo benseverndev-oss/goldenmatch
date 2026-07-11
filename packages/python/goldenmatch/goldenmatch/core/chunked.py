@@ -86,16 +86,23 @@ class ChunkedMatcher:
             self._chunk_count += 1
             chunk_start = time.perf_counter()
 
-            # Add row IDs with offset
-            chunk_df = chunk_df.with_row_index("__row_id__").with_columns(
-                (pl.col("__row_id__") + self._row_offset).cast(pl.Int64).alias("__row_id__")
+            # Add row IDs with offset (W4d: seam ops, byte-identical chain)
+            from goldenmatch.core.frame import to_frame
+
+            chunk_df = (
+                to_frame(chunk_df)
+                .with_row_index("__row_id__")
+                .with_int64_offset("__row_id__", self._row_offset)
+                .with_literal_column("__source__", "source")
+                .native
             )
-            chunk_df = chunk_df.with_columns(pl.lit("source").alias("__source__"))
 
             # Auto-fix
             chunk_df, _ = auto_fix_dataframe(chunk_df)
 
             # Standardize
+            # W5: apply_standardization/compute_matchkeys are the LazyFrame
+            # expression engines; they rewire with the core pipeline flip.
             if self.config.standardization:
                 lf = chunk_df.lazy()
                 lf = apply_standardization(lf, self.config.standardization)
@@ -291,7 +298,9 @@ class ChunkedMatcher:
         keep_cols = self._slim_columns(matchkeys)
         chunk_slim = chunk_df.select([c for c in keep_cols if c in chunk_df.columns])
 
-        joint = pl.concat([chunk_slim, self._index_df], how="vertical")
+        from goldenmatch.core.frame import concat_frames, to_frame
+
+        joint = concat_frames([to_frame(chunk_slim), to_frame(self._index_df)]).native
         joint_df = compute_matchkeys(joint.lazy(), matchkeys).collect()
 
         chunk_lo = self._row_offset
@@ -396,10 +405,14 @@ class ChunkedMatcher:
                 # then stack. compute_matchkeys was already applied on the
                 # joint frame upstream; re-stacking slim frames is cheap.
                 cols = [c for c in index_subset.columns if c in chunk_subset.columns]
-                combined = pl.concat(
-                    [chunk_subset.select(cols), index_subset.select(cols)],
-                    how="vertical",
-                )
+                from goldenmatch.core.frame import concat_frames, to_frame
+
+                combined = concat_frames(
+                    [
+                        to_frame(chunk_subset.select(cols)),
+                        to_frame(index_subset.select(cols)),
+                    ]
+                ).native
                 synthetic_blocks.append(
                     BlockResult(block_key=bk, df=combined.lazy(), strategy="static"),
                 )
@@ -427,7 +440,11 @@ class ChunkedMatcher:
         if self._index_df is None:
             self._index_df = slim_df
         else:
-            self._index_df = pl.concat([self._index_df, slim_df], how="vertical")
+            from goldenmatch.core.frame import concat_frames, to_frame
+
+            self._index_df = concat_frames(
+                [to_frame(self._index_df), to_frame(slim_df)]
+            ).native
 
         # If blocking is static, also partition the slim slice by each
         # blocking key and append into the bucketed index. The bucketed
@@ -454,4 +471,8 @@ class ChunkedMatcher:
                     if existing is None:
                         bucket[bk] = part_df
                     else:
-                        bucket[bk] = pl.concat([existing, part_df], how="vertical")
+                        from goldenmatch.core.frame import concat_frames, to_frame
+
+                        bucket[bk] = concat_frames(
+                            [to_frame(existing), to_frame(part_df)]
+                        ).native

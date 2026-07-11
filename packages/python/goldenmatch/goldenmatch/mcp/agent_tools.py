@@ -802,6 +802,7 @@ def _dispatch(
             return {"error": "Missing required parameter: file_path"}
 
         try:
+            # W5: CSV ingest routes through core/ingest.load_file (io_arrow) at the flip.
             df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
         except FileNotFoundError:
             return {"error": f"File not found: {file_path}"}

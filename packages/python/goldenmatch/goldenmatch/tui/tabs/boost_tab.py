@@ -11,6 +11,7 @@ from textual.message import Message
 from textual.widgets import Button, DataTable, Static
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core.frame import to_frame as _to_frame
 from goldenmatch.tui.engine import EngineResult
 
 logger = logging.getLogger(__name__)
@@ -229,8 +230,8 @@ class BoostTab(Static):
         )
 
         # Build row lookup
-        row_a = self._data.filter(pl.col("__row_id__") == a)
-        row_b = self._data.filter(pl.col("__row_id__") == b)
+        row_a = _to_frame(self._data).filter_eq("__row_id__", a).native
+        row_b = _to_frame(self._data).filter_eq("__row_id__", b).native
 
         # Populate tables
         for table_id, row_df, label in [

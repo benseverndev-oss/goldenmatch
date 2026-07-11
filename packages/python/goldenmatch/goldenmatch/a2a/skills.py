@@ -149,6 +149,7 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         _analysis = session.analyze(params["file_path"])
         decision = select_strategy(
             profile_for_agent(
+                # W5: CSV ingest routes through core/ingest.load_file (io_arrow) at the flip.
                 pl.read_csv(params["file_path"], encoding="utf8-lossy", ignore_errors=True)
             ),
             allow_pprl=allow_pprl,
@@ -478,6 +479,7 @@ def _serialise_result(obj: Any) -> dict:
             try:
                 import polars as pl
 
+                # W5: native-type dispatch; becomes Frame isinstance at the flip.
                 if isinstance(v, pl.DataFrame):
                     out[k] = {"rows": v.height, "columns": v.columns}
                     continue
