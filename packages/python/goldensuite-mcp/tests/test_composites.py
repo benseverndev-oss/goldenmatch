@@ -85,3 +85,55 @@ def test_dedupe_file_registered_and_curated():
     assert "dedupe_file" in listed
     out = dispatch["suite_find_tools"]("suite_find_tools", {})
     assert "dedupe_file" in {r["name"] for r in out["tools"]}
+
+
+# --- Task 2.4: assess_file (read-only, degraded-aware) --------------------
+
+def _fake_assess_table(rec, with_scan=True):
+    def upload(n, a):
+        rec.append(("upload", a))
+        return {"path": "/up/in.csv", "bytes": 10, "filename": "in.csv"}
+
+    def analyze(n, a):
+        rec.append(("analyze", a))
+        return {"total_records": 100, "domain": "healthcare", "recommended_strategy": "exact(email)"}
+
+    def scan(n, a):
+        rec.append(("scan", a))
+        return {"rows": 100, "columns": 4, "health_grade": "B", "health_score": 82,
+                "total_findings": 3, "errors": 1, "warnings": 2}
+
+    t = {"upload_dataset": upload, "analyze_data": analyze}
+    if with_scan:
+        t["scan"] = scan
+    return t
+
+
+def test_assess_file_happy():
+    from goldensuite_mcp.composites import build_composites
+    rec = []
+    _, dispatch = build_composites(_fake_assess_table(rec))
+    out = dispatch["assess_file"]("assess_file", {"file_content": "...", "filename": "in.csv"})
+    assert out["ok"] is True
+    assert [s["step"] for s in out["steps"]] == ["upload", "analyze", "scan"]
+    assert dict(rec)["analyze"]["file_path"] == "/up/in.csv"
+    assert dict(rec)["scan"]["file_path"] == "/up/in.csv"
+    # read-only: no config, no outputs
+    assert "config" not in out and "outputs" not in out
+    # summary mentions rows + a quality signal
+    assert "100" in out["summary"]
+    assert "B" in out["summary"] or "finding" in out["summary"].lower()
+
+
+def test_assess_file_degraded_without_scan():
+    from goldensuite_mcp.composites import build_composites
+    rec = []
+    _, dispatch = build_composites(_fake_assess_table(rec, with_scan=False))
+    out = dispatch["assess_file"]("assess_file", {"file_content": "...", "filename": "in.csv"})
+    steps = {s["step"]: s for s in out["steps"]}
+    assert steps["analyze"]["ok"] is True
+    assert steps["scan"]["ok"] is False
+    # degraded but successful: a missing optional scan does not fail the composite
+    assert out["ok"] is True
+    assert "profile" in steps["analyze"]  # profile still present
+    assert not out["summary"].startswith("assess_file failed at step")

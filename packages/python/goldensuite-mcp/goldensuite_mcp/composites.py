@@ -81,6 +81,32 @@ def orchestrate_dedupe_file(dispatch, args):
     return _finish("dedupe_file", steps, config=config, outputs=outputs)
 
 
+def orchestrate_assess_file(dispatch, args):
+    """Read-only health check: upload -> analyze_data -> scan. The goldencheck
+    `scan` step is optional -- if goldencheck isn't in the build, the composite
+    still succeeds (degraded) and reports the profile without a quality grade."""
+    steps = []
+    degraded = {"scan"}
+    ok, res, label = _upload(dispatch, args)
+    steps.append({"step": label, "ok": ok, **({"path": res.get("path")} if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("assess_file", steps, degraded_steps=degraded)
+    path = res["path"]
+
+    ok, res = run_step(dispatch, "analyze_data", {"file_path": path})
+    rows = (res.get("total_records") or res.get("rows") or res.get("row_count")) if ok else None
+    steps.append({"step": "analyze", "ok": ok,
+                  **({"rows": rows, "profile": res} if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("assess_file", steps, degraded_steps=degraded)
+
+    ok, res = run_step(dispatch, "scan", {"file_path": path})
+    steps.append({"step": "scan", "ok": ok,
+                  **({"health_grade": res.get("health_grade"), "health_score": res.get("health_score"),
+                      "total_findings": res.get("total_findings")} if ok else {"error": res.get("error")})})
+    return _finish("assess_file", steps, degraded_steps=degraded)
+
+
 def _finish(workflow, steps, config=None, outputs=None, degraded_steps=frozenset()):
     ok = all(s["ok"] for s in steps if s["step"] not in degraded_steps)
     out = {"workflow": workflow, "ok": ok, "summary": _summarize(workflow, steps, outputs, degraded_steps), "steps": steps}
@@ -99,6 +125,14 @@ def _summarize(workflow, steps, outputs, degraded_steps=frozenset()):
         d = next((s for s in steps if s["step"] == "deduplicate"), {})
         return (f"{outputs.get('total_records')} records -> {outputs.get('golden_records')} golden; "
                 f"{d.get('auto_merge')} merged, {d.get('review')} to review. Written to {outputs.get('golden_path')}.")
+    if workflow == "assess_file":
+        a = next((s for s in steps if s["step"] == "analyze"), {})
+        sc = next((s for s in steps if s["step"] == "scan"), {})
+        rows = a.get("rows")
+        if sc.get("ok"):
+            return (f"{rows} rows profiled; health {sc.get('health_grade')} "
+                    f"(score {sc.get('health_score')}, {sc.get('total_findings')} findings).")
+        return f"{rows} rows profiled; quality scan unavailable (goldencheck not in this build)."
     return f"{workflow} ok"
 
 
@@ -108,6 +142,10 @@ _COMPOSITE_SPECS = [
      "inputSchema": {"type": "object", "properties": {**_FILE_INPUT_PROPS,
         "exclude_columns": {"type": "array", "items": {"type": "string"}, "description": "Columns to exclude from matching."}}, "required": []},
      "orchestrate": orchestrate_dedupe_file},
+    {"name": "assess_file",
+     "description": "One call: assess a single file's quality. Uploads the file, profiles it (record count, detected domain, recommended matching strategy), then runs a data-quality scan (health grade + findings). Read-only -- writes nothing. The quality scan is skipped gracefully if goldencheck isn't installed.",
+     "inputSchema": {"type": "object", "properties": {**_FILE_INPUT_PROPS}, "required": []},
+     "orchestrate": orchestrate_assess_file},
 ]
 
 
