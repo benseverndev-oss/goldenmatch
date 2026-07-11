@@ -207,9 +207,12 @@ class Frame(Protocol):
     # triples in order (dtype from the _SCHEMA_DTYPES vocabulary; None = no
     # cast). group_min = group_by(key).agg(min(value)) frame (row order
     # engine-defined, SET contract). with_gt_column derives a bool col.
+    def to_arrow(self) -> Any: ...  # pa.Table (PolarsFrame: df.to_arrow(); ArrowFrame: the table)
     def group_min(self, key: str, value: str) -> Frame: ...
     def select_cast(self, spec: Sequence[tuple[str, str | None, str]]) -> Frame: ...
     def with_gt_column(self, src: str, threshold: Any, name: str) -> Frame: ...
+    def with_coalesce(self, cols: Sequence[str], name: str) -> Frame: ...
+    def group_max(self, keys: Sequence[str], value: str) -> Frame: ...
 
 
 class PolarsColumn:
@@ -684,6 +687,11 @@ class PolarsFrame:
         # distributed/identity_partition.py:100-102 partition tag.
         return PolarsFrame(self._df.with_columns((pl.col(src) % n).alias(name)))
 
+    def to_arrow(self) -> Any:
+        # W4e-2: the Ray-UDF bookend (return-to-Arrow). Same bytes the raw
+        # df.to_arrow() produced.
+        return self._df.to_arrow()
+
     def group_min(self, key: str, value: str) -> PolarsFrame:
         # distributed/clustering.py:833 per-id min label.
         return PolarsFrame(self._df.group_by(key).agg(pl.col(value).min()))
@@ -701,6 +709,14 @@ class PolarsFrame:
     def with_gt_column(self, src: str, threshold: Any, name: str) -> PolarsFrame:
         # clustering.py:436 oversized flag.
         return PolarsFrame(self._df.with_columns((pl.col(src) > threshold).alias(name)))
+
+    def with_coalesce(self, cols: Sequence[str], name: str) -> PolarsFrame:
+        # clustering.py shortcut/compose kernels: pl.coalesce(cols).
+        return PolarsFrame(self._df.with_columns(pl.coalesce(list(cols)).alias(name)))
+
+    def group_max(self, keys: Sequence[str], value: str) -> PolarsFrame:
+        # distributed/scoring.py dedup: group_by(keys).agg(max(value)).
+        return PolarsFrame(self._df.group_by(list(keys)).agg(pl.col(value).max()))
 
 
 class ArrowColumn:
@@ -1301,6 +1317,9 @@ class ArrowFrame:
             self._tbl.append_column(name, pa.array(out, type=self._tbl.column(src).type))
         )
 
+    def to_arrow(self) -> Any:
+        return self._tbl
+
     def group_min(self, key: str, value: str) -> ArrowFrame:
         import pyarrow as pa
 
@@ -1342,6 +1361,36 @@ class ArrowFrame:
         return ArrowFrame(
             self._tbl.append_column(name, pc.greater(self._tbl.column(src), threshold))
         )
+
+    def with_coalesce(self, cols: Sequence[str], name: str) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        arr = pc.coalesce(*[self._tbl.column(c) for c in cols])
+        if name in self._tbl.column_names:
+            idx = self._tbl.column_names.index(name)
+            return ArrowFrame(self._tbl.set_column(idx, name, arr))
+        return ArrowFrame(self._tbl.append_column(name, arr))
+
+    def group_max(self, keys: Sequence[str], value: str) -> ArrowFrame:
+        import pyarrow as pa
+
+        kcols = [self._tbl.column(k).to_pylist() for k in keys]
+        vals = self._tbl.column(value).to_pylist()
+        maxes: dict = {}
+        order: list = []
+        for kv in zip(*kcols, vals):
+            k, v = kv[:-1], kv[-1]
+            if k not in maxes:
+                maxes[k] = v
+                order.append(k)
+            elif v is not None and (maxes[k] is None or v > maxes[k]):
+                maxes[k] = v
+        data = {
+            key: pa.array([k[i] for k in order], type=self._tbl.column(key).type)
+            for i, key in enumerate(keys)
+        }
+        data[value] = pa.array([maxes[k] for k in order], type=self._tbl.column(value).type)
+        return ArrowFrame(pa.table(data))
 
 
 def to_frame(obj: Any) -> Frame:

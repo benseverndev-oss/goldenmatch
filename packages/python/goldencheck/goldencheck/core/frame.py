@@ -84,6 +84,16 @@ def _neutral_dtype(dt: Any) -> str:
     return "other"
 
 
+def dtype_category(pl_dtype: Any) -> str:
+    """Public single entry point for the neutral dtype vocabulary
+    (str/int/uint/float/date/datetime/bool/other). Mirrors the Rust
+    kernel's ``dtype_category`` string-for-string. Callers that need the
+    neutral category for a dtype gate should route through this rather
+    than reimplementing tuple/equality checks against ``pl.*`` dtypes.
+    """
+    return _neutral_dtype(pl_dtype)
+
+
 _CAST_KIND = {"float": "Float64", "int": "Int64", "str": "String"}   # strings only; resolved via getattr in cast()
 
 
@@ -144,7 +154,7 @@ class PolarsColumn:
 
     @property
     def dtype(self) -> str:
-        return _neutral_dtype(self._s.dtype)
+        return dtype_category(self._s.dtype)
 
     def dtype_repr(self) -> str:
         return str(self._s.dtype)

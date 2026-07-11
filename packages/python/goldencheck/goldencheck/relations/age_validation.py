@@ -37,6 +37,7 @@ def _is_dob_column(name: str) -> bool:
 
 def _try_parse_dates(series: pl.Series) -> pl.Series:
     """Attempt to cast a series to Date."""
+    # TODO(W-path): route the dtype gates in this file via dtype_category
     if series.dtype in (pl.Date, pl.Datetime):
         return series.cast(pl.Date)
     if series.dtype in (pl.Utf8, pl.String):

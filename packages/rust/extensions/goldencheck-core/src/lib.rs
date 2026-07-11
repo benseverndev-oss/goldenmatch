@@ -21,6 +21,7 @@
 //! kernel (`dc`) is the exception: its columns arrive order-preservingly
 //! rank-encoded, so it does ordered `<`/`<=`/`>`/`>=` comparisons over those ids.
 
+mod aggregate;
 mod arrow_support;
 mod benford;
 mod csv_infer;
@@ -30,6 +31,7 @@ mod fuzzy;
 mod keys;
 mod regex;
 
+pub use aggregate::{column_aggregate, dtype_category, ColumnAgg, DtypeCat};
 pub use arrow_support::intern_column;
 pub use benford::{benford_leading_digits, benford_leading_digits_slice};
 pub use csv_infer::{infer_and_type, read_csv_bytes, read_csv_owned_bytes, TypedColumn};

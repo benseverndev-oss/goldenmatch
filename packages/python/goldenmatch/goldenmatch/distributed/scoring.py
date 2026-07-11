@@ -359,13 +359,14 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
             pl.lit(None).cast(pl.Utf8).alias("__keyid__"),
         )
 
-    exploded = pl.concat(pieces, how="vertical_relaxed")
+    # W4e-3: seam ops (relaxed concat + nonblank-key filter; __block_key__
+    # is already Utf8, so filter_nonblank_key's strict=False cast is a no-op).
+    from goldenmatch.core.frame import concat_frames, to_frame
+
+    exploded = concat_frames([to_frame(pc_) for pc_ in pieces], relaxed=True)
     # Drop null/blank keys (no co-location signal; mirrors the blocker's null
     # filter -- records with a null block key must not all share one block).
-    return exploded.filter(
-        pl.col("__block_key__").is_not_null()
-        & (pl.col("__block_key__").str.strip_chars() != "")
-    )
+    return exploded.filter_nonblank_key("__block_key__").native
 
 
 def _score_colocated_groups(
@@ -556,11 +557,9 @@ def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
         import polars as pl
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
-        out = df.with_columns([
-            pl.min_horizontal("id_a", "id_b").alias("id_a"),
-            pl.max_horizontal("id_a", "id_b").alias("id_b"),
-        ])
-        return out.to_arrow()
+        from goldenmatch.core.frame import to_frame
+
+        return to_frame(df).with_pair_canonical("id_a", "id_b").to_arrow()
 
     canonical = pairs_ds.map_batches(_canonicalize, batch_format="pyarrow")
 
@@ -576,15 +575,12 @@ def dedup_pairs_distributed(pairs_ds: Dataset) -> Dataset:
         assert isinstance(df, pl.DataFrame)
         if df.height == 0:
             return df.to_arrow()
-        out = df.group_by(["id_a", "id_b"]).max()
-        # Polars group_by(...).max() keeps key columns and aggregates the
-        # rest. Normalize the score column name if Polars renamed it.
-        if "score" not in out.columns:
-            for c in out.columns:
-                if c not in ("id_a", "id_b"):
-                    out = out.rename({c: "score"})
-                    break
-        return out.to_arrow()
+        # W4e-3: group_max(keys, value) == group_by(keys).agg(max(score))
+        # with the output column named "score" on both backends (retires the
+        # rename-normalization dance).
+        from goldenmatch.core.frame import to_frame
+
+        return to_frame(df).group_max(["id_a", "id_b"], "score").to_arrow()
 
     return repartitioned.map_batches(
         _dedup_within_partition, batch_format="pyarrow",
