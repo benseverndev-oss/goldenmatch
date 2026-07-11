@@ -84,7 +84,7 @@ Expected: either PASS (golden populated by default — good) or FAIL with `golde
 
 - [ ] **Step 3: If golden is None, find how to enable it**
 
-If FAIL: inspect `dedupe_df` in `goldenmatch/_api.py` and `run_pipeline`/`output_golden` in `goldenmatch/core/pipeline.py`. Determine the call that populates golden (likely `dedupe_df(df, output_golden=True)` or a config flag). Record the exact call in a comment at the top of the test file — Task 1.2 uses it. If golden is populated by default, no change needed; note that.
+If FAIL: golden is expected to be populated by default (`DedupeResult.golden` is set from the pipeline's return dict unconditionally; `output_golden` gates only the *disk write*, not computation — see `goldenmatch/core/pipeline.py`). Note: `dedupe_df` has **no** `output_golden` kwarg — that flag lives on `run_dedupe_df`, so do not try to pass it to `dedupe_df`. If golden genuinely comes back `None`, investigate how `run_dedupe_df` gates golden and thread it through `session.deduplicate`. Record the exact working call in a comment at the top of the test file — Task 1.2 uses it. Most likely outcome: golden is populated by default and no change is needed.
 
 - [ ] **Step 4: Commit the pinned probe**
 
@@ -368,7 +368,10 @@ def _upload(dispatch, args):
 def orchestrate_dedupe_file(dispatch, args):
     steps = []
     ok, res, label = _upload(dispatch, args)
-    steps.append({"step": label, "ok": ok, **({"path": res.get("path"), "rows": res.get("rows")} if ok else {"error": res.get("error")})})
+    # NOTE: upload_dataset returns {path, bytes, filename} -- no row count. Don't
+    # record "rows" here (it would always be None); row/record counts come from
+    # the dedupe step's results.total_records.
+    steps.append({"step": label, "ok": ok, **({"path": res.get("path")} if ok else {"error": res.get("error")})})
     if not ok:
         return _finish("dedupe_file", steps)
     path = res["path"]
@@ -494,11 +497,11 @@ Add the composite names to `CURATED_TOOLS`:
 
 **Files:** `composites.py`, `tests/test_composites.py`
 
-- [ ] **Step 1: Failing unit test** with a fake table exposing `upload_dataset`, `analyze_data`, `scan`; assert steps `["upload","analyze","scan"]`, `ok True`, `summary` mentions rows + a quality signal. Add a **degraded** test: table missing `scan` → analyze step `ok True`, scan step `ok False`, composite `ok True` (degraded), profile still present.
+- [ ] **Step 1: Failing unit test** with a fake table exposing `upload_dataset`, `analyze_data`, `scan`; assert steps `["upload","analyze","scan"]`, `ok True`, `summary` mentions rows + a quality signal. Add a **degraded** test: table missing `scan` → analyze step `ok True`, scan step `ok False`, composite `ok True` (degraded), profile still present, **and assert `out["summary"]` is NOT a failure message** (does not start with "assess_file failed at step").
 
 - [ ] **Step 2: Run to verify it fails.**
 
-- [ ] **Step 3: Implement `orchestrate_assess_file`** — upload → `analyze_data(file_path=path)` → `scan(path)` (check the goldencheck `scan` arg name — likely `path`; confirm from `goldencheck.mcp.server` TOOLS). No `output_path`, no `config`/`outputs` export. Degraded rule: a failed `scan` does **not** flip the composite to `ok:false` (override `_finish` for this workflow, or pass a `degraded_steps={"scan"}` set so `_finish` ignores it when computing `ok`). Add its spec entry (inputSchema = `_FILE_INPUT_PROPS` only). Extend `_summarize` for `assess_file`.
+- [ ] **Step 3: Implement `orchestrate_assess_file`** — upload → `analyze_data(file_path=path)` → `scan(path)` (check the goldencheck `scan` arg name — likely `path`; confirm from `goldencheck.mcp.server` TOOLS). No `output_path`, no `config`/`outputs` export. Degraded rule: a failed `scan` does **not** flip the composite to `ok:false` — thread a `degraded_steps={"scan"}` set through `_finish` so it is excluded from the `ok = all(...)` computation. **Coordinate `_summarize`:** its current first branch emits "failed at step X" whenever any step is `not ok`; it must use the SAME degraded-aware `ok` (ignore degraded steps) so a degraded-but-successful `assess_file` gets a real summary, not a failure message. Add its spec entry (inputSchema = `_FILE_INPUT_PROPS` only).
 
 - [ ] **Step 4: Run to verify pass.**
 
