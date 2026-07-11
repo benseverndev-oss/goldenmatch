@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from functools import lru_cache
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
@@ -39,14 +38,6 @@ _IDENTITY_NAME_PATTERNS = [
     (re.compile(r"^(phone|mobile|tel|telephone)$", re.I), 0.85),
     (re.compile(r"^(id|uuid|guid|user_id|account_id)$", re.I), 0.90),
 ]
-
-@lru_cache(maxsize=1)
-def _non_identity_dtypes() -> frozenset:
-    """Deferred: this module is swept onto _polars_lazy, so a module-level
-    ``pl.`` evaluation would trigger the polars import at package import time
-    and defeat the lazy proxy."""
-    return frozenset({pl.Boolean, pl.Date, pl.Datetime, pl.Time})
-
 
 def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
     """Compute per-column identity + corruption priors.
