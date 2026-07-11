@@ -1859,36 +1859,17 @@ class AutoConfigController:
 
         user_cols = [c for c in df.columns if not c.startswith("__")]
         n_rows = df.height
+        # W3c: shared seam-routed body with autoconfig._emit_data_profile
+        # (the twins were byte-identical; mirror retired).
+        from goldenmatch.core._profile_helpers import data_profile_column_stats
 
-        column_types: dict[str, str] = {}
-        cardinality_ratio: dict[str, float] = {}
-        null_rate: dict[str, float] = {}
-        value_length_p50: dict[str, int] = {}
-        value_length_p99: dict[str, int] = {}
-
-        for col in user_cols:
-            ser = df[col]
-            non_null = ser.drop_nulls()
-            n_non_null = non_null.len()
-            cardinality_ratio[col] = (non_null.n_unique() / n_non_null) if n_non_null else 0.0
-            null_rate[col] = 1 - (n_non_null / n_rows) if n_rows else 0.0
-            dtype = str(ser.dtype).lower()
-            if "utf" in dtype or "str" in dtype:
-                column_types[col] = "text"
-            elif "int" in dtype or "float" in dtype:
-                column_types[col] = "numeric"
-            elif "date" in dtype or "time" in dtype:
-                column_types[col] = "date"
-            else:
-                column_types[col] = "unknown"
-            if column_types[col] == "text" and n_non_null:
-                try:
-                    lens = sorted(non_null.cast(pl.Utf8).str.len_chars().to_list())
-                    if lens:
-                        value_length_p50[col] = int(lens[len(lens) // 2])
-                        value_length_p99[col] = int(lens[max(0, int(0.99 * len(lens)) - 1)])
-                except Exception:
-                    pass
+        (
+            column_types,
+            cardinality_ratio,
+            null_rate,
+            value_length_p50,
+            value_length_p99,
+        ) = data_profile_column_stats(df, user_cols)
 
         return DataProfile(
             n_rows=n_rows,

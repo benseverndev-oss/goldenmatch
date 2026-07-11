@@ -83,3 +83,46 @@ def transitivity_rate(
         and edge(a, c) >= threshold
     )
     return agree / len(triples)
+
+
+def data_profile_column_stats(
+    df,  # pl.DataFrame (today) or any Frame-coercible
+    user_cols,
+):
+    """Shared body of autoconfig._emit_data_profile and
+    autoconfig_controller._compute_data_profile_from_df (W3c: the twins were
+    byte-identical -- one seam-routed implementation retires the mirror,
+    the W2c _cross_source_filter_df pattern).
+
+    Returns (column_types, cardinality_ratio, null_rate, p50, p99).
+    column_types keeps the LEGACY tag set {text, numeric, date, unknown}:
+    the old dtype substring chain had no bool branch, so Boolean maps
+    "unknown" here even though semantic_dtype knows better -- byte-identical
+    verdicts beat tidiness until a deliberate re-bless.
+    """
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+    n_rows = frame.height
+    column_types: dict[str, str] = {}
+    cardinality_ratio: dict[str, float] = {}
+    null_rate: dict[str, float] = {}
+    value_length_p50: dict[str, int] = {}
+    value_length_p99: dict[str, int] = {}
+    for col in user_cols:
+        ser = frame.column(col)
+        non_null = ser.drop_nulls()
+        n_non_null = len(non_null)
+        cardinality_ratio[col] = (non_null.n_unique() / n_non_null) if n_non_null else 0.0
+        null_rate[col] = 1 - (n_non_null / n_rows) if n_rows else 0.0
+        tag = ser.semantic_dtype()
+        column_types[col] = tag if tag in ("text", "numeric", "date") else "unknown"
+        if column_types[col] == "text" and n_non_null:
+            try:
+                lens = sorted(non_null.cast_str().str_len_chars().to_list())
+                if lens:
+                    value_length_p50[col] = int(lens[len(lens) // 2])
+                    value_length_p99[col] = int(lens[max(0, int(0.99 * len(lens)) - 1)])
+            except Exception:
+                pass
+    return column_types, cardinality_ratio, null_rate, value_length_p50, value_length_p99

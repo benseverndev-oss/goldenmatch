@@ -99,19 +99,26 @@ def _guess_type(values: list[str]) -> str:
 
 
 def profile_column(series: pl.Series) -> dict[str, Any]:
-    """Profile a single column and return a statistics dict."""
-    name = series.name
-    dtype = str(series.dtype)
-    total = len(series)
-    null_count = series.null_count()
+    """Profile a single column and return a statistics dict.
+
+    W3c: internals route through the Column seam (PolarsColumn wraps the
+    series -- byte-identical delegation; an ArrowColumn caller gets the same
+    stats via the parity-pinned pc twins)."""
+    from goldenmatch.core.frame import Column, PolarsColumn
+
+    name = series.name if not isinstance(series, Column) else "<column>"
+    col: Column = series if isinstance(series, Column) else PolarsColumn(series)
+    dtype = str(series.dtype) if not isinstance(series, Column) else col.semantic_dtype()
+    total = len(col)
+    null_count = col.null_count()
     null_rate = null_count / total if total > 0 else 0.0
 
-    non_null = series.drop_nulls()
+    non_null = col.drop_nulls()
     non_null_count = len(non_null)
     unique_count = non_null.n_unique() if non_null_count > 0 else 0
     unique_rate = unique_count / non_null_count if non_null_count > 0 else 0.0
 
-    is_string = series.dtype in (pl.Utf8, pl.String)
+    is_string = col.semantic_dtype() == "text"
 
     min_length: int | None = None
     max_length: int | None = None
@@ -120,17 +127,14 @@ def profile_column(series: pl.Series) -> dict[str, Any]:
     suspected_type = "text"
 
     if is_string:
-        lengths = non_null.str.len_chars()
+        lengths = non_null.str_len_chars()
         if non_null_count > 0:
             min_length = int(lengths.min())  # type: ignore[arg-type]
             max_length = int(lengths.max())  # type: ignore[arg-type]
             avg_length = float(lengths.mean())  # type: ignore[arg-type]
 
         # Count empty or whitespace-only strings (excluding actual nulls)
-        if non_null_count > 0:
-            empty_string_count = int((non_null.str.strip_chars() == "").sum())
-        else:
-            empty_string_count = 0
+        empty_string_count = col.blank_count() if non_null_count > 0 else 0
 
         # Heuristic type detection on non-null, non-empty values
         non_empty_vals = [
@@ -141,7 +145,7 @@ def profile_column(series: pl.Series) -> dict[str, Any]:
         empty_string_count = 0
 
     # Sample values
-    sample_values: list[Any] = non_null.head(5).to_list() if non_null_count > 0 else []
+    sample_values: list[Any] = non_null.to_list()[:5] if non_null_count > 0 else []
 
     return {
         "name": name,
