@@ -7,11 +7,13 @@
 - Remote MCP: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benzsevern/goldencheck)
 - A2A Server: `goldencheck agent-serve --port 8100` (9 skills)
 - CLI: `goldencheck scan`, `goldencheck validate`, + 14 more commands
-- Python API: `from goldencheck import scan_file, validate_file, health_score, create_baseline`
+- Python API: `from goldencheck import scan_file, scan_columns, scan_file_columns, read_columns, validate_file, health_score, create_baseline` (scan_columns / read_columns / scan_file_columns are the Polars-free structural path)
 - REST API: `goldencheck serve` on port 8000
 
 ## Install
-- `pip install goldencheck` — core scanning
+- `pip install goldencheck` — Polars-free base: structural scan (`scan_columns`) + Parquet/Excel reading (`read_columns`/`scan_file_columns`)
+- `pip install goldencheck[polars]` — CSV reading + the full `scan_file`/`scan_dataframe` scan (Polars; since 2.0.0 Polars is optional)
+- `pip install goldencheck[parquet]` — Polars-free Parquet reading (pyarrow)
 - `pip install goldencheck[llm]` — LLM boost (~$0.01/scan)
 - `pip install goldencheck[baseline]` — deep profiling & drift detection
 - `pip install goldencheck[mcp]` — MCP server for Claude Desktop

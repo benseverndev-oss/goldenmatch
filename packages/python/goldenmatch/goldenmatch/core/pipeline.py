@@ -810,7 +810,8 @@ def run_dedupe(
         from goldenmatch.core.frame import ArrowFrame as _ArrowFrame
 
         if isinstance(lf, _ArrowFrame):
-            lf = pl.from_arrow(lf.native).lazy()
+            # from_arrow is typed DataFrame | Series; a Table is always a DataFrame
+            lf = cast("pl.DataFrame", pl.from_arrow(lf.native)).lazy()
         if column_map:
             lf = apply_column_map(lf, column_map)
         required = _get_required_columns(config)

@@ -167,7 +167,7 @@ agent = [
     "aiohttp>=3.14.0",
 ]
 quality = [
-    "goldencheck>=0.5.0",
+    "goldencheck[polars]>=2.0.0",  # cell_quality uses goldencheck's Polars path; [polars] since 2.0.0 made Polars optional
 ]
 transform = [
     "goldenflow>=1.0.0",

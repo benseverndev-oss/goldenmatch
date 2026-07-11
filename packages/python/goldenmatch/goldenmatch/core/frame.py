@@ -46,6 +46,25 @@ def resolve_frame_backend() -> str:
     return raw
 
 
+def _semantic_dtype_name(dtype_str: str) -> str:
+    """Cross-backend dtype tag: {text, numeric, date, bool, unknown}.
+
+    Polars spells Float64/Int64/String/Date/Boolean; Arrow spells
+    double/int64/large_string/date32[day]/bool. Raw substring checks like
+    `"float" in str(dtype)` misclassify Arrow's "double" as unknown -- this
+    table is the one normalization point (W3a, reviewer finding)."""
+    d = dtype_str.lower()
+    if any(t in d for t in ("utf", "str", "string")):
+        return "text"
+    if any(t in d for t in ("int", "float", "double", "decimal", "uint")):
+        return "numeric"
+    if any(t in d for t in ("date", "time")):
+        return "date"
+    if "bool" in d:
+        return "bool"
+    return "unknown"
+
+
 @runtime_checkable
 class Column(Protocol):
     def __len__(self) -> int: ...
@@ -56,6 +75,23 @@ class Column(Protocol):
     def unique(self) -> Column: ...
     def max(self) -> Any: ...
     def to_numpy(self) -> Any: ...
+    # W3a reduction ops (contracts in tests/test_frame_relational_ops.py):
+    # value_counts_desc INCLUDES nulls as a countable value (polars parity)
+    # and pins count-desc + stringified-value tiebreak ordering; std is
+    # ddof=1; semantic_dtype normalizes cross-backend dtype naming (Arrow
+    # says "double" where Polars says Float64 -- raw str(dtype) checks
+    # misclassify floats as unknown on arrow).
+    def drop_nulls(self) -> Column: ...
+    def cast_str(self, strict: bool = True) -> Column: ...
+    def fill_null(self, value: Any) -> Column: ...
+    def sum(self) -> Any: ...
+    def mean(self) -> Any: ...
+    def min(self) -> Any: ...
+    def std(self) -> Any: ...
+    def value_counts_desc(self) -> list[tuple[Any, int]]: ...
+    def str_len_chars(self) -> Column: ...
+    def blank_count(self) -> int: ...
+    def semantic_dtype(self) -> str: ...
 
 
 @runtime_checkable
@@ -124,6 +160,30 @@ class Frame(Protocol):
     def with_column(self, name: str, col: Column) -> Frame: ...
     def with_literal_column(self, name: str, value: Any) -> Frame: ...
     def group_partitions(self, key: str) -> list[tuple[Any, Frame]]: ...
+    # W3a controller/profiling ops. `sample`: statistical contract, NOT
+    # byte -- polars' RNG is not reproducible on arrow; same n,
+    # deterministic per (seed, backend), no duplicates, n>height raises.
+    # Once arrow flows past ingest (W5) the differential harness's
+    # controller expectations become per-backend BY DESIGN.
+    def sample(self, n: int, seed: int | None = None, shuffle: bool = False) -> Frame: ...
+    def with_row_index(self, name: str = "__row__") -> Frame: ...
+    def head(self, n: int) -> Frame: ...
+    def joint_n_unique(self, cols: Sequence[str]) -> int: ...
+    def group_nunique(self, key: str, value: str) -> Frame: ...
+    def coverage_ratio(self, pass_field_lists: Sequence[Sequence[str]]) -> float: ...
+    def distinct_row_count(self) -> int: ...
+    # W2e-1: one field's standardizer chain (apply_standardization's
+    # per-column derivation as a seam op; `address`/plugins fall back to the
+    # pure-Python STANDARDIZERS oracle on the arrow backend).
+    def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> Column: ...
+    # W2e-2: matchkey composite (PER-FIELD transform chains, unlike
+    # derive_block_key's shared chain; the non-native fallback runs over RAW
+    # values -- matchkey's map_elements has no Utf8 pre-cast) + the derived-NE
+    # space-join (fill_null("") means it never null-propagates).
+    def derive_matchkey(
+        self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
+    ) -> Column: ...
+    def derive_ne_joined(self, fields: Sequence[str]) -> Column: ...
 
 
 class PolarsColumn:
@@ -159,6 +219,48 @@ class PolarsColumn:
 
     def to_numpy(self) -> Any:
         return self._s.to_numpy()
+
+    # -- W3a reductions (exact-delegation; contracts in the fixtures) ------
+
+    def drop_nulls(self) -> PolarsColumn:
+        return PolarsColumn(self._s.drop_nulls())
+
+    def cast_str(self, strict: bool = True) -> PolarsColumn:
+        return PolarsColumn(self._s.cast(pl.Utf8, strict=strict))
+
+    def fill_null(self, value: Any) -> PolarsColumn:
+        return PolarsColumn(self._s.fill_null(value))
+
+    def sum(self) -> Any:
+        return self._s.sum()
+
+    def mean(self) -> Any:
+        return self._s.mean()
+
+    def min(self) -> Any:
+        return self._s.min()
+
+    def std(self) -> Any:
+        return self._s.std()  # ddof=1, polars default (fixture-pinned)
+
+    def value_counts_desc(self) -> list[tuple[Any, int]]:
+        # Includes nulls as a value (polars parity); ordering imposed HERE
+        # (polars value_counts has no order guarantee): count desc, then
+        # stringified value (None first) for cross-backend determinism.
+        vc = self._s.value_counts()
+        pairs = list(zip(vc[self._s.name].to_list(), vc["count"].to_list()))
+        pairs.sort(key=lambda t: (-t[1], t[0] is not None, str(t[0])))
+        return pairs
+
+    def str_len_chars(self) -> PolarsColumn:
+        return PolarsColumn(self._s.str.len_chars())
+
+    def blank_count(self) -> int:
+        # profiler.py:131 shape: non-null values whose strip() == "".
+        return int((self._s.drop_nulls().str.strip_chars() == "").sum())
+
+    def semantic_dtype(self) -> str:
+        return _semantic_dtype_name(str(self._s.dtype))
 
 
 class PolarsFrame:
@@ -395,6 +497,117 @@ class PolarsFrame:
         parts = self._df.partition_by(key, maintain_order=True, include_key=True)
         return [(p[key][0], PolarsFrame(p)) for p in parts]
 
+    # -- W3a controller/profiling ops ---------------------------------------
+
+    def sample(self, n: int, seed: int | None = None, shuffle: bool = False) -> PolarsFrame:
+        # Statistical contract (see Frame protocol note): polars rows are the
+        # per-backend reference; n>height raises (polars ShapeError).
+        return PolarsFrame(self._df.sample(n=n, seed=seed, shuffle=shuffle))
+
+    def with_row_index(self, name: str = "__row__") -> PolarsFrame:
+        return PolarsFrame(self._df.with_row_index(name))
+
+    def head(self, n: int) -> PolarsFrame:
+        return PolarsFrame(self._df.head(n))
+
+    def joint_n_unique(self, cols: Sequence[str]) -> int:
+        # autoconfig:3203 composite cardinality (null combos count).
+        return int(self._df.select(list(cols)).n_unique())
+
+    def group_nunique(self, key: str, value: str) -> PolarsFrame:
+        # _source_disjoint shape: rows where EITHER col is null are DROPPED
+        # (frame-level drop_nulls on the 2-col selection) before grouping.
+        g = (
+            self._df.select([key, value])
+            .drop_nulls()
+            .group_by(key)
+            .agg(pl.col(value).n_unique().alias("n_unique"))
+        )
+        return PolarsFrame(g)
+
+    def coverage_ratio(self, pass_field_lists: Sequence[Sequence[str]]) -> float:
+        # _union_coverage:1436-1451 VERBATIM: fraction of rows covered by at
+        # least one pass whose fields are ALL non-null. Missing column ->
+        # that pass covers nothing; empty pass list -> 0.0; an empty
+        # fields-list INSIDE a pass covers everything (all-True fold,
+        # unreachable today, pinned by fixture); height==0 -> 0.0.
+        if self._df.height == 0:
+            return 0.0
+        covered = pl.repeat(False, self._df.height, eager=True)
+        for fields in pass_field_lists:
+            present = pl.repeat(True, self._df.height, eager=True)
+            ok = True
+            for f in fields:
+                if f not in self._df.columns:
+                    ok = False
+                    break
+                present = present & self._df[f].is_not_null()
+            if not ok:
+                continue
+            covered = covered | present
+        return float(covered.sum() / self._df.height)
+
+    def distinct_row_count(self) -> int:
+        return int(self._df.unique().height)
+
+    def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> PolarsColumn:
+        # Byte-identical to apply_standardization's three per-column branches
+        # (standardize.py:443-501): native builders as one fused expr chain,
+        # any non-native tail via ONE chained map_elements UDF -- including
+        # the mixed-chain REORDERING quirk (native first, then non-native).
+        from goldenmatch.core.standardize import _NATIVE_STANDARDIZERS, get_standardizer
+
+        expr = pl.col(field).cast(pl.Utf8)
+        for name in [n for n in std_names if n in _NATIVE_STANDARDIZERS]:
+            expr = _NATIVE_STANDARDIZERS[name](expr)  # type: ignore[operator]
+        non_native = [n for n in std_names if n not in _NATIVE_STANDARDIZERS]
+        if non_native:
+            funcs = [get_standardizer(n) for n in non_native]
+
+            def _chained(val: Any, _funcs: Any = funcs) -> Any:
+                for fn in _funcs:
+                    val = fn(val)
+                return val
+
+            # noqa: GM-MAP-ELEMENTS: non-native standardizer tail needs per-row Python (mirrors apply_standardization)
+            expr = expr.map_elements(_chained, return_dtype=pl.Utf8)
+        return PolarsColumn(self._df.select(expr.alias("__std__"))["__std__"])
+
+    def derive_matchkey(
+        self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
+    ) -> PolarsColumn:
+        # build_matchkey_expr's per-field branches VERBATIM (matchkey.py
+        # :164-184): native chain when fully expressible, else map_elements
+        # over RAW values (NO pre-cast -- the one contract difference vs the
+        # fused prep's cast-then-chain), else plain cast; concat_str for
+        # multi-field.
+        from goldenmatch.core.matchkey import _build_field_expr_native
+        from goldenmatch.utils.transforms import apply_transforms
+
+        field_exprs = []
+        for f, transforms in fields_with_chains:
+            chain = list(transforms)
+            if chain:
+                native = _build_field_expr_native(f, chain)
+                if native is not None:
+                    expr = native
+                else:
+                    # noqa: GM-MAP-ELEMENTS: non-native matchkey transform (soundex/metaphone); mirrors build_matchkey_expr
+                    expr = pl.col(f).map_elements(
+                        lambda val, _c=chain: apply_transforms(val, _c),
+                        return_dtype=pl.Utf8,
+                    )
+            else:
+                expr = pl.col(f).cast(pl.Utf8)
+            field_exprs.append(expr)
+        out = field_exprs[0] if len(field_exprs) == 1 else pl.concat_str(field_exprs, separator=sep)
+        return PolarsColumn(self._df.select(out.alias("__mk__"))["__mk__"])
+
+    def derive_ne_joined(self, fields: Sequence[str]) -> PolarsColumn:
+        # precompute_matchkey_transforms' derived-NE join (matchkey.py:381-386).
+        expr = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("") for c in fields], separator=" ")
+        return PolarsColumn(self._df.select(expr.alias("__ne__"))["__ne__"])
+
 
 class ArrowColumn:
     """Delegates each op to the pyarrow-compute call matching Polars semantics."""
@@ -446,6 +659,71 @@ class ArrowColumn:
         if hasattr(arr, "combine_chunks"):
             arr = arr.combine_chunks()
         return arr.to_numpy(zero_copy_only=False)
+
+    # -- W3a reductions (pc twins; contracts in the fixtures) --------------
+
+    def drop_nulls(self) -> ArrowColumn:
+        import pyarrow.compute as pc
+
+        return ArrowColumn(pc.drop_null(self._col))
+
+    def cast_str(self, strict: bool = True) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        # strict is a polars-ism (uncastable -> null when False); the
+        # arrow_derive cast handles every dtype in the corpus and never
+        # raises for them, so both flavors route through it (fixture-pinned
+        # against BOTH strict values on the polars side).
+        return ArrowColumn(arrow_derive.cast_utf8(self._col))
+
+    def fill_null(self, value: Any) -> ArrowColumn:
+        import pyarrow.compute as pc
+
+        return ArrowColumn(pc.fill_null(self._col, value))
+
+    def sum(self) -> Any:
+        import pyarrow.compute as pc
+
+        v = pc.sum(self._col).as_py()
+        return v
+
+    def mean(self) -> Any:
+        import pyarrow.compute as pc
+
+        return pc.mean(self._col).as_py()
+
+    def min(self) -> Any:
+        import pyarrow.compute as pc
+
+        return pc.min(self._col).as_py()
+
+    def std(self) -> Any:
+        import pyarrow.compute as pc
+
+        return pc.stddev(self._col, ddof=1).as_py()  # polars ddof=1 parity
+
+    def value_counts_desc(self) -> list[tuple[Any, int]]:
+        import pyarrow.compute as pc
+
+        vc = pc.value_counts(self._col)  # includes nulls, like polars
+        pairs = [(d["values"], d["counts"]) for d in vc.to_pylist()]
+        pairs.sort(key=lambda t: (-t[1], t[0] is not None, str(t[0])))
+        return pairs
+
+    def str_len_chars(self) -> ArrowColumn:
+        import pyarrow.compute as pc
+
+        return ArrowColumn(pc.utf8_length(self._col))  # codepoints, like polars
+
+    def blank_count(self) -> int:
+        import pyarrow.compute as pc
+
+        nonnull = pc.drop_null(self._col)
+        return pc.sum(pc.equal(pc.utf8_trim_whitespace(nonnull), "")).as_py() or 0
+
+    def semantic_dtype(self) -> str:
+        t = self._col.type if not hasattr(self._col, "chunks") else self._col.type
+        return _semantic_dtype_name(str(t))
 
 
 class ArrowFrame:
@@ -740,6 +1018,91 @@ class ArrowFrame:
                 order.append(v)
             groups[v].append(i)
         return [(v, ArrowFrame(self._tbl.take(groups[v]))) for v in order]
+
+    # -- W3a controller/profiling ops ---------------------------------------
+
+    def sample(self, n: int, seed: int | None = None, shuffle: bool = False) -> ArrowFrame:
+        import random
+
+        if n > self._tbl.num_rows:
+            raise ValueError(
+                f"cannot take a larger sample ({n}) than the population "
+                f"({self._tbl.num_rows}) -- polars ShapeError parity"
+            )
+        rng = random.Random(seed)
+        idx = rng.sample(range(self._tbl.num_rows), n)
+        if not shuffle:
+            idx.sort()  # polars shuffle=False keeps frame order
+        return ArrowFrame(self._tbl.take(idx))
+
+    def with_row_index(self, name: str = "__row__") -> ArrowFrame:
+        import pyarrow as pa
+
+        idx = pa.array(range(self._tbl.num_rows), type=pa.uint32())
+        return ArrowFrame(self._tbl.add_column(0, name, idx))
+
+    def head(self, n: int) -> ArrowFrame:
+        return ArrowFrame(self._tbl.slice(0, n))
+
+    def joint_n_unique(self, cols: Sequence[str]) -> int:
+        rows = zip(*(self._tbl.column(c).to_pylist() for c in cols))
+        return len(set(rows))
+
+    def group_nunique(self, key: str, value: str) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        sub = self._tbl.select([key, value])
+        keep = pc.and_kleene(pc.is_valid(sub.column(key)), pc.is_valid(sub.column(value)))
+        sub = sub.filter(keep)  # either-col-null rows DROP (contract)
+        grouped = sub.group_by(key).aggregate([(value, "count_distinct")])
+        names = ["n_unique" if c == f"{value}_count_distinct" else c for c in grouped.column_names]
+        return ArrowFrame(grouped.rename_columns(names))
+
+    def coverage_ratio(self, pass_field_lists: Sequence[Sequence[str]]) -> float:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        n = self._tbl.num_rows
+        if n == 0:
+            return 0.0
+        covered = pa.array([False] * n, type=pa.bool_())
+        for fields in pass_field_lists:
+            present = pa.array([True] * n, type=pa.bool_())
+            ok = True
+            for f in fields:
+                if f not in self._tbl.column_names:
+                    ok = False
+                    break
+                present = pc.and_(present, pc.is_valid(self._tbl.column(f)))
+            if not ok:
+                continue
+            covered = pc.or_(covered, present)
+        return float((pc.sum(covered).as_py() or 0) / n)
+
+    def distinct_row_count(self) -> int:
+        cols = self._tbl.column_names
+        rows = zip(*(self._tbl.column(c).to_pylist() for c in cols))
+        return len(set(rows))
+
+    def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        return ArrowColumn(
+            arrow_derive.standardized_column(self._tbl.column(field), list(std_names))
+        )
+
+    def derive_matchkey(
+        self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
+    ) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        pairs = [(self._tbl.column(f), list(t)) for f, t in fields_with_chains]
+        return ArrowColumn(arrow_derive.matchkey_composite(pairs, sep=sep))
+
+    def derive_ne_joined(self, fields: Sequence[str]) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        return ArrowColumn(arrow_derive.ne_joined_column([self._tbl.column(f) for f in fields]))
 
 
 def to_frame(obj: Any) -> Frame:
