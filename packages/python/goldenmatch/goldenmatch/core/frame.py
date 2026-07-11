@@ -207,6 +207,7 @@ class Frame(Protocol):
     # triples in order (dtype from the _SCHEMA_DTYPES vocabulary; None = no
     # cast). group_min = group_by(key).agg(min(value)) frame (row order
     # engine-defined, SET contract). with_gt_column derives a bool col.
+    def to_arrow(self) -> Any: ...  # pa.Table (PolarsFrame: df.to_arrow(); ArrowFrame: the table)
     def group_min(self, key: str, value: str) -> Frame: ...
     def select_cast(self, spec: Sequence[tuple[str, str | None, str]]) -> Frame: ...
     def with_gt_column(self, src: str, threshold: Any, name: str) -> Frame: ...
@@ -683,6 +684,11 @@ class PolarsFrame:
     def with_mod_column(self, src: str, n: int, name: str) -> PolarsFrame:
         # distributed/identity_partition.py:100-102 partition tag.
         return PolarsFrame(self._df.with_columns((pl.col(src) % n).alias(name)))
+
+    def to_arrow(self) -> Any:
+        # W4e-2: the Ray-UDF bookend (return-to-Arrow). Same bytes the raw
+        # df.to_arrow() produced.
+        return self._df.to_arrow()
 
     def group_min(self, key: str, value: str) -> PolarsFrame:
         # distributed/clustering.py:833 per-id min label.
@@ -1300,6 +1306,9 @@ class ArrowFrame:
         return ArrowFrame(
             self._tbl.append_column(name, pa.array(out, type=self._tbl.column(src).type))
         )
+
+    def to_arrow(self) -> Any:
+        return self._tbl
 
     def group_min(self, key: str, value: str) -> ArrowFrame:
         import pyarrow as pa

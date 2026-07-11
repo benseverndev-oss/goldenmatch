@@ -291,3 +291,14 @@ def test_with_gt_column(backend):
     # clustering oversized flag: (cluster_size > max).alias(...).
     f = _mk({"n": [1, 5, 3]}, backend)
     assert f.with_gt_column("n", 3, "big").column("big").to_list() == [False, True, False]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_frame_to_arrow_roundtrip(backend):
+    # the Ray-UDF return bookend: Frame.to_arrow() -> pa.Table.
+    import pyarrow as pa
+
+    f = _mk({"id": [1, 2], "v": ["a", "b"]}, backend)
+    t = f.to_arrow()
+    assert isinstance(t, pa.Table)
+    assert t.column("id").to_pylist() == [1, 2]
