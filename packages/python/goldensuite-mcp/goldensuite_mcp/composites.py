@@ -56,6 +56,10 @@ def _upload_named(dispatch, args, content_key, name_key, path_key, label):
     if "encoding" in args:
         up["encoding"] = args["encoding"]
     ok, res = run_step(dispatch, "upload_dataset", up)
+    if ok and not res.get("path"):
+        # Guard the happy-path assumption: a malformed upload return (no path)
+        # degrades to a clean composite failure instead of a KeyError downstream.
+        return False, {"error": f"upload_dataset returned no path: {res}"}, label
     return ok, res, label
 
 
