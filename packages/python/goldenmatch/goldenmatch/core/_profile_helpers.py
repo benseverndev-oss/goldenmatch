@@ -38,6 +38,12 @@ def mass_borderline(scores: list[float], threshold: float, band: float = 0.1) ->
     return sum(1 for s in scores if lo <= s <= hi) / len(scores)
 
 
+# Minimum in-cluster triple count for a transitivity estimate to count as
+# evidence. Below this, the rate is returned as vacuously 1.0 (not
+# evaluable) -- systemic non-transitivity at real scale always has support.
+_MIN_TRIPLE_SUPPORT = 30
+
+
 def transitivity_rate(
     members_by_cluster: dict[int, list[int]],
     pair_scores: dict[tuple[int, int], float],
@@ -50,7 +56,14 @@ def transitivity_rate(
     (a,c) score >= threshold.
 
     Pair lookup canonicalizes (a,b) as (min,max) per project convention.
-    Returns 1.0 when no clusters have >= 3 members (vacuously transitive).
+    Returns 1.0 when no clusters have >= 3 members (vacuously transitive),
+    AND when fewer than ``_MIN_TRIPLE_SUPPORT`` triples exist -- a rate
+    estimated from a handful of triples is sampling noise, not a signal.
+    Without the support floor, small controller samples on typo-heavy person
+    data hard-RED the cluster verdict on 2-of-13-triangle noise, the
+    controller reacts by lowering thresholds, borderline pairs multiply,
+    transitivity gets WORSE, and zero-config death-spirals to
+    BUDGET_ITERATIONS (the 2026-07-10 bench regression's terminal layer).
     Samples up to ``max_samples`` triples for cost control.
     """
     import random
@@ -68,7 +81,9 @@ def transitivity_rate(
             for _ in range(min(max_samples, 100)):
                 a, b, c = sorted(rng.sample(members, 3))
                 triples.append((a, b, c))
-    if not triples:
+    if len(triples) < _MIN_TRIPLE_SUPPORT:
+        # Too few triples for the rate to mean anything (includes the
+        # no-triples vacuous case). See docstring.
         return 1.0
     if len(triples) > max_samples:
         triples = rng.sample(triples, max_samples)
