@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from goldencheck.core._native_loader import native_enabled
 from goldencheck.core.frame import PyFrame
 from goldencheck.engine.confidence import apply_corroboration_boost
-from goldencheck.engine.reader import read_file
+from goldencheck.engine.reader import read_columns, read_file
 from goldencheck.engine.sampler import maybe_sample
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
@@ -41,7 +41,9 @@ from goldencheck.relations.temporal import TemporalOrderProfiler
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["scan_file", "scan_file_with_llm", "scan_dataframe", "scan_columns"]
+__all__ = [
+    "scan_file", "scan_file_with_llm", "scan_dataframe", "scan_columns", "scan_file_columns",
+]
 
 COLUMN_PROFILERS = [
     TypeInferenceProfiler(),
@@ -277,6 +279,14 @@ def scan_columns(columns: dict[str, list]) -> list[Finding]:
             "check. Install with `pip install goldencheck[native]`."
         )
     return findings
+
+
+def scan_file_columns(path: Path) -> list[Finding]:
+    """Polars-free file scan: read a file into columns (Parquet/Excel without Polars;
+    CSV needs Polars) and run the covered structural checks via scan_columns(). For the
+    full scan (classification, sampling, denial, Polars-only relation checks) use
+    scan_file()."""
+    return scan_columns(read_columns(path))
 
 
 def scan_dataframe(
