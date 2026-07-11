@@ -189,6 +189,33 @@ def test_cross_blocking_overlap_budget_returns_none(monkeypatch):
     assert result is None
 
 
+def test_cross_blocking_overlap_coarse_key_skips_via_preflight(monkeypatch):
+    """A key too coarse to be a useful discriminator (it co-blocks more than the
+    pair cap) returns None from the CHEAP pre-flight -- never materializing the
+    O(sum group^2) pairs. This is the fix for the 500K controller BUDGET_TIME:
+    coarse geo keys (state/zip) co-block billions of pairs; the old in-loop time
+    check burned the full BUDGET_CROSS_BLOCKING (~20s) and returned None anyway."""
+    import time
+
+    from goldenmatch.core import indicators
+    monkeypatch.setattr(indicators, "_MAX_CROSS_BLOCKING_PAIRS", 100)
+    n = 4000  # one giant group under 'coarse' -> 4000*3999/2 ~= 8M pairs >> cap
+    df = pl.DataFrame({"coarse": ["x"] * n, "fine": [str(i) for i in range(n)]})
+    t0 = time.time()
+    result = indicators.compute_cross_blocking_overlap(df, "coarse", "fine")
+    elapsed = time.time() - t0
+    assert result is None  # coarse key -> skip (not a computed float)
+    assert elapsed < 2.0  # pre-flight groupby, NOT an 8M-pair materialization
+
+
+def test_cross_blocking_overlap_fine_keys_unaffected_by_cap():
+    """Below the cap the guard is inert: correct overlap still computed."""
+    from goldenmatch.core.indicators import compute_cross_blocking_overlap
+    # 'a' and 'b' induce the SAME grouping -> co-blocked pair sets identical -> 1.0
+    df = pl.DataFrame({"a": ["p", "p", "q", "q"], "b": ["1", "1", "2", "2"]})
+    assert compute_cross_blocking_overlap(df, "a", "b") == 1.0
+
+
 def test_compute_corruption_score_budget_returns_zero(monkeypatch):
     """Budget exhaustion -> return 0.0 sentinel."""
     from goldenmatch.core import indicators
