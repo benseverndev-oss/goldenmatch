@@ -573,3 +573,161 @@ def test_group_partitions_unsorted_and_nulls() -> None:
         assert got == {"x": [0, 2, 5], "y": [1, 4], None: [3]}
         # first-appearance order
         assert [k for k, _ in parts] == ["x", "y", None]
+
+
+# ---- W3a ops: controller/profiling reductions ---------------------------------
+
+
+def _w3_pair(cols: dict) -> tuple[PolarsFrame, ArrowFrame]:
+    tbl = pa.table(cols)
+    return PolarsFrame(pl.from_arrow(tbl)), ArrowFrame(tbl)
+
+
+def test_w3_column_reductions_parity() -> None:
+    pf, af = _w3_pair({"n": pa.array([1.0, 2.0, 3.0, None], type=pa.float64())})
+    for frame in (pf, af):
+        c = frame.column("n")
+        assert c.drop_nulls().to_list() == [1.0, 2.0, 3.0]
+        assert c.sum() == 6.0
+        assert c.mean() == 2.0
+        assert c.min() == 1.0
+        assert c.std() == 1.0  # ddof=1 pinned
+        assert c.fill_null(0.0).to_list() == [1.0, 2.0, 3.0, 0.0]
+
+
+def test_w3_value_counts_desc_includes_nulls_pinned_order() -> None:
+    pf, af = _w3_pair({"c": pa.array(["a", "b", "a", None, "a", "b"], type=pa.string())})
+    want = [("a", 3), ("b", 2), (None, 1)]  # count desc; null in the tail tie
+    for frame in (pf, af):
+        assert frame.column("c").value_counts_desc() == want
+
+
+def test_w3_value_counts_tie_order() -> None:
+    pf, af = _w3_pair({"c": pa.array(["x", "y", "x", "y"], type=pa.string())})
+    for frame in (pf, af):
+        assert frame.column("c").value_counts_desc() == [("x", 2), ("y", 2)]
+
+
+def test_w3_str_len_chars_codepoints() -> None:
+    pf, af = _w3_pair({"c": pa.array(["héllo", "", None, "aé£€"], type=pa.string())})
+    for frame in (pf, af):
+        assert frame.column("c").str_len_chars().to_list() == [5, 0, None, 4]
+
+
+def test_w3_blank_count() -> None:
+    pf, af = _w3_pair({"c": pa.array(["x", "", "  ", None, "\t"], type=pa.string())})
+    for frame in (pf, af):
+        assert frame.column("c").blank_count() == 3
+
+
+def test_w3_cast_str_both_strict_flavors() -> None:
+    pf, af = _w3_pair({"n": pa.array([7030, None], type=pa.int64())})
+    for strict in (True, False):
+        want = pf.column("n").cast_str(strict=strict).to_list()
+        got = af.column("n").cast_str(strict=strict).to_list()
+        assert got == want == ["7030", None]
+
+
+def test_w3_semantic_dtype() -> None:
+    import datetime as dt
+
+    pf, af = _w3_pair(
+        {
+            "t": pa.array(["x"], type=pa.string()),
+            "f": pa.array([1.5], type=pa.float64()),  # arrow says "double"
+            "i": pa.array([1], type=pa.int64()),
+            "d": pa.array([dt.date(2020, 1, 1)], type=pa.date32()),
+            "b": pa.array([True], type=pa.bool_()),
+        }
+    )
+    for frame in (pf, af):
+        assert frame.column("t").semantic_dtype() == "text"
+        assert frame.column("f").semantic_dtype() == "numeric"  # THE double fix
+        assert frame.column("i").semantic_dtype() == "numeric"
+        assert frame.column("d").semantic_dtype() == "date"
+        assert frame.column("b").semantic_dtype() == "bool"
+
+
+def test_w3_sample_contract() -> None:
+    tbl = pa.table({"i": pa.array(list(range(100)), type=pa.int64())})
+    pf, af = PolarsFrame(pl.from_arrow(tbl)), ArrowFrame(tbl)
+    for frame in (pf, af):
+        s1 = frame.sample(10, seed=42)
+        s2 = frame.sample(10, seed=42)
+        assert s1.height == s2.height == 10
+        # deterministic per (seed, backend)
+        assert s1.column("i").to_list() == s2.column("i").to_list()
+        # no duplicates
+        assert len(set(s1.column("i").to_list())) == 10
+        # n > height raises (polars ShapeError parity)
+        with pytest.raises(Exception):
+            frame.sample(1000, seed=1)
+
+
+def test_w3_with_row_index_and_head() -> None:
+    pf, af = _w3_pair({"c": pa.array(["a", "b", "c"], type=pa.string())})
+    for frame in (pf, af):
+        idx = frame.with_row_index("__row__")
+        assert idx.columns[0] == "__row__"
+        assert idx.column("__row__").to_list() == [0, 1, 2]
+        assert frame.head(2).column("c").to_list() == ["a", "b"]
+
+
+def test_w3_joint_n_unique_null_combos() -> None:
+    pf, af = _w3_pair(
+        {
+            "a": pa.array([1, 1, None, 1], type=pa.int64()),
+            "b": pa.array([2, 3, 2, 2], type=pa.int64()),
+        }
+    )
+    for frame in (pf, af):
+        assert frame.joint_n_unique(["a", "b"]) == 3  # (1,2) dup; null combo counts
+
+
+def test_w3_group_nunique_drops_either_null() -> None:
+    pf, af = _w3_pair(
+        {
+            "k": pa.array(["x", "x", "y", None, "y"], type=pa.string()),
+            "v": pa.array(["s1", "s2", "s1", "s1", None], type=pa.string()),
+        }
+    )
+    for frame in (pf, af):
+        got = frame.group_nunique("k", "v")
+        d = dict(zip(got.column("k").to_list(), got.column("n_unique").to_list()))
+        # null-k row and null-v row both dropped BEFORE grouping.
+        assert d == {"x": 2, "y": 1}
+
+
+def test_w3_coverage_ratio_edges() -> None:
+    pf, af = _w3_pair(
+        {
+            "a": pa.array(["x", None, "z", None], type=pa.string()),
+            "b": pa.array([1.0, 2.0, None, float("nan")], type=pa.float64()),
+        }
+    )
+    for frame in (pf, af):
+        # pass [a]: rows 0,2; pass [b]: rows 0,1,3 (NaN is non-null!) -> union all 4
+        assert frame.coverage_ratio([["a"], ["b"]]) == 1.0
+        # single pass [a,b]: both non-null -> row 0 and row 3? a[3]=None -> just row 0
+        assert frame.coverage_ratio([["a", "b"]]) == 0.25
+        # missing column: pass contributes nothing
+        assert frame.coverage_ratio([["nope"]]) == 0.0
+        # empty pass list
+        assert frame.coverage_ratio([]) == 0.0
+        # empty fields INSIDE a pass covers everything (pinned; unreachable today)
+        assert frame.coverage_ratio([[]]) == 1.0
+    # height == 0
+    e = pa.table({"a": pa.array([], type=pa.string())})
+    assert ArrowFrame(e).coverage_ratio([["a"]]) == 0.0
+    assert PolarsFrame(pl.from_arrow(e)).coverage_ratio([["a"]]) == 0.0
+
+
+def test_w3_distinct_row_count() -> None:
+    pf, af = _w3_pair(
+        {
+            "a": pa.array([1, 1, 2, None], type=pa.int64()),
+            "b": pa.array(["x", "x", "y", "z"], type=pa.string()),
+        }
+    )
+    for frame in (pf, af):
+        assert frame.distinct_row_count() == 3
