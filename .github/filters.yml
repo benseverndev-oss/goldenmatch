@@ -564,11 +564,12 @@ goldenflow_nopolars:
   - 'packages/python/goldenflow/pyproject.toml'
   - 'packages/python/goldenflow/scripts/build_native.py'
 goldencheck_nopolars:
-  # Stage-2 S2.0 (Polars eviction) proof lane: installs goldencheck with polars
+  # Stage-2/P4b (Polars eviction) proof lane: installs goldencheck with polars
   # UNINSTALLED and runs the polars-absent tests (tests/nopolars). Proves `import
-  # goldencheck` survives + the uncovered tail raises cleanly with polars gone, so
-  # the P4 base-deps flip is de-risked. Advisory (not ci-required). No covered scan
-  # yet (goldencheck has no non-Polars backend until S2.1).
+  # goldencheck` survives, the polars-free read/scan surface (read_columns /
+  # scan_file_columns over Parquet + Excel, scan_columns structural checks) works
+  # for real, and the uncovered tail (CSV, scan_file()'s full scan) raises cleanly
+  # with polars gone. REQUIRED (in ci-required) as of P4b Task 3.
   - 'packages/python/goldencheck/goldencheck/**'
   - 'packages/python/goldencheck/tests/nopolars/**'
   - 'packages/python/goldencheck/pyproject.toml'

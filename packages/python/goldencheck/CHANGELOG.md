@@ -2,9 +2,20 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
-## [Unreleased]
+## [2.0.0] - 2026-07-11
+
+### Changed (BREAKING)
+- **`polars` is no longer a base dependency** -- it moved to the `[polars]` optional
+  extra. `pip install goldencheck` no longer pulls Polars (~185 MB). Parquet/Excel
+  reading (`read_columns`) and the structural scan (`scan_columns` / `scan_file_columns`)
+  run without Polars. **CSV reading and the full scan (`scan_dataframe` / `scan_file`)
+  still require Polars** -- install `goldencheck[polars]` for them (Polars' CSV dtype
+  inference isn't reproducible, and the full scan is Polars-native). Upgrading users who
+  scan CSVs or use `scan_file` / `scan_dataframe` must add `[polars]`.
 
 ### Added
+- `read_columns(path)` / `scan_file_columns(path)` -- Polars-free Parquet (pyarrow, new
+  `[parquet]` extra) + Excel (openpyxl) read into columns + covered structural scan.
 - **Denial-constraint discovery** -- a new opt-in discovered-rule family that
   mines denial constraints `¬(p1 ∧ … ∧ pm)` (if-then / cross-tuple invariants
   like `¬(status=shipped ∧ ship_date<order_date)`) from a single table and
