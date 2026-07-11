@@ -148,9 +148,16 @@ share ≈ 420 uses.
   _controller/_pipeline), test_bucketed_store, test_partitioned_block_scoring_pipeline,
   test_score_buckets_*, test_sail_* parity stack, tests/identity/
   test_distributed_identity*. Ray tests in CI via .venv/bin/python NOT uv run.
-- **W4f — downstream consumers**: SQL-extensions bridge JSON→Arrow, goldenmatch-duckdb
-  `.arrow()`, goldenmatch-kg, dbt adapter surfaces (spec risk row). Survey at batch
-  start; port or explicitly defer with notes.
+- **W4f — downstream consumers (SURVEYED 2026-07-11)**: goldenmatch-kg single
+  pl.DataFrame construction -> frame_from_column_data (ported). dbt goldensuite
+  materialize.py patch loop operates on the polars RESULTS type -> # W5: comment
+  (flips with DedupeResult -> pa.Table at v3.0.0; duckdb registers pa natively).
+  SQL-extensions bridge: its polars is a RUST-crate dependency
+  (packages/rust/extensions/bridge), not the Python package's -- the JSON->Arrow
+  conversion port is EXPLICITLY DEFERRED to the W5 release train (does not block
+  the Python polars eviction; tracked in the W5 plan). No goldenmatch-duckdb
+  Python package exists in-repo (duckdb surfaces live in the rust extensions +
+  connectors, already covered).
 
 ## Exit gates (whole wave)
 

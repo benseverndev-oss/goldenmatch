@@ -105,6 +105,8 @@ def run_goldenmatch_dedupe(
             and getattr(c, "corrected_value", None) is not None
         ]
         if field_level and "__cluster_id__" in output_df.columns:
+            # W5: results become pa.Table at v3.0.0 -- this patch loop and the
+            # duckdb registration flip with the results type.
             import polars as pl
 
             # Build a Python-side patch map then materialize.

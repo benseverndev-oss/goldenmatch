@@ -39,14 +39,16 @@ def resolve_entities(
         return EntityResolution((), {}, {})
 
     import goldenmatch as gm
-    import polars as pl
 
     cols: dict[str, list[str]] = {_FIELD_TO_COL["name"]: [e.name for e in ents]}
     if "type" in fields and any(e.type for e in ents):
         cols[_FIELD_TO_COL["type"]] = [e.type or "" for e in ents]
     if "description" in fields and any(e.description for e in ents):
         cols[_FIELD_TO_COL["description"]] = [e.description or "" for e in ents]
-    df = pl.DataFrame(cols)
+    # W4f: seam constructor; dedupe_df input flips to Arrow-native at W5.
+    from goldenmatch.core.frame import frame_from_column_data
+
+    df = frame_from_column_data(cols, backend="polars").native
 
     result = gm.dedupe_df(df)
 
