@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from functools import lru_cache
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
@@ -40,14 +39,6 @@ _IDENTITY_NAME_PATTERNS = [
     (re.compile(r"^(id|uuid|guid|user_id|account_id)$", re.I), 0.90),
 ]
 
-@lru_cache(maxsize=1)
-def _non_identity_dtypes() -> frozenset:
-    """Deferred: this module is swept onto _polars_lazy, so a module-level
-    ``pl.`` evaluation would trigger the polars import at package import time
-    and defeat the lazy proxy."""
-    return frozenset({pl.Boolean, pl.Date, pl.Datetime, pl.Time})
-
-
 def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
     """Compute per-column identity + corruption priors.
 
@@ -62,11 +53,14 @@ def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
       - High when within-column edit-distance variance is high (Brian/BRIAN/B.)
       - Low when entries are deterministic (clean email patterns)
     """
+    from goldenmatch.core.frame import to_frame
+
     start = time.time()
-    if df.is_empty():
+    frame = to_frame(df)
+    if frame.height == 0:
         return {}
     priors: dict[str, ColumnPrior] = {}
-    sample = df.head(1000) if df.height > 1000 else df
+    sample = frame.head(1000).native if frame.height > 1000 else df
 
     for col in df.columns:
         if (time.time() - start) > BUDGET_COLUMN_PRIORS:
@@ -91,16 +85,24 @@ def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
 
 
 def _compute_identity_score(df: pl.DataFrame, col: str) -> float:
-    """Identity-score heuristic. Name match > dtype match > cardinality."""
-    if df.schema.get(col) in _non_identity_dtypes():
+    """Identity-score heuristic. Name match > dtype match > cardinality.
+
+    W3b: routed through the Frame seam. The dtype gate uses semantic_dtype
+    ("bool"/"date" == the old {Boolean, Date, Datetime, Time} frozenset --
+    byte-identical mapping on polars; the arrow backend gets normalized tags
+    instead of misreading "double")."""
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+    if frame.column(col).semantic_dtype() in ("bool", "date"):
         return 0.0
     for pattern, score in _IDENTITY_NAME_PATTERNS:
         if pattern.match(col):
             return score
     # High-cardinality string column = id-like
     try:
-        n_unique = df[col].n_unique()
-        cardinality_ratio = n_unique / max(1, df.height)
+        n_unique = frame.column(col).n_unique()
+        cardinality_ratio = n_unique / max(1, frame.height)
         if cardinality_ratio > 0.5:
             return 0.7
         if cardinality_ratio > 0.1:
@@ -122,7 +124,9 @@ def _compute_corruption_score_inline(sample: pl.DataFrame, col: str) -> float:
         return 0.0
     start = time.time()
     try:
-        vals = sample[col].cast(str).fill_null("").to_list()
+        from goldenmatch.core.frame import to_frame
+
+        vals = to_frame(sample).column(col).cast_str().fill_null("").to_list()
     except Exception:
         return 0.0
     if (time.time() - start) > BUDGET_CORRUPTION:
@@ -195,23 +199,21 @@ def estimate_sparse_match_signal(
         if estimated_pairs is not None
         else sparse_threshold
     )
-    sample = df.head(sample_size) if df.height > sample_size else df
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+    sample_frame = frame.head(sample_size) if frame.height > sample_size else frame
     n_pairs = 0
     for col in exact_columns:
-        if col not in sample.columns:
+        if col not in sample_frame.columns:
             continue
         try:
-            counts = (
-                sample.group_by(col)
-                .agg(pl.len().alias("n"))
-                .filter(pl.col("n") > 1)
-            )
-            # Each group of size k contributes k*(k-1)/2 pairs
-            n_pairs += int(
-                counts.select(
-                    (pl.col("n") * (pl.col("n") - 1) / 2).sum()
-                ).item()
-            )
+            # W3b: group sizes via the seam; the k*(k-1)/2 fold moves to
+            # Python over the counts (same values as the old
+            # .select((n*(n-1)/2).sum()) expression -- pinned by the
+            # unedited test_indicators.py).
+            sizes = sample_frame.group_len([col]).column("len").to_list()
+            n_pairs += sum(k * (k - 1) // 2 for k in sizes if k > 1)
         except Exception:
             continue
     is_sparse = n_pairs < threshold
@@ -246,18 +248,12 @@ def estimate_full_pop_hits(df: pl.DataFrame, blocking_col: str) -> int | None:
     if (time.time() - start) > BUDGET_FULL_POP_HITS:
         return None
     try:
-        counts = (
-            df.group_by(blocking_col)
-            .agg(pl.len().alias("n"))
-            .filter(pl.col("n") > 1)
-        )
+        from goldenmatch.core.frame import to_frame
+
+        sizes = to_frame(df).group_len([blocking_col]).column("len").to_list()
         if (time.time() - start) > BUDGET_FULL_POP_HITS:
             return None
-        n_pairs = int(
-            counts.select(
-                (pl.col("n") * (pl.col("n") - 1) / 2).sum()
-            ).item()
-        )
+        n_pairs = sum(k * (k - 1) // 2 for k in sizes if k > 1)
         return n_pairs
     except Exception as exc:
         logger.warning("estimate_full_pop_hits failed: %s", exc)
@@ -289,27 +285,22 @@ def compute_cross_blocking_overlap(
     if (time.time() - start) > BUDGET_CROSS_BLOCKING:
         return None
     try:
-        # Co-blocked under key_a: pairs sharing same key_a value
-        df_indexed = df.with_row_index("__row__")
-        a_pairs = (
-            df_indexed.group_by(key_a)
-            .agg(pl.col("__row__").alias("rows"))
-            .filter(pl.col("rows").list.len() > 1)
-        )
-        b_pairs = (
-            df_indexed.group_by(key_b)
-            .agg(pl.col("__row__").alias("rows"))
-            .filter(pl.col("rows").list.len() > 1)
-        )
+        # Co-blocked pairs per key (W3b: seam row-index + hash-grouped
+        # partitions; each multi-member group contributes its row-id pairs,
+        # identical values to the old list-agg -- pinned by unedited tests).
+        from goldenmatch.core.frame import to_frame
+
+        indexed = to_frame(df).with_row_index("__row__")
 
         if (time.time() - start) > BUDGET_CROSS_BLOCKING:
             return None
 
-        # Build pair sets (small enough to materialize as Python sets
-        # within budget; if too big, return None defensively)
-        def _pairs_set(grouped: pl.DataFrame) -> set[tuple[int, int]] | None:
+        def _pairs_set(key: str) -> set[tuple[int, int]] | None:
             pairs: set[tuple[int, int]] = set()
-            for rows in grouped["rows"].to_list():
+            for _k, part in indexed.group_partitions(key):
+                rows = part.column("__row__").to_list()
+                if len(rows) < 2:
+                    continue
                 rows = sorted(rows)
                 for i in range(len(rows)):
                     for j in range(i + 1, len(rows)):
@@ -318,10 +309,10 @@ def compute_cross_blocking_overlap(
                             return None
             return pairs
 
-        set_a = _pairs_set(a_pairs)
+        set_a = _pairs_set(key_a)
         if set_a is None:
             return None
-        set_b = _pairs_set(b_pairs)
+        set_b = _pairs_set(key_b)
         if set_b is None:
             return None
 
