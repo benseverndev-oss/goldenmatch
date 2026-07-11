@@ -135,25 +135,42 @@ def record_fingerprints_batch_arrow(records_df):  # pl.DataFrame -> list[str]
         List of 64-char lowercase hex fingerprint strings, one per
         row in input order.
     """
+    # W4b-2: also accepts a pa.Table (the arrow-lane twin). Duck-typed on
+    # column_names so neither engine imports eagerly.
+    is_arrow_table = hasattr(records_df, "column_names")
+
+    def _to_dicts() -> list[dict]:
+        return records_df.to_pylist() if is_arrow_table else records_df.to_dicts()
+
     if not native_enabled("hashing"):
         # Convert to dicts and use the per-record loop -- same shape
         # the existing record_fingerprints_batch fallback gives.
-        return record_fingerprints_batch(records_df.to_dicts())
+        return record_fingerprints_batch(_to_dicts())
     native = native_module()
     arrow_fn = getattr(native, "record_fingerprints_batch_arrow", None)
     if arrow_fn is None:
         # Older native build -- delegate to the dict kernel.
-        return record_fingerprints_batch(records_df.to_dicts())
+        return record_fingerprints_batch(_to_dicts())
 
     field_names: list[str] = []
     field_arrays: list = []
-    for col in records_df.columns:
-        if col.startswith("__"):
-            continue
-        field_names.append(col)
-        field_arrays.append(records_df[col].to_arrow())
+    if is_arrow_table:
+        for col in records_df.column_names:
+            if col.startswith("__"):
+                continue
+            field_names.append(col)
+            field_arrays.append(records_df.column(col).combine_chunks())
+    else:
+        for col in records_df.columns:
+            if col.startswith("__"):
+                continue
+            field_names.append(col)
+            field_arrays.append(records_df[col].to_arrow())
 
     arrow_out = arrow_fn(field_names, field_arrays)
+    if is_arrow_table:
+        # LargeStringArray -> list[str] without touching polars.
+        return arrow_out.to_pylist()
     # arrow_out is a PyArrowType<ArrayData> -> LargeStringArray. Convert
     # to a Python list[str] via Polars (handles the Arrow -> Python
     # decoding without per-row overhead beyond the final list build).

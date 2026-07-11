@@ -191,3 +191,132 @@ def batch_fingerprints(df: pl.DataFrame) -> list[str | None]:
             except (TypeError, ValueError):
                 out[i] = None
     return out
+
+
+# -- W4b-2: pyarrow twin ------------------------------------------------------
+# The arrow-lane canonicalizer: same routing contract as
+# canonicalize_records_df, dispatched on the pyarrow dtype lattice. PROBED
+# parity recipes (2026-07-11): date32.cast(string) == "%Y-%m-%d";
+# pc.strftime(us-timestamp, "%Y-%m-%dT%H:%M:%S") ALWAYS appends 6-digit
+# subseconds -> trimming "\.000000$" reproduces Python isoformat()/the
+# polars recipe byte-for-byte.
+
+
+def _is_unbatchable_arrow_type(typ) -> bool:
+    import pyarrow as pa
+
+    if pa.types.is_binary(typ) or pa.types.is_large_binary(typ):
+        return True
+    if pa.types.is_duration(typ) or pa.types.is_time(typ):
+        return True
+    if pa.types.is_decimal(typ):
+        return True
+    if pa.types.is_timestamp(typ):
+        return typ.tz is not None or typ.unit != "us"
+    if (
+        pa.types.is_list(typ)
+        or pa.types.is_large_list(typ)
+        or pa.types.is_fixed_size_list(typ)
+        or pa.types.is_struct(typ)
+        or pa.types.is_map(typ)
+    ):
+        return True
+    return False
+
+
+def canonicalize_records_table(tbl):
+    """pa.Table twin of ``canonicalize_records_df`` -- returns
+    ``(batch_tbl_or_None, fallback_mask)`` with the identical routing
+    contract (cross-pinned by test_fingerprint_batch_arrow_twin)."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    height = tbl.num_rows
+    keep_cols = [c for c in tbl.column_names if not c.startswith("__")]
+    if not keep_cols:
+        return None, [True] * height
+    sub = tbl.select(keep_cols)
+
+    for col in keep_cols:
+        if _is_unbatchable_arrow_type(sub.schema.field(col).type):
+            return None, [True] * height
+
+    mask = pa.array([False] * height, type=pa.bool_())
+    for col in keep_cols:
+        typ = sub.schema.field(col).type
+        arr = sub.column(col)
+        if pa.types.is_float64(typ) or pa.types.is_float32(typ):
+            f64 = arr.cast(pa.float64()) if pa.types.is_float32(typ) else arr
+            non_finite = pc.and_kleene(
+                pc.invert(pc.is_finite(f64)), pc.is_valid(f64)
+            )
+            mask = pc.or_(mask, pc.fill_null(non_finite, False))
+        elif pa.types.is_uint64(typ):
+            # uint64-typed scalar: the comparison kernel would otherwise promote
+            # the ARRAY to int64 and raise on the very overflow values we mask.
+            overflow = pc.fill_null(
+                pc.greater(arr, pa.scalar(_I64_MAX, type=pa.uint64())), False
+            )
+            mask = pc.or_(mask, overflow)
+
+    mask_list = mask.to_pylist()
+    survivors = sub.filter(pc.invert(mask))
+
+    out_cols = []
+    for col in keep_cols:
+        typ = survivors.schema.field(col).type
+        arr = survivors.column(col).combine_chunks()
+        if pa.types.is_date(typ):
+            out_cols.append(arr.cast(pa.large_string()))
+        elif pa.types.is_timestamp(typ):
+            # us-unit tz-naive (others routed un-batchable above).
+            iso = pc.strftime(arr, format="%Y-%m-%dT%H:%M:%S")
+            out_cols.append(
+                pc.replace_substring_regex(
+                    iso.cast(pa.large_string()), pattern=r"\.000000$", replacement=""
+                )
+            )
+        elif pa.types.is_float32(typ):
+            out_cols.append(arr.cast(pa.float64()))
+        elif pa.types.is_integer(typ) and not pa.types.is_int64(typ):
+            out_cols.append(arr.cast(pa.int64()))
+        elif pa.types.is_dictionary(typ):
+            out_cols.append(arr.cast(pa.large_string()))
+        elif pa.types.is_null(typ):
+            # Kernel rejects the Arrow null type; large_string nulls hash as
+            # FpValue::Null, matching the per-row path.
+            out_cols.append(arr.cast(pa.large_string()))
+        else:
+            out_cols.append(arr)
+
+    batch_tbl = pa.table(dict(zip(keep_cols, out_cols)))
+    return batch_tbl, mask_list
+
+
+def batch_fingerprints_table(tbl) -> list[str | None]:
+    """pa.Table twin of ``batch_fingerprints`` (arrow lane). Byte-identical
+    output values by the same canonical spec."""
+    from goldenmatch.core._hashing import (
+        record_fingerprint,
+        record_fingerprints_batch_arrow,
+    )
+
+    height = tbl.num_rows
+    out: list[str | None] = [None] * height
+    batch_tbl, mask = canonicalize_records_table(tbl)
+    if batch_tbl is not None and batch_tbl.num_rows:
+        hashes = record_fingerprints_batch_arrow(batch_tbl)
+        bi = 0
+        for i in range(height):
+            if not mask[i]:
+                out[i] = hashes[bi]
+                bi += 1
+    rows = tbl.to_pylist()
+    for i in range(height):
+        if mask[i]:
+            payload = {k: v for k, v in rows[i].items() if not k.startswith("__")}
+            try:
+                out[i] = record_fingerprint(_canonical_payload(payload))
+            except (TypeError, ValueError):
+                out[i] = None
+    return out
