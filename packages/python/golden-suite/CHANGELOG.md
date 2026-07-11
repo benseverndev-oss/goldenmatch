@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.1.10] - 2026-07-11
+
+### Changed
+- Bumped the goldencheck floor to **`goldencheck[polars]>=2.0.0`** (was `>=1.4.1`), per the
+  lockstep policy. goldencheck 2.0.0 completes its Polars eviction: Polars is no longer a base
+  dependency (it moved to the `goldencheck[polars]` extra). The `[polars]` marker keeps CSV
+  reading and the full `scan_file`/`scan_dataframe` scan working in a suite install (Parquet/
+  Excel + `scan_columns` run Polars-free). goldenmatch (a suite member) already pulls Polars,
+  so the suite is unaffected at runtime; this is the explicit declaration.
+
 ## [0.1.9] - 2026-07-08
 
 ### Changed
