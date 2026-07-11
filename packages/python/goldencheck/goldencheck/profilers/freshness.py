@@ -17,10 +17,45 @@ arithmetic is already vectorized and cheap.
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 
+from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
+
+logger = logging.getLogger(__name__)
+
+_EPOCH_DATE = _dt.date(1970, 1, 1)
+_EPOCH_DT = _dt.datetime(1970, 1, 1)
+
+
+def _now_epoch_for_array(arr_type, now: _dt.date | _dt.datetime) -> int | None:
+    """Offset-free epoch of ``now`` in the Arrow array's native temporal unit
+    (spec B2). Pure subtraction from the naive 1970-01-01 epoch -- NEVER
+    ``.timestamp()`` (that would apply the machine's local UTC offset). Returns
+    ``None`` for a non-temporal array so the shadow simply skips."""
+    import pyarrow as pa
+
+    if pa.types.is_date32(arr_type):
+        d = now.date() if isinstance(now, _dt.datetime) else now
+        return (d - _EPOCH_DATE).days
+    if pa.types.is_date64(arr_type):
+        d = now.date() if isinstance(now, _dt.datetime) else now
+        return (d - _EPOCH_DATE).days * 86_400_000
+    if pa.types.is_timestamp(arr_type):
+        dt = now if isinstance(now, _dt.datetime) else _dt.datetime(now.year, now.month, now.day)
+        delta = dt - _EPOCH_DT
+        unit = arr_type.unit
+        if unit == "s":
+            return delta // _dt.timedelta(seconds=1)
+        if unit == "ms":
+            return delta // _dt.timedelta(milliseconds=1)
+        if unit == "us":
+            return delta // _dt.timedelta(microseconds=1)
+        if unit == "ns":
+            return (delta // _dt.timedelta(microseconds=1)) * 1000
+    return None
 
 # Newest value older than this (days) on an update/event column => likely stale.
 _STALE_DAYS = 365
@@ -56,6 +91,21 @@ class FreshnessProfiler(BaseProfiler):
         try:
             future_count = non_null.count_gt(now)
             newest = non_null.max()
+            # Shadow-compute the fused native date_freshness kernel on the real
+            # scan path so it runs against production shapes ahead of the Flip
+            # (see tests/engine/test_w2_shadow.py for the parity assertion). This
+            # sits INSIDE the try AFTER the successful count_gt/max so a tz-aware
+            # column that makes Polars bail never reaches the kernel (spec S). The
+            # inner try guarantees a shadow failure never trips the outer except
+            # (which would drop legitimate findings) -- NOT authoritative.
+            if native_enabled("date_freshness"):
+                try:
+                    arr = non_null.to_arrow()
+                    now_epoch = _now_epoch_for_array(arr.type, now)
+                    if now_epoch is not None:
+                        native_module().date_freshness(arr, now_epoch)
+                except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                    logger.debug("date_freshness shadow failed on %s: %s", column, e)
         except Exception:  # noqa: BLE001 - tz-aware vs naive, exotic dtype, etc.
             return []
 

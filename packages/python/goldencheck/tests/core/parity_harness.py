@@ -365,6 +365,253 @@ def _csv_infer_fallback(fx: tuple[list[str], list[list[str]]]) -> dict:
     return infer_and_type(cells, header)
 
 
+# ---------------------------------------------------------------------------
+# numeric_stats (column_numeric_stats + count_outside) -- range_distribution.
+#
+# `mean`/`std` are float reductions, so the harness compares them via a
+# significant-figure canonical form (the float-epsilon "divergence class" for
+# this kernel) rather than bare `!=`; `min`/`max`/`count` are exact but NaN is
+# canonicalised (Polars `None` for empty/all-NaN min-max and `n<2` std maps to
+# the kernel's NaN). Because both run_native and run_fallback apply the SAME
+# normalisation, a real divergence beyond ~9 sig-figs still trips the oracle --
+# so this stays an exact-`!=` check and ACCEPTED_DIVERGENCES remains empty.
+# ---------------------------------------------------------------------------
+_STATS_SIG = 9
+
+
+def _canon_float(x: object) -> str:
+    """Canonical token for a possibly-None / NaN / inf float, rounded to
+    ``_STATS_SIG`` significant figures so float-reduction noise collapses."""
+    import math
+
+    if x is None:
+        return "NAN"
+    v = float(x)
+    if math.isnan(v):
+        return "NAN"
+    if math.isinf(v):
+        return "inf" if v > 0 else "-inf"
+    if v == 0.0:
+        return "0"
+    d = _STATS_SIG - 1 - math.floor(math.log10(abs(v)))
+    return repr(round(v, d))
+
+
+def _numeric_stats_fixtures(seed: int) -> list[pl.Series]:
+    rng = random.Random(seed)
+    n = rng.randint(0, 250)
+    int_pool = [None] + list(range(-40, 41)) + [5000, -5000]
+    int_vals = [rng.choice(int_pool) for _ in range(n)]
+    float_pool = (
+        [None, 0.0, -0.0] + [rng.uniform(-50, 50) for _ in range(20)] + [9999.5, -8888.25]
+    )
+    float_vals = [rng.choice(float_pool) for _ in range(n)]
+    uint_pool = [None] + list(range(0, 60)) + [9000]
+    uint_vals = [rng.choice(uint_pool) for _ in range(n)]
+    # A NaN/inf-bearing float column too (min/max ignore NaN; mean/std propagate).
+    nan_vals = [rng.choice([None, 1.0, 2.0, float("nan"), float("inf")]) for _ in range(n)]
+    return [
+        pl.Series("i", int_vals, dtype=pl.Int64),
+        pl.Series("f", float_vals, dtype=pl.Float64),
+        pl.Series("u", uint_vals, dtype=pl.UInt32),
+        pl.Series("nan", nan_vals, dtype=pl.Float64),
+    ]
+
+
+def _numeric_stats_normalized(
+    count: int,
+    mn: object,
+    mx: object,
+    mean: object,
+    std: object,
+    outlier: tuple[int, list[str]],
+) -> tuple:
+    return (
+        count,
+        _canon_float(mn),
+        _canon_float(mx),
+        _canon_float(mean),
+        _canon_float(std),
+        outlier[0],
+        tuple(outlier[1]),
+    )
+
+
+def _numeric_stats_outlier_bounds(s: pl.Series) -> tuple[float, float] | None:
+    import math
+
+    mean = s.mean()
+    std = s.std()
+    if mean is None or std is None or not math.isfinite(std) or std <= 0:
+        return None
+    return (mean - 3 * std, mean + 3 * std)
+
+
+def _numeric_stats_native(s: pl.Series) -> tuple:
+    count, mn, mx, mean, std, _sum = native_module().column_numeric_stats(s.to_arrow())
+    bounds = _numeric_stats_outlier_bounds(s)
+    if bounds is None:
+        outlier = (0, [])
+    else:
+        outlier = tuple(native_module().count_outside(s.to_arrow(), bounds[0], bounds[1]))
+    return _numeric_stats_normalized(count, mn, mx, mean, std, outlier)
+
+
+def _numeric_stats_fallback(s: pl.Series) -> tuple:
+    count = s.len() - s.null_count()
+    bounds = _numeric_stats_outlier_bounds(s)
+    if bounds is None:
+        outlier = (0, [])
+    else:
+        non_null = s.drop_nulls()
+        out = non_null.filter((non_null < bounds[0]) | (non_null > bounds[1]))
+        outlier = (len(out), [str(v) for v in out.to_list()[:5]])
+    return _numeric_stats_normalized(count, s.min(), s.max(), s.mean(), s.std(), outlier)
+
+
+# ---------------------------------------------------------------------------
+# sequence_analysis (fused order-preserving gap scan) -- sequence_detection.
+# All signals are integer/bool exact (int/uint only, NaN-free), so this is an
+# exact-`!=` check with an EMPTY divergence class. The fallback mirrors the
+# profiler's per-field Polars computation; the gap fields use the arithmetic
+# `expected - present_size` count + a lazy first-10 sample so the i64 min/max
+# fixture's 2^64-wide span never materialises.
+# ---------------------------------------------------------------------------
+def _sequence_fixtures(seed: int) -> list[pl.Series]:
+    rng = random.Random(seed)
+    n = rng.randint(2, 300)
+    int_pool = [None] + list(range(0, 120))
+    int_vals = [rng.choice(int_pool) for _ in range(n)]
+    uint_pool = [None] + list(range(0, 200))
+    uint_vals = [rng.choice(uint_pool) for _ in range(n)]
+    fixtures = [
+        pl.Series("i", int_vals, dtype=pl.Int64),
+        pl.Series("u", uint_vals, dtype=pl.UInt32),
+        # Seed-invariant adversarials: gapped, unsorted-with-dups, i64 min/max.
+        pl.Series("gap", [1, 2, 4, 7, 8, 12, 20], dtype=pl.Int64),
+        pl.Series("dup", [3, 1, 2, 9, 5, 4, 3], dtype=pl.Int64),
+        pl.Series("mm", [-(2**63), 2**63 - 1], dtype=pl.Int64),
+    ]
+    # Drop any fixture that would leave <2 non-null values (kernel declines).
+    return [s for s in fixtures if s.drop_nulls().len() >= 2]
+
+
+def _sequence_normalized(s: pl.Series, res: object) -> tuple | None:
+    if res is None:
+        return None
+    (n_diffs, unit, pos, is_sorted, mn, mx, present_size, gap_count, gap_sample) = res
+    return (n_diffs, unit, pos, is_sorted, mn, mx, present_size, gap_count, tuple(gap_sample))
+
+
+def _sequence_native(s: pl.Series) -> tuple | None:
+    return _sequence_normalized(s, native_module().sequence_analysis(s.to_arrow()))
+
+
+def _sequence_fallback(s: pl.Series) -> tuple | None:
+    import itertools
+
+    non_null = s.drop_nulls()
+    total = len(non_null)
+    if total < 2:
+        return None
+    diffs = non_null.diff().drop_nulls()
+    n_diffs = len(diffs)
+    unit = int((diffs == 1).sum())
+    pos = int((diffs > 0).sum())
+    is_sorted = bool(non_null.is_sorted())
+    col_min = int(non_null.min())
+    col_max = int(non_null.max())
+    present = set(non_null.unique().to_list())
+    present_size = len(present)
+    expected = col_max - col_min + 1
+    if expected <= total:
+        gap_count = 0
+        gap_sample: list[int] = []
+    else:
+        gap_count = expected - present_size
+        gap_sample = list(
+            itertools.islice((v for v in range(col_min, col_max + 1) if v not in present), 10)
+        )
+    return (n_diffs, unit, pos, is_sorted, col_min, col_max, present_size, gap_count, tuple(gap_sample))
+
+
+# ---------------------------------------------------------------------------
+# date_freshness (fused count_gt(now) + max) -- freshness. Both signals are
+# exact integers (count + raw epoch), so this is an exact-`!=` check with an
+# EMPTY divergence class. `now_epoch` is computed offset-free in the array's
+# native Arrow unit (spec review B2 -- NEVER `datetime.timestamp()`).
+# ---------------------------------------------------------------------------
+import datetime as _dt_mod  # noqa: E402
+
+_FRESH_EPOCH_DATE = _dt_mod.date(1970, 1, 1)
+_FRESH_EPOCH_DT = _dt_mod.datetime(1970, 1, 1)
+_FRESH_REF_DATE = _dt_mod.date(2000, 1, 1)
+_FRESH_REF_DT = _dt_mod.datetime(2000, 1, 1, 12, 0, 0)
+
+
+def _fresh_unit(arr: pa.Array) -> str:
+    t = arr.type
+    if pa.types.is_date32(t):
+        return "day"
+    if pa.types.is_date64(t):
+        return "ms"
+    if pa.types.is_timestamp(t):
+        return t.unit
+    raise AssertionError(f"non-temporal array type: {t}")
+
+
+def _fresh_epoch(ref: object, unit: str) -> int:
+    if unit == "day":
+        return (ref - _FRESH_EPOCH_DATE).days  # type: ignore[operator]
+    dt = ref if isinstance(ref, _dt_mod.datetime) else _dt_mod.datetime(ref.year, ref.month, ref.day)  # type: ignore[union-attr]
+    delta = dt - _FRESH_EPOCH_DT
+    if unit == "s":
+        return delta // _dt_mod.timedelta(seconds=1)
+    if unit == "ms":
+        return delta // _dt_mod.timedelta(milliseconds=1)
+    if unit == "us":
+        return delta // _dt_mod.timedelta(microseconds=1)
+    if unit == "ns":
+        return (delta // _dt_mod.timedelta(microseconds=1)) * 1000
+    raise AssertionError(f"unknown unit: {unit}")
+
+
+def _freshness_fixtures(seed: int) -> list[tuple[pl.Series, object]]:
+    rng = random.Random(seed)
+    n = rng.randint(0, 60)
+    ref_day = (_FRESH_REF_DATE - _FRESH_EPOCH_DATE).days
+    day_pool = [None] + [ref_day + rng.randint(-4000, 4000) for _ in range(20)]
+    dates = [rng.choice(day_pool) for _ in range(n)]
+    date_vals = [None if d is None else _FRESH_EPOCH_DATE + _dt_mod.timedelta(days=d) for d in dates]
+    us_pool = [None] + [rng.randint(-10_000_000, 10_000_000) for _ in range(20)]
+    micros = [rng.choice(us_pool) for _ in range(n)]
+    dt_vals = [None if m is None else _FRESH_REF_DT + _dt_mod.timedelta(microseconds=m) for m in micros]
+    return [
+        (pl.Series("d", date_vals, dtype=pl.Date), _FRESH_REF_DATE),
+        (pl.Series("t", dt_vals, dtype=pl.Datetime("us")), _FRESH_REF_DT),
+        # Seed-invariant adversarials.
+        (pl.Series("d0", [], dtype=pl.Date), _FRESH_REF_DATE),
+        (pl.Series("dn", [None, None], dtype=pl.Date), _FRESH_REF_DATE),
+    ]
+
+
+def _freshness_native(fx: tuple[pl.Series, object]) -> tuple | None:
+    s, ref = fx
+    arr = s.to_arrow()
+    now_epoch = _fresh_epoch(ref, _fresh_unit(arr))
+    res = native_module().date_freshness(arr, now_epoch)
+    return None if res is None else (res[0], res[1])
+
+
+def _freshness_fallback(fx: tuple[pl.Series, object]) -> tuple | None:
+    s, ref = fx
+    non_null = s.drop_nulls()
+    if len(non_null) == 0:
+        return None
+    unit = _fresh_unit(s.to_arrow())
+    return (non_null.filter(non_null > ref).len(), _fresh_epoch(non_null.max(), unit))
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -380,9 +627,27 @@ REGISTERED_COMPONENTS: list[Component] = [
     ),
     Component("csv_infer", _csv_infer_native, _csv_infer_fallback, _csv_infer_fixtures),
     Component(
+        "numeric_stats",
+        _numeric_stats_native,
+        _numeric_stats_fallback,
+        _numeric_stats_fixtures,
+    ),
+    Component(
         "column_aggregate",
         _column_aggregate_native,
         _column_aggregate_fallback,
         _column_aggregate_fixtures,
+    ),
+    Component(
+        "sequence_analysis",
+        _sequence_native,
+        _sequence_fallback,
+        _sequence_fixtures,
+    ),
+    Component(
+        "date_freshness",
+        _freshness_native,
+        _freshness_fallback,
+        _freshness_fixtures,
     ),
 ]

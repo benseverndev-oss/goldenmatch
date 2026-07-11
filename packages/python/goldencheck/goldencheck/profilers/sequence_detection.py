@@ -1,9 +1,14 @@
 """Sequence gap detection profiler — detects gaps in sequential integer columns."""
 from __future__ import annotations
 
+import logging
+
+from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
+
+logger = logging.getLogger(__name__)
 
 # Minimum fraction of consecutive diffs == 1 to consider column sequential.
 # We use this threshold on columns where the values increment exactly by 1 most of the time.
@@ -47,6 +52,17 @@ class SequenceDetectionProfiler(BaseProfiler):
         if not (is_tight_sequential or is_sorted_sequential):
             # Not sequential — skip
             return findings
+
+        # Shadow-compute the fused native sequence_analysis kernel on the real
+        # scan path so it runs against production shapes ahead of the Flip (see
+        # tests/engine/test_w2_shadow.py for the parity assertion). NOT
+        # authoritative -- the Polars gap scan below stays the emitted values.
+        # Fully guarded + swallow-on-error: shadow only.
+        if native_enabled("sequence_analysis"):
+            try:
+                native_module().sequence_analysis(non_null.to_arrow())
+            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                logger.debug("sequence_analysis shadow failed on %s: %s", column, e)
 
         # Column is sequential — find gaps
         col_min = int(non_null.min())
