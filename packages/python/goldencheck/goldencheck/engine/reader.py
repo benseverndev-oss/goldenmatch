@@ -47,3 +47,18 @@ def read_file(path: Path) -> pl.DataFrame:
             raise
     else:
         raise ValueError(f"Unsupported file format: {ext}")
+
+
+def _read_parquet_columns(path: Path) -> dict[str, list]:
+    """Read a Parquet file into a dict[str, list] without Polars.
+
+    Byte-identical to `pl.read_parquet(path).to_dict(as_series=False)` — pyarrow's
+    `to_pydict()` produces value-identical Python scalars for the supported dtypes.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as e:
+        raise ImportError(
+            "Reading Parquet without Polars needs pyarrow: pip install goldencheck[parquet]"
+        ) from e
+    return pq.read_table(str(path)).to_pydict()
