@@ -203,6 +203,14 @@ class Frame(Protocol):
     def with_pair_canonical(self, a: str, b: str) -> Frame: ...
     def unique_by(self, subset: Sequence[str], keep: str = "first") -> Frame: ...
     def with_mod_column(self, src: str, n: int, name: str) -> Frame: ...
+    # W4e-2 clustering-kernel ops. select_cast projects (src, dtype, alias)
+    # triples in order (dtype from the _SCHEMA_DTYPES vocabulary; None = no
+    # cast). group_min = group_by(key).agg(min(value)) frame (row order
+    # engine-defined, SET contract). with_gt_column derives a bool col.
+    def to_arrow(self) -> Any: ...  # pa.Table (PolarsFrame: df.to_arrow(); ArrowFrame: the table)
+    def group_min(self, key: str, value: str) -> Frame: ...
+    def select_cast(self, spec: Sequence[tuple[str, str | None, str]]) -> Frame: ...
+    def with_gt_column(self, src: str, threshold: Any, name: str) -> Frame: ...
 
 
 class PolarsColumn:
@@ -676,6 +684,29 @@ class PolarsFrame:
     def with_mod_column(self, src: str, n: int, name: str) -> PolarsFrame:
         # distributed/identity_partition.py:100-102 partition tag.
         return PolarsFrame(self._df.with_columns((pl.col(src) % n).alias(name)))
+
+    def to_arrow(self) -> Any:
+        # W4e-2: the Ray-UDF bookend (return-to-Arrow). Same bytes the raw
+        # df.to_arrow() produced.
+        return self._df.to_arrow()
+
+    def group_min(self, key: str, value: str) -> PolarsFrame:
+        # distributed/clustering.py:833 per-id min label.
+        return PolarsFrame(self._df.group_by(key).agg(pl.col(value).min()))
+
+    def select_cast(self, spec: Sequence[tuple[str, str | None, str]]) -> PolarsFrame:
+        # clustering UDF output projections: select(col.cast(dtype).alias(name)).
+        exprs = []
+        for src, dtype, alias in spec:
+            e = pl.col(src)
+            if dtype is not None:
+                e = e.cast(_polars_dtype(dtype))
+            exprs.append(e.alias(alias))
+        return PolarsFrame(self._df.select(exprs))
+
+    def with_gt_column(self, src: str, threshold: Any, name: str) -> PolarsFrame:
+        # clustering.py:436 oversized flag.
+        return PolarsFrame(self._df.with_columns((pl.col(src) > threshold).alias(name)))
 
 
 class ArrowColumn:
@@ -1274,6 +1305,51 @@ class ArrowFrame:
         out = [None if v is None else v % n for v in vals]
         return ArrowFrame(
             self._tbl.append_column(name, pa.array(out, type=self._tbl.column(src).type))
+        )
+
+    def to_arrow(self) -> Any:
+        return self._tbl
+
+    def group_min(self, key: str, value: str) -> ArrowFrame:
+        import pyarrow as pa
+
+        keys = self._tbl.column(key).to_pylist()
+        vals = self._tbl.column(value).to_pylist()
+        mins: dict = {}
+        order: list = []
+        for k, v in zip(keys, vals):
+            if k not in mins:
+                mins[k] = v
+                order.append(k)
+            elif v is not None and (mins[k] is None or v < mins[k]):
+                mins[k] = v
+        return ArrowFrame(
+            pa.table(
+                {
+                    key: pa.array(order, type=self._tbl.column(key).type),
+                    value: pa.array(
+                        [mins[k] for k in order], type=self._tbl.column(value).type
+                    ),
+                }
+            )
+        )
+
+    def select_cast(self, spec: Sequence[tuple[str, str | None, str]]) -> ArrowFrame:
+        import pyarrow as pa
+
+        cols = {}
+        for src, dtype, alias in spec:
+            arr = self._tbl.column(src).combine_chunks()
+            if dtype is not None:
+                arr = arr.cast(_arrow_dtype(dtype))
+            cols[alias] = arr
+        return ArrowFrame(pa.table(cols))
+
+    def with_gt_column(self, src: str, threshold: Any, name: str) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        return ArrowFrame(
+            self._tbl.append_column(name, pc.greater(self._tbl.column(src), threshold))
         )
 
 
