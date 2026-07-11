@@ -148,6 +148,55 @@ def _near_dup_locked(config: GoldenMatchConfig) -> bool:
     return b is not None and b.strategy in ("lsh", "simhash")
 
 
+def _blocking_recovery_target(
+    mk: MatchkeyConfig, profile: ComplexityProfile
+) -> tuple[str, list[str]] | None:
+    """Pick the blocking-recovery key for the text-field rules.
+
+    ``first_token`` (the DBLP-ACM lesson) is right for TEXT corpora: titles
+    sharing a first word co-block. For NAME columns it is recall-blind --
+    equality on the first token still splits typo variants
+    ("michael"/"micheal"), the exact population fuzzy matching exists for; it
+    RED-looped zero-config on person data for two months (the 2026-07-10
+    bench regression: iterations bounced between identifier blocking with
+    ZERO candidates and token-name blocking with mass_above_threshold=1.0 --
+    two RED shapes with no lever proposing the canonical middle).
+
+    Names get the repo-canonical phonetic block: ``soundex`` on the SURNAME
+    when one is present (the same key the differential harness's known-good
+    deterministic config and the compound builder's pass-3 recall net use --
+    surnames spread across soundex codes; given names are too concentrated),
+    else soundex on the first name-class field.
+
+    Name detection uses ``_classify_by_name`` (column-NAME classification,
+    consistent with the rest of autoconfig) -- NOT
+    ``profile.data.column_types``, whose coarse map labels person-name
+    columns plain ``text``.
+    """
+    from goldenmatch.core.autoconfig import _classify_by_name
+
+    text_fallback: str | None = None
+    name_fields: list[str] = []
+    for f in mk.fields or []:
+        if f.field is None:
+            continue
+        if _classify_by_name(f.field) == "name":
+            name_fields.append(f.field)
+        elif text_fallback is None:
+            col_type = profile.data.column_types.get(f.field, "unknown")
+            if col_type in ("text", "name"):
+                text_fallback = f.field
+    if name_fields:
+        surname = next(
+            (n for n in name_fields if "last" in n.lower() or "surname" in n.lower()),
+            None,
+        )
+        return (surname or name_fields[0], ["lowercase", "soundex"])
+    if text_fallback is not None:
+        return (text_fallback, ["lowercase", "first_token"])
+    return None
+
+
 def rule_blocking_singleton_trap(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -185,23 +234,15 @@ def rule_blocking_singleton_trap(
     mk = _first_weighted_mk(current)
     if mk is None:
         return None
-    target_field: str | None = None
-    for f in mk.fields or []:
-        if f.field is None:
-            continue
-        col_type = profile.data.column_types.get(f.field, "unknown")
-        if col_type in ("text", "name"):
-            target_field = f.field
-            break
-    if target_field is None:
+    target = _blocking_recovery_target(mk, profile)
+    if target is None:
         return None
-
-    # Build a new blocking key on raw text with first_token + lowercase.
+    target_field, transforms = target
     new_blocking = current.blocking.model_copy(update={
         "strategy": "static",
         "keys": [BlockingKeyConfig(
             fields=[target_field],
-            transforms=["lowercase", "first_token"],
+            transforms=transforms,
         )],
     })
     new_cfg = current.model_copy(update={"blocking": new_blocking})
@@ -211,11 +252,11 @@ def rule_blocking_singleton_trap(
             f"candidates_compared=0 with n_blocks={bp.n_blocks}; "
             f"singletons={bp.singleton_block_count}/{bp.n_blocks} "
             f"({bp.singleton_block_count / bp.n_blocks:.0%}); "
-            f"switching blocking to first_token({target_field!r})"
+            f"switching blocking to {transforms[-1]}({target_field!r})"
         ),
         config_diff={
             "blocking.keys[0].fields": [target_field],
-            "blocking.keys[0].transforms": ["lowercase", "first_token"],
+            "blocking.keys[0].transforms": transforms,
         },
     )
     return new_cfg, decision
@@ -455,29 +496,23 @@ def rule_blocking_key_swap(
     mk = _first_weighted_mk(current)
     if mk is None:
         return None
-    target_field: str | None = None
-    for f in mk.fields or []:
-        if f.field is None:
-            continue
-        col_type = profile.data.column_types.get(f.field, "unknown")
-        if col_type in ("text", "name"):
-            target_field = f.field
-            break
-    if target_field is None:
+    target = _blocking_recovery_target(mk, profile)
+    if target is None:
         return None
+    target_field, transforms = target
 
     # Avoid proposing a config we already have (anti-oscillation belt-and-suspenders)
     existing_first_key = (current.blocking.keys or [None])[0]
     if (existing_first_key is not None
             and existing_first_key.fields == [target_field]
-            and "first_token" in (existing_first_key.transforms or [])):
+            and transforms[-1] in (existing_first_key.transforms or [])):
         return None
 
     new_blocking = current.blocking.model_copy(update={
         "strategy": "static",
         "keys": [BlockingKeyConfig(
             fields=[target_field],
-            transforms=["lowercase", "first_token"],
+            transforms=transforms,
         )],
     })
 
@@ -504,7 +539,7 @@ def rule_blocking_key_swap(
         f"after {len(history.decisions)} prior decision(s), "
         f"candidates_compared={sp.candidates_compared} "
         f"but mass_above_threshold={sp.mass_above_threshold}; "
-        f"swapping blocking to first_token({target_field!r})"
+        f"swapping blocking to {transforms[-1]}({target_field!r})"
     ]
     if dropped_names:
         rationale_parts.append(
@@ -516,7 +551,7 @@ def rule_blocking_key_swap(
         rationale="".join(rationale_parts),
         config_diff={
             "blocking.keys[0].fields": [target_field],
-            "blocking.keys[0].transforms": ["lowercase", "first_token"],
+            "blocking.keys[0].transforms": transforms,
             **({"matchkeys.dropped": dropped_names} if dropped_names else {}),
         },
     )

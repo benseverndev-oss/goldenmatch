@@ -437,3 +437,62 @@ def test_rule_sparse_match_expand_no_fire_when_not_sparse():
     ctx = _ctx_with_sparsity(_V110SV(is_sparse=False, estimated_n_true_pairs=100))
     outcome = rule_sparse_match_expand(profile, cfg, _empty_history(), ctx=ctx)
     assert outcome is None
+
+
+# ---- 2026-07-10 zero-config regression fixes ---------------------------------
+
+
+def test_blocking_recovery_prefers_soundex_surname():
+    """Name-class columns get the canonical phonetic block on the SURNAME --
+    first_token equality-splits typo'd names (the two-month zero-config
+    RED-loop). Text corpora keep first_token (the DBLP-ACM lesson)."""
+    from types import SimpleNamespace
+
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+    from goldenmatch.core.autoconfig_rules import _blocking_recovery_target
+
+    mk = MatchkeyConfig(
+        name="mk", type="weighted", threshold=0.8,
+        fields=[
+            MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.5),
+            MatchkeyField(field="last_name", scorer="jaro_winkler", weight=0.5),
+        ],
+    )
+    profile = SimpleNamespace(data=SimpleNamespace(column_types={
+        "first_name": "text", "last_name": "text",  # the coarse map lies; name
+    }))                                              # detection is by column NAME
+    target = _blocking_recovery_target(mk, profile)
+    assert target == ("last_name", ["lowercase", "soundex"])
+
+    mk_text = MatchkeyConfig(
+        name="mk", type="weighted", threshold=0.8,
+        fields=[MatchkeyField(field="title", scorer="token_sort", weight=1.0)],
+    )
+    profile_text = SimpleNamespace(data=SimpleNamespace(column_types={"title": "text"}))
+    target_text = _blocking_recovery_target(mk_text, profile_text)
+    assert target_text == ("title", ["lowercase", "first_token"])
+
+
+def test_transitivity_rate_small_sample_not_evidence():
+    """A transitivity estimate from a handful of triples is sampling noise --
+    below the support floor it returns vacuously 1.0 instead of hard-REDding
+    the cluster verdict (the zero-config death-spiral's terminal layer)."""
+    from goldenmatch.core._profile_helpers import _MIN_TRIPLE_SUPPORT, transitivity_rate
+
+    # Two 3-member clusters = 2 triples, both non-transitive: below the
+    # floor -> 1.0 (not evaluable).
+    members = {1: [1, 2, 3], 2: [4, 5, 6]}
+    scores = {(1, 2): 0.9, (2, 3): 0.9, (4, 5): 0.9, (5, 6): 0.9}  # a-c edges missing
+    assert transitivity_rate(members, scores, 0.8) == 1.0
+
+    # A cluster large enough to clear the floor with the same broken shape
+    # must still be flagged (rate < 1).
+    big = list(range(100, 100 + 12))  # C(12,3) = 220 triples >= floor
+    members_big = {1: big}
+    scores_chain = {
+        (min(a, b), max(a, b)): 0.9
+        for a, b in zip(big, big[1:])  # chain only: most triples fail
+    }
+    rate = transitivity_rate(members_big, scores_chain, 0.8)
+    assert rate < 0.85
+    assert _MIN_TRIPLE_SUPPORT <= 220
