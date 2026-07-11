@@ -87,6 +87,7 @@ def profile_statistical(
         if len(non_null) < _MIN_ROWS:
             continue
 
+        # TODO(W-path): route via dtype_category
         is_numeric = series.dtype in (
             pl.Int8, pl.Int16, pl.Int32, pl.Int64,
             pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,

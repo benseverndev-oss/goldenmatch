@@ -211,6 +211,7 @@ def _apply_single_rule(df: pl.DataFrame, rule: GeneratedRule) -> list[Finding]:
     findings: list[Finding] = []
 
     if rule.rule_type == "regex" and params.pattern:
+        # TODO(W-path): route via dtype_category
         if col.dtype in (pl.Utf8, pl.String):
             non_null = col.drop_nulls()
             if len(non_null) > 0:
@@ -230,6 +231,7 @@ def _apply_single_rule(df: pl.DataFrame, rule: GeneratedRule) -> list[Finding]:
                     ))
 
     elif rule.rule_type == "length":
+        # TODO(W-path): route via dtype_category
         if col.dtype in (pl.Utf8, pl.String):
             non_null = col.drop_nulls()
             if len(non_null) > 0:

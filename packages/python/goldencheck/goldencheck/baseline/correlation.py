@@ -176,6 +176,7 @@ def analyze_correlations(df: pl.DataFrame) -> list[CorrelationEntry]:
     - Each pair must have at least _MIN_ROWS non-null rows.
     """
     # Partition columns by type
+    # TODO(W-path): route via dtype_category
     numeric_cols: list[str] = [
         c for c in df.columns if df[c].dtype in (pl.Float32, pl.Float64, pl.Int8, pl.Int16,
                                                   pl.Int32, pl.Int64, pl.UInt8, pl.UInt16,

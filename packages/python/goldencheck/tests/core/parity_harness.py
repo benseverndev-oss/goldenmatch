@@ -316,6 +316,38 @@ def _fd_bridge_fallback(df: pl.DataFrame) -> list:
 
 
 # ---------------------------------------------------------------------------
+# column_aggregate (fused len/null_count/n_unique_nonnull/dtype scan)
+# ---------------------------------------------------------------------------
+def _column_aggregate_fixtures(seed: int) -> list[pl.Series]:
+    rng = random.Random(seed)
+    n = rng.randint(0, 200)
+    int_vals = [rng.choice([None, rng.randint(-50, 50)]) for _ in range(n)]
+    float_pool = [None, 0.0, -0.0, float("nan")] + [rng.uniform(-50, 50) for _ in range(20)]
+    float_vals = [rng.choice(float_pool) for _ in range(n)]
+    str_pool = [None, "a", "b", "c", "aa", "bb", ""]
+    str_vals = [rng.choice(str_pool) for _ in range(n)]
+    return [
+        pl.Series("i", int_vals, dtype=pl.Int64),
+        pl.Series("f", float_vals, dtype=pl.Float64),
+        pl.Series("s", str_vals, dtype=pl.Utf8),
+    ]
+
+
+def _column_aggregate_native(s: pl.Series) -> tuple:
+    from goldencheck.core.frame import _neutral_dtype
+
+    ln, nc, nu, dt = native_module().column_aggregate(s.to_arrow())
+    return (ln, nc, nu, dt, _neutral_dtype(s.dtype))
+
+
+def _column_aggregate_fallback(s: pl.Series) -> tuple:
+    from goldencheck.core.frame import _neutral_dtype
+
+    dt = _neutral_dtype(s.dtype)
+    return (len(s), s.null_count(), s.drop_nulls().n_unique(), dt, dt)
+
+
+# ---------------------------------------------------------------------------
 # csv_infer (owned CSV type-inference)
 # ---------------------------------------------------------------------------
 def _csv_infer_fixtures(seed: int) -> list[tuple[list[str], list[list[str]]]]:
@@ -347,4 +379,10 @@ REGISTERED_COMPONENTS: list[Component] = [
         _fd_bridge_fixtures,
     ),
     Component("csv_infer", _csv_infer_native, _csv_infer_fallback, _csv_infer_fixtures),
+    Component(
+        "column_aggregate",
+        _column_aggregate_native,
+        _column_aggregate_fallback,
+        _column_aggregate_fixtures,
+    ),
 ]

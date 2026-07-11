@@ -12,6 +12,7 @@
 //! plain slices and delegate to `goldencheck-core`.
 use pyo3::prelude::*;
 
+mod aggregate;
 mod csv_infer;
 mod date;
 mod dc;
@@ -24,6 +25,7 @@ mod regex;
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(profile::benford_leading_digits, m)?)?;
+    m.add_function(wrap_pyfunction!(aggregate::column_aggregate, m)?)?;
     m.add_function(wrap_pyfunction!(keys::composite_key_search, m)?)?;
     m.add_function(wrap_pyfunction!(keys::functional_dependency_holds, m)?)?;
     m.add_function(wrap_pyfunction!(keys::discover_functional_dependencies, m)?)?;

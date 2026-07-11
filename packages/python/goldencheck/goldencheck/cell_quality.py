@@ -89,6 +89,7 @@ def _fuzzy_penalties(df: pl.DataFrame, col: str, scores: dict[tuple[int, str], f
 
 def _future_penalties(df: pl.DataFrame, col: str, scores: dict[tuple[int, str], float]) -> None:
     s = df[col]
+    # TODO(W-path): route via dtype_category
     is_date = s.dtype == pl.Date
     now: _dt.date | _dt.datetime = _dt.date.today() if is_date else _dt.datetime.now()
     try:
