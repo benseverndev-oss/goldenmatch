@@ -12,6 +12,7 @@
 //! plain slices and delegate to `goldencheck-core`.
 use pyo3::prelude::*;
 
+mod csv_infer;
 mod date;
 mod dc;
 mod fuzzy;
@@ -34,5 +35,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(regex::str_filter_mask, m)?)?;
     m.add_function(wrap_pyfunction!(regex::str_replace_all, m)?)?;
     m.add_function(wrap_pyfunction!(date::str_to_date, m)?)?;
+    m.add_function(wrap_pyfunction!(csv_infer::csv_infer_columns, m)?)?;
     Ok(())
 }
