@@ -111,6 +111,7 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "denial_constraint": ("denial_constraint_evidence",),
     "regex": ("str_contains_count", "str_filter_mask", "str_replace_all"),
     "str_to_date": ("str_to_date",),
+    "csv_infer": ("csv_infer_columns",),
 }
 
 

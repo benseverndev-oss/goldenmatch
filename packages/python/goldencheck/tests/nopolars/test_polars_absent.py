@@ -130,19 +130,22 @@ def test_read_columns_parquet_excel_polars_free(tmp_path) -> None:
     assert "polars" not in sys.modules
 
 
-def test_csv_and_full_scan_decline_without_polars(tmp_path) -> None:
-    # CSV dtype inference isn't reproducible without Polars, and scan_file()'s full
-    # scan (classification/sampling/denial) reads via Polars -- both must decline with
-    # the helpful `goldencheck[polars]` ImportError rather than crash or silently degrade.
+def test_csv_reads_owned_and_full_scan_declines_without_polars(tmp_path) -> None:
+    # CSV now reads Polars-free via goldencheck's OWN inference contract (the native
+    # csv_infer kernel, or the Python reference fallback) -- so read_columns(csv) works
+    # WITHOUT Polars (deliberately differs from pl.read_csv; see engine/csv_infer.py).
+    # But scan_file()'s FULL scan (classification/sampling/denial) reads via
+    # read_file() -> pl.read_csv(), which still needs Polars and must decline with the
+    # helpful `goldencheck[polars]` ImportError rather than crash or silently degrade.
     import pytest
     from goldencheck import read_columns
     from goldencheck.engine.scanner import scan_file
 
     csv = tmp_path / "c.csv"
     csv.write_text("a\n1\n", encoding="utf-8")
-    with pytest.raises(ImportError, match=r"goldencheck\[polars\]"):
-        read_columns(csv)
-    # scan_file() -> read_file() -> pl.read_csv() on the lazy proxy -> helpful ImportError.
+    # CSV reads via the owned path (int column), no ImportError, no Polars:
+    assert read_columns(csv) == {"a": [1]}
+    # scan_file() -> read_file() -> pl.read_csv() on the lazy proxy -> helpful ImportError:
     with pytest.raises(ImportError, match=r"goldencheck\[polars\]"):
         scan_file(csv)
     assert "polars" not in sys.modules

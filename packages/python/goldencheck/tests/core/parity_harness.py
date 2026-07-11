@@ -23,6 +23,7 @@ import pyarrow as pa
 from goldencheck import cell_quality as _cell_quality
 from goldencheck import functional_dependencies as _fd_bridge
 from goldencheck.core._native_loader import native_module
+from goldencheck.engine.csv_infer import infer_and_type
 from goldencheck.profilers import fuzzy_values as fv
 from goldencheck.relations import approx_fd as afd
 from goldencheck.relations import composite_key as ck
@@ -31,6 +32,7 @@ from goldencheck.relations import functional_dependency as fd
 # Reuse the fixture generators + Python-fallback helpers the hard-coded parity
 # test already defines instead of duplicating them.
 from tests.core import test_native_parity as tp
+from tests.core.test_csv_infer_parity import _cells_to_csv_bytes, _random_cell_matrix
 
 
 @dataclass(frozen=True)
@@ -313,6 +315,24 @@ def _fd_bridge_fallback(df: pl.DataFrame) -> list:
         return _fd_bridge_records(df)
 
 
+# ---------------------------------------------------------------------------
+# csv_infer (owned CSV type-inference)
+# ---------------------------------------------------------------------------
+def _csv_infer_fixtures(seed: int) -> list[tuple[list[str], list[list[str]]]]:
+    return [_random_cell_matrix(seed)]
+
+
+def _csv_infer_native(fx: tuple[list[str], list[list[str]]]) -> dict:
+    header, cells = fx
+    csv_bytes = _cells_to_csv_bytes(header, cells)
+    return native_module().csv_infer_columns(csv_bytes, ord(","))
+
+
+def _csv_infer_fallback(fx: tuple[list[str], list[list[str]]]) -> dict:
+    header, cells = fx
+    return infer_and_type(cells, header)
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -326,4 +346,5 @@ REGISTERED_COMPONENTS: list[Component] = [
         _fd_bridge_fallback,
         _fd_bridge_fixtures,
     ),
+    Component("csv_infer", _csv_infer_native, _csv_infer_fallback, _csv_infer_fixtures),
 ]
