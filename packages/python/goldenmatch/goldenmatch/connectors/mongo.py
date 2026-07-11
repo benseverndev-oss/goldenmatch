@@ -131,6 +131,8 @@ class MongoConnector(BaseConnector):
             raise ConnectorError("Mongo connector requires 'collection'.")
         return client[db_name][col_name]
 
+    # W5: LazyFrame read contract (bounded-inference rows->lazy) -- ports
+    # with the connector contract flip.
     def read(self, config: dict) -> pl.LazyFrame:
         client = self._connect(config)
         try:

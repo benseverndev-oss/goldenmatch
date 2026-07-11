@@ -120,7 +120,13 @@ class PostgresConnector(DatabaseConnector):
                 if not rows:
                     break
                 data = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-                yield _normalize_chunk_schema(pl.DataFrame(data))
+                # W4c: seam constructor; Null->Utf8 promotion stays native
+                # (full-dtype recipe, see _normalize_chunk_schema / W5).
+                from goldenmatch.core.frame import frame_from_column_data
+
+                yield _normalize_chunk_schema(
+                    frame_from_column_data(data, backend="polars").native
+                )
         finally:
             cursor.close()
 
@@ -133,10 +139,14 @@ class PostgresConnector(DatabaseConnector):
                 return pl.DataFrame()
             columns = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
+            from goldenmatch.core.frame import frame_from_column_data
+
             if not rows:
-                return pl.DataFrame({col: [] for col in columns})
+                return frame_from_column_data(
+                    {col: [] for col in columns}, backend="polars"
+                ).native
             data = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-            return pl.DataFrame(data)
+            return frame_from_column_data(data, backend="polars").native
         finally:
             cursor.close()
 

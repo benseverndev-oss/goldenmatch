@@ -28,13 +28,17 @@ VALID_WRITE_MODES = ("append", "upsert", "replace")
 
 
 def rows_to_dataframe(columns: list[str], rows: Iterable[tuple]) -> pl.DataFrame:
-    """Build a Polars DataFrame from a cursor's columns + rows."""
+    """Build a Polars DataFrame from a cursor's columns + rows.
+
+    W4c: routed through the seam constructor (engine inference, values
+    parity). The connector read contract stays pl.DataFrame until W5."""
+    from goldenmatch.core.frame import frame_from_column_data
+
     materialized = list(rows)
+    data = {c: [r[i] for r in materialized] for i, c in enumerate(columns)}
     if not materialized:
-        return pl.DataFrame({c: [] for c in columns})
-    return pl.DataFrame(
-        {c: [r[i] for r in materialized] for i, c in enumerate(columns)}
-    )
+        data = {c: [] for c in columns}
+    return frame_from_column_data(data, backend="polars").native
 
 
 def resolve_query(config: dict, connector_label: str) -> str:
