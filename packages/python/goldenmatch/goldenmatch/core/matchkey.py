@@ -204,9 +204,10 @@ def _emit_matchkey_profile(lf_after: pl.LazyFrame, matchkeys: list) -> None:
             col = next((c for c in candidates if c in df.columns), None)
             if col is None or n_total == 0:
                 continue
-            ser = df.select(pl.col(col)).to_series()
-            non_null = ser.drop_nulls()
-            n_non_null = non_null.len()
+            from goldenmatch.core.frame import to_frame
+
+            non_null = to_frame(df.select(pl.col(col))).column(col).drop_nulls()
+            n_non_null = len(non_null)
             if n_non_null == 0:
                 per_field[field_name] = FieldStats(
                     post_transform_cardinality_ratio=0.0,
@@ -216,7 +217,7 @@ def _emit_matchkey_profile(lf_after: pl.LazyFrame, matchkeys: list) -> None:
                 continue
             n_distinct = non_null.n_unique()
             try:
-                lengths = sorted(non_null.cast(pl.Utf8).str.len_chars().to_list())
+                lengths = sorted(non_null.cast_str().str_len_chars().to_list())
                 p50 = lengths[len(lengths) // 2] if lengths else 0
             except Exception:
                 p50 = 0
@@ -231,12 +232,12 @@ def _emit_matchkey_profile(lf_after: pl.LazyFrame, matchkeys: list) -> None:
             f1 = 0
             f2 = 0
             try:
-                vc = non_null.value_counts()
-                # value_counts result has shape (n_distinct, 2) with the
-                # second column always named "count" in recent Polars.
-                counts = vc["count"] if "count" in vc.columns else vc[vc.columns[-1]]
-                f1 = int((counts == 1).sum())
-                f2 = int((counts == 2).sum())
+                # W3c: seam value_counts_desc replaces the fragile
+                # vc["count"] column-name probing -- list[(value, count)],
+                # order-insensitive for f1/f2.
+                counts = [c for _v, c in non_null.value_counts_desc()]
+                f1 = sum(1 for c in counts if c == 1)
+                f2 = sum(1 for c in counts if c == 2)
             except Exception:
                 # Degrades to "no Chao1 inputs"; FieldStats falls back to
                 # raw cardinality in that case.
