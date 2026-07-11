@@ -62,43 +62,43 @@ def partition_cluster_frames(
           is deterministic; Polars' ``__hash__`` is based on bytewise
           contents on the i64 column).
     """
-    import polars as _pl
+    from goldenmatch.core.frame import empty_frame, to_frame
 
     if num_partitions < 1:
         raise ValueError(
             f"num_partitions must be >= 1; got {num_partitions}"
         )
 
+    # W4e: seam schemas + ops; ClusterFrames stays polars-typed until W5.
     empty_assignments_schema = {
-        "cluster_id": _pl.Int64(),
-        "member_id":  _pl.Int64(),
+        "cluster_id": "int64",
+        "member_id": "int64",
     }
     empty_metadata_schema = {
-        "cluster_id":       _pl.Int64(),
-        "size":             _pl.Int64(),
-        "confidence":       _pl.Float64(),
-        "quality":          _pl.Utf8(),
-        "oversized":        _pl.Boolean(),
-        "bottleneck_pair_a": _pl.Int64(),
-        "bottleneck_pair_b": _pl.Int64(),
+        "cluster_id": "int64",
+        "size": "int64",
+        "confidence": "float64",
+        "quality": "utf8",
+        "oversized": "bool",
+        "bottleneck_pair_a": "int64",
+        "bottleneck_pair_b": "int64",
     }
 
     if frames.metadata.is_empty():
         return [
             ClusterFrames(
-                assignments=_pl.DataFrame(schema=empty_assignments_schema),
-                metadata=_pl.DataFrame(schema=empty_metadata_schema),
+                assignments=empty_frame(empty_assignments_schema, backend="polars").native,
+                metadata=empty_frame(empty_metadata_schema, backend="polars").native,
             )
             for _ in range(num_partitions)
         ]
 
     # Tag every cluster with its partition index via ``cluster_id %
-    # num_partitions``. Polars supports modulo on integer columns
-    # natively. For i64 cluster_ids, this gives a uniform partition
+    # num_partitions``. For i64 cluster_ids this gives a uniform partition
     # distribution as long as cluster_ids aren't pathologically
     # correlated with N (uuidv7 + offset minted ids satisfy this).
-    metadata_tagged = frames.metadata.with_columns(
-        (_pl.col("cluster_id") % num_partitions).alias("__partition__"),
+    metadata_tagged = to_frame(frames.metadata).with_mod_column(
+        "cluster_id", num_partitions, "__partition__"
     )
 
     # Build partition_id -> cluster_id table once, then join the
@@ -107,21 +107,17 @@ def partition_cluster_frames(
     # the hash keeps the partition assignment consistent if the modulo
     # logic ever moves (single source of truth: metadata_tagged).
     partition_index = metadata_tagged.select(["cluster_id", "__partition__"])
-    assignments_tagged = frames.assignments.join(
-        partition_index, on="cluster_id", how="inner",
+    assignments_tagged = to_frame(frames.assignments).join_inner(
+        partition_index, on="cluster_id"
     )
 
     out: list[ClusterFrames] = []
     for i in range(num_partitions):
         part_assignments = (
-            assignments_tagged
-            .filter(_pl.col("__partition__") == i)
-            .drop("__partition__")
+            assignments_tagged.filter_eq("__partition__", i).drop(["__partition__"]).native
         )
         part_metadata = (
-            metadata_tagged
-            .filter(_pl.col("__partition__") == i)
-            .drop("__partition__")
+            metadata_tagged.filter_eq("__partition__", i).drop(["__partition__"]).native
         )
         out.append(ClusterFrames(
             assignments=part_assignments,
@@ -145,29 +141,29 @@ def merge_partitioned_frames(parts: list[ClusterFrames]) -> ClusterFrames:
         A single ``ClusterFrames`` whose ``assignments`` and ``metadata``
         are the row-concatenation of each partition's frames.
     """
-    import polars as _pl
+    from goldenmatch.core.frame import concat_frames, empty_frame, to_frame
 
     if not parts:
         # Caller should provide at least one partition; mirror the
         # ``partition_cluster_frames`` empty-input shape so the
         # round-trip is total.
         empty_assignments_schema = {
-            "cluster_id": _pl.Int64(),
-            "member_id":  _pl.Int64(),
-        }
+        "cluster_id": "int64",
+        "member_id": "int64",
+    }
         empty_metadata_schema = {
-            "cluster_id":       _pl.Int64(),
-            "size":             _pl.Int64(),
-            "confidence":       _pl.Float64(),
-            "quality":          _pl.Utf8(),
-            "oversized":        _pl.Boolean(),
-            "bottleneck_pair_a": _pl.Int64(),
-            "bottleneck_pair_b": _pl.Int64(),
-        }
+        "cluster_id": "int64",
+        "size": "int64",
+        "confidence": "float64",
+        "quality": "utf8",
+        "oversized": "bool",
+        "bottleneck_pair_a": "int64",
+        "bottleneck_pair_b": "int64",
+    }
         return ClusterFrames(
-            assignments=_pl.DataFrame(schema=empty_assignments_schema),
-            metadata=_pl.DataFrame(schema=empty_metadata_schema),
+            assignments=empty_frame(empty_assignments_schema, backend="polars").native,
+            metadata=empty_frame(empty_metadata_schema, backend="polars").native,
         )
-    assignments = _pl.concat([p.assignments for p in parts])
-    metadata = _pl.concat([p.metadata for p in parts])
+    assignments = concat_frames([to_frame(p.assignments) for p in parts]).native
+    metadata = concat_frames([to_frame(p.metadata) for p in parts]).native
     return ClusterFrames(assignments=assignments, metadata=metadata)

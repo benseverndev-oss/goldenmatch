@@ -9,6 +9,13 @@ if TYPE_CHECKING:
     from ray.data import Dataset
 
 
+def _ffr_native(rows):
+    # W4e: seam constructor (engine inference); polars-typed contract until W5.
+    from goldenmatch.core.frame import frame_from_records
+
+    return frame_from_records(list(rows), backend="polars").native
+
+
 def take_sample_distributed(ds: Dataset, sample_cap: int = 20_000) -> pl.DataFrame:
     """Pull a bounded sample from a Ray Dataset as a Polars DataFrame.
 
@@ -28,4 +35,4 @@ def take_sample_distributed(ds: Dataset, sample_cap: int = 20_000) -> pl.DataFra
         # Pull a small headroom so random_sample's approximate fraction
         # doesn't undershoot the cap on tiny inputs.
         rows = ds.random_sample(fraction=min(1.0, fraction * 1.5)).take(sample_cap)
-    return pl.from_dicts(list(rows))
+    return _ffr_native(list(rows))

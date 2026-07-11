@@ -405,13 +405,15 @@ def _join_clusters_to_rows(ds: Dataset, clusters: dict) -> Dataset:
             )
         lookup_raw = _ray.get(map_ref)
         lookup: dict[int, int] = dict(lookup_raw) if not isinstance(lookup_raw, dict) else lookup_raw
-        keys = list(lookup.keys())
-        vals = list(lookup.values())
-        out = df.with_columns(
-            pl.col("__row_id__").replace_strict(
-                keys, vals, default=-1,
-            ).alias("__cluster_id__")
-        ).filter(pl.col("__cluster_id__") != -1)
+        # W4e: seam ops (map_column default= == replace_strict(keys, vals,
+        # default); filter_not_in([-1]) == != -1, nulls unreachable post-default).
+        from goldenmatch.core.frame import to_frame
+
+        out = (
+            to_frame(df)
+            .map_column("__row_id__", "__cluster_id__", lookup, default=-1)
+            .filter_not_in("__cluster_id__", [-1])
+        )
         return out.to_arrow()
 
     return ds.map_batches(_annotate, batch_format="pyarrow")
