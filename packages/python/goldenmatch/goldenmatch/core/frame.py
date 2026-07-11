@@ -202,6 +202,7 @@ class Frame(Protocol):
     def with_group_min_over(self, key: str, value: str, name: str) -> Frame: ...
     def with_pair_canonical(self, a: str, b: str) -> Frame: ...
     def unique_by(self, subset: Sequence[str], keep: str = "first") -> Frame: ...
+    def with_mod_column(self, src: str, n: int, name: str) -> Frame: ...
 
 
 class PolarsColumn:
@@ -671,6 +672,10 @@ class PolarsFrame:
     def unique_by(self, subset: Sequence[str], keep: str = "first") -> PolarsFrame:
         # clustering ~1237 / pipeline.py:1970. Result order engine-defined.
         return PolarsFrame(self._df.unique(subset=list(subset), keep=keep))  # type: ignore[arg-type]
+
+    def with_mod_column(self, src: str, n: int, name: str) -> PolarsFrame:
+        # distributed/identity_partition.py:100-102 partition tag.
+        return PolarsFrame(self._df.with_columns((pl.col(src) % n).alias(name)))
 
 
 class ArrowColumn:
@@ -1260,6 +1265,16 @@ class ArrowFrame:
             else:
                 kept[key] = i
         return ArrowFrame(self._tbl.take(sorted(kept.values())))
+
+    def with_mod_column(self, src: str, n: int, name: str) -> ArrowFrame:
+        import pyarrow as pa
+
+        # No pc.mod kernel; Python % == polars % (PROBED: -11 % 3 == 1 on both).
+        vals = self._tbl.column(src).to_pylist()
+        out = [None if v is None else v % n for v in vals]
+        return ArrowFrame(
+            self._tbl.append_column(name, pa.array(out, type=self._tbl.column(src).type))
+        )
 
 
 def to_frame(obj: Any) -> Frame:

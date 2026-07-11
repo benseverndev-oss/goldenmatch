@@ -21,13 +21,20 @@ if TYPE_CHECKING:
 _INDICATOR_SAMPLE_CAP = 5000
 
 
+def _ffr_native(rows):
+    # W4e: seam constructor (engine inference); polars-typed contract until W5.
+    from goldenmatch.core.frame import frame_from_records
+
+    return frame_from_records(list(rows), backend="polars").native
+
+
 def _collect_indicator_sample(ds: Dataset, cap: int = _INDICATOR_SAMPLE_CAP) -> pl.DataFrame:
     total = ds.count()
     if total == 0:
         return pl.DataFrame()
     fraction = min(1.0, cap / total)
     rows = ds.random_sample(fraction=fraction).take(cap)
-    return pl.from_dicts(list(rows))
+    return _ffr_native(list(rows))
 
 
 def compute_column_priors_distributed(ds: Dataset) -> dict[str, ColumnPrior]:

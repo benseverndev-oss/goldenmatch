@@ -223,16 +223,30 @@ def materialize_bucketed_blocks(
     """
     sig_hash = _sanitize_signature(signature)
     bucket_dir = store.path.parent / f"buckets_{sig_hash}"
+    # W4e FIX (latent stale-file bug): the signature is CONFIG-ONLY, so a
+    # persisted store re-materialized with different data (or, post-W5, a
+    # different backend hash) would leave stale bucket=K parquets that
+    # iter_buckets happily returns. Materialize is an authoritative rebuild:
+    # clear the dir first.
+    if bucket_dir.exists():
+        import shutil
+
+        shutil.rmtree(bucket_dir)
     bucket_dir.mkdir(parents=True, exist_ok=True)
 
     # Normalize to a Polars DataFrame.
     if isinstance(block_assignments, dict):
         if not block_assignments:
             return bucket_dir
-        rid_to_block = pl.DataFrame({
-            "__row_id__": list(block_assignments.keys()),
-            "__block_key__": list(block_assignments.values()),
-        })
+        from goldenmatch.core.frame import frame_from_column_data
+
+        rid_to_block = frame_from_column_data(
+            {
+                "__row_id__": list(block_assignments.keys()),
+                "__block_key__": list(block_assignments.values()),
+            },
+            backend="polars",
+        ).native
     else:
         rid_to_block = block_assignments
         if rid_to_block.height == 0:
@@ -246,24 +260,25 @@ def materialize_bucketed_blocks(
 
     # Inner join attaches __block_key__. Rows in `df` without an
     # assignment drop out (matches v1: unassigned rows weren't scored).
-    keyed = df.join(rid_to_block, on="__row_id__", how="inner")
+    from goldenmatch.core.frame import to_frame
 
-    # Bucket assignment via Polars xxHash with fixed seed.
-    with_bucket = keyed.with_columns(
+    keyed = to_frame(df).join_inner(to_frame(rid_to_block), on="__row_id__")
+
+    # Bucket assignment via Polars xxHash with fixed seed. W5: bucket layout
+    # is per-backend shard-internal (never output-visible; the clear-on-
+    # materialize above makes cross-run reuse of a differently-hashed layout
+    # impossible) -- the arrow lane gets its own stable hash at the flip.
+    with_bucket = keyed.native.with_columns(
         (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
         .alias("__bucket__"),
     )
 
-    for bucket_id, bucket_df in with_bucket.partition_by(
-        "__bucket__", as_dict=True,
-    ).items():
-        # bucket_id may arrive as a tuple (Polars >= 1.0 with as_dict=True
-        # uses tuple keys for partition cols). Unwrap.
-        if isinstance(bucket_id, tuple):
-            bucket_id = bucket_id[0]
+    # W4e: group_partitions == partition_by(as_dict) with unwrapped keys.
+    for bucket_id, bucket_frame in to_frame(with_bucket).group_partitions("__bucket__"):
         bucket_path = bucket_dir / f"bucket={int(bucket_id)}" / "data.parquet"
         bucket_path.parent.mkdir(parents=True, exist_ok=True)
-        bucket_df.drop("__bucket__").write_parquet(
+        # W5: parquet shard IO goes through io_arrow twins at the flip.
+        bucket_frame.drop(["__bucket__"]).native.write_parquet(
             bucket_path, compression="snappy",
         )
 

@@ -172,3 +172,37 @@ def test_hash_distribution_skew_bounded(tmp_path: Path):
             sizes.append(load_bucket(path).height)
     assert min(sizes) > 0
     assert max(sizes) / min(sizes) <= 3.0
+
+
+def test_materialize_clears_stale_bucket_files(tmp_path):
+    """W4e regression: re-materializing over an existing bucket_dir must not
+    leave bucket files from the previous materialize (the signature is
+    config-only, so data changes reuse the same dir)."""
+    import polars as pl
+    from goldenmatch.distributed.record_store import (
+        PreparedRecordStore,
+        iter_buckets,
+        materialize_bucketed_blocks,
+    )
+
+    store = PreparedRecordStore(path=tmp_path / "prep.duckdb")
+    df1 = pl.DataFrame({"__row_id__": [1, 2, 3], "name": ["a", "b", "c"]})
+    assign1 = {1: "k1", 2: "k2", 3: "k3"}
+    d1 = materialize_bucketed_blocks(
+        store, df1, block_assignments=assign1, n_buckets=8, signature="sig"
+    )
+    first = {b for b, _ in iter_buckets(d1)}
+    assert first
+
+    # Second materialize, SAME signature, one row: only its bucket survives.
+    df2 = pl.DataFrame({"__row_id__": [1], "name": ["a"]})
+    d2 = materialize_bucketed_blocks(
+        store, df2, block_assignments={1: "k1"}, n_buckets=8, signature="sig"
+    )
+    assert d2 == d1
+    second = {b for b, _ in iter_buckets(d2)}
+    assert len(second) == 1
+    total_rows = sum(
+        pl.read_parquet(p).height for _, p in iter_buckets(d2)
+    )
+    assert total_rows == 1

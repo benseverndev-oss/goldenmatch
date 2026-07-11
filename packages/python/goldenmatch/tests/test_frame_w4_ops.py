@@ -252,3 +252,14 @@ def test_frame_from_column_data_empty_columns(backend):
     f = frame_from_column_data({"a": [], "b": []}, backend=backend)
     assert f.height == 0
     assert f.columns == ["a", "b"]
+
+
+# -- with_mod_column (W4e) --------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_with_mod_column(backend):
+    # identity_partition.py partition tag: cluster_id % num_partitions.
+    f = _mk({"cluster_id": [10, 11, 12, None]}, backend)
+    out = f.with_mod_column("cluster_id", 3, "__partition__")
+    assert out.column("__partition__").to_list() == [1, 2, 0, None]
