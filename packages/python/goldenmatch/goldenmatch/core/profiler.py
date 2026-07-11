@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
 from rich.table import Table
 
 from goldenmatch._polars_lazy import pl
+
+if TYPE_CHECKING:
+    from goldenmatch.core.frame import Column
 
 # ── Heuristic type detection helpers ────────────────────────────────────────
 
@@ -98,17 +101,32 @@ def _guess_type(values: list[str]) -> str:
 # ── Column profiling ───────────────────────────────────────────────────────
 
 
+def _as_column(series: Any) -> Column:
+    """Coerce a pl.Series (or an already-seam Column) to the Column seam.
+
+    Typed Any -> Column so pyright never forms a Series & Column
+    intersection at call sites (it would resolve seam methods through
+    pl.Series and reject the parity twins)."""
+    from goldenmatch.core.frame import Column, PolarsColumn
+
+    if isinstance(series, Column):
+        return series
+    return PolarsColumn(series)
+
+
 def profile_column(series: pl.Series) -> dict[str, Any]:
     """Profile a single column and return a statistics dict.
 
     W3c: internals route through the Column seam (PolarsColumn wraps the
     series -- byte-identical delegation; an ArrowColumn caller gets the same
     stats via the parity-pinned pc twins)."""
-    from goldenmatch.core.frame import Column, PolarsColumn
-
-    name = series.name if not isinstance(series, Column) else "<column>"
-    col: Column = series if isinstance(series, Column) else PolarsColumn(series)
-    dtype = str(series.dtype) if not isinstance(series, Column) else col.semantic_dtype()
+    col = _as_column(series)
+    if isinstance(series, pl.Series):
+        name = series.name
+        dtype = str(series.dtype)
+    else:
+        name = "<column>"
+        dtype = col.semantic_dtype()
     total = len(col)
     null_count = col.null_count()
     null_rate = null_count / total if total > 0 else 0.0

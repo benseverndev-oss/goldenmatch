@@ -58,6 +58,10 @@ CURATED_TOOLS: frozenset[str] = frozenset({
     "apply",
     # goldenanalysis -- read-only run analysis
     "analyze_frame", "detect_regressions",
+    # discovery meta-tool -- how a client reaches the ~80 non-headline tools
+    "suite_find_tools",
+    # composite workflow tools -- one-call happy paths
+    "dedupe_file", "match_sources", "assess_file", "clean_and_dedupe",
 })
 
 
@@ -194,6 +198,80 @@ _SUITE_ORDER: list[tuple[str, Callable[[], tuple[list[Tool], Callable[[str, dict
 
 
 # ---------------------------------------------------------------------------
+# Discovery meta-tool
+# ---------------------------------------------------------------------------
+# `list_tools` shows only the curated headline set by default (see above), which
+# leaves the long tail undiscoverable even though every tool stays callable by
+# exact name. `suite_find_tools` closes that gap: it returns the FULL catalog
+# (name + package + description + inputSchema), optionally filtered by keyword or
+# package, so a client can find a hidden tool and then call it directly. This is
+# the progressive-disclosure pattern -- a small default surface plus one search
+# tool -- rather than collapsing everything into overloaded god-tools.
+
+_FIND_TOOLS_NAME = "suite_find_tools"
+
+_FIND_TOOLS_TOOL = Tool(
+    name=_FIND_TOOLS_NAME,
+    description=(
+        "Search the full Golden Suite tool catalog. list_tools shows only a curated "
+        "headline subset by default; use this to discover the complete set (~105 tools "
+        "across goldenmatch, goldencheck, goldenflow, goldenpipe, infermap, "
+        "goldenanalysis), then call any returned tool by its exact `name` (hidden tools "
+        "are fully callable, just not listed). Returns each tool's name, package, "
+        "description, and inputSchema."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Case-insensitive substring matched against tool name and description. Omit to list everything.",
+            },
+            "package": {
+                "type": "string",
+                "enum": [name for name, _ in _SUITE_ORDER],
+                "description": "Restrict results to one sub-package.",
+            },
+        },
+        "required": [],
+    },
+)
+
+
+def _make_find_tools_dispatch(
+    catalog: list[tuple[Tool, str]],
+) -> Callable[[str, dict], dict]:
+    """Build the dispatcher for `suite_find_tools` over a snapshot of the catalog.
+
+    `catalog` is a list of (tool, source_package) for every real (non-meta) tool
+    in the aggregated surface.
+    """
+
+    def dispatch(name: str, args: dict) -> dict:
+        query = str(args.get("query") or "").strip().lower()
+        package = str(args.get("package") or "").strip().lower()
+        results: list[dict[str, Any]] = []
+        for tool, source in catalog:
+            if package and source != package:
+                continue
+            if query and query not in tool.name.lower() and query not in (
+                (tool.description or "").lower()
+            ):
+                continue
+            results.append(
+                {
+                    "name": tool.name,
+                    "package": source,
+                    "description": tool.description,
+                    "inputSchema": tool.inputSchema,
+                }
+            )
+        return {"count": len(results), "tools": results}
+
+    return dispatch
+
+
+# ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
 
@@ -236,6 +314,33 @@ def _aggregate() -> tuple[list[Tool], dict[str, Callable[[str, dict], dict]]]:
             )
         else:
             logger.info("goldensuite-mcp: registered %d tools from %s", added, source_name)
+
+    # Register composite workflow tools BEFORE the discovery snapshot so they
+    # appear both in the catalog and in suite_find_tools. They dispatch against
+    # the aggregated real-tool table (name_to_dispatch) built above.
+    from goldensuite_mcp.composites import build_composites
+    composite_tools, composite_dispatch = build_composites(name_to_dispatch)
+    for tool in composite_tools:
+        if tool.name in seen:
+            logger.warning("composite %r shadowed by earlier %s", tool.name, seen[tool.name])
+            continue
+        seen[tool.name] = "goldensuite"
+        all_tools.append(tool)
+        name_to_dispatch[tool.name] = composite_dispatch[tool.name]
+
+    # Register the discovery meta-tool over a snapshot of the real tools (it does
+    # not list itself). Its name can't collide -- no sub-package ships it -- but
+    # guard anyway so a future clash is visible rather than silently shadowing.
+    if _FIND_TOOLS_NAME not in seen:
+        catalog = [(t, seen[t.name]) for t in all_tools]
+        all_tools.append(_FIND_TOOLS_TOOL)
+        name_to_dispatch[_FIND_TOOLS_NAME] = _make_find_tools_dispatch(catalog)
+        seen[_FIND_TOOLS_NAME] = "goldensuite"
+    else:
+        logger.warning(
+            "goldensuite-mcp: %r already registered by %s; discovery meta-tool not added",
+            _FIND_TOOLS_NAME, seen[_FIND_TOOLS_NAME],
+        )
 
     return all_tools, name_to_dispatch
 
