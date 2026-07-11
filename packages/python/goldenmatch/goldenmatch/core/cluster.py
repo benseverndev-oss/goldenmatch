@@ -546,7 +546,6 @@ def build_cluster_frames(
     import numpy as _np
     import polars as _pl
 
-    from goldenmatch.core.scorer import PAIR_STREAM_SCHEMA
 
     pairs_list = list(pairs)
     if all_ids is None:                       # mirror build_clusters (:411-417)
@@ -556,14 +555,19 @@ def build_cluster_frames(
             seen.add(b)
         all_ids = list(seen)
 
-    pairs_df = _pl.DataFrame(
+    # W2c: constructed via the seam (spec schema == PAIR_STREAM_SCHEMA).
+    from goldenmatch.core.frame import PAIR_STREAM_SCHEMA_SPEC as _PAIR_SPEC
+    from goldenmatch.core.frame import frame_from_columns as _ffc
+
+    pairs_df = _ffc(
         {
             "id_a": [p[0] for p in pairs_list],
             "id_b": [p[1] for p in pairs_list],
             "score": [p[2] for p in pairs_list],
         },
-        schema=PAIR_STREAM_SCHEMA,
-    )
+        _PAIR_SPEC,
+        backend="polars",
+    ).native
     # BULK pre-split frames. Two paths, IDENTICAL output schema/shape (the SP-A
     # parity test runs both native=1 and native=0):
     #   - Native: the Arrow kernel ALREADY returns canonical (assignments,
@@ -586,10 +590,9 @@ def build_cluster_frames(
             pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
         )
         assignments = frames0.assignments
-        metadata = frames0.metadata.with_columns(
-            _pl.col("min_edge").fill_null(0.0),
-            _pl.col("avg_edge").fill_null(0.0),
-        )
+        from goldenmatch.core.frame import to_frame as _tf
+
+        metadata = _tf(frames0.metadata).with_fill_null(["min_edge", "avg_edge"], 0.0).native
     else:
         sorted_clusters, metadata_by_cid, _weak = _columnar_presplit(
             pairs_list, pairs_df, all_ids, max_cluster_size,
@@ -645,10 +648,16 @@ def build_cluster_frames(
         # label subs contiguously from max(live_cids)+1. split rows carry
         # quality="split" so the Step-3 vectorized weak/quality block's
         # when(quality=="split") short-circuit preserves them.
-        oversized = sorted(metadata.filter(_pl.col("oversized"))["cluster_id"].to_list())
+        from goldenmatch.core.frame import to_frame as _tf2
+
+        _mf = _tf2(metadata)
+        oversized = sorted(
+            _mf.filter_mask(_mf.column("oversized")).column("cluster_id").to_list()
+        )
         if oversized:
+            _af = _tf2(assignments)
             members_by_cid = {
-                int(cid): assignments.filter(_pl.col("cluster_id") == cid)["member_id"].to_list()
+                int(cid): _af.filter_eq("cluster_id", cid).column("member_id").to_list()
                 for cid in oversized
             }
             live_cids = set(range(1, metadata.height + 1))
@@ -703,30 +712,31 @@ def build_cluster_frames(
                     "avg_edge": (sum(_sv) / len(_sv)) if _sv else 0.0,
                 })
             if drop_cids:
-                assignments = assignments.filter(~_pl.col("cluster_id").is_in(drop_cids))
-                metadata = metadata.filter(~_pl.col("cluster_id").is_in(drop_cids))
+                assignments = _tf2(assignments).filter_not_in("cluster_id", list(drop_cids)).native
+                metadata = _tf2(metadata).filter_not_in("cluster_id", list(drop_cids)).native
             if split_assign_rows:
-                assignments = _pl.concat([assignments, _pl.DataFrame(
-                    split_assign_rows, schema=["cluster_id", "member_id"], orient="row")])
-                metadata = _pl.concat(
-                    [metadata, _pl.DataFrame(split_meta_rows, schema=metadata.schema)],
-                    how="vertical",
+                # W2c: explicit spec schemas (the raw site inferred int64 from
+                # names-only / reflected metadata.schema -- identical dtypes).
+                from goldenmatch.core.frame import (
+                    CLUSTER_METADATA_SCHEMA_SPEC as _META_SPEC,
                 )
+                from goldenmatch.core.frame import concat_frames as _cf
+                from goldenmatch.core.frame import frame_from_rows as _ffr
+
+                assignments = _cf([
+                    _tf2(assignments),
+                    _ffr(split_assign_rows, {"cluster_id": "int64", "member_id": "int64"}, backend="polars"),
+                ]).native
+                metadata = _cf([
+                    _tf2(metadata),
+                    _ffr(split_meta_rows, _META_SPEC, backend="polars"),
+                ]).native
 
     # Step 3: vectorized weak/quality (excludes "split" rows -- none in Task 1).
     # Reproduces the dict path's _finalize_clusters weak/quality logic.
-    metadata = metadata.with_columns(
-        _pl.when(_pl.col("quality") == "split").then(_pl.col("quality"))
-        .when(
-            (_pl.col("size") > 1)
-            & ((_pl.col("avg_edge") - _pl.col("min_edge")) > weak_cluster_threshold)
-        )
-        .then(_pl.lit("weak")).otherwise(_pl.lit("strong")).alias("quality"),
-    ).with_columns(
-        _pl.when(_pl.col("quality") == "weak")
-        .then(_pl.col("confidence") * 0.7).otherwise(_pl.col("confidence"))
-        .alias("confidence"),
-    )
+    from goldenmatch.core.frame import to_frame as _tf3
+
+    metadata = _tf3(metadata).apply_weak_quality(weak_cluster_threshold).native
 
     _emit_cluster_profile_frames(metadata, assignments, pairs_list)
     return ClusterFrames(assignments=assignments, metadata=metadata)
@@ -1043,7 +1053,6 @@ def _columnar_presplit(
       frames-out parity gate (tests/test_cluster_frames_out_parity.py) doesn't
       regress.
     """
-    import polars as _pl
 
     # --- Step 1: Union-Find member sets (PRE-split). -----------------------
     native = native_module() if native_enabled("clustering") else None
@@ -1148,9 +1157,9 @@ def _columnar_presplit(
         transient: dict[int, dict[tuple[int, int], float]] = {}
         with stage("cluster_pair_scores_fill"):
             if not pairs_df.is_empty():
-                tagged = pairs_df.with_columns(
-                    _pl.col("id_a").replace_strict(member_to_cid).alias("__cid__"),
-                )
+                from goldenmatch.core.frame import to_frame as _tf4
+
+                tagged = _tf4(pairs_df).map_column("id_a", "__cid__", member_to_cid).native
                 for id_a, id_b, score, cid in zip(
                     tagged["id_a"].to_list(),
                     tagged["id_b"].to_list(),
@@ -1935,10 +1944,12 @@ def build_clusters_arrow_native(
         if pairs_df.is_empty():
             all_ids = []
         else:
-            ids_series = _pl.concat(
-                [pairs_df["id_a"], pairs_df["id_b"]],
-            ).unique()
-            all_ids = [int(i) for i in ids_series.to_list()]
+            from goldenmatch.core.frame import concat_columns as _cc
+            from goldenmatch.core.frame import to_frame as _tf5
+
+            _pf = _tf5(pairs_df)
+            ids_col = _cc([_pf.column("id_a"), _pf.column("id_b")]).unique()
+            all_ids = [int(i) for i in ids_col.to_list()]
 
     a_arrow = pairs_df["id_a"].to_arrow() if not pairs_df.is_empty() \
         else _pl.Series("id_a", [], dtype=_pl.Int64).to_arrow()

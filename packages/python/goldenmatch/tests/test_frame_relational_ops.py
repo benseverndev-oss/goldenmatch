@@ -344,3 +344,196 @@ def test_frame_from_columns_numpy_buffers() -> None:
     for backend in ("polars", "arrow"):
         f = frame_from_columns(data, schema, backend=backend)
         assert f.column("a").to_list() == [1, 2, 3]
+
+
+# ---- W2c ops: columnar-spine port fixtures -----------------------------------
+
+
+def _meta_tbl() -> pa.Table:
+    # cluster-metadata shaped corpus: split-preserved, weak-by-gap, strong,
+    # size-1, and a null-edge row (pins the when()-null fall-through).
+    return pa.table(
+        {
+            "cluster_id": pa.array([1, 2, 3, 4, 5], type=pa.int64()),
+            "size": pa.array([3, 2, 2, 1, 2], type=pa.int64()),
+            "confidence": pa.array([0.9, 0.8, 0.7, 1.0, 0.6], type=pa.float64()),
+            "quality": pa.array(["split", "strong", "strong", "strong", "strong"]),
+            "oversized": pa.array([True, False, False, False, False], type=pa.bool_()),
+            "bottleneck_pair_a": pa.array([0, 0, 0, 0, 0], type=pa.int64()),
+            "bottleneck_pair_b": pa.array([0, 0, 0, 0, 0], type=pa.int64()),
+            "min_edge": pa.array([0.0, 0.5, 0.85, 0.0, None], type=pa.float64()),
+            "avg_edge": pa.array([0.0, 0.9, 0.9, 0.0, None], type=pa.float64()),
+        }
+    )
+
+
+def test_select_and_delegation() -> None:
+    tbl = pa.table({"a": pa.array([1]), "b": pa.array([2]), "c": pa.array([3])})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        got = frame.select(["c", "a"])
+        assert got.columns == ["c", "a"]
+    assert pf.select(["c", "a"]).native.equals(pf.native.select(["c", "a"]))
+
+
+def test_filter_eq_and_not_in() -> None:
+    tbl = pa.table({"cid": pa.array([1, 2, 1, None, 3], type=pa.int64()),
+                    "i": pa.array([0, 1, 2, 3, 4], type=pa.int64())})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        assert frame.filter_eq("cid", 1).column("i").to_list() == [0, 2]
+        # null cid drops on BOTH ops (polars null-mask semantics).
+        assert frame.filter_not_in("cid", [1]).column("i").to_list() == [1, 4]
+
+
+def test_filter_ne_cols_null_drops() -> None:
+    tbl = pa.table({"a": pa.array(["x", "x", None, "y"], type=pa.string()),
+                    "b": pa.array(["x", "z", "x", None], type=pa.string()),
+                    "i": pa.array([0, 1, 2, 3], type=pa.int64())})
+    pf, af = _pair(tbl)
+    # Columnar-engine parity: null comparison -> row DROPS (rows 2 and 3).
+    for frame in (pf, af):
+        assert frame.filter_ne_cols("a", "b").column("i").to_list() == [1]
+
+
+def test_filter_nonblank_key_semantics() -> None:
+    tbl = pa.table({"mk": pa.array(["ok", "", "  ", None, "x||y"], type=pa.string()),
+                    "i": pa.array([0, 1, 2, 3, 4], type=pa.int64())})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        # DROPS "" and whitespace-only (opposite of filter_valid_key).
+        assert frame.filter_nonblank_key("mk").column("i").to_list() == [0, 4]
+
+
+def test_filter_nonblank_key_nonstring_casts() -> None:
+    # strict=False cast contract: int keys stringify, so they survive.
+    tbl = pa.table({"mk": pa.array([7030, None, 12], type=pa.int64()),
+                    "i": pa.array([0, 1, 2], type=pa.int64())})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        assert frame.filter_nonblank_key("mk").column("i").to_list() == [0, 2]
+
+
+def test_filter_target_split_xor() -> None:
+    tbl = pa.table({"id_a": pa.array([1, 1, 3, 4], type=pa.int64()),
+                    "id_b": pa.array([5, 2, 1, 6], type=pa.int64()),
+                    "i": pa.array([0, 1, 2, 3], type=pa.int64())})
+    pf, af = _pair(tbl)
+    targets = [1, 2]
+    # row0: a in, b out -> KEEP; row1: BOTH in -> drop;
+    # row2: a out, b in -> KEEP; row3: BOTH out -> drop.
+    for frame in (pf, af):
+        assert frame.filter_target_split("id_a", "id_b", targets).column("i").to_list() == [0, 2]
+
+
+def test_with_fill_null() -> None:
+    tbl = pa.table({"min_edge": pa.array([0.5, None], type=pa.float64()),
+                    "avg_edge": pa.array([None, 0.9], type=pa.float64())})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        got = frame.with_fill_null(["min_edge", "avg_edge"], 0.0)
+        assert got.column("min_edge").to_list() == [0.5, 0.0]
+        assert got.column("avg_edge").to_list() == [0.0, 0.9]
+
+
+def test_map_column_maps_and_raises_on_unmapped() -> None:
+    tbl = pa.table({"id_a": pa.array([10, 20], type=pa.int64())})
+    pf, af = _pair(tbl)
+    mapping = {10: 1, 20: 2}
+    for frame in (pf, af):
+        got = frame.map_column("id_a", "__cid__", mapping)
+        assert got.column("__cid__").to_list() == [1, 2]
+    for frame in (pf, af):
+        with pytest.raises(Exception):  # replace_strict raises; arrow twin raises ValueError
+            frame.map_column("id_a", "__cid__", {10: 1})
+
+
+def test_apply_weak_quality_parity() -> None:
+    pf, af = _pair("m", _meta_tbl()) if False else (
+        PolarsFrame(pl.from_arrow(_meta_tbl())), ArrowFrame(_meta_tbl()))
+    threshold = 0.3
+    want_q = ["split", "weak", "strong", "strong", "strong"]  # null gap falls through
+    want_conf = [0.9, 0.8 * 0.7, 0.7, 1.0, 0.6]
+    for frame in (pf, af):
+        got = frame.apply_weak_quality(threshold)
+        assert got.column("quality").to_list() == want_q
+        assert got.column("confidence").to_list() == pytest.approx(want_conf)
+    # delegation parity: byte-equal to the raw Step-3 expression.
+    raw = pf.native.with_columns(
+        pl.when(pl.col("quality") == "split").then(pl.col("quality"))
+        .when((pl.col("size") > 1) & ((pl.col("avg_edge") - pl.col("min_edge")) > threshold))
+        .then(pl.lit("weak")).otherwise(pl.lit("strong")).alias("quality"),
+    ).with_columns(
+        pl.when(pl.col("quality") == "weak")
+        .then(pl.col("confidence") * 0.7).otherwise(pl.col("confidence"))
+        .alias("confidence"),
+    )
+    assert pf.apply_weak_quality(threshold).native.equals(raw)
+
+
+def test_select_eligible_clusters() -> None:
+    pf, af = PolarsFrame(pl.from_arrow(_meta_tbl())), ArrowFrame(_meta_tbl())
+    # size>1 AND not oversized: clusters 2, 3, 5 (1 is oversized, 4 is size-1).
+    for frame in (pf, af):
+        got = frame.select_eligible_clusters()
+        assert got.columns == ["cluster_id"]
+        assert sorted(got.column("cluster_id").to_list()) == [2, 3, 5]
+
+
+def test_frame_from_rows_tuples_and_dicts() -> None:
+    from goldenmatch.core.frame import frame_from_rows
+
+    schema = {"cluster_id": "int64", "member_id": "int64"}
+    for backend in ("polars", "arrow"):
+        f = frame_from_rows([(1, 10), (1, 11)], schema, backend=backend)
+        assert f.column("member_id").to_list() == [10, 11]
+        g = frame_from_rows(
+            [{"cluster_id": 2, "member_id": 20}], schema, backend=backend
+        )
+        assert g.column("cluster_id").to_list() == [2]
+        e = frame_from_rows([], schema, backend=backend)
+        assert e.height == 0 and set(e.columns) == set(schema)
+
+
+def test_concat_columns_unique() -> None:
+    from goldenmatch.core.frame import concat_columns
+
+    tbl = pa.table({"id_a": pa.array([1, 2], type=pa.int64()),
+                    "id_b": pa.array([2, 3], type=pa.int64())})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        merged = concat_columns([frame.column("id_a"), frame.column("id_b")])
+        assert sorted(merged.unique().to_list()) == [1, 2, 3]
+
+
+def test_schema_specs_exported() -> None:
+    from goldenmatch.core.frame import CLUSTER_METADATA_SCHEMA_SPEC, PAIR_STREAM_SCHEMA_SPEC
+
+    assert PAIR_STREAM_SCHEMA_SPEC == {"id_a": "int64", "id_b": "int64", "score": "float64"}
+    assert list(CLUSTER_METADATA_SCHEMA_SPEC) == [
+        "cluster_id", "size", "confidence", "quality", "oversized",
+        "bottleneck_pair_a", "bottleneck_pair_b", "min_edge", "avg_edge",
+    ]
+
+
+def test_cross_source_filter_dual_backend() -> None:
+    # W2c arrow twin of scorer._cross_source_filter_df (the shared helper
+    # that replaced the mirror-flagged twins): identical pair survival on
+    # both backends. E2e arrow arrives with W2d; this pins the helper.
+    from goldenmatch.core.scorer import _cross_source_filter_df
+
+    lookup = {1: "a", 2: "b", 3: "a", 4: "a"}
+    pairs = pa.table(
+        {
+            "id_a": pa.array([1, 1, 3], type=pa.int64()),
+            "id_b": pa.array([2, 3, 4], type=pa.int64()),
+            "score": pa.array([0.9, 0.8, 0.7], type=pa.float64()),
+        }
+    )
+    got_pl = _cross_source_filter_df(pl.from_arrow(pairs), lookup)
+    got_pa = _cross_source_filter_df(pairs, lookup)
+    # only (1,2) crosses sources; (1,3) and (3,4) are same-source.
+    assert got_pl["id_a"].to_list() == [1] and got_pl["id_b"].to_list() == [2]
+    assert got_pa.column("id_a").to_pylist() == [1]
+    assert got_pa.column("id_b").to_pylist() == [2]
+    assert set(got_pl.columns) == set(got_pa.column_names) == {"id_a", "id_b", "score"}
