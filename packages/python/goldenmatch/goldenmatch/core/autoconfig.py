@@ -3581,6 +3581,25 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
+    # W3e entry boundary: accept a Frame, unwrapped AT THE TOP -- the
+    # throughput early-check and the exclusions gate below are both
+    # isinstance-DataFrame-guarded; a still-wrapped Frame would silently
+    # skip them. PolarsFrame unwraps to today's path; ArrowFrame goes
+    # through the pl.from_arrow shim (W2d explicit-boundary pattern --
+    # REMOVE in W5 when arrow flows past ingest). `reference` stays
+    # Polars-only deliberately: match-mode arrow can't flow until W5.
+    from goldenmatch.core.frame import ArrowFrame, Frame, PolarsFrame
+
+    if isinstance(df, Frame):
+        if isinstance(df, ArrowFrame):
+            df = cast("pl.DataFrame", pl.from_arrow(df.native))
+        elif isinstance(df, PolarsFrame):
+            df = df.native
+        else:  # pragma: no cover -- future backend without a shim
+            raise TypeError(
+                f"auto_configure_df cannot unwrap Frame backend {type(df).__name__}"
+            )
+
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.
     if throughput is not None:

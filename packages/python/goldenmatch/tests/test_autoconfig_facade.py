@@ -135,3 +135,34 @@ def test_kwargs_threaded_to_v0():
     assert call_kwargs.get("llm_auto") is True, (
         f"expected llm_auto=True to be forwarded; got kwargs={call_kwargs}"
     )
+
+
+# ============================================================
+# W3e — Frame acceptance at the auto_configure_df entry boundary
+# ============================================================
+
+def test_auto_configure_df_accepts_polars_frame_wrapper():
+    """A PolarsFrame-wrapped df unwraps at the top and matches the raw call."""
+    from goldenmatch.core.frame import PolarsFrame
+    df = pl.DataFrame({
+        "name": ["alice", "bob", "carol"] * 4,
+        "city": ["nyc", "la", "sf"] * 4,
+    })
+    raw = goldenmatch.auto_configure_df(df)
+    wrapped = goldenmatch.auto_configure_df(PolarsFrame(df))
+    assert isinstance(wrapped, GoldenMatchConfig)
+    assert wrapped.model_dump() == raw.model_dump()
+
+
+def test_auto_configure_df_accepts_arrow_frame_wrapper():
+    """An ArrowFrame-wrapped df goes through the pl.from_arrow shim (W5
+    removes the shim; until then the config must match the polars call)."""
+    from goldenmatch.core.frame import ArrowFrame
+    df = pl.DataFrame({
+        "name": ["alice", "bob", "carol"] * 4,
+        "city": ["nyc", "la", "sf"] * 4,
+    })
+    raw = goldenmatch.auto_configure_df(df)
+    wrapped = goldenmatch.auto_configure_df(ArrowFrame(df.to_arrow()))
+    assert isinstance(wrapped, GoldenMatchConfig)
+    assert wrapped.model_dump() == raw.model_dump()

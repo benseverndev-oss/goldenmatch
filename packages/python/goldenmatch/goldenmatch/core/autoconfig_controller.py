@@ -192,16 +192,21 @@ def _pick_stratification_key(df: pl.DataFrame) -> str | None:
     strata aren't singletons). Prefers blocking-shaped names (zip,
     state, etc) as tiebreak. Returns None when no column qualifies —
     caller falls back to uniform random.
+
+    W3e: cardinality probes route through the Frame seam.
     """
-    n_rows = df.height
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+    n_rows = frame.height
     if n_rows <= 0:
         return None
     candidates: list[tuple[str, int, int]] = []  # (name, distinct, preference_rank)
-    for col in df.columns:
+    for col in frame.columns:
         if col.startswith("__"):  # skip internal bookkeeping
             continue
         try:
-            n_distinct = int(df[col].n_unique())
+            n_distinct = int(frame.column(col).n_unique())
         except Exception:  # pragma: no cover -- defensive
             continue
         if not (_STRAT_MIN_DISTINCT <= n_distinct <= _STRAT_MAX_DISTINCT):
@@ -238,13 +243,20 @@ def _stratified_sample(
     even when proportional allocation would round them to 0. If the
     sum of floors exceeds target_n (very many small strata), each
     stratum gets ``target_n // n_strata`` rows.
+
+    W3e: seam-routed. group_partitions' first-appearance order matches the
+    old partition_by maintain_order (pinned by its W2d fixture); sample
+    carries the seam's statistical (per-backend) contract.
     """
-    strata = df.partition_by(strat_key, as_dict=False)
+    from goldenmatch.core.frame import concat_frames, to_frame
+
+    frame = to_frame(df)
+    strata = [part for _key, part in frame.group_partitions(strat_key)]
     n_strata = len(strata)
     if n_strata == 0:
-        return df.sample(n=min(target_n, df.height), seed=seed, shuffle=True)
+        return frame.sample(min(target_n, frame.height), seed=seed, shuffle=True).native
     # Proportional allocation with floor.
-    total = df.height
+    total = frame.height
     allocations: list[int] = []
     for stratum in strata:
         proportional = max(int(stratum.height * target_n / total), min_per_stratum)
@@ -258,8 +270,8 @@ def _stratified_sample(
         if alloc >= stratum.height:
             samples.append(stratum)
         elif alloc > 0:
-            samples.append(stratum.sample(n=alloc, seed=seed, shuffle=True))
-    return pl.concat(samples) if samples else df.head(target_n)
+            samples.append(stratum.sample(alloc, seed=seed, shuffle=True))
+    return concat_frames(samples).native if samples else frame.head(target_n).native
 
 
 class ConfigValidationError(Exception):
@@ -1614,8 +1626,11 @@ class AutoConfigController:
                     min_per_stratum=10, seed=seed,
                 )
 
-        # Polars sample with shuffle=False keeps row order; we want diverse coverage so shuffle=True.
-        return df.sample(n=n, seed=seed, shuffle=True)
+        # shuffle=False keeps row order; we want diverse coverage so
+        # shuffle=True. (W3e: seam sample -- statistical per-backend contract.)
+        from goldenmatch.core.frame import to_frame
+
+        return to_frame(df).sample(n, seed=seed, shuffle=True).native
 
     def _seed_for(self, df: pl.DataFrame) -> int:
         """Hash of data shape for reproducible sampling."""
