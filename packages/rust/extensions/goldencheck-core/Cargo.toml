@@ -23,6 +23,8 @@ rustc-hash = "2"
 # Same engine Polars uses for str.contains/replace_all, so regex ops are
 # byte-identical. Already resolved transitively (1.12.x) in the native lock.
 regex = "1"
+# Same engine Polars uses for str.to_date, so date parsing is byte-identical.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Property/parity checks for the Benford leading-digit extraction, plus the

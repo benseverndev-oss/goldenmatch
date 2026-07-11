@@ -53,4 +53,7 @@ def test_scan_columns_matches_polars_covered_output(data):
     for name in data:
         for profiler in covered:
             expected.extend(profiler.profile(pol, name))
+    from goldencheck.relations.temporal import TemporalOrderProfiler
+    if native_enabled("str_to_date"):
+        expected.extend(TemporalOrderProfiler().profile(pol))
     assert scan_columns(data) == expected

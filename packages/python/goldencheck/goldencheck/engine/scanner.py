@@ -253,7 +253,9 @@ def scan_columns(columns: dict[str, list]) -> list[Finding]:
     The mechanical checks (nullability/uniqueness/cardinality) always run; the regex
     checks (encoding/format/pattern_consistency) run when the native regex kernel is
     available (`pip install goldencheck[native]`) and are skipped-with-a-log otherwise.
-    Date/relational checks still need Polars -- use scan_dataframe for a full scan."""
+    The temporal-order relation check runs once over the whole frame when the native
+    date kernel (`str_to_date`) is available and is skipped-with-a-log otherwise.
+    Other relational checks still need Polars -- use scan_dataframe for a full scan."""
     frame = PyFrame.from_columns(columns)
     profilers = list(_MECHANICAL_PROFILERS)
     if native_enabled("regex"):
@@ -267,6 +269,13 @@ def scan_columns(columns: dict[str, list]) -> list[Finding]:
     for name in columns:
         for profiler in profilers:
             findings.extend(profiler.profile(frame, name))
+    if native_enabled("str_to_date"):
+        findings.extend(TemporalOrderProfiler().profile(frame))
+    else:
+        logger.info(
+            "scan_columns: native date kernel unavailable; skipping the temporal-order "
+            "check. Install with `pip install goldencheck[native]`."
+        )
     return findings
 
 

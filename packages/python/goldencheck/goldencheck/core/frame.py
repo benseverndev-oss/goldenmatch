@@ -8,6 +8,7 @@ caller may pass either a raw ``pl.DataFrame`` or an already-wrapped ``Frame``.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from goldencheck._polars_lazy import pl
@@ -101,6 +102,15 @@ def _regex_kernel():
         raise NativeRequiredError(
             "goldencheck native regex kernel unavailable; the encoding/format/"
             "pattern_consistency checks need `pip install goldencheck[native]`."
+        )
+    return native_module()
+
+
+def _date_kernel():
+    if not native_enabled("str_to_date"):
+        raise NativeRequiredError(
+            "goldencheck native date kernel unavailable; the temporal check needs "
+            "`pip install goldencheck[native]`."
         )
     return native_module()
 
@@ -286,6 +296,10 @@ class PyColumn:
         first = non_null[0]
         if isinstance(first, bool):
             return "bool"
+        if isinstance(first, datetime):
+            return "datetime"
+        if isinstance(first, date):
+            return "date"
         if isinstance(first, int):
             return "int"
         if isinstance(first, float):
@@ -312,6 +326,27 @@ class PyColumn:
 
     def filter_by(self, mask: PyColumn) -> PyColumn:
         return PyColumn([v for v, m in zip(self._v, mask._v) if m])
+
+    def str_to_date(self, fmt: str, *, strict: bool) -> PyColumn:
+        if strict:
+            raise NotImplementedError("goldencheck str_to_date supports strict=False only")
+        iso = _date_kernel().str_to_date(self._v, fmt)
+        return PyColumn([date.fromisoformat(s) if s is not None else None for s in iso])
+
+    def gt_mask(self, other: PyColumn) -> PyColumn:
+        return PyColumn([None if a is None or b is None else a > b
+                          for a, b in zip(self._v, other._v)])
+
+    def fill_null(self, value: Any) -> PyColumn:
+        return PyColumn([value if v is None else v for v in self._v])
+
+    def sum(self) -> Any:
+        return sum(v for v in self._v if v is not None)
+
+    def cast(self, kind: str, *, strict: bool = False) -> PyColumn:
+        if kind != "str":
+            raise NotImplementedError(f"PyColumn.cast supports 'str' only, got {kind!r}")
+        return PyColumn([None if v is None else str(v) for v in self._v])
 
 
 class PyFrame:

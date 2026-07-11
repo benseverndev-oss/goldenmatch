@@ -361,3 +361,25 @@ def test_value_counts_desc_deterministic_and_backend_identical():
     d2 = {"s": ["b", "a", "b", "a"]}
     assert PolarsFrame(pl.DataFrame(d2)).column("s").value_counts_desc() == [("a", 2), ("b", 2)]
     assert PyFrame.from_columns(d2).column("s").value_counts_desc() == [("a", 2), ("b", 2)]
+
+
+@pytest.mark.skipif(not native_enabled("str_to_date"), reason="needs native date kernel")
+def test_pycolumn_str_to_date_and_date_ops_match_polars():
+    import polars as pl
+    from goldencheck.core.frame import PolarsFrame, PyFrame
+    d = {"s": ["2021-01-05", "2021-1-5", "2021-13-01", "2021-02-30", "", "nope", None, "2020-06-01x"]}
+    pol = PolarsFrame(pl.DataFrame(d)).column("s")
+    pyf = PyFrame.from_columns(d).column("s")
+    pol_dates = pol.str_to_date("%Y-%m-%d", strict=False)
+    pyf_dates = pyf.str_to_date("%Y-%m-%d", strict=False)
+    assert pyf_dates.to_list() == pol_dates.to_list()          # datetime.date | None, byte-identical
+    assert pyf_dates.dtype == pol_dates.dtype == "date"
+    dd = {"a": ["2021-05-01", "2021-01-01", None], "b": ["2021-01-01", "2021-06-01", "2021-01-01"]}
+    pa = PolarsFrame(pl.DataFrame(dd)); ya = PyFrame.from_columns(dd)
+    results = {}
+    for tag, fr in (("pol", pa), ("py", ya)):
+        A = fr.column("a").str_to_date("%Y-%m-%d", strict=False)
+        B = fr.column("b").str_to_date("%Y-%m-%d", strict=False)
+        mask = A.gt_mask(B).fill_null(False)
+        results[tag] = (mask.to_list(), mask.sum(), A.filter_by(mask).cast("str").to_list())
+    assert results["pol"] == results["py"]

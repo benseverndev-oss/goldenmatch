@@ -17,12 +17,14 @@
 //! rank-encoded, so it does ordered `<`/`<=`/`>`/`>=` comparisons over those ids.
 
 mod benford;
+mod date;
 mod dc;
 mod fuzzy;
 mod keys;
 mod regex;
 
 pub use benford::benford_leading_digits;
+pub use date::str_to_date;
 pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
 pub use fuzzy::near_duplicate_clusters;
 pub use keys::{
