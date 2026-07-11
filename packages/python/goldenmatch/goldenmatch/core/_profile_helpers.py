@@ -1,6 +1,8 @@
 """Numeric helpers for profile emission. Used by scorer + cluster instrumentation."""
 from __future__ import annotations
 
+from typing import Any
+
 
 def histogram_20(scores: list[float]) -> list[int]:
     """20 fixed bins over [0, 1]. Score >= 1.0 lands in bin 19."""
@@ -86,9 +88,11 @@ def transitivity_rate(
 
 
 def data_profile_column_stats(
-    df,  # pl.DataFrame (today) or any Frame-coercible
-    user_cols,
-):
+    df: Any,  # pl.DataFrame (today) or any Frame-coercible
+    user_cols: list[str],
+) -> tuple[
+    dict[str, str], dict[str, float], dict[str, float], dict[str, int], dict[str, int]
+]:
     """Shared body of autoconfig._emit_data_profile and
     autoconfig_controller._compute_data_profile_from_df (W3c: the twins were
     byte-identical -- one seam-routed implementation retires the mirror,
