@@ -1,3 +1,7 @@
+import csv as _csv
+import os
+
+import pytest
 from goldensuite_mcp.composites import run_step
 
 
@@ -78,7 +82,6 @@ def test_dedupe_file_short_circuits_on_step_failure():
 
 def test_dedupe_file_registered_and_curated():
     from goldensuite_mcp.server import _aggregate, _apply_tool_filter
-    import os
     os.environ.pop("GOLDENSUITE_MCP_TOOLS", None)
     tools, dispatch = _aggregate()
     names = {t.name for t in tools}
@@ -246,8 +249,7 @@ def test_clean_and_dedupe_soft_dep_short_circuit():
 
 
 def test_all_four_composites_exist_no_dangling_curated():
-    from goldensuite_mcp.server import _aggregate, CURATED_TOOLS
-    import os
+    from goldensuite_mcp.server import CURATED_TOOLS, _aggregate
     os.environ.pop("GOLDENSUITE_MCP_TOOLS", None)
     tools, _ = _aggregate()
     names = {t.name for t in tools}
@@ -255,3 +257,96 @@ def test_all_four_composites_exist_no_dangling_curated():
         assert c in names, f"{c} not registered"
     # every composite curated name now resolves to a real tool
     assert {"dedupe_file", "assess_file", "match_sources", "clean_and_dedupe"} <= (CURATED_TOOLS & names)
+
+
+# --- Task 2.7: end-to-end through the REAL aggregator ---------------------
+#
+# These run against _aggregate() (no fakes), on tiny CSVs written to a temp
+# dir. assess_file needs no file-writing capability and runs anywhere the
+# goldenmatch/goldencheck sub-packages import. dedupe_file needs Phase 1's
+# agent_deduplicate `output_path`; it is skipped where that capability is
+# absent (this worktree) and runs in CI once Phase 1 merges.
+
+
+def _write_people_csv(path):
+    rows = [
+        {"id": "1", "name": "Alice Smith", "email": "alice@example.com"},
+        {"id": "2", "name": "Alice Smith", "email": "alice@example.com"},
+        {"id": "3", "name": "Bob Jones", "email": "bob@example.com"},
+        {"id": "4", "name": "Bob Jones", "email": "bob@example.com"},
+        {"id": "5", "name": "Carol White", "email": "carol@example.com"},
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(fh, fieldnames=["id", "name", "email"])
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _real_aggregate():
+    from goldensuite_mcp.server import _aggregate
+    os.environ.pop("GOLDENSUITE_MCP_TOOLS", None)
+    return _aggregate()
+
+
+def _has_output_path(tools, tool_name):
+    t = next((t for t in tools if t.name == tool_name), None)
+    return t is not None and "output_path" in (t.inputSchema.get("properties") or {})
+
+
+def test_assess_file_end_to_end(tmp_path):
+    """assess_file through the real aggregator on a real CSV (no writes)."""
+    tools, dispatch = _real_aggregate()
+    if "analyze_data" not in dispatch:
+        pytest.skip("goldenmatch analyze_data not available in this build")
+    csv_path = tmp_path / "people.csv"
+    _write_people_csv(csv_path)
+
+    os.environ["GOLDENMATCH_ALLOWED_ROOT"] = str(tmp_path)
+    try:
+        out = dispatch["assess_file"]("assess_file", {"file_path": str(csv_path)})
+    finally:
+        os.environ.pop("GOLDENMATCH_ALLOWED_ROOT", None)
+
+    assert out["workflow"] == "assess_file"
+    assert out["ok"] is True
+    labels = [s["step"] for s in out["steps"]]
+    assert labels[:2] == ["upload", "analyze"]
+    analyze = next(s for s in out["steps"] if s["step"] == "analyze")
+    assert analyze["ok"] is True and "profile" in analyze
+    # read-only: nothing written
+    assert "outputs" not in out
+
+
+@pytest.mark.skipif(
+    not _has_output_path(_real_aggregate()[0], "agent_deduplicate"),
+    reason="agent_deduplicate lacks output_path (pre-Phase-1 goldenmatch build)",
+)
+def test_dedupe_file_end_to_end_and_parity(tmp_path):
+    """dedupe_file end-to-end: golden CSV lands on disk, and its row count
+    matches a by-hand upload+auto_configure+agent_deduplicate run."""
+    tools, dispatch = _real_aggregate()
+    csv_path = tmp_path / "people.csv"
+    _write_people_csv(csv_path)
+    os.environ["GOLDENMATCH_ALLOWED_ROOT"] = str(tmp_path)
+    try:
+        out = dispatch["dedupe_file"]("dedupe_file", {"file_path": str(csv_path)})
+        assert out["ok"] is True, out
+        golden = (out.get("outputs") or {}).get("golden_path")
+        assert golden and os.path.exists(golden), f"golden not written: {golden}"
+        with open(golden, encoding="utf-8") as fh:
+            composite_rows = sum(1 for _ in fh)
+
+        # By-hand parity path through the same aggregated dispatch. A file_path
+        # input needs no upload (upload_dataset is for inline file_content), so
+        # this mirrors what the composite does: auto_configure then dedupe.
+        dispatch["auto_configure"]("auto_configure", {"file_path": str(csv_path)})
+        manual_golden = str(tmp_path / "manual.golden.csv")
+        dispatch["agent_deduplicate"](
+            "agent_deduplicate", {"file_path": str(csv_path), "output_path": manual_golden})
+        with open(manual_golden, encoding="utf-8") as fh:
+            manual_rows = sum(1 for _ in fh)
+    finally:
+        os.environ.pop("GOLDENMATCH_ALLOWED_ROOT", None)
+
+    assert composite_rows == manual_rows, (
+        f"composite golden {composite_rows} rows != manual {manual_rows}")

@@ -84,6 +84,62 @@ just aren't listed. (`suite_find_tools` does not list itself.) This keeps the
 default surface small while leaving the full ~105-tool catalog one search away,
 instead of collapsing everything into a few overloaded `action`-style god-tools.
 
+## Composite workflows (one-call happy paths)
+
+The aggregator also registers four **composite** tools that orchestrate the
+granular sub-package tools into a single call, so an agent doesn't have to
+chain upload -> configure -> match/dedupe by hand. Each is curated (listed by
+default) and dispatches against the same aggregated tool table — the granular
+tools it calls stay individually listed and callable.
+
+| Composite | Chain | Writes |
+| --- | --- | --- |
+| **`dedupe_file`** | `upload_dataset` -> `auto_configure` -> `agent_deduplicate` | golden CSV |
+| **`match_sources`** | upload A + upload B -> `agent_match_sources` | matches CSV |
+| **`assess_file`** | `upload_dataset` -> `analyze_data` -> `scan` | nothing (read-only) |
+| **`clean_and_dedupe`** | `upload_dataset` -> `run_transforms` -> `agent_deduplicate` | golden CSV |
+
+Each accepts a file either inline (`file_content` + `filename`) or as an
+already-uploaded server path (`file_path`); `match_sources` takes the pair
+(`file_a*` / `file_b*`).
+
+```jsonc
+// dedupe one CSV end-to-end
+dedupe_file({ "file_path": "/data/contacts.csv" })
+
+// link two sources
+match_sources({ "file_a": "/data/crm.csv", "file_b": "/data/signups.csv" })
+
+// read-only quality + profile check
+assess_file({ "file_path": "/data/contacts.csv" })
+
+// normalize then dedupe
+clean_and_dedupe({ "file_path": "/data/contacts.csv" })
+```
+
+**Merged return shape** — every composite returns one uniform envelope:
+
+```jsonc
+{
+  "workflow": "dedupe_file",
+  "ok": true,                 // false if a non-degraded step failed
+  "summary": "5 records -> 3 golden; 1 merged, 0 to review. Written to /data/contacts.golden.csv.",
+  "steps": [                  // one entry per orchestrated step, in order
+    { "step": "upload", "ok": true, "path": "/data/contacts.csv" },
+    { "step": "auto_configure", "ok": true, "config": { } },
+    { "step": "deduplicate", "ok": true, "auto_merge": 1, "review": 0, "golden_path": "/data/contacts.golden.csv" }
+  ],
+  "config": { },             // when a configure step ran (transparency)
+  "outputs": { "golden_path": "/data/contacts.golden.csv", "golden_records": 3, "total_records": 5 }
+}
+```
+
+A composite **short-circuits** on the first hard step failure (`ok: false`,
+`summary` names the failing step). `assess_file` treats its `scan` step as
+**degraded-optional**: if goldencheck isn't in the build, `scan` reports
+unavailable but the composite still returns `ok: true` with the profile intact.
+Writes are guarded by `GOLDENMATCH_ALLOWED_ROOT` like the underlying tools.
+
 ## Claude Desktop / Claude Code config
 
 ```json
