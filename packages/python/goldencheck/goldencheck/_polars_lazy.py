@@ -39,8 +39,15 @@ class _LazyPolars:
         # re-enters __getattr__; only genuine polars attributes reach this path.
         mod = self._mod
         if mod is None:
-            import polars as _polars
-
+            try:
+                import polars as _polars
+            except ImportError as e:
+                raise ImportError(
+                    "This GoldenCheck operation needs Polars, which isn't installed. "
+                    "Install it with `pip install goldencheck[polars]`. (Parquet/Excel "
+                    "reading via read_columns() and the scan_columns() structural checks "
+                    "work without Polars.)"
+                ) from e
             self._mod = mod = _polars
         return getattr(mod, name)
 

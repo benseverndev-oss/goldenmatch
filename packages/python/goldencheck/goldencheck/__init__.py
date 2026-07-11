@@ -1,7 +1,7 @@
 """GoldenCheck — data validation that discovers rules from your data."""
 from __future__ import annotations
 
-__version__ = "1.4.1"
+__version__ = "2.0.0"
 
 # Core: scanner + models
 from goldencheck.cell_quality import cell_quality
@@ -30,8 +30,14 @@ from goldencheck.engine.differ import (
     diff_files,
 )
 from goldencheck.engine.fixer import FixEntry, FixReport, apply_fixes
-from goldencheck.engine.reader import read_file
-from goldencheck.engine.scanner import scan_columns, scan_dataframe, scan_file, scan_file_with_llm
+from goldencheck.engine.reader import read_columns, read_file
+from goldencheck.engine.scanner import (
+    scan_columns,
+    scan_dataframe,
+    scan_file,
+    scan_file_columns,
+    scan_file_with_llm,
+)
 from goldencheck.engine.triage import TriageResult, auto_triage
 
 # Engine: validator, confidence, triage, fixer, differ, reader
@@ -68,6 +74,7 @@ __all__ = [
     "scan_dataframe",
     "scan_columns",
     "scan_file",
+    "scan_file_columns",
     "scan_file_with_llm",
     "cell_quality",
     "functional_dependencies",
@@ -95,6 +102,7 @@ __all__ = [
     "FindingChange",
     "StatChange",
     "read_file",
+    "read_columns",
     # Config
     "GoldenCheckConfig",
     "ColumnRule",

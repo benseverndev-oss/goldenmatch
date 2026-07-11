@@ -255,6 +255,12 @@ fn cluster_size_histogram(values: PyArrowType<ArrayData>) -> PyResult<Vec<i64>> 
 
 /// Per-column null ratio (`null_count / len`, 0.0 for empty columns) for each
 /// Arrow column. Reads Arrow null buffers directly -- no interning needed.
+///
+/// Uses `logical_null_count`, NOT `null_count`: an all-null column has the Arrow
+/// `Null` dtype (a `NullArray`), which carries no physical validity buffer, so
+/// `null_count()` reports 0 and the ratio would wrongly come out 0.0 instead of
+/// 1.0. `logical_null_count()` counts a `NullArray` as all-null and is identical
+/// to `null_count()` for every supported dtype (a validity-buffer-backed array).
 #[pyfunction]
 fn null_ratio_per_column(cols: Vec<PyArrowType<ArrayData>>) -> PyResult<Vec<f64>> {
     Ok(cols
@@ -265,7 +271,7 @@ fn null_ratio_per_column(cols: Vec<PyArrowType<ArrayData>>) -> PyResult<Vec<f64>
             if n == 0 {
                 0.0
             } else {
-                arr.null_count() as f64 / n as f64
+                arr.logical_null_count() as f64 / n as f64
             }
         })
         .collect())

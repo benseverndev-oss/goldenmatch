@@ -109,6 +109,8 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "fuzzy_values": ("near_duplicate_value_clusters",),
     "approximate_fd": ("discover_approximate_fds", "fd_violation_rows"),
     "denial_constraint": ("denial_constraint_evidence",),
+    "regex": ("str_contains_count", "str_filter_mask", "str_replace_all"),
+    "str_to_date": ("str_to_date",),
 }
 
 

@@ -1,0 +1,112 @@
+# Zero-config QUALITY at scale -- the regression guard for the class of bug that
+# sat broken at >=500K rows for ~2 months undetected. Every existing quality
+# floor runs at <=20K rows; the only harnesses that measure F1 at scale are
+# report-only and dispatch-only. This runs the REAL zero-config pipeline on
+# LABELED data at a matrix that brackets the behaviour-change thresholds and
+# FAILS on a quality regression -- so main-health surfaces it within 6h and the
+# alert step files a dedicated issue. Detection latency: ~1 day (nightly) instead
+# of ~60. Uses scripts/qis_gate.py over the existing quality_invariant_scale (QIS)
+# harness. NOT in ci-required (it's a scheduled quality watch, not a PR gate).
+name: bench-quality-scale
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # nightly 05:00 UTC -- CI tier (<=1M)
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC -- heavy tier (5M)
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Which row-count tier to run"
+        type: choice
+        options: [ci, heavy, both]
+        default: ci
+      mode:
+        description: "check (assert floors) or bless (regenerate the baseline scorecard artifact)"
+        type: choice
+        options: [check, bless]
+        default: check
+
+permissions:
+  contents: read
+  issues: write # the alert step files/updates the quality-regression issue
+
+env:
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads;
+  # force the system pool (the #1627 remedy -- this lane runs the full pipeline).
+  ARROW_DEFAULT_MEMORY_POOL: system
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0" # no cross-run memory writes in CI
+
+concurrency:
+  group: bench-quality-scale-${{ github.event.schedule || github.event.inputs.tier || 'ci' }}
+  cancel-in-progress: false
+
+jobs:
+  ci-tier:
+    # Nightly cron, or a dispatch selecting ci/both.
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.tier == 'ci' || github.event.inputs.tier == 'both'))
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace (installs goldenmatch @ HEAD)
+        run: uv sync --all-packages
+      - name: Build the native kernel (mirror real zero-config usage)
+        run: uv run python scripts/build_native.py
+      - name: Run the quality-at-scale gate (CI tier <=1M)
+        id: gate
+        run: uv run python scripts/qis_gate.py --tier ci --mode "${{ github.event.inputs.mode || 'check' }}" --out-json qis_ci.json
+      - name: Upload rung records + baseline
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qis-quality-ci
+          path: |
+            qis_ci.json
+            scripts/baselines/qis_scorecard.json
+          if-no-files-found: ignore
+      - name: File / update the quality-regression alert issue
+        if: failure() && steps.gate.conclusion == 'failure' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/qis_alert.sh ci "${{ github.run_id }}"
+
+  heavy-tier:
+    # Weekly cron, or a dispatch selecting heavy/both.
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1') ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.tier == 'heavy' || github.event.inputs.tier == 'both'))
+    runs-on: large-new-64GB
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace (installs goldenmatch @ HEAD)
+        run: uv sync --all-packages
+      - name: Build the native kernel
+        run: uv run python scripts/build_native.py
+      - name: Run the quality-at-scale gate (heavy tier 5M)
+        id: gate
+        run: uv run python scripts/qis_gate.py --tier heavy --mode "${{ github.event.inputs.mode || 'check' }}" --out-json qis_heavy.json
+      - name: Upload rung records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qis-quality-heavy
+          path: qis_heavy.json
+          if-no-files-found: ignore
+      - name: File / update the quality-regression alert issue
+        if: failure() && steps.gate.conclusion == 'failure' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/qis_alert.sh heavy "${{ github.run_id }}"

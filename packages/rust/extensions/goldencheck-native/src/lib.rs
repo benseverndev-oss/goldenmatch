@@ -12,10 +12,12 @@
 //! plain slices and delegate to `goldencheck-core`.
 use pyo3::prelude::*;
 
+mod date;
 mod dc;
 mod fuzzy;
 mod keys;
 mod profile;
+mod regex;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -28,5 +30,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(keys::fd_violation_rows, m)?)?;
     m.add_function(wrap_pyfunction!(fuzzy::near_duplicate_value_clusters, m)?)?;
     m.add_function(wrap_pyfunction!(dc::denial_constraint_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(regex::str_contains_count, m)?)?;
+    m.add_function(wrap_pyfunction!(regex::str_filter_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(regex::str_replace_all, m)?)?;
+    m.add_function(wrap_pyfunction!(date::str_to_date, m)?)?;
     Ok(())
 }
