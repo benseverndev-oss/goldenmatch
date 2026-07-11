@@ -319,3 +319,14 @@ def test_group_max(backend):
         zip(out.column("id_a").to_list(), out.column("id_b").to_list(), out.column("score").to_list())
     )
     assert kept == [(1, 2, 0.9), (2, 3, 0.7)]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_frame_to_arrow_roundtrip(backend):
+    # the Ray-UDF return bookend: Frame.to_arrow() -> pa.Table.
+    import pyarrow as pa
+
+    f = _mk({"id": [1, 2], "v": ["a", "b"]}, backend)
+    t = f.to_arrow()
+    assert isinstance(t, pa.Table)
+    assert t.column("id").to_pylist() == [1, 2]
