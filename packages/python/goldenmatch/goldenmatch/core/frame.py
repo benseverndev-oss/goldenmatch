@@ -1359,6 +1359,20 @@ def concat_frames(frames: Sequence[Frame], relaxed: bool = False) -> Frame:
     raise TypeError("concat_frames requires all frames on the same backend")
 
 
+def frame_from_column_data(data: dict[str, list], backend: str | None = None) -> Frame:
+    """Build a Frame from name -> value-list dicts with ENGINE INFERENCE --
+    the db-connector cursor shape (``pl.DataFrame({col: [vals]})``). Values
+    parity contract, per-backend dtype inference (all-null columns infer
+    Null/null() -- the connector Null->Utf8 promotion recipe stays a native
+    caller concern until W5). Empty dict -> zero-column frame."""
+    b = backend if backend is not None else resolve_frame_backend()
+    if b == "polars":
+        return PolarsFrame(pl.DataFrame(data))
+    import pyarrow as pa
+
+    return ArrowFrame(pa.table({k: pa.array(v) for k, v in data.items()}))
+
+
 def frame_from_records(rows: Sequence[dict], backend: str | None = None) -> Frame:
     """Build a Frame from a list of dict rows with ENGINE INFERENCE -- the
     db-connector / a2a / tui boundary shape (``pl.DataFrame(rows)``). Unlike

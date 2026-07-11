@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core.frame import frame_from_column_data as _ffcd
 from goldenmatch.db.connector import DatabaseConnector
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ class SqlServerConnector(DatabaseConnector):
                 data = {
                     col: [row[i] for row in rows] for i, col in enumerate(columns)
                 }
-                yield pl.DataFrame(data)
+                yield _ffcd(data, backend="polars").native  # W4c seam constructor
         finally:
             cursor.close()
 
@@ -89,9 +90,9 @@ class SqlServerConnector(DatabaseConnector):
             columns = [d[0] for d in cursor.description]
             rows = cursor.fetchall()
             if not rows:
-                return pl.DataFrame({c: [] for c in columns})
+                return _ffcd({c: [] for c in columns}, backend="polars").native
             data = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-            return pl.DataFrame(data)
+            return _ffcd(data, backend="polars").native
         finally:
             cursor.close()
 

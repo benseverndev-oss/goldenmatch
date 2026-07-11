@@ -229,3 +229,26 @@ def test_empty_frame_datetime_us(backend):
         import pyarrow as pa
 
         assert f.native.schema.field("created_at").type == pa.timestamp("us")
+
+
+# -- frame_from_column_data (W4c) ------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_frame_from_column_data_inference(backend):
+    from goldenmatch.core.frame import frame_from_column_data
+
+    f = frame_from_column_data({"a": [1, None], "b": ["x", "y"]}, backend=backend)
+    assert f.columns == ["a", "b"]
+    assert f.column("a").to_list() == [1, None]
+    assert f.column("b").to_list() == ["x", "y"]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_frame_from_column_data_empty_columns(backend):
+    # the connector empty-result shape: {col: [] for col in columns}
+    from goldenmatch.core.frame import frame_from_column_data
+
+    f = frame_from_column_data({"a": [], "b": []}, backend=backend)
+    assert f.height == 0
+    assert f.columns == ["a", "b"]

@@ -101,6 +101,8 @@ class ObjectStorageConnector(BaseConnector):
 
     name = "object_storage"
 
+    # W5: LazyFrame read contract (cloud scan_* with storage_options) -- the
+    # eager seam cannot represent it; ports with the connector contract flip.
     def read(self, config: dict) -> pl.LazyFrame:
         path = self._require_path(config)
         fmt = self._resolve_format(path, config)

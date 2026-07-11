@@ -1001,7 +1001,16 @@ def _full_scan_streaming(
             golden["__cluster_id__"] = cluster_id
             golden_records.append(golden)
 
-    golden_df = pl.DataFrame(golden_records) if golden_records else None
+    from goldenmatch.core.frame import frame_from_records
+
+    # W4c: seam constructor (dict rows, engine inference). Lazy scan/staging
+    # plumbing in this module stays native polars until W5 (# W5: the
+    # LazyFrame pipeline + weakref staging contract, see #388).
+    golden_df = (
+        frame_from_records(golden_records, backend="polars").native
+        if golden_records
+        else None
+    )
 
     match_actions = [
         (int(a), int(b), float(s), "merged") for a, b, s in all_pairs
