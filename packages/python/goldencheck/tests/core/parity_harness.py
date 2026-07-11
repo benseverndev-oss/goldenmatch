@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 import pyarrow as pa
+from scipy import stats as _scipy_stats
 from goldencheck import cell_quality as _cell_quality
 from goldencheck import functional_dependencies as _fd_bridge
 from goldencheck.core._native_loader import native_module
@@ -723,6 +724,77 @@ def _agesig_fallback(fx: tuple[pl.Series, pl.Series]) -> tuple[int, list]:
     return (count, [str(v) for v in age.filter(mismatch_mask).head(5).to_list()])
 
 
+# ---------------------------------------------------------------------------
+# pearson_r + chi2_contingency (correlation.py) -- W4 baseline-stat kernels.
+#
+# These kernels have NO pure-Python fallback: the profiler consumes the scipy
+# STATISTIC directly (`pearsonr(a,b)[0]`, `chi2_contingency(m)[0]`), so the
+# harness's `run_fallback` calls SCIPY itself as the parity oracle. Both are
+# pure-arithmetic (deterministic), so a float-reduction-tight canonicalisation
+# (`_canon_float`, ~9 sig-figs, applied in BOTH lanes) collapses the last-digit
+# noise while still tripping the oracle on any real divergence -- so this stays
+# an exact-`!=` check and ACCEPTED_DIVERGENCES remains EMPTY.
+# ---------------------------------------------------------------------------
+
+
+def _pearson_fixtures(seed: int) -> list[tuple[list[float], list[float]]]:
+    rng = random.Random(seed)
+    n = rng.randint(30, 250)
+    # Correlated pair: y = slope*x + noise, so r lands across the whole range.
+    xs = [rng.uniform(-100, 100) for _ in range(n)]
+    slope = rng.choice([-2.0, -0.5, 0.3, 1.5])
+    ys = [slope * x + rng.gauss(0, 20) for x in xs]
+    # Adversarial, seed-invariant: perfect +1 / perfect -1 (must clamp exactly).
+    pos = [float(i) for i in range(40)]
+    perfect_pos = ([v for v in pos], [2.0 * v + 1.0 for v in pos])
+    perfect_neg = ([v for v in pos], [-3.0 * v + 5.0 for v in pos])
+    # A near-zero-correlation symmetric pair.
+    zx = [float(i) for i in range(1, 41)]
+    zy = [1.0 if i % 2 else -1.0 for i in range(40)]
+    return [(xs, ys), perfect_pos, perfect_neg, (zx, zy)]
+
+
+def _pearson_native(fx: tuple[list[float], list[float]]) -> str:
+    a, b = fx
+    r = native_module().pearson_r(pa.array(a, type=pa.float64()), pa.array(b, type=pa.float64()))
+    return _canon_float(r)
+
+
+def _pearson_fallback(fx: tuple[list[float], list[float]]) -> str:
+    a, b = fx
+    r = _scipy_stats.pearsonr(a, b)[0]
+    return _canon_float(r)
+
+
+def _chi2_contingency_fixtures(seed: int) -> list[tuple[list[list[float]], int, int]]:
+    rng = random.Random(seed)
+    fixtures: list[tuple[list[list[float]], int, int]] = []
+    # A random 2x2 (Yates path) and a random 3x3 / 2x4 (no correction).
+    m2 = [[float(rng.randint(5, 60)) for _ in range(2)] for _ in range(2)]
+    fixtures.append((m2, 2, 2))
+    m3 = [[float(rng.randint(5, 80)) for _ in range(3)] for _ in range(3)]
+    fixtures.append((m3, 3, 3))
+    m24 = [[float(rng.randint(5, 50)) for _ in range(4)] for _ in range(2)]
+    fixtures.append((m24, 2, 4))
+    # Seed-invariant adversarials: 2x2 with all |obs-exp| < 0.5 (Yates clips each
+    # residual to 0 -> chi2 == 0), a strong 2x2, and a clean 3x2.
+    fixtures.append(([[5.0, 5.0], [5.0, 6.0]], 2, 2))
+    fixtures.append(([[1.0, 9.0], [9.0, 1.0]], 2, 2))
+    fixtures.append(([[10.0, 20.0], [30.0, 20.0], [10.0, 30.0]], 3, 2))
+    return fixtures
+
+
+def _chi2_contingency_native(fx: tuple[list[list[float]], int, int]) -> str:
+    matrix, nrows, ncols = fx
+    flat = [v for row in matrix for v in row]
+    return _canon_float(native_module().chi2_contingency_stat(flat, nrows, ncols))
+
+
+def _chi2_contingency_fallback(fx: tuple[list[list[float]], int, int]) -> str:
+    matrix, _nrows, _ncols = fx
+    return _canon_float(_scipy_stats.chi2_contingency(matrix)[0])
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -763,4 +835,11 @@ REGISTERED_COMPONENTS: list[Component] = [
     ),
     Component("duplicate_signatures", _dupsig_native, _dupsig_fallback, _dupsig_fixtures),
     Component("age_mismatch", _agesig_native, _agesig_fallback, _agesig_fixtures),
+    Component("pearson_r", _pearson_native, _pearson_fallback, _pearson_fixtures),
+    Component(
+        "chi2_contingency",
+        _chi2_contingency_native,
+        _chi2_contingency_fallback,
+        _chi2_contingency_fixtures,
+    ),
 ]
