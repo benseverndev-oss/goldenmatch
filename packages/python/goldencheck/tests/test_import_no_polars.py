@@ -43,10 +43,69 @@ def test_scan_columns_runs_with_polars_unimportable():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_scan_columns_hard_checks_with_polars_unimportable():
+    import importlib.util
+    if (importlib.util.find_spec("goldencheck._native") is None
+            and importlib.util.find_spec("goldencheck_native") is None):
+        import pytest
+        pytest.skip("native kernel not built; hard-op polars-free path is CI-parity-lane verified")
+    code = (
+        "import sys, importlib.abc\n"
+        "class _B(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, n, path=None, target=None):\n"
+        "        if n=='polars' or n.startswith('polars.'):\n"
+        "            raise ModuleNotFoundError(n)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _B())\n"
+        "import os; os.environ['GOLDENCHECK_NATIVE']='auto'\n"
+        "from goldencheck import scan_columns\n"
+        "fs = scan_columns({'email': [f'u{i}@x.com' for i in range(18)] + ['bad','worse']})\n"
+        "checks = {f.check for f in fs}\n"
+        "assert 'format_detection' in checks, checks\n"
+        "assert 'polars' not in sys.modules\n"
+    )
+    pkg_dir = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = pkg_dir + os.pathsep + env.get("PYTHONPATH", "")
+    env["POLARS_SKIP_CPU_CHECK"] = "1"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_temporal_check_with_polars_unimportable():
+    import importlib.util
+    if (importlib.util.find_spec("goldencheck._native") is None
+            and importlib.util.find_spec("goldencheck_native") is None):
+        import pytest
+        pytest.skip("native kernel not built; temporal polars-free path is CI-parity-lane verified")
+    code = (
+        "import sys, importlib.abc\n"
+        "class _B(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, n, path=None, target=None):\n"
+        "        if n=='polars' or n.startswith('polars.'):\n"
+        "            raise ModuleNotFoundError(n)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _B())\n"
+        "import os; os.environ['GOLDENCHECK_NATIVE']='auto'\n"
+        "from goldencheck import scan_columns\n"
+        "fs = scan_columns({'start_date': ['2021-05-01','2021-01-01'], 'end_date': ['2021-01-01','2021-06-01']})\n"
+        "checks = {f.check for f in fs}\n"
+        "assert 'temporal_order' in checks, checks\n"
+        "assert 'polars' not in sys.modules\n"
+    )
+    pkg_dir = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = pkg_dir + os.pathsep + env.get("PYTHONPATH", "")
+    env["POLARS_SKIP_CPU_CHECK"] = "1"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_goldencheck_survives_polars_unimportable():
     # Simulate the P4 base-deps flip WITHOUT uninstalling: a meta_path finder makes
     # `polars` unimportable, then `import goldencheck` must still succeed (lazy proxy
-    # defers `import polars`), and touching the proxy must raise a clean ModuleNotFoundError.
+    # defers `import polars`), and touching the proxy must raise a helpful ImportError
+    # (not a raw ModuleNotFoundError) naming the `goldencheck[polars]` extra.
     code = (
         "import sys, importlib.abc\n"
         "class _Block(importlib.abc.MetaPathFinder):\n"
@@ -61,9 +120,9 @@ def test_goldencheck_survives_polars_unimportable():
         "from goldencheck._polars_lazy import pl\n"
         "try:\n"
         "    pl.DataFrame\n"
-        "    raise AssertionError('expected ModuleNotFoundError touching the lazy proxy')\n"
-        "except ModuleNotFoundError:\n"
-        "    pass\n"
+        "    raise AssertionError('expected ImportError touching the lazy proxy')\n"
+        "except ImportError as e:\n"
+        "    assert 'goldencheck[polars]' in str(e), str(e)\n"
     )
     pkg_dir = str(Path(__file__).resolve().parents[1])
     env = dict(os.environ)

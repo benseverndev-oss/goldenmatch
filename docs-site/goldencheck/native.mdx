@@ -4,10 +4,12 @@ description: "GoldenCheck's optional Rust/Arrow runtime and the deep-profiling c
 keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "functional dependency", "composite key", "fuzzy", "referential integrity", "freshness", "denial constraint"]
 ---
 
-GoldenCheck is pure-Python and Polars-native, so the everyday sampled scan is
-already fast. For the CPU-heavy **deep-profiling** checks there's an optional
-compiled runtime, and the package falls back to pure Python when it isn't
-installed — behaviour is identical either way, native only changes wall-clock.
+GoldenCheck is pure-Python; the full scan is Polars-backed (via the `[polars]`
+extra since 2.0.0), so the everyday sampled scan is fast, while the structural
+`scan_columns` checks and Parquet/Excel reading run Polars-free. For the
+CPU-heavy **deep-profiling** checks there's an optional compiled runtime, and
+the package falls back to pure Python when it isn't installed — behaviour is
+identical either way, native only changes wall-clock.
 
 ```bash
 pip install goldencheck[native]
@@ -16,6 +18,18 @@ pip install goldencheck[native]
 `goldencheck.core._native_loader` discovers the kernels automatically; nothing in
 your code changes. Control it with `GOLDENCHECK_NATIVE=auto|0|1` (`auto` is the
 default: use native where available, fall back otherwise).
+
+goldencheck-native also backs the **Polars-free structural checks** — the format,
+encoding, pattern, and temporal profilers that run inside `scan_columns` (and the
+Parquet/Excel `read_columns`/`scan_file_columns` paths). That means a Polars-absent
+install (`pip install goldencheck[native]`, without `[polars]`) can still run those
+checks at native speed; only CSV reading and the full `scan_file`/`scan_dataframe`
+scan need `goldencheck[polars]`.
+
+Extras at a glance: `[polars]` adds Polars for CSV reading and the full scan;
+`[parquet]` adds pyarrow alone for Polars-free Parquet reading; `[native]` adds the
+Rust kernels below (works with or without Polars installed); `[baseline]` adds
+scipy/numpy for deep profiling and drift detection.
 
 ## How the kernels earn their place
 

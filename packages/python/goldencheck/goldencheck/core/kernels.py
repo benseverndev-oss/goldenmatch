@@ -122,8 +122,7 @@ def discover_functional_dependencies(
             ]
         except Exception:  # noqa: BLE001 - any native failure -> Polars path
             pass
-    import polars as pl
-
+    from goldencheck._polars_lazy import pl
     from goldencheck.relations.functional_dependency import _discover_python
 
     names = [f"c{i}" for i in range(len(cols))]
@@ -248,8 +247,7 @@ def denial_constraint_evidence(cols, nulls, pred_spec, which_pass, n, sample_idx
 def _composite_fallback(
     cand_cols: list[list], n_rows: int, max_size: int
 ) -> list[list[int]]:
-    import polars as pl
-
+    from goldencheck._polars_lazy import pl
     from goldencheck.relations.composite_key import _python_search
 
     names = [f"c{i}" for i in range(len(cand_cols))]

@@ -170,7 +170,18 @@ def mean(values: Sequence[float]) -> float:
 
 def _mean_pure(values: Sequence[float]) -> float:
     vals = [float(v) for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else 0.0
+    if not vals:
+        return 0.0
+    # Explicit naive left-to-right accumulation -- NOT builtin ``sum()``. As of
+    # CPython 3.12 ``sum()`` uses Neumaier compensated summation for floats, so
+    # its result drifts from the native kernel's naive ``iter().sum::<f64>()`` by
+    # a few ULPs on large inputs (and would silently vary by Python version). A
+    # plain fold is naive on every version, keeping ``_mean_pure`` byte-identical
+    # to the Rust reference. The summation-order fixture pins this ordering.
+    total = 0.0
+    for v in vals:
+        total += v
+    return total / len(vals)
 
 
 def _mean_native(values: Sequence[float]) -> float:

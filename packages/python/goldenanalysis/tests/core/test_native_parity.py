@@ -232,36 +232,74 @@ def _frames() -> dict:
     }
 
 
+def _native_supported_frames() -> dict:
+    """Frames whose columns are all a native-supported dtype (no Arrow ``Null``).
+
+    The value-interning kernels (``duplicate_row_ratio`` / ``distinct_count``)
+    reject the Arrow ``Null`` dtype by design -- interning has no values to key on
+    -- so the RAW kernel raises ``TypeError`` and the public dispatcher catches it
+    and falls back to pure. The raw-native parity tests below therefore exclude
+    Null-dtype frames (empty / all-null): feeding those kernels a dtype they are
+    built to reject is out of contract. End-to-end behaviour on those frames --
+    including that ``null_ratio_per_column`` DOES handle Null dtype natively
+    (all-null => 1.0 via ``logical_null_count``) while the other two fall back to
+    pure -- is covered by ``test_frame_kernels_dispatcher_matches_pure``.
+    """
+    import polars as pl
+
+    return {
+        name: df
+        for name, df in _frames().items()
+        if not any(df[c].dtype == pl.Null for c in df.columns)
+    }
+
+
 @native_only
-@pytest.mark.parametrize("name", sorted(_frames()))
+@pytest.mark.parametrize("name", sorted(_native_supported_frames()))
 def test_duplicate_row_ratio_parity(name: str) -> None:
     from goldenanalysis.core import aggregate
 
-    df = _frames()[name]
+    df = _native_supported_frames()[name]
     native = native_module().duplicate_row_ratio([df[c].to_arrow() for c in df.columns])
     assert native == aggregate._duplicate_row_ratio_pure(df)
 
 
 @native_only
-@pytest.mark.parametrize("name", sorted(_frames()))
+@pytest.mark.parametrize("name", sorted(_native_supported_frames()))
 def test_null_ratio_per_column_parity(name: str) -> None:
     from goldenanalysis.core import aggregate
 
-    df = _frames()[name]
+    df = _native_supported_frames()[name]
     ratios = native_module().null_ratio_per_column([df[c].to_arrow() for c in df.columns])
     native = dict(zip(df.columns, ratios))
     assert native == aggregate._null_ratio_per_column_pure(df)
 
 
 @native_only
-@pytest.mark.parametrize("name", sorted(_frames()))
+@pytest.mark.parametrize("name", sorted(_native_supported_frames()))
 def test_distinct_count_parity(name: str) -> None:
     from goldenanalysis.core import aggregate
 
-    df = _frames()[name]
+    df = _native_supported_frames()[name]
     for col in df.columns:
         native = native_module().distinct_count(df[col].to_arrow())
         assert native == aggregate._distinct_count_pure(df[col])
+
+
+@native_only
+@pytest.mark.parametrize("name", sorted(_frames()))
+def test_frame_kernels_dispatcher_matches_pure(name: str) -> None:
+    """End-to-end: the public dispatchers match the pure path on EVERY frame,
+    including the Null-dtype ``empty`` / ``all_null`` frames where the kernel
+    raises and the dispatcher falls back to pure. This is the production contract
+    the raw-native tests above cannot assert on Null dtype."""
+    from goldenanalysis.core import aggregate
+
+    df = _frames()[name]
+    assert aggregate.null_ratio_per_column(df) == aggregate._null_ratio_per_column_pure(df)
+    assert aggregate.duplicate_row_ratio(df) == aggregate._duplicate_row_ratio_pure(df)
+    for col in df.columns:
+        assert aggregate.distinct_count(df[col]) == aggregate._distinct_count_pure(df[col])
 
 
 def test_native_dtype_fallback_returns_pure(monkeypatch: pytest.MonkeyPatch) -> None:

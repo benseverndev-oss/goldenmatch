@@ -8,7 +8,6 @@ import polars as pl
 import pytest
 from goldencheck import scan_columns
 from goldencheck.core.frame import PolarsFrame, PyFrame
-from goldencheck.engine.scanner import _COVERED_COLUMN_PROFILERS
 from goldencheck.profilers.cardinality import CardinalityProfiler
 from goldencheck.profilers.nullability import NullabilityProfiler
 from goldencheck.profilers.uniqueness import UniquenessProfiler
@@ -44,9 +43,17 @@ def test_covered_profilers_backend_parity(data):
 
 @pytest.mark.parametrize("data", _datasets())
 def test_scan_columns_matches_polars_covered_output(data):
+    from goldencheck.core._native_loader import native_enabled
+    from goldencheck.engine.scanner import _HARD_PROFILERS, _MECHANICAL_PROFILERS
     pol = PolarsFrame(pl.DataFrame(data))
+    covered = list(_MECHANICAL_PROFILERS)
+    if native_enabled("regex"):
+        covered += _HARD_PROFILERS
     expected = []
     for name in data:
-        for profiler in _COVERED_COLUMN_PROFILERS:
+        for profiler in covered:
             expected.extend(profiler.profile(pol, name))
+    from goldencheck.relations.temporal import TemporalOrderProfiler
+    if native_enabled("str_to_date"):
+        expected.extend(TemporalOrderProfiler().profile(pol))
     assert scan_columns(data) == expected

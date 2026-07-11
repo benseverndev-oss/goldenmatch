@@ -12,5 +12,5 @@ are logged at startup so deployers know which tool was shadowed.
 """
 from goldensuite_mcp.server import create_server
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["create_server", "__version__"]
