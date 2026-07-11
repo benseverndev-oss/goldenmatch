@@ -11,10 +11,14 @@ routed through the seam; it stays import-safe (lazy ``pl``) but requires Polars 
 from __future__ import annotations
 
 import datetime
+import logging
 
 from goldencheck._polars_lazy import pl
+from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
+
+logger = logging.getLogger(__name__)
 
 # Words that contain "age" but are NOT age columns
 _AGE_EXCLUSIONS = ("stage", "page", "usage", "mileage", "dosage", "voltage")
@@ -125,6 +129,26 @@ class AgeValidationProfiler:
                     mismatch_mask = (diff > 2.0) & non_null_mask
 
                     mismatch_count = int(mismatch_mask.sum())
+
+                    # Shadow-compute the fused native age_mismatch kernel alongside the
+                    # authoritative Polars compute above (see tests/engine/test_w3_shadow.py
+                    # for the parity assertion). NOT authoritative -- the finding below is
+                    # built from the Polars values exactly as before this shadow wire. Its
+                    # OWN try/except so a shadow failure can never reach the outer
+                    # ``except: continue`` and suppress a Finding.
+                    if native_enabled("age_mismatch"):
+                        try:
+                            ref_epoch_days = (
+                                reference_date - datetime.date(1970, 1, 1)
+                            ).days
+                            dob_date32 = df.select(dob_expr.alias("d"))["d"].to_arrow()
+                            actual_arrow = result["actual"].to_arrow()
+                            native_module().age_mismatch(
+                                actual_arrow, dob_date32, ref_epoch_days
+                            )
+                        except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                            logger.debug("age_mismatch shadow compute failed: %s", e)
+
                     if mismatch_count > 0:
                         sample_ages = col_series.filter(mismatch_mask).head(5).to_list()
                         findings.append(Finding(

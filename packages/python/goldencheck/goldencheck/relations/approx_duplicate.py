@@ -27,9 +27,14 @@ through the seam; it stays import-safe (lazy ``pl``) but requires Polars at runt
 """
 from __future__ import annotations
 
+import logging
+
 from goldencheck._polars_lazy import pl
+from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
+
+logger = logging.getLogger(__name__)
 
 _SEP = "\x1f"  # unit separator -- won't appear in normal data
 _MAX_SAMPLE = 5
@@ -73,6 +78,20 @@ class ApproxDuplicateProfiler:
         norm_counts = work.group_by("__norm__").len().rename({"len": "__nc__"})
         exact_counts = work.group_by("__exact__").len().rename({"len": "__ec__"})
         work = work.join(norm_counts, on="__norm__").join(exact_counts, on="__exact__")
+
+        # Shadow-compute the fused native duplicate_signatures kernel alongside the
+        # authoritative Polars group_by/join above (see tests/engine/test_w3_shadow.py
+        # for the parity assertion). NOT authoritative -- the findings below are built
+        # from the Polars values exactly as before this shadow wire. Wrapped so a shadow
+        # failure can never change or suppress an emitted Finding.
+        if native_enabled("duplicate_signatures"):
+            try:
+                is_string = [dt == pl.Utf8 for dt in df.dtypes]
+                native_module().duplicate_signatures(
+                    [df[c].to_arrow() for c in df.columns], is_string
+                )
+            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                logger.debug("duplicate_signatures shadow compute failed: %s", e)
 
         findings: list[Finding] = []
 
