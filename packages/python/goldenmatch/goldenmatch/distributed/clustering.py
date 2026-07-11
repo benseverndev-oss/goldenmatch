@@ -898,67 +898,63 @@ def distributed_wcc(pairs_ds: Dataset, *, max_iterations: int = 60) -> Dataset:
     npart = min(256, max(4, (__import__("os").cpu_count() or 16) * 4))
 
     def _mk_edges(batch: Any) -> Any:
+        # W4e-3: seam ops (symmetrize + self-loop drop).
+        from goldenmatch.core.frame import concat_frames, empty_frame, to_frame
+
         df = pl.from_arrow(batch)
         if df.height == 0:
-            return pl.DataFrame(
-                schema={"src": pl.Int64, "dst": pl.Int64},
-            ).to_arrow()
-        fwd = df.select(
-            pl.col("id_a").cast(pl.Int64).alias("src"),
-            pl.col("id_b").cast(pl.Int64).alias("dst"),
-        )
-        bwd = df.select(
-            pl.col("id_b").cast(pl.Int64).alias("src"),
-            pl.col("id_a").cast(pl.Int64).alias("dst"),
-        )
-        return (
-            pl.concat([fwd, bwd]).filter(pl.col("src") != pl.col("dst")).to_arrow()
-        )
+            return empty_frame({"src": "int64", "dst": "int64"}, backend="polars").to_arrow()
+        frame = to_frame(df)
+        fwd = frame.select_cast([("id_a", "int64", "src"), ("id_b", "int64", "dst")])
+        bwd = frame.select_cast([("id_b", "int64", "src"), ("id_a", "int64", "dst")])
+        return concat_frames([fwd, bwd]).filter_ne_cols("src", "dst").to_arrow()
 
     edges = pairs_ds.map_batches(_mk_edges, batch_format="pyarrow").materialize()
 
     def _verts(batch: Any) -> Any:
+        # W4e-3: seam ops (unique ids seeded with label=id).
+        from goldenmatch.core.frame import empty_frame, to_frame
+
         df = pl.from_arrow(batch)
         if df.height == 0:
-            return pl.DataFrame(
-                schema={"id": pl.Int64, "label": pl.Int64},
-            ).to_arrow()
-        ids = df.select(pl.col("src").alias("id")).unique()
-        return ids.with_columns(
-            pl.col("id").cast(pl.Int64).alias("label"),
-        ).to_arrow()
+            return empty_frame({"id": "int64", "label": "int64"}, backend="polars").to_arrow()
+        ids = to_frame(df).select_cast([("src", None, "id")]).unique_by(["id"])
+        return ids.select_cast([("id", None, "id"), ("id", "int64", "label")]).to_arrow()
 
     labels = _wcc_groupby_min_label(
         edges.map_batches(_verts, batch_format="pyarrow"), npart,
     ).materialize()
 
     def _proposal(batch: Any) -> Any:  # {src,dst,label} -> {id=dst, label}
+        from goldenmatch.core.frame import empty_frame, to_frame
+
         df = pl.from_arrow(batch)
         if df.height == 0:
-            return pl.DataFrame(
-                schema={"id": pl.Int64, "label": pl.Int64},
-            ).to_arrow()
-        return df.select(
-            pl.col("dst").cast(pl.Int64).alias("id"),
-            pl.col("label").cast(pl.Int64),
+            return empty_frame({"id": "int64", "label": "int64"}, backend="polars").to_arrow()
+        return to_frame(df).select_cast(
+            [("dst", "int64", "id"), ("label", "int64", "label")]
         ).to_arrow()
 
     def _shortcut_pick(batch: Any) -> Any:  # {id,label,label_p} -> {id, label}
+        from goldenmatch.core.frame import empty_frame, to_frame
+
         df = pl.from_arrow(batch)
         if df.height == 0:
-            return pl.DataFrame(
-                schema={"id": pl.Int64, "label": pl.Int64},
-            ).to_arrow()
-        return df.select(
-            pl.col("id").cast(pl.Int64),
-            pl.coalesce(["label_p", "label"]).cast(pl.Int64).alias("label"),
-        ).to_arrow()
+            return empty_frame({"id": "int64", "label": "int64"}, backend="polars").to_arrow()
+        return (
+            to_frame(df)
+            .with_coalesce(["label_p", "label"], "__sc__")
+            .select_cast([("id", "int64", "id"), ("__sc__", "int64", "label")])
+            .to_arrow()
+        )
 
     def _changed(batch: Any) -> Any:  # {id,label,label_new} -> changed rows
         df = pl.from_arrow(batch)
         if df.height == 0:
             return df.to_arrow()
-        return df.filter(pl.col("label") != pl.col("label_new")).to_arrow()
+        from goldenmatch.core.frame import to_frame
+
+        return to_frame(df).filter_ne_cols("label", "label_new").to_arrow()
 
     for _it in range(max_iterations):
         # (a) propagate src->dst then min with current labels.
@@ -1230,7 +1226,14 @@ def _rc_compose_distributed(label: Any, rep: Any, npart: int) -> Any:
         df = pl.from_arrow(b)
         if df.height == 0:
             return pl.DataFrame(schema={"orig_id": pl.Int64, "cur": pl.Int64}).to_arrow()
-        return df.select("orig_id", cur=pl.coalesce(["rep", "cur"])).to_arrow()
+        from goldenmatch.core.frame import to_frame
+
+        return (
+            to_frame(df)
+            .with_coalesce(["rep", "cur"], "cur")
+            .select(["orig_id", "cur"])
+            .to_arrow()
+        )
 
     return j.map_batches(_co, batch_format="pyarrow")
 
@@ -1247,10 +1250,15 @@ def _rc_normalize_distributed(label: Any, npart: int) -> Any:
         df = pl.from_arrow(b)
         if df.height == 0:
             return pl.DataFrame(schema={"id": pl.Int64, "label": pl.Int64}).to_arrow()
-        out = df.with_columns(label=pl.col("orig_id").min().over("cur"))
-        return (out.select(id=pl.col("orig_id").cast(pl.Int64),
-                           label=pl.col("label").cast(pl.Int64))
-                   .unique(subset=["id"]).to_arrow())
+        from goldenmatch.core.frame import to_frame
+
+        out = (
+            to_frame(df)
+            .with_group_min_over("cur", "orig_id", "label")
+            .select_cast([("orig_id", "int64", "id"), ("label", "int64", "label")])
+            .unique_by(["id"])
+        )
+        return out.to_arrow()
 
     return colocated.map_batches(_nm, batch_format="pyarrow")
 
