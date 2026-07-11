@@ -167,7 +167,9 @@ def _golden_record_from_members(
     df: pl.DataFrame, row_ids: list[int]
 ) -> dict[str, Any]:
     """Roll up cluster members into a single representative row (most-complete)."""
-    members = df.filter(pl.col("__row_id__").is_in(row_ids))
+    from goldenmatch.core.frame import to_frame
+
+    members = to_frame(df).filter_in("__row_id__", row_ids).native
     if members.is_empty():
         return {}
     out: dict[str, Any] = {}
@@ -750,62 +752,70 @@ def resolve_clusters(
     # matters: identities first (so the source_records FK is valid),
     # then records, then edges, then events.
     if use_bulk_fast_path and bulk_node_rows:
-        nodes_df = pl.DataFrame(
+        from goldenmatch.core.frame import frame_from_rows
+
+        # W4b: seam constructor (datetime_us == bare pl.Datetime). The store
+        # COPY contract stays polars-typed until W5.
+        nodes_df = frame_from_rows(
             bulk_node_rows,
-            schema={
-                "entity_id": pl.Utf8,
-                "status": pl.Utf8,
-                "merged_into": pl.Utf8,
-                "golden_record": pl.Utf8,
-                "confidence": pl.Float64,
-                "dataset": pl.Utf8,
-                "created_at": pl.Datetime,
-                "updated_at": pl.Datetime,
+            {
+                "entity_id": "utf8",
+                "status": "utf8",
+                "merged_into": "utf8",
+                "golden_record": "utf8",
+                "confidence": "float64",
+                "dataset": "utf8",
+                "created_at": "datetime_us",
+                "updated_at": "datetime_us",
             },
-        )
+            backend="polars",
+        ).native
         store.bulk_upsert_identities(nodes_df)
         if bulk_record_rows:
-            records_df = pl.DataFrame(
+            records_df = frame_from_rows(
                 bulk_record_rows,
-                schema={
-                    "record_id": pl.Utf8,
-                    "source": pl.Utf8,
-                    "source_pk": pl.Utf8,
-                    "record_hash": pl.Utf8,
-                    "entity_id": pl.Utf8,
-                    "dataset": pl.Utf8,
-                    "first_seen_at": pl.Datetime,
-                    "last_seen_at": pl.Datetime,
+                {
+                    "record_id": "utf8",
+                    "source": "utf8",
+                    "source_pk": "utf8",
+                    "record_hash": "utf8",
+                    "entity_id": "utf8",
+                    "dataset": "utf8",
+                    "first_seen_at": "datetime_us",
+                    "last_seen_at": "datetime_us",
                 },
-            )
+                backend="polars",
+            ).native
             store.bulk_upsert_records(records_df)
         if bulk_edge_rows:
-            edges_df = pl.DataFrame(
+            edges_df = frame_from_rows(
                 bulk_edge_rows,
-                schema={
-                    "entity_id": pl.Utf8,
-                    "record_a_id": pl.Utf8,
-                    "record_b_id": pl.Utf8,
-                    "kind": pl.Utf8,
-                    "score": pl.Float64,
-                    "matchkey_name": pl.Utf8,
-                    "run_name": pl.Utf8,
-                    "dataset": pl.Utf8,
-                    "recorded_at": pl.Datetime,
+                {
+                    "entity_id": "utf8",
+                    "record_a_id": "utf8",
+                    "record_b_id": "utf8",
+                    "kind": "utf8",
+                    "score": "float64",
+                    "matchkey_name": "utf8",
+                    "run_name": "utf8",
+                    "dataset": "utf8",
+                    "recorded_at": "datetime_us",
                 },
-            )
+                backend="polars",
+            ).native
             store.bulk_add_edges(edges_df)
         if bulk_event_rows:
-            events_df = pl.DataFrame(
+            events_df = frame_from_rows(
                 bulk_event_rows,
-                schema={
-                    "entity_id": pl.Utf8,
-                    "kind": pl.Utf8,
-                    "run_name": pl.Utf8,
-                    "dataset": pl.Utf8,
-                    "recorded_at": pl.Datetime,
+                {
+                    "entity_id": "utf8",
+                    "kind": "utf8",
+                    "run_name": "utf8",
+                    "dataset": "utf8",
+                    "recorded_at": "datetime_us",
                 },
-            )
+                backend="polars",
+            ).native
             store.bulk_emit_events(events_df)
         log.info(
             "resolve_clusters bulk fast-path: %d clusters / %d nodes / "
@@ -915,7 +925,9 @@ def match_record_to_entity(
     )
     if not matches:
         return {}
-    matched_rows = df.filter(pl.col("__row_id__").is_in(list(matches.keys())))
+    from goldenmatch.core.frame import to_frame
+
+    matched_rows = to_frame(df).filter_in("__row_id__", list(matches.keys())).native
     rowid_to_candidates: dict[int, list[str]] = {}
     for row in matched_rows.to_dicts():
         rid = row.get("__row_id__")
@@ -993,7 +1005,9 @@ def resolve_record_incremental(
 
     matched_ids = list(matches.keys())
     if matched_ids:
-        mini = df.filter(pl.col("__row_id__").is_in(matched_ids))
+        from goldenmatch.core.frame import to_frame
+
+        mini = to_frame(df).filter_in("__row_id__", matched_ids).native
         existing_rowids = [int(r) for r in mini["__row_id__"].to_list()]
     else:
         mini = None

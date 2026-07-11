@@ -264,14 +264,17 @@ def deterministic_stitch_pairs(
         if sub.is_empty():
             continue
         # Drop empty-string values (a blank cookie is not a link).
-        sub = sub.filter(
-            pl.col(key).cast(pl.Utf8).str.strip_chars().str.len_chars() > 0
-        )
-        if sub.is_empty():
+        # W4b: seam ops. filter_nonblank_key == this filter post-drop_nulls
+        # (its extra is_not_null is a no-op here; strip!="" == len>0).
+        from goldenmatch.core.frame import to_frame
+
+        frame = to_frame(sub).filter_nonblank_key(key)
+        if frame.height == 0:
             continue
-        grouped = sub.group_by(key).agg(pl.col("__row_id__"))
-        for mids in grouped["__row_id__"].to_list():
-            ids = [int(m) for m in mids]
+        # group_partitions: per-key row-id lists, within-group row order
+        # preserved (same ids the old group_by().agg() collected).
+        for _key_val, part in frame.group_partitions(key):
+            ids = [int(m) for m in part.column("__row_id__").to_list()]
             if len(ids) < 2:
                 continue
             anchor = ids[0]
