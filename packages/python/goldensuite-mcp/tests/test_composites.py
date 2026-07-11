@@ -137,3 +137,56 @@ def test_assess_file_degraded_without_scan():
     assert out["ok"] is True
     assert "profile" in steps["analyze"]  # profile still present
     assert not out["summary"].startswith("assess_file failed at step")
+
+
+# --- Task 2.5: match_sources ----------------------------------------------
+
+def _fake_match_table(rec):
+    def upload(n, a):
+        rec.append(("upload", a))
+        return {"path": f"/up/{a.get('filename', 'x')}", "bytes": 10, "filename": a.get("filename")}
+
+    def match(n, a):
+        rec.append(("match", a))
+        return {"matches_path": a["output_path"], "matched_pairs": 7,
+                "results": {"match_rate": 0.42, "total_matched_records": 14}}
+
+    return {"upload_dataset": upload, "agent_match_sources": match}
+
+
+def test_match_sources_shape_and_threading():
+    from goldensuite_mcp.composites import build_composites
+    rec = []
+    _, dispatch = build_composites(_fake_match_table(rec))
+    out = dispatch["match_sources"]("match_sources",
+        {"file_a_content": "a", "file_a_name": "a.csv", "file_b_content": "b", "file_b_name": "b.csv"})
+    assert out["ok"] is True
+    assert [s["step"] for s in out["steps"]] == ["upload_a", "upload_b", "match"]
+    # both files uploaded
+    assert sum(1 for k, _ in rec if k == "upload") == 2
+    m = dict(rec)["match"]
+    assert m["file_a"] == "/up/a.csv"
+    assert m["file_b"] == "/up/b.csv"
+    assert m["output_path"].endswith(".matches.csv")
+    assert out["outputs"]["matches_path"].endswith(".matches.csv")
+    assert out["outputs"]["matched_pairs"] == 7
+    assert isinstance(out["summary"], str) and out["summary"]
+
+
+def test_match_sources_short_circuits_on_second_upload():
+    from goldensuite_mcp.composites import build_composites
+    tbl = _fake_match_table([])
+    calls = {"n": 0}
+
+    def upload(n, a):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return {"error": "upload b boom"}
+        return {"path": f"/up/{a.get('filename', 'x')}", "filename": a.get("filename")}
+
+    tbl["upload_dataset"] = upload
+    _, dispatch = build_composites(tbl)
+    out = dispatch["match_sources"]("match_sources",
+        {"file_a_content": "a", "file_a_name": "a.csv", "file_b_content": "b", "file_b_name": "b.csv"})
+    assert out["ok"] is False
+    assert [s["step"] for s in out["steps"]] == ["upload_a", "upload_b"]

@@ -40,13 +40,28 @@ def _gen_output_path(src_path: str, suffix: str) -> str:
     return f"{stem}.{suffix}.csv"
 
 
-def _upload(dispatch, args):
-    """Resolve the input to a server path: pass inline bytes or an existing path."""
-    up = {k: args[k] for k in ("file_content", "filename", "file_path", "encoding") if k in args}
-    if args.get("file_path") and "file_content" not in args:
-        return True, {"path": args["file_path"], "filename": os.path.basename(args["file_path"])}, "upload"
+def _upload_named(dispatch, args, content_key, name_key, path_key, label):
+    """Resolve one named input to a server path. Maps the caller's per-file keys
+    (e.g. file_a_content/file_a_name/file_a) onto upload_dataset's standard
+    file_content/filename/file_path keys. An existing path skips the upload."""
+    if args.get(path_key) and content_key not in args:
+        return True, {"path": args[path_key], "filename": os.path.basename(args[path_key])}, label
+    up = {}
+    if content_key in args:
+        up["file_content"] = args[content_key]
+    if name_key in args:
+        up["filename"] = args[name_key]
+    if path_key in args:
+        up["file_path"] = args[path_key]
+    if "encoding" in args:
+        up["encoding"] = args["encoding"]
     ok, res = run_step(dispatch, "upload_dataset", up)
-    return ok, res, "upload"
+    return ok, res, label
+
+
+def _upload(dispatch, args):
+    """Resolve the single-file input to a server path (default key names)."""
+    return _upload_named(dispatch, args, "file_content", "filename", "file_path", "upload")
 
 
 def orchestrate_dedupe_file(dispatch, args):
@@ -79,6 +94,39 @@ def orchestrate_dedupe_file(dispatch, args):
                "golden_records": res.get("golden_records"),
                "total_records": (res.get("results") or {}).get("total_records")}
     return _finish("dedupe_file", steps, config=config, outputs=outputs)
+
+
+def orchestrate_match_sources(dispatch, args):
+    """Link two sources: upload both -> agent_match_sources -> surface matches."""
+    steps = []
+    ok, res, label = _upload_named(dispatch, args, "file_a_content", "file_a_name", "file_a", "upload_a")
+    steps.append({"step": label, "ok": ok, **({"path": res.get("path")} if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("match_sources", steps)
+    path_a = res["path"]
+
+    ok, res, label = _upload_named(dispatch, args, "file_b_content", "file_b_name", "file_b", "upload_b")
+    steps.append({"step": label, "ok": ok, **({"path": res.get("path")} if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("match_sources", steps)
+    path_b = res["path"]
+
+    matches_path = _gen_output_path(path_a, "matches")
+    excl = {"exclude_columns": args["exclude_columns"]} if args.get("exclude_columns") else {}
+    ok, res = run_step(dispatch, "agent_match_sources",
+                       {"file_a": path_a, "file_b": path_b, "output_path": matches_path, **excl})
+    results = (res.get("results") or {}) if ok else {}
+    m_path = (res.get("matches_path") or res.get("output_path")) if ok else None
+    m_pairs = res.get("matched_pairs") if ok else None
+    if ok and m_pairs is None:
+        m_pairs = results.get("total_matched_records") or results.get("scored_pairs")
+    steps.append({"step": "match", "ok": ok,
+                  **({"matches_path": m_path, "matched_pairs": m_pairs} if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("match_sources", steps)
+
+    outputs = {"matches_path": m_path, "matched_pairs": m_pairs, "match_rate": results.get("match_rate")}
+    return _finish("match_sources", steps, outputs=outputs)
 
 
 def orchestrate_assess_file(dispatch, args):
@@ -133,6 +181,11 @@ def _summarize(workflow, steps, outputs, degraded_steps=frozenset()):
             return (f"{rows} rows profiled; health {sc.get('health_grade')} "
                     f"(score {sc.get('health_score')}, {sc.get('total_findings')} findings).")
         return f"{rows} rows profiled; quality scan unavailable (goldencheck not in this build)."
+    if workflow == "match_sources" and outputs:
+        pairs = outputs.get("matched_pairs")
+        dest = outputs.get("matches_path")
+        tail = f" Written to {dest}." if dest else ""
+        return f"Matched two sources: {pairs} matched pairs.{tail}"
     return f"{workflow} ok"
 
 
@@ -146,6 +199,19 @@ _COMPOSITE_SPECS = [
      "description": "One call: assess a single file's quality. Uploads the file, profiles it (record count, detected domain, recommended matching strategy), then runs a data-quality scan (health grade + findings). Read-only -- writes nothing. The quality scan is skipped gracefully if goldencheck isn't installed.",
      "inputSchema": {"type": "object", "properties": {**_FILE_INPUT_PROPS}, "required": []},
      "orchestrate": orchestrate_assess_file},
+    {"name": "match_sources",
+     "description": "One call: link two sources. Uploads both files, then runs cross-source matching with intelligent strategy selection and returns the matched pairs (and a matches file path when the engine writes one).",
+     "inputSchema": {"type": "object", "properties": {
+        "file_a": {"type": "string", "description": "Server path to source A (already uploaded)."},
+        "file_a_content": {"type": "string", "description": "Inline bytes for source A (base64 or text)."},
+        "file_a_name": {"type": "string", "description": "Original filename for inline source A."},
+        "file_b": {"type": "string", "description": "Server path to source B (already uploaded)."},
+        "file_b_content": {"type": "string", "description": "Inline bytes for source B (base64 or text)."},
+        "file_b_name": {"type": "string", "description": "Original filename for inline source B."},
+        "encoding": {"type": "string", "description": "Inline content encoding: 'base64' (default) or 'text'."},
+        "exclude_columns": {"type": "array", "items": {"type": "string"}, "description": "Columns to exclude from matching."}},
+        "required": []},
+     "orchestrate": orchestrate_match_sources},
 ]
 
 
