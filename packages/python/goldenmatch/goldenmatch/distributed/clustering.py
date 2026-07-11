@@ -413,27 +413,36 @@ def _annotate_cluster_sizes(
     colocated = labels_ds.repartition(num_partitions, keys=["label"])
 
     def _emit(batch: Any) -> Any:  # pa.Table -> pa.Table
+        # W4e-2: seam ops at the pyarrow bookends (byte-identical polars lane).
+        from goldenmatch.core.frame import empty_frame, to_frame
+
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
         if df.height == 0:
             # Preserve the output schema on empty partitions.
-            empty = pl.DataFrame(
-                schema={
-                    "member_id": pl.Int64, "cluster_id": pl.Int64,
-                    "cluster_size": pl.Int64, "oversized": pl.Boolean,
+            return empty_frame(
+                {
+                    "member_id": "int64",
+                    "cluster_id": "int64",
+                    "cluster_size": "int64",
+                    "oversized": "bool",
                 },
-            )
-            return empty.to_arrow()
+                backend="polars",
+            ).to_arrow()
         # repartition(keys=["label"]) co-locates a whole component here, so
         # the within-partition per-label count is the GLOBAL cluster size.
-        sized = df.with_columns(
-            pl.len().over("label").alias("cluster_size"),
-        )
-        out = sized.select(
-            pl.col("id").cast(pl.Int64).alias("member_id"),
-            pl.col("label").cast(pl.Int64).alias("cluster_id"),
-            pl.col("cluster_size").cast(pl.Int64),
-            (pl.col("cluster_size") > max_cluster_size).alias("oversized"),
+        out = (
+            to_frame(df)
+            .with_group_len_over("label", "cluster_size")
+            .with_gt_column("cluster_size", max_cluster_size, "oversized")
+            .select_cast(
+                [
+                    ("id", "int64", "member_id"),
+                    ("label", "int64", "cluster_id"),
+                    ("cluster_size", "int64", "cluster_size"),
+                    ("oversized", None, "oversized"),
+                ]
+            )
         )
         return out.to_arrow()
 
@@ -832,15 +841,21 @@ def _wcc_groupby_min_label(ds: Dataset, num_partitions: int) -> Dataset:
     import polars as pl
 
     def _gmin(batch: Any) -> Any:
+        # W4e-2: seam ops (group_min SET contract -- downstream treats
+        # labels as an unordered relation).
+        from goldenmatch.core.frame import empty_frame, to_frame
+
         df = pl.from_arrow(batch)
         if df.height == 0:
-            return pl.DataFrame(
-                schema={"id": pl.Int64, "label": pl.Int64},
+            return empty_frame(
+                {"id": "int64", "label": "int64"}, backend="polars"
             ).to_arrow()
-        out = df.group_by("id").agg(pl.col("label").min())
-        return out.select(
-            pl.col("id").cast(pl.Int64), pl.col("label").cast(pl.Int64),
-        ).to_arrow()
+        out = (
+            to_frame(df)
+            .group_min("id", "label")
+            .select_cast([("id", "int64", "id"), ("label", "int64", "label")])
+        )
+        return out.to_arrow()
 
     return ds.repartition(num_partitions, keys=["id"]).map_batches(
         _gmin, batch_format="pyarrow",

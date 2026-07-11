@@ -263,3 +263,31 @@ def test_with_mod_column(backend):
     f = _mk({"cluster_id": [10, 11, 12, None]}, backend)
     out = f.with_mod_column("cluster_id", 3, "__partition__")
     assert out.column("__partition__").to_list() == [1, 2, 0, None]
+
+
+# -- W4e-2 clustering-kernel ops ---------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_group_min(backend):
+    # clustering _wcc_groupby_min_label: group_by(id).agg(label.min()).
+    f = _mk({"id": [1, 2, 1, 2], "label": [9, 4, 3, None]}, backend)
+    out = f.group_min("id", "label")
+    kept = sorted(zip(out.column("id").to_list(), out.column("label").to_list()))
+    assert kept == [(1, 3), (2, 4)]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_select_cast(backend):
+    f = _mk({"id": [1, 2], "label": [7, 8]}, backend)
+    out = f.select_cast([("id", "int64", "member_id"), ("label", None, "cluster_id")])
+    assert out.columns == ["member_id", "cluster_id"]
+    assert out.column("member_id").to_list() == [1, 2]
+    assert out.column("cluster_id").to_list() == [7, 8]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_with_gt_column(backend):
+    # clustering oversized flag: (cluster_size > max).alias(...).
+    f = _mk({"n": [1, 5, 3]}, backend)
+    assert f.with_gt_column("n", 3, "big").column("big").to_list() == [False, True, False]
