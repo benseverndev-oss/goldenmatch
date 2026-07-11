@@ -116,9 +116,13 @@ share ≈ 420 uses.
   W4e select+cast+alias shapes: reuse `select` + `with_column`/cast_str or
   frame_from_columns; if a byte-fit gap appears mid-batch, add `select_cast` then,
   fixtures-first. Polars impls byte-equal to the raw snippets; arrow twins parity-pinned.
-- **W4b — identity**: resolve.py (filter_in + graph-bootstrap frames onto extended
-  vocabulary + stitch row-aligned construction), stitching.py, fingerprint_batch arrow
-  twin (golden-vector cross-pin). Gates: identity suites + fingerprint goldens unedited.
+- **W4b-1 — identity relational**: resolve.py (filter_in x3 + graph-bootstrap frames
+  via frame_from_rows/datetime_us; stitch row-aligned construction stays native per the
+  pre-decision; store COPY contract stays polars-typed until W5), stitching.py
+  (filter_nonblank_key + group_partitions). Gates: tests/identity/ unedited.
+- **W4b-2 — fingerprint_batch arrow twin**: hand-written pa canonicalizer twin
+  (full dtype lattice), selected by backend, cross-pinned by the existing fingerprint
+  golden vectors + test_record_fingerprints_arrow_parity. Own PR.
 - **W4c — db + connectors**: connector contract stays DataFrame-shaped for polars lane;
   read/write boundaries via load_file/io_arrow where arrow-lane reachable; sync.py lazy
   plumbing kept, payload boundaries polymorphic; Null→Utf8 promotion recipe becomes a
