@@ -532,14 +532,20 @@ def _extract_software_features_df(
         if result.confidence < confidence_threshold:
             low_confidence_ids.append(rid)
 
-    enhanced = df.with_columns([
-        pl.Series("__sw_name__", names_norm, dtype=pl.Utf8),
-        pl.Series("__sw_version__", versions, dtype=pl.Utf8),
-        pl.Series("__sw_edition__", editions, dtype=pl.Utf8),
-        pl.Series("__sw_platform__", platforms, dtype=pl.Utf8),
-        pl.Series("__sw_part_num__", part_numbers, dtype=pl.Utf8),
-        pl.Series("__extract_confidence__", confidences, dtype=pl.Float64),
-    ])
+    # W5a: seam attach (backend-agnostic column constructors).
+    from goldenmatch.core.frame import column_from_values, to_frame
+
+    frame = to_frame(df)
+    for _n, _v, _d in (
+        ("__sw_name__", names_norm, "utf8"),
+        ("__sw_version__", versions, "utf8"),
+        ("__sw_edition__", editions, "utf8"),
+        ("__sw_platform__", platforms, "utf8"),
+        ("__sw_part_num__", part_numbers, "utf8"),
+        ("__extract_confidence__", confidences, "float64"),
+    ):
+        frame = frame.with_column(_n, column_from_values(_v, _d, backend="polars"))
+    enhanced = frame.native
 
     n_names = sum(1 for n in names_norm if n)
     n_versions = sum(1 for v in versions if v)
@@ -590,14 +596,19 @@ def _extract_product_features_df(
     brands_norm = [b.upper().strip() if b else None for b in brands]
 
     # Add derived columns
-    enhanced = df.with_columns([
-        pl.Series("__brand__", brands_norm, dtype=pl.Utf8),
-        pl.Series("__model__", models, dtype=pl.Utf8),
-        pl.Series("__model_norm__", models_norm, dtype=pl.Utf8),
-        pl.Series("__color__", colors, dtype=pl.Utf8),
-        pl.Series("__specs__", specs_strs, dtype=pl.Utf8),
-        pl.Series("__extract_confidence__", confidences, dtype=pl.Float64),
-    ])
+    from goldenmatch.core.frame import column_from_values, to_frame
+
+    frame = to_frame(df)
+    for _n, _v, _d in (
+        ("__brand__", brands_norm, "utf8"),
+        ("__model__", models, "utf8"),
+        ("__model_norm__", models_norm, "utf8"),
+        ("__color__", colors, "utf8"),
+        ("__specs__", specs_strs, "utf8"),
+        ("__extract_confidence__", confidences, "float64"),
+    ):
+        frame = frame.with_column(_n, column_from_values(_v, _d, backend="polars"))
+    enhanced = frame.native
 
     n_with_model = sum(1 for m in models if m)
     n_with_brand = sum(1 for b in brands if b)
@@ -625,8 +636,14 @@ def _extract_biblio_features_df(
         features = extract_biblio_features(text)
         title_keys.append(features.get("title_key"))
 
-    enhanced = df.with_columns([
-        pl.Series("__title_key__", title_keys, dtype=pl.Utf8),
-    ])
+    from goldenmatch.core.frame import column_from_values, to_frame
+
+    enhanced = (
+        to_frame(df)
+        .with_column(
+            "__title_key__", column_from_values(title_keys, "utf8", backend="polars")
+        )
+        .native
+    )
 
     return enhanced, []

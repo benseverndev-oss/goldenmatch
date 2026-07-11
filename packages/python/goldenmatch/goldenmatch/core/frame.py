@@ -213,6 +213,9 @@ class Frame(Protocol):
     def with_gt_column(self, src: str, threshold: Any, name: str) -> Frame: ...
     def with_coalesce(self, cols: Sequence[str], name: str) -> Frame: ...
     def group_max(self, keys: Sequence[str], value: str) -> Frame: ...
+    # W5a: pipeline._add_row_ids' exact chain, eager (the #844 reuse-existing
+    # branch pinned; offset applied only when > 0; final Int64 cast always).
+    def ensure_row_ids(self, name: str = "__row_id__", offset: int = 0) -> Frame: ...
 
 
 class PolarsColumn:
@@ -717,6 +720,16 @@ class PolarsFrame:
     def group_max(self, keys: Sequence[str], value: str) -> PolarsFrame:
         # distributed/scoring.py dedup: group_by(keys).agg(max(value)).
         return PolarsFrame(self._df.group_by(list(keys)).agg(pl.col(value).max()))
+
+    def ensure_row_ids(self, name: str = "__row_id__", offset: int = 0) -> PolarsFrame:
+        # pipeline.py:715-733 VERBATIM (eager): reuse-existing (#844), offset
+        # only when > 0, Int64 cast always.
+        df = self._df
+        if name not in df.columns:
+            df = df.with_row_index(name)
+        if offset > 0:
+            df = df.with_columns((pl.col(name) + offset).alias(name))
+        return PolarsFrame(df.with_columns(pl.col(name).cast(pl.Int64)))
 
 
 class ArrowColumn:
@@ -1392,6 +1405,22 @@ class ArrowFrame:
         data[value] = pa.array([maxes[k] for k in order], type=self._tbl.column(value).type)
         return ArrowFrame(pa.table(data))
 
+    def ensure_row_ids(self, name: str = "__row_id__", offset: int = 0) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        tbl = self._tbl
+        if name not in tbl.column_names:
+            tbl = tbl.append_column(
+                name, pa.array(range(tbl.num_rows), type=pa.uint32())
+            )
+        arr = tbl.column(name)
+        if offset > 0:
+            arr = pc.add(arr, offset)
+        arr = pc.cast(arr, pa.int64())
+        idx = tbl.column_names.index(name)
+        return ArrowFrame(tbl.set_column(idx, name, arr))
+
 
 def to_frame(obj: Any) -> Frame:
     """Idempotent coercion: raw ``pl.DataFrame``/``pa.Table``, a
@@ -1502,6 +1531,20 @@ def frame_from_column_data(data: dict[str, list], backend: str | None = None) ->
     import pyarrow as pa
 
     return ArrowFrame(pa.table({k: pa.array(v) for k, v in data.items()}))
+
+
+def column_from_values(
+    values: Sequence[Any], dtype: str, backend: str | None = None
+) -> Column:
+    """Build a Column from a Python value list with an explicit vocabulary
+    dtype -- the domain-extraction attach shape (``pl.Series(name, vals,
+    dtype)``; the name comes from ``with_column``)."""
+    b = backend if backend is not None else resolve_frame_backend()
+    if b == "polars":
+        return PolarsColumn(pl.Series("", list(values), dtype=_polars_dtype(dtype)))
+    import pyarrow as pa
+
+    return ArrowColumn(pa.array(list(values), type=_arrow_dtype(dtype)))
 
 
 def frame_from_records(rows: Sequence[dict], backend: str | None = None) -> Frame:

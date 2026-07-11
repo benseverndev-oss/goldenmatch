@@ -330,3 +330,32 @@ def test_frame_to_arrow_roundtrip(backend):
     t = f.to_arrow()
     assert isinstance(t, pa.Table)
     assert t.column("id").to_pylist() == [1, 2]
+
+
+# -- W5a ops ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_column_from_values(backend):
+    from goldenmatch.core.frame import column_from_values
+
+    f = _mk({"id": [1, 2]}, backend)
+    col = column_from_values(["x", None], "utf8", backend=backend)
+    out = f.with_column("__d__", col)
+    assert out.column("__d__").to_list() == ["x", None]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_ensure_row_ids_synthesizes_and_casts(backend):
+    f = _mk({"v": ["a", "b"]}, backend)
+    out = f.ensure_row_ids()
+    assert out.column("__row_id__").to_list() == [0, 1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_ensure_row_ids_reuses_existing_and_offsets(backend):
+    # the #844 collision guard: an existing __row_id__ is respected; offset
+    # applies to it (reference/incremental disjoint id spaces).
+    f = _mk({"__row_id__": [5, 9], "v": ["a", "b"]}, backend)
+    assert f.ensure_row_ids().column("__row_id__").to_list() == [5, 9]
+    assert f.ensure_row_ids(offset=100).column("__row_id__").to_list() == [105, 109]
