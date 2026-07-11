@@ -71,3 +71,17 @@ def test_dedupe_file_short_circuits_on_step_failure():
     assert out["ok"] is False
     assert [s["step"] for s in out["steps"]] == ["upload", "auto_configure"]
     assert "boom" in out["summary"].lower() or "auto_configure" in out["summary"]
+
+
+def test_dedupe_file_registered_and_curated():
+    from goldensuite_mcp.server import _aggregate, _apply_tool_filter
+    import os
+    os.environ.pop("GOLDENSUITE_MCP_TOOLS", None)
+    tools, dispatch = _aggregate()
+    names = {t.name for t in tools}
+    assert "dedupe_file" in names
+    assert "dedupe_file" in dispatch
+    listed = {t.name for t in _apply_tool_filter(tools)}
+    assert "dedupe_file" in listed
+    out = dispatch["suite_find_tools"]("suite_find_tools", {})
+    assert "dedupe_file" in {r["name"] for r in out["tools"]}
