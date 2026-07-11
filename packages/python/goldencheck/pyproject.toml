@@ -85,6 +85,7 @@ native = [
 semantic = [
     "sentence-transformers>=2.2",
 ]
+parquet = ["pyarrow>=14"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

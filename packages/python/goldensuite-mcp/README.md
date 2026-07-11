@@ -38,6 +38,32 @@ WARNING goldensuite_mcp.server: tool collision: 'profile' from goldenflow shadow
 
 If you need a shadowed tool, use that package's standalone MCP server instead (e.g. `goldenflow mcp-serve`).
 
+## Curated tool listing (`GOLDENSUITE_MCP_TOOLS`)
+
+The full suite is ~105 tools. That many in one flat namespace makes an LLM's
+tool-selection noticeably worse, so **`list_tools` returns a curated headline
+set (~25 tools) by default** — the primary verbs of each package. Every other
+tool stays **fully callable by exact name**; the filter only trims what the
+client sees when it *enumerates* tools, never what it can *invoke*.
+
+Control it with the `GOLDENSUITE_MCP_TOOLS` env var:
+
+| Value | `list_tools` returns |
+|---|---|
+| _unset_ / `curated` | the ~25 headline tools (default) |
+| `full` | every aggregated tool (~105) |
+| `scan,transform,analyze_data` | exactly those names (whitespace tolerated) |
+
+```bash
+# See the whole surface
+GOLDENSUITE_MCP_TOOLS=full goldensuite-mcp serve
+
+# Only the tools a given workflow needs
+GOLDENSUITE_MCP_TOOLS=upload_dataset,agent_deduplicate,scan goldensuite-mcp serve
+```
+
+The curated set lives in `CURATED_TOOLS` in `goldensuite_mcp/server.py`.
+
 ## Claude Desktop / Claude Code config
 
 ```json

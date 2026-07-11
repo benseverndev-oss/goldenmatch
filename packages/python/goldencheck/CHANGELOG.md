@@ -30,6 +30,21 @@ All notable changes to GoldenCheck will be documented in this file.
   `goldencheck_*` UDFs (goldenmatch-duckdb) and the Postgres `goldencheck_*`
   functions (goldenmatch_pg 0.13.0), completing GoldenCheck's cross-surface
   parity (roadmap P5).
+- **`scan_columns(columns)`** -- a reduced, **Polars-free** structural scan of
+  in-memory column data (`dict[str, list]` in, `list[Finding]` out). Always runs
+  the mechanical structural checks (nullability, uniqueness, cardinality); also
+  runs the format, encoding, pattern-consistency, and temporal-order checks when
+  `goldencheck[native]` is installed. Byte-identical to the corresponding
+  `scan_dataframe` checks; complements `scan_dataframe` for callers that want the
+  covered structural checks without constructing a Polars DataFrame. Internally
+  this is the covered-subset backend of the Polars-eviction program (a backend-
+  neutral Frame/Column seam with a pure-Python backend); new `goldencheck-native`
+  kernel components `regex` (string-pattern checks) and `str_to_date` (chrono
+  date parsing, the same engine Polars uses) back the format/encoding/pattern and
+  temporal profilers on the non-Polars path, byte-identically. `NativeRequiredError`
+  is raised if a native-only covered check is requested without the kernel built.
+  (Polars remains a base dependency today; making it optional is a later stage of
+  the program.)
 
 ## [1.4.1] - 2026-07-02
 

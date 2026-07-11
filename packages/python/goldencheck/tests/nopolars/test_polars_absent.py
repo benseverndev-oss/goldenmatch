@@ -60,3 +60,32 @@ def test_covered_scan_columns_without_polars() -> None:
     assert "cardinality" in checks     # grade is low-cardinality
     assert "nullability" in checks     # note is entirely null
     assert "polars" not in sys.modules
+
+
+def test_hard_checks_run_without_polars() -> None:
+    import pytest
+    from goldencheck.core._native_loader import native_enabled
+    if not native_enabled("regex"):
+        pytest.skip("nopolars lane without native regex kernel; hard checks skip by design")
+    from goldencheck import scan_columns
+
+    findings = scan_columns({"email": [f"u{i}@x.com" for i in range(18)] + ["bad", "worse"]})
+    checks = {f.check for f in findings}
+    assert "format_detection" in checks       # regex ran polars-free
+    assert "polars" not in sys.modules
+
+
+def test_temporal_check_runs_without_polars() -> None:
+    import pytest
+    from goldencheck.core._native_loader import native_enabled
+    if not native_enabled("str_to_date"):
+        pytest.skip("nopolars lane without native date kernel; temporal skips by design")
+    from goldencheck import scan_columns
+
+    findings = scan_columns({
+        "start_date": ["2021-05-01", "2021-01-01"],
+        "end_date": ["2021-01-01", "2021-06-01"],
+    })
+    checks = {f.check for f in findings}
+    assert "temporal_order" in checks
+    assert "polars" not in sys.modules

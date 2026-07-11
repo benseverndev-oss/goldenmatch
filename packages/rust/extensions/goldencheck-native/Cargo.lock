@@ -364,6 +364,8 @@ dependencies = [
 name = "goldencheck-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "regex",
  "rustc-hash",
 ]
 
