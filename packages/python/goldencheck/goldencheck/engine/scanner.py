@@ -10,7 +10,7 @@ from goldencheck._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
-from goldencheck.core._native_loader import native_enabled
+from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import PyFrame, dtype_category
 from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.engine.reader import read_columns, read_file
@@ -389,6 +389,18 @@ def _scan_dataframe_impl(
         # surrounding I/O). Strict 2x reduction; zero behavioral change.
         n_unique = non_null.n_unique() if non_null_len > 0 else 0
         null_count = col.null_count()
+        # Shadow-compute the fused native column_aggregate kernel on the real
+        # scan path so it runs against production shapes ahead of the Flip
+        # (see tests/engine/test_column_aggregate_shadow.py for the parity
+        # assertion). NOT authoritative -- the ColumnProfile below is built
+        # from the Polars values above exactly as before this shadow wire.
+        if native_enabled("column_aggregate"):
+            try:
+                native_module().column_aggregate(col.to_arrow())
+            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                logger.debug(
+                    "column_aggregate shadow compute failed on column %s: %s", col_name, e
+                )
         cp = ColumnProfile(
             name=col_name,
             inferred_type=str(col.dtype),
