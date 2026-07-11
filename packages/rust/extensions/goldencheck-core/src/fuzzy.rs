@@ -25,7 +25,18 @@
 //!
 //! Pairwise edit distance is the part that is painfully slow in Python and fast
 //! here -- this kernel genuinely beats a pure-Python fallback.
+//!
+//! `near_duplicate_clusters` is the Arrow-in entry point (native's pyo3 shim
+//! decodes pyarrow -> `ArrayRef` and calls it directly). `near_duplicate_clusters_slice`
+//! stays `pub` (not `pub(crate)`) because it's also the entry point for the
+//! non-Arrow surfaces that call this crate directly with plain `&[String]`:
+//! `goldencheck-wasm` (JSON in/out over wasm-bindgen), the `goldenmatch_pg`
+//! Postgres extension, and this crate's own `tests/golden.rs` cross-surface
+//! fixture.
 
+use arrow::array::{Array, LargeStringArray, StringArray};
+use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 const MAX_BLOCK: usize = 300;
@@ -122,7 +133,7 @@ impl UnionFind {
 
 /// Cluster the distinct `values` into groups of edit-distance-close strings.
 /// Returns clusters (each a sorted list of indices into `values`) of size >= 2.
-pub fn near_duplicate_clusters(values: &[String], min_similarity: f64) -> Vec<Vec<usize>> {
+pub fn near_duplicate_clusters_slice(values: &[String], min_similarity: f64) -> Vec<Vec<usize>> {
     let n = values.len();
     if n < 2 {
         return Vec::new();
@@ -189,6 +200,36 @@ pub fn near_duplicate_clusters(values: &[String], min_similarity: f64) -> Vec<Ve
     clusters
 }
 
+/// Cluster the distinct string `values` of a column into edit-distance-close
+/// groups. Input must be a null-free Utf8/LargeUtf8 array; indices map 1:1.
+pub fn near_duplicate_clusters(
+    array: &dyn Array,
+    min_similarity: f64,
+) -> Result<Vec<Vec<usize>>, ArrowError> {
+    if array.null_count() > 0 {
+        return Err(ArrowError::InvalidArgumentError(
+            "near_duplicate_clusters expects a null-free array (pass distinct non-null values)"
+                .into(),
+        ));
+    }
+    let values: Vec<String> = match array.data_type() {
+        DataType::Utf8 => {
+            let a = array.as_any().downcast_ref::<StringArray>().unwrap();
+            (0..a.len()).map(|i| a.value(i).to_string()).collect()
+        }
+        DataType::LargeUtf8 => {
+            let a = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            (0..a.len()).map(|i| a.value(i).to_string()).collect()
+        }
+        other => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "near_duplicate_clusters expects Utf8/LargeUtf8, got {other:?}"
+            )))
+        }
+    };
+    Ok(near_duplicate_clusters_slice(&values, min_similarity))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,7 +241,7 @@ mod tests {
     #[test]
     fn clusters_typos_and_case() {
         let values = v(&["California", "Californa", "CALIFORNIA", "Texas", "New York"]);
-        let clusters = near_duplicate_clusters(&values, 0.8);
+        let clusters = near_duplicate_clusters_slice(&values, 0.8);
         // The three California variants cluster; Texas / New York stand alone.
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0], vec![0, 1, 2]);
@@ -209,19 +250,34 @@ mod tests {
     #[test]
     fn short_string_typo_via_prefix_block() {
         let values = v(&["Jon", "John", "Jane"]);
-        let clusters = near_duplicate_clusters(&values, 0.7);
+        let clusters = near_duplicate_clusters_slice(&values, 0.7);
         assert_eq!(clusters, vec![vec![0, 1]]); // jon/john; jane separate
     }
 
     #[test]
     fn nothing_when_all_distinct() {
         let values = v(&["apple", "banana", "cherry"]);
-        assert!(near_duplicate_clusters(&values, 0.8).is_empty());
+        assert!(near_duplicate_clusters_slice(&values, 0.8).is_empty());
     }
 
     #[test]
     fn empty_and_singleton() {
-        assert!(near_duplicate_clusters(&[], 0.8).is_empty());
-        assert!(near_duplicate_clusters(&v(&["x"]), 0.8).is_empty());
+        assert!(near_duplicate_clusters_slice(&[], 0.8).is_empty());
+        assert!(near_duplicate_clusters_slice(&v(&["x"]), 0.8).is_empty());
+    }
+
+    #[test]
+    fn arrow_clusters_match_string_slice() {
+        use arrow::array::StringArray;
+        let arr = StringArray::from(vec!["California", "Californa", "CALIFORNIA", "Texas"]);
+        let via_arrow = near_duplicate_clusters(&arr, 0.8).unwrap();
+        assert_eq!(via_arrow, vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn arrow_rejects_nulls() {
+        use arrow::array::StringArray;
+        let arr = StringArray::from(vec![Some("a"), None, Some("b")]);
+        assert!(near_duplicate_clusters(&arr, 0.8).is_err());
     }
 }
