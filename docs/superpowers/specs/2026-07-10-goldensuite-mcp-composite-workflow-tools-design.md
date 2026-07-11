@@ -3,7 +3,9 @@
 **Date:** 2026-07-10
 **Status:** Approved (brainstorm) → spec
 **Package:** `packages/python/goldensuite-mcp`
-**Depends on:** curated tool listing (PR #1639) + `suite_find_tools` (PR #1640)
+**Depends on:** curated tool listing (PR #1639) + `suite_find_tools` (PR #1640) +
+**Phase 1 goldenmatch golden-out** (`output_path` on `agent_deduplicate` /
+`agent_match_sources`; separate goldenmatch PR — see Build order)
 
 ## Problem
 
@@ -38,12 +40,13 @@ and a human gets "CSV in → result out" without chaining.
 - Not available on the standalone `goldenmatch-mcp`. Per decision **PD2**
   (consolidate on the unified endpoint), `dedupe_file`/`match_sources` live only
   in `goldensuite-mcp` even though they are goldenmatch-only. Accepted tradeoff.
-- No new persistence. Composites rely on the tools' existing server-side session
-  state (see "Why the dispatcher seam").
+- No new persistence / no server-global state. Composites thread step outputs
+  inline (the batch-ER tools are stateless; see "Why the dispatcher seam").
 
 ## Why the dispatcher seam (not the Python APIs)
 
-Two facts about the current tools make calling the dispatchers the correct seam:
+Calling the dispatchers (not the Python APIs) keeps composites thin and parity-
+guaranteed with the granular tools. Two facts make it work:
 
 1. **Inline-or-path inputs.** Every goldenmatch input tool accepts inline file
    bytes (`file_content` + `filename`) *or* a server `file_path` via the shared
@@ -52,14 +55,46 @@ Two facts about the current tools make calling the dispatchers the correct seam:
    in the `_ingest` resolver — they take a bare `file_path` and read it directly;
    threading the server path still works because the path is readable, the
    composite just doesn't rely on the resolver for those steps.
-2. **Shared server-side session state.** `agent_deduplicate` / `agent_match_sources`
-   populate the server session; `export_results(output_path)` exports the *last
-   run*. Calling the dispatchers in order threads this state implicitly — exactly
-   what a human calling the tools in sequence gets.
+2. **Stateless, self-contained returns.** The batch-ER tools (`agent_deduplicate`,
+   `agent_match_sources`) create a fresh `AgentSession` per call and return their
+   result inline — they do **not** share server state across calls. Composites
+   thread by passing each step's returned path/config to the next call.
 
-Calling the underlying Python APIs directly would re-implement this orchestration
-and could drift from what the MCP tools actually do. The dispatcher seam keeps
-composites thin and parity-guaranteed.
+### The `_result`-global gotcha (why Phase 1 exists)
+
+The base non-agent tools (`export_results`, `list_clusters`, `get_cluster`,
+`get_golden_record`, `find_duplicates`) read a **module-global `_result` that is
+only populated when the standalone GoldenMatch server boots with a dataset**
+(`_initialize(file_paths)` in `goldenmatch/mcp/server.py`). The `goldensuite-mcp`
+aggregator imports the tools without ever booting that way, so `_result` is
+`None` and those base tools are effectively **dead in the aggregated endpoint** —
+they cannot be composite steps.
+
+As a result `agent_deduplicate` returns only a **summary** today
+(`_serialize_result` reduces the `DedupeResult` to counts + match rate) even
+though the golden records exist on `result.golden` (the pipeline just runs with
+`output_golden=False` by default). Delivering a golden file therefore needs a
+**Phase 1** goldenmatch change; the composites are **Phase 2**.
+
+## Phase 1 — stateless golden-out (goldenmatch prerequisite)
+
+Add an optional `output_path` (CSV) to the `agent_deduplicate` and
+`agent_match_sources` MCP tools, mirroring the existing `run_transforms`
+`output_path` pattern:
+
+- When `output_path` is provided, the handler runs the stateless pipeline with
+  golden/linked output enabled, writes the result frame to `output_path`
+  (stripping `__`-prefixed internal columns, as `export_results` does), and adds
+  `{"golden_path": output_path, "golden_records": N}` (dedupe) /
+  `{"matches_path": output_path, "matched_pairs": N}` (match) to the return.
+- When absent, behavior is unchanged (summary only) — fully backward compatible.
+- `output_path` is validated through the same `safe_path`/allowed-root guard the
+  other file-writing tools use.
+
+This is a small, additive change to `goldenmatch/mcp/agent_tools.py` (+ the two
+tools' input schemas), lands as its own goldenmatch PR, and is independently
+useful (any agent chaining these tools can now get a file). Phase 2 composites
+call these tools with a generated `output_path`.
 
 ## Architecture
 
@@ -110,20 +145,25 @@ Single-source dedupe. Chain:
 
 1. `upload_dataset(file_content, filename)` → `path`
 2. `auto_configure(file_path=path)` → `config` (surfaced for transparency/reuse)
-3. `agent_deduplicate(file_path=path, config=config)` → clusters + confidence gating
-4. `export_results(output_path=<gen>)` → `golden_path`
+3. `agent_deduplicate(file_path=path, config=config, output_path=<gen>)` →
+   confidence gating + `golden_path` (Phase 1 `output_path` writes the golden CSV)
 
-`output_path` is generated under the uploads dir (e.g. `<stem>.golden.csv`) and
-returned. `exclude_columns` passes through to steps 2–3.
+The dedupe step both returns the summary/gating **and** writes the golden file
+(Phase 1), so there is no separate `export_results` step (that base tool reads the
+dead `_result` global — see the gotcha above). `output_path` is generated under
+the uploads dir (e.g. `<stem>.golden.csv`) and returned. `exclude_columns` passes
+through to steps 2–3.
 
 ### `match_sources`
 
 Cross-source linkage. Chain:
 
 1. `upload_dataset` × 2 → `path_a`, `path_b`
-2. `agent_match_sources(file_a=path_a, file_b=path_b, config?)` → matched pairs
-3. `export_results(output_path=<gen>)` → `matches_path`
+2. `agent_match_sources(file_a=path_a, file_b=path_b, config?, output_path=<gen>)`
+   → matched-pairs summary + `matches_path` (Phase 1 `output_path` writes the
+   linked-pairs CSV)
 
+No separate `export_results` step (same dead-`_result` reason as `dedupe_file`).
 Input mirrors `agent_match_sources`: `file_a_content`/`file_a_name` +
 `file_b_content`/`file_b_name`, or `file_a`/`file_b` paths.
 
@@ -146,8 +186,8 @@ Standardize then dedupe. Chain:
 
 1. `upload_dataset` → `path`
 2. `run_transforms(file_path=path, output_path=<gen cleaned>)` → `cleaned_path`
-3. `agent_deduplicate(file_path=cleaned_path)` → clusters
-4. `export_results(output_path=<gen>)` → `golden_path`
+3. `agent_deduplicate(file_path=cleaned_path, output_path=<gen golden>)` →
+   summary + `golden_path` (Phase 1 `output_path`)
 
 Uses goldenmatch's **`run_transforms`** tool, *not* goldenflow's raw `transform`.
 `run_transforms` is a goldenmatch tool (inline-or-path via `_ingest`) that runs
@@ -177,13 +217,17 @@ placement decision.
   "steps": [
     { "step": "upload",        "ok": true, "path": "/uploads/derm.csv", "rows": 288 },
     { "step": "auto_configure","ok": true, "matchkeys": ["exact(npi)", "weighted(full_name,phone)"] },
-    { "step": "deduplicate",   "ok": true, "n_clusters": 172, "auto_merge": 98, "review": 14, "reject": 4 },
-    { "step": "export",        "ok": true, "golden_path": "/uploads/derm.golden.csv" }
+    { "step": "deduplicate",   "ok": true, "auto_merge": 98, "review": 14, "reject": 4, "golden_path": "/uploads/derm.golden.csv" }
   ],
   "config": { /* config used, where relevant */ },
-  "outputs": { "golden_path": "/uploads/derm.golden.csv", "clusters_preview": [ /* first N */ ] }
+  "outputs": { "golden_path": "/uploads/derm.golden.csv", "golden_records": 172, "total_records": 288 }
 }
 ```
+
+`outputs` carries the workflow's headline results (the written file path + counts
+the dedupe tool returns). Full cluster membership is **not** returned inline — the
+golden file is the artifact; `get_cluster`/`list_clusters` can't back an inline
+preview in the aggregator (dead `_result` global).
 
 - `summary`: one human-readable line.
 - `steps`: ordered, one entry per attempted step, each with `step`, `ok`, and that
@@ -217,7 +261,8 @@ synthetic frames):
 2. **Threading** — the path from `upload_dataset` reaches later steps; generated
    `output_path` is returned in `outputs`.
 3. **Parity** — a composite's result matches calling the same tools by hand in
-   sequence through the aggregator (same clusters / same export path).
+   sequence through the aggregator (same summary counts / same written golden
+   file contents).
 4. **Failure injection** — a fake dispatch table whose step-K returns `{"error"}`
    (or raises) → composite short-circuits, `ok:false`, `steps` ends at K.
 5. **Degraded assess_file** — `scan` missing → step `ok:false`, composite
@@ -230,11 +275,21 @@ test per composite runs through the real aggregated dispatch on a fixture file.
 
 ## Build order
 
-`dedupe_file` first as the reference implementation (module scaffold + step
-helper + return contract + its tests). The other three reuse the identical spec
-shape and helper. Lands as `feat/goldensuite-mcp-composites` off `main` once
-#1639/#1640 merge (rebase onto the merged main so the `_aggregate` registration
-point and `CURATED_TOOLS` are present).
+**Phase 1 — goldenmatch golden-out (separate goldenmatch PR).** Add the optional
+`output_path` to `agent_deduplicate` + `agent_match_sources` (writes golden /
+linked CSV, backward compatible). Ships and merges on its own; independently
+useful.
+
+**Phase 2 — composites (`feat/goldensuite-mcp-composites`).** `dedupe_file` first
+as the reference implementation (module scaffold + step helper + return contract +
+tests), then `assess_file`, `match_sources`, `clean_and_dedupe` reuse the identical
+shape/helper. Rebase onto a `main` that has Phase 1 + #1639/#1640 merged so the
+`output_path` capability, the `_aggregate` registration point, and `CURATED_TOOLS`
+are all present.
+
+Note: Phase 2's end-to-end tests for the dedupe-family composites depend on Phase 1
+being present (the golden file). Until Phase 1 merges, those composites are
+summary-only; `assess_file` is buildable/verifiable without Phase 1.
 
 ## Risks / open items (pinned at implementation)
 
