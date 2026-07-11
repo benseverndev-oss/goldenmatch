@@ -16,6 +16,7 @@ mod aggregate;
 mod csv_infer;
 mod date;
 mod dc;
+mod freshness;
 mod fuzzy;
 mod keys;
 mod profile;
@@ -31,6 +32,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stats::column_numeric_stats, m)?)?;
     m.add_function(wrap_pyfunction!(stats::count_outside, m)?)?;
     m.add_function(wrap_pyfunction!(sequence::sequence_analysis, m)?)?;
+    m.add_function(wrap_pyfunction!(freshness::date_freshness, m)?)?;
     m.add_function(wrap_pyfunction!(keys::composite_key_search, m)?)?;
     m.add_function(wrap_pyfunction!(keys::functional_dependency_holds, m)?)?;
     m.add_function(wrap_pyfunction!(keys::discover_functional_dependencies, m)?)?;

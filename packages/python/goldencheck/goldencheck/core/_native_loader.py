@@ -115,6 +115,7 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "column_aggregate": ("column_aggregate",),
     "numeric_stats": ("column_numeric_stats", "count_outside"),
     "sequence_analysis": ("sequence_analysis",),
+    "date_freshness": ("date_freshness",),
 }
 
 

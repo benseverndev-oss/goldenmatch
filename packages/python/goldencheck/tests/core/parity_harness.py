@@ -535,6 +535,83 @@ def _sequence_fallback(s: pl.Series) -> tuple | None:
     return (n_diffs, unit, pos, is_sorted, col_min, col_max, present_size, gap_count, tuple(gap_sample))
 
 
+# ---------------------------------------------------------------------------
+# date_freshness (fused count_gt(now) + max) -- freshness. Both signals are
+# exact integers (count + raw epoch), so this is an exact-`!=` check with an
+# EMPTY divergence class. `now_epoch` is computed offset-free in the array's
+# native Arrow unit (spec review B2 -- NEVER `datetime.timestamp()`).
+# ---------------------------------------------------------------------------
+import datetime as _dt_mod  # noqa: E402
+
+_FRESH_EPOCH_DATE = _dt_mod.date(1970, 1, 1)
+_FRESH_EPOCH_DT = _dt_mod.datetime(1970, 1, 1)
+_FRESH_REF_DATE = _dt_mod.date(2000, 1, 1)
+_FRESH_REF_DT = _dt_mod.datetime(2000, 1, 1, 12, 0, 0)
+
+
+def _fresh_unit(arr: pa.Array) -> str:
+    t = arr.type
+    if pa.types.is_date32(t):
+        return "day"
+    if pa.types.is_date64(t):
+        return "ms"
+    if pa.types.is_timestamp(t):
+        return t.unit
+    raise AssertionError(f"non-temporal array type: {t}")
+
+
+def _fresh_epoch(ref: object, unit: str) -> int:
+    if unit == "day":
+        return (ref - _FRESH_EPOCH_DATE).days  # type: ignore[operator]
+    dt = ref if isinstance(ref, _dt_mod.datetime) else _dt_mod.datetime(ref.year, ref.month, ref.day)  # type: ignore[union-attr]
+    delta = dt - _FRESH_EPOCH_DT
+    if unit == "s":
+        return delta // _dt_mod.timedelta(seconds=1)
+    if unit == "ms":
+        return delta // _dt_mod.timedelta(milliseconds=1)
+    if unit == "us":
+        return delta // _dt_mod.timedelta(microseconds=1)
+    if unit == "ns":
+        return (delta // _dt_mod.timedelta(microseconds=1)) * 1000
+    raise AssertionError(f"unknown unit: {unit}")
+
+
+def _freshness_fixtures(seed: int) -> list[tuple[pl.Series, object]]:
+    rng = random.Random(seed)
+    n = rng.randint(0, 60)
+    ref_day = (_FRESH_REF_DATE - _FRESH_EPOCH_DATE).days
+    day_pool = [None] + [ref_day + rng.randint(-4000, 4000) for _ in range(20)]
+    dates = [rng.choice(day_pool) for _ in range(n)]
+    date_vals = [None if d is None else _FRESH_EPOCH_DATE + _dt_mod.timedelta(days=d) for d in dates]
+    us_pool = [None] + [rng.randint(-10_000_000, 10_000_000) for _ in range(20)]
+    micros = [rng.choice(us_pool) for _ in range(n)]
+    dt_vals = [None if m is None else _FRESH_REF_DT + _dt_mod.timedelta(microseconds=m) for m in micros]
+    return [
+        (pl.Series("d", date_vals, dtype=pl.Date), _FRESH_REF_DATE),
+        (pl.Series("t", dt_vals, dtype=pl.Datetime("us")), _FRESH_REF_DT),
+        # Seed-invariant adversarials.
+        (pl.Series("d0", [], dtype=pl.Date), _FRESH_REF_DATE),
+        (pl.Series("dn", [None, None], dtype=pl.Date), _FRESH_REF_DATE),
+    ]
+
+
+def _freshness_native(fx: tuple[pl.Series, object]) -> tuple | None:
+    s, ref = fx
+    arr = s.to_arrow()
+    now_epoch = _fresh_epoch(ref, _fresh_unit(arr))
+    res = native_module().date_freshness(arr, now_epoch)
+    return None if res is None else (res[0], res[1])
+
+
+def _freshness_fallback(fx: tuple[pl.Series, object]) -> tuple | None:
+    s, ref = fx
+    non_null = s.drop_nulls()
+    if len(non_null) == 0:
+        return None
+    unit = _fresh_unit(s.to_arrow())
+    return (non_null.filter(non_null > ref).len(), _fresh_epoch(non_null.max(), unit))
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -566,5 +643,11 @@ REGISTERED_COMPONENTS: list[Component] = [
         _sequence_native,
         _sequence_fallback,
         _sequence_fixtures,
+    ),
+    Component(
+        "date_freshness",
+        _freshness_native,
+        _freshness_fallback,
+        _freshness_fixtures,
     ),
 ]
