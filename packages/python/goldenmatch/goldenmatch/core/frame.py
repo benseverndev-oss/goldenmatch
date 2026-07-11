@@ -94,6 +94,10 @@ class Column(Protocol):
     def semantic_dtype(self) -> str: ...
 
 
+# W4a: map_column's "no default" marker -- None is a legitimate default value.
+_MAP_RAISE: Any = object()
+
+
 @runtime_checkable
 class Frame(Protocol):
     # W2b relational-op contracts (pinned by tests/test_frame_relational_ops.py):
@@ -150,7 +154,9 @@ class Frame(Protocol):
     def filter_nonblank_key(self, col: str) -> Frame: ...
     def filter_target_split(self, a: str, b: str, values: Sequence[Any]) -> Frame: ...
     def with_fill_null(self, cols: Sequence[str], value: Any) -> Frame: ...
-    def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> Frame: ...
+    def map_column(
+        self, src: str, dst: str, mapping: dict, dtype: str = "int64", default: Any = _MAP_RAISE
+    ) -> Frame: ...
     def apply_weak_quality(self, weak_threshold: float) -> Frame: ...
     def select_eligible_clusters(self) -> Frame: ...
     # W2d ops: with_column attaches a derived Column; group_partitions is
@@ -184,6 +190,18 @@ class Frame(Protocol):
         self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
     ) -> Column: ...
     def derive_ne_joined(self, fields: Sequence[str]) -> Column: ...
+    # W4a tail/distributed ops (fixtures: tests/test_frame_w4_ops.py). Probed
+    # semantics: filter_in DROPS null rows on both backends (polars null mask,
+    # pc.is_in False); with_pair_canonical min/max_horizontal SKIP nulls;
+    # unique_by result ORDER is engine-defined (SET contract; keep refers to
+    # input order); with_group_len_over counts null keys as a group.
+    def filter_in(self, col: str, values: Sequence[Any]) -> Frame: ...
+    def with_row_index_int64(self, name: str, offset: int = 0) -> Frame: ...
+    def with_int64_offset(self, col: str, offset: int) -> Frame: ...
+    def with_group_len_over(self, key: str, name: str) -> Frame: ...
+    def with_group_min_over(self, key: str, value: str, name: str) -> Frame: ...
+    def with_pair_canonical(self, a: str, b: str) -> Frame: ...
+    def unique_by(self, subset: Sequence[str], keep: str = "first") -> Frame: ...
 
 
 class PolarsColumn:
@@ -446,10 +464,18 @@ class PolarsFrame:
         # cluster.py ~589-592: coalesce native-bridge null edges.
         return PolarsFrame(self._df.with_columns([pl.col(c).fill_null(value) for c in cols]))
 
-    def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> PolarsFrame:
+    def map_column(
+        self, src: str, dst: str, mapping: dict, dtype: str = "int64", default: Any = _MAP_RAISE
+    ) -> PolarsFrame:
         # cluster.py ~1151-1152: tag pairs with their cluster id.
-        # replace_strict RAISES on unmapped source values (contract).
-        return PolarsFrame(self._df.with_columns(pl.col(src).replace_strict(mapping).alias(dst)))
+        # replace_strict RAISES on unmapped source values (contract). W4a:
+        # optional default= (distributed/pipeline.py:411 remap-with-sentinel);
+        # PROBED: polars maps null -> default too (not passthrough).
+        if default is _MAP_RAISE:
+            expr = pl.col(src).replace_strict(mapping)
+        else:
+            expr = pl.col(src).replace_strict(mapping, default=default)
+        return PolarsFrame(self._df.with_columns(expr.alias(dst)))
 
     def apply_weak_quality(self, weak_threshold: float) -> PolarsFrame:
         # cluster.py Step-3 (~718-729) VERBATIM: quality recompute (split rows
@@ -607,6 +633,44 @@ class PolarsFrame:
         # precompute_matchkey_transforms' derived-NE join (matchkey.py:381-386).
         expr = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("") for c in fields], separator=" ")
         return PolarsColumn(self._df.select(expr.alias("__ne__"))["__ne__"])
+
+    # -- W4a tail/distributed ops --------------------------------------------
+
+    def filter_in(self, col: str, values: Sequence[Any]) -> PolarsFrame:
+        # resolve.py:170/918/996, sync.py:994, tui/engine.py:312/338/339.
+        return PolarsFrame(self._df.filter(pl.col(col).is_in(list(values))))
+
+    def with_row_index_int64(self, name: str, offset: int = 0) -> PolarsFrame:
+        # web/preview.py:189's pl.int_range(0, height, dtype=Int64) + offset.
+        return PolarsFrame(
+            self._df.with_columns(
+                pl.int_range(offset, offset + self._df.height, dtype=pl.Int64).alias(name)
+            )
+        )
+
+    def with_int64_offset(self, col: str, offset: int) -> PolarsFrame:
+        # chunked.py:91-93: (col + offset).cast(Int64) in place.
+        return PolarsFrame(self._df.with_columns((pl.col(col) + offset).cast(pl.Int64).alias(col)))
+
+    def with_group_len_over(self, key: str, name: str) -> PolarsFrame:
+        # clustering.py ~430: per-row group size window.
+        return PolarsFrame(self._df.with_columns(pl.len().over(key).alias(name)))
+
+    def with_group_min_over(self, key: str, value: str, name: str) -> PolarsFrame:
+        # clustering.py ~1234: per-row group min window.
+        return PolarsFrame(self._df.with_columns(pl.col(value).min().over(key).alias(name)))
+
+    def with_pair_canonical(self, a: str, b: str) -> PolarsFrame:
+        # distributed/scoring.py ~560: canonical (min, max) endpoint order.
+        return PolarsFrame(
+            self._df.with_columns(
+                [pl.min_horizontal(a, b).alias(a), pl.max_horizontal(a, b).alias(b)]
+            )
+        )
+
+    def unique_by(self, subset: Sequence[str], keep: str = "first") -> PolarsFrame:
+        # clustering ~1237 / pipeline.py:1970. Result order engine-defined.
+        return PolarsFrame(self._df.unique(subset=list(subset), keep=keep))  # type: ignore[arg-type]
 
 
 class ArrowColumn:
@@ -935,14 +999,23 @@ class ArrowFrame:
             tbl = tbl.set_column(idx, c, pc.fill_null(tbl.column(c), value))
         return ArrowFrame(tbl)
 
-    def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> ArrowFrame:
+    def map_column(
+        self, src: str, dst: str, mapping: dict, dtype: str = "int64", default: Any = _MAP_RAISE
+    ) -> ArrowFrame:
         import pyarrow as pa
 
         vals = self._tbl.column(src).to_pylist()
-        try:
-            mapped = [None if v is None else mapping[v] for v in vals]
-        except KeyError as e:  # replace_strict twin: unmapped RAISES
-            raise ValueError(f"map_column: value {e.args[0]!r} in {src!r} not in mapping") from e
+        if default is _MAP_RAISE:
+            try:
+                mapped = [None if v is None else mapping[v] for v in vals]
+            except KeyError as e:  # replace_strict twin: unmapped RAISES
+                raise ValueError(
+                    f"map_column: value {e.args[0]!r} in {src!r} not in mapping"
+                ) from e
+        else:
+            # PROBED polars parity: replace_strict(mapping, default) maps
+            # unmapped values AND nulls to the default.
+            mapped = [mapping.get(v, default) for v in vals]
         return ArrowFrame(self._tbl.append_column(dst, pa.array(mapped, type=_arrow_dtype(dtype))))
 
     def apply_weak_quality(self, weak_threshold: float) -> ArrowFrame:
@@ -1104,6 +1177,90 @@ class ArrowFrame:
 
         return ArrowColumn(arrow_derive.ne_joined_column([self._tbl.column(f) for f in fields]))
 
+    # -- W4a tail/distributed ops --------------------------------------------
+
+    def filter_in(self, col: str, values: Sequence[Any]) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        # Nones are stripped from the value set: polars drops null rows even
+        # when None is listed (probed), while pc.is_in would MATCH them.
+        vals = [v for v in values if v is not None]
+        if not vals:
+            return ArrowFrame(self._tbl.slice(0, 0))
+        # pc.is_in: null -> False == polars null-mask DROP (probed).
+        mask = pc.is_in(self._tbl.column(col), value_set=pa.array(vals))
+        return ArrowFrame(self._tbl.filter(mask))
+
+    def with_row_index_int64(self, name: str, offset: int = 0) -> ArrowFrame:
+        import pyarrow as pa
+
+        n = self._tbl.num_rows
+        return ArrowFrame(
+            self._tbl.append_column(name, pa.array(range(offset, offset + n), type=pa.int64()))
+        )
+
+    def with_int64_offset(self, col: str, offset: int) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        idx = self._tbl.column_names.index(col)
+        arr = pc.cast(pc.add(self._tbl.column(col), offset), pa.int64())
+        return ArrowFrame(self._tbl.set_column(idx, col, arr))
+
+    def with_group_len_over(self, key: str, name: str) -> ArrowFrame:
+        from collections import Counter
+
+        import pyarrow as pa
+
+        keys = self._tbl.column(key).to_pylist()
+        counts = Counter(keys)  # None keys count as a group (polars over parity)
+        return ArrowFrame(
+            self._tbl.append_column(name, pa.array([counts[k] for k in keys], type=pa.uint32()))
+        )
+
+    def with_group_min_over(self, key: str, value: str, name: str) -> ArrowFrame:
+        keys = self._tbl.column(key).to_pylist()
+        vals = self._tbl.column(value).to_pylist()
+        mins: dict = {}
+        for k, v in zip(keys, vals):
+            if v is None:
+                continue
+            if k not in mins or v < mins[k]:
+                mins[k] = v
+        out = [mins.get(k) for k in keys]
+        return ArrowFrame(
+            self._tbl.append_column(name, _pa_array_typed(out, self._tbl.column(value).type))
+        )
+
+    def with_pair_canonical(self, a: str, b: str) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        ca, cb = self._tbl.column(a), self._tbl.column(b)
+        # An all-null column is null()-typed and breaks element_wise (the W1
+        # count_distinct lesson) -- cast it to the partner's type first.
+        if pa.types.is_null(ca.type) and not pa.types.is_null(cb.type):
+            ca = ca.cast(cb.type)
+        elif pa.types.is_null(cb.type) and not pa.types.is_null(ca.type):
+            cb = cb.cast(ca.type)
+        # element_wise min/max skip nulls by default (polars horizontal parity).
+        mn, mx = pc.min_element_wise(ca, cb), pc.max_element_wise(ca, cb)
+        tbl = self._tbl.set_column(self._tbl.column_names.index(a), a, mn)
+        return ArrowFrame(tbl.set_column(tbl.column_names.index(b), b, mx))
+
+    def unique_by(self, subset: Sequence[str], keep: str = "first") -> ArrowFrame:
+        if keep not in ("first", "last"):
+            raise ValueError(f"unique_by keep must be first/last, got {keep!r}")
+        cols = [self._tbl.column(c).to_pylist() for c in subset]
+        kept: dict = {}
+        for i, key in enumerate(zip(*cols)):
+            if keep == "first":
+                kept.setdefault(key, i)
+            else:
+                kept[key] = i
+        return ArrowFrame(self._tbl.take(sorted(kept.values())))
+
 
 def to_frame(obj: Any) -> Frame:
     """Idempotent coercion: raw ``pl.DataFrame``/``pa.Table``, a
@@ -1137,7 +1294,7 @@ def to_frame(obj: Any) -> Frame:
 # The pinned dtype vocabulary for frame_from_columns/empty_frame schemas.
 # Deliberately tiny: exactly what the engine's frame-construction call sites
 # use (cluster.py assignment/metadata buffers, scorer pair streams).
-_SCHEMA_DTYPES = ("int64", "uint32", "float64", "utf8", "bool")
+_SCHEMA_DTYPES = ("int64", "uint32", "float64", "utf8", "bool", "datetime_us")
 
 
 def _polars_dtype(name: str) -> Any:
@@ -1147,6 +1304,8 @@ def _polars_dtype(name: str) -> Any:
         "float64": pl.Float64,
         "utf8": pl.Utf8,
         "bool": pl.Boolean,
+        # W4a: identity graph frames (resolve.py) use bare pl.Datetime == us, no tz.
+        "datetime_us": pl.Datetime,
     }[name]
 
 
@@ -1159,6 +1318,7 @@ def _arrow_dtype(name: str) -> Any:
         "float64": pa.float64(),
         "utf8": pa.large_string(),  # Polars exports Utf8 as LargeUtf8
         "bool": pa.bool_(),
+        "datetime_us": pa.timestamp("us"),
     }[name]
 
 
@@ -1168,19 +1328,52 @@ def _check_schema(schema: dict[str, str]) -> None:
         raise ValueError(f"unsupported schema dtype(s) {bad}; supported: {_SCHEMA_DTYPES}")
 
 
-def concat_frames(frames: Sequence[Frame]) -> Frame:
+def _pa_array_typed(values: list, typ: Any) -> Any:
+    """pa.array with the source column type when castable, inference fallback."""
+    import pyarrow as pa
+
+    try:
+        return pa.array(values, type=typ)
+    except (pa.ArrowInvalid, pa.ArrowTypeError):  # pragma: no cover -- defensive
+        return pa.array(values)
+
+
+def concat_frames(frames: Sequence[Frame], relaxed: bool = False) -> Frame:
     """Vertical concat, schema-checked by the underlying engine. All frames
     must share a backend (mixing indicates a caller bug, not a coercion
-    opportunity)."""
+    opportunity). W4a: ``relaxed=True`` == polars vertical_relaxed == arrow
+    promote_options="permissive" (PROBED: int64+float64 -> float64 on both)."""
     if not frames:
         raise ValueError("concat_frames requires at least one frame")
     if all(isinstance(f, PolarsFrame) for f in frames):
-        return PolarsFrame(pl.concat([f.native for f in frames], how="vertical"))
+        how = "vertical_relaxed" if relaxed else "vertical"
+        return PolarsFrame(pl.concat([f.native for f in frames], how=how))  # type: ignore[arg-type]
     if all(isinstance(f, ArrowFrame) for f in frames):
         import pyarrow as pa
 
+        if relaxed:
+            return ArrowFrame(
+                pa.concat_tables([f.native for f in frames], promote_options="permissive")
+            )
         return ArrowFrame(pa.concat_tables([f.native for f in frames]))
     raise TypeError("concat_frames requires all frames on the same backend")
+
+
+def frame_from_records(rows: Sequence[dict], backend: str | None = None) -> Frame:
+    """Build a Frame from a list of dict rows with ENGINE INFERENCE -- the
+    db-connector / a2a / tui boundary shape (``pl.DataFrame(rows)``). Unlike
+    ``frame_from_rows`` there is no explicit schema; per-backend dtype
+    inference is the documented contract (values parity, not dtype parity).
+    Empty rows -> zero-column empty frame on both backends."""
+    b = backend if backend is not None else resolve_frame_backend()
+    rows = list(rows)
+    if b == "polars":
+        return PolarsFrame(pl.DataFrame(rows))
+    import pyarrow as pa
+
+    if not rows:
+        return ArrowFrame(pa.table({}))
+    return ArrowFrame(pa.Table.from_pylist(rows))
 
 
 def frame_from_columns(
