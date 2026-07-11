@@ -11,12 +11,15 @@ the merge queue is unaffected, and the red rots for days. This closes that gap.
 
 What it does
 ------------
-For every ACTIVE workflow, it reads the latest COMPLETED run whose head branch
-is `main` and classifies its conclusion. Workflows with no main run (pure
-`workflow_dispatch` / `pull_request` lanes) are skipped -- absence of a main run
-is not a failure. The RED set is written to the step summary and reconciled into
-a single tracking issue (the durable, notifying surface): opened/updated when
-anything is red, closed when `main` is clean again.
+For every ACTIVE workflow, it reads the latest COMPLETED, AUTOMATIC run whose
+head branch is `main` and classifies its conclusion. Manual `workflow_dispatch`
+runs are ignored -- a human running a bench/publish by hand (often weeks ago) is
+not "main is broken now", so those must not read as red. Workflows with no
+automatic main run (pure `workflow_dispatch` / `pull_request` lanes) are skipped
+-- absence of an automatic main run is not a failure. The RED set is written to
+the step summary and reconciled into a single tracking issue (the durable,
+notifying surface): opened/updated when anything is red, closed when `main` is
+clean again.
 
 Deliberately exits 0 even when reds exist -- this workflow is the *watcher*; its
 own run status must not become just another silent red on `main`. The signal is
@@ -33,6 +36,13 @@ import json
 import subprocess
 import sys
 from typing import Iterable, Optional
+
+# Trigger events we IGNORE when judging main health. A `workflow_dispatch` run is
+# a human manually kicking a lane (a one-off bench, a retro-publish); its failure
+# is not "main is broken now" -- a weeks-old manual dispatch must not read as red
+# on main. Everything else (push / schedule / release / dynamic ...) is automatic
+# and reflects main's actual state, so it counts.
+IGNORED_EVENTS = frozenset({"workflow_dispatch"})
 
 # Conclusions that mean "this lane is broken on main".
 RED_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure"})
@@ -55,6 +65,17 @@ def classify(conclusion: Optional[str]) -> str:
     return "red"
 
 
+def select_main_run(runs: list[dict]) -> Optional[dict]:
+    """From completed main runs (GitHub returns them newest-first), the latest one
+    triggered by an AUTOMATIC event. Manual ``workflow_dispatch`` runs are skipped
+    so a stale one-off dispatch failure can't masquerade as a broken main lane.
+    Returns None when every candidate is a manual dispatch (or the list is empty)."""
+    for run in runs:
+        if run.get("event") not in IGNORED_EVENTS:
+            return run
+    return None
+
+
 def red_workflows(runs: Iterable[dict]) -> list[dict]:
     """Given [{name, conclusion, html_url, ...}] pick the red ones, name-sorted."""
     reds = [r for r in runs if classify(r.get("conclusion")) == "red"]
@@ -70,6 +91,10 @@ def _gh(*args: str, check: bool = True) -> str:
         ["gh", *args],
         capture_output=True,
         text=True,
+        # gh emits UTF-8; decode it as such rather than the platform locale
+        # (cp1252 on Windows chokes on emoji/non-latin bytes in run titles).
+        encoding="utf-8",
+        errors="replace",
     )
     if check and proc.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args)} failed ({proc.returncode}): {proc.stderr.strip()}")
@@ -96,13 +121,18 @@ def list_active_workflows(repo: str) -> list[dict]:
 
 
 def latest_main_run(repo: str, workflow_id: int) -> Optional[dict]:
-    """Latest COMPLETED run of this workflow with head branch = main, or None."""
+    """Latest COMPLETED, AUTOMATIC run of this workflow on main, or None.
+
+    Fetches several recent completed main runs (newest-first) and returns the
+    latest one that wasn't a manual ``workflow_dispatch`` (see ``select_main_run``).
+    ``per_page`` is >1 so that if the newest run happens to be a manual dispatch we
+    can still fall back to the latest automatic push/schedule run underneath it."""
     data = _gh_api(
         f"repos/{repo}/actions/workflows/{workflow_id}/runs"
-        f"?branch=main&status=completed&exclude_pull_requests=true&per_page=1"
+        f"?branch=main&status=completed&exclude_pull_requests=true&per_page=20"
     )
     runs = (data or {}).get("workflow_runs", [])
-    return runs[0] if runs else None
+    return select_main_run(runs)
 
 
 def collect_main_runs(repo: str) -> list[dict]:

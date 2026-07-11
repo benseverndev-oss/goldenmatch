@@ -45,6 +45,43 @@ def test_red_workflows_empty_when_all_green():
     assert mod.red_workflows(runs) == []
 
 
+def test_select_main_run_ignores_stale_workflow_dispatch():
+    # Newest main run is a manual dispatch failure -> ignored; the latest
+    # AUTOMATIC run is the real main-health signal.
+    runs = [
+        {"conclusion": "failure", "event": "workflow_dispatch", "run_number": 9},
+        {"conclusion": "success", "event": "push", "run_number": 8},
+    ]
+    assert mod.select_main_run(runs)["run_number"] == 8
+
+
+def test_select_main_run_none_when_only_dispatch():
+    # A lane that only ever runs via manual dispatch is not "main health".
+    runs = [
+        {"conclusion": "failure", "event": "workflow_dispatch"},
+        {"conclusion": "failure", "event": "workflow_dispatch"},
+    ]
+    assert mod.select_main_run(runs) is None
+
+
+def test_select_main_run_keeps_automatic_events():
+    for ev in ("push", "schedule", "release"):
+        got = mod.select_main_run([{"event": ev, "conclusion": "failure"}])
+        assert got is not None and got["event"] == ev
+
+
+def test_select_main_run_takes_newest_automatic():
+    runs = [
+        {"event": "schedule", "conclusion": "failure", "run_number": 10},
+        {"event": "push", "conclusion": "success", "run_number": 9},
+    ]
+    assert mod.select_main_run(runs)["run_number"] == 10
+
+
+def test_select_main_run_empty():
+    assert mod.select_main_run([]) is None
+
+
 def test_issue_body_carries_marker_and_rows():
     body = mod._issue_body(
         [{"name": "goldengraph-pipeline", "conclusion": "failure",
