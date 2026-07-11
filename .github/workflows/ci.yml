@@ -2228,6 +2228,14 @@ jobs:
         # are self-contained, only the builtin tmp_path fixture).
         run: uv run --no-sync python -m pytest packages/python/goldenflow/tests/nopolars --noconftest -v
 
+  # P4b Task 3: promoted to ci-required. Builds the goldencheck native regex kernel,
+  # UNINSTALLS polars, then proves the polars-free read/scan surface for real
+  # (read_columns/scan_file_columns over Parquet via pyarrow + Excel via openpyxl,
+  # scan_columns structural checks) AND that the uncovered tail (CSV, scan_file()'s
+  # full scan) declines with the helpful `goldencheck[polars]` ImportError rather than
+  # crashing or silently degrading. A red here means either regressed (a module grew a
+  # top-level `import polars`, a covered reader broke, or a decline path stopped
+  # raising the helpful error) -- gate on it like any other required lane.
   goldencheck_nopolars:
     needs: changes
     if: needs.changes.outputs.goldencheck_nopolars == 'true' || needs.changes.outputs.force_all == 'true'
@@ -2251,6 +2259,13 @@ jobs:
         run: uv pip uninstall polars polars-runtime-32 polars-runtime-64 || true
       - name: Confirm polars is gone
         run: uv run --no-sync python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('polars') is None else 'polars still present')"
+      - name: Ensure pyarrow present (polars-free Parquet reader)
+        # `uv sync --all-packages` does NOT pull the `[parquet]`/`[native]` extras (same
+        # gap goldencheck_native papers over with an explicit `uv pip install`), so
+        # test_read_columns_parquet_excel_polars_free's pq.write_table/read_columns
+        # round-trip would ImportError without this. openpyxl is a base dependency
+        # (pyproject.toml [project.dependencies]) so it's already present here.
+        run: uv pip install "pyarrow>=14"
       - name: Polars-absent proof (tests/nopolars)
         run: uv run --no-sync python -m pytest packages/python/goldencheck/tests/nopolars --noconftest -v
 
@@ -3437,6 +3452,7 @@ jobs:
       - duckdb_extensions
       - native
       - goldencheck_native
+      - goldencheck_nopolars
       - goldenprofile_native
       - goldengraph_native
       - native_wheel

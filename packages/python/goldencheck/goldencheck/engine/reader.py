@@ -35,9 +35,18 @@ def read_file(path: Path) -> pl.DataFrame:
     if ext == ".csv":
         try:
             return pl.read_csv(path, infer_schema_length=10000)
+        except ImportError:
+            # The lazy `pl` proxy's helpful "install goldencheck[polars]" ImportError --
+            # let it propagate as-is instead of getting coerced into the generic
+            # ValueError below, which would be indistinguishable from a real malformed
+            # CSV and would break `except ImportError` callers checking for the
+            # missing-Polars case specifically.
+            raise
         except Exception:
             try:
                 return pl.read_csv(path, infer_schema_length=10000, encoding="latin-1")
+            except ImportError:
+                raise
             except Exception as e:
                 raise ValueError(
                     f"Could not read CSV: {e}. Try specifying --separator or --quote-char"
