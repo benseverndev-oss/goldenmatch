@@ -56,7 +56,7 @@ fn refs(interned: &[Vec<u64>]) -> Vec<&[u64]> {
 pub fn gc_discover_functional_dependencies(columns_json: &str) -> Result<String, JsError> {
     let columns = parse_columns(columns_json)?;
     let interned = intern_all(&columns);
-    let out = gc::discover_functional_dependencies(&refs(&interned));
+    let out = gc::discover_functional_dependencies_slice(&refs(&interned));
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -69,7 +69,7 @@ pub fn gc_discover_approximate_fds(
 ) -> Result<String, JsError> {
     let columns = parse_columns(columns_json)?;
     let interned = intern_all(&columns);
-    let out = gc::discover_approximate_fds(&refs(&interned), min_confidence);
+    let out = gc::discover_approximate_fds_slice(&refs(&interned), min_confidence);
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -88,7 +88,7 @@ pub fn gc_functional_dependency_holds(lhs_json: &str, rhs_json: &str) -> Result<
     }
     let l = intern(&lhs);
     let r = intern(&rhs);
-    let out = gc::functional_dependency_holds(&l, &r);
+    let out = gc::functional_dependency_holds_slice(&l, &r);
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -105,7 +105,7 @@ pub fn gc_fd_violation_rows(det_json: &str, dep_json: &str) -> Result<String, Js
     }
     let d = intern(&det);
     let p = intern(&dep);
-    let out = gc::fd_violation_rows(&d, &p);
+    let out = gc::fd_violation_rows_slice(&d, &p);
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -127,7 +127,7 @@ pub fn gc_composite_key_search(
     }
     let interned = intern_all(&columns);
     let n_rows = interned[0].len();
-    let out = gc::composite_key_search(&refs(&interned), n_rows, max_size, &single_unique);
+    let out = gc::composite_key_search_slice(&refs(&interned), n_rows, max_size, &single_unique);
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -155,6 +155,6 @@ pub fn gc_near_duplicate_clusters(
 ) -> Result<String, JsError> {
     let values: Vec<String> =
         serde_json::from_str(values_json).map_err(|e| JsError::new(&format!("bad values: {e}")))?;
-    let out = gc::near_duplicate_clusters(&values, min_similarity);
+    let out = gc::near_duplicate_clusters_slice(&values, min_similarity);
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }

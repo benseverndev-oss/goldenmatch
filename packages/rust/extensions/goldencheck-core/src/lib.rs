@@ -6,13 +6,16 @@
 //! `GOLDENCHECK_NATIVE` opts in (see `goldencheck/core/_native_loader.py`); the
 //! pure-Python implementation stays the default and the fallback.
 //!
-//! Most kernels take plain slices (`&[f64]`, `&[u64]`) so they carry no Python
-//! or Arrow types. Benford is the exception (and the model for future
-//! conversions): it takes Arrow arrays (`&dyn Array`) directly via the shared
-//! `arrow_support` module, so the Arrow boundary lives in this pyo3-free core
-//! -- the `goldencheck-native` crate now only marshals pyarrow<->Arrow for it,
-//! it doesn't own the zero-copy read. This mirrors `score-core` / `graph-core`
-//! on the goldenmatch side.
+//! Benford, the key/FD kernels, and the fuzzy near-duplicate kernel take Arrow
+//! arrays (`&dyn Array` / `&[ArrayRef]`) directly via the shared `arrow_support`
+//! module, so the Arrow boundary lives in this pyo3-free core -- the
+//! `goldencheck-native` crate only marshals pyarrow<->Arrow for them, it
+//! doesn't own the zero-copy read. This mirrors `score-core` / `graph-core` on
+//! the goldenmatch side. Each of these also keeps a `_slice`-suffixed twin
+//! (over already-interned `&[u64]` / plain `&[String]`) as the entry point for
+//! non-Arrow surfaces that call this crate directly: `goldencheck-wasm`
+//! (JSON in/out over wasm-bindgen), the `goldenmatch_pg` Postgres extension,
+//! and this crate's own `tests/golden.rs` cross-surface fixture.
 //!
 //! Most kernels compare interned ids by equality only. The denial-constraint
 //! kernel (`dc`) is the exception: its columns arrive order-preservingly
@@ -30,9 +33,11 @@ pub use arrow_support::intern_column;
 pub use benford::{benford_leading_digits, benford_leading_digits_slice};
 pub use date::str_to_date;
 pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
-pub use fuzzy::near_duplicate_clusters;
+pub use fuzzy::{near_duplicate_clusters, near_duplicate_clusters_slice};
 pub use keys::{
-    composite_key_search, discover_approximate_fds, discover_functional_dependencies,
-    fd_violation_rows, functional_dependency_holds, tuple_distinct_count,
+    composite_key_search, composite_key_search_slice, discover_approximate_fds,
+    discover_approximate_fds_slice, discover_functional_dependencies,
+    discover_functional_dependencies_slice, fd_violation_rows, fd_violation_rows_slice,
+    functional_dependency_holds, functional_dependency_holds_slice, tuple_distinct_count,
 };
 pub use regex::{str_contains_count, str_filter_mask, str_replace_all};

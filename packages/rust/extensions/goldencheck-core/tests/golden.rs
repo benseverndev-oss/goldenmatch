@@ -61,11 +61,12 @@ fn reproduces_golden_vectors() {
     let cols = columns(&fd["columns"]);
     let refs: Vec<&[u64]> = cols.iter().map(|c| c.as_slice()).collect();
     assert_eq!(
-        gc::discover_functional_dependencies(&refs),
+        gc::discover_functional_dependencies_slice(&refs),
         as_pairs(&fd["discover_expected"]),
         "discover_functional_dependencies"
     );
-    let approx = gc::discover_approximate_fds(&refs, fd["approx_min_confidence"].as_f64().unwrap());
+    let approx =
+        gc::discover_approximate_fds_slice(&refs, fd["approx_min_confidence"].as_f64().unwrap());
     let approx_want: Vec<(usize, usize, usize)> = fd["approx_expected"]
         .as_array()
         .unwrap()
@@ -84,7 +85,7 @@ fn reproduces_golden_vectors() {
     let det = fd["holds_det"].as_u64().unwrap() as usize;
     let dep = fd["holds_dep"].as_u64().unwrap() as usize;
     assert_eq!(
-        gc::functional_dependency_holds(&cols[det], &cols[dep]),
+        gc::functional_dependency_holds_slice(&cols[det], &cols[dep]),
         fd["holds_expected"].as_bool().unwrap(),
         "functional_dependency_holds"
     );
@@ -95,7 +96,7 @@ fn reproduces_golden_vectors() {
         .map(|x| x.as_u64().unwrap() as usize)
         .collect();
     assert_eq!(
-        gc::fd_violation_rows(&cols[det], &cols[dep]),
+        gc::fd_violation_rows_slice(&cols[det], &cols[dep]),
         viol_want,
         "fd_violation_rows"
     );
@@ -110,7 +111,7 @@ fn reproduces_golden_vectors() {
         .iter()
         .map(|b| b.as_bool().unwrap())
         .collect();
-    let keys = gc::composite_key_search(
+    let keys = gc::composite_key_search_slice(
         &ck_refs,
         ck_cols[0].len(),
         ck["max_size"].as_u64().unwrap() as usize,
@@ -170,7 +171,7 @@ fn reproduces_golden_vectors() {
         })
         .collect();
     assert_eq!(
-        gc::near_duplicate_clusters(&nd_vals, nd["min_similarity"].as_f64().unwrap()),
+        gc::near_duplicate_clusters_slice(&nd_vals, nd["min_similarity"].as_f64().unwrap()),
         nd_want,
         "near_duplicate_clusters"
     );

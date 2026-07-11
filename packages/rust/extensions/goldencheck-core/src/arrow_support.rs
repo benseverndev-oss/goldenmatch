@@ -3,10 +3,14 @@
 //! (for Benford). Moved down from the `goldencheck-native` pyo3 shim so the
 //! Arrow boundary lives in the pyo3-free core. No pyo3, no Python.
 use arrow::array::{
-    Array, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    LargeStringArray, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeStringArray, StringArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
+};
 use arrow::error::ArrowError;
 use rustc_hash::FxHashMap;
 
@@ -114,6 +118,47 @@ pub fn intern_column(array: &dyn Array) -> Result<Vec<u64>, ArrowError> {
             }
             Ok(ids)
         }
+        // Dictionary-encoded (e.g. a Polars Categorical/Enum column). The
+        // dictionary *is* the interning: intern the (small) values array ONCE,
+        // then map each row's key through it -- O(dict) hashing + O(rows) index
+        // lookups, instead of O(rows) hashing on the raw path. A null row keeps
+        // id 0.
+        DataType::Dictionary(key_type, _) => {
+            macro_rules! intern_dict {
+                ($kt:ty) => {{
+                    let dict = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<$kt>>()
+                        .unwrap();
+                    // Dense id per dictionary entry (recurses on the small values
+                    // array; null entries -> 0, values -> 1,2,... first-seen).
+                    let value_ids = intern_column(dict.values().as_ref())?;
+                    let keys = dict.keys();
+                    let mut ids = Vec::with_capacity(keys.len());
+                    for i in 0..keys.len() {
+                        if keys.is_null(i) {
+                            ids.push(0);
+                        } else {
+                            ids.push(value_ids[keys.value(i).as_usize()]);
+                        }
+                    }
+                    Ok(ids)
+                }};
+            }
+            match key_type.as_ref() {
+                DataType::Int8 => intern_dict!(Int8Type),
+                DataType::Int16 => intern_dict!(Int16Type),
+                DataType::Int32 => intern_dict!(Int32Type),
+                DataType::Int64 => intern_dict!(Int64Type),
+                DataType::UInt8 => intern_dict!(UInt8Type),
+                DataType::UInt16 => intern_dict!(UInt16Type),
+                DataType::UInt32 => intern_dict!(UInt32Type),
+                DataType::UInt64 => intern_dict!(UInt64Type),
+                other => Err(ArrowError::InvalidArgumentError(format!(
+                    "key/FD kernels: unsupported dictionary key type {other:?}"
+                ))),
+            }
+        }
         other => Err(ArrowError::InvalidArgumentError(format!(
             "key/FD kernels do not support Arrow dtype {other:?}; \
              cast to string/int/float/bool first"
@@ -161,5 +206,38 @@ mod tests {
     fn arc_dyn_array_accepted() {
         let a: Arc<dyn Array> = Arc::new(StringArray::from(vec!["a", "b"]));
         assert_eq!(intern_column(a.as_ref()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn dictionary_encoded_interns_like_plain_string() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+
+        let plain = StringArray::from(vec![Some("x"), Some("y"), Some("x"), None]);
+        let plain_ids = intern_column(&plain).unwrap();
+
+        // Same logical values, dictionary-encoded: dict = [x, y], keys = [0,1,0,null].
+        let dict: DictionaryArray<Int32Type> = vec![Some("x"), Some("y"), Some("x"), None]
+            .into_iter()
+            .collect();
+        let dict_ids = intern_column(&dict).unwrap();
+        assert_eq!(dict_ids, plain_ids);
+
+        // Sanity: raw keys/values shape is as expected.
+        let keys: Int32Array = dict.keys().clone();
+        assert_eq!(keys.len(), 4);
+    }
+
+    #[test]
+    fn dictionary_unsupported_key_type_errors() {
+        // Values array itself unsupported (Date32) surfaces through the recursive
+        // intern_column call on `dict.values()`.
+        use arrow::array::{Date32Array, DictionaryArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        let values: Date32Array = vec![1, 2].into();
+        let keys = Int32Array::from(vec![0, 1, 0]);
+        let dict =
+            DictionaryArray::<Int32Type>::try_new(keys, std::sync::Arc::new(values)).unwrap();
+        assert!(intern_column(&dict).is_err());
     }
 }

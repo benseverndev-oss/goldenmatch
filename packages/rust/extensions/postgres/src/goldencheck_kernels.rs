@@ -84,7 +84,7 @@ pub fn goldencheck_near_duplicates(
     min_similarity: f64,
 ) -> TableIterator<'static, (name!(cluster, i64), name!(member, i64))> {
     let strings: Vec<String> = values.into_iter().map(|v| v.unwrap_or_default()).collect();
-    let clusters = goldencheck_core::near_duplicate_clusters(&strings, min_similarity);
+    let clusters = goldencheck_core::near_duplicate_clusters_slice(&strings, min_similarity);
     let rows: Vec<(i64, i64)> = clusters
         .into_iter()
         .enumerate()
@@ -109,7 +109,7 @@ pub fn goldencheck_discover_fds(
         None => return TableIterator::new(Vec::new()),
     };
     let refs: Vec<&[u64]> = cols.iter().map(Vec::as_slice).collect();
-    let pairs = goldencheck_core::discover_functional_dependencies(&refs);
+    let pairs = goldencheck_core::discover_functional_dependencies_slice(&refs);
     TableIterator::new(
         pairs
             .into_iter()
@@ -134,7 +134,7 @@ pub fn goldencheck_discover_approx_fds(
         None => return TableIterator::new(Vec::new()),
     };
     let refs: Vec<&[u64]> = cols.iter().map(Vec::as_slice).collect();
-    let triples = goldencheck_core::discover_approximate_fds(&refs, min_confidence);
+    let triples = goldencheck_core::discover_approximate_fds_slice(&refs, min_confidence);
     TableIterator::new(
         triples
             .into_iter()
@@ -184,7 +184,7 @@ pub fn goldencheck_composite_keys(
     }
     let cand: Vec<&[u64]> = cand_orig.iter().map(|&i| cols[i].as_slice()).collect();
     let single_unique = vec![false; cand.len()];
-    let keys = goldencheck_core::composite_key_search(
+    let keys = goldencheck_core::composite_key_search_slice(
         &cand,
         n_rows,
         max_size.max(0) as usize,
