@@ -78,11 +78,16 @@ def orchestrate_dedupe_file(dispatch, args):
     steps.append({"step": "auto_configure", "ok": ok, **({"config": res.get("config") or res} if ok else {"error": res.get("error")})})
     if not ok:
         return _finish("dedupe_file", steps)
+    # Surface auto_configure's result for transparency, but do NOT hand it to
+    # agent_deduplicate: the MCP tool's `config` param expects a real Config
+    # object (or None), not auto_configure's serialized display dict -- passing
+    # the dict dies with `'dict' object has no attribute 'get_matchkeys'`. Omit
+    # config so agent_deduplicate auto-configures internally (config=None path).
     config = res.get("config") or res
 
     golden_path = _gen_output_path(path, "golden")
     ok, res = run_step(dispatch, "agent_deduplicate",
-                       {"file_path": path, "config": config, "output_path": golden_path, **excl})
+                       {"file_path": path, "output_path": golden_path, **excl})
     cd = res.get("confidence_distribution", {}) if ok else {}
     steps.append({"step": "deduplicate", "ok": ok,
                   **({"auto_merge": cd.get("auto_merged"), "review": cd.get("review"),

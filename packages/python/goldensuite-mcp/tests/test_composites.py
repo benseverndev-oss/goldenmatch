@@ -41,6 +41,9 @@ def _fake_dedupe_table(rec):
 
     def dedup(n, a):
         rec.append(("dedup", a))
+        # Contract: dedupe_file must NOT hand auto_configure's display dict to
+        # agent_deduplicate -- its `config` param wants a Config object/None.
+        assert "config" not in a, "dedupe_file must not pass config to agent_deduplicate"
         return {"confidence_distribution": {"auto_merged": 2, "review": 1, "auto_rejected": 0},
                 "golden_path": a["output_path"], "golden_records": 3, "results": {"total_records": 4}}
 
