@@ -469,6 +469,72 @@ def _numeric_stats_fallback(s: pl.Series) -> tuple:
     return _numeric_stats_normalized(count, s.min(), s.max(), s.mean(), s.std(), outlier)
 
 
+# ---------------------------------------------------------------------------
+# sequence_analysis (fused order-preserving gap scan) -- sequence_detection.
+# All signals are integer/bool exact (int/uint only, NaN-free), so this is an
+# exact-`!=` check with an EMPTY divergence class. The fallback mirrors the
+# profiler's per-field Polars computation; the gap fields use the arithmetic
+# `expected - present_size` count + a lazy first-10 sample so the i64 min/max
+# fixture's 2^64-wide span never materialises.
+# ---------------------------------------------------------------------------
+def _sequence_fixtures(seed: int) -> list[pl.Series]:
+    rng = random.Random(seed)
+    n = rng.randint(2, 300)
+    int_pool = [None] + list(range(0, 120))
+    int_vals = [rng.choice(int_pool) for _ in range(n)]
+    uint_pool = [None] + list(range(0, 200))
+    uint_vals = [rng.choice(uint_pool) for _ in range(n)]
+    fixtures = [
+        pl.Series("i", int_vals, dtype=pl.Int64),
+        pl.Series("u", uint_vals, dtype=pl.UInt32),
+        # Seed-invariant adversarials: gapped, unsorted-with-dups, i64 min/max.
+        pl.Series("gap", [1, 2, 4, 7, 8, 12, 20], dtype=pl.Int64),
+        pl.Series("dup", [3, 1, 2, 9, 5, 4, 3], dtype=pl.Int64),
+        pl.Series("mm", [-(2**63), 2**63 - 1], dtype=pl.Int64),
+    ]
+    # Drop any fixture that would leave <2 non-null values (kernel declines).
+    return [s for s in fixtures if s.drop_nulls().len() >= 2]
+
+
+def _sequence_normalized(s: pl.Series, res: object) -> tuple | None:
+    if res is None:
+        return None
+    (n_diffs, unit, pos, is_sorted, mn, mx, present_size, gap_count, gap_sample) = res
+    return (n_diffs, unit, pos, is_sorted, mn, mx, present_size, gap_count, tuple(gap_sample))
+
+
+def _sequence_native(s: pl.Series) -> tuple | None:
+    return _sequence_normalized(s, native_module().sequence_analysis(s.to_arrow()))
+
+
+def _sequence_fallback(s: pl.Series) -> tuple | None:
+    import itertools
+
+    non_null = s.drop_nulls()
+    total = len(non_null)
+    if total < 2:
+        return None
+    diffs = non_null.diff().drop_nulls()
+    n_diffs = len(diffs)
+    unit = int((diffs == 1).sum())
+    pos = int((diffs > 0).sum())
+    is_sorted = bool(non_null.is_sorted())
+    col_min = int(non_null.min())
+    col_max = int(non_null.max())
+    present = set(non_null.unique().to_list())
+    present_size = len(present)
+    expected = col_max - col_min + 1
+    if expected <= total:
+        gap_count = 0
+        gap_sample: list[int] = []
+    else:
+        gap_count = expected - present_size
+        gap_sample = list(
+            itertools.islice((v for v in range(col_min, col_max + 1) if v not in present), 10)
+        )
+    return (n_diffs, unit, pos, is_sorted, col_min, col_max, present_size, gap_count, tuple(gap_sample))
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -494,5 +560,11 @@ REGISTERED_COMPONENTS: list[Component] = [
         _column_aggregate_native,
         _column_aggregate_fallback,
         _column_aggregate_fixtures,
+    ),
+    Component(
+        "sequence_analysis",
+        _sequence_native,
+        _sequence_fallback,
+        _sequence_fixtures,
     ),
 ]
