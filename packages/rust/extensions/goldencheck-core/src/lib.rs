@@ -21,6 +21,7 @@
 //! kernel (`dc`) is the exception: its columns arrive order-preservingly
 //! rank-encoded, so it does ordered `<`/`<=`/`>`/`>=` comparisons over those ids.
 
+mod age;
 mod aggregate;
 mod arrow_support;
 mod benford;
@@ -35,6 +36,7 @@ mod regex;
 mod sequence;
 mod stats;
 
+pub use age::{age_mismatch, AgeStats};
 pub use aggregate::{column_aggregate, dtype_category, ColumnAgg, DtypeCat};
 pub use arrow_support::intern_column;
 pub use benford::{benford_leading_digits, benford_leading_digits_slice};

@@ -10,6 +10,7 @@ defines, so parity checking of a new surface is a few lines, not a new test file
 """
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import random
 from collections.abc import Callable, Iterator
@@ -657,6 +658,71 @@ def _dupsig_fallback(df: pl.DataFrame) -> tuple[int, int, int, int]:
     return (edr, edg, ndr, ndg)
 
 
+# ---------------------------------------------------------------------------
+# age_mismatch (fused age-vs-DOB mismatch scan)
+# ---------------------------------------------------------------------------
+_AGE_EPOCH = _dt.date(1970, 1, 1)
+_AGE_REF = _dt.date(2020, 1, 1)
+
+
+def _agesig_fixtures(seed: int) -> list[tuple[pl.Series, pl.Series]]:
+    rng = random.Random(seed)
+    n = rng.randint(0, 60)
+    ages: list[float | None] = []
+    dobs: list[_dt.date | None] = []
+    for _ in range(n):
+        true_age = rng.uniform(0, 95)
+        dob = _AGE_REF - _dt.timedelta(days=round(true_age * 365.25))
+        roll = rng.random()
+        if roll < 0.15:
+            ages.append(None)
+        elif roll < 0.30:
+            ages.append(true_age + rng.choice([-20, -5, 5, 20]))
+        elif roll < 0.40:
+            ages.append(float("nan"))
+        else:
+            ages.append(round(true_age))
+        dobs.append(None if rng.random() < 0.1 else dob)
+    return [
+        (
+            pl.Series("age", ages, dtype=pl.Float64),
+            pl.Series("dob", dobs, dtype=pl.Date),
+        )
+    ]
+
+
+def _agesig_native(fx: tuple[pl.Series, pl.Series]) -> tuple[int, list]:
+    age, dob = fx
+    ref_epoch_days = (_AGE_REF - _AGE_EPOCH).days
+    actual = age.cast(pl.Float64)
+    dob_date32 = dob.cast(pl.Date, strict=False)
+    count, indices = native_module().age_mismatch(
+        actual.to_arrow(), dob_date32.to_arrow(), ref_epoch_days
+    )
+    # Stringify sample values (the profiler stores str(v)) so a NaN age compares
+    # equal across lanes (raw nan != nan).
+    return (count, [str(age[i]) for i in indices])
+
+
+def _agesig_fallback(fx: tuple[pl.Series, pl.Series]) -> tuple[int, list]:
+    age, dob = fx
+    df = pl.DataFrame({"age": age, "dob": dob})
+    result = df.select(
+        actual=pl.col("age").cast(pl.Float64),
+        expected=(
+            (pl.lit(_AGE_REF).cast(pl.Date) - pl.col("dob").cast(pl.Date, strict=False))
+            .dt.total_days()
+            / 365.25
+        ),
+    )
+    actual = result["actual"]
+    expected = result["expected"]
+    diff = (actual - expected).abs()
+    mismatch_mask = (diff > 2.0) & actual.is_not_null() & expected.is_not_null()
+    count = int(mismatch_mask.sum())
+    return (count, [str(v) for v in age.filter(mismatch_mask).head(5).to_list()])
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -696,4 +762,5 @@ REGISTERED_COMPONENTS: list[Component] = [
         _freshness_fixtures,
     ),
     Component("duplicate_signatures", _dupsig_native, _dupsig_fallback, _dupsig_fixtures),
+    Component("age_mismatch", _agesig_native, _agesig_fallback, _agesig_fixtures),
 ]

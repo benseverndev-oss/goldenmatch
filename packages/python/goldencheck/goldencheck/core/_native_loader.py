@@ -117,6 +117,7 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "sequence_analysis": ("sequence_analysis",),
     "date_freshness": ("date_freshness",),
     "duplicate_signatures": ("duplicate_signatures",),
+    "age_mismatch": ("age_mismatch",),
 }
 
 
