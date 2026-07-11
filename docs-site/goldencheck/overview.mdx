@@ -39,6 +39,17 @@ pip install goldencheck[db]                  # database scanning
 pip install goldencheck[mcp]                 # MCP server
 ```
 
+## Polars is optional (2.0.0)
+
+As of 2.0.0, `pip install goldencheck` does not pull in Polars. `import goldencheck`,
+`scan_columns(...)`, and Parquet/Excel reading via `read_columns`/`scan_file_columns` all
+work without it.
+
+Install `goldencheck[polars]` for CSV reading and the full `scan_file`/`scan_dataframe` scan
+— Polars' CSV dtype inference isn't reproducible without it, and the full scan is Polars-native.
+Calling a Polars-only path without the extra raises a clear `ImportError` telling you which
+extra to add.
+
 ## Quickstart
 
 ```bash

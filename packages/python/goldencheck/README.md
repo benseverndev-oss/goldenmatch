@@ -39,6 +39,19 @@ Built by [Ben Severn](https://bensevern.dev).
 pip install goldencheck
 ```
 
+The base install is Polars-free: `scan_columns`, `read_columns`, and `scan_file_columns`
+work out of the box for Parquet and Excel sources. For CSV reading and the full
+`scan_file`/`scan_dataframe` scan, add the `[polars]` extra:
+
+```bash
+pip install goldencheck[polars]
+```
+
+> **2.0.0 breaking change:** Polars moved from a hard dependency to the `[polars]` extra.
+> If your code reads CSVs or calls `scan_file`/`scan_dataframe`, add `goldencheck[polars]`
+> when upgrading — calling those paths without it raises a clear `ImportError` naming the
+> extra to install.
+
 With LLM boost support:
 
 ```bash
@@ -74,6 +87,9 @@ import { readFile, scanData } from "goldencheck/node";
 ```
 
 ## Quick Start
+
+CSV scanning below needs `pip install goldencheck[polars]` (see [Install](#install)).
+Parquet/Excel scanning works with the base install.
 
 ```bash
 # Scan a file — discovers issues, launches interactive TUI
@@ -289,6 +305,7 @@ goldencheck scan orders.csv --denial                            # fold DC findin
 ```
 
 ```python
+# Requires goldencheck[polars]
 from goldencheck import discover_denial_constraints
 import polars as pl
 
@@ -538,7 +555,7 @@ Tested on a custom benchmark with 341 planted data quality issues across 9 categ
 
 | Dependency | Purpose |
 |-----------|---------|
-| [Polars](https://pola.rs/) | All data operations |
+| [Polars](https://pola.rs/) | CSV reading + the full scan (optional, `[polars]`) |
 | [Typer](https://typer.tiangolo.com/) | CLI framework |
 | [Textual](https://textual.textualize.io/) | Interactive TUI |
 | [Rich](https://rich.readthedocs.io/) | CLI output formatting |
