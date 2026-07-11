@@ -176,6 +176,7 @@ AGENT_TOOLS = [
                 "file_b": {"type": "string"},
                 "config": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "output_path": {"type": "string", "description": "Optional. If given, write the linked/matched pairs to this CSV path and return matches_path + matched_pairs. Omit to get the summary only."},
                 "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
                 "file_a_name": {"type": "string"},
                 "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
@@ -717,12 +718,21 @@ def _dispatch(
             if _excl_token is not None:
                 from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
                 _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
-        return {
+        out = {
             "reasoning": raw.get("reasoning", {}),
             "telemetry": session.last_telemetry
                 or {"available": False, "source": None},
             "results": _serialize_result(raw.get("results")),
         }
+        output_path = args.get("output_path")
+        if output_path:
+            matched = getattr(raw.get("results"), "matched", None)
+            out.update(
+                _write_frame_csv(
+                    output_path, matched, "matches", count_key="matched_pairs"
+                )
+            )
+        return out
 
     if name == "agent_explain_pair":
         from goldenmatch._api import explain_pair_df
