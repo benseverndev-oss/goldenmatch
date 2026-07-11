@@ -4,6 +4,7 @@ from datetime import date
 
 import polars as pl
 import pyarrow.parquet as pq
+import pytest
 from goldencheck.engine.reader import _read_parquet_columns
 
 
@@ -88,3 +89,26 @@ def test_read_excel_columns_matches_polars_edge_cases(tmp_path):
     got = _read_excel_columns(p)
     exp = pl.read_excel(p, engine="openpyxl").to_dict(as_series=False)
     assert got == exp
+
+
+def test_read_csv_columns_matches_read_file(tmp_path):
+    p = tmp_path / "f.csv"
+    p.write_text("i,s\n1,a\n2,b\n,c\n", encoding="utf-8")
+    from goldencheck.engine.reader import _read_csv_columns, read_file
+
+    got = _read_csv_columns(p)
+    exp = read_file(p).to_dict(as_series=False)
+    assert got == exp
+
+
+def test_read_columns_dispatch_and_guards(tmp_path):
+    from goldencheck.engine.reader import read_columns
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        read_columns(tmp_path / "x.json")
+    with pytest.raises(FileNotFoundError):
+        read_columns(tmp_path / "missing.csv")
+    empty = tmp_path / "e.csv"
+    empty.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="no data"):
+        read_columns(empty)

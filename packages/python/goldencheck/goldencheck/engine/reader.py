@@ -57,6 +57,50 @@ def read_file(path: Path) -> pl.DataFrame:
         raise ValueError(f"Unsupported file format: {ext}")
 
 
+def _read_csv_columns(path: Path) -> dict[str, list]:
+    """Read a CSV file into a dict[str, list] using Polars.
+
+    CSV cannot be read byte-identically without Polars (its dtype inference isn't
+    reproducible), so this requires Polars and mirrors `read_file`'s CSV path exactly.
+    """
+    try:
+        import polars  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "Reading CSV requires Polars (its dtype inference is not reproducible without "
+            "it). Install goldencheck[polars], or use a Parquet/Excel source."
+        ) from e
+    try:
+        df = pl.read_csv(path, infer_schema_length=10000)
+    except Exception:
+        df = pl.read_csv(path, infer_schema_length=10000, encoding="latin-1")
+    return df.to_dict(as_series=False)
+
+
+def read_columns(path: Path) -> dict[str, list]:
+    """Polars-free typed read into columns for scan_columns(). Parquet (pyarrow) and
+    Excel (openpyxl) read without Polars; CSV needs Polars (dtype inference). Returns
+    {column_name: [values...]} with native Python scalars matching the pl.read_* values."""
+    path = Path(path).resolve()
+    ext = path.suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported file format: {ext}. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path.name}")
+    logger.info("Reading %s (%s) [columns]", path.name, ext)
+    if path.stat().st_size == 0:
+        raise ValueError("File has no data rows. Nothing to profile.")
+    if ext == ".parquet":
+        return _read_parquet_columns(path)
+    if ext in (".xlsx", ".xls"):
+        return _read_excel_columns(path)
+    if ext == ".csv":
+        return _read_csv_columns(path)
+    raise ValueError(f"Unsupported file format: {ext}")
+
+
 def _read_parquet_columns(path: Path) -> dict[str, list]:
     """Read a Parquet file into a dict[str, list] without Polars.
 
