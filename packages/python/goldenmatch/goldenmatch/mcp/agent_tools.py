@@ -581,7 +581,16 @@ def _write_frame_csv(
 
     validated = _safe_path_or_error(output_path)
     if isinstance(validated, dict):  # {"error": ...} from the guard
-        return {path_key: None, error_key: validated["error"]}
+        # Path REJECTION (outside GOLDENMATCH_ALLOWED_ROOT / NUL byte) — set a
+        # top-level `error` too, the convention handle_agent_tool uses for
+        # failure, so an agent that asked to write a file cannot mistake the
+        # buried namespaced error for success. (The benign no-frame case above
+        # stays informational-only: nothing was asked-for-but-refused.)
+        return {
+            path_key: None,
+            error_key: validated["error"],
+            "error": f"output_path rejected: {validated['error']}",
+        }
 
     cols = [c for c in frame.columns if not c.startswith("__")]
     frame.select(cols).write_csv(str(validated))
