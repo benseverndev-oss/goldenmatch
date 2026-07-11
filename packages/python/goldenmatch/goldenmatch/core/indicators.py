@@ -27,6 +27,14 @@ BUDGET_COLUMN_PRIORS = 5.0
 BUDGET_SPARSE_MATCH = 2.0
 BUDGET_FULL_POP_HITS = 15.0
 BUDGET_CROSS_BLOCKING = 20.0
+# Skip cross-blocking-overlap when a key would co-block more than this many pairs
+# (sum over group sizes of k*(k-1)/2). Such a key is far too coarse to be a useful
+# discriminator -- its overlap signal is uninformative -- and materializing its
+# O(sum group^2) pairs blows the wall budget. At 500K a geo key (state/zip) co-blocks
+# billions of pairs; the old in-loop time check burned the full BUDGET_CROSS_BLOCKING
+# (~20s) per key and returned None anyway (the controller BUDGET_TIME regression). The
+# pre-flight pair-count is a cheap O(distinct-values) groupby -- no materialization.
+_MAX_CROSS_BLOCKING_PAIRS = 2_000_000
 BUDGET_CORRUPTION = 3.0
 
 # Identity-column heuristics. Column-name regex -> identity_score floor.
@@ -290,7 +298,25 @@ def compute_cross_blocking_overlap(
         # identical values to the old list-agg -- pinned by unedited tests).
         from goldenmatch.core.frame import to_frame
 
-        indexed = to_frame(df).with_row_index("__row__")
+        framed = to_frame(df)
+
+        # Pre-flight: skip keys too coarse to compare. Counting co-blocked pairs
+        # from group sizes (sum k*(k-1)/2) is a cheap O(distinct-values) groupby;
+        # materializing them is O(sum group^2). A key over the cap is a poor
+        # discriminator anyway, so returning None (no signal) is the right answer
+        # -- computed instantly instead of after a ~20s budget burn.
+        for _k in (key_a, key_b):
+            _sizes = framed.group_len([_k]).column("len").to_list()
+            _n_pairs = sum(s * (s - 1) // 2 for s in _sizes if s > 1)
+            if _n_pairs > _MAX_CROSS_BLOCKING_PAIRS:
+                logger.info(
+                    "compute_cross_blocking_overlap: key %r co-blocks %d pairs "
+                    "(> %d cap) -- too coarse to compare; returning None",
+                    _k, _n_pairs, _MAX_CROSS_BLOCKING_PAIRS,
+                )
+                return None
+
+        indexed = framed.with_row_index("__row__")
 
         if (time.time() - start) > BUDGET_CROSS_BLOCKING:
             return None
