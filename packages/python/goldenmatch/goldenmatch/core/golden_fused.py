@@ -463,7 +463,17 @@ def run_golden_fused_arrow(
     # Fast-path decline: the polars-native columnar path already has no capacity
     # win to capture AND approximates most_complete confidence -- reuse its own
     # gate (which has quality_scores in scope) rather than re-deriving.
-    if _polars_native_eligible(rules, quality_scores):
+    # W2e-3: the decline is POLARS-BACKEND-ONLY. On GOLDENMATCH_FRAME=arrow
+    # there is no cheaper polars fast path to defer to -- declining would drop
+    # these simple configs (most_complete/first_non_null, no rules, no
+    # quality) to the slow per-cluster to_list merge. The kernel already
+    # implements both strategies; porting the fast path's
+    # sort_by(struct).first() expressions to Acero was assessed and rejected
+    # (no grouped arg-min with a composite stable tie-break -- the #870
+    # tie-break would be a risky reimplementation).
+    from goldenmatch.core.frame import resolve_frame_backend
+
+    if resolve_frame_backend() != "arrow" and _polars_native_eligible(rules, quality_scores):
         return None
 
     fn = _native_golden_symbol()

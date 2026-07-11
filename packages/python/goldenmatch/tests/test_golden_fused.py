@@ -2098,3 +2098,49 @@ def test_parity_matrix(case_name, provenance):
             quality_scores=quality_scores,
             cluster_pair_scores=cluster_pair_scores,
         )
+
+
+# ---- W2e-3: the decline gate is polars-backend-only ---------------------------
+
+
+def test_fused_takes_simple_configs_on_arrow_backend(monkeypatch):
+    """On GOLDENMATCH_FRAME=arrow the _polars_native_eligible decline lifts:
+    the kernel handles most_complete/first_non_null no-rule configs directly
+    (there is no cheaper polars fast path to defer to on that backend), and
+    its output must equal the polars fast path byte-for-byte."""
+    import polars as pl
+    from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
+    from goldenmatch.core import golden_fused
+    from goldenmatch.core.golden import build_golden_records_df
+
+    if golden_fused._native_golden_symbol() is None:
+        import pytest
+
+        pytest.skip("goldenmatch-native golden_fused kernel not built")
+
+    rules = GoldenRulesConfig(default=GoldenFieldRule(strategy="most_complete"))
+    df = pl.DataFrame(
+        {
+            "__cluster_id__": [1, 1, 2, 2],
+            "__row_id__": [0, 1, 2, 3],
+            "name": ["Bob", "Robert", None, "Ann"],
+            "zip": ["07030", None, "10001", "10001"],
+        }
+    )
+
+    # polars backend: decline stands (returns None -> polars fast path).
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "polars")
+    assert golden_fused.run_golden_fused_arrow(df, rules, None) is None
+
+    # arrow backend: the kernel takes it, and matches the fast path's output.
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    fused = golden_fused.run_golden_fused_arrow(df, rules, None)
+    assert fused is not None
+    want = build_golden_records_df(df, rules)
+    got_rows = {r["__cluster_id__"]: r for r in fused.to_dicts()} if hasattr(fused, "to_dicts") else None
+    want_rows = {r["__cluster_id__"]: r for r in want.to_dicts()}
+    assert got_rows is not None
+    for cid, wrow in want_rows.items():
+        grow = got_rows[cid]
+        for col in ("name", "zip"):
+            assert grow[col] == wrow[col], (cid, col)
