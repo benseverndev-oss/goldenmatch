@@ -291,3 +291,31 @@ def test_with_gt_column(backend):
     # clustering oversized flag: (cluster_size > max).alias(...).
     f = _mk({"n": [1, 5, 3]}, backend)
     assert f.with_gt_column("n", 3, "big").column("big").to_list() == [False, True, False]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_with_coalesce(backend):
+    # clustering shortcut/compose kernels: pl.coalesce([a, b]).
+    f = _mk({"a": [None, 5, None], "b": [2, 9, None]}, backend)
+    assert f.with_coalesce(["a", "b"], "c").column("c").to_list() == [2, 5, None]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_with_coalesce_replaces_existing_name(backend):
+    # _rc_compose writes back into "cur" -- in-place replacement semantics.
+    f = _mk({"rep": [None, 7], "cur": [3, 4]}, backend)
+    out = f.with_coalesce(["rep", "cur"], "cur")
+    assert out.column("cur").to_list() == [3, 7]
+    assert out.columns == ["rep", "cur"]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_group_max(backend):
+    # scoring dedup: group_by([id_a,id_b]).agg(score.max()), SET contract.
+    f = _mk({"id_a": [1, 1, 2], "id_b": [2, 2, 3], "score": [0.5, 0.9, 0.7]}, backend)
+    out = f.group_max(["id_a", "id_b"], "score")
+    assert out.columns == ["id_a", "id_b", "score"]
+    kept = sorted(
+        zip(out.column("id_a").to_list(), out.column("id_b").to_list(), out.column("score").to_list())
+    )
+    assert kept == [(1, 2, 0.9), (2, 3, 0.7)]
