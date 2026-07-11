@@ -12,6 +12,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
     RulesPayload,
 )
+from goldenmatch.core.frame import to_frame as _to_frame
 from goldenmatch.core.lineage import build_lineage
 from goldenmatch.core.pipeline import run_dedupe_df
 from goldenmatch.web.registry import PreviewRegistry
@@ -186,7 +187,7 @@ def run_preview(
 
     # Re-attach __row_id__ so build_lineage can resolve pair indices. The pipeline
     # adds __row_id__ on its working copy; reconstruct the same column here.
-    enriched = df.with_columns(pl.int_range(0, df.height, dtype=pl.Int64).alias("__row_id__"))
+    enriched = _to_frame(df).with_row_index_int64("__row_id__").native
     lineage_records = build_lineage(
         scored_pairs=scored_pairs,
         df=enriched,

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core.frame import frame_from_records as _frame_from_records
+from goldenmatch.core.frame import to_frame as _to_frame
 
 
 @dataclass
@@ -197,6 +199,7 @@ class MatchEngine:
 
         # ── Standardization ──
         if config.standardization and config.standardization.rules:
+            # W5: LazyFrame expression engines; rewire with the core pipeline flip.
             combined_lf = apply_standardization(combined_lf, config.standardization.rules)
 
         # ── Domain feature extraction ──
@@ -309,7 +312,7 @@ class MatchEngine:
         for cluster_id, cluster_info in clusters.items():
             if cluster_info["size"] > 1 and not cluster_info["oversized"]:
                 member_ids = cluster_info["members"]
-                cluster_df = collected_df.filter(pl.col("__row_id__").is_in(member_ids))
+                cluster_df = _to_frame(collected_df).filter_in("__row_id__", member_ids).native
                 golden = build_golden_record(cluster_df, golden_rules)
                 golden["__cluster_id__"] = cluster_id
                 golden_records.append(golden)
@@ -326,7 +329,7 @@ class MatchEngine:
                     if isinstance(val_info, dict) and "value" in val_info:
                         row[col] = val_info["value"]
                 golden_rows.append(row)
-            golden_df = pl.DataFrame(golden_rows)
+            golden_df = _frame_from_records(golden_rows, backend="polars").native
 
         # ── Classify dupes / unique ──
         multi_cluster_ids = [cid for cid, c in clusters.items() if c["size"] > 1]
@@ -335,8 +338,8 @@ class MatchEngine:
             dupe_row_ids.update(clusters[cid]["members"])
         unique_row_ids = set(all_ids) - dupe_row_ids
 
-        dupes_df = collected_df.filter(pl.col("__row_id__").is_in(list(dupe_row_ids)))
-        unique_df = collected_df.filter(pl.col("__row_id__").is_in(list(unique_row_ids)))
+        dupes_df = _to_frame(collected_df).filter_in("__row_id__", list(dupe_row_ids)).native
+        unique_df = _to_frame(collected_df).filter_in("__row_id__", list(unique_row_ids)).native
 
         # ── Stats ──
         stats = self._compute_stats(clusters, collected_df.height)

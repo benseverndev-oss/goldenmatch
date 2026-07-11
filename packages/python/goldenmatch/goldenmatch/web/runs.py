@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core.frame import to_frame as _to_frame
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ def load_run_manifest(ref: RunRef) -> RunManifest:
         run_name=ref.run_name,
         generated_at=lineage.get("generated_at", ""),
         total_pairs=int(lineage.get("total_pairs", 0)),
-        cluster_count=int(df.select(pl.col("cluster_id").n_unique()).item()),
+        cluster_count=int(_to_frame(df).column("cluster_id").n_unique()),
         row_count=int(df.height),
     )
 
@@ -95,7 +96,7 @@ def cluster_summaries(ref: RunRef) -> list[dict]:
 def cluster_detail(ref: RunRef, cluster_id: int) -> dict:
     df = load_clusters_df(ref)
     lineage = load_lineage(ref)
-    members = df.filter(pl.col("cluster_id") == cluster_id)
+    members = _to_frame(df).filter_eq("cluster_id", cluster_id).native
     if members.height == 0:
         raise KeyError(cluster_id)
     row_ids = [int(r) for r in members["row_id"]]
