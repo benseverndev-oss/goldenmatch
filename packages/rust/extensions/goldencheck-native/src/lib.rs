@@ -20,12 +20,15 @@ mod fuzzy;
 mod keys;
 mod profile;
 mod regex;
+mod stats;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(profile::benford_leading_digits, m)?)?;
     m.add_function(wrap_pyfunction!(aggregate::column_aggregate, m)?)?;
+    m.add_function(wrap_pyfunction!(stats::column_numeric_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(stats::count_outside, m)?)?;
     m.add_function(wrap_pyfunction!(keys::composite_key_search, m)?)?;
     m.add_function(wrap_pyfunction!(keys::functional_dependency_holds, m)?)?;
     m.add_function(wrap_pyfunction!(keys::discover_functional_dependencies, m)?)?;

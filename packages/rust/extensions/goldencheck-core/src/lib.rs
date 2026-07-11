@@ -30,6 +30,7 @@ mod dc;
 mod fuzzy;
 mod keys;
 mod regex;
+mod stats;
 
 pub use aggregate::{column_aggregate, dtype_category, ColumnAgg, DtypeCat};
 pub use arrow_support::intern_column;
@@ -45,3 +46,4 @@ pub use keys::{
     functional_dependency_holds, functional_dependency_holds_slice, tuple_distinct_count,
 };
 pub use regex::{str_contains_count, str_filter_mask, str_replace_all};
+pub use stats::{column_numeric_stats, count_outside, NumStats};

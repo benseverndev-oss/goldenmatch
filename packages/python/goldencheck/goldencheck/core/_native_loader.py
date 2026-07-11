@@ -113,6 +113,7 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "str_to_date": ("str_to_date",),
     "csv_infer": ("csv_infer_columns",),
     "column_aggregate": ("column_aggregate",),
+    "numeric_stats": ("column_numeric_stats", "count_outside"),
 }
 
 

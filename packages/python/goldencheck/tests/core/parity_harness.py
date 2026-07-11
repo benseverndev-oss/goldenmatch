@@ -365,6 +365,110 @@ def _csv_infer_fallback(fx: tuple[list[str], list[list[str]]]) -> dict:
     return infer_and_type(cells, header)
 
 
+# ---------------------------------------------------------------------------
+# numeric_stats (column_numeric_stats + count_outside) -- range_distribution.
+#
+# `mean`/`std` are float reductions, so the harness compares them via a
+# significant-figure canonical form (the float-epsilon "divergence class" for
+# this kernel) rather than bare `!=`; `min`/`max`/`count` are exact but NaN is
+# canonicalised (Polars `None` for empty/all-NaN min-max and `n<2` std maps to
+# the kernel's NaN). Because both run_native and run_fallback apply the SAME
+# normalisation, a real divergence beyond ~9 sig-figs still trips the oracle --
+# so this stays an exact-`!=` check and ACCEPTED_DIVERGENCES remains empty.
+# ---------------------------------------------------------------------------
+_STATS_SIG = 9
+
+
+def _canon_float(x: object) -> str:
+    """Canonical token for a possibly-None / NaN / inf float, rounded to
+    ``_STATS_SIG`` significant figures so float-reduction noise collapses."""
+    import math
+
+    if x is None:
+        return "NAN"
+    v = float(x)
+    if math.isnan(v):
+        return "NAN"
+    if math.isinf(v):
+        return "inf" if v > 0 else "-inf"
+    if v == 0.0:
+        return "0"
+    d = _STATS_SIG - 1 - math.floor(math.log10(abs(v)))
+    return repr(round(v, d))
+
+
+def _numeric_stats_fixtures(seed: int) -> list[pl.Series]:
+    rng = random.Random(seed)
+    n = rng.randint(0, 250)
+    int_pool = [None] + list(range(-40, 41)) + [5000, -5000]
+    int_vals = [rng.choice(int_pool) for _ in range(n)]
+    float_pool = (
+        [None, 0.0, -0.0] + [rng.uniform(-50, 50) for _ in range(20)] + [9999.5, -8888.25]
+    )
+    float_vals = [rng.choice(float_pool) for _ in range(n)]
+    uint_pool = [None] + list(range(0, 60)) + [9000]
+    uint_vals = [rng.choice(uint_pool) for _ in range(n)]
+    # A NaN/inf-bearing float column too (min/max ignore NaN; mean/std propagate).
+    nan_vals = [rng.choice([None, 1.0, 2.0, float("nan"), float("inf")]) for _ in range(n)]
+    return [
+        pl.Series("i", int_vals, dtype=pl.Int64),
+        pl.Series("f", float_vals, dtype=pl.Float64),
+        pl.Series("u", uint_vals, dtype=pl.UInt32),
+        pl.Series("nan", nan_vals, dtype=pl.Float64),
+    ]
+
+
+def _numeric_stats_normalized(
+    count: int,
+    mn: object,
+    mx: object,
+    mean: object,
+    std: object,
+    outlier: tuple[int, list[str]],
+) -> tuple:
+    return (
+        count,
+        _canon_float(mn),
+        _canon_float(mx),
+        _canon_float(mean),
+        _canon_float(std),
+        outlier[0],
+        tuple(outlier[1]),
+    )
+
+
+def _numeric_stats_outlier_bounds(s: pl.Series) -> tuple[float, float] | None:
+    import math
+
+    mean = s.mean()
+    std = s.std()
+    if mean is None or std is None or not math.isfinite(std) or std <= 0:
+        return None
+    return (mean - 3 * std, mean + 3 * std)
+
+
+def _numeric_stats_native(s: pl.Series) -> tuple:
+    count, mn, mx, mean, std, _sum = native_module().column_numeric_stats(s.to_arrow())
+    bounds = _numeric_stats_outlier_bounds(s)
+    if bounds is None:
+        outlier = (0, [])
+    else:
+        outlier = tuple(native_module().count_outside(s.to_arrow(), bounds[0], bounds[1]))
+    return _numeric_stats_normalized(count, mn, mx, mean, std, outlier)
+
+
+def _numeric_stats_fallback(s: pl.Series) -> tuple:
+    count = s.len() - s.null_count()
+    bounds = _numeric_stats_outlier_bounds(s)
+    if bounds is None:
+        outlier = (0, [])
+    else:
+        non_null = s.drop_nulls()
+        out = non_null.filter((non_null < bounds[0]) | (non_null > bounds[1]))
+        outlier = (len(out), [str(v) for v in out.to_list()[:5]])
+    return _numeric_stats_normalized(count, s.min(), s.max(), s.mean(), s.std(), outlier)
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -379,6 +483,12 @@ REGISTERED_COMPONENTS: list[Component] = [
         _fd_bridge_fixtures,
     ),
     Component("csv_infer", _csv_infer_native, _csv_infer_fallback, _csv_infer_fixtures),
+    Component(
+        "numeric_stats",
+        _numeric_stats_native,
+        _numeric_stats_fallback,
+        _numeric_stats_fixtures,
+    ),
     Component(
         "column_aggregate",
         _column_aggregate_native,
