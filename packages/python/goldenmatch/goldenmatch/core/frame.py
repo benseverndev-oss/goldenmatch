@@ -124,6 +124,18 @@ class Frame(Protocol):
     def with_column(self, name: str, col: Column) -> Frame: ...
     def with_literal_column(self, name: str, value: Any) -> Frame: ...
     def group_partitions(self, key: str) -> list[tuple[Any, Frame]]: ...
+    # W2e-1: one field's standardizer chain (apply_standardization's
+    # per-column derivation as a seam op; `address`/plugins fall back to the
+    # pure-Python STANDARDIZERS oracle on the arrow backend).
+    def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> Column: ...
+    # W2e-2: matchkey composite (PER-FIELD transform chains, unlike
+    # derive_block_key's shared chain; the non-native fallback runs over RAW
+    # values -- matchkey's map_elements has no Utf8 pre-cast) + the derived-NE
+    # space-join (fill_null("") means it never null-propagates).
+    def derive_matchkey(
+        self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
+    ) -> Column: ...
+    def derive_ne_joined(self, fields: Sequence[str]) -> Column: ...
 
 
 class PolarsColumn:
@@ -394,6 +406,64 @@ class PolarsFrame:
         # downstream: thread-pool scored, pairs canonicalized).
         parts = self._df.partition_by(key, maintain_order=True, include_key=True)
         return [(p[key][0], PolarsFrame(p)) for p in parts]
+
+    def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> PolarsColumn:
+        # Byte-identical to apply_standardization's three per-column branches
+        # (standardize.py:443-501): native builders as one fused expr chain,
+        # any non-native tail via ONE chained map_elements UDF -- including
+        # the mixed-chain REORDERING quirk (native first, then non-native).
+        from goldenmatch.core.standardize import _NATIVE_STANDARDIZERS, get_standardizer
+
+        expr = pl.col(field).cast(pl.Utf8)
+        for name in [n for n in std_names if n in _NATIVE_STANDARDIZERS]:
+            expr = _NATIVE_STANDARDIZERS[name](expr)  # type: ignore[operator]
+        non_native = [n for n in std_names if n not in _NATIVE_STANDARDIZERS]
+        if non_native:
+            funcs = [get_standardizer(n) for n in non_native]
+
+            def _chained(val: Any, _funcs: Any = funcs) -> Any:
+                for fn in _funcs:
+                    val = fn(val)
+                return val
+
+            # noqa: GM-MAP-ELEMENTS: non-native standardizer tail needs per-row Python (mirrors apply_standardization)
+            expr = expr.map_elements(_chained, return_dtype=pl.Utf8)
+        return PolarsColumn(self._df.select(expr.alias("__std__"))["__std__"])
+
+    def derive_matchkey(
+        self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
+    ) -> PolarsColumn:
+        # build_matchkey_expr's per-field branches VERBATIM (matchkey.py
+        # :164-184): native chain when fully expressible, else map_elements
+        # over RAW values (NO pre-cast -- the one contract difference vs the
+        # fused prep's cast-then-chain), else plain cast; concat_str for
+        # multi-field.
+        from goldenmatch.core.matchkey import _build_field_expr_native
+        from goldenmatch.utils.transforms import apply_transforms
+
+        field_exprs = []
+        for f, transforms in fields_with_chains:
+            chain = list(transforms)
+            if chain:
+                native = _build_field_expr_native(f, chain)
+                if native is not None:
+                    expr = native
+                else:
+                    # noqa: GM-MAP-ELEMENTS: non-native matchkey transform (soundex/metaphone); mirrors build_matchkey_expr
+                    expr = pl.col(f).map_elements(
+                        lambda val, _c=chain: apply_transforms(val, _c),
+                        return_dtype=pl.Utf8,
+                    )
+            else:
+                expr = pl.col(f).cast(pl.Utf8)
+            field_exprs.append(expr)
+        out = field_exprs[0] if len(field_exprs) == 1 else pl.concat_str(field_exprs, separator=sep)
+        return PolarsColumn(self._df.select(out.alias("__mk__"))["__mk__"])
+
+    def derive_ne_joined(self, fields: Sequence[str]) -> PolarsColumn:
+        # precompute_matchkey_transforms' derived-NE join (matchkey.py:381-386).
+        expr = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("") for c in fields], separator=" ")
+        return PolarsColumn(self._df.select(expr.alias("__ne__"))["__ne__"])
 
 
 class ArrowColumn:
@@ -740,6 +810,26 @@ class ArrowFrame:
                 order.append(v)
             groups[v].append(i)
         return [(v, ArrowFrame(self._tbl.take(groups[v]))) for v in order]
+
+    def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        return ArrowColumn(
+            arrow_derive.standardized_column(self._tbl.column(field), list(std_names))
+        )
+
+    def derive_matchkey(
+        self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
+    ) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        pairs = [(self._tbl.column(f), list(t)) for f, t in fields_with_chains]
+        return ArrowColumn(arrow_derive.matchkey_composite(pairs, sep=sep))
+
+    def derive_ne_joined(self, fields: Sequence[str]) -> ArrowColumn:
+        from goldenmatch.core import arrow_derive
+
+        return ArrowColumn(arrow_derive.ne_joined_column([self._tbl.column(f) for f in fields]))
 
 
 def to_frame(obj: Any) -> Frame:
