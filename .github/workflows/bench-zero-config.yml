@@ -37,6 +37,10 @@ on:
         description: "Override backend (blank = controller default)"
         required: false
         default: ""
+      frame:
+        description: "GOLDENMATCH_FRAME override (blank = polars default). NOTE: the bench script ingests via pl.read_csv, so until W2e adds a load_file ingest path this only flips in-pipeline resolve_frame_backend() readers, not the ingest boundary."
+        required: false
+        default: ""
       label:
         description: "Tag for the output filename (e.g. 'post-pr239', 'post-attack-a')"
         required: false
@@ -100,6 +104,10 @@ jobs:
       - name: Apply backend override (if set)
         if: ${{ inputs.backend != '' }}
         run: echo "GOLDENMATCH_AUTOCONFIG_BACKEND=${{ inputs.backend }}" >> $GITHUB_ENV
+
+      - name: Apply frame-backend override (if set)
+        if: ${{ inputs.frame != '' }}
+        run: echo "GOLDENMATCH_FRAME=${{ inputs.frame }}" >> $GITHUB_ENV
 
       - name: Run bench
         run: |

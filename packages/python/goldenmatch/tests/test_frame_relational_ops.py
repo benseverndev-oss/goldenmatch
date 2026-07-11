@@ -537,3 +537,39 @@ def test_cross_source_filter_dual_backend() -> None:
     assert got_pa.column("id_a").to_pylist() == [1]
     assert got_pa.column("id_b").to_pylist() == [2]
     assert set(got_pl.columns) == set(got_pa.column_names) == {"id_a", "id_b", "score"}
+
+
+# ---- W2d ops -----------------------------------------------------------------
+
+
+def test_with_column_and_literal() -> None:
+    tbl = pa.table({"a": pa.array([1, 2], type=pa.int64())})
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        derived = frame.derive_transformed_column("a", [])
+        got = frame.with_column("__key__", derived).with_literal_column("__source__", "s1")
+        assert got.column("__key__").to_list() == ["1", "2"]
+        assert got.column("__source__").to_list() == ["s1", "s1"]
+    # overwrite semantics: attaching an existing name replaces the column.
+    for frame in (pf, af):
+        replaced = frame.with_column("a", frame.derive_transformed_column("a", []))
+        assert replaced.column("a").to_list() == ["1", "2"]
+        assert replaced.columns == ["a"]
+
+
+def test_group_partitions_unsorted_and_nulls() -> None:
+    # THE trap group_partitions exists for: a key recurring NON-adjacently
+    # must form ONE group (partition_by_key's run-slicing would split it).
+    tbl = pa.table(
+        {
+            "k": pa.array(["x", "y", "x", None, "y", "x"], type=pa.string()),
+            "i": pa.array([0, 1, 2, 3, 4, 5], type=pa.int64()),
+        }
+    )
+    pf, af = _pair(tbl)
+    for frame in (pf, af):
+        parts = frame.group_partitions("k")
+        got = {k: p.column("i").to_list() for k, p in parts}
+        assert got == {"x": [0, 2, 5], "y": [1, 4], None: [3]}
+        # first-appearance order
+        assert [k for k, _ in parts] == ["x", "y", None]

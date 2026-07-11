@@ -135,3 +135,41 @@ def test_load_file_default_mode_purity(tmp_path: Path, monkeypatch: pytest.Monke
     anchor_df = pl.scan_csv(path, encoding="utf8-lossy").collect()
 
     assert result_df.equals(anchor_df)
+
+
+# ---- W2d: load_file(return_frame=True) --------------------------------------
+
+
+def test_return_frame_arrow_route_yields_arrow_frame(tmp_path, monkeypatch):
+    import polars as pl
+    from goldenmatch.core.frame import ArrowFrame
+    from goldenmatch.core.ingest import load_file, load_files
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    p = tmp_path / "t.csv"
+    p.write_text("a,b\n1,x\n2,y\n", encoding="utf-8")
+
+    f = load_file(p, return_frame=True)
+    assert isinstance(f, ArrowFrame)
+    assert f.columns == ["a", "b"] and f.height == 2
+
+    # default False keeps the LazyFrame contract even on the arrow route.
+    lf = load_file(p)
+    assert isinstance(lf, pl.LazyFrame)
+
+    frames = load_files([(str(p), "s1")], return_frame=True)
+    assert isinstance(frames[0], ArrowFrame)
+    assert frames[0].column("__source__").to_list() == ["s1", "s1"]
+
+
+def test_return_frame_polars_backend_stays_lazyframe(tmp_path, monkeypatch):
+    import polars as pl
+    from goldenmatch.core.ingest import load_file
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "polars")
+    p = tmp_path / "t.csv"
+    p.write_text("a\n1\n", encoding="utf-8")
+    # return_frame only changes the ARROW route; the polars backend keeps
+    # returning LazyFrame (the seam's PolarsFrame is eager-only by contract).
+    lf = load_file(p, return_frame=True)
+    assert isinstance(lf, pl.LazyFrame)

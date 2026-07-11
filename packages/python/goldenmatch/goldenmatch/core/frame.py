@@ -117,6 +117,13 @@ class Frame(Protocol):
     def map_column(self, src: str, dst: str, mapping: dict, dtype: str = "int64") -> Frame: ...
     def apply_weak_quality(self, weak_threshold: float) -> Frame: ...
     def select_eligible_clusters(self) -> Frame: ...
+    # W2d ops: with_column attaches a derived Column; group_partitions is
+    # HASH-grouped (first-appearance order, no pre-sort requirement -- unlike
+    # partition_by_key, whose adjacent-run slicing on unsorted input would
+    # silently split a block). Null keys form a group; callers skip explicitly.
+    def with_column(self, name: str, col: Column) -> Frame: ...
+    def with_literal_column(self, name: str, value: Any) -> Frame: ...
+    def group_partitions(self, key: str) -> list[tuple[Any, Frame]]: ...
 
 
 class PolarsColumn:
@@ -370,6 +377,23 @@ class PolarsFrame:
         return PolarsFrame(
             self._df.filter((pl.col("size") > 1) & ~pl.col("oversized")).select("cluster_id")
         )
+
+    def with_column(self, name: str, col: Column) -> PolarsFrame:
+        # blocker.py auto-split key attach (~710-712).
+        s = col._s if isinstance(col, PolarsColumn) else pl.Series(name, col.to_list())  # noqa: SLF001
+        return PolarsFrame(self._df.with_columns(s.alias(name)))
+
+    def with_literal_column(self, name: str, value: Any) -> PolarsFrame:
+        # ingest.py:191's `__source__` tag.
+        return PolarsFrame(self._df.with_columns(pl.lit(value).alias(name)))
+
+    def group_partitions(self, key: str) -> list[tuple[Any, PolarsFrame]]:
+        # blocker.py:373-375's group_by iteration. partition_by with
+        # maintain_order is a DETERMINISTIC refinement of the raw
+        # nondeterministic group_by order (blocks are an unordered set
+        # downstream: thread-pool scored, pairs canonicalized).
+        parts = self._df.partition_by(key, maintain_order=True, include_key=True)
+        return [(p[key][0], PolarsFrame(p)) for p in parts]
 
 
 class ArrowColumn:
@@ -687,6 +711,35 @@ class ArrowFrame:
         return ArrowFrame(
             self._tbl.filter(keep, null_selection_behavior="drop").select(["cluster_id"])
         )
+
+    def with_column(self, name: str, col: Column) -> ArrowFrame:
+        import pyarrow as pa
+
+        arr = col.to_arrow()
+        if isinstance(arr, pa.ChunkedArray):
+            arr = arr.combine_chunks()
+        if name in self._tbl.column_names:
+            idx = self._tbl.column_names.index(name)
+            return ArrowFrame(self._tbl.set_column(idx, name, arr))
+        return ArrowFrame(self._tbl.append_column(name, arr))
+
+    def with_literal_column(self, name: str, value: Any) -> ArrowFrame:
+        import pyarrow as pa
+
+        return ArrowFrame(self._tbl.append_column(name, pa.array([value] * self._tbl.num_rows)))
+
+    def group_partitions(self, key: str) -> list[tuple[Any, ArrowFrame]]:
+        # Hash-grouped, first-appearance order, correct on UNSORTED input
+        # (adjacent-run slicing would split recurring keys). Null keys group.
+        vals = self._tbl.column(key).to_pylist()
+        groups: dict[Any, list[int]] = {}
+        order: list[Any] = []
+        for i, v in enumerate(vals):
+            if v not in groups:
+                groups[v] = []
+                order.append(v)
+            groups[v].append(i)
+        return [(v, ArrowFrame(self._tbl.take(groups[v]))) for v in order]
 
 
 def to_frame(obj: Any) -> Frame:
