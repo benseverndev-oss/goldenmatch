@@ -186,11 +186,15 @@ def score_candidate(
             }
 
     df_with_key = _apply_candidate_transforms(df, candidate)
+    # ^ stays a polars expression chain: this MCP tool is unreachable on the
+    # arrow backend until W5 lifts the ingest shim; the REDUCTIONS below run
+    # through the seam (W3d).
 
-    # Drop nulls in block key
-    df_valid = df_with_key.filter(pl.col("__block_key__").is_not_null())
+    from goldenmatch.core.frame import to_frame
 
-    if len(df_valid) == 0:
+    df_valid = to_frame(df_with_key.filter(pl.col("__block_key__").is_not_null()))
+
+    if df_valid.height == 0:
         return {
             "group_count": 0,
             "max_group_size": 0,
@@ -200,15 +204,12 @@ def score_candidate(
             "score": 0.0,
         }
 
-    # Group by block key using Polars expressions
-    stats = (
-        df_valid
-        .group_by("__block_key__")
-        .agg(pl.len().alias("block_size"))
-    )
+    # Group sizes via the seam (column named "len" per group_len contract).
+    stats = df_valid.group_len(["__block_key__"])
+    sizes = stats.column("len")
 
-    group_count = len(stats)
-    total_records = len(df_valid)
+    group_count = stats.height
+    total_records = df_valid.height
 
     if group_count == 0:
         return {
@@ -220,18 +221,15 @@ def score_candidate(
             "score": 0.0,
         }
 
-    max_group_size = stats["block_size"].max()
-    mean_group_size = stats["block_size"].mean()
-    std_group_size = stats["block_size"].std() if group_count > 1 else 0.0
+    max_group_size = sizes.max()
+    mean_group_size = sizes.mean()
+    std_group_size = sizes.std() if group_count > 1 else 0.0
     if std_group_size is None:
         std_group_size = 0.0
 
-    # total_comparisons = sum(n*(n-1)/2) using Polars
-    total_comparisons = int(
-        stats.select(
-            (pl.col("block_size") * (pl.col("block_size") - 1) / 2).sum()
-        ).item()
-    )
+    # total_comparisons = sum(n*(n-1)/2), Python fold over the seam sizes
+    # (same values as the old polars expression).
+    total_comparisons = sum(k * (k - 1) // 2 for k in sizes.to_list())
 
     # Score formula
     if mean_group_size == 0:
@@ -283,20 +281,22 @@ def estimate_recall(
     if n < 2:
         return 0.0
 
+    from goldenmatch.core.frame import to_frame
+
     actual_sample = min(sample_size, n)
-    sample_df = df.sample(actual_sample, seed=42)
+    sample_frame = to_frame(df).sample(actual_sample, seed=42)
 
     # Pick highest-cardinality matchkey column
-    valid_cols = [c for c in matchkey_columns if c in sample_df.columns]
+    valid_cols = [c for c in matchkey_columns if c in sample_frame.columns]
     if not valid_cols:
         return 0.0
 
-    best_col = max(valid_cols, key=lambda c: sample_df[c].n_unique())
+    best_col = max(valid_cols, key=lambda c: sample_frame.column(c).n_unique())
 
     # Prepare string values for cdist
     values = (
-        sample_df[best_col]
-        .cast(pl.Utf8)
+        sample_frame.column(best_col)
+        .cast_str()
         .fill_null("")
         .to_list()
     )
@@ -317,7 +317,7 @@ def estimate_recall(
         return 1.0  # No pairs to miss
 
     # Apply candidate transforms to sample and get block keys
-    sample_with_key = _apply_candidate_transforms(sample_df, candidate)
+    sample_with_key = _apply_candidate_transforms(sample_frame.native, candidate)
     block_keys = sample_with_key["__block_key__"].to_list()
 
     # Check how many pairs share the same block key
@@ -376,7 +376,9 @@ def analyze_blocking(
     # rows. Block-size distribution is shape-only; sample is sufficient.
     n_full = df.height
     if n_full > _SCORE_SAMPLE_THRESHOLD:
-        score_df = df.sample(_SCORE_SAMPLE_SIZE, seed=42)
+        from goldenmatch.core.frame import to_frame
+
+        score_df = to_frame(df).sample(_SCORE_SAMPLE_SIZE, seed=42).native
         logger.info(
             "analyze_blocking: sampling %d rows from %d for candidate scoring",
             _SCORE_SAMPLE_SIZE, n_full,

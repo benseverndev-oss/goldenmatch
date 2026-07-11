@@ -1423,18 +1423,11 @@ def _union_coverage(df: pl.DataFrame, pass_field_lists: list[list[str]]) -> floa
     """Fraction of rows non-null on at least one pass's fields (OR across passes).
     A multi-field pass requires ALL its fields non-null (it can't block a row
     missing any component)."""
-    if df.height == 0:
-        return 0.0
-    covered = pl.repeat(False, df.height, eager=True)
-    for fields in pass_field_lists:
-        present = pl.repeat(True, df.height, eager=True)
-        for f in fields:
-            if f not in df.columns:
-                present = pl.repeat(False, df.height, eager=True)
-                break
-            present = present & df[f].is_not_null()
-        covered = covered | present
-    return float(covered.sum()) / df.height
+    # W3d: the seam's coverage_ratio op is this exact fold (edge cases
+    # pinned by its fixtures: missing column, empty lists, NaN non-null).
+    from goldenmatch.core.frame import to_frame
+
+    return to_frame(df).coverage_ratio(pass_field_lists)
 
 
 def _build_strong_identifier_union(
@@ -1455,7 +1448,10 @@ def _build_strong_identifier_union(
     `n_rows_full` is reserved for call-site signature parity; scale-safety is
     enforced by the caller via `_gate_passes`, not here."""
     def _nonnull(col: str) -> float:
-        return 1.0 - (df[col].null_count() / df.height) if df.height else 0.0
+        from goldenmatch.core.frame import to_frame
+
+        frame = to_frame(df)
+        return 1.0 - (frame.column(col).null_count() / frame.height) if frame.height else 0.0
 
     candidate_passes: list[list[str]] = []
 
@@ -1530,16 +1526,20 @@ def _build_compound_blocking(
         return df[col_name].null_count() / df.height if df.height > 0 else 0.0
 
     def _max_block_size(col_name: str) -> int:
-        """Largest group size when blocking on this column."""
-        return int(df.group_by(col_name).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
+        """Largest group size when blocking on this column (W3d: seam)."""
+        from goldenmatch.core.frame import to_frame
+
+        return int(to_frame(df).group_len([col_name]).column("len").max() or 0)
 
     def _nonnull_ratio(col_name: str) -> float:
         """Distinct/non-null ratio -- the TRUE per-record uniqueness, not the
         null-deflated ColumnProfile.cardinality_ratio. A near-1.0 value means a
         surrogate-key-like column (npi/phone/email) whose only big "block" is
         its null bucket -- useless as a blocking component."""
-        nn = df[col_name].drop_nulls()
-        n = nn.len()
+        from goldenmatch.core.frame import to_frame
+
+        nn = to_frame(df).column(col_name).drop_nulls()
+        n = len(nn)
         return (nn.n_unique() / n) if n > 0 else 1.0
 
     # #715: judge compound COMPONENTS by whether they BOUND block size (i.e.
@@ -1842,12 +1842,16 @@ def _check_source_overlap(
     if len(sources) < 2:
         return 1.0
 
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
     value_sets = []
     for src in sources:
         vals = set(
-            df.filter(pl.col(partition_col) == src)[col]
+            frame.filter_eq(partition_col, src)
+            .column(col)
             .drop_nulls()
-            .cast(pl.Utf8)
+            .cast_str()
             .to_list()
         )
         value_sets.append(vals)
@@ -1878,13 +1882,14 @@ def _source_disjoint(df: pl.DataFrame, col: str, partition_col: str) -> bool:
     """
     if partition_col not in df.columns:
         return False
-    sub = df.select([col, partition_col]).drop_nulls()
-    if sub.height == 0:
+    # W3d: group_nunique pins the either-col-null row drop this site's
+    # frame-level drop_nulls performed.
+    from goldenmatch.core.frame import to_frame
+
+    per_value = to_frame(df).group_nunique(col, partition_col)
+    if per_value.height == 0:
         return False
-    per_value = sub.group_by(col).agg(
-        pl.col(partition_col).n_unique().alias("_np")
-    )
-    max_parts = cast("int | None", per_value["_np"].max())
+    max_parts = cast("int | None", per_value.column("n_unique").max())
     return max_parts is None or max_parts <= 1
 
 
@@ -3186,7 +3191,9 @@ def build_blocking(
     composite = find_composite_blocking_keys(df, column_roles)
     if composite is not None:
         try:
-            joint_card = int(df.select(composite).n_unique())
+            from goldenmatch.core.frame import to_frame
+
+            joint_card = int(to_frame(df).joint_n_unique(list(composite)))
         except Exception:  # pragma: no cover -- defensive
             joint_card = 1
         avg_block = max(effective_n_full // max(joint_card, 1), 1)
