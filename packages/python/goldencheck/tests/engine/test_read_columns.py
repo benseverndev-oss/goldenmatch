@@ -123,7 +123,7 @@ def test_read_columns_parquet_excel_are_polars_free(tmp_path):
     p_pq = _write_parquet(tmp_path)
     p_xl = _write_xlsx(tmp_path)
     csv = tmp_path / "c.csv"
-    csv.write_text("a\n1\n", encoding="utf-8")
+    csv.write_text("id,zip\n1,01234\n2,00099\n", encoding="utf-8")
     code = textwrap.dedent(f"""
         import sys, importlib.abc
         class _B(importlib.abc.MetaPathFinder):
@@ -136,11 +136,12 @@ def test_read_columns_parquet_excel_are_polars_free(tmp_path):
         assert read_columns(r{str(p_pq)!r})
         assert read_columns(r{str(p_xl)!r})
         assert 'polars' not in sys.modules, sorted(m for m in sys.modules if 'polar' in m)
-        try:
-            read_columns(r{str(csv)!r})
-            raise SystemExit('csv should have raised ImportError')
-        except ImportError:
-            pass
+        # CSV is now polars-free too: routes to the OWNED inference contract
+        # (see engine/csv_infer.py), not pl.read_csv -- no ImportError, and the
+        # zip column stays str (leading zeros) instead of coercing to int.
+        got = read_columns(r{str(csv)!r})
+        assert got == {{"id": [1, 2], "zip": ["01234", "00099"]}}, got
+        assert 'polars' not in sys.modules, sorted(m for m in sys.modules if 'polar' in m)
     """)
     pkg = str(Path(__file__).resolve().parents[1])
     env = dict(os.environ)

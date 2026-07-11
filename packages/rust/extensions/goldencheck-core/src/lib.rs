@@ -23,6 +23,7 @@
 
 mod arrow_support;
 mod benford;
+mod csv_infer;
 mod date;
 mod dc;
 mod fuzzy;
@@ -31,6 +32,7 @@ mod regex;
 
 pub use arrow_support::intern_column;
 pub use benford::{benford_leading_digits, benford_leading_digits_slice};
+pub use csv_infer::{infer_and_type, read_csv_bytes, read_csv_owned_bytes, TypedColumn};
 pub use date::str_to_date;
 pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
 pub use fuzzy::{near_duplicate_clusters, near_duplicate_clusters_slice};

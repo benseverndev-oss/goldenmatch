@@ -69,21 +69,36 @@ def read_file(path: Path) -> pl.DataFrame:
 def _read_csv_columns(path: Path) -> dict[str, list]:
     """Read a CSV file into a dict[str, list] using Polars.
 
-    CSV cannot be read byte-identically without Polars (its dtype inference isn't
-    reproducible), so this requires Polars and mirrors `read_file`'s CSV path exactly.
+    When Polars is importable this reads byte-identically to `read_file`'s CSV path
+    (unchanged pl.read_csv behaviour). When Polars is absent, delegates to the
+    OWNED (polars-free) inference contract in `_read_csv_columns_owned` -- a
+    documented, DIFFERENT dtype-inference contract (see `engine/csv_infer.py`),
+    not a byte-identical stand-in for `pl.read_csv`.
     """
     try:
         import polars  # noqa: F401
-    except ImportError as e:
-        raise ImportError(
-            "Reading CSV requires Polars (its dtype inference is not reproducible without "
-            "it). Install goldencheck[polars], or use a Parquet/Excel source."
-        ) from e
+    except ImportError:
+        return _read_csv_columns_owned(path)
     try:
         df = pl.read_csv(path, infer_schema_length=10000)
     except Exception:
         df = pl.read_csv(path, infer_schema_length=10000, encoding="latin-1")
     return df.to_dict(as_series=False)
+
+
+def _read_csv_columns_owned(path: Path) -> dict[str, list]:
+    """Polars-free CSV read via goldencheck's OWN inference contract (see
+    engine/csv_infer.py). Deliberately differs from pl.read_csv (leading-zero -> str,
+    inf/nan -> str). Native kernel (source of truth) when built, else the Python
+    reference."""
+    from goldencheck.core._native_loader import native_enabled, native_module
+
+    if native_enabled("csv_infer"):
+        data = path.read_bytes()
+        return native_module().csv_infer_columns(data, ord(","))
+    from goldencheck.engine.csv_infer import read_csv_owned
+
+    return read_csv_owned(path)
 
 
 def read_columns(path: Path) -> dict[str, list]:
