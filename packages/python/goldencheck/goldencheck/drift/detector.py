@@ -88,6 +88,7 @@ def _check_statistical(df: pl.DataFrame, baseline: BaselineProfile) -> list[Find
         if len(series) < 30:
             continue
 
+        # TODO(W-path): route via dtype_category
         is_numeric = df[col].dtype in (
             pl.Int8, pl.Int16, pl.Int32, pl.Int64,
             pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
@@ -484,6 +485,7 @@ def _check_temporal_order_drift(df: pl.DataFrame, baseline: BaselineProfile) -> 
             continue
 
         try:
+            # TODO(W-path): route via dtype_category
             a = df[col_before] if df[col_before].dtype in (pl.Date, pl.Datetime) else df[col_before].cast(pl.Date)
             b = df[col_after] if df[col_after].dtype in (pl.Date, pl.Datetime) else df[col_after].cast(pl.Date)
         except Exception as exc:
@@ -640,6 +642,7 @@ def _check_correlations(df: pl.DataFrame, baseline: BaselineProfile) -> list[Fin
 
     # new_correlation: INFO for newly emerged strong correlations not in baseline
     # Check numeric-numeric pairs
+    # TODO(W-path): route via dtype_category
     numeric_cols = [
         c for c in df.columns
         if df[c].dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64,

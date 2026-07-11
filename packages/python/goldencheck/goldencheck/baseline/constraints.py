@@ -156,6 +156,7 @@ def _mine_temporal_orders(
     for i, col_a in enumerate(present):
         for col_b in present[i + 1 :]:
             try:
+                # TODO(W-path): route via dtype_category
                 a = df[col_a] if df[col_a].dtype in (pl.Date, pl.Datetime) else df[col_a].cast(pl.Date)
                 b = df[col_b] if df[col_b].dtype in (pl.Date, pl.Datetime) else df[col_b].cast(pl.Date)
             except Exception as exc:

@@ -10,8 +10,8 @@ from goldencheck._polars_lazy import pl
 
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
-from goldencheck.core._native_loader import native_enabled
-from goldencheck.core.frame import PyFrame
+from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import PyFrame, dtype_category
 from goldencheck.engine.confidence import apply_corroboration_boost
 from goldencheck.engine.reader import read_columns, read_file
 from goldencheck.engine.sampler import maybe_sample
@@ -98,7 +98,7 @@ def _post_classification_checks(
         if col_name not in sample.columns:
             continue
         col = sample[col_name]
-        if col.dtype not in (pl.Utf8, pl.String):
+        if dtype_category(col.dtype) != "str":
             continue
 
         # Detect digit characters in person name columns
@@ -142,7 +142,7 @@ def _post_classification_checks(
         if col_name not in sample.columns:
             continue
         col = sample[col_name]
-        if col.dtype not in (pl.Utf8, pl.String):
+        if dtype_category(col.dtype) != "str":
             continue
         non_null = col.drop_nulls()
         total = len(non_null)
@@ -190,12 +190,9 @@ def _post_classification_checks(
         col = sample[col_name]
 
         # Accept string or numeric columns (numeric IDs are common)
-        is_string = col.dtype in (pl.Utf8, pl.String)
-        is_numeric = col.dtype in (
-            pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-            pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-            pl.Float32, pl.Float64,
-        )
+        _cat = dtype_category(col.dtype)
+        is_string = _cat == "str"
+        is_numeric = _cat in ("int", "uint", "float")
         if not (is_string or is_numeric):
             continue
 
@@ -392,6 +389,18 @@ def _scan_dataframe_impl(
         # surrounding I/O). Strict 2x reduction; zero behavioral change.
         n_unique = non_null.n_unique() if non_null_len > 0 else 0
         null_count = col.null_count()
+        # Shadow-compute the fused native column_aggregate kernel on the real
+        # scan path so it runs against production shapes ahead of the Flip
+        # (see tests/engine/test_column_aggregate_shadow.py for the parity
+        # assertion). NOT authoritative -- the ColumnProfile below is built
+        # from the Polars values above exactly as before this shadow wire.
+        if native_enabled("column_aggregate"):
+            try:
+                native_module().column_aggregate(col.to_arrow())
+            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                logger.debug(
+                    "column_aggregate shadow compute failed on column %s: %s", col_name, e
+                )
         cp = ColumnProfile(
             name=col_name,
             inferred_type=str(col.dtype),
