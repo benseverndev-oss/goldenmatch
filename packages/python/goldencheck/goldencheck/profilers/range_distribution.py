@@ -1,9 +1,14 @@
 """Range and distribution profiler — detects outliers and reports min/max for numeric columns."""
 from __future__ import annotations
 
+import logging
+
+from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
+
+logger = logging.getLogger(__name__)
 
 
 class RangeDistributionProfiler(BaseProfiler):
@@ -38,11 +43,30 @@ class RangeDistributionProfiler(BaseProfiler):
             message=f"Range: min={col_min}, max={col_max}, mean={mean:.2f}",
         ))
 
+        # Shadow-compute the fused native numeric_stats kernel on the real scan
+        # path so it runs against production shapes ahead of the Flip (see
+        # tests/engine/test_w2_shadow.py for the parity assertion). NOT
+        # authoritative -- the Polars-computed mean/std/min/max above stay the
+        # emitted values. Fully guarded + swallow-on-error: shadow only.
+        native_stats = native_enabled("numeric_stats")
+        if native_stats:
+            try:
+                native_module().column_numeric_stats(non_null.to_arrow())
+            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                logger.debug("column_numeric_stats shadow failed on %s: %s", column, e)
+
         if std is not None and std > 0:
             lower = mean - 3 * std
             upper = mean + 3 * std
             outliers = non_null.filter_outside(lower, upper)
             outlier_count = len(outliers)
+            # Shadow the outlier count/sample kernel with the POLARS-computed
+            # lower/upper (spec B1) so boundary values agree with filter_outside.
+            if native_stats:
+                try:
+                    native_module().count_outside(non_null.to_arrow(), lower, upper)
+                except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
+                    logger.debug("count_outside shadow failed on %s: %s", column, e)
             if outlier_count > 0:
                 sample = outliers.to_list()[:5]
                 # Determine how many stddevs outliers are
