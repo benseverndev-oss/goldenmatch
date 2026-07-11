@@ -190,3 +190,65 @@ def test_match_sources_short_circuits_on_second_upload():
         {"file_a_content": "a", "file_a_name": "a.csv", "file_b_content": "b", "file_b_name": "b.csv"})
     assert out["ok"] is False
     assert [s["step"] for s in out["steps"]] == ["upload_a", "upload_b"]
+
+
+# --- Task 2.6: clean_and_dedupe -------------------------------------------
+
+def _fake_clean_table(rec, transforms_ok=True):
+    def upload(n, a):
+        rec.append(("upload", a))
+        return {"path": "/up/in.csv", "bytes": 10, "filename": "in.csv"}
+
+    def transforms(n, a):
+        rec.append(("clean", a))
+        if not transforms_ok:
+            return {"error": "goldenflow is not installed. Install with: pip install goldenmatch[transform]"}
+        return {"file": a["file_path"], "output_path": a["output_path"],
+                "transforms_applied": 5, "total_records": 10}
+
+    def dedup(n, a):
+        rec.append(("dedup", a))
+        return {"confidence_distribution": {"auto_merged": 1, "review": 0, "auto_rejected": 0},
+                "golden_path": a["output_path"], "golden_records": 9, "results": {"total_records": 10}}
+
+    return {"upload_dataset": upload, "run_transforms": transforms, "agent_deduplicate": dedup}
+
+
+def test_clean_and_dedupe_happy():
+    from goldensuite_mcp.composites import build_composites
+    rec = []
+    _, dispatch = build_composites(_fake_clean_table(rec))
+    out = dispatch["clean_and_dedupe"]("clean_and_dedupe", {"file_content": "...", "filename": "in.csv"})
+    assert out["ok"] is True
+    assert [s["step"] for s in out["steps"]] == ["upload", "clean", "deduplicate"]
+    clean_call = dict(rec)["clean"]
+    assert clean_call["file_path"] == "/up/in.csv"
+    assert clean_call["output_path"].endswith(".cleaned.csv")
+    dedup_call = dict(rec)["dedup"]
+    # the cleaned path returned by run_transforms is threaded as the dedupe input
+    assert dedup_call["file_path"].endswith(".cleaned.csv")
+    assert out["outputs"]["golden_path"].endswith(".golden.csv")
+    assert isinstance(out["summary"], str) and out["summary"]
+
+
+def test_clean_and_dedupe_soft_dep_short_circuit():
+    from goldensuite_mcp.composites import build_composites
+    rec = []
+    _, dispatch = build_composites(_fake_clean_table(rec, transforms_ok=False))
+    out = dispatch["clean_and_dedupe"]("clean_and_dedupe", {"file_content": "...", "filename": "in.csv"})
+    assert out["ok"] is False
+    assert [s["step"] for s in out["steps"]] == ["upload", "clean"]
+    # deduplicate never ran
+    assert not any(k == "dedup" for k, _ in rec)
+
+
+def test_all_four_composites_exist_no_dangling_curated():
+    from goldensuite_mcp.server import _aggregate, CURATED_TOOLS
+    import os
+    os.environ.pop("GOLDENSUITE_MCP_TOOLS", None)
+    tools, _ = _aggregate()
+    names = {t.name for t in tools}
+    for c in ("dedupe_file", "assess_file", "match_sources", "clean_and_dedupe"):
+        assert c in names, f"{c} not registered"
+    # every composite curated name now resolves to a real tool
+    assert {"dedupe_file", "assess_file", "match_sources", "clean_and_dedupe"} <= (CURATED_TOOLS & names)

@@ -96,6 +96,44 @@ def orchestrate_dedupe_file(dispatch, args):
     return _finish("dedupe_file", steps, config=config, outputs=outputs)
 
 
+def orchestrate_clean_and_dedupe(dispatch, args):
+    """Normalize then dedupe: upload -> run_transforms -> agent_deduplicate.
+    The cleaned file that run_transforms writes is threaded into the dedupe."""
+    steps = []
+    excl = {"exclude_columns": args["exclude_columns"]} if args.get("exclude_columns") else {}
+
+    ok, res, label = _upload(dispatch, args)
+    steps.append({"step": label, "ok": ok, **({"path": res.get("path")} if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("clean_and_dedupe", steps)
+    path = res["path"]
+
+    cleaned_path = _gen_output_path(path, "cleaned")
+    ok, res = run_step(dispatch, "run_transforms", {"file_path": path, "output_path": cleaned_path})
+    steps.append({"step": "clean", "ok": ok,
+                  **({"cleaned_path": res.get("output_path"), "transforms_applied": res.get("transforms_applied")}
+                     if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("clean_and_dedupe", steps)
+    cleaned = res.get("output_path") or cleaned_path
+
+    golden_path = _gen_output_path(cleaned, "golden")
+    ok, res = run_step(dispatch, "agent_deduplicate",
+                       {"file_path": cleaned, "output_path": golden_path, **excl})
+    cd = res.get("confidence_distribution", {}) if ok else {}
+    steps.append({"step": "deduplicate", "ok": ok,
+                  **({"auto_merge": cd.get("auto_merged"), "review": cd.get("review"),
+                      "reject": cd.get("auto_rejected"), "golden_path": res.get("golden_path")}
+                     if ok else {"error": res.get("error")})})
+    if not ok:
+        return _finish("clean_and_dedupe", steps)
+
+    outputs = {"cleaned_path": cleaned, "golden_path": res.get("golden_path"),
+               "golden_records": res.get("golden_records"),
+               "total_records": (res.get("results") or {}).get("total_records")}
+    return _finish("clean_and_dedupe", steps, outputs=outputs)
+
+
 def orchestrate_match_sources(dispatch, args):
     """Link two sources: upload both -> agent_match_sources -> surface matches."""
     steps = []
@@ -186,6 +224,13 @@ def _summarize(workflow, steps, outputs, degraded_steps=frozenset()):
         dest = outputs.get("matches_path")
         tail = f" Written to {dest}." if dest else ""
         return f"Matched two sources: {pairs} matched pairs.{tail}"
+    if workflow == "clean_and_dedupe" and outputs:
+        c = next((s for s in steps if s["step"] == "clean"), {})
+        d = next((s for s in steps if s["step"] == "deduplicate"), {})
+        return (f"{outputs.get('total_records')} records cleaned "
+                f"({c.get('transforms_applied')} transforms) -> "
+                f"{outputs.get('golden_records')} golden; {d.get('auto_merge')} merged, "
+                f"{d.get('review')} to review. Written to {outputs.get('golden_path')}.")
     return f"{workflow} ok"
 
 
@@ -212,6 +257,11 @@ _COMPOSITE_SPECS = [
         "exclude_columns": {"type": "array", "items": {"type": "string"}, "description": "Columns to exclude from matching."}},
         "required": []},
      "orchestrate": orchestrate_match_sources},
+    {"name": "clean_and_dedupe",
+     "description": "One call: clean then dedupe a single CSV. Uploads the file, runs GoldenFlow transforms (phone/date/unicode/categorical normalization), then runs entity resolution on the cleaned data and writes golden records. Returns a summary + the golden file path. Requires the transform extra for the clean step.",
+     "inputSchema": {"type": "object", "properties": {**_FILE_INPUT_PROPS,
+        "exclude_columns": {"type": "array", "items": {"type": "string"}, "description": "Columns to exclude from matching."}}, "required": []},
+     "orchestrate": orchestrate_clean_and_dedupe},
 ]
 
 
