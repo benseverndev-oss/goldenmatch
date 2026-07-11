@@ -104,7 +104,8 @@ def test_temporal_check_with_polars_unimportable():
 def test_goldencheck_survives_polars_unimportable():
     # Simulate the P4 base-deps flip WITHOUT uninstalling: a meta_path finder makes
     # `polars` unimportable, then `import goldencheck` must still succeed (lazy proxy
-    # defers `import polars`), and touching the proxy must raise a clean ModuleNotFoundError.
+    # defers `import polars`), and touching the proxy must raise a helpful ImportError
+    # (not a raw ModuleNotFoundError) naming the `goldencheck[polars]` extra.
     code = (
         "import sys, importlib.abc\n"
         "class _Block(importlib.abc.MetaPathFinder):\n"
@@ -119,9 +120,9 @@ def test_goldencheck_survives_polars_unimportable():
         "from goldencheck._polars_lazy import pl\n"
         "try:\n"
         "    pl.DataFrame\n"
-        "    raise AssertionError('expected ModuleNotFoundError touching the lazy proxy')\n"
-        "except ModuleNotFoundError:\n"
-        "    pass\n"
+        "    raise AssertionError('expected ImportError touching the lazy proxy')\n"
+        "except ImportError as e:\n"
+        "    assert 'goldencheck[polars]' in str(e), str(e)\n"
     )
     pkg_dir = str(Path(__file__).resolve().parents[1])
     env = dict(os.environ)
