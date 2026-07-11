@@ -16,9 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . /app
 
 # Install the goldensuite-mcp package and all sub-packages it depends on.
-# Use uv for workspace-aware install; fall back to pip if uv isn't present.
+# `--no-sources` ignores the root `[tool.uv.sources]` workspace path overrides so
+# native transitive deps (e.g. `goldenflow-native`, a BASE dep of goldenflow since
+# the Polars eviction) resolve from their published PyPI abi3 wheels instead of
+# building from the Rust source in-tree -- the image has no cargo, so a source
+# build fails with "Do you have cargo in your PATH?". The pure-Python packages
+# below still install from their local paths (explicit path args, not sources).
 RUN pip install --no-cache-dir uv \
-    && uv pip install --system --no-cache \
+    && uv pip install --system --no-cache --no-sources \
         ./packages/python/goldencheck-types \
         ./packages/python/goldenmatch \
         ./packages/python/goldencheck \
