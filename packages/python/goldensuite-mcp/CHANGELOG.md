@@ -11,6 +11,13 @@
   Filtering is **list-only** — every hidden tool stays callable by exact name via
   `dispatch`. The set lives in `CURATED_TOOLS` in `server.py`. (README: "Curated
   tool listing".)
+- **`suite_find_tools` discovery meta-tool** — a curated tool that searches the
+  full catalog (name + package + description + inputSchema), optionally filtered by
+  `query` (keyword) or `package`, so a client can discover any of the ~80 hidden
+  tools and then call it by exact name. This is the progressive-disclosure
+  complement to the curated listing (small default surface + one search tool)
+  rather than collapsing everything into overloaded god-tools. It does not list
+  itself. (README: "Discovering hidden tools".)
 
 ## 0.3.0 (2026-06-24)
 

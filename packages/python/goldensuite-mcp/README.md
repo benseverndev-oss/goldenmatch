@@ -64,6 +64,26 @@ GOLDENSUITE_MCP_TOOLS=upload_dataset,agent_deduplicate,scan goldensuite-mcp serv
 
 The curated set lives in `CURATED_TOOLS` in `goldensuite_mcp/server.py`.
 
+### Discovering hidden tools (`suite_find_tools`)
+
+Because the curated listing hides ~80 tools, the default surface includes one
+discovery tool, **`suite_find_tools`**, so a client can find and reach the rest
+without switching to `full`:
+
+```jsonc
+// find everything data-quality related
+suite_find_tools({ "query": "quality" })
+// list one package's whole surface
+suite_find_tools({ "package": "goldenmatch" })
+// -> [{ name, package, description, inputSchema }, ...]
+```
+
+It returns each matching tool's name, package, description, and input schema.
+Call any returned tool by its exact `name` — hidden tools dispatch normally, they
+just aren't listed. (`suite_find_tools` does not list itself.) This keeps the
+default surface small while leaving the full ~105-tool catalog one search away,
+instead of collapsing everything into a few overloaded `action`-style god-tools.
+
 ## Claude Desktop / Claude Code config
 
 ```json
