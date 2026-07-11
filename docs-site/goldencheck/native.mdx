@@ -4,10 +4,12 @@ description: "GoldenCheck's optional Rust/Arrow runtime and the deep-profiling c
 keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "functional dependency", "composite key", "fuzzy", "referential integrity", "freshness", "denial constraint"]
 ---
 
-GoldenCheck is pure-Python and Polars-native, so the everyday sampled scan is
-already fast. For the CPU-heavy **deep-profiling** checks there's an optional
-compiled runtime, and the package falls back to pure Python when it isn't
-installed — behaviour is identical either way, native only changes wall-clock.
+GoldenCheck is pure-Python; the full scan is Polars-backed (via the `[polars]`
+extra since 2.0.0), so the everyday sampled scan is fast, while the structural
+`scan_columns` checks and Parquet/Excel reading run Polars-free. For the
+CPU-heavy **deep-profiling** checks there's an optional compiled runtime, and
+the package falls back to pure Python when it isn't installed — behaviour is
+identical either way, native only changes wall-clock.
 
 ```bash
 pip install goldencheck[native]
