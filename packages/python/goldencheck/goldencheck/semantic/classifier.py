@@ -8,7 +8,6 @@ from typing import Any
 
 import yaml
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core.frame import to_frame
 
 logger = logging.getLogger(__name__)

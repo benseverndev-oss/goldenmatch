@@ -122,7 +122,6 @@ class _ErrorFinding:
 def run_authoritative_seam(path: Path):
     """Authoritative side of the fused diff: seam profilers over a PolarsFrame."""
     import polars as pl
-
     from goldencheck.core.frame import PolarsFrame
 
     df = pl.read_parquet(path)
@@ -134,7 +133,6 @@ def run_authoritative_seam(path: Path):
 def run_fused_seam(path: Path):
     """Fused side of the diff: the SAME seam profilers over an ArrowFrame."""
     import pyarrow.parquet as pq
-
     from goldencheck.core.frame import ArrowFrame
 
     tbl = pq.read_table(path)

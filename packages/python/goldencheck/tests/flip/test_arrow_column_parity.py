@@ -19,7 +19,6 @@ from pathlib import Path
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
-
 from goldencheck.core.frame import ArrowColumn, PolarsColumn
 
 CORPUS = Path(__file__).parent / "corpus"

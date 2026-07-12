@@ -358,9 +358,9 @@ def _coerce_to_arrow_frame(data):
     """Wrap ``data`` in an Arrow-native ``ArrowFrame``. Accepts a ``pyarrow.Table``
     or (convenience) a ``polars.DataFrame`` (converted via ``.to_arrow()`` only
     when Polars imports) or an already-wrapped ``ArrowFrame``."""
-    from goldencheck.core.frame import ArrowFrame
-
     import pyarrow as pa
+
+    from goldencheck.core.frame import ArrowFrame
 
     if isinstance(data, ArrowFrame):
         return data
