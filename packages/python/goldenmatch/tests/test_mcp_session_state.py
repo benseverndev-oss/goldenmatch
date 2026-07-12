@@ -97,3 +97,28 @@ def test_resolver_nothing_loaded(monkeypatch):
         assert rs.result is None and rs.config is None and rs.data is None
     finally:
         ctx.reset_current_session_id(tok)
+
+
+def test_resolver_caches_augmented_frame(tmp_path, monkeypatch):
+    import polars as pl
+    from goldenmatch.mcp import _session_ctx as ctx
+    from goldenmatch.mcp import _session_store as store
+    from goldenmatch.mcp import server as gm
+    for g in ("_result", "_config", "_engine"):
+        monkeypatch.setattr(gm, g, None)
+    monkeypatch.setattr(store, "_STORE", store.SessionStore(clock=lambda: 0.0))
+    sess = AgentSession()
+    sess.result = "R"; sess.data = pl.DataFrame({"name": ["a", "b"]})
+    store._STORE.put("s1", sess)
+    tok = ctx.set_current_session_id("s1")
+    try:
+        rs1 = gm._resolve_run_state()
+        rs2 = gm._resolve_run_state()
+        assert rs1.data is rs2.data           # cached, not rebuilt
+        assert rs1.rows is rs2.rows
+        # a new run (new frame) invalidates the cache
+        sess.data = pl.DataFrame({"name": ["x"]})
+        rs3 = gm._resolve_run_state()
+        assert rs3.data is not rs1.data
+    finally:
+        ctx.reset_current_session_id(tok)

@@ -980,10 +980,12 @@ def _resolve_run_state() -> _RunState:
     sess = _STORE.get(sid) if sid else None
     if sess is None or getattr(sess, "result", None) is None:
         return _RunState(None, None, None, [], {})
-    df = sess.data
-    if df is not None and "__row_id__" not in df.columns:
-        df = df.with_row_index("__row_id__")
-    if getattr(sess, "_mcp_data", None) is not df:
+    raw = sess.data
+    if getattr(sess, "_mcp_src", None) is not raw:
+        df = raw
+        if df is not None and "__row_id__" not in df.columns:
+            df = df.with_row_index("__row_id__")
+        sess._mcp_src = raw
         sess._mcp_data = df
         rows = df.to_dicts() if df is not None else []
         sess._mcp_rows = rows
