@@ -13,7 +13,7 @@ goldencheck/
 │   └── writer.py            # Serialize config back to YAML
 │
 ├── engine/
-│   ├── reader.py            # Read CSV/Parquet/Excel into a Polars DataFrame
+│   ├── reader.py            # Arrow-native read of CSV/Parquet/Excel into a pyarrow.Table (no Polars)
 │   ├── sampler.py           # maybe_sample() — reservoir sample for large files
 │   ├── scanner.py           # Orchestrate profilers, return findings + profile
 │   └── validator.py         # Apply pinned rules from config, return violations

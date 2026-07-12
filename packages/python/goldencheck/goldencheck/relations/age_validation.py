@@ -1,24 +1,26 @@
 """Age vs DOB cross-validation profiler.
 
-**Polars-accelerator-only (declined from the seam eviction, R4).** This profiler's core is a Polars
-expression tree -- ``df.select(actual=pl.col(age_col).cast(...), expected=((pl.lit(reference_date)
-.cast(pl.Date) - pl.col(dob_col).str.to_date(...)).dt.total_days() / 365.25))`` -- with no
-byte-identical ``Frame``/``Column``-seam equivalent (the seam models per-column reductions +
-element-wise ops, not ``pl.col``/``pl.lit``/``.dt`` expression trees or date arithmetic). It is NOT
-routed through the seam; it stays import-safe (lazy ``pl``) but requires Polars at runtime. See
-``docs/superpowers/specs/2026-07-09-goldencheck-relation-ports-r4-decline.md``.
+**Flip (Stage A4): kernel-authoritative.** The mismatch scan runs through the
+fused native ``age_mismatch`` kernel (byte/index-parity-validated in W3,
+tests/engine/test_w3_shadow.py) over Arrow arrays pulled from the Frame/Column
+seam, so it drives a ``PolarsFrame`` (tests) or an Arrow-native ``ArrowFrame``
+(default scan) unchanged. Date parsing + reference-date discovery use
+``pyarrow.compute`` on the seam's Arrow arrays -- no Polars expression trees. A
+polars-free ``pyarrow`` fallback reproduces the kernel when it is unavailable.
 """
 from __future__ import annotations
 
 import datetime
 import logging
 
-from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 logger = logging.getLogger(__name__)
+
+_EPOCH = datetime.date(1970, 1, 1)
+_NUMERIC = ("int", "uint", "float")
 
 # Words that contain "age" but are NOT age columns
 _AGE_EXCLUSIONS = ("stage", "page", "usage", "mileage", "dosage", "voltage")
@@ -39,133 +41,120 @@ def _is_dob_column(name: str) -> bool:
     return any(kw in lower for kw in ("birth", "dob", "born"))
 
 
-def _try_parse_dates(series: pl.Series) -> pl.Series:
-    """Attempt to cast a series to Date."""
-    # TODO(W-path): route the dtype gates in this file via dtype_category
-    if series.dtype in (pl.Date, pl.Datetime):
-        return series.cast(pl.Date)
-    if series.dtype in (pl.Utf8, pl.String):
-        return series.str.to_date(format="%Y-%m-%d", strict=False)
-    return series
+def _parse_date32(col):
+    """Parse a seam ``Column`` to a ``pyarrow`` ``date32`` array, or ``None`` when
+    the column isn't date-like. Mirrors the prior ``_try_parse_dates``:
+    date/datetime -> Date; string -> ``to_date("%Y-%m-%d", strict=False)``; other
+    -> not a date."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    cat = col.dtype
+    if cat == "date":
+        arr = col.to_arrow()
+        return arr if arr.type == pa.date32() else pc.cast(arr, pa.date32())
+    if cat == "datetime":
+        return pc.cast(col.to_arrow(), pa.date32())
+    if cat == "str":
+        return col.str_to_date("%Y-%m-%d", strict=False).to_arrow()
+    return None
+
+
+def _age_mismatch(actual, dob_date32, ref_epoch_days):
+    """``(count, sample_indices[:5])`` of rows where ``|actual - expected| > 2``
+    years. Native kernel when available; polars-free ``pyarrow`` fallback else."""
+    if native_enabled("age_mismatch"):
+        return native_module().age_mismatch(actual, dob_date32, ref_epoch_days)
+
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    # date32 -> float64 isn't a supported direct cast; go via int32 (which IS the
+    # days-since-epoch representation) then widen to float for the division.
+    dob_days = pc.cast(pc.cast(dob_date32, pa.int32()), pa.float64())  # days since epoch
+    expected = pc.divide(pc.subtract(float(ref_epoch_days), dob_days), 365.25)
+    diff = pc.abs(pc.subtract(actual, expected))
+    mism = pc.and_(pc.greater(diff, 2.0), pc.and_(pc.is_valid(actual), pc.is_valid(dob_date32)))
+    mism = pc.fill_null(mism, False).to_pylist()
+    indices = [i for i, v in enumerate(mism) if v]
+    return len(indices), indices[:5]
 
 
 class AgeValidationProfiler:
     """Cross-validates age columns against date-of-birth columns."""
 
-    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
-        findings: list[Finding] = []
+        import pyarrow as pa
+        import pyarrow.compute as pc
 
-        age_cols = [c for c in df.columns if _is_age_column(c)]
-        dob_cols = [c for c in df.columns if _is_dob_column(c)]
-
+        cols = frame.columns
+        age_cols = [c for c in cols if _is_age_column(c)]
+        dob_cols = [c for c in cols if _is_dob_column(c)]
         if not age_cols or not dob_cols:
-            return findings
+            return []
 
-        # Find reference date: max date from non-DOB date columns, <= today
+        # Reference date: max parseable date from non-DOB date columns, <= today.
         today = datetime.date.today()
+        today_scalar = pa.scalar(today, type=pa.date32())
         reference_date = today
-
-        date_cols_for_ref = [
-            c for c in df.columns
-            if c not in dob_cols
-        ]
-        for col_name in date_cols_for_ref:
+        for col_name in cols:
+            if col_name in dob_cols:
+                continue
             try:
-                parsed = _try_parse_dates(df[col_name])
-                if parsed.dtype != pl.Date:
-                    continue
-                valid = parsed.drop_nulls().filter(parsed.drop_nulls() <= today)
-                if len(valid) > 0:
-                    max_date = valid.max()
-                    if max_date and max_date <= today:
-                        reference_date = max_date
-                        break
+                d32 = _parse_date32(frame.column(col_name))
             except Exception:
                 continue
+            if d32 is None:
+                continue
+            nn = pc.drop_null(d32)
+            if len(nn) == 0:
+                continue
+            keep = pc.filter(nn, pc.less_equal(nn, today_scalar))
+            if len(keep) == 0:
+                continue
+            mx = pc.max(keep).as_py()
+            if mx is not None and mx <= today:
+                reference_date = mx
+                break
+
+        ref_epoch_days = (reference_date - _EPOCH).days
+        findings: list[Finding] = []
 
         for age_col in age_cols:
-            # Age column must be numeric
-            col_series = df[age_col]
-            if col_series.dtype not in (
-                pl.Int8, pl.Int16, pl.Int32, pl.Int64,
-                pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
-                pl.Float32, pl.Float64,
-            ):
+            age_seam = frame.column(age_col)
+            if age_seam.dtype not in _NUMERIC:
                 continue
+            actual_arrow = age_seam.cast("float").to_arrow()
 
             for dob_col in dob_cols:
                 try:
-                    dob_series = _try_parse_dates(df[dob_col])
-                    if dob_series.dtype != pl.Date:
-                        continue
+                    dob_d32 = _parse_date32(frame.column(dob_col))
                 except Exception:
                     continue
-
-                # Calculate expected age using DataFrame select for proper evaluation
-                # Check ORIGINAL column dtype, not parsed dtype (dob_series is already Date)
-                original_dtype = df[dob_col].dtype
+                if dob_d32 is None:
+                    continue
                 try:
-                    if original_dtype in (pl.Utf8, pl.String):
-                        dob_expr = pl.col(dob_col).str.to_date(format="%Y-%m-%d", strict=False)
-                    else:
-                        dob_expr = pl.col(dob_col).cast(pl.Date, strict=False)
-
-                    result = df.select(
-                        actual=pl.col(age_col).cast(pl.Float64),
-                        expected=(
-                            (pl.lit(reference_date).cast(pl.Date) - dob_expr)
-                            .dt.total_days()
-                            / 365.25
-                        ),
-                    )
-
-                    actual = result["actual"]
-                    expected = result["expected"]
-                    diff = (actual - expected).abs()
-
-                    non_null_mask = actual.is_not_null() & expected.is_not_null()
-                    mismatch_mask = (diff > 2.0) & non_null_mask
-
-                    mismatch_count = int(mismatch_mask.sum())
-
-                    # Shadow-compute the fused native age_mismatch kernel alongside the
-                    # authoritative Polars compute above (see tests/engine/test_w3_shadow.py
-                    # for the parity assertion). NOT authoritative -- the finding below is
-                    # built from the Polars values exactly as before this shadow wire. Its
-                    # OWN try/except so a shadow failure can never reach the outer
-                    # ``except: continue`` and suppress a Finding.
-                    if native_enabled("age_mismatch"):
-                        try:
-                            ref_epoch_days = (
-                                reference_date - datetime.date(1970, 1, 1)
-                            ).days
-                            dob_date32 = df.select(dob_expr.alias("d"))["d"].to_arrow()
-                            actual_arrow = result["actual"].to_arrow()
-                            native_module().age_mismatch(
-                                actual_arrow, dob_date32, ref_epoch_days
-                            )
-                        except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
-                            logger.debug("age_mismatch shadow compute failed: %s", e)
-
-                    if mismatch_count > 0:
-                        sample_ages = col_series.filter(mismatch_mask).head(5).to_list()
-                        findings.append(Finding(
-                            severity=Severity.ERROR,
-                            column=age_col,
-                            check="cross_column",
-                            message=(
-                                f"{mismatch_count} row(s) where {age_col} doesn't match "
-                                f"calculated age from {dob_col} — values mismatch by more "
-                                f"than 2 years"
-                            ),
-                            affected_rows=mismatch_count,
-                            sample_values=[str(v) for v in sample_ages],
-                            suggestion=f"Verify {age_col} values against {dob_col}",
-                            confidence=0.9,
-                        ))
-                except Exception:
+                    count, indices = _age_mismatch(actual_arrow, dob_d32, ref_epoch_days)
+                except Exception as e:  # noqa: BLE001 - any kernel/arrow failure -> skip pair
+                    logger.debug("age_mismatch failed for %s/%s: %s", age_col, dob_col, e)
                     continue
+
+                if count > 0:
+                    sample_ages = [str(age_seam.get(i)) for i in indices[:5]]
+                    findings.append(Finding(
+                        severity=Severity.ERROR,
+                        column=age_col,
+                        check="cross_column",
+                        message=(
+                            f"{count} row(s) where {age_col} doesn't match "
+                            f"calculated age from {dob_col} — values mismatch by more "
+                            f"than 2 years"
+                        ),
+                        affected_rows=count,
+                        sample_values=sample_ages,
+                        suggestion=f"Verify {age_col} values against {dob_col}",
+                        confidence=0.9,
+                    ))
 
         return findings

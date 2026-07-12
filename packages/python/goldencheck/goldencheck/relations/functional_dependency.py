@@ -23,7 +23,7 @@ reports a bounded number of findings.
 from __future__ import annotations
 
 from goldencheck.core._native_loader import native_enabled, native_module
-from goldencheck.core.frame import _neutral_dtype, to_frame
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 50          # enough support that a strict FD isn't a small-sample fluke
@@ -33,13 +33,14 @@ _MAX_FINDINGS = 10
 _SUPPORTED = frozenset({"str", "int", "uint", "bool"})
 
 
-def _select_candidates(df, n_rows: int) -> list[str]:
+def _select_candidates(frame, n_rows: int) -> list[str]:
     """Supported-dtype, non-constant columns; lowest-cardinality first (the
     interesting determinants), capped."""
+    frame = to_frame(frame)
     scored: list[tuple[int, str]] = []
-    for col in df.columns:
-        series = df[col]
-        if _neutral_dtype(series.dtype) not in _SUPPORTED:
+    for col in frame.columns:
+        series = frame.column(col)
+        if series.dtype not in _SUPPORTED:
             continue
         nu = series.n_unique()
         if nu <= 1:
@@ -49,7 +50,7 @@ def _select_candidates(df, n_rows: int) -> list[str]:
     return [c for _nu, c in scored[:_MAX_CANDIDATES]]
 
 
-def _discover_python(df, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
+def _discover_python(frame, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
     """Polars-free mirror of the kernel: det->dep holds iff
     n_distinct(det, dep) == n_distinct(det). Skips trivial pairs identically.
 
@@ -58,8 +59,9 @@ def _discover_python(df, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
     the fast reference; this is the correctness fallback when the native wheel
     isn't installed (roughly ~4x slower than the old Polars path, acceptable for
     a safety net). Values are pulled out of the Polars frame once with
-    ``to_list``; the Polars *engine* no longer runs the distinct counts."""
-    lists = {c: df[c].to_list() for c in cols}
+    ``to_list``; the engine no longer runs the distinct counts."""
+    frame = to_frame(frame)
+    lists = {c: frame.column(c).to_list() for c in cols}
     distinct = {c: len(set(lists[c])) for c in cols}
     out: list[tuple[int, int]] = []
     for i, det in enumerate(cols):
@@ -78,12 +80,11 @@ class FunctionalDependencyProfiler:
 
     def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
-        n_rows = df.height
+        n_rows = frame.height
         if n_rows < _MIN_ROWS or len(frame.columns) < 2:
             return []
 
-        cols = _select_candidates(df, n_rows)
+        cols = _select_candidates(frame, n_rows)
         if len(cols) < 2:
             return []
 
@@ -93,9 +94,9 @@ class FunctionalDependencyProfiler:
                 arrays = [frame.column(c).to_arrow() for c in cols]
                 pairs = native_module().discover_functional_dependencies(arrays)
             except Exception:  # noqa: BLE001 - any native failure -> pure-Python path
-                pairs = _discover_python(df, cols, n_rows)
+                pairs = _discover_python(frame, cols, n_rows)
         else:
-            pairs = _discover_python(df, cols, n_rows)
+            pairs = _discover_python(frame, cols, n_rows)
 
         if not pairs:
             return []

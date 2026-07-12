@@ -3,8 +3,8 @@
 ## Scanner Pipeline Order
 
 ```
-read_file(path)                         # reader.py — CSV/Parquet/Excel → pl.DataFrame
-maybe_sample(df, max_rows=100_000)      # sampler.py — deterministic seed=42
+read_file_arrow(path)                   # reader.py — CSV/Parquet/Excel → pyarrow.Table (Arrow-native, no Polars)
+maybe_sample(frame, max_rows=100_000)   # sampler.py — owned deterministic stride sample (3.0.0)
 run COLUMN_PROFILERS per column         # 10 profilers, shared context dict
 run RELATION_PROFILERS on full sample   # temporal, null_correlation, numeric_cross, age_validation
 classify_columns(sample)                # semantic/classifier.py
@@ -47,18 +47,23 @@ The CLI's `_do_scan` does this; the `review` command does it too. Don't skip it.
 
 Supported formats: `.csv`, `.parquet`, `.xlsx`, `.xls`
 
-CSV fallback chain:
-1. `pl.read_csv(path, infer_schema_length=10000)` — UTF-8
-2. `pl.read_csv(path, infer_schema_length=10000, encoding="latin-1")` — Latin-1 fallback
-3. Raises `ValueError` with hint about `--separator`/`--quote-char`
+Two readers live here:
+- **`read_file_arrow(path)`** — the default, Arrow-native reader the scan path uses
+  (`scan_file` → `read_file_arrow`). Returns a `pyarrow.Table`, no Polars involved.
+- **`read_file(path)`** — the legacy Polars reader (`pl.DataFrame`), still used by the
+  `scan_dataframe(pl.DataFrame)` overload / `[polars]` callers. Its CSV fallback chain
+  (`pl.read_csv` UTF-8 → latin-1 → `ValueError` with a `--separator`/`--quote-char` hint)
+  is unchanged, but it is NOT on the default scan path anymore.
 
 Excel raises a user-friendly `ValueError` on password-protected files.
 
 ## sampler.py
 
 ```python
-maybe_sample(df, max_rows=100_000)  # returns df unchanged if ≤ max_rows
-# uses df.sample(n=max_rows, seed=42) — deterministic, Polars native
+maybe_sample(frame, max_rows=100_000)  # returns frame unchanged if ≤ max_rows
+# 3.0.0: OWNED deterministic stride/reservoir sample over the Arrow table —
+# stable across runs AND --workers, Polars-free. Replaced the old Polars PRNG
+# (df.sample(n=max_rows, seed=42)); the swap is a registered accepted divergence.
 ```
 
 Default `sample_size` is `100_000`. Overridable via `scan_file(path, sample_size=N)`.

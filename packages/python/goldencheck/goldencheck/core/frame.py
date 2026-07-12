@@ -44,6 +44,7 @@ class Column(Protocol):
     def filter_outside(self, lower: Any, upper: Any) -> Column: ...
     def slice(self, offset: int, length: int | None = None) -> Column: ...
     def str_replace_all(self, pattern: str, value: str) -> Column: ...
+    def str_len_chars(self) -> Column: ...
     def value_counts_desc(self) -> list[tuple[Any, int]]: ...
     def eq(self, value: Any) -> Column: ...
     def filter_by(self, mask: Column) -> Column: ...
@@ -212,6 +213,9 @@ class PolarsColumn:
     def str_replace_all(self, pattern: str, value: str) -> PolarsColumn:
         return PolarsColumn(self._s.str.replace_all(pattern, value))
 
+    def str_len_chars(self) -> PolarsColumn:
+        return PolarsColumn(self._s.str.len_chars())
+
     def value_counts_desc(self) -> list[tuple[Any, int]]:
         vc = self._s.value_counts()
         pairs = zip(vc[self._s.name].to_list(), vc["count"].to_list())   # (value, count)
@@ -328,6 +332,9 @@ class PyColumn:
     def str_replace_all(self, pattern: str, value: str) -> PyColumn:
         return PyColumn(_regex_kernel().str_replace_all(self._v, pattern, value))
 
+    def str_len_chars(self) -> PyColumn:
+        return PyColumn([None if v is None else len(v) for v in self._v])
+
     def value_counts_desc(self) -> list[tuple[Any, int]]:
         return sorted(Counter(self._v).items(), key=_VC_KEY)
 
@@ -387,11 +394,409 @@ class PyFrame:
         return PyColumn(self._cols[name])
 
 
+def _arrow():
+    """Lazy pyarrow accessor — mirrors ``_polars_lazy`` so ``import
+    goldencheck.core.frame`` works without pyarrow for the pure-Polars path.
+    Returns ``(pyarrow, pyarrow.compute)``."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    return pa, pc
+
+
+def _arrow_neutral_dtype(arr_type: Any) -> str:
+    """Arrow type -> neutral dtype vocabulary (str/int/uint/float/date/datetime/
+    bool/other). MUST agree with ``dtype_category(pl_dtype)`` for the same data so
+    ``ArrowColumn.dtype == PolarsColumn.dtype``."""
+    import pyarrow.types as pat
+
+    if pat.is_string(arr_type) or pat.is_large_string(arr_type):
+        return "str"
+    if pat.is_unsigned_integer(arr_type):   # must precede is_integer (true for both)
+        return "uint"
+    if pat.is_integer(arr_type):
+        return "int"
+    if pat.is_floating(arr_type):
+        return "float"
+    if pat.is_date(arr_type):
+        return "date"
+    if pat.is_timestamp(arr_type):
+        return "datetime"
+    if pat.is_boolean(arr_type):
+        return "bool"
+    return "other"
+
+
+class ArrowColumn:
+    """``pyarrow.Array``-backed column implementing the full ``Column`` Protocol.
+
+    Parity oracle is ``PolarsColumn``: for the same data every method returns a
+    byte/epsilon-identical result, EXCEPT ``dtype_repr`` (see its docstring). The
+    numeric reductions route through the native ``column_numeric_stats`` kernel
+    (one cached call); temporal/string/bool reductions use ``pyarrow.compute`` so
+    ``max()`` on a date column returns a ``datetime.date`` (freshness needs it).
+    """
+
+    __slots__ = ("_arr", "_cat", "_num_stats")
+
+    def __init__(self, arr: Any) -> None:
+        pa, _ = _arrow()
+        if isinstance(arr, pa.ChunkedArray):
+            arr = arr.combine_chunks()
+        self._arr = arr
+        self._cat = _arrow_neutral_dtype(arr.type)
+        self._num_stats: Any = None   # None=unset, False=empty/all-null, tuple=cached
+
+    # -- numeric stats (cached single kernel call) ----------------------------
+    def _numeric_stats(self):
+        """Cached ``(count_nonnull, min, max, mean, std, sum)`` for numeric
+        columns, or ``None`` when empty/all-null (guarded before the kernel).
+
+        Native ``column_numeric_stats`` is the fast path; when the kernel is
+        absent/disabled (``native_enabled("numeric_stats")`` False) a
+        ``pyarrow.compute`` fallback computes the identical tuple within the
+        already-accepted stat epsilon (``std`` uses ddof=1 to match
+        Polars/kernel). Restores the accelerator-not-requirement contract."""
+        if self._num_stats is not None:
+            return None if self._num_stats is False else self._num_stats
+        arr = self._arr
+        if len(arr) == 0 or arr.null_count == len(arr):
+            self._num_stats = False
+            return None
+        if native_enabled("numeric_stats"):
+            self._num_stats = native_module().column_numeric_stats(arr)
+        else:
+            self._num_stats = self._numeric_stats_pyarrow(arr)
+        return self._num_stats
+
+    @staticmethod
+    def _numeric_stats_pyarrow(arr):
+        """``pyarrow.compute`` mirror of ``column_numeric_stats``: returns
+        ``(count_nonnull, min, max, mean, std, sum)``. ``std`` is ddof=1 (Polars
+        parity) and is ``None`` when <2 non-null values (as the native kernel's
+        std-guard is applied downstream in ``std()``)."""
+        _, pc = _arrow()
+        count_nonnull = len(arr) - arr.null_count
+        mm = pc.min_max(arr, skip_nulls=True)
+        vmin = mm["min"].as_py()
+        vmax = mm["max"].as_py()
+        mean = pc.mean(arr, skip_nulls=True).as_py()
+        total = pc.sum(arr, skip_nulls=True).as_py()
+        if count_nonnull >= 2:
+            std_scalar = pc.stddev(arr, ddof=1, skip_nulls=True)
+            std = std_scalar.as_py() if std_scalar.is_valid else None
+        else:
+            std = None
+        return (count_nonnull, vmin, vmax, mean, std, total)
+
+    def _is_numeric(self) -> bool:
+        return self._cat in ("int", "uint", "float")
+
+    def _scalar(self, value: Any) -> Any:
+        """Wrap a comparison value as an Arrow scalar of THIS column's type so
+        date/datetime comparisons work; numeric values pass straight through."""
+        if self._cat in ("date", "datetime"):
+            pa, _ = _arrow()
+            return pa.scalar(value, type=self._arr.type)
+        return value
+
+    # -- Column Protocol ------------------------------------------------------
+    def __len__(self) -> int:
+        return len(self._arr)
+
+    def null_count(self) -> int:
+        return self._arr.null_count
+
+    def n_unique(self) -> int:
+        _, pc = _arrow()
+        return int(pc.count_distinct(self._arr, mode="all").as_py())   # nulls = 1 distinct (Polars parity)
+
+    def drop_nulls(self) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.drop_null(self._arr))
+
+    def unique(self) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.unique(self._arr))
+
+    def sort(self) -> ArrowColumn:
+        _, pc = _arrow()
+        idx = pc.sort_indices(self._arr, null_placement="at_start")   # ascending, nulls-first (Polars)
+        return ArrowColumn(self._arr.take(idx))
+
+    def to_list(self) -> list:
+        return self._arr.to_pylist()
+
+    @property
+    def dtype(self) -> str:
+        return self._cat
+
+    def dtype_repr(self) -> str:
+        # OWNED-contract dtype vocabulary: returns the NEUTRAL category, unlike
+        # PolarsColumn.dtype_repr which returns raw ``str(pl.dtype)``. This
+        # divergence is EXPECTED and measured by the Flip differential, not a bug.
+        return self._cat
+
+    def to_arrow(self) -> Any:
+        return self._arr
+
+    def get(self, index: int) -> Any:
+        return self._arr[index].as_py()
+
+    def cast(self, kind: str, *, strict: bool = False) -> ArrowColumn:
+        pa, pc = _arrow()
+        import pyarrow.types as pat
+
+        a = self._arr
+        is_str = pat.is_string(a.type) or pat.is_large_string(a.type)
+        if kind == "float":
+            if is_str:
+                out = []
+                for v in a.to_pylist():
+                    if v is None:
+                        out.append(None)
+                        continue
+                    try:
+                        out.append(float(v))
+                    except (ValueError, TypeError):
+                        out.append(None)   # unparseable -> null (pl strict=False)
+                return ArrowColumn(pa.array(out, type=pa.float64()))
+            return ArrowColumn(pc.cast(a, pa.float64(), safe=False))
+        if kind == "int":
+            if is_str:
+                out = []
+                for v in a.to_pylist():
+                    if v is None:
+                        out.append(None)
+                        continue
+                    try:
+                        out.append(int(v))
+                    except (ValueError, TypeError):
+                        out.append(None)
+                return ArrowColumn(pa.array(out, type=pa.int64()))
+            return ArrowColumn(pc.cast(a, pa.int64(), safe=False))
+        if kind == "str":
+            return ArrowColumn(pc.cast(a, pa.string()))
+        raise KeyError(kind)
+
+    def member_count(self, values: list) -> int:
+        pa, pc = _arrow()
+        r = pc.sum(pc.is_in(self._arr, value_set=pa.array(values))).as_py()
+        return int(r or 0)
+
+    def str_match_count(self, pattern: str) -> int:
+        if native_enabled("regex"):
+            return _regex_kernel().str_contains_count(self._arr.to_pylist(), pattern)
+        _, pc = _arrow()
+        mask = pc.match_substring_regex(self._arr, pattern)   # null preserved on null input
+        return int(pc.sum(mask, skip_nulls=True).as_py() or 0)
+
+    def str_filter(self, pattern: str, *, matching: bool) -> ArrowColumn:
+        pa, pc = _arrow()
+        if native_enabled("regex"):
+            vals = self._arr.to_pylist()
+            mask = _regex_kernel().str_filter_mask(vals, pattern)   # list[bool | None]
+            kept = [v for v, m in zip(vals, mask) if m is not None and m == matching]
+            return ArrowColumn(pa.array(kept, type=pa.string()))
+        # pyarrow fallback: match_substring_regex -> bool mask (null on null input);
+        # ~mask is null-preserving so nulls drop from BOTH matching/non-matching
+        # (Polars' filter drops null-mask rows), matching PyColumn's `m is not None`.
+        mask = pc.match_substring_regex(self._arr, pattern)
+        sel = mask if matching else pc.invert(mask)
+        return ArrowColumn(pc.filter(self._arr, sel, null_selection_behavior="drop"))
+
+    def min(self) -> Any:
+        if self._is_numeric():
+            s = self._numeric_stats()
+            if s is None:
+                return None
+            return int(round(s[1])) if self._cat in ("int", "uint") else s[1]
+        _, pc = _arrow()
+        return pc.min(self._arr).as_py()
+
+    def max(self) -> Any:
+        if self._is_numeric():
+            s = self._numeric_stats()
+            if s is None:
+                return None
+            return int(round(s[2])) if self._cat in ("int", "uint") else s[2]
+        _, pc = _arrow()
+        return pc.max(self._arr).as_py()
+
+    def mean(self) -> Any:
+        if not self._is_numeric():
+            return None
+        s = self._numeric_stats()
+        return None if s is None else s[3]
+
+    def std(self) -> Any:
+        if not self._is_numeric():
+            return None
+        s = self._numeric_stats()
+        if s is None or s[0] < 2:   # ddof=1 needs >=2 non-null (Polars -> None)
+            return None
+        return s[4]
+
+    def diff(self) -> ArrowColumn:
+        pa, pc = _arrow()
+        import pyarrow.types as pat
+
+        a = self._arr
+        # pl.Series.diff() dtype rule: SIGNED ints keep their type and WRAP
+        # (Int8 diff stays Int8, wrapping_sub); UNSIGNED ints upcast to the next
+        # wider SIGNED type (UInt8->Int16, UInt32->Int64) so diffs can go negative.
+        if pat.is_unsigned_integer(a.type):
+            widen = {1: pa.int16(), 2: pa.int32(), 4: pa.int64(), 8: pa.int64()}
+            a = pc.cast(a, widen[a.type.bit_width // 8], safe=False)
+        n = len(a)
+        null_head = pa.array([None], type=a.type)
+        if n == 0:
+            return ArrowColumn(a.slice(0, 0))
+        if n == 1:
+            return ArrowColumn(null_head)
+        # pc.subtract WRAPS on overflow (non-checked variant) -> matches Int64
+        # diff's wrapping_sub; narrower ints were widened above so never overflow.
+        d = pc.subtract(a.slice(1), a.slice(0, n - 1))
+        return ArrowColumn(pa.concat_arrays([null_head, d]))
+
+    def is_sorted(self) -> bool:
+        _, pc = _arrow()
+        a = self._arr
+        if len(a) <= 1:
+            return True
+        idx = pc.sort_indices(a, null_placement="at_start")   # ascending nulls-first (Polars)
+        return a.equals(a.take(idx))
+
+    def count_gt(self, value: Any) -> int:
+        _, pc = _arrow()
+        r = pc.sum(pc.greater(self._arr, self._scalar(value))).as_py()
+        return int(r or 0)
+
+    def count_eq(self, value: Any) -> int:
+        _, pc = _arrow()
+        r = pc.sum(pc.equal(self._arr, self._scalar(value))).as_py()
+        return int(r or 0)
+
+    def filter_outside(self, lower: Any, upper: Any) -> ArrowColumn:
+        _, pc = _arrow()
+        a = self._arr
+        mask = pc.or_(pc.less(a, lower), pc.greater(a, upper))
+        return ArrowColumn(pc.filter(a, mask))
+
+    def slice(self, offset: int, length: int | None = None) -> ArrowColumn:
+        if length is None:
+            return ArrowColumn(self._arr.slice(offset))
+        return ArrowColumn(self._arr.slice(offset, length))
+
+    def str_replace_all(self, pattern: str, value: str) -> ArrowColumn:
+        pa, pc = _arrow()
+        if native_enabled("regex"):
+            out = _regex_kernel().str_replace_all(self._arr.to_pylist(), pattern, value)
+            return ArrowColumn(pa.array(out, type=pa.string()))
+        # pyarrow fallback: replace_substring_regex preserves nulls, matching
+        # Polars' str.replace_all. Cast to string() so the result column dtype
+        # matches the native path (input may be large_string).
+        out = pc.replace_substring_regex(self._arr, pattern, value)
+        return ArrowColumn(pc.cast(out, pa.string()))
+
+    def str_len_chars(self) -> ArrowColumn:
+        # pc.utf8_length -> per-value character count (nulls preserved), matching
+        # pl.Series.str.len_chars(). The result is an integer column so
+        # ``.mean()`` routes through the numeric-stats kernel like Polars' mean.
+        _, pc = _arrow()
+        return ArrowColumn(pc.utf8_length(self._arr))
+
+    def value_counts_desc(self) -> list[tuple[Any, int]]:
+        return sorted(Counter(self._arr.to_pylist()).items(), key=_VC_KEY)
+
+    def eq(self, value: Any) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.equal(self._arr, self._scalar(value)))
+
+    def filter_by(self, mask: Column) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.filter(self._arr, mask._arr, null_selection_behavior="drop"))
+
+    def is_null(self) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.is_null(self._arr))
+
+    def gt_mask(self, other: Column) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.greater(self._arr, other._arr))
+
+    def eq_mask(self, other: Column) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.equal(self._arr, other._arr))
+
+    def fill_null(self, value: Any) -> ArrowColumn:
+        _, pc = _arrow()
+        return ArrowColumn(pc.fill_null(self._arr, value))
+
+    def sum(self) -> Any:
+        if self._cat == "bool":
+            # Polars Series.sum() on Boolean returns the count of True (nulls
+            # skipped) as an int; pc.sum over a bool array does the same.
+            _, pc = _arrow()
+            r = pc.sum(self._arr).as_py()
+            return int(r or 0)
+        if not self._is_numeric():
+            return None
+        s = self._numeric_stats()
+        if s is None:
+            return 0   # Polars empty/all-null numeric sum -> 0
+        return int(round(s[5])) if self._cat in ("int", "uint") else s[5]
+
+    def str_to_date(self, fmt: str, *, strict: bool) -> ArrowColumn:
+        pa, pc = _arrow()
+        if strict:
+            raise NotImplementedError("goldencheck str_to_date supports strict=False only")
+        if native_enabled("str_to_date"):
+            iso = _date_kernel().str_to_date(self._arr.to_pylist(), fmt)
+            vals = [date.fromisoformat(s) if s is not None else None for s in iso]
+            return ArrowColumn(pa.array(vals, type=pa.date32()))
+        # pyarrow fallback: strptime with error_is_null (== Polars strict=False:
+        # unparseable -> null) then narrow the timestamp to date32.
+        ts = pc.strptime(self._arr, format=fmt, unit="s", error_is_null=True)
+        return ArrowColumn(pc.cast(ts, pa.date32()))
+
+
+class ArrowFrame:
+    """``pyarrow.Table``-backed frame implementing the ``Frame`` Protocol."""
+
+    __slots__ = ("_tbl",)
+
+    def __init__(self, tbl: Any) -> None:
+        self._tbl = tbl
+
+    @property
+    def columns(self) -> list[str]:
+        return self._tbl.column_names
+
+    @property
+    def height(self) -> int:
+        return self._tbl.num_rows
+
+    @property
+    def native(self) -> Any:
+        return self._tbl
+
+    def column(self, name: str) -> ArrowColumn:
+        return ArrowColumn(self._tbl.column(name))
+
+
 def to_frame(native: Any) -> Frame:
-    if isinstance(native, (PolarsFrame, PyFrame)):
+    if isinstance(native, (PolarsFrame, PyFrame, ArrowFrame)):
         return native
     if isinstance(native, pl.DataFrame):
         return PolarsFrame(native)
+    try:
+        import pyarrow as pa
+    except ImportError:
+        pa = None
+    if pa is not None and isinstance(native, pa.Table):
+        return ArrowFrame(native)
     raise TypeError(
-        f"to_frame() expects a polars.DataFrame, PolarsFrame, or PyFrame; got {type(native)!r}"
+        f"to_frame() expects a polars.DataFrame, pyarrow.Table, PolarsFrame, PyFrame, "
+        f"or ArrowFrame; got {type(native)!r}"
     )

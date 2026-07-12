@@ -10,24 +10,18 @@ that are duplicated or near-duplicated. This profiler covers both:
   punctuation): ``"Acme, Inc."`` vs ``"acme inc"`` vs ``"ACME  Inc"``. These are
   the most common real-world dupes that exact matching misses.
 
-Intentionally pure-Polars: the work is a normalize + group-by, which Polars
-already does vectorized + multithreaded. Per the native-kernel lesson
-(packages/python/goldencheck/CLAUDE.md), we don't reach for Rust where Polars is
-already the fast path -- the gate is "beat Polars", and here it wouldn't.
-
-True edit-distance fuzzy matching (typos that survive normalization, e.g.
-``Jon``/``John``) needs blocking + pairwise scoring and is a heavier follow-up;
-this profiler is the deterministic normalize-and-group tier.
-
-**Polars-accelerator-only (declined from the seam eviction, R4).** The core is a ``pl.concat_str`` +
-``str.*`` expression chain inside ``df.select`` followed by ``group_by(...).len()`` + two real
-``.join()``s -- relational-engine ops the ``Frame``/``Column`` seam does not expose. It is NOT routed
-through the seam; it stays import-safe (lazy ``pl``) but requires Polars at runtime. See
-``docs/superpowers/specs/2026-07-09-goldencheck-relation-ports-r4-decline.md``.
+**Flip (Stage A4): kernel-authoritative.** The four counts (exact rows/groups,
+near rows/groups) come from the fused native ``duplicate_signatures`` kernel over
+the Arrow columns -- byte/set-parity-validated in W3 (tests/engine/test_w3_shadow.py).
+When the native kernel is unavailable, a polars-free pure-Python fallback
+reproduces the identical normalize-and-group signatures. Nothing on this path
+requires Polars.
 """
 from __future__ import annotations
 
 import logging
+import re
+from collections import Counter
 
 from goldencheck._polars_lazy import pl
 from goldencheck.core._native_loader import native_enabled, native_module
@@ -37,19 +31,21 @@ from goldencheck.models.finding import Finding, Severity
 logger = logging.getLogger(__name__)
 
 _SEP = "\x1f"  # unit separator -- won't appear in normal data
-_MAX_SAMPLE = 5
+_NORM_RE = re.compile(r"[^0-9a-z]+")
 
 
+# --- Polars parity-reference helpers -----------------------------------------
+# The profiler is now kernel-authoritative (Arrow + duplicate_signatures). These
+# two Polars helpers are retained ONLY as the byte-for-byte ground-truth oracle
+# for the W3 parity test (tests/engine/test_w3_shadow.py). They are lazy (no
+# Polars import at module load) and are NOT on the scan path.
 def _normalized_signature(df: pl.DataFrame) -> pl.Series:
     """One signature string per row: string columns normalized (lowercased,
-    punctuation/whitespace collapsed), other columns cast as-is. Two rows share
-    a signature iff they are equal after that normalization."""
+    punctuation/whitespace collapsed), other columns cast as-is."""
     exprs = []
     for name, dtype in zip(df.columns, df.dtypes):
         col = pl.col(name).cast(pl.Utf8).fill_null("")
         if dtype == pl.Utf8:
-            # lowercase -> collapse any run of non-alphanumerics to a single
-            # space -> trim. "Acme, Inc." and "acme  inc" both -> "acme inc".
             col = col.str.to_lowercase().str.replace_all(r"[^0-9a-z]+", " ").str.strip_chars()
         exprs.append(col.alias(name))
     return df.select(pl.concat_str(exprs, separator=_SEP)).to_series()
@@ -61,84 +57,122 @@ def _exact_signature(df: pl.DataFrame) -> pl.Series:
     return df.select(pl.concat_str(exprs, separator=_SEP)).to_series()
 
 
+def _cast_str(value) -> str:
+    """``pl.col(x).cast(pl.Utf8).fill_null("")`` equivalent for a Python scalar:
+    null -> "", bool -> lowercase, everything else -> ``str(v)``."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _py_duplicate_signatures(col_lists, is_string) -> tuple[int, int, int, int]:
+    """Polars-free mirror of ``goldencheck_core::duplicate_signatures``: build a
+    per-row exact + normalized signature, then count rows/groups. Matches the
+    kernel's four counts on identical input."""
+    n = len(col_lists[0]) if col_lists else 0
+    exact_sigs: list[str] = []
+    norm_sigs: list[str] = []
+    for r in range(n):
+        exact_parts: list[str] = []
+        norm_parts: list[str] = []
+        for ci, vals in enumerate(col_lists):
+            s = _cast_str(vals[r])
+            exact_parts.append(s)
+            if is_string[ci]:
+                norm_parts.append(_NORM_RE.sub(" ", s.lower()).strip())
+            else:
+                norm_parts.append(s)
+        exact_sigs.append(_SEP.join(exact_parts))
+        norm_sigs.append(_SEP.join(norm_parts))
+
+    ec = Counter(exact_sigs)
+    nc = Counter(norm_sigs)
+    exact_rows = sum(1 for s in exact_sigs if ec[s] >= 2)
+    exact_groups = sum(1 for c in ec.values() if c >= 2)
+    near_rows = 0
+    near_group_sigs: set[str] = set()
+    for i in range(n):
+        if nc[norm_sigs[i]] >= 2 and ec[exact_sigs[i]] < 2:
+            near_rows += 1
+            near_group_sigs.add(norm_sigs[i])
+    return exact_rows, exact_groups, near_rows, len(near_group_sigs)
+
+
 class ApproxDuplicateProfiler:
     """Dataset-level relation profiler: exact + near-duplicate rows."""
 
-    def profile(self, frame: pl.DataFrame) -> list[Finding]:
+    def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
-        n_rows = df.height
-        if n_rows < 2 or df.width == 0:
+        cols = frame.columns
+        n_rows = frame.height
+        if n_rows < 2 or len(cols) == 0:
             return []
 
-        work = pl.DataFrame({
-            "__norm__": _normalized_signature(df),
-            "__exact__": _exact_signature(df),
-        })
-        norm_counts = work.group_by("__norm__").len().rename({"len": "__nc__"})
-        exact_counts = work.group_by("__exact__").len().rename({"len": "__ec__"})
-        work = work.join(norm_counts, on="__norm__").join(exact_counts, on="__exact__")
+        seam_cols = [frame.column(c) for c in cols]
+        # is_string selects the columns normalized for the near-dup signature. It
+        # mirrors the prior ``dt == pl.Utf8`` mask: a Polars Categorical maps to
+        # neutral "other" (NOT "str"), so it is excluded exactly as before.
+        is_string = [c.dtype == "str" for c in seam_cols]
 
-        # Shadow-compute the fused native duplicate_signatures kernel alongside the
-        # authoritative Polars group_by/join above (see tests/engine/test_w3_shadow.py
-        # for the parity assertion). NOT authoritative -- the findings below are built
-        # from the Polars values exactly as before this shadow wire. Wrapped so a shadow
-        # failure can never change or suppress an emitted Finding.
+        edr = edg = ndr = ndg = 0
         if native_enabled("duplicate_signatures"):
             try:
-                is_string = [dt == pl.Utf8 for dt in df.dtypes]
-                native_module().duplicate_signatures(
-                    [df[c].to_arrow() for c in df.columns], is_string
+                arrays = [c.to_arrow() for c in seam_cols]
+                edr, edg, ndr, ndg = native_module().duplicate_signatures(arrays, is_string)
+            except Exception as e:  # noqa: BLE001 - native failure -> pure-Python path
+                logger.debug("duplicate_signatures kernel failed, using Python fallback: %s", e)
+                edr, edg, ndr, ndg = _py_duplicate_signatures(
+                    [c.to_list() for c in seam_cols], is_string
                 )
-            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
-                logger.debug("duplicate_signatures shadow compute failed: %s", e)
+        else:
+            edr, edg, ndr, ndg = _py_duplicate_signatures(
+                [c.to_list() for c in seam_cols], is_string
+            )
 
         findings: list[Finding] = []
 
         # Exact duplicate rows (any row whose exact signature repeats).
-        exact_dups = work.filter(pl.col("__ec__") >= 2)
-        if exact_dups.height > 0:
-            n_groups = exact_dups["__exact__"].n_unique()
+        if edr > 0:
             findings.append(Finding(
                 severity=Severity.WARNING,
                 column="__dataset__",
                 check="duplicate_rows",
                 message=(
-                    f"{exact_dups.height} rows are exact duplicates "
-                    f"({n_groups} distinct duplicated record{'s' if n_groups != 1 else ''})."
+                    f"{edr} rows are exact duplicates "
+                    f"({edg} distinct duplicated record{'s' if edg != 1 else ''})."
                 ),
-                affected_rows=exact_dups.height,
+                affected_rows=edr,
                 sample_values=[],
                 suggestion=(
                     "De-duplicate before downstream processing, or confirm the "
                     "repetition is intentional (e.g. a denormalized fact table)."
                 ),
                 confidence=0.7,
-                metadata={"technique": "duplicate_rows", "duplicate_groups": n_groups},
+                metadata={"technique": "duplicate_rows", "duplicate_groups": edg},
             ))
 
         # Near-duplicates: share a normalized signature with another row but have
         # NO exact twin -- i.e. they differ only by case / whitespace / punctuation.
-        near_dups = work.filter((pl.col("__nc__") >= 2) & (pl.col("__ec__") < 2))
-        if near_dups.height > 0:
-            n_groups = near_dups["__norm__"].n_unique()
+        if ndr > 0:
             findings.append(Finding(
                 severity=Severity.WARNING,
                 column="__dataset__",
                 check="near_duplicate_rows",
                 message=(
-                    f"{near_dups.height} rows are near-duplicates — identical after "
+                    f"{ndr} rows are near-duplicates — identical after "
                     f"lowercasing, collapsing whitespace, and removing punctuation "
-                    f"({n_groups} group{'s' if n_groups != 1 else ''})."
+                    f"({ndg} group{'s' if ndg != 1 else ''})."
                 ),
-                affected_rows=near_dups.height,
+                affected_rows=ndr,
                 sample_values=[],
                 suggestion=(
                     "Standardize casing/whitespace/punctuation (or run an entity-"
                     "resolution pass) so these records reconcile to one."
                 ),
                 confidence=0.6,
-                metadata={"technique": "near_duplicate_rows", "near_duplicate_groups": n_groups},
+                metadata={"technique": "near_duplicate_rows", "near_duplicate_groups": ndg},
             ))
 
         return findings

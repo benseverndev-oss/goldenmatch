@@ -19,13 +19,17 @@ This installs GoldenCheck with all core dependencies:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| polars | >=1.0 | Data operations |
+| pyarrow | >=14 | Arrow-native scan frame — CSV/Parquet/Excel scanning (no Polars) |
 | typer | >=0.12 | CLI framework |
 | rich | >=13.0 | Console output |
 | pyyaml | >=6.0 | Config file parsing |
 | pydantic | >=2.0 | Config validation |
 | openpyxl | >=3.1 | Excel file support |
 | textual | >=1.0 | Interactive TUI |
+
+> As of 3.0.0 the default scan is Arrow-native and Polars-free. Polars is no longer a
+> core dependency — it ships only in the `[baseline]` (statistical / drift features) and
+> `[polars]` (the `scan_dataframe(pl.DataFrame)` overload) extras.
 
 ## With LLM Boost
 

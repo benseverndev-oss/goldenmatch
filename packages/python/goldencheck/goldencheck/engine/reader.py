@@ -66,6 +66,60 @@ def read_file(path: Path) -> pl.DataFrame:
         raise ValueError(f"Unsupported file format: {ext}")
 
 
+def _cols_to_table(cols: dict[str, list]):
+    """Build a ``pyarrow.Table`` from a ``dict[str, list]`` of native Python
+    scalars (owned-CSV / Excel readers). pyarrow infers each column's Arrow type
+    from its values -- the same value-level typing the owned readers pin against
+    the prior Polars behaviour. An empty dict yields an empty table."""
+    import pyarrow as pa
+
+    if not cols:
+        return pa.table({})
+    return pa.table({name: pa.array(vals) for name, vals in cols.items()})
+
+
+def read_file_arrow(path: Path):
+    """Polars-free file read into a ``pyarrow.Table`` for the default scan path.
+
+    - **Parquet** -> ``pyarrow.parquet.read_table`` (native Arrow, zero copy).
+    - **Excel** -> ``openpyxl`` -> owned per-column coercion -> Arrow (the same
+      ``_read_excel_columns`` typing used by ``read_columns``).
+    - **CSV** -> the OWNED inference contract (``_read_csv_columns_owned`` ->
+      native ``csv_infer`` kernel or the Python reference in
+      ``engine/csv_infer.py``). This is a *documented, different* dtype-inference
+      contract from ``pl.read_csv`` (leading-zero -> str, inf/nan -> str), NOT a
+      byte-identical stand-in. It is the owned contract the Flip emits.
+
+    The legacy Polars ``read_file`` stays for callers that still need a
+    ``pl.DataFrame``; the scanner's ``scan_file`` uses this Arrow path.
+    """
+    path = Path(path).resolve()
+    ext = path.suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported file format: {ext}. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path.name}")
+    logger.info("Reading %s (%s) [arrow]", path.name, ext)
+    if path.stat().st_size == 0:
+        raise ValueError("File has no data rows. Nothing to profile.")
+
+    if ext == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as e:
+            raise ImportError(
+                "Reading Parquet needs pyarrow: pip install goldencheck[parquet]"
+            ) from e
+        return pq.read_table(str(path))
+    if ext in (".xlsx", ".xls"):
+        return _cols_to_table(_read_excel_columns(path))
+    if ext == ".csv":
+        return _cols_to_table(_read_csv_columns_owned(path))
+    raise ValueError(f"Unsupported file format: {ext}")
+
+
 def _read_csv_columns(path: Path) -> dict[str, list]:
     """Read a CSV file into a dict[str, list] using Polars.
 

@@ -70,4 +70,6 @@ def test_shadow_runs_on_real_scan_path(shadow_df: pl.DataFrame) -> None:
         non_null = col.drop_nulls()
         assert cp.null_count == col.null_count()
         assert cp.unique_count == (non_null.n_unique() if len(non_null) > 0 else 0)
-        assert cp.inferred_type == str(col.dtype)
+        # Flip owned dtype contract: inferred_type is the NEUTRAL vocabulary
+        # (str/int/uint/float/date/datetime/bool/other), not raw ``str(pl.dtype)``.
+        assert cp.inferred_type == _neutral_dtype(col.dtype)

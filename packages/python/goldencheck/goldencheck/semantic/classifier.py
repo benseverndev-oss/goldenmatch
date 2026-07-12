@@ -8,8 +8,7 @@ from typing import Any
 
 import yaml
 
-from goldencheck._polars_lazy import pl
-from goldencheck.core._native_loader import native_enabled, native_module
+from goldencheck.core.frame import to_frame
 
 logger = logging.getLogger(__name__)
 
@@ -97,16 +96,25 @@ def load_type_defs(
 
 
 def classify_columns(
-    df: pl.DataFrame,
+    df,
     custom_types_path: Path | None = None,
     type_defs: dict[str, TypeDef] | None = None,
+    only: list[str] | None = None,
 ) -> dict[str, ColumnClassification]:
-    """Classify each column's semantic type with provenance."""
+    """Classify each column's semantic type with provenance.
+
+    Routes through the backend-neutral Frame/Column seam, so ``df`` may be a
+    ``pl.DataFrame`` (wrapped as ``PolarsFrame``) or an Arrow-native
+    ``ArrowFrame`` -- the default scan path passes the latter. ``only`` restricts
+    classification to a subset of columns (used by the schema-aware scan branch).
+    """
     if type_defs is None:
         type_defs = load_type_defs(custom_types_path)
+    frame = to_frame(df)
     results = {}
 
-    for col_name in df.columns:
+    names = frame.columns if only is None else [c for c in frame.columns if c in only]
+    for col_name in names:
         # 1. Name heuristic matching
         classification = _match_by_name(col_name, type_defs)
         if classification:
@@ -114,7 +122,7 @@ def classify_columns(
             continue
 
         # 2. Value-based inference
-        classification = _match_by_value(df, col_name, type_defs)
+        classification = _match_by_value(frame, col_name, type_defs)
         if classification:
             results[col_name] = ColumnClassification(type_name=classification, source="value")
             continue
@@ -140,8 +148,8 @@ def _match_by_name(col_name: str, type_defs: dict[str, TypeDef]) -> str | None:
                 return type_name
     return None
 
-def _match_by_value(df: pl.DataFrame, col_name: str, type_defs: dict[str, TypeDef]) -> str | None:
-    col = df[col_name]
+def _match_by_value(frame, col_name: str, type_defs: dict[str, TypeDef]) -> str | None:
+    col = frame.column(col_name)
     non_null = col.drop_nulls()
     if len(non_null) == 0:
         return None
@@ -154,8 +162,10 @@ def _match_by_value(df: pl.DataFrame, col_name: str, type_defs: dict[str, TypeDe
             return type_name
     return None
 
-def _check_value_signals(non_null: pl.Series, col: pl.Series, signals: dict) -> bool:
-    """Check if ALL value signals are satisfied."""
+def _check_value_signals(non_null, col, signals: dict) -> bool:
+    """Check if ALL value signals are satisfied. ``non_null``/``col`` are seam
+    ``Column``s (Polars- or Arrow-backed); dtype gates use the neutral vocabulary
+    (``str``/``int``/``float``/...)."""
     for key, value in signals.items():
         if key == "min_unique_pct":
             if non_null.n_unique() / len(non_null) < value:
@@ -170,52 +180,42 @@ def _check_value_signals(non_null: pl.Series, col: pl.Series, signals: dict) -> 
         elif key == "min_match_pct":
             pass  # Used with format_match, handled there
         elif key == "mixed_case":
-            # TODO(W-path): route the dtype gates in this function via dtype_category
-            if non_null.dtype not in (pl.Utf8, pl.String):
+            if non_null.dtype != "str":
                 return False
-            sample = non_null.head(100).to_list()
+            sample = non_null.slice(0, 100).to_list()
             has_upper = any(any(c.isupper() for c in str(s)) for s in sample)
             has_lower = any(any(c.islower() for c in str(s)) for s in sample)
             if not (has_upper and has_lower):
                 return False
         elif key == "avg_length_min":
-            if non_null.dtype not in (pl.Utf8, pl.String):
+            if non_null.dtype != "str":
                 return False
-            avg_len = non_null.str.len_chars().mean()
+            avg_len = non_null.str_len_chars().mean()
             if avg_len is None or avg_len < value:
                 return False
         elif key == "numeric":
-            if col.dtype not in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Float32, pl.Float64):
+            # Matches the prior gate exactly: signed-int / float only (UInt was
+            # NOT accepted by the original ``pl.Int*/pl.Float*`` tuple).
+            if col.dtype not in ("int", "float"):
                 return False
         elif key == "short_strings":
-            if non_null.dtype not in (pl.Utf8, pl.String):
+            if non_null.dtype != "str":
                 return False
-            avg_len = non_null.str.len_chars().mean()
+            avg_len = non_null.str_len_chars().mean()
             if avg_len is None or avg_len >= 5:
                 return False
     return True
 
-def _count_matches(non_null: pl.Series, pattern: str) -> int:
-    """Count values in ``non_null`` matching ``pattern`` (Polars-authoritative).
-
-    W6 shadow-wire: when the ``regex`` kernel is enabled, ALSO compute the count
-    via the Rust ``str_contains_count`` kernel (both Polars ``str.contains`` and
-    the kernel use the Rust ``regex`` crate, so the counts are byte-identical).
-    The kernel result is discarded -- the authoritative count stays Polars until
-    the Flip. Mirrors the profiler call form (``PyColumn.str_match_count``):
-    ``str_contains_count(<list of non-null values>, pattern) -> int``.
-    """
-    matches = int(non_null.str.contains(pattern, literal=False).sum())
-    if native_enabled("regex"):
-        try:  # noqa: SIM105 - shadow compute, discard result, never fail the caller
-            native_module().str_contains_count(non_null.to_list(), pattern)
-        except BaseException:  # noqa: BLE001 - shadow must never affect the return
-            pass
-    return matches
+def _count_matches(non_null, pattern: str) -> int:
+    """Count values in ``non_null`` matching ``pattern`` via the seam
+    ``str_match_count`` (Arrow -> native regex kernel; Polars -> ``str.contains``;
+    both use the Rust ``regex`` crate, so counts are byte-identical -- proven in
+    tests/engine/test_w6_semantic_shadow.py)."""
+    return non_null.str_match_count(pattern)
 
 
-def _check_format_match(non_null: pl.Series, format_type: str) -> bool:
-    if non_null.dtype not in (pl.Utf8, pl.String):
+def _check_format_match(non_null, format_type: str) -> bool:
+    if non_null.dtype != "str":
         return False
     if format_type == "email":
         return _count_matches(non_null, r"@.*\.") / len(non_null) >= 0.70

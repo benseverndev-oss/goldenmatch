@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 
-from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.profilers.base import BaseProfiler
@@ -53,16 +52,9 @@ class SequenceDetectionProfiler(BaseProfiler):
             # Not sequential — skip
             return findings
 
-        # Shadow-compute the fused native sequence_analysis kernel on the real
-        # scan path so it runs against production shapes ahead of the Flip (see
-        # tests/engine/test_w2_shadow.py for the parity assertion). NOT
-        # authoritative -- the Polars gap scan below stays the emitted values.
-        # Fully guarded + swallow-on-error: shadow only.
-        if native_enabled("sequence_analysis"):
-            try:
-                native_module().sequence_analysis(non_null.to_arrow())
-            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
-                logger.debug("sequence_analysis shadow failed on %s: %s", column, e)
+        # Flip: diff/count_eq/count_gt/is_sorted/min/max above are
+        # kernel-authoritative via the Arrow seam. The former Population-B shadow
+        # recompute (sequence_analysis, result discarded) is now dead and removed.
 
         # Column is sequential — find gaps
         col_min = int(non_null.min())

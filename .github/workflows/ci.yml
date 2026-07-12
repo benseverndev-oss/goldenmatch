@@ -2228,14 +2228,15 @@ jobs:
         # are self-contained, only the builtin tmp_path fixture).
         run: uv run --no-sync python -m pytest packages/python/goldenflow/tests/nopolars --noconftest -v
 
-  # P4b Task 3: promoted to ci-required. Builds the goldencheck native regex kernel,
-  # UNINSTALLS polars, then proves the polars-free read/scan surface for real
-  # (read_columns/scan_file_columns over Parquet via pyarrow + Excel via openpyxl,
-  # scan_columns structural checks) AND that the uncovered tail (CSV, scan_file()'s
-  # full scan) declines with the helpful `goldencheck[polars]` ImportError rather than
-  # crashing or silently degrading. A red here means either regressed (a module grew a
-  # top-level `import polars`, a covered reader broke, or a decline path stopped
-  # raising the helpful error) -- gate on it like any other required lane.
+  # ci-required. Builds the goldencheck native regex kernel, UNINSTALLS polars, then
+  # proves the polars-free scan surface for real. 3.0.0 CONTRACT FLIP: the default scan
+  # is now Arrow-native, so this lane asserts the FULL scan SUCCEEDS polars-absent --
+  # CSV + Parquet + Excel via scan_file()/scan_dataframe(pa.Table), plus the covered
+  # scan_columns structural checks. The only path that still declines with the helpful
+  # `goldencheck[polars]` ImportError is the scan_dataframe(pl.DataFrame) overload. A red
+  # here means a regression (a scan-path module grew a top-level `import polars`, an
+  # Arrow reader broke, or the pl.DataFrame overload stopped raising the helpful error)
+  # -- gate on it like any other required lane.
   goldencheck_nopolars:
     needs: changes
     if: needs.changes.outputs.goldencheck_nopolars == 'true' || needs.changes.outputs.force_all == 'true'
