@@ -97,6 +97,13 @@ def dtype_category(pl_dtype: Any) -> str:
 
 _CAST_KIND = {"float": "Float64", "int": "Int64", "str": "String"}   # strings only; resolved via getattr in cast()
 
+# Standard numeric-literal shapes for the vectorized ArrowColumn string->numeric
+# cast (RE2, anchored full-match). Match what float()/int() accept for the common
+# case; the owned contract treats non-standard tokens (inf/nan/underscored) as
+# non-numeric -> null, which is the sensible answer for "is this column numeric".
+_INT_LITERAL_RE = r"^[+-]?\d+$"
+_FLOAT_LITERAL_RE = r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$"
+
 
 class NativeRequiredError(RuntimeError):
     """A covered hard op needs the native regex kernel. Install it with
@@ -543,6 +550,21 @@ class ArrowColumn:
     def get(self, index: int) -> Any:
         return self._arr[index].as_py()
 
+    def _cast_str_numeric(self, target: Any, pattern: str) -> ArrowColumn:
+        """Vectorized string -> numeric cast with null-on-unparseable (polars
+        strict=False). Regex-mask the values that are NOT a standard numeric
+        literal to null, then a single vectorized pc.cast -- no per-element
+        Python loop (that loop made type_inference's cast the dominant scan cost:
+        2M float()/append calls on a 1M-row column). Leading/trailing whitespace
+        is trimmed first to match Python float()/int() acceptance.
+        """
+        pa, pc = _arrow()
+        a = self._arr
+        stripped = pc.utf8_trim_whitespace(a)
+        looks_numeric = pc.match_substring_regex(stripped, pattern)
+        cleaned = pc.if_else(looks_numeric, stripped, pa.scalar(None, type=a.type))
+        return ArrowColumn(pc.cast(cleaned, target))
+
     def cast(self, kind: str, *, strict: bool = False) -> ArrowColumn:
         pa, pc = _arrow()
         import pyarrow.types as pat
@@ -551,29 +573,11 @@ class ArrowColumn:
         is_str = pat.is_string(a.type) or pat.is_large_string(a.type)
         if kind == "float":
             if is_str:
-                out = []
-                for v in a.to_pylist():
-                    if v is None:
-                        out.append(None)
-                        continue
-                    try:
-                        out.append(float(v))
-                    except (ValueError, TypeError):
-                        out.append(None)   # unparseable -> null (pl strict=False)
-                return ArrowColumn(pa.array(out, type=pa.float64()))
+                return self._cast_str_numeric(pa.float64(), _FLOAT_LITERAL_RE)
             return ArrowColumn(pc.cast(a, pa.float64(), safe=False))
         if kind == "int":
             if is_str:
-                out = []
-                for v in a.to_pylist():
-                    if v is None:
-                        out.append(None)
-                        continue
-                    try:
-                        out.append(int(v))
-                    except (ValueError, TypeError):
-                        out.append(None)
-                return ArrowColumn(pa.array(out, type=pa.int64()))
+                return self._cast_str_numeric(pa.int64(), _INT_LITERAL_RE)
             return ArrowColumn(pc.cast(a, pa.int64(), safe=False))
         if kind == "str":
             return ArrowColumn(pc.cast(a, pa.string()))
