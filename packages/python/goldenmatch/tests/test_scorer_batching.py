@@ -80,10 +80,13 @@ def _mixed_person_frame():
 
 
 def _blocks_and_mk(df):
-    from goldenmatch.core.blocker import build_blocks
     from goldenmatch.config.schemas import (
-        BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField,
+        BlockingConfig,
+        BlockingKeyConfig,
+        MatchkeyConfig,
+        MatchkeyField,
     )
+    from goldenmatch.core.blocker import build_blocks
     blocking = BlockingConfig(
         strategy="static",
         keys=[BlockingKeyConfig(fields=["last"], transforms=["lowercase"])],
@@ -144,12 +147,11 @@ def test_batched_equals_per_block_solo_path(monkeypatch):
 
 def test_columnar_batched_equals_per_block(monkeypatch):
     from goldenmatch.core import scorer
-    import polars as pl
     df = _mixed_person_frame()
     blocks, mk = _blocks_and_mk(df)
 
     # Reference = direct per-block columnar scoring (pre-batching behavior).
-    from goldenmatch.core.scorer import _score_one_block_columnar, _concat_pair_frames
+    from goldenmatch.core.scorer import _concat_pair_frames, _score_one_block_columnar
     ref_frames = [
         _score_one_block_columnar(b, mk, set(), across_files_only=False,
                                   source_lookup=None)
@@ -175,7 +177,7 @@ def test_columnar_batched_equals_per_block_solo_path(monkeypatch):
     """Force multi-row blocks through the SOLO branch and confirm columnar
     byte-identity holds there too (mirrors the list-path solo test)."""
     from goldenmatch.core import scorer
-    from goldenmatch.core.scorer import _score_one_block_columnar, _concat_pair_frames
+    from goldenmatch.core.scorer import _concat_pair_frames, _score_one_block_columnar
     df = _mixed_person_frame()
     blocks, mk = _blocks_and_mk(df)
 
