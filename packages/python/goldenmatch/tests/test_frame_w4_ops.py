@@ -457,3 +457,31 @@ def test_run_lengths_matches_worker_sort_then_sizes(backend):
         .to_list()
     )
     assert sf.run_lengths("__block_key__") == legacy
+
+
+# -- D2s-c pins ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_with_bucket_column_shape_contract(backend):
+    # PER-LANE contract: values in [0, n), deterministic within a lane,
+    # equal keys -> equal bucket. Cross-lane assignments need NOT agree
+    # (buckets are shard-internal, never output-visible).
+    f = _mk({"k": ["a", "b", "a", None, "c", None]}, backend)
+    out = f.with_bucket_column("k", "__bucket__", 4, 12345)
+    vals = out.column("__bucket__").to_list()
+    assert all(v is not None and 0 <= v < 4 for v in vals)
+    assert vals[0] == vals[2]  # equal keys same bucket
+    assert vals[3] == vals[5]  # null keys share one bucket
+    again = f.with_bucket_column("k", "__bucket__", 4, 12345).column("__bucket__").to_list()
+    assert vals == again  # deterministic
+
+
+def test_with_bucket_column_polars_matches_legacy_expr():
+    df = pl.DataFrame({"k": ["a", "b", "c", "a", None]})
+    seed = 0xC2B5C0BBE7ED5E5D
+    legacy = df.with_columns((pl.col("k").hash(seed=seed) % 8).alias("__bucket__"))
+    from goldenmatch.core.frame import PolarsFrame
+
+    out = PolarsFrame(df).with_bucket_column("k", "__bucket__", 8, seed)
+    assert out.native["__bucket__"].to_list() == legacy["__bucket__"].to_list()

@@ -1026,9 +1026,15 @@ def score_buckets(
             # bench can attribute it instead of pooling it into the unwrapped
             # gap between bucket_assign and bucket_partition.
             with stage("bucket_hash_modulo"):
-                bucketed = keyed.with_columns(
-                    (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
-                    .alias("__bucket__")
+                # D2s-c: per-lane bucket assignment via the seam (polars impl
+                # is this stage's old hash(seed) % n expr verbatim; buckets
+                # are shard-internal, never output-visible).
+                bucketed = (
+                    _tf(keyed)
+                    .with_bucket_column(
+                        "__block_key__", "__bucket__", n_buckets, BUCKET_HASH_SEED
+                    )
+                    .native
                 )
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
 
