@@ -1,17 +1,20 @@
-"""GoldenCheck Stage-2 S2.0: goldencheck works with **polars genuinely uninstalled**.
+"""GoldenCheck 3.0.0: the DEFAULT scan path runs with **polars genuinely uninstalled**.
 
-This module imports polars NOWHERE. It is the living proof for the Polars-eviction end
-state (P4, where `polars` moves to the `[polars]` extra). Every other polars-free test in
-the suite still touches polars somewhere, so none of them can run in a polars-absent
-interpreter; this one can.
+This module imports polars NOWHERE. It is the living proof for the 3.0.0 Flip end state:
+`scan_file`/`scan_dataframe` are Arrow-native (the fused Rust/Arrow seam), so the full
+default scan -- not just the covered-columns subset -- succeeds without polars. polars is
+only needed for the opt-in [baseline] stat/drift features and the scan_dataframe(pl.DataFrame)
+convenience overload.
 
 It is `skipif`'d OUT of the normal suite (where polars IS present), so it is inert there
 and only executes in the dedicated `goldencheck_nopolars` CI lane (and any local run where
 polars is absent).
 
-NOTE (S2.0): goldencheck has no non-Polars `Column`/`Frame` backend yet (that arrives with
-S2.1), so this lane asserts import-survival + a clean decline on the uncovered tail ONLY --
-NOT a covered scan. The covered-scan assertions land when S2.1 ships the backend.
+CONTRACT FLIP (3.0.0): pre-3.0 this lane asserted the full scan DECLINED (raised the
+`goldencheck[polars]` ImportError) polars-absent. It now asserts the full scan SUCCEEDS via
+the owned Arrow contract, emitting the neutral dtype vocabulary. The numeric/sequence/date/
+regex checks self-skip when the native kernel is also absent (same graceful-degradation
+pattern as the hard/temporal checks).
 """
 
 from __future__ import annotations
@@ -130,22 +133,47 @@ def test_read_columns_parquet_excel_polars_free(tmp_path) -> None:
     assert "polars" not in sys.modules
 
 
-def test_csv_reads_owned_and_full_scan_declines_without_polars(tmp_path) -> None:
-    # CSV now reads Polars-free via goldencheck's OWN inference contract (the native
-    # csv_infer kernel, or the Python reference fallback) -- so read_columns(csv) works
-    # WITHOUT Polars (deliberately differs from pl.read_csv; see engine/csv_infer.py).
-    # But scan_file()'s FULL scan (classification/sampling/denial) reads via
-    # read_file() -> pl.read_csv(), which still needs Polars and must decline with the
-    # helpful `goldencheck[polars]` ImportError rather than crash or silently degrade.
-    import pytest
+def test_csv_full_scan_succeeds_without_polars(tmp_path) -> None:
+    # 3.0.0 CONTRACT FLIP: scan_file() now runs the FULL default scan Arrow-native,
+    # so a CSV full scan SUCCEEDS polars-free (was: raised goldencheck[polars]).
     from goldencheck import read_columns
     from goldencheck.engine.scanner import scan_file
 
     csv = tmp_path / "c.csv"
-    csv.write_text("a\n1\n", encoding="utf-8")
-    # CSV reads via the owned path (int column), no ImportError, no Polars:
-    assert read_columns(csv) == {"a": [1]}
-    # scan_file() -> read_file() -> pl.read_csv() on the lazy proxy -> helpful ImportError:
-    with pytest.raises(ImportError, match=r"goldencheck\[polars\]"):
-        scan_file(csv)
+    csv.write_text("a,b\n1,x\n2,y\n3,x\n", encoding="utf-8")
+    # CSV reads via the owned inference path (int + str columns), no Polars:
+    assert read_columns(csv) == {"a": [1, 2, 3], "b": ["x", "y", "x"]}
+    # Full scan succeeds and emits the neutral dtype vocabulary:
+    findings, profile = scan_file(csv)
+    assert isinstance(findings, list)
+    types = {c.name: c.inferred_type for c in profile.columns}
+    assert types["a"] == "int"  # neutral vocab, not raw "Int64"
+    assert types["b"] == "str"
+    assert "polars" not in sys.modules
+
+
+def test_parquet_full_scan_succeeds_without_polars(tmp_path) -> None:
+    # Parquet full scan is Arrow-native end to end -- succeeds polars-free.
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from goldencheck.engine.scanner import scan_file
+
+    pqp = tmp_path / "f.parquet"
+    pq.write_table(pa.table({"pk": list(range(50)), "grade": ["A", "B"] * 25}), pqp)
+    findings, profile = scan_file(pqp)
+    assert isinstance(findings, list)
+    checks = {f.check for f in findings}
+    assert "uniqueness" in checks  # pk unique
+    assert {c.name: c.inferred_type for c in profile.columns}["pk"] == "int"
+    assert "polars" not in sys.modules
+
+
+def test_scan_dataframe_accepts_arrow_table_without_polars() -> None:
+    # 3.0.0 scan_dataframe accepts a pyarrow.Table natively (no pl.DataFrame needed).
+    import pyarrow as pa
+    from goldencheck.engine.scanner import scan_dataframe
+
+    tbl = pa.table({"id": list(range(30)), "val": [1.0, 2.0, 3.0] * 10})
+    findings, _profile = scan_dataframe(tbl)
+    assert isinstance(findings, list)
     assert "polars" not in sys.modules

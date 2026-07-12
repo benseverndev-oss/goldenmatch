@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldencheck"
-version = "2.0.0"
+version = "3.0.0"
 description = "Data validation that discovers rules from your data so you don't have to write them"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,7 +25,15 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # polars moved to the [polars] extra in 2.0.0 (see optional-dependencies)
+    # Polars is NOT a base dep. In 2.0.0 it moved to the [polars] extra; in 3.0.0
+    # the default scan path is Arrow-native (the fused Rust/Arrow seam), so polars
+    # is only needed for the opt-in [baseline] stat/drift features and the
+    # scan_dataframe(pl.DataFrame) convenience overload ([polars] extra).
+    # pyarrow is a BASE dep in 3.0.0 -- the scan frame is a pyarrow.Table and every
+    # scan routes through the Arrow seam. The compiled goldencheck-native kernel
+    # ([native] extra) accelerates the numeric/sequence/date/regex checks and the
+    # profilers self-skip those when it is absent (same pattern as 2.x).
+    "pyarrow>=14",
     "typer>=0.12",
     "rich>=13.0",
     "pyyaml>=6.0",
@@ -70,8 +78,12 @@ agent = [
     "aiohttp>=3.14.0",
 ]
 baseline = [
+    # The baseline statistics + drift + correlation subsystems are opt-in and still
+    # run on Polars (group_by/pivot/join) + scipy. 3.0.0 gates them here rather than
+    # porting them off Polars -- installing [baseline] pulls the polars they need.
     "scipy>=1.11",
     "numpy>=1.26",
+    "polars>=1.0",
 ]
 native = [
     # Optional Rust/PyO3 acceleration for the CPU-bound deep-profiling kernels
