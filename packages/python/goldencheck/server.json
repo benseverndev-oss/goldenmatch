@@ -4,7 +4,7 @@
   "title": "GoldenCheck",
   "description": "Auto-discover validation rules from data — scan, profile, health-score. No rules to write.",
   "websiteUrl": "https://benseverndev-oss.github.io/goldencheck/",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "repository": {
     "url": "https://github.com/benseverndev-oss/goldencheck",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldencheck",
-      "version": "3.0.2",
+      "version": "3.0.3",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
