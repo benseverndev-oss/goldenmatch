@@ -2,6 +2,18 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.0.3] - 2026-07-12
+
+### Performance
+- **Parallel column scan.** The column-profiling loop now fans out across a thread
+  pool (pyarrow.compute and the native kernels release the GIL). Column profiling is
+  independent per column and `profiler_context` is per-column, so results are merged
+  in COLUMN order and are byte-identical to the sequential path (verified: `scan_file`
+  1-thread vs 8-thread findings identical incl. order; differential Jaccard 1.000).
+  1M x 7: scan_file 1.97s -> 1.36s. Gated by `GOLDENCHECK_SCAN_THREADS` (default:
+  parallel when >=2 columns and >=50k rows, capped at min(cpu, 8, ncols); `1` forces
+  sequential). Cumulative with 3.0.1/3.0.2: 3.74s -> 1.36s (~2.75x).
+
 ## [3.0.2] - 2026-07-12
 
 ### Performance

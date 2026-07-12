@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -404,6 +406,52 @@ def _sample_for_return(frame):
     return _pl.from_arrow(native)
 
 
+def _scan_threads(ncols: int, row_count: int) -> int:
+    """How many threads to fan the column loop across. `GOLDENCHECK_SCAN_THREADS`
+    overrides (1 = sequential, for debug/determinism checks). Otherwise parallelize
+    only when there's enough work to beat the thread-pool overhead: multiple columns
+    and a non-trivial row count. Capped at min(cpu, 8, ncols)."""
+    env = os.environ.get("GOLDENCHECK_SCAN_THREADS")
+    if env is not None:
+        try:
+            return max(1, min(int(env), ncols))
+        except ValueError:
+            return 1
+    if ncols < 2 or row_count < 50_000:
+        return 1
+    return max(1, min(os.cpu_count() or 1, 8, ncols))
+
+
+def _profile_column(frame, sample, col_name: str, row_count: int):
+    """Profile ONE column: its ColumnProfile (from the full ``frame``) + the
+    COLUMN_PROFILERS over ``sample``. Pure w.r.t. its inputs and a LOCAL context
+    dict, so it is safe to run concurrently across columns (see the caller)."""
+    ctx: dict = {}   # per-column: context is keyed by column, no cross-column reads
+    col = frame.column(col_name)
+    non_null = col.drop_nulls()
+    non_null_len = len(non_null)
+    n_unique = non_null.n_unique() if non_null_len > 0 else 0
+    null_count = col.null_count()
+    cp = ColumnProfile(
+        name=col_name,
+        # OWNED dtype contract: neutral vocabulary (str/int/uint/float/date/
+        # datetime/bool/other) via the Arrow seam, not raw `str(pl.dtype)`.
+        inferred_type=col.dtype_repr(),
+        null_count=null_count,
+        null_pct=null_count / row_count if row_count > 0 else 0,
+        unique_count=n_unique,
+        unique_pct=n_unique / non_null_len if non_null_len > 0 else 0,
+        row_count=row_count,
+    )
+    findings: list[Finding] = []
+    for profiler in COLUMN_PROFILERS:
+        try:
+            findings.extend(profiler.profile(sample, col_name, context=ctx))
+        except Exception as e:  # noqa: BLE001 - one profiler failing must not sink the scan
+            logger.warning("Profiler %s failed on column %s: %s", type(profiler).__name__, col_name, e)
+    return cp, findings
+
+
 def _scan_dataframe_impl(
     frame,
     *,
@@ -433,34 +481,31 @@ def _scan_dataframe_impl(
 
     all_findings: list[Finding] = []
     column_profiles: list[ColumnProfile] = []
-    profiler_context: dict = {}
 
-    for col_name in columns:
-        col = frame.column(col_name)
-        non_null = col.drop_nulls()
-        non_null_len = len(non_null)
-        # Cache n_unique + null_count once per column (both feed two ColumnProfile
-        # kwargs each). The kernel-backed ArrowColumn carries the CPU work.
-        n_unique = non_null.n_unique() if non_null_len > 0 else 0
-        null_count = col.null_count()
-        cp = ColumnProfile(
-            name=col_name,
-            # OWNED dtype contract: neutral vocabulary (str/int/uint/float/date/
-            # datetime/bool/other) via the Arrow seam, not raw `str(pl.dtype)`.
-            inferred_type=col.dtype_repr(),
-            null_count=null_count,
-            null_pct=null_count / row_count if row_count > 0 else 0,
-            unique_count=n_unique,
-            unique_pct=n_unique / non_null_len if non_null_len > 0 else 0,
-            row_count=row_count,
-        )
+    # Column profiling is embarrassingly parallel across columns: each column's
+    # ColumnProfile + COLUMN_PROFILERS depend only on that column (profiler_context
+    # is keyed by column -- type_inference writes context[col], range_distribution
+    # reads context[col] -- so a per-column context has no cross-column dependency),
+    # and pyarrow.compute / the native kernels release the GIL. We run columns on a
+    # thread pool and merge results in COLUMN ORDER (not completion order) so the
+    # finding set is identical to the sequential path (the differential enforces it).
+    n_threads = _scan_threads(len(columns), row_count)
+    if n_threads > 1:
+        # Pre-populate the frame column caches single-threaded so the parallel
+        # tasks only READ them -- concurrent dict writes (ArrowFrame._col_cache)
+        # aren't safe. combine_chunks runs here, once per column. No-op for frames
+        # whose column() doesn't cache.
+        for col_name in columns:
+            frame.column(col_name)
+            if sample is not frame:
+                sample.column(col_name)
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            results = list(pool.map(lambda c: _profile_column(frame, sample, c, row_count), columns))
+    else:
+        results = [_profile_column(frame, sample, c, row_count) for c in columns]
+    for cp, findings in results:
         column_profiles.append(cp)
-        for profiler in COLUMN_PROFILERS:
-            try:
-                findings = profiler.profile(sample, col_name, context=profiler_context)
-                all_findings.extend(findings)
-            except Exception as e:
-                logger.warning("Profiler %s failed on column %s: %s", type(profiler).__name__, col_name, e)
+        all_findings.extend(findings)
 
     for profiler in RELATION_PROFILERS:
         try:
