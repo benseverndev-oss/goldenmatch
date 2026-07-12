@@ -115,8 +115,8 @@ def _norm_value(key: str, value):
         d = value.to_dict()
         d["created_at"] = _FROZEN_TS  # freeze the only wall-clock field
         return d
-    if key == "golden":  # polars frame -> list of row dicts
-        return value.to_dicts()
+    if key == "golden":  # v3.0.0: pa.Table result frame -> list of row dicts
+        return value.to_pylist() if hasattr(value, "num_rows") else value.to_dicts()
     if key == "match_stats":
         return _strip_timing(dict(value))
     if key == "findings":

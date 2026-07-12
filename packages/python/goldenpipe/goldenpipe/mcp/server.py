@@ -99,28 +99,44 @@ def run_pipeline_tool(
 
 
 def _is_frame(obj: Any) -> bool:
-    """A Polars-DataFrame-shaped artifact (duck-typed to avoid a hard import)."""
-    return obj is not None and hasattr(obj, "height") and hasattr(obj, "to_dicts")
+    """A DataFrame-shaped artifact (duck-typed to avoid a hard import).
+
+    Accepts BOTH a ``pa.Table`` (``num_rows``; the v3.0.0 goldenmatch result
+    frame) and a ``pl.DataFrame`` (``height`` + ``to_dicts``; the escape hatch
+    and the unit-test fixtures)."""
+    if obj is None:
+        return False
+    return hasattr(obj, "num_rows") or (hasattr(obj, "height") and hasattr(obj, "to_dicts"))
+
+
+def _frame_rows(obj: Any) -> int:
+    return obj.num_rows if hasattr(obj, "num_rows") else obj.height
+
+
+def _frame_head_dicts(obj: Any, n: int) -> list[dict]:
+    if hasattr(obj, "num_rows"):  # pa.Table
+        return obj.slice(0, n).to_pylist()
+    return obj.head(n).to_dicts()
 
 
 def _summarize_output(artifacts: dict, preview_rows: int) -> dict[str, Any]:
     """Pull the deduped output out of the pipeline artifacts, JSON-safe.
 
     The dedupe stage casts every column to string before matching, so
-    ``to_dicts()`` on golden/unique frames is JSON-serializable.
+    ``to_pylist()``/``to_dicts()`` on golden/unique frames is JSON-serializable.
     """
     out: dict[str, Any] = {}
     golden = artifacts.get("golden")
     if _is_frame(golden):
-        out["golden_records"] = golden.height
+        out["golden_records"] = _frame_rows(golden)
         if preview_rows:
-            out["golden_preview"] = golden.head(preview_rows).to_dicts()
+            out["golden_preview"] = _frame_head_dicts(golden, preview_rows)
     unique = artifacts.get("unique")
     if _is_frame(unique):
-        out["unique_records"] = unique.height
+        out["unique_records"] = _frame_rows(unique)
     dupes = artifacts.get("dupes")
     if _is_frame(dupes):
-        out["duplicate_records"] = dupes.height
+        out["duplicate_records"] = _frame_rows(dupes)
     stats = artifacts.get("match_stats")
     if isinstance(stats, dict):
         out["match_stats"] = stats
