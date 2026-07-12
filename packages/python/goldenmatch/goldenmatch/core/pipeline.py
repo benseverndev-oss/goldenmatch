@@ -1449,38 +1449,38 @@ def _run_fused_match_short_circuit(
     max_cluster_size = 100
     if config.golden_rules is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
-    fused_df = pl.from_arrow(fused_tbl)
-    assert isinstance(fused_df, pl.DataFrame)  # from_arrow returns a DataFrame for a Table
-    sizes = fused_df.group_by("__cluster_id__").agg(pl.len().alias("__size__"))
+    # D1 (arrow descent): the kernel's pa.Table is NOT round-tripped through
+    # polars. Cluster sizes + id sets derive from Python folds over the arrow
+    # columns (small: one entry per cluster); the collected-frame splits run
+    # on seam ops (byte-identical polars delegation until D3 unifies).
+    from goldenmatch.core.frame import ArrowFrame, to_frame
+
+    fused_frame = ArrowFrame(fused_tbl)
+    _rid_list = fused_frame.column("__row_id__").to_list()
+    _cid_list = fused_frame.column("__cluster_id__").to_list()
+    _size_by_cid: dict[int, int] = {}
+    for _cid in _cid_list:
+        _size_by_cid[_cid] = _size_by_cid.get(_cid, 0) + 1
     # dupes: members of every multi-member cluster (oversized INCLUDED, mirroring
     # the classic size>1 dupe rule). golden: non-oversized multi-member only.
-    dupe_ids = sizes.filter(pl.col("__size__") > 1)["__cluster_id__"].to_list()
-    golden_ids = sizes.filter(
-        (pl.col("__size__") > 1) & (pl.col("__size__") <= max_cluster_size)
-    )["__cluster_id__"].to_list()
-    oversized_ids = set(
-        sizes.filter(pl.col("__size__") > max_cluster_size)["__cluster_id__"].to_list()
-    )
+    dupe_ids = {c for c, n in _size_by_cid.items() if n > 1}
+    golden_ids = {c for c, n in _size_by_cid.items() if 1 < n <= max_cluster_size}
+    oversized_ids = {c for c, n in _size_by_cid.items() if n > max_cluster_size}
 
-    dupe_row_ids = fused_df.filter(pl.col("__cluster_id__").is_in(dupe_ids))[
-        "__row_id__"
-    ].to_list()
-    golden_row_ids = fused_df.filter(pl.col("__cluster_id__").is_in(golden_ids))[
-        "__row_id__"
-    ].to_list()
+    dupe_row_ids = [r for r, c in zip(_rid_list, _cid_list) if c in dupe_ids]
+    golden_row_ids = [r for r, c in zip(_rid_list, _cid_list) if c in golden_ids]
     dupe_set = set(dupe_row_ids)
-    all_ids = collected_df["__row_id__"].to_list()
+    collected_frame = to_frame(collected_df)
+    all_ids = collected_frame.column("__row_id__").to_list()
     unique_row_ids = [r for r in all_ids if r not in dupe_set]
-    dupes_df = collected_df.filter(pl.col("__row_id__").is_in(dupe_row_ids))
-    unique_df = collected_df.filter(pl.col("__row_id__").is_in(unique_row_ids))
+    dupes_df = collected_frame.filter_in("__row_id__", dupe_row_ids).native
+    unique_df = collected_frame.filter_in("__row_id__", unique_row_ids).native
 
     # Clusters dict (capacity mode: pair_scores/confidence/bottleneck shed). Same
     # STRUCTURE as build_clusters so DedupeResult.clusters consumers don't break;
     # confidence sentinel mirrors cluster.py (1.0 singleton / 0.0 multi).
     grouped: dict[int, list[int]] = {}
-    for rid, cid in zip(
-        fused_df["__row_id__"].to_list(), fused_df["__cluster_id__"].to_list()
-    ):
+    for rid, cid in zip(_rid_list, _cid_list):
         grouped.setdefault(cid, []).append(rid)
     clusters: dict[int, dict] = {}
     for cid, members in grouped.items():
@@ -1515,13 +1515,13 @@ def _run_fused_match_short_circuit(
 
             quality_scores = (
                 compute_quality_scores(
-                    collected_df.filter(pl.col("__row_id__").is_in(golden_row_ids))
+                    collected_frame.filter_in("__row_id__", golden_row_ids).native
                 )
                 or None
             )
         # Build multi_df: member rows + slim internal columns + __cluster_id__
         # (mirrors the dict-path golden branch for byte-identity).
-        multi_df = collected_df.filter(pl.col("__row_id__").is_in(golden_row_ids))
+        multi_df = collected_frame.filter_in("__row_id__", golden_row_ids).native
         if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
             _internal_prefixes = ("__xform_", "__mk_", "__block_key__", "__bucket__")
             multi_df = multi_df.select(
@@ -1531,7 +1531,16 @@ def _run_fused_match_short_circuit(
                     if not any(c.startswith(p) for p in _internal_prefixes)
                 ]
             )
-        multi_df = multi_df.join(fused_df, on="__row_id__", how="inner")
+        # __cluster_id__ attach: map_column over the kernel's rid->cid map is
+        # byte-equivalent to the old inner join against the fused frame
+        # (unique rid keys; downstream golden groups by cluster, order-free)
+        # and keeps the arrow table un-round-tripped.
+        _rid_to_cid = dict(zip(_rid_list, _cid_list))
+        multi_df = (
+            to_frame(multi_df)
+            .map_column("__row_id__", "__cluster_id__", _rid_to_cid)
+            .native
+        )
         golden_df, golden_fused_used = _golden_from_multi_df(
             multi_df, golden_rules, quality_scores, config.output.lineage_provenance
         )
