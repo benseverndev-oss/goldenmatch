@@ -49,9 +49,20 @@ array-ization is leaf-local (`to_list`/`to_numpy` before rapidfuzz).
   - D5b (WALL-GATED 100K/1M): BlockResult.df becomes a seam Frame
     (materialized, score_buckets slice model); drop .lazy()/.collect()
     round-trips; candidate probe → Frame.height.
-  - D5d (heaviest, THE hot path, strictest gate): score_buckets' polars
-    scaffolding (with_columns/hash/partition_by/sort/slice, :953/:997/:1035)
-    → seam; compute core already arrow.
+  - D5d (heaviest, THE hot path, strictest gate) PORT SPEC (read 2026-07-12):
+    _score_single_pass (score_buckets.py ~:985-1070) stage-by-stage --
+    (1) keyed = slim_df.with_columns(key_expr) → frame.with_column("__block_key__",
+    frame.derive_block_key(...)) (W2a twin of _build_block_key_expr);
+    (2) PRESERVE the #422 small-block fast path (height < n_buckets skips
+    hash+partition) verbatim; (3) bucket hash stays PER-LANE native (W4e
+    precedent: shard-internal, not output-visible; sorted-slice blocks are
+    hash-independent); (4) partition_by(as_dict) → group_partitions;
+    (5) per-bucket sort(__block_key__)+slice → frame.sort/slice (already
+    ops); (6) MUST PRESERVE: the del keyed/del bucketed RSS points, every
+    stage() wrapper, and the print instrumentation (RSS bench attribution).
+    GATES: 100K A/B + 1M dispatch + RSS comparison (rss workstream
+    constraint: hold wall+accuracy, don't regress peak RSS); the 5M
+    distributed stack re-run if the bucket lane is touched by ray_backend.
 - **D6 — the deletion**: default already arrow; delete the `polars` opt-out
   value + PolarsFrame + `_polars_dtype` + polars constructor branches;
   `_polars_lazy` proxy SURVIVES only in the extra-gated integration modules
