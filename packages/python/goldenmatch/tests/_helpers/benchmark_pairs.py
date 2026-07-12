@@ -45,9 +45,9 @@ def pairs_from_match_result(
     """Direct extraction from MatchResult.matched. No closure needed --
     each row is one (target_id, ref_id) pair. Pairs NOT canonicalized
     (target/ref are semantically distinct, e.g. DBLP vs ACM)."""
-    if result.matched is None or result.matched.height == 0:
+    m = result.matched
+    if m is None:
         return set()
-    return {
-        (row[target_id_col], row[ref_id_col])
-        for row in result.matched.iter_rows(named=True)
-    }
+    # v3.0.0: matched is pa.Table; the unit test feeds a raw pl.DataFrame.
+    rows = m.to_pylist() if hasattr(m, "num_rows") else m.to_dicts()
+    return {(row[target_id_col], row[ref_id_col]) for row in rows}

@@ -7,7 +7,7 @@ Usage:
     import goldenmatch as gm
 
     result = gm.dedupe("data.csv", exact=["email"], fuzzy={"name": 0.85})
-    result.golden.write_csv("output.csv")
+    result.to_csv("output.csv")  # result frames are pa.Table (v3.0.0)
 """
 from __future__ import annotations
 
@@ -125,6 +125,17 @@ def _detect_llm_provider() -> str | None:
 # so the flip is a field-type change rather than a method rewrite.
 
 
+def _to_result_table(obj: Any) -> Any:
+    """v3.0.0: result frames are pa.Table. The pipeline's internal frames
+    convert here (polars .to_arrow() zero-copy); pa.Table passes through.
+    Migration guide: wrap with pl.from_arrow(...) for the old type."""
+    if obj is None:
+        return None
+    if hasattr(obj, "num_rows"):  # already a pa.Table
+        return obj
+    return obj.to_arrow()
+
+
 def _frame_height(obj: Any) -> int:
     return obj.num_rows if hasattr(obj, "num_rows") else obj.height
 
@@ -164,10 +175,10 @@ class DedupeResult:
             per-cluster pair_scores when oversized clusters split).
         config: The GoldenMatchConfig used for this run.
     """
-    golden: pl.DataFrame | None = None
+    golden: Any | None = None  # pa.Table (v3.0.0)
     clusters: dict[int, dict] = field(default_factory=dict)
-    dupes: pl.DataFrame | None = None
-    unique: pl.DataFrame | None = None
+    dupes: Any | None = None  # pa.Table (v3.0.0)
+    unique: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
     scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)
     config: Any = None
@@ -304,8 +315,8 @@ class MatchResult:
         unmatched: DataFrame of unmatched target records.
         stats: Summary statistics.
     """
-    matched: pl.DataFrame | None = None
-    unmatched: pl.DataFrame | None = None
+    matched: Any | None = None  # pa.Table (v3.0.0)
+    unmatched: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
     postflight_report: PostflightReport | None = None
     # See DedupeResult.memory_stats note — same intentional duplication.
@@ -421,10 +432,10 @@ def dedupe(
 
     _mem = result.get("memory_stats")
     return DedupeResult(
-        golden=result.get("golden"),
+        golden=_to_result_table(result.get("golden")),
         clusters=result.get("clusters", {}),
-        dupes=result.get("dupes"),
-        unique=result.get("unique"),
+        dupes=_to_result_table(result.get("dupes")),
+        unique=_to_result_table(result.get("unique")),
         stats=_extract_stats(result),
         scored_pairs=result.get("scored_pairs", []),
         config=cfg,
@@ -681,10 +692,10 @@ def dedupe_df(
     warn_if_slow_path(_native, logger)
 
     dedupe_result = DedupeResult(
-        golden=result.get("golden"),
+        golden=_to_result_table(result.get("golden")),
         clusters=result.get("clusters", {}),
-        dupes=result.get("dupes"),
-        unique=result.get("unique"),
+        dupes=_to_result_table(result.get("dupes")),
+        unique=_to_result_table(result.get("unique")),
         stats=_extract_stats(result),
         scored_pairs=result.get("scored_pairs", []),
         config=config,
@@ -888,8 +899,8 @@ def match_df(
     warn_if_slow_path(_native, logger)
 
     return MatchResult(
-        matched=result.get("matched"),
-        unmatched=result.get("unmatched"),
+        matched=_to_result_table(result.get("matched")),
+        unmatched=_to_result_table(result.get("unmatched")),
         stats=_extract_stats(result),
         postflight_report=pf,
         memory_stats=_mem,
@@ -1080,8 +1091,8 @@ def match(
 
     _mem = result.get("memory_stats")
     return MatchResult(
-        matched=result.get("matched"),
-        unmatched=result.get("unmatched"),
+        matched=_to_result_table(result.get("matched")),
+        unmatched=_to_result_table(result.get("unmatched")),
         stats=_extract_stats(result),
         postflight_report=_attach_memory_to_postflight(
             result.get("postflight_report"), _mem

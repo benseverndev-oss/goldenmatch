@@ -215,7 +215,7 @@ def test_pipeline_columnar_gate_parity(monkeypatch):
         res = gm.dedupe_df(df, config=_cfg())
         monkeypatch.setattr(scorer_mod, "score_blocks_columnar", real)
         part = frozenset(frozenset(c["members"]) for c in res.clusters.values())
-        return part, len(res.clusters), res.dupes.height, res.unique.height, called["columnar"]
+        return part, len(res.clusters), res.dupes.num_rows, res.unique.num_rows, called["columnar"]
 
     off = _result(False)
     on = _result(True)

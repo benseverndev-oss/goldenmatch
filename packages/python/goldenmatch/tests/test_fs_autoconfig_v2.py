@@ -253,4 +253,4 @@ def test_v2_config_runs_end_to_end(monkeypatch):
     fields = [f.field for f in cfg.get_matchkeys()[0].fields]
     assert "dob" in fields  # lever #1 active under v2
     result = dedupe_df(df, config=cfg)
-    assert result.dupes is not None and result.dupes.height > 0
+    assert result.dupes is not None and result.dupes.num_rows > 0

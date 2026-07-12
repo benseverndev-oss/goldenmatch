@@ -1127,14 +1127,16 @@ def _tool_get_golden_record(cluster_id: int) -> dict:
     if _result.golden is None:
         return {"error": "No golden records available"}
 
-    golden_rows = _result.golden.filter(
-        _result.golden["__cluster_id__"] == cluster_id
-    ) if "__cluster_id__" in _result.golden.columns else None
+    import pyarrow.compute as pc
 
-    if golden_rows is None or golden_rows.height == 0:
+    golden_rows = _result.golden.filter(
+        pc.equal(_result.golden.column("__cluster_id__"), cluster_id)
+    ) if "__cluster_id__" in _result.golden.column_names else None
+
+    if golden_rows is None or golden_rows.num_rows == 0:
         return {"error": f"No golden record for cluster {cluster_id}"}
 
-    row = golden_rows.to_dicts()[0]
+    row = golden_rows.to_pylist()[0]
     clean = {k: v for k, v in row.items() if not k.startswith("__")}
     return {"cluster_id": cluster_id, "golden_record": clean}
 
@@ -1368,19 +1370,21 @@ def _tool_export_results(output_path: str, fmt: str) -> dict:
         return path
     if fmt == "json":
         if _result.golden is not None:
-            golden_dicts = _result.golden.to_dicts()
+            golden_dicts = _result.golden.to_pylist()
             clean = [{k: v for k, v in r.items() if not k.startswith("__")} for r in golden_dicts]
             path.write_text(json.dumps(clean, default=str, indent=2))
         else:
             path.write_text("[]")
     else:
         if _result.golden is not None:
-            cols = [c for c in _result.golden.columns if not c.startswith("__")]
-            _result.golden.select(cols).write_csv(str(path))
+            from pyarrow import csv as _pacsv
+
+            cols = [c for c in _result.golden.column_names if not c.startswith("__")]
+            _pacsv.write_csv(_result.golden.select(cols), str(path))
         else:
             path.write_text("")
 
-    return {"exported": str(path), "format": fmt, "records": _result.golden.height if _result.golden is not None else 0}
+    return {"exported": str(path), "format": fmt, "records": _result.golden.num_rows if _result.golden is not None else 0}
 
 
 def _tool_list_domains() -> dict:

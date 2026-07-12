@@ -171,13 +171,13 @@ def demo_cmd(
         console.print(cluster_table)
 
     # Golden records
-    if result.golden is not None and result.golden.height > 0:
+    if result.golden is not None and result.golden.num_rows > 0:
         console.print()
         golden_table = Table(title="Golden Records (merged)", border_style="#2ecc71", header_style="bold #2ecc71")
-        cols = [c for c in result.golden.columns if not c.startswith("__")]
+        cols = [c for c in result.golden.column_names if not c.startswith("__")]
         for col in cols[:5]:
             golden_table.add_column(col)
-        for row in result.golden.to_dicts():
+        for row in result.golden.to_pylist():
             golden_table.add_row(*[str(row.get(c, ""))[:25] for c in cols[:5]])
         console.print(golden_table)
 

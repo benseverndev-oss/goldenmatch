@@ -138,4 +138,4 @@ class TestFSEnsembleEndToEnd:
 
         # Must not raise (was: ValueError: Unknown scorer: 'ensemble' at EM train)
         result = dedupe_df(df, config=cfg)
-        assert result.dupes is not None and result.dupes.height > 0
+        assert result.dupes is not None and result.dupes.num_rows > 0

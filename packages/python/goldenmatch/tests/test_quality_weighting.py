@@ -103,12 +103,14 @@ def test_dedupe_df_pipeline_runs_with_quality_weighting() -> None:
 
     result = dedupe_df(df, exact=["name"], confidence_required=False)
     assert result.golden is not None
-    golden = result.golden.filter(pl.col("name") == "dupperson")
+    import pyarrow.compute as pc
+
+    golden = result.golden.filter(pc.equal(result.golden.column("name"), "dupperson"))
     # Only assert the merge happened + a canonical value was chosen; default
     # most_complete prefers the longer 'California' regardless, so this is a
     # wiring/no-crash guard (the flip itself is locked by the test above).
-    assert golden.height == 1
-    assert golden["state"][0] in ("California", "Californa")
+    assert golden.num_rows == 1
+    assert golden.column("state")[0].as_py() in ("California", "Californa")
 
 
 def test_quality_scan_scoped_to_cluster_members(monkeypatch):

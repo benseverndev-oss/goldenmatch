@@ -123,7 +123,10 @@ def _multi_partition(clusters: dict) -> set[frozenset[int]]:
     return {frozenset(c["members"]) for c in clusters.values() if c["size"] > 1}
 
 
-def _golden_content(g: pl.DataFrame) -> pl.DataFrame:
+def _golden_content(g) -> pl.DataFrame:
+    # v3.0.0: result frames are pa.Table; compare in polars (dev dep).
+    if not isinstance(g, pl.DataFrame):
+        g = pl.from_arrow(g)
     cols = [c for c in g.columns if c not in ("__cluster_id__", "__golden_confidence__")]
     return g.select(sorted(cols)).sort(sorted(cols))
 
@@ -224,8 +227,8 @@ def test_end_to_end_golden_routing_parity(monkeypatch):
 
     assert fused.golden is not None and classic.golden is not None
     assert_frame_equal(
-        fused.golden.sort("__cluster_id__"),
-        classic.golden.sort("__cluster_id__"),
+        pl.from_arrow(fused.golden).sort("__cluster_id__"),
+        pl.from_arrow(classic.golden).sort("__cluster_id__"),
         check_column_order=False,
         check_row_order=False,
     )
@@ -262,11 +265,11 @@ def test_end_to_end_match_capacity_parity_lock(monkeypatch):
     assert _multi_partition(fused.clusters) == _multi_partition(classic.clusters)
 
     # dupes / unique row populations byte-identical.
-    assert set(fused.dupes["__row_id__"].to_list()) == set(
-        classic.dupes["__row_id__"].to_list()
+    assert set(fused.dupes["__row_id__"].to_pylist()) == set(
+        classic.dupes["__row_id__"].to_pylist()
     )
-    assert set(fused.unique["__row_id__"].to_list()) == set(
-        classic.unique["__row_id__"].to_list()
+    assert set(fused.unique.column("__row_id__").to_pylist()) == set(
+        classic.unique.column("__row_id__").to_pylist()
     )
 
     # Golden content byte-identical (modulo cluster id + confidence).
