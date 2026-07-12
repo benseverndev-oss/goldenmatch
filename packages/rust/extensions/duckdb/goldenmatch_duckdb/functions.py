@@ -227,6 +227,20 @@ def register(con: duckdb.DuckDBPyConnection) -> None:
 # ── Implementation ──────────────────────────────────────────────────────
 
 
+def _frame_to_json(frame) -> str:
+    """Serialize a result frame to row-oriented JSON.
+
+    v3.0.0: goldenmatch result frames (``result.golden`` / ``result.matched``)
+    are ``pa.Table``, which has no ``write_json``. ``Table.to_pylist()`` yields
+    the same ``[{col: val}, ...]`` shape polars' ``DataFrame.write_json()`` did,
+    so ``json.dumps(to_pylist())`` is byte-equivalent after ``json.loads``. The
+    polars branch stays for the ``GOLDENMATCH_FRAME=polars`` escape hatch.
+    """
+    if hasattr(frame, "num_rows"):  # pa.Table
+        return json.dumps(frame.to_pylist())
+    return frame.write_json()  # pl.DataFrame
+
+
 def _validate_table_name(name: str) -> str:
     """Validate table name to prevent SQL injection."""
     import re
@@ -264,7 +278,7 @@ def _dedupe_json(rows_json: str, config_json: str) -> str:
     cfg = json.loads(config_json)
     result = dedupe_df(df, **cfg)
     if result.golden is not None:
-        return result.golden.write_json()
+        return _frame_to_json(result.golden)
     return json.dumps(result.stats)
 
 
@@ -276,7 +290,7 @@ def _match_json(target_json: str, ref_json: str, config_json: str) -> str:
     cfg = json.loads(config_json)
     result = match_df(target, ref_df, **cfg)
     if result.matched is not None:
-        return result.matched.write_json()
+        return _frame_to_json(result.matched)
     return "[]"
 
 
@@ -293,7 +307,7 @@ def _dedupe_table(con: duckdb.DuckDBPyConnection, table_name: str, config_json: 
     cfg = json.loads(config_json)
     result = dedupe_df(df, **cfg)
     if result.golden is not None:
-        return result.golden.write_json()
+        return _frame_to_json(result.golden)
     return json.dumps(result.stats)
 
 
@@ -316,7 +330,7 @@ def _match_tables(
     cfg = json.loads(config_json)
     result = match_df(target, ref_df, **cfg)
     if result.matched is not None:
-        return result.matched.write_json()
+        return _frame_to_json(result.matched)
     return "[]"
 
 
@@ -366,7 +380,7 @@ def _gm_run(con: duckdb.DuckDBPyConnection, job_name: str, table_name: str) -> s
 
     # Store golden records in memory
     if result.golden is not None:
-        job["golden"] = json.loads(result.golden.write_json())
+        job["golden"] = json.loads(_frame_to_json(result.golden))
     else:
         job["golden"] = []
 
@@ -463,7 +477,7 @@ def _dedupe_full_table(
     cfg = GoldenMatchConfig.model_validate_json(config_json)
     result = dedupe_df(df, config=cfg)
     if result.golden is not None:
-        return result.golden.write_json()
+        return _frame_to_json(result.golden)
     return json.dumps(result.stats)
 
 
