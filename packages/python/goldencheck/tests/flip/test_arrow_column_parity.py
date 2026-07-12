@@ -16,10 +16,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-import polars as pl
-import pyarrow.parquet as pq
 import pytest
-from goldencheck.core.frame import ArrowColumn, PolarsColumn
+
+# The parity oracle is PolarsColumn, and the corpus generator (scripts/flip_corpus.py,
+# run via subprocess) needs numpy + pyarrow. Skip cleanly rather than error in a
+# minimal-deps CI job where any of these is absent (e.g. numpy is not a base dep).
+pl = pytest.importorskip("polars")
+pytest.importorskip("numpy")  # corpus generator dependency
+pq = pytest.importorskip("pyarrow.parquet")
+from goldencheck.core.frame import ArrowColumn, PolarsColumn  # noqa: E402
 
 CORPUS = Path(__file__).parent / "corpus"
 NUMERIC = {"int", "uint", "float"}
