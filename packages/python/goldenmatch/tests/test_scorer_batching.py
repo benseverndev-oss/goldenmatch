@@ -169,3 +169,32 @@ def test_columnar_batched_equals_per_block(monkeypatch):
 
     assert _norm(got) == _norm(ref)
     assert got.height, "sanity: the smith/jones/lee blocks should yield some pairs"
+
+
+def test_columnar_batched_equals_per_block_solo_path(monkeypatch):
+    """Force multi-row blocks through the SOLO branch and confirm columnar
+    byte-identity holds there too (mirrors the list-path solo test)."""
+    from goldenmatch.core import scorer
+    from goldenmatch.core.scorer import _score_one_block_columnar, _concat_pair_frames
+    df = _mixed_person_frame()
+    blocks, mk = _blocks_and_mk(df)
+
+    ref_frames = [
+        _score_one_block_columnar(b, mk, set(), across_files_only=False,
+                                  source_lookup=None)
+        for b in blocks
+    ]
+    ref_frames = [f for f in ref_frames if f is not None and not f.is_empty()]
+    ref = _concat_pair_frames(ref_frames) if ref_frames else None
+
+    monkeypatch.setattr(scorer, "_SOLO_BLOCK_MIN_PAIRS", 1)
+    got = scorer.score_blocks_columnar(list(blocks), mk, set(), max_workers=4)
+
+    def _norm(dfp):
+        if dfp is None or dfp.height == 0:
+            return []
+        rows = dfp.select(["id_a", "id_b", "score"]).iter_rows()
+        return sorted((min(x, y), max(x, y), round(float(sc), 6)) for x, y, sc in rows)
+
+    assert _norm(got) == _norm(ref)
+    assert got.height, "sanity: grouped blocks should yield pairs on the solo path too"

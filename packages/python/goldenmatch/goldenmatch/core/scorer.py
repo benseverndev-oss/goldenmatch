@@ -1963,7 +1963,7 @@ def _score_block_batch_columnar(
             across_files_only=across_files_only,
             source_lookup=source_lookup,
         )
-        if dfp is not None and not dfp.is_empty():
+        if not dfp.is_empty():
             frames.append(dfp)
     if not frames:
         return _empty_pair_stream_df()
@@ -2050,7 +2050,6 @@ def score_blocks_columnar(
     # path, so threads give real parallelism.
     frozen_exclude = frozenset(matched_pairs)
     frames = []
-    total_blocks = len(blocks)
     batches = _plan_block_batches(blocks, max_workers)
     total_batches = len(batches)
     log_interval = max(total_batches // 10, 1)
