@@ -359,3 +359,36 @@ def test_ensure_row_ids_reuses_existing_and_offsets(backend):
     f = _mk({"__row_id__": [5, 9], "v": ["a", "b"]}, backend)
     assert f.ensure_row_ids().column("__row_id__").to_list() == [5, 9]
     assert f.ensure_row_ids(offset=100).column("__row_id__").to_list() == [105, 109]
+
+
+# -- auto_fix (W5b-3b) --------------------------------------------------------------
+
+
+def test_auto_fix_cross_backend_parity():
+    """The seven fixes produce identical values + fix reports on both
+    backends (probed: the \s{2,} collapse uses the W2a explicit class on
+    arrow -- RE2 ASCII \s misses NBSP/em-space)."""
+    from goldenmatch.core.frame import ArrowFrame, PolarsFrame
+
+    df = pl.DataFrame(
+        {
+            "name": ["﻿alice", "  bob  ", "NULL", "a  b", "x\x01y", None],
+            "age": [1, 2, 3, 4, 5, None],
+            "dead": pl.Series([None] * 6, dtype=pl.Utf8),
+        }
+    )
+    pf, pfixes = PolarsFrame(df).auto_fix()
+    af, afixes = ArrowFrame(df.to_arrow()).auto_fix()
+    assert pfixes == afixes
+    assert pf.native.columns == list(af.native.column_names)
+    for c in pf.native.columns:
+        assert pf.native[c].to_list() == af.native.column(c).to_pylist(), c
+
+
+def test_auto_fix_drops_empty_rows_and_null_cols_both_backends():
+    from goldenmatch.core.frame import ArrowFrame, PolarsFrame
+
+    df = pl.DataFrame({"a": ["x", " ", None], "b": [1, None, None]})
+    pf, _ = PolarsFrame(df).auto_fix()
+    af, _ = ArrowFrame(df.to_arrow()).auto_fix()
+    assert pf.native.height == af.native.num_rows == 1
