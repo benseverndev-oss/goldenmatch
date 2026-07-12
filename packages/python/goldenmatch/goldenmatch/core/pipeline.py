@@ -854,8 +854,20 @@ def run_dedupe(
         # decline the eager path when either is configured; the polars stages
         # then run as before). _run_dedupe_pipeline skips whatever is listed
         # in _eager_stages_done -- re-running standardize is NOT idempotent.
+        # The prep block sits BETWEEN ingest and the standardize stage and
+        # can MUTATE data (goldencheck quality + goldenflow transform are
+        # DEFAULT-ON: they run unless mode == "disabled"; transform E.164s
+        # phones, which is how the ordering bug surfaced). The eager path is
+        # only sound when the pipeline's own prep gates all evaluate False --
+        # mirrored VERBATIM from _run_dedupe_pipeline's stage conditions.
+        _prep_will_run = (
+            (config.quality is None or config.quality.mode != "disabled")
+            or (config.transform is None or config.transform.mode != "disabled")
+            or bool(config.validation and config.validation.auto_fix)
+        )
         _eager_ok = (
-            config.semantic_blocking is None
+            not _prep_will_run
+            and config.semantic_blocking is None
             and not (config.domain and config.domain.enabled)
         )
         if _eager_ok:
