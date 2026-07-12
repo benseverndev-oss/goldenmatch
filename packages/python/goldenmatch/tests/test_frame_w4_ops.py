@@ -419,3 +419,41 @@ def test_derive_transformed_column_matches_python_oracle(backend, chain):
     f = _mk({"name": vals}, backend)
     legacy = [apply_transforms(v, chain) if v is not None else None for v in vals]
     assert f.derive_transformed_column("name", chain).to_list() == legacy
+
+
+# -- D5d pins ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_run_lengths_on_sorted_input(backend):
+    # score_buckets' block sizes: adjacent-run sizes of a KEY-SORTED column.
+    # PRECONDITION is sorted input -- polars groups by VALUE (split runs
+    # merge) while arrow run_end_encode is adjacency-based; they agree only
+    # when the key is sorted (probed 2026-07-12), which is the sole call
+    # shape (workers sort by __block_key__ first).
+    f = _mk({"k": [None, None, "a", "a", "a", "b", "c", "c"], "v": list(range(8))}, backend)
+    assert f.run_lengths("k") == [2, 3, 1, 2]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_run_lengths_empty_and_single(backend):
+    assert _mk({"k": []}, backend).run_lengths("k") == []
+    assert _mk({"k": ["x"]}, backend).run_lengths("k") == [1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_run_lengths_matches_worker_sort_then_sizes(backend):
+    # End-to-end worker shape: seam sort then run_lengths == the legacy
+    # group_by(maintain_order=True).agg(len) on the sorted frame.
+    df = pl.DataFrame({"__block_key__": ["b", "a", None, "b", "a", "c"], "v": [1, 2, 3, 4, 5, 6]})
+    f = _mk({"__block_key__": df["__block_key__"].to_list(), "v": df["v"].to_list()}, backend)
+    sf = f.sort(["__block_key__"])
+    legacy = (
+        df.sort("__block_key__")
+        .lazy()
+        .group_by("__block_key__", maintain_order=True)
+        .agg(pl.len().alias("__size__"))
+        .collect()["__size__"]
+        .to_list()
+    )
+    assert sf.run_lengths("__block_key__") == legacy
