@@ -40,7 +40,6 @@ from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage
-from goldenmatch.core.blocker import _build_block_key_expr
 
 logger = logging.getLogger(__name__)
 
