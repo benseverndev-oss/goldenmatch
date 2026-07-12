@@ -104,6 +104,34 @@ _CAST_KIND = {"float": "Float64", "int": "Int64", "str": "String"}   # strings o
 _INT_LITERAL_RE = r"^[+-]?\d+$"
 _FLOAT_LITERAL_RE = r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$"
 
+# The 7 fixed patterns every string column is scanned for by format_detection
+# (email/phone/url) and encoding_detection (non-ascii/zero-width/smart-quotes/
+# control). These MUST be byte-identical to the constants in those profilers so
+# `pattern in _SCAN_STRING_PATTERNS` matches at the seam. When native is enabled,
+# the FIRST `str_match_count` of any of these on a string column computes the
+# fused digest (null_count + n_unique + all 7 match counts) in ONE Rust pass and
+# caches it on the ArrowColumn; every subsequent known-pattern match count (and,
+# opportunistically, n_unique/null_count) reads the cache. Order is load-bearing:
+# the digest returns match_counts aligned to this tuple.
+#
+# The zero-width and smart-quote patterns are the raw-string ``\uXXXX`` escape
+# forms (literal backslashes) that ``encoding_detection`` passes -- pyarrow RE2
+# can't compile them, so they already route to the regex crate, and the digest
+# uses the same engine. They're built from code points (not typed as literal
+# ``\uXXXX`` or as the raw Unicode characters) so a source formatter can't
+# silently un-escape them and break the byte-exact ``pattern in ...`` seam match.
+_ZERO_WIDTH_PATTERN = "[" + "".join(f"\\u{c:04X}" for c in (0x200B, 0x200C, 0x200D, 0xFEFF)) + "]"
+_SMART_QUOTES_PATTERN = "[" + "".join(f"\\u{c:04X}" for c in (0x2018, 0x2019, 0x201C, 0x201D)) + "]"
+_SCAN_STRING_PATTERNS: tuple[str, ...] = (
+    r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",  # email (format_detection)
+    r"^\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$",             # phone (format_detection)
+    r"^https?://",                                         # url (format_detection)
+    r"[^\x00-\x7F]",                                       # non-ascii (encoding_detection)
+    _ZERO_WIDTH_PATTERN,                                   # zero-width (encoding_detection)
+    _SMART_QUOTES_PATTERN,                                 # smart quotes (encoding_detection)
+    r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]",                   # control chars (encoding_detection)
+)
+
 
 class NativeRequiredError(RuntimeError):
     """A covered hard op needs the native regex kernel. Install it with
@@ -444,7 +472,7 @@ class ArrowColumn:
     ``max()`` on a date column returns a ``datetime.date`` (freshness needs it).
     """
 
-    __slots__ = ("_arr", "_cat", "_num_stats", "_n_unique", "_dropna")
+    __slots__ = ("_arr", "_cat", "_num_stats", "_n_unique", "_dropna", "_str_digest")
 
     def __init__(self, arr: Any) -> None:
         pa, _ = _arrow()
@@ -455,6 +483,10 @@ class ArrowColumn:
         self._num_stats: Any = None   # None=unset, False=empty/all-null, tuple=cached
         self._n_unique: int | None = None      # memoized across profilers (see ArrowFrame cache)
         self._dropna: ArrowColumn | None = None
+        # Fused string digest (null_count, n_unique, match_counts) for the 7 fixed
+        # scan patterns. None=unset; computed once by the first known-pattern
+        # str_match_count and read by later known-pattern counts + n_unique/null_count.
+        self._str_digest: tuple[int, int, list[int]] | None = None
 
     # -- numeric stats (cached single kernel call) ----------------------------
     def _numeric_stats(self):
@@ -514,15 +546,26 @@ class ArrowColumn:
         return len(self._arr)
 
     def null_count(self) -> int:
+        # Opportunistically read the fused string digest if it's already been
+        # computed (do NOT force it just for null_count). pyarrow's null_count is
+        # already cheap, so this only shortcuts when the digest happens to exist.
+        if self._str_digest is not None:
+            return self._str_digest[0]
         return self._arr.null_count
 
     def n_unique(self) -> int:
         # Memoized: cardinality + uniqueness + the scan-loop ColumnProfile each ask
         # for this on the SAME cached column (ArrowFrame reuses instances), so
         # count_distinct runs once per column instead of ~3x. nulls = 1 distinct.
+        # If the fused string digest is already computed, reuse its n_unique (same
+        # count_distinct(mode="all") semantics) instead of a separate scan -- but
+        # never force the digest just for this.
         if self._n_unique is None:
-            _, pc = _arrow()
-            self._n_unique = int(pc.count_distinct(self._arr, mode="all").as_py())
+            if self._str_digest is not None:
+                self._n_unique = self._str_digest[1]
+            else:
+                _, pc = _arrow()
+                self._n_unique = int(pc.count_distinct(self._arr, mode="all").as_py())
         return self._n_unique
 
     def drop_nulls(self) -> ArrowColumn:
@@ -598,7 +641,33 @@ class ArrowColumn:
         r = pc.sum(pc.is_in(self._arr, value_set=pa.array(values))).as_py()
         return int(r or 0)
 
+    def _is_string(self) -> bool:
+        return self._cat == "str"
+
+    def _compute_str_digest(self) -> tuple[int, int, list[int]]:
+        """Run the fused string kernel ONCE (null_count, n_unique, and the match
+        count for all 7 fixed scan patterns in a single pass) and cache it. Only
+        called when the column is a string type and native ``string_digest`` is
+        enabled. Reused by every subsequent known-pattern ``str_match_count`` and
+        opportunistically by ``n_unique``/``null_count``."""
+        if self._str_digest is None:
+            null_count, n_unique, match_counts = native_module().string_column_digest(
+                self._arr, list(_SCAN_STRING_PATTERNS)
+            )
+            self._str_digest = (null_count, n_unique, list(match_counts))
+        return self._str_digest
+
     def str_match_count(self, pattern: str) -> int:
+        # Fused digest fast path: the first known-pattern match count on a string
+        # column computes null_count + n_unique + all 7 fixed-pattern match counts
+        # in ONE Rust pass (collapsing the ~10 separate scans a string column
+        # otherwise makes); every later known-pattern count reads the cache. The
+        # kernel is byte-identical to the per-pattern path (finding-set differential
+        # Jaccard 1.000). Unknown patterns / non-string cols / native-off fall
+        # through to the vectorized pyarrow path unchanged.
+        if self._is_string() and native_enabled("string_digest") and pattern in _SCAN_STRING_PATTERNS:
+            _, _, match_counts = self._compute_str_digest()
+            return match_counts[_SCAN_STRING_PATTERNS.index(pattern)]
         # Prefer the VECTORIZED pyarrow path (pc.match_substring_regex + pc.sum, C++,
         # no Python-list materialization). The native kernel is list-based, so routing
         # through it forces `self._arr.to_pylist()` on the whole column -- at 1M rows
