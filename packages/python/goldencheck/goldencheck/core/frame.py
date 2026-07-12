@@ -450,15 +450,44 @@ class ArrowColumn:
     # -- numeric stats (cached single kernel call) ----------------------------
     def _numeric_stats(self):
         """Cached ``(count_nonnull, min, max, mean, std, sum)`` for numeric
-        columns, or ``None`` when empty/all-null (guarded before the kernel)."""
+        columns, or ``None`` when empty/all-null (guarded before the kernel).
+
+        Native ``column_numeric_stats`` is the fast path; when the kernel is
+        absent/disabled (``native_enabled("numeric_stats")`` False) a
+        ``pyarrow.compute`` fallback computes the identical tuple within the
+        already-accepted stat epsilon (``std`` uses ddof=1 to match
+        Polars/kernel). Restores the accelerator-not-requirement contract."""
         if self._num_stats is not None:
             return None if self._num_stats is False else self._num_stats
         arr = self._arr
         if len(arr) == 0 or arr.null_count == len(arr):
             self._num_stats = False
             return None
-        self._num_stats = native_module().column_numeric_stats(arr)
+        if native_enabled("numeric_stats"):
+            self._num_stats = native_module().column_numeric_stats(arr)
+        else:
+            self._num_stats = self._numeric_stats_pyarrow(arr)
         return self._num_stats
+
+    @staticmethod
+    def _numeric_stats_pyarrow(arr):
+        """``pyarrow.compute`` mirror of ``column_numeric_stats``: returns
+        ``(count_nonnull, min, max, mean, std, sum)``. ``std`` is ddof=1 (Polars
+        parity) and is ``None`` when <2 non-null values (as the native kernel's
+        std-guard is applied downstream in ``std()``)."""
+        _, pc = _arrow()
+        count_nonnull = len(arr) - arr.null_count
+        mm = pc.min_max(arr, skip_nulls=True)
+        vmin = mm["min"].as_py()
+        vmax = mm["max"].as_py()
+        mean = pc.mean(arr, skip_nulls=True).as_py()
+        total = pc.sum(arr, skip_nulls=True).as_py()
+        if count_nonnull >= 2:
+            std_scalar = pc.stddev(arr, ddof=1, skip_nulls=True)
+            std = std_scalar.as_py() if std_scalar.is_valid else None
+        else:
+            std = None
+        return (count_nonnull, vmin, vmax, mean, std, total)
 
     def _is_numeric(self) -> bool:
         return self._cat in ("int", "uint", "float")
@@ -556,14 +585,25 @@ class ArrowColumn:
         return int(r or 0)
 
     def str_match_count(self, pattern: str) -> int:
-        return _regex_kernel().str_contains_count(self._arr.to_pylist(), pattern)
+        if native_enabled("regex"):
+            return _regex_kernel().str_contains_count(self._arr.to_pylist(), pattern)
+        _, pc = _arrow()
+        mask = pc.match_substring_regex(self._arr, pattern)   # null preserved on null input
+        return int(pc.sum(mask, skip_nulls=True).as_py() or 0)
 
     def str_filter(self, pattern: str, *, matching: bool) -> ArrowColumn:
-        pa, _ = _arrow()
-        vals = self._arr.to_pylist()
-        mask = _regex_kernel().str_filter_mask(vals, pattern)   # list[bool | None]
-        kept = [v for v, m in zip(vals, mask) if m is not None and m == matching]
-        return ArrowColumn(pa.array(kept, type=pa.string()))
+        pa, pc = _arrow()
+        if native_enabled("regex"):
+            vals = self._arr.to_pylist()
+            mask = _regex_kernel().str_filter_mask(vals, pattern)   # list[bool | None]
+            kept = [v for v, m in zip(vals, mask) if m is not None and m == matching]
+            return ArrowColumn(pa.array(kept, type=pa.string()))
+        # pyarrow fallback: match_substring_regex -> bool mask (null on null input);
+        # ~mask is null-preserving so nulls drop from BOTH matching/non-matching
+        # (Polars' filter drops null-mask rows), matching PyColumn's `m is not None`.
+        mask = pc.match_substring_regex(self._arr, pattern)
+        sel = mask if matching else pc.invert(mask)
+        return ArrowColumn(pc.filter(self._arr, sel, null_selection_behavior="drop"))
 
     def min(self) -> Any:
         if self._is_numeric():
@@ -649,9 +689,15 @@ class ArrowColumn:
         return ArrowColumn(self._arr.slice(offset, length))
 
     def str_replace_all(self, pattern: str, value: str) -> ArrowColumn:
-        pa, _ = _arrow()
-        out = _regex_kernel().str_replace_all(self._arr.to_pylist(), pattern, value)
-        return ArrowColumn(pa.array(out, type=pa.string()))
+        pa, pc = _arrow()
+        if native_enabled("regex"):
+            out = _regex_kernel().str_replace_all(self._arr.to_pylist(), pattern, value)
+            return ArrowColumn(pa.array(out, type=pa.string()))
+        # pyarrow fallback: replace_substring_regex preserves nulls, matching
+        # Polars' str.replace_all. Cast to string() so the result column dtype
+        # matches the native path (input may be large_string).
+        out = pc.replace_substring_regex(self._arr, pattern, value)
+        return ArrowColumn(pc.cast(out, pa.string()))
 
     def str_len_chars(self) -> ArrowColumn:
         # pc.utf8_length -> per-value character count (nulls preserved), matching
@@ -702,12 +748,17 @@ class ArrowColumn:
         return int(round(s[5])) if self._cat in ("int", "uint") else s[5]
 
     def str_to_date(self, fmt: str, *, strict: bool) -> ArrowColumn:
-        pa, _ = _arrow()
+        pa, pc = _arrow()
         if strict:
             raise NotImplementedError("goldencheck str_to_date supports strict=False only")
-        iso = _date_kernel().str_to_date(self._arr.to_pylist(), fmt)
-        vals = [date.fromisoformat(s) if s is not None else None for s in iso]
-        return ArrowColumn(pa.array(vals, type=pa.date32()))
+        if native_enabled("str_to_date"):
+            iso = _date_kernel().str_to_date(self._arr.to_pylist(), fmt)
+            vals = [date.fromisoformat(s) if s is not None else None for s in iso]
+            return ArrowColumn(pa.array(vals, type=pa.date32()))
+        # pyarrow fallback: strptime with error_is_null (== Polars strict=False:
+        # unparseable -> null) then narrow the timestamp to date32.
+        ts = pc.strptime(self._arr, format=fmt, unit="s", error_is_null=True)
+        return ArrowColumn(pc.cast(ts, pa.date32()))
 
 
 class ArrowFrame:

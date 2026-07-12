@@ -69,7 +69,9 @@ def _age_mismatch(actual, dob_date32, ref_epoch_days):
     import pyarrow as pa
     import pyarrow.compute as pc
 
-    dob_days = pc.cast(dob_date32, pa.float64())  # days since epoch (float for div)
+    # date32 -> float64 isn't a supported direct cast; go via int32 (which IS the
+    # days-since-epoch representation) then widen to float for the division.
+    dob_days = pc.cast(pc.cast(dob_date32, pa.int32()), pa.float64())  # days since epoch
     expected = pc.divide(pc.subtract(float(ref_epoch_days), dob_days), 365.25)
     diff = pc.abs(pc.subtract(actual, expected))
     mism = pc.and_(pc.greater(diff, 2.0), pc.and_(pc.is_valid(actual), pc.is_valid(dob_date32)))
