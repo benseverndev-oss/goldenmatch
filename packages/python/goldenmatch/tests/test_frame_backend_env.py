@@ -23,8 +23,15 @@ from goldenmatch.core.ingest import load_file
 # --------------------------------------------------------------------------
 
 
-def test_resolve_frame_backend_default_is_polars(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_frame_backend_default_is_arrow(monkeypatch: pytest.MonkeyPatch) -> None:
+    # v3.0.0: arrow is the default (measured 36% faster at 100K); polars is
+    # the opt-out until the W5e deletion train removes it.
     monkeypatch.delenv("GOLDENMATCH_FRAME", raising=False)
+    assert resolve_frame_backend() == "arrow"
+
+
+def test_resolve_frame_backend_polars_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "polars")
     assert resolve_frame_backend() == "polars"
 
 
