@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover
     auto_configure_df = None  # type: ignore[assignment]
 
 from goldenmatch.core.autoconfig_verify import PostflightReport
+from goldenmatch.core.diagnostics import guard_entrypoint
 
 if TYPE_CHECKING:
     from goldenmatch.core._native_loader import NativeDispatchSummary
@@ -75,8 +76,14 @@ def _run_config_lint(df: Any, config: Any) -> list:
     try:
         from goldenmatch.core import config_lint as cl
         findings = cl.lint(config, cl.build_lint_input(df, config))
-    except Exception:  # noqa: BLE001 - linting must never break a run
+    except Exception as _lint_exc:  # noqa: BLE001 - linting must never break a run
         logger.debug("config-lint skipped (build/run error)", exc_info=True)
+        # The linter itself crashing is an anomaly (not the user's config being
+        # bad -- that surfaces as findings, below). Prompt an issue, but never
+        # let diagnostics break the run.
+        from goldenmatch.core.diagnostics import report_unexpected
+        report_unexpected(_lint_exc, category="config-lint",
+                          summary="the config linter crashed (linting was skipped)")
         return []
     for f in findings:
         logger.warning(
@@ -450,6 +457,7 @@ def dedupe(
     )
 
 
+@guard_entrypoint("dedupe", "dedupe_df raised an unexpected error")
 def dedupe_df(
     df: pl.DataFrame,
     *,
@@ -754,6 +762,7 @@ def dedupe_df(
     return dedupe_result
 
 
+@guard_entrypoint("match", "match_df raised an unexpected error")
 def match_df(
     target: pl.DataFrame,
     reference: pl.DataFrame,

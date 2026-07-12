@@ -1,0 +1,22 @@
+[project]
+name = "golden-diagnostics"
+version = "0.1.0"
+description = "Anomaly diagnostics + prefilled GitHub issue prompts for the Golden Suite"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/benseverndev-oss/goldenmatch"
+Repository = "https://github.com/benseverndev-oss/goldenmatch"
+Documentation = "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/golden-diagnostics#readme"
+Issues = "https://github.com/benseverndev-oss/goldenmatch/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["golden_diagnostics"]

@@ -40,6 +40,13 @@ dependencies = [
     "psutil>=5.9",
     "duckdb>=0.9",
     "pyarrow>=10",
+    # Shared anomaly diagnostics -- turns a wheel-skew slow path / unexpected
+    # crash / broken optional-dep install into an actionable prefilled GitHub
+    # issue. Sends nothing anywhere; the import is guarded so it is never
+    # load-bearing. NOTE (golden-suite lockstep): golden-diagnostics must be on
+    # PyPI before goldenmatch's next release, or the published wheel's
+    # Requires-Dist is unsatisfiable -- publish it first, like the other members.
+    "golden-diagnostics>=0.1.0",
     # Optional native acceleration runtime, shipped as a marker-guarded default
     # dependency so `pip install goldenmatch` auto-installs the abi3 kernel on the
     # platforms where prebuilt wheels exist. Kept ALSO as the `[native]` extra
