@@ -320,7 +320,7 @@ def apply_learned_blocks(
     seen: set[frozenset[int]] = set()
     deduped: list = []
     for block in all_blocks:
-        block_df = block.df.collect()
+        block_df = block.materialize().native
         members = frozenset(block_df["__row_id__"].to_list())
         if members not in seen:
             seen.add(members)
