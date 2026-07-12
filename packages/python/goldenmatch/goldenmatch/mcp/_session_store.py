@@ -27,41 +27,42 @@ class SessionStore:
         ttl_seconds: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._max = max_sessions if max_sessions is not None else _env_int(
+        _max = max_sessions if max_sessions is not None else _env_int(
             "GOLDENMATCH_MCP_SESSION_MAX", 64)
+        self._max = max(1, _max)  # a 0/negative cap would make the store a no-op
         self._ttl = ttl_seconds if ttl_seconds is not None else _env_int(
             "GOLDENMATCH_MCP_SESSION_TTL", 3600)
         self._clock = clock
         self._lock = threading.Lock()
-        self._d: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
+        self._entries: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
 
     def put(self, session_id: str, session: Any) -> None:
         with self._lock:
             now = self._clock()
-            self._d[session_id] = (session, now)
-            self._d.move_to_end(session_id)
+            self._entries[session_id] = (session, now)
+            self._entries.move_to_end(session_id)
             self._evict(now)
 
     def get(self, session_id: str) -> Any | None:
         with self._lock:
             now = self._clock()
-            entry = self._d.get(session_id)
+            entry = self._entries.get(session_id)
             if entry is None:
                 return None
             session, touched = entry
             if now - touched > self._ttl:
-                del self._d[session_id]
+                del self._entries[session_id]
                 return None
-            self._d.move_to_end(session_id)  # LRU touch; TTL clock is put()-anchored
+            self._entries.move_to_end(session_id)  # LRU touch; TTL clock is put()-anchored
             return session
 
     def _evict(self, now: float) -> None:
         # drop expired first
-        for k in [k for k, (_, t) in self._d.items() if now - t > self._ttl]:
-            del self._d[k]
+        for k in [k for k, (_, t) in self._entries.items() if now - t > self._ttl]:
+            del self._entries[k]
         # then LRU until within cap
-        while len(self._d) > self._max:
-            self._d.popitem(last=False)
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
 
 
 _STORE = SessionStore()
