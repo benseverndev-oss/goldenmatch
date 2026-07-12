@@ -1,0 +1,68 @@
+---
+title: "Migrating to v3"
+description: "GoldenMatch 3.0.0: Arrow-native results and the Arrow frame backend by default"
+---
+
+GoldenMatch 3.0.0 completes the public half of the Polars-eviction program:
+results are Arrow-native, and the Arrow frame backend is the default engine
+lane. Inputs are unchanged.
+
+## The one breaking change: result frames are `pyarrow.Table`
+
+`DedupeResult.golden`, `.dupes`, `.unique` and `MatchResult.matched`,
+`.unmatched` now return `pyarrow.Table` (they were `polars.DataFrame`).
+
+If you consumed those frames with Polars, migration is one line:
+
+```python
+import polars as pl
+
+result = gm.dedupe_df(df)
+golden = pl.from_arrow(result.golden)   # zero-copy back to a Polars frame
+```
+
+Common direct translations if you'd rather stay on Arrow:
+
+| v2 (`pl.DataFrame`)         | v3 (`pa.Table`)                     |
+| --------------------------- | ----------------------------------- |
+| `frame.height`              | `table.num_rows`                    |
+| `frame.columns`             | `table.column_names`                |
+| `frame.to_dicts()`          | `table.to_pylist()`                 |
+| `frame["col"].to_list()`    | `table["col"].to_pylist()`          |
+| `frame.write_csv(path)`     | `result.to_csv(path)` (works on both) |
+
+Everything else on the result objects is unchanged: `result.clusters`,
+`result.stats`, `result.scored_pairs`, `to_csv`, the notebook display, and
+`__repr__` all behave as before.
+
+## Inputs are NOT affected
+
+`dedupe_df` / `match_df` accept Polars, pandas, and Arrow inputs exactly as in
+v2 (Arrow C stream polymorphism). Your ingestion code does not change.
+
+## The Arrow backend is now the default
+
+`GOLDENMATCH_FRAME` defaults to `arrow` — the measured-faster lane (~36%
+faster end-to-end on the 100K zero-config A/B benchmark). Behavior is
+output-equivalent to the Polars lane, enforced by a differential harness with
+frozen fixtures.
+
+If you need the old lane while validating the upgrade:
+
+```bash
+export GOLDENMATCH_FRAME=polars   # opt-out escape hatch
+```
+
+The `polars` backend (and the `polars` runtime dependency) will be removed in
+a 3.x minor once the remaining engine internals complete their Arrow descent —
+pin `GOLDENMATCH_FRAME=polars` only as a transition aid, not a long-term
+configuration.
+
+## Notes for specific surfaces
+
+- **MCP / A2A**: tool responses were already JSON — no change.
+- **dbt (`dbt-goldensuite`)**: unaffected in 3.0.0 (it consumes the internal
+  pipeline result, still Polars-backed until the engine descent completes).
+- **One behavioral nuance**: sampling-based auto-config decisions are
+  deterministic per backend but may legitimately differ between the `arrow`
+  and `polars` lanes (documented statistical contract of `Frame.sample`).

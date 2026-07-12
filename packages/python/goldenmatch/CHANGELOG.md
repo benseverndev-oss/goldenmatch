@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [3.0.0] - 2026-07-12
 
+<!-- README-callout
+**v3.0.0 — Arrow-native results.** Result frames are now `pyarrow.Table`
+(migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
+Arrow frame backend is the default — measured ~36% faster end-to-end on the
+100K zero-config benchmark — with `GOLDENMATCH_FRAME=polars` as the opt-out.
+-->
+
 ### Changed
 - **BREAKING: result frames are now `pyarrow.Table`.** `DedupeResult.golden` /
   `.dupes` / `.unique` and `MatchResult.matched` / `.unmatched` return

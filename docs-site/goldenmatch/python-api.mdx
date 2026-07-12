@@ -83,7 +83,7 @@ Match a target file against a reference file.
 
 ```python
 result = gm.match("new.csv", "master.csv", fuzzy={"name": 0.85})
-result.matched.write_csv("matches.csv")
+result.to_csv("matches.csv")  # v3: result frames are pa.Table; to_csv works on both
 ```
 
 ### match_df
