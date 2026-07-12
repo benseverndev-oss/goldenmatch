@@ -186,7 +186,7 @@ pub fn canon_f64_bits(x: f64) -> u64 {
 
 #[inline]
 fn is_null(validity: &[u8], i: usize) -> bool {
-    validity.get(i).map_or(false, |&b| b == 0)
+    validity.get(i).is_some_and(|&b| b == 0)
 }
 
 /// Intern an f64 column (canonicalizing NaN / signed-zero) to dense u64 ids.
