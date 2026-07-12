@@ -122,3 +122,43 @@ def test_resolver_caches_augmented_frame(tmp_path, monkeypatch):
         assert rs3.data is not rs1.data
     finally:
         ctx.reset_current_session_id(tok)
+
+
+def test_eight_tools_work_via_session(tmp_path, monkeypatch):
+    """Aggregator path (globals None): after agent_deduplicate under a session id,
+    the stateful tools return real data (no AttributeError/ColumnNotFoundError)."""
+    from goldenmatch.mcp import _session_store as store
+    from goldenmatch.mcp import server as gm
+    for g in ("_result", "_config", "_engine"):
+        monkeypatch.setattr(gm, g, None)
+    monkeypatch.setattr(gm, "_rows", [])
+    monkeypatch.setattr(gm, "_id_to_idx", {})
+    monkeypatch.setattr(store, "_STORE", store.SessionStore(clock=lambda: 0.0))
+
+    tok = ctx.set_current_session_id("s-e2e")
+    try:
+        _dispatch("agent_deduplicate", {"file_path": _fixture(tmp_path)}, AgentSession)
+        assert "error" not in gm._tool_list_clusters(min_size=1, limit=100)
+        exp = tmp_path / "exp.csv"
+        r_exp = gm._tool_export_results(str(exp), "csv")
+        assert "error" not in r_exp and exp.exists()
+        r_md = gm._tool_match_record({"name": "John Smith", "email": "j@x.com"}, None, 5)
+        assert "error" not in r_md   # the __row_id__ augmentation guard
+        r_fd = gm._tool_find_duplicates({"name": "John Smith"}, 5)
+        assert "error" not in r_fd
+    finally:
+        ctx.reset_current_session_id(tok)
+
+
+def test_tools_clean_error_when_nothing_loaded(monkeypatch):
+    from goldenmatch.mcp import server as gm
+    for g in ("_result", "_config", "_engine"):
+        monkeypatch.setattr(gm, g, None)
+    monkeypatch.setattr(gm, "_rows", [])
+    monkeypatch.setattr(gm, "_id_to_idx", {})
+    tok = ctx.set_current_session_id("cold")
+    try:
+        res = gm._tool_list_clusters(min_size=1, limit=100)
+        assert "error" in res and "AttributeError" not in str(res)
+    finally:
+        ctx.reset_current_session_id(tok)

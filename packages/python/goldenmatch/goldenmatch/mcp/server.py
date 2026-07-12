@@ -1086,13 +1086,16 @@ def _tool_get_stats() -> dict:
 def _tool_find_duplicates(record: dict, top_k: int) -> dict:
     from goldenmatch.core.explainer import explain_pair
 
-    matchkeys = _config.get_matchkeys()
+    rs = _resolve_run_state()
+    if rs.config is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    matchkeys = rs.config.get_matchkeys()
     results = []
 
     for mk in matchkeys:
         if mk.type != "weighted":
             continue
-        for row in _rows:
+        for row in rs.rows:
             exp = explain_pair(record, row, mk.fields, mk.threshold or 0.80)
             if exp.is_match:
                 clean = {k: v for k, v in row.items() if not k.startswith("__")}
@@ -1109,7 +1112,10 @@ def _tool_find_duplicates(record: dict, top_k: int) -> dict:
 def _tool_explain_match(record_a: dict, record_b: dict) -> dict:
     from goldenmatch.core.explainer import explain_pair
 
-    matchkeys = _config.get_matchkeys()
+    rs = _resolve_run_state()
+    if rs.config is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    matchkeys = rs.config.get_matchkeys()
     fields = []
     threshold = 0.80
     for mk in matchkeys:
@@ -1142,8 +1148,11 @@ def _tool_explain_match(record_a: dict, record_b: dict) -> dict:
 
 
 def _tool_list_clusters(min_size: int, limit: int) -> dict:
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
     clusters = []
-    for cid, info in _result.clusters.items():
+    for cid, info in rs.result.clusters.items():
         if info["size"] >= min_size:
             clusters.append({
                 "cluster_id": cid,
@@ -1155,29 +1164,35 @@ def _tool_list_clusters(min_size: int, limit: int) -> dict:
 
 
 def _tool_get_cluster(cluster_id: int) -> dict:
-    info = _result.clusters.get(cluster_id)
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    info = rs.result.clusters.get(cluster_id)
     if not info:
         return {"error": f"Cluster {cluster_id} not found"}
 
     members = []
     for mid in info["members"]:
-        idx = _id_to_idx.get(mid)
+        idx = rs.id_to_idx.get(mid)
         if idx is not None:
-            clean = {k: v for k, v in _rows[idx].items() if not k.startswith("__")}
+            clean = {k: v for k, v in rs.rows[idx].items() if not k.startswith("__")}
             members.append(clean)
 
     return {"cluster_id": cluster_id, "size": info["size"], "members": members}
 
 
 def _tool_get_golden_record(cluster_id: int) -> dict:
-    if _result.golden is None:
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    if rs.result.golden is None:
         return {"error": "No golden records available"}
 
     import pyarrow.compute as pc
 
-    golden_rows = _result.golden.filter(
-        pc.equal(_result.golden.column("__cluster_id__"), cluster_id)
-    ) if "__cluster_id__" in _result.golden.column_names else None
+    golden_rows = rs.result.golden.filter(
+        pc.equal(rs.result.golden.column("__cluster_id__"), cluster_id)
+    ) if "__cluster_id__" in rs.result.golden.column_names else None
 
     if golden_rows is None or golden_rows.num_rows == 0:
         return {"error": f"No golden record for cluster {cluster_id}"}
@@ -1191,7 +1206,10 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
     """Match a single record against the dataset using match_one."""
     from goldenmatch.core.match_one import match_one
 
-    matchkeys = _config.get_matchkeys()
+    rs = _resolve_run_state()
+    if rs.config is None or rs.data is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    matchkeys = rs.config.get_matchkeys()
     all_matches = []
 
     for mk in matchkeys:
@@ -1203,11 +1221,11 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
         mk_copy = copy.deepcopy(mk)
         mk_copy.threshold = t
 
-        matches = match_one(record, _engine.data, mk_copy)
+        matches = match_one(record, rs.data, mk_copy)
         for row_id, score in matches:
-            idx = _id_to_idx.get(row_id)
+            idx = rs.id_to_idx.get(row_id)
             if idx is not None:
-                clean = {k: v for k, v in _rows[idx].items() if not k.startswith("__")}
+                clean = {k: v for k, v in rs.rows[idx].items() if not k.startswith("__")}
                 all_matches.append({
                     "row_id": row_id,
                     "score": round(score, 4),
@@ -1411,26 +1429,29 @@ def _safe_path_or_error(value: str) -> Path | dict:
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
     path = _safe_path_or_error(output_path)
     if isinstance(path, dict):
         return path
     if fmt == "json":
-        if _result.golden is not None:
-            golden_dicts = _result.golden.to_pylist()
+        if rs.result.golden is not None:
+            golden_dicts = rs.result.golden.to_pylist()
             clean = [{k: v for k, v in r.items() if not k.startswith("__")} for r in golden_dicts]
             path.write_text(json.dumps(clean, default=str, indent=2))
         else:
             path.write_text("[]")
     else:
-        if _result.golden is not None:
+        if rs.result.golden is not None:
             from pyarrow import csv as _pacsv
 
-            cols = [c for c in _result.golden.column_names if not c.startswith("__")]
-            _pacsv.write_csv(_result.golden.select(cols), str(path))
+            cols = [c for c in rs.result.golden.column_names if not c.startswith("__")]
+            _pacsv.write_csv(rs.result.golden.select(cols), str(path))
         else:
             path.write_text("")
 
-    return {"exported": str(path), "format": fmt, "records": _result.golden.num_rows if _result.golden is not None else 0}
+    return {"exported": str(path), "format": fmt, "records": rs.result.golden.num_rows if rs.result.golden is not None else 0}
 
 
 def _tool_list_domains() -> dict:
@@ -1636,13 +1657,14 @@ def _load_clusters_json(path: str) -> dict[int, dict]:
 
 def _tool_evaluate(ground_truth_path: str, col_a: str = "id_a", col_b: str = "id_b") -> dict:
     from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
-    if _result is None:
-        return {"error": "No dataset loaded"}
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
     validated = _safe_path_or_error(ground_truth_path)
     if isinstance(validated, dict):
         return validated
     gt = load_ground_truth_csv(str(validated), col_a, col_b)
-    return evaluate_clusters(_result.clusters, gt).summary()
+    return evaluate_clusters(rs.result.clusters, gt).summary()
 
 
 def _tool_analyze_blocking(
