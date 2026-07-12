@@ -427,16 +427,25 @@ def create_server() -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        handler = dispatch_by_name.get(name)
-        if handler is None:
-            payload: Any = {"error": f"unknown tool: {name}"}
-        else:
-            try:
-                payload = handler(name, arguments or {})
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("tool %s failed", name)
-                payload = {"error": f"{type(exc).__name__}: {exc}"}
-        return [TextContent(type="text", text=json.dumps(payload, default=str, indent=2))]
+        from goldenmatch.mcp._session_ctx import (
+            reset_current_session_id,
+            session_key_from_context,
+            set_current_session_id,
+        )
+        _tok = set_current_session_id(session_key_from_context(server))
+        try:
+            handler = dispatch_by_name.get(name)
+            if handler is None:
+                payload: Any = {"error": f"unknown tool: {name}"}
+            else:
+                try:
+                    payload = handler(name, arguments or {})
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("tool %s failed", name)
+                    payload = {"error": f"{type(exc).__name__}: {exc}"}
+            return [TextContent(type="text", text=json.dumps(payload, default=str, indent=2))]
+        finally:
+            reset_current_session_id(_tok)
 
     return server
 

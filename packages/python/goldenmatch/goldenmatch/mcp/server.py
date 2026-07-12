@@ -920,31 +920,40 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        name = _resolve_alias(name)
-        # Anonymous, opt-in usage event: the TOOL NAME only -- never `arguments`
-        # (which can carry user data). No-op unless GOLDENMATCH_ANALYTICS=1.
+        from goldenmatch.mcp._session_ctx import (
+            reset_current_session_id,
+            session_key_from_context,
+            set_current_session_id,
+        )
+        _tok = set_current_session_id(session_key_from_context(server))
         try:
-            from goldenmatch.core.analytics import capture
-            capture("mcp_tool_call", {"surface": "mcp", "tool": name})
-        except Exception:  # noqa: BLE001 - analytics is never load-bearing
-            pass
-        # Delegate agent-level tools to the agent handler
-        if name in _AGENT_TOOL_NAMES:
-            return handle_agent_tool(name, arguments)
-        if name in _MEMORY_TOOL_NAMES:
-            return handle_memory_tool(name, arguments)
-        if name in IDENTITY_TOOL_NAMES:
-            return await handle_identity_tool(name, arguments)
-        try:
-            if name in DOCUMENT_TOOL_NAMES:
-                result = handle_document_tool(name, arguments)
-            elif name in ROUTING_TOOL_NAMES:
-                result = handle_routing_tool(name, arguments)
-            else:
-                result = _handle_tool(name, arguments)
-            return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
-        except Exception as e:
-            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+            name = _resolve_alias(name)
+            # Anonymous, opt-in usage event: the TOOL NAME only -- never `arguments`
+            # (which can carry user data). No-op unless GOLDENMATCH_ANALYTICS=1.
+            try:
+                from goldenmatch.core.analytics import capture
+                capture("mcp_tool_call", {"surface": "mcp", "tool": name})
+            except Exception:  # noqa: BLE001 - analytics is never load-bearing
+                pass
+            # Delegate agent-level tools to the agent handler
+            if name in _AGENT_TOOL_NAMES:
+                return handle_agent_tool(name, arguments)
+            if name in _MEMORY_TOOL_NAMES:
+                return handle_memory_tool(name, arguments)
+            if name in IDENTITY_TOOL_NAMES:
+                return await handle_identity_tool(name, arguments)
+            try:
+                if name in DOCUMENT_TOOL_NAMES:
+                    result = handle_document_tool(name, arguments)
+                elif name in ROUTING_TOOL_NAMES:
+                    result = handle_routing_tool(name, arguments)
+                else:
+                    result = _handle_tool(name, arguments)
+                return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+        finally:
+            reset_current_session_id(_tok)
 
     return server
 
