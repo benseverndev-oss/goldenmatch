@@ -3909,3 +3909,51 @@ def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
             all_pairs.extend(pairs)
 
     return all_pairs
+
+
+def _frame_lane_eligible(
+    config: GoldenMatchConfig,
+    matchkeys: list[Any],
+    *,
+    writes_outputs: bool,
+) -> bool:
+    """D2s-d2 gate: may the engine keep ``collected_df`` as a seam Frame?
+
+    True only when NO consumer on the run needs the polars-bound classic
+    surface (the C-class list from the D2s-d audit). Any flagged feature
+    forces the classic ``pl.from_arrow`` lane -- correctness first; each
+    flag re-opens as its consumer ports. This predicate must stay in
+    lockstep with the decline list in the 3.x plan (D2s-d spec).
+
+    ``writes_outputs`` covers the file-output tail (write_output + lineage),
+    which reads ``collected_df`` through polars-bound builders.
+    """
+    if getattr(config, "_throughput_plan", None) is not None:
+        return False
+    if getattr(config, "_preflight_report", None) is not None:
+        return False
+    if config.memory and config.memory.enabled:
+        return False
+    if config.identity and config.identity.enabled:
+        return False
+    if config.blocking and getattr(config.blocking, "auto_suggest", False):
+        return False
+    if config.llm_boost:
+        return False
+    if config.llm_scorer and config.llm_scorer.enabled:
+        return False
+    gr = config.golden_rules
+    if gr is not None and (
+        getattr(gr, "adaptive", False) or getattr(gr, "quality_weighting", False)
+    ):
+        return False
+    for mk in matchkeys:
+        if mk.type == "probabilistic":
+            return False
+        if mk.type == "weighted" and getattr(mk, "rerank", None):
+            return False
+        if mk.type == "exact" and (getattr(mk, "negative_evidence", None) or []):
+            return False
+    if writes_outputs:
+        return False
+    return True

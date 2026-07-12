@@ -151,3 +151,77 @@ def test_precompute_frame_skips_record_embedding_and_missing_fields():
     ]
     out = precompute_matchkey_transforms_frame(ArrowFrame(df.to_arrow()), mks)
     assert list(out.columns) == ["__row_id__", "first"]
+
+
+# -- D2s-d2a: the Frame-lane eligibility predicate ----------------------------------
+
+
+def _base_cfg(**overrides):
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="k",
+                type="exact",
+                fields=[MatchkeyField(field="name")],
+            )
+        ],
+        **overrides,
+    )
+    return cfg
+
+
+def _eligible(cfg, writes_outputs=False):
+    from goldenmatch.core.pipeline import _frame_lane_eligible
+
+    return _frame_lane_eligible(cfg, cfg.get_matchkeys(), writes_outputs=writes_outputs)
+
+
+def test_frame_lane_eligible_baseline():
+    assert _eligible(_base_cfg()) is True
+
+
+def test_frame_lane_declines_writes_outputs():
+    assert _eligible(_base_cfg(), writes_outputs=True) is False
+
+
+def test_frame_lane_declines_throughput_plan():
+    cfg = _base_cfg()
+    object.__setattr__(cfg, "_throughput_plan", object())
+    assert _eligible(cfg) is False
+
+
+def test_frame_lane_declines_preflight():
+    cfg = _base_cfg()
+    object.__setattr__(cfg, "_preflight_report", {"x": 1})
+    assert _eligible(cfg) is False
+
+
+def test_frame_lane_declines_probabilistic_mk():
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="p",
+                type="probabilistic",
+                fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+                threshold=0.8,
+            )
+        ],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["name"])]),
+    )
+    assert _eligible(cfg) is False
+
+
+def test_frame_lane_declines_ne_on_exact():
+    from goldenmatch.config.schemas import NegativeEvidenceField
+
+    cfg = _base_cfg()
+    cfg.matchkeys[0].negative_evidence = [
+        NegativeEvidenceField(
+            field="name", scorer="jaro_winkler", threshold=0.9, penalty=0.5
+        )
+    ]
+    assert _eligible(cfg) is False
