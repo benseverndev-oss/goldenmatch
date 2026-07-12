@@ -645,7 +645,9 @@ def _record_embedding_score_matrix(
                     parts.append(f"{col}: {val}")
         concat_values.append(" | ".join(parts) if parts else "")
 
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_emb
+
+    row_ids = _tf_emb(block_df).column("__row_id__").to_list()
     cache_key = f"_rec_emb_{hash(tuple(columns))}_{hash(tuple(row_ids))}"
 
     embedder = get_embedder(model_name)
@@ -1098,11 +1100,11 @@ def find_fuzzy_matches(
                 results.append((pair_key[0], pair_key[1], score))
         return _emit_results(results)
 
-    n = block_df.height
+    from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+    n = _to_frame_d5(block_df).height
     if n < 2:
         return _emit_empty()
-
-    from goldenmatch.core.frame import to_frame as _to_frame_d5
 
     row_ids = _to_frame_d5(block_df).column("__row_id__").to_list()
 
@@ -1473,8 +1475,7 @@ def score_blocks_parallel(
         all_pairs = []
         total_candidates = 0
         for block in blocks:
-            block_df = block.materialize().native
-            n = block_df.height
+            n = block.n_rows()
             total_candidates += n * (n - 1) // 2
             pairs = _score_one_block(
                 block, mk, matched_pairs,
@@ -1843,7 +1844,9 @@ def _score_one_block_columnar(
     block_df = block.materialize().native
 
     if across_files_only and source_lookup:
-        sources_in_block = block_df["__source__"].unique().to_list()
+        from goldenmatch.core.frame import to_frame as _tf_ps
+
+        sources_in_block = _tf_ps(block_df).column("__source__").unique().to_list()
         if len(sources_in_block) < 2:
             return _empty_pair_stream_df()
 

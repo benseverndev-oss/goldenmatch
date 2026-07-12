@@ -895,6 +895,29 @@ def run_dedupe(
                     )
                 done.add("compute_matchkeys")
             _eager_done = frozenset(done)
+            # D2s-d2b Frame lane: when no C-class consumer is flagged, skip
+            # the polars shim entirely -- the engine receives the ArrowFrame
+            # and keeps the spine arrow through collect (predicate =
+            # _frame_lane_eligible; GOLDEN BRIDGE re-enters polars only at
+            # the golden builders until deep-D2). GOLDENMATCH_FRAME_LANE=0
+            # kill-switch restores the classic shim.
+            _writes_outputs = bool(
+                output_golden or output_clusters or output_dupes or output_unique
+            )
+            if (
+                os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
+                and os.environ.get("GOLDENMATCH_COLUMNAR_PIPELINE", "0") != "1"
+                and _frame_lane_eligible(
+                    config, matchkeys, writes_outputs=_writes_outputs
+                )
+            ):
+                return _run_dedupe_pipeline(
+                    _combined, config, matchkeys,
+                    output_golden, output_clusters,
+                    output_dupes, output_unique, output_report,
+                    across_files_only, llm_retrain, llm_provider, llm_max_labels,
+                    _eager_stages_done=_eager_done,
+                )
         # W5b-1 shim (single, post-eager-stages): everything below is still
         # polars-lazy; removal point is W5b-3 (prep-block integrations).
         combined_df = cast("pl.DataFrame", pl.from_arrow(_combined.native))
@@ -919,6 +942,15 @@ def run_dedupe(
         _prep_cache_seed=(id(combined_lf), combined_df.height),
         _eager_stages_done=_eager_done,
     )
+
+
+def _as_polars_df(obj):
+    """GOLDEN BRIDGE (D2s-d2b): the golden builders are polars-bound; on the
+    Frame lane the multi_df/_golden_source natives are pa.Table, so re-enter
+    polars HERE only. Removal point: deep-D2 (golden gather on arrow)."""
+    if obj is None or isinstance(obj, pl.DataFrame):
+        return obj
+    return cast("pl.DataFrame", pl.from_arrow(obj))
 
 
 def _dict_frame_to_arrow(obj: Any) -> Any:
@@ -1550,7 +1582,7 @@ def _run_fused_match_short_circuit(
         # (unique rid keys; downstream golden groups by cluster, order-free)
         # and keeps the arrow table un-round-tripped.
         _rid_to_cid = dict(zip(_rid_list, _cid_list))
-        multi_df = (
+        multi_df = _as_polars_df(
             to_frame(multi_df)
             .map_column("__row_id__", "__cluster_id__", _rid_to_cid)
             .native
@@ -1636,241 +1668,258 @@ def _run_dedupe_pipeline(
     # silently get the stale entry. Column names defend against a different
     # schema; height defends against same-schema-different-rows (e.g. an empty
     # input vs a populated one) — the `test_dedupe_df_empty` flake.
-    prep_cache_key = (
-        _prep_cache_seed if _prep_cache_seed is not None else id(combined_lf),
-        tuple(combined_lf.collect_schema().names()),
-        _prep_cache_signature(config),
-    )
-    cached_prep = _PREP_CACHE.get(prep_cache_key)
-    if cached_prep is not None:
-        combined_lf = cached_prep.lazy()
-        logger.debug("prep cache HIT (id=%s)", prep_cache_key[0])
+    if not isinstance(combined_lf, pl.LazyFrame):
+        # D2s-d2b Frame lane (arrow spine): entered only from run_dedupe's
+        # eligibility gate -- every prep stage below is a no-op by
+        # construction (_eager_ok + _frame_lane_eligible), so the prep block
+        # reduces to the matchkey precompute. combined_lf IS a seam Frame
+        # from here down; downstream consumers are dual-rep (D2s-a/d1).
+        from goldenmatch.core.frame import to_frame as _tf_lane
+        from goldenmatch.core.matchkey import precompute_matchkey_transforms_frame
+
+        with stage("precompute_matchkey_transforms"):
+            collected_frame = precompute_matchkey_transforms_frame(
+                _tf_lane(combined_lf), matchkeys
+            )
+        collected_df = collected_frame.native
+        combined_lf = collected_frame
+        quarantine_df = None
     else:
-        # NEW (Phase 2): try the disk-backed prepared-record store before
-        # re-prepping. In-memory _PREP_CACHE was already consulted above;
-        # disk store covers cross-call + cross-process cases that the
-        # per-process LRU can't. Same signature -> same prepared records.
-        disk_signature = _prep_cache_signature(config)
-        if _prep_store is not None:
-            from goldenmatch.distributed.record_store import load_prepared_records
-            cached_disk = load_prepared_records(_prep_store, signature=disk_signature)
-            if cached_disk is not None:
-                combined_lf = cached_disk.lazy()
-                # Seed in-memory cache so subsequent in-process iterations
-                # skip the disk read (RAM > DuckDB+Arrow latency).
-                # Guard against _PREP_CACHE_MAX == 0 (tests use this to
-                # disable the in-memory cache) -- the existing eviction
-                # logic would IndexError on pop() from an empty LRU list
-                # when ``0 >= 0`` is true.
+        prep_cache_key = (
+            _prep_cache_seed if _prep_cache_seed is not None else id(combined_lf),
+            tuple(combined_lf.collect_schema().names()),
+            _prep_cache_signature(config),
+        )
+        cached_prep = _PREP_CACHE.get(prep_cache_key)
+        if cached_prep is not None:
+            combined_lf = cached_prep.lazy()
+            logger.debug("prep cache HIT (id=%s)", prep_cache_key[0])
+        else:
+            # NEW (Phase 2): try the disk-backed prepared-record store before
+            # re-prepping. In-memory _PREP_CACHE was already consulted above;
+            # disk store covers cross-call + cross-process cases that the
+            # per-process LRU can't. Same signature -> same prepared records.
+            disk_signature = _prep_cache_signature(config)
+            if _prep_store is not None:
+                from goldenmatch.distributed.record_store import load_prepared_records
+                cached_disk = load_prepared_records(_prep_store, signature=disk_signature)
+                if cached_disk is not None:
+                    combined_lf = cached_disk.lazy()
+                    # Seed in-memory cache so subsequent in-process iterations
+                    # skip the disk read (RAM > DuckDB+Arrow latency).
+                    # Guard against _PREP_CACHE_MAX == 0 (tests use this to
+                    # disable the in-memory cache) -- the existing eviction
+                    # logic would IndexError on pop() from an empty LRU list
+                    # when ``0 >= 0`` is true.
+                    if _PREP_CACHE_MAX > 0:
+                        if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
+                            evicted = _PREP_CACHE_LRU.pop(0)
+                            _PREP_CACHE.pop(evicted, None)
+                        _PREP_CACHE[prep_cache_key] = cached_disk
+                        _PREP_CACHE_LRU.append(prep_cache_key)
+                    logger.debug("prep store DISK-HIT (signature=%s)", disk_signature)
+                else:
+                    cached_disk = None  # explicit; falls through to prep steps
+            else:
+                cached_disk = None
+
+            if cached_disk is None:
+                # ── Step 1.3.5: FIRST INGEST MATERIALIZATION ──
+                # Pull the initial `combined_lf.collect()` out of whichever prep
+                # stage runs first so its cost isn't misattributed. v20 QIS
+                # instrumentation (2026-05-29) showed pipeline_prep_quality_scan
+                # = 117.4s of which only ~5s was actual goldencheck work; the
+                # other ~112s was THIS collect materializing the 10M-row ingest
+                # LazyFrame. The cost is fundamental Polars work the rest of
+                # the prep block needs anyway -- it just shouldn't read as
+                # "quality scan time" in bench reports. Subsequent .collect()s
+                # in the prep block (transform / auto_fix / cache_populate)
+                # see a lazy-wrapped eager df and unwrap cheaply.
+                with stage("pipeline_initial_collect"):
+                    combined_df_tmp = combined_lf.collect()
+                    combined_lf = combined_df_tmp.lazy()
+
+                # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
+                if config.quality is None or config.quality.mode != "disabled":
+                    from goldenmatch.core.quality import run_quality_check
+                    with stage("pipeline_prep_quality_scan"):
+                        combined_df_tmp = combined_lf.collect()
+                        combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
+                        if gc_fixes:
+                            logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
+                        combined_lf = combined_df_tmp.lazy()
+
+                # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
+                # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
+                # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
+                if config.transform is None or config.transform.mode != "disabled":
+                    from goldenmatch.core.transform import run_transform
+                    with stage("pipeline_prep_transform"):
+                        combined_df_tmp = combined_lf.collect()
+                        combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
+                        if gf_fixes:
+                            logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
+                        combined_lf = combined_df_tmp.lazy()
+
+                # ── Step 1.5a: AUTO-FIX + VALIDATION ──
+                if config.validation and config.validation.auto_fix:
+                    with stage("pipeline_prep_auto_fix"):
+                        combined_df_tmp = combined_lf.collect()
+                        combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
+                        logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
+                        combined_lf = combined_df_tmp.lazy()
+
+                # Populate in-memory cache (LRU eviction). We materialize as an
+                # eager DataFrame so subsequent hits don't re-evaluate a long lazy
+                # plan. Guard _PREP_CACHE_MAX > 0 so tests that monkey-patch it to
+                # 0 don't trigger IndexError on pop() from an empty LRU list.
+                with stage("pipeline_prep_cache_populate"):
+                    prepped_df = combined_lf.collect()
                 if _PREP_CACHE_MAX > 0:
                     if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
                         evicted = _PREP_CACHE_LRU.pop(0)
                         _PREP_CACHE.pop(evicted, None)
-                    _PREP_CACHE[prep_cache_key] = cached_disk
+                    _PREP_CACHE[prep_cache_key] = prepped_df
                     _PREP_CACHE_LRU.append(prep_cache_key)
-                logger.debug("prep store DISK-HIT (signature=%s)", disk_signature)
-            else:
-                cached_disk = None  # explicit; falls through to prep steps
-        else:
-            cached_disk = None
+                combined_lf = prepped_df.lazy()
 
-        if cached_disk is None:
-            # ── Step 1.3.5: FIRST INGEST MATERIALIZATION ──
-            # Pull the initial `combined_lf.collect()` out of whichever prep
-            # stage runs first so its cost isn't misattributed. v20 QIS
-            # instrumentation (2026-05-29) showed pipeline_prep_quality_scan
-            # = 117.4s of which only ~5s was actual goldencheck work; the
-            # other ~112s was THIS collect materializing the 10M-row ingest
-            # LazyFrame. The cost is fundamental Polars work the rest of
-            # the prep block needs anyway -- it just shouldn't read as
-            # "quality scan time" in bench reports. Subsequent .collect()s
-            # in the prep block (transform / auto_fix / cache_populate)
-            # see a lazy-wrapped eager df and unwrap cheaply.
-            with stage("pipeline_initial_collect"):
-                combined_df_tmp = combined_lf.collect()
-                combined_lf = combined_df_tmp.lazy()
+                # NEW (Phase 2): also write to disk store, if provided.
+                if _prep_store is not None:
+                    from goldenmatch.distributed.record_store import materialize_prepared_records
+                    with stage("pipeline_prep_disk_store_write"):
+                        materialize_prepared_records(
+                            _prep_store, prepped_df, signature=disk_signature,
+                        )
+                    logger.debug("prep store DISK-WRITE (signature=%s)", disk_signature)
 
-            # ── Step 1.4: GOLDENCHECK QUALITY SCAN (if available) ──
-            if config.quality is None or config.quality.mode != "disabled":
-                from goldenmatch.core.quality import run_quality_check
-                with stage("pipeline_prep_quality_scan"):
-                    combined_df_tmp = combined_lf.collect()
-                    combined_df_tmp, gc_fixes = run_quality_check(combined_df_tmp, config.quality)
-                    if gc_fixes:
-                        logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-                    combined_lf = combined_df_tmp.lazy()
-
-            # ── Step 1.4b: GOLDENFLOW TRANSFORM (if available) ──
-            # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
-            # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
-            if config.transform is None or config.transform.mode != "disabled":
-                from goldenmatch.core.transform import run_transform
-                with stage("pipeline_prep_transform"):
-                    combined_df_tmp = combined_lf.collect()
-                    combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
-                    if gf_fixes:
-                        logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
-                    combined_lf = combined_df_tmp.lazy()
-
-            # ── Step 1.5a: AUTO-FIX + VALIDATION ──
-            if config.validation and config.validation.auto_fix:
-                with stage("pipeline_prep_auto_fix"):
-                    combined_df_tmp = combined_lf.collect()
-                    combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
-                    logger.info("Auto-fix applied: %d fix type(s)", len(fix_log))
-                    combined_lf = combined_df_tmp.lazy()
-
-            # Populate in-memory cache (LRU eviction). We materialize as an
-            # eager DataFrame so subsequent hits don't re-evaluate a long lazy
-            # plan. Guard _PREP_CACHE_MAX > 0 so tests that monkey-patch it to
-            # 0 don't trigger IndexError on pop() from an empty LRU list.
-            with stage("pipeline_prep_cache_populate"):
-                prepped_df = combined_lf.collect()
-            if _PREP_CACHE_MAX > 0:
-                if len(_PREP_CACHE_LRU) >= _PREP_CACHE_MAX:
-                    evicted = _PREP_CACHE_LRU.pop(0)
-                    _PREP_CACHE.pop(evicted, None)
-                _PREP_CACHE[prep_cache_key] = prepped_df
-                _PREP_CACHE_LRU.append(prep_cache_key)
-            combined_lf = prepped_df.lazy()
-
-            # NEW (Phase 2): also write to disk store, if provided.
-            if _prep_store is not None:
-                from goldenmatch.distributed.record_store import materialize_prepared_records
-                with stage("pipeline_prep_disk_store_write"):
-                    materialize_prepared_records(
-                        _prep_store, prepped_df, signature=disk_signature,
-                    )
-                logger.debug("prep store DISK-WRITE (signature=%s)", disk_signature)
-
-    # ── Step 1.5b: AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
-    if auto_config:
-        from goldenmatch.core.autoconfig import auto_configure_df
-        combined_df_tmp = combined_lf.collect()
-        with stage("auto_configure"):
-            auto_cfg = auto_configure_df(
-                combined_df_tmp,
-                llm_provider=auto_config_llm_provider,
-                llm_auto=config.llm_auto,
-            )
-        config.matchkeys = auto_cfg.matchkeys
-        config.match_settings = auto_cfg.match_settings
-        config.blocking = auto_cfg.blocking
-        config.golden_rules = auto_cfg.golden_rules
-        config.llm_scorer = auto_cfg.llm_scorer
-        config.memory = auto_cfg.memory
-        # Propagate domain config so pipeline's domain-extraction step runs
-        # when auto_configure_df (via preflight Check 1) decided it should.
-        if auto_cfg.domain is not None:
-            config.domain = auto_cfg.domain
-        _propagate_autoconfig_markers(auto_cfg, config)
-        matchkeys = config.get_matchkeys()
-        logger.info("Auto-configured from cleaned data: %d matchkeys", len(matchkeys))
-        combined_lf = combined_df_tmp.lazy()
-
-    if config.validation and config.validation.rules:
-        with stage("pipeline_prep_validation_rules"):
-            rules = [
-                ValidationRule(
-                    column=rc.column,
-                    rule_type=rc.rule_type,
-                    params=rc.params,
-                    action=rc.action,
-                )
-                for rc in config.validation.rules
-            ]
+        # ── Step 1.5b: AUTO-CONFIG ON CLEANED DATA (if zero-config) ──
+        if auto_config:
+            from goldenmatch.core.autoconfig import auto_configure_df
             combined_df_tmp = combined_lf.collect()
-            valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
-            logger.info("Validation: %d quarantined rows", quarantine_df.height)
-            combined_lf = valid_df.lazy()
-    else:
-        quarantine_df = None
+            with stage("auto_configure"):
+                auto_cfg = auto_configure_df(
+                    combined_df_tmp,
+                    llm_provider=auto_config_llm_provider,
+                    llm_auto=config.llm_auto,
+                )
+            config.matchkeys = auto_cfg.matchkeys
+            config.match_settings = auto_cfg.match_settings
+            config.blocking = auto_cfg.blocking
+            config.golden_rules = auto_cfg.golden_rules
+            config.llm_scorer = auto_cfg.llm_scorer
+            config.memory = auto_cfg.memory
+            # Propagate domain config so pipeline's domain-extraction step runs
+            # when auto_configure_df (via preflight Check 1) decided it should.
+            if auto_cfg.domain is not None:
+                config.domain = auto_cfg.domain
+            _propagate_autoconfig_markers(auto_cfg, config)
+            matchkeys = config.get_matchkeys()
+            logger.info("Auto-configured from cleaned data: %d matchkeys", len(matchkeys))
+            combined_lf = combined_df_tmp.lazy()
 
-    # RSS attribution sentinel: a near-no-op stage that captures ru_maxrss right
-    # before standardize fires. Lets us tell whether peak growth happens INSIDE
-    # apply_standardization (sentinel low, standardize high) or in the prep work
-    # above (sentinel high, standardize delta 0).
-    with stage("pipeline_pre_standardize_sentinel"):
-        pass
+        if config.validation and config.validation.rules:
+            with stage("pipeline_prep_validation_rules"):
+                rules = [
+                    ValidationRule(
+                        column=rc.column,
+                        rule_type=rc.rule_type,
+                        params=rc.params,
+                        action=rc.action,
+                    )
+                    for rc in config.validation.rules
+                ]
+                combined_df_tmp = combined_lf.collect()
+                valid_df, quarantine_df, _val_report = validate_dataframe(combined_df_tmp, rules)
+                logger.info("Validation: %d quarantined rows", quarantine_df.height)
+                combined_lf = valid_df.lazy()
+        else:
+            quarantine_df = None
 
-    # ── Step 1.5b: STANDARDIZE ──
-    # When GOLDENMATCH_PREP_STAGED_COLLECT=1, FORCE an intermediate collect
-    # after each prep step so the bench can attribute combined_lf_collect's
-    # 80s wall to standardize vs domain_extraction vs compute_matchkeys.
-    # Default off (the forced materializations defeat Polars fusion and
-    # only exist to localize the wall hotspot for the next perf PR).
-    _staged_collect = os.environ.get("GOLDENMATCH_PREP_STAGED_COLLECT") == "1"
+        # RSS attribution sentinel: a near-no-op stage that captures ru_maxrss right
+        # before standardize fires. Lets us tell whether peak growth happens INSIDE
+        # apply_standardization (sentinel low, standardize high) or in the prep work
+        # above (sentinel high, standardize delta 0).
+        with stage("pipeline_pre_standardize_sentinel"):
+            pass
 
-    def _force_collect_if_staged(lf: pl.LazyFrame, label: str) -> pl.LazyFrame:
-        if not _staged_collect:
-            return lf
-        with stage(f"prep_force_collect_{label}"):
-            return lf.collect().lazy()
+        # ── Step 1.5b: STANDARDIZE ──
+        # When GOLDENMATCH_PREP_STAGED_COLLECT=1, FORCE an intermediate collect
+        # after each prep step so the bench can attribute combined_lf_collect's
+        # 80s wall to standardize vs domain_extraction vs compute_matchkeys.
+        # Default off (the forced materializations defeat Polars fusion and
+        # only exist to localize the wall hotspot for the next perf PR).
+        _staged_collect = os.environ.get("GOLDENMATCH_PREP_STAGED_COLLECT") == "1"
 
-    # ── Semantic-blocking raw-name capture (recall lever) ──
-    # The semantic-blocking sources (initialism / alias) derive their block keys
-    # and confirming scores from the name column. Standardize (below) title-cases
-    # that column (`name_proper` -> "IBM" becomes "Ibm"), which destroys the
-    # all-caps acronym signal `derive_initialism` keys off of. Snapshot the RAW
-    # (pre-standardize) name value into an internal `__raw__<col>` column so
-    # `_semantic_blocking_pairs` can key + score off the un-standardized text.
-    # Gated entirely behind `config.semantic_blocking`; byte-identical when None.
-    if config.semantic_blocking is not None:
-        _sem_name_col = _semantic_name_column(
-            config, matchkeys, list(combined_lf.collect_schema().names()),
-        )
-        if _sem_name_col is not None:
-            _raw_col = f"{_SEMANTIC_RAW_COL_PREFIX}{_sem_name_col}"
-            combined_lf = combined_lf.with_columns(
-                pl.col(_sem_name_col).alias(_raw_col)
+        def _force_collect_if_staged(lf: pl.LazyFrame, label: str) -> pl.LazyFrame:
+            if not _staged_collect:
+                return lf
+            with stage(f"prep_force_collect_{label}"):
+                return lf.collect().lazy()
+
+        # ── Semantic-blocking raw-name capture (recall lever) ──
+        # The semantic-blocking sources (initialism / alias) derive their block keys
+        # and confirming scores from the name column. Standardize (below) title-cases
+        # that column (`name_proper` -> "IBM" becomes "Ibm"), which destroys the
+        # all-caps acronym signal `derive_initialism` keys off of. Snapshot the RAW
+        # (pre-standardize) name value into an internal `__raw__<col>` column so
+        # `_semantic_blocking_pairs` can key + score off the un-standardized text.
+        # Gated entirely behind `config.semantic_blocking`; byte-identical when None.
+        if config.semantic_blocking is not None:
+            _sem_name_col = _semantic_name_column(
+                config, matchkeys, list(combined_lf.collect_schema().names()),
             )
+            if _sem_name_col is not None:
+                _raw_col = f"{_SEMANTIC_RAW_COL_PREFIX}{_sem_name_col}"
+                combined_lf = combined_lf.with_columns(
+                    pl.col(_sem_name_col).alias(_raw_col)
+                )
 
-    if (
-        config.standardization
-        and config.standardization.rules
-        and "standardize" not in _eager_stages_done
-    ):
-        with stage("standardize"):
-            combined_lf = apply_standardization(combined_lf, config.standardization.rules)
-        combined_lf = _force_collect_if_staged(combined_lf, "standardize")
+        if (
+            config.standardization
+            and config.standardization.rules
+            and "standardize" not in _eager_stages_done
+        ):
+            with stage("standardize"):
+                combined_lf = apply_standardization(combined_lf, config.standardization.rules)
+            combined_lf = _force_collect_if_staged(combined_lf, "standardize")
 
-    # ── Step 1.5c: DOMAIN FEATURE EXTRACTION ──
-    with stage("domain_extraction"):
-        combined_lf = _apply_domain_extraction(combined_lf, config)
-    combined_lf = _force_collect_if_staged(combined_lf, "domain_extraction")
+        # ── Step 1.5c: DOMAIN FEATURE EXTRACTION ──
+        with stage("domain_extraction"):
+            combined_lf = _apply_domain_extraction(combined_lf, config)
+        combined_lf = _force_collect_if_staged(combined_lf, "domain_extraction")
 
-    # ── Learning Memory: pre-scoring learner overlay ──
-    with stage("memory_pre_overlay"):
-        _apply_memory_pre(memory_store, config, matchkeys)
+        # ── Learning Memory: pre-scoring learner overlay ──
+        with stage("memory_pre_overlay"):
+            _apply_memory_pre(memory_store, config, matchkeys)
 
-    # ── Step 2: TRANSFORM ──
-    if "compute_matchkeys" not in _eager_stages_done:
-        with stage("compute_matchkeys"):
-            combined_lf = compute_matchkeys(combined_lf, matchkeys)
-        combined_lf = _force_collect_if_staged(combined_lf, "compute_matchkeys")
-    else:
-        # Eager arrow path already derived the __mk_*__ columns; keep the
-        # telemetry surface identical (compute_matchkeys emits this).
-        from goldenmatch.core.matchkey import _emit_matchkey_profile
+        # ── Step 2: TRANSFORM ──
+        if "compute_matchkeys" not in _eager_stages_done:
+            with stage("compute_matchkeys"):
+                combined_lf = compute_matchkeys(combined_lf, matchkeys)
+            combined_lf = _force_collect_if_staged(combined_lf, "compute_matchkeys")
+        else:
+            # Eager arrow path already derived the __mk_*__ columns; keep the
+            # telemetry surface identical (compute_matchkeys emits this).
+            from goldenmatch.core.matchkey import _emit_matchkey_profile
 
-        _emit_matchkey_profile(combined_lf, matchkeys)
+            _emit_matchkey_profile(combined_lf, matchkeys)
 
-    # ── Step 2.5: AUTO-SUGGEST blocking keys ──
-    # Hoist matchkey transforms onto the materialized df once — eliminates
-    # one .select() per (block × matchkey field) during scoring (folds into
-    # the existing collect; no extra materialization). See spec
-    # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
-    #
-    # NEW (2026-05-18): two distinct stages so the heartbeat-stream can
-    # tell us whether the LazyFrame collect or the precompute step is
-    # the long pole at 5M scale. Prior runner runs had a ~5 min black
-    # hole between auto_configure_df returning and any fuzzy stage
-    # entering -- this instrumentation closes it.
-    with stage("combined_lf_collect"):
-        _collected_pre_mk = combined_lf.collect()
-    with stage("precompute_matchkey_transforms"):
-        collected_df = precompute_matchkey_transforms(_collected_pre_mk, matchkeys)
-    combined_lf = collected_df.lazy()
+        # ── Step 2.5: AUTO-SUGGEST blocking keys ──
+        # Hoist matchkey transforms onto the materialized df once — eliminates
+        # one .select() per (block × matchkey field) during scoring (folds into
+        # the existing collect; no extra materialization). See spec
+        # docs/superpowers/specs/2026-05-04-hoist-matchkey-transforms.md.
+        #
+        # NEW (2026-05-18): two distinct stages so the heartbeat-stream can
+        # tell us whether the LazyFrame collect or the precompute step is
+        # the long pole at 5M scale. Prior runner runs had a ~5 min black
+        # hole between auto_configure_df returning and any fuzzy stage
+        # entering -- this instrumentation closes it.
+        with stage("combined_lf_collect"):
+            _collected_pre_mk = combined_lf.collect()
+        with stage("precompute_matchkey_transforms"):
+            collected_df = precompute_matchkey_transforms(_collected_pre_mk, matchkeys)
+        combined_lf = collected_df.lazy()
     with stage("auto_suggest_blocking"):
         _run_auto_suggest(collected_df, config)
 
@@ -2864,8 +2913,13 @@ def _run_dedupe_pipeline(
         if _member_ids:
             from goldenmatch.core.quality import compute_quality_scores
             with stage("golden_quality_scores"):
+                # GOLDEN BRIDGE: compute_quality_scores is goldencheck-side
+                # polars; quality_weighting defaults True, so bridging (not
+                # declining) keeps the Frame lane live on default configs.
                 quality_scores = compute_quality_scores(
-                    collected_df.filter(pl.col("__row_id__").is_in(_member_ids))
+                    _as_polars_df(
+                        _collected_frame.filter_in("__row_id__", _member_ids).native
+                    )
                 )
             if quality_scores:
                 logger.info(
@@ -2909,17 +2963,17 @@ def _run_dedupe_pipeline(
             # survivorship never reads, BEFORE the join, so golden records carry
             # the same columns as the dict path (byte-identical golden). Keep
             # __row_id__ (the from-frames join needs it). Same env opt-out.
-            _golden_source = collected_df
+            _golden_source = _as_polars_df(collected_df)
             if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
                 _internal_prefixes = (
                     "__xform_", "__mk_", "__block_key__", "__bucket__",
                 )
                 from goldenmatch.core.frame import to_frame as _tf_golden
 
-                _golden_source = _tf_golden(collected_df).select([
+                _golden_source = _as_polars_df(_tf_golden(collected_df).select([
                     c for c in _collected_frame.columns
                     if not any(c.startswith(p) for p in _internal_prefixes)
-                ]).native
+                ]).native)
             # Source per-cluster pair scores from the view so the slow builder's
             # confidence_majority survivorship weights by edge confidence instead
             # of degrading to count-majority (the frames-out cluster dict carries
@@ -2987,9 +3041,11 @@ def _run_dedupe_pipeline(
                     member_ids_all = list(row_to_cluster.keys())
 
                 with stage("golden_multi_df_filter"):
-                    multi_df = _collected_frame.filter_in(
-                        "__row_id__", member_ids_all
-                    ).native
+                    multi_df = _as_polars_df(
+                        _collected_frame.filter_in(
+                            "__row_id__", member_ids_all
+                        ).native
+                    )
 
                 # Slim projection (PR #595). v32 attribution localized the
                 # +9 GB peak jump entirely to golden_attach_cluster_id's
@@ -3938,14 +3994,17 @@ def _frame_lane_eligible(
         return False
     if config.blocking and getattr(config.blocking, "auto_suggest", False):
         return False
+    if config.validation and (config.validation.rules or config.validation.auto_fix):
+        # validate_dataframe / auto_fix_dataframe are polars-bound prep.
+        return False
     if config.llm_boost:
         return False
     if config.llm_scorer and config.llm_scorer.enabled:
         return False
     gr = config.golden_rules
-    if gr is not None and (
-        getattr(gr, "adaptive", False) or getattr(gr, "quality_weighting", False)
-    ):
+    # quality_weighting (default True) is BRIDGED at golden_quality_scores,
+    # not declined; adaptive still requires the polars refiner.
+    if gr is not None and getattr(gr, "adaptive", False):
         return False
     for mk in matchkeys:
         if mk.type == "probabilistic":

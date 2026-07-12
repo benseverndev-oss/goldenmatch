@@ -1085,7 +1085,8 @@ def score_buckets(
                 print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
         with stage("bucket_post_partition_setup"):
-            non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
+            # len() works on both native frames (pl rows / pa num_rows).
+            non_empty_buckets = [b for b in buckets_dict.values() if len(b) > 0]
             n_non_empty_buckets = len(non_empty_buckets)
         print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
