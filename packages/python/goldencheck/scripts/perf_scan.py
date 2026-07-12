@@ -5,9 +5,18 @@ reference + a cProfile top-N. Run each perf iteration to track the hotspot.
   python scripts/perf_scan.py --profile  # + cProfile top-15 by tottime
 """
 from __future__ import annotations
-import argparse, cProfile, io, pstats, statistics, time
+
+import argparse
+import cProfile
+import io
+import pstats
+import statistics
+import time
 from pathlib import Path
-import numpy as np, pyarrow as pa, pyarrow.parquet as pq
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 N = 1_000_000
 TMP = Path(__file__).parent / "_perf_scan.parquet"
