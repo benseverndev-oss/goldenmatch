@@ -91,7 +91,10 @@ def _cluster_frame():
     )
 
 
-def test_run_declines_fast_path_eligible_simple_config():
+def test_run_declines_fast_path_eligible_simple_config(monkeypatch):
+    # These pin the POLARS-lane decline (the arrow lane keeps the kernel by
+    # W2e-3 design; audited in the W5 plan) -- pin the backend explicitly.
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "polars")
     df = _cluster_frame()
     # simple most_complete default, no field_rules/groups/overrides, no quality_scores
     rules = GoldenRulesConfig(default_strategy="most_complete")
@@ -614,7 +617,10 @@ def _assert_value_conf_parity_q(df, rules, cols, quality_scores):
     return got_map, ref_map
 
 
-def test_quality_scores_forces_off_fast_path():
+def test_quality_scores_forces_off_fast_path(monkeypatch):
+    # These pin the POLARS-lane decline (the arrow lane keeps the kernel by
+    # W2e-3 design; audited in the W5 plan) -- pin the backend explicitly.
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "polars")
     # A bare most_complete default declines (fast-path eligible); adding a non-None
     # quality_scores makes it exact-path-eligible, so the fused path RUNS (does not
     # decline) even without a field_rule -- confirms the _polars_native_eligible

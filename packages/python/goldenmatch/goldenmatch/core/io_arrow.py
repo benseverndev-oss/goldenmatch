@@ -43,6 +43,7 @@ Known reader deltas vs ``load_file`` (documented, not silently tolerated):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,9 @@ from goldenmatch.core.ingest import _TEXT_SUFFIXES, _is_probably_utf8
 # default null_values list is much wider, so it must be narrowed explicitly
 # rather than left at the default.
 _NULL_VALUES = [""]
+
+
+logger = logging.getLogger(__name__)
 
 
 def read_table_arrow(
@@ -128,10 +132,15 @@ def _read_csv_arrow(path: Path, *, separator: str, encoding: str | None):
         # there is no observable difference from a direct strict read.
         return _read_csv_direct(path, parse_options)
 
-    # Non-UTF-8 file: mirror ingest.py's cp1252 fallback (no warning log
-    # here -- load_file already logs it; this reader is a parallel path,
-    # not the caller-facing one, so it stays quiet to avoid double-logging
-    # once wired into the pipeline).
+    # Non-UTF-8 file: mirror ingest.py's cp1252 fallback INCLUDING the
+    # warning (W5e: on the arrow-default route THIS is the caller-facing
+    # reader -- ingest.py's polars-route warning never fires, so the
+    # "stays quiet to avoid double-logging" assumption inverted).
+    logger.warning(
+        "%s is not valid UTF-8; decoding as Windows-1252 (cp1252). "
+        "Pass encoding=/--encoding to override if that is wrong.",
+        path,
+    )
     text = path.read_bytes().decode("cp1252", errors="replace")
     return _read_csv_from_text(text, parse_options)
 

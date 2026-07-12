@@ -386,3 +386,39 @@ class TestStandardizationInPipeline:
             # Phone should be digits only
             if "phone" in row and row["phone"]:
                 assert row["phone"].isdigit()
+
+
+def test_arrow_lane_standardize_runs_after_default_prep(tmp_path, monkeypatch):
+    """W5e regression: the arrow lane's eager standardize must DECLINE when
+    the default-on prep block (goldencheck quality / goldenflow transform)
+    will run -- transform E.164s phones, so eager-standardize-before-prep
+    inverted the stage order and golden phones came out '+1...'."""
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    path = tmp_path / "messy.csv"
+    pl.DataFrame({
+        "email": ["A@B.COM", "a@b.com"],
+        "phone": ["(267) 555-1234", "267-555-1234"],
+    }).write_csv(path)
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+        StandardizationConfig,
+    )
+    from goldenmatch.core.pipeline import run_dedupe
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="k",
+            fields=[MatchkeyField(column="email", transforms=["lowercase"])],
+            comparison="exact",
+        )],
+        standardization=StandardizationConfig(
+            rules={"email": ["email"], "phone": ["phone"]}
+        ),
+    )
+    res = run_dedupe([(str(path), "src")], cfg)
+    golden = res["golden"]
+    assert golden is not None
+    for v in golden["phone"].to_list():
+        assert v.isdigit(), f"stage order inverted: phone={v!r}"

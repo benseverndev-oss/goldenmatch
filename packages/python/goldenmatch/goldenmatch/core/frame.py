@@ -28,16 +28,16 @@ _VALID_FRAME_BACKENDS = ("polars", "arrow")
 def resolve_frame_backend() -> str:
     """Resolve the ``GOLDENMATCH_FRAME`` env var to a Frame backend name.
 
-    Reads ``GOLDENMATCH_FRAME`` (default ``"polars"``), stripped and
-    lowercased. Valid values are ``"polars"`` (default, byte-identical
-    behavior) and ``"arrow"`` (routes file ingest through pyarrow -- see
-    ``core/ingest.py::load_file``).
+    Reads ``GOLDENMATCH_FRAME`` (default ``"arrow"`` since v3.0.0 -- the
+    measured-faster lane: 100K zero-config A/B medians 76.4s arrow vs
+    119.1s polars, runs 29176760301/29176760816). ``"polars"`` remains the
+    opt-out escape hatch until the W5e deletion train removes it.
 
     Raises:
         ValueError: if the env var is set to anything else, naming the bad
             value and the valid options.
     """
-    raw = os.environ.get("GOLDENMATCH_FRAME", "polars").strip().lower()
+    raw = os.environ.get("GOLDENMATCH_FRAME", "arrow").strip().lower()
     if raw not in _VALID_FRAME_BACKENDS:
         raise ValueError(
             f"Invalid GOLDENMATCH_FRAME={raw!r}; valid options are "
