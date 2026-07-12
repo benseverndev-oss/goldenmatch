@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-07-12
+
+### Changed
+- **BREAKING: result frames are now `pyarrow.Table`.** `DedupeResult.golden` /
+  `.dupes` / `.unique` and `MatchResult.matched` / `.unmatched` return
+  `pa.Table` instead of `pl.DataFrame` (Polars-eviction W5, spec
+  `docs/superpowers/specs/2026-07-09-goldenmatch-polars-eviction-design.md`).
+  Migration is a one-liner: `pl.from_arrow(result.golden)`. Inputs are
+  unchanged (polars/pandas/arrow all accepted). `to_csv` and the notebook
+  `_repr_html_` render from Arrow natively.
+- The arrow ingest lane runs the expression stages (row-ids, standardize,
+  exact matchkeys) eagerly on the Frame seam; validation rules and auto-fix
+  are seam-routed with probed arrow twins (RE2 regex owned contract).
+
 ### Added
 - Experimental GOLDENMATCH_FRAME=arrow lane: file ingest via pyarrow with a polars-parity reader corpus and a frame-backend differential harness (Polars-eviction W1).
 - **Fused auto-routing at the golden + match seams (controller-driven).** The pipeline now auto-routes covered slow-path runs to the fused Arrow-native kernels, byte-identically, with no config change and per-surface kill-switches. **Golden routing is the broad, LIVE win:** at the golden seam the pipeline tries `golden_fused.run_golden_fused_arrow` by default on every covered slow-path config and reaches golden output at roughly 2x lower peak RSS; it declines to the classic builder (unchanged output) when the config is uncovered, the native kernel is absent, full `ClusterProvenance` lineage is requested, or the run is fast-path-eligible. Surfaced on `DedupeResult.golden_fused_used`; kill-switch `GOLDENMATCH_GOLDEN_FUSED=0`. **Match routing is a documented DORMANT capacity-survival scaffold, not a live default.** A controller post-step (`maybe_route_fused_match`) can short-circuit the match stage to the fused match kernel under an estimated-peak-RSS pressure gate, but the gate is deliberately narrow (`auto_split=False`, no identity/adaptive/memory/llm_boost/confidence_majority/full-provenance, not across-files-only, a covered weighted matchkey, and real memory pressure). Because zero-config auto-config commits `auto_split=True` and explicit configs bypass the controller, it effectively never fires by default. When it does fire it is a capacity mode that sheds `scored_pairs`, cluster-confidence, and lineage to survive; marked `DedupeResult.match_fused_capacity_mode` and controller-telemetry `rule_name` `+fused_match_post_step`. Kill-switch `GOLDENMATCH_MATCH_FUSED=0`; the wake-up path (a postflight-threshold fast-follow, or an explicit opt-in) is a follow-up. New env knobs (`core/fused_routing.py`, `ExecutionPlan.use_fused_match`): `GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_MATCH_FUSED`, `GOLDENMATCH_FUSED_PRESSURE_FRACTION` (default 0.65), and the est-RSS calibration coefficients `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY`. No new native symbols (reuses the `golden_fused` / `match_fused` kernels), no new MCP tools / CLI commands / A2A skills.
