@@ -110,3 +110,78 @@ def test_curated_only_names_that_exist(monkeypatch):
     # bulk must resolve.
     unknown = CURATED_TOOLS - full
     assert len(unknown) <= 3, f"curated names not found in the suite: {sorted(unknown)}"
+
+
+# ---------------------------------------------------------------------------
+# Suite-only disambiguation suffixes (_CURATED_DESCRIPTION_SUFFIXES)
+# ---------------------------------------------------------------------------
+
+def test_suffix_keys_are_all_curated():
+    """No suffix may target a non-curated tool (it would never be applied)."""
+    from goldensuite_mcp.server import _CURATED_DESCRIPTION_SUFFIXES, CURATED_TOOLS
+
+    stray = set(_CURATED_DESCRIPTION_SUFFIXES) - CURATED_TOOLS
+    assert not stray, f"suffix keys not in CURATED_TOOLS: {sorted(stray)}"
+
+
+def test_curated_listing_appends_suffix(monkeypatch):
+    """A curated tool with a suffix shows base description + suffix in list_tools."""
+    monkeypatch.delenv("GOLDENSUITE_MCP_TOOLS", raising=False)
+    from goldensuite_mcp.server import (
+        _CURATED_DESCRIPTION_SUFFIXES,
+        _aggregate,
+        _apply_tool_filter,
+    )
+
+    tools, _ = _aggregate()
+    base = {t.name: (t.description or "") for t in tools}
+    listed = {t.name: (t.description or "") for t in _apply_tool_filter(tools)}
+
+    # agent_deduplicate is always present and carries a suffix.
+    assert "agent_deduplicate" in listed
+    suffix = _CURATED_DESCRIPTION_SUFFIXES["agent_deduplicate"]
+    assert "Deduplicate ONE dataset" in listed["agent_deduplicate"]  # base (Part A)
+    assert suffix in listed["agent_deduplicate"]                     # + suffix
+    assert "dedupe_file" in listed["agent_deduplicate"]
+
+    # Every listed curated tool that has a suffix carries it; the base is intact.
+    for name, suf in _CURATED_DESCRIPTION_SUFFIXES.items():
+        if name in listed:
+            assert listed[name].startswith(base[name].rstrip())
+            assert listed[name].endswith(suf)
+
+
+def test_suffix_is_nondestructive(monkeypatch):
+    """The aggregated Tool keeps its base description; only the listed copy grows.
+
+    Guards against mutating the shared Tool objects that dispatch + the full
+    catalog / suite_find_tools also read.
+    """
+    monkeypatch.delenv("GOLDENSUITE_MCP_TOOLS", raising=False)
+    from goldensuite_mcp.server import (
+        _CURATED_DESCRIPTION_SUFFIXES,
+        _aggregate,
+        _apply_tool_filter,
+    )
+
+    tools, _ = _aggregate()
+    _apply_tool_filter(tools)  # build the curated view (must not mutate `tools`)
+
+    agg = {t.name: (t.description or "") for t in tools}
+    suffix = _CURATED_DESCRIPTION_SUFFIXES["agent_deduplicate"]
+    assert suffix not in agg["agent_deduplicate"], "base Tool was mutated by filtering"
+
+
+def test_full_mode_has_no_suffix(monkeypatch):
+    """`full` view returns base descriptions -- suffixes are a headline-only aid."""
+    monkeypatch.setenv("GOLDENSUITE_MCP_TOOLS", "full")
+    from goldensuite_mcp.server import (
+        _CURATED_DESCRIPTION_SUFFIXES,
+        _aggregate,
+        _apply_tool_filter,
+    )
+
+    tools, _ = _aggregate()
+    listed = {t.name: (t.description or "") for t in _apply_tool_filter(tools)}
+    suffix = _CURATED_DESCRIPTION_SUFFIXES["agent_deduplicate"]
+    assert suffix not in listed.get("agent_deduplicate", "")

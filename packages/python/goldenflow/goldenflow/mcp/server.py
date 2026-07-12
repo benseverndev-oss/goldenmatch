@@ -7,7 +7,13 @@ from pathlib import Path
 TOOLS = [
     {
         "name": "transform",
-        "description": "Transform a data file using GoldenFlow. Zero-config or config-driven.",
+        "description": (
+            "Clean / normalize a data file with GoldenFlow transforms (phone, date, "
+            "unicode, casing, categorical, and more) and write the transformed file. "
+            "Zero-config auto-detects and applies transforms; pass a config to control "
+            "them. See list_transforms for what's available. Does not deduplicate or "
+            "match -- it only reshapes column values."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {

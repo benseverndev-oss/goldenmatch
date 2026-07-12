@@ -65,6 +65,70 @@ CURATED_TOOLS: frozenset[str] = frozenset({
 })
 
 
+# Suite-only disambiguation suffixes appended to a curated tool's own
+# description in the ``list_tools`` headline view. These say things only the
+# SUITE knows -- that a one-call composite covers the same job, or that a tool
+# needs prior session state -- which the underlying package's standalone
+# description can't (composites don't exist at the package level). Applied
+# non-destructively (model_copy) to the curated list ONLY; dispatch and the
+# full catalog / suite_find_tools keep each package's base description.
+# Every key MUST be in CURATED_TOOLS (enforced by test).
+_RUN_REQUIRED = (
+    "Requires a completed run in this session -- call `agent_deduplicate` or "
+    "`dedupe_file` first."
+)
+_LOADED_REQUIRED = (
+    "Requires a dataset already loaded/configured in this session (e.g. from a "
+    "prior dedupe or match run)."
+)
+_CURATED_DESCRIPTION_SUFFIXES: dict[str, str] = {
+    # composite one-call alternatives (the primitive points at the composite)
+    "agent_deduplicate": (
+        "For a one-call flow that uploads a local file and writes the golden CSV "
+        "in a single step, use `dedupe_file`; use this tool when you want the "
+        "clusters and reasoning returned inline."
+    ),
+    "agent_match_sources": (
+        "For a one-call upload-both-and-write flow, use `match_sources`; use this "
+        "tool for the matched pairs returned inline."
+    ),
+    "analyze_data": "For profiling PLUS a data-quality scan in one call, use `assess_file`.",
+    "transform": "To clean and then deduplicate in one call, use `clean_and_dedupe`.",
+    # tools that read prior session state
+    "list_clusters": _RUN_REQUIRED,
+    "get_cluster": _RUN_REQUIRED,
+    "get_golden_record": _RUN_REQUIRED,
+    "explain_match": _RUN_REQUIRED,
+    "evaluate": _RUN_REQUIRED,
+    "export_results": _RUN_REQUIRED,
+    "match_record": _LOADED_REQUIRED,
+    "find_duplicates": _LOADED_REQUIRED,
+    # map (goldenflow) vs apply (infermap) -- easily confused names
+    "map": (
+        "Distinct from `apply` (infermap): `map` auto-DERIVES a column alignment "
+        "between two files, while `apply` applies an already-saved mapping config."
+    ),
+    "apply": (
+        "Distinct from `map` (GoldenFlow): `apply` applies an already-saved "
+        "infermap mapping config, while `map` auto-derives a new alignment."
+    ),
+}
+
+
+def _with_curated_suffix(tool: Tool) -> Tool:
+    """Return *tool* with its suite disambiguation suffix appended, or unchanged.
+
+    Non-destructive: emits a copy so the aggregated Tool (shared with dispatch
+    and the full catalog) keeps its base description.
+    """
+    suffix = _CURATED_DESCRIPTION_SUFFIXES.get(tool.name)
+    if not suffix:
+        return tool
+    base = (tool.description or "").rstrip()
+    joined = f"{base} {suffix}" if base else suffix
+    return tool.model_copy(update={"description": joined})
+
+
 def _resolve_tool_allowlist() -> frozenset[str] | None:
     """Parse ``GOLDENSUITE_MCP_TOOLS`` into an allow-set, or None for 'full'."""
     val = os.environ.get("GOLDENSUITE_MCP_TOOLS", "").strip()
@@ -76,11 +140,16 @@ def _resolve_tool_allowlist() -> frozenset[str] | None:
 
 
 def _apply_tool_filter(tools: list[Tool]) -> list[Tool]:
-    """Filter the aggregated tool list for ``list_tools`` per the env profile."""
+    """Filter the aggregated tool list for ``list_tools`` per the env profile.
+
+    In the curated / explicit-subset views, curated tools also get their
+    suite-only disambiguation suffix (:data:`_CURATED_DESCRIPTION_SUFFIXES`)
+    appended. The ``full`` view is returned verbatim (base descriptions).
+    """
     allow = _resolve_tool_allowlist()
     if allow is None:
         return tools
-    return [t for t in tools if t.name in allow]
+    return [_with_curated_suffix(t) for t in tools if t.name in allow]
 
 # ---------------------------------------------------------------------------
 # Sub-package adapters
