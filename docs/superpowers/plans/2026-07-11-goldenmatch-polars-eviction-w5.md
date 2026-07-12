@@ -86,10 +86,18 @@ assertions migrate to Arrow, results become `pa.Table`. W0-W4 merged/queued
     expectations per-backend per the W3a sample contract). Wall + RSS both
     lanes on the 100K gate + 1M dispatch bench (fused-with_columns loss
     measured; >10% → multi-column derive op).
-- **W5c (v3.0.0 branch)** — result flip: 5 fields → pa.Table, _repr_html_ /
-  to_csv re-render, migration guide (pl.from_arrow one-liner), input
-  polymorphism already in place. Fused/golden_fused backend-conditional
-  audit. Ingest loop → pa.concat_tables.
+- **W5c (v3.0.0)** — W5c-1 (SHIPPED #1690): type-agnostic result accessors,
+  flip becomes a field-type change. W5c-2 (THE FLIP): 4 construction sites
+  wrap frames with a to-arrow helper; consumers migrate: cli/demo.py (3
+  sites), mcp/server.py (5), the 13 test files/16 sites (W5d fold-in);
+  migration guide (pl.from_arrow one-liner). FUSED AUDIT (2026-07-12,
+  PASS): fused_match.py:162 is seam-routed comment-only;
+  golden_fused.py:466's polars-only decline `resolve_frame_backend() !=
+  "arrow" and _polars_native_eligible(...)` simply never fires when arrow
+  is the only backend -- BY DESIGN per its W2e-3 comment; W5e deletes the
+  decline + the _polars_native_eligible import. Ingest loop →
+  pa.concat_tables (already concat_frames on the arrow lane; the polars
+  branch dies at W5e).
 - **W5d (RESCOPED 2026-07-12: collapses into W5c-2)** — the ~334-file count
   measured ANY pl usage in tests; the REAL result-assertion surface is 13
   files / 16 call sites (grep: .golden/.dupes/.unique/.matched/.unmatched
