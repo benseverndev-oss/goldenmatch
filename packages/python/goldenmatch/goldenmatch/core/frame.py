@@ -216,6 +216,16 @@ class Frame(Protocol):
     # W5a: pipeline._add_row_ids' exact chain, eager (the #844 reuse-existing
     # branch pinned; offset applied only when > 0; final Int64 cast always).
     def ensure_row_ids(self, name: str = "__row_id__", offset: int = 0) -> Frame: ...
+    # W5b-3 validation ops. evaluate_validation_rule returns a bool Column
+    # (True=passed) for one rule; polars impl == validate._evaluate_rule
+    # VERBATIM. Arrow regex twin uses RE2 (pc.match_substring_regex) -- the
+    # documented owned contract for user patterns (Rust-regex on polars;
+    # exotic constructs may differ, same stance as the W2a derive chains).
+    # with_null_where nulls COL where mask is True, dtype-preserving.
+    def evaluate_validation_rule(
+        self, column: str, rule_type: str, params: dict
+    ) -> Column: ...
+    def with_null_where(self, col: str, mask: Column) -> Frame: ...
 
 
 class PolarsColumn:
@@ -730,6 +740,53 @@ class PolarsFrame:
         if offset > 0:
             df = df.with_columns((pl.col(name) + offset).alias(name))
         return PolarsFrame(df.with_columns(pl.col(name).cast(pl.Int64)))
+
+    def evaluate_validation_rule(
+        self, column: str, rule_type: str, params: dict
+    ) -> PolarsColumn:
+        # validate.py:_evaluate_rule VERBATIM per branch.
+        series = self._df[column]
+        if rule_type == "not_null":
+            out = series.is_not_null()
+        elif rule_type == "regex":
+            pattern = params["pattern"]
+            out = (
+                series.is_not_null()
+                & series.fill_null("").str.contains(pattern)
+                & series.is_not_null()
+            )
+        elif rule_type == "min_length":
+            length = params["length"]
+            out = (
+                series.is_not_null()
+                & (series.fill_null("").str.len_chars() >= length)
+                & series.is_not_null()
+            )
+        elif rule_type == "max_length":
+            length = params["length"]
+            out = (
+                series.is_not_null()
+                & (series.fill_null("").str.len_chars() <= length)
+                & series.is_not_null()
+            )
+        elif rule_type == "in_set":
+            out = series.is_not_null() & series.is_in(params["values"])
+        elif rule_type == "format":
+            checker = params["__checker__"]  # resolved by the caller
+            out = series.map_elements(checker, return_dtype=pl.Boolean)
+        else:
+            raise ValueError(f"Unknown rule_type: {rule_type!r}")
+        return PolarsColumn(out)
+
+    def with_null_where(self, col: str, mask: Column) -> PolarsFrame:
+        # validate.py "null" action: when(passed).then(col).otherwise(None);
+        # mask here is FAILED (True = null it out). Dtype-preserving.
+        m = mask._s if isinstance(mask, PolarsColumn) else pl.Series(mask.to_list())  # noqa: SLF001
+        return PolarsFrame(
+            self._df.with_columns(
+                pl.when(m).then(None).otherwise(pl.col(col)).alias(col)
+            )
+        )
 
 
 class ArrowColumn:
@@ -1420,6 +1477,45 @@ class ArrowFrame:
         arr = pc.cast(arr, pa.int64())
         idx = tbl.column_names.index(name)
         return ArrowFrame(tbl.set_column(idx, name, arr))
+
+    def evaluate_validation_rule(
+        self, column: str, rule_type: str, params: dict
+    ) -> ArrowColumn:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        arr = self._tbl.column(column).combine_chunks()
+        valid = pc.is_valid(arr)
+        if rule_type == "not_null":
+            out = valid
+        elif rule_type == "regex":
+            # RE2 owned contract (see protocol note).
+            filled = pc.fill_null(pc.cast(arr, pa.large_string()), "")
+            out = pc.and_(valid, pc.match_substring_regex(filled, params["pattern"]))
+        elif rule_type == "min_length":
+            filled = pc.fill_null(pc.cast(arr, pa.large_string()), "")
+            out = pc.and_(valid, pc.greater_equal(pc.utf8_length(filled), params["length"]))
+        elif rule_type == "max_length":
+            filled = pc.fill_null(pc.cast(arr, pa.large_string()), "")
+            out = pc.and_(valid, pc.less_equal(pc.utf8_length(filled), params["length"]))
+        elif rule_type == "in_set":
+            vals = [v for v in params["values"] if v is not None]
+            out = pc.and_(valid, pc.is_in(arr, value_set=pa.array(vals)))
+        elif rule_type == "format":
+            checker = params["__checker__"]
+            out = pa.array([checker(v) for v in arr.to_pylist()], type=pa.bool_())
+        else:
+            raise ValueError(f"Unknown rule_type: {rule_type!r}")
+        return ArrowColumn(out)
+
+    def with_null_where(self, col: str, mask: Column) -> ArrowFrame:
+        import pyarrow.compute as pc
+
+        m = mask.to_arrow() if hasattr(mask, "to_arrow") else mask
+        idx = self._tbl.column_names.index(col)
+        src = self._tbl.column(col).combine_chunks()
+        nulled = pc.if_else(pc.fill_null(m, False), None, src)
+        return ArrowFrame(self._tbl.set_column(idx, col, nulled))
 
 
 def to_frame(obj: Any) -> Frame:

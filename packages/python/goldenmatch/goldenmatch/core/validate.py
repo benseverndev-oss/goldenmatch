@@ -61,41 +61,6 @@ _FORMAT_CHECKERS = {
 }
 
 
-def _evaluate_rule(series: pl.Series, rule: ValidationRule) -> pl.Series:
-    """Evaluate a rule against a series, returning a boolean Series (True=passed)."""
-    _n = len(series)
-
-    if rule.rule_type == "not_null":
-        return series.is_not_null()
-
-    if rule.rule_type == "regex":
-        pattern = rule.params["pattern"]
-        # Null values fail regex
-        return series.is_not_null() & series.fill_null("").str.contains(pattern) & series.is_not_null()
-
-    if rule.rule_type == "min_length":
-        length = rule.params["length"]
-        return series.is_not_null() & (series.fill_null("").str.len_chars() >= length) & series.is_not_null()
-
-    if rule.rule_type == "max_length":
-        length = rule.params["length"]
-        return series.is_not_null() & (series.fill_null("").str.len_chars() <= length) & series.is_not_null()
-
-    if rule.rule_type == "in_set":
-        values = rule.params["values"]
-        return series.is_not_null() & series.is_in(values)
-
-    if rule.rule_type == "format":
-        fmt_type = rule.params["type"]
-        checker = _FORMAT_CHECKERS.get(fmt_type)
-        if checker is None:
-            raise ValueError(f"Unknown format type: {fmt_type!r}. Available: {sorted(_FORMAT_CHECKERS)}")
-        # Use map_elements for format checking
-        return series.map_elements(checker, return_dtype=pl.Boolean)
-
-    raise ValueError(f"Unknown rule_type: {rule.rule_type!r}")
-
-
 def validate_dataframe(
     df: pl.DataFrame,
     rules: list[ValidationRule],
@@ -109,22 +74,38 @@ def validate_dataframe(
         - quarantine_df: rows that failed quarantine rules (with __quarantine_reason__)
         - validation_report: list of dicts with rule evaluation stats
     """
-    validation_report: list[dict] = []
-    quarantine_mask = pl.Series("__q__", [False] * df.height)
-    quarantine_reasons: list[list[str]] = [[] for _ in range(df.height)]
+    # W5b-3: seam-driven. PolarsFrame.evaluate_validation_rule carries the
+    # legacy _evaluate_rule branches VERBATIM (the delegation oracle moved
+    # into the seam); mask bookkeeping runs in Python lists on both backends.
+    from goldenmatch.core.frame import column_from_values, to_frame
 
-    working_df = df.clone()
+    validation_report: list[dict] = []
+    height = df.height
+    quarantine_flags: list[bool] = [False] * height
+    quarantine_reasons: list[list[str]] = [[] for _ in range(height)]
+
+    frame = to_frame(df.clone())
+    backend = "polars"  # df arrives polars until the W5c/W5e flip
 
     for rule in rules:
-        if rule.column not in working_df.columns:
+        if rule.column not in frame.columns:
             raise ValueError(f"Column {rule.column!r} not found in DataFrame")
 
-        series = working_df[rule.column]
-        passed = _evaluate_rule(series, rule)
-        failed = ~passed
+        params = dict(rule.params or {})
+        if rule.rule_type == "format":
+            fmt_type = params["type"]
+            checker = _FORMAT_CHECKERS.get(fmt_type)
+            if checker is None:
+                raise ValueError(
+                    f"Unknown format type: {fmt_type!r}. "
+                    f"Available: {sorted(_FORMAT_CHECKERS)}"
+                )
+            params["__checker__"] = checker
+        passed = frame.evaluate_validation_rule(rule.column, rule.rule_type, params)
+        passed_list = [bool(v) for v in passed.to_list()]
 
-        total_checked = len(series)
-        passed_count = int(passed.sum())
+        total_checked = height
+        passed_count = sum(passed_list)
         failed_count = total_checked - passed_count
         fail_rate = failed_count / total_checked if total_checked > 0 else 0.0
 
@@ -139,44 +120,43 @@ def validate_dataframe(
 
         if rule.action == "flag":
             flag_col = f"__vf_{rule.column}_{rule.rule_type}__"
-            working_df = working_df.with_columns(passed.alias(flag_col))
+            frame = frame.with_column(flag_col, passed)
 
         elif rule.action == "null":
-            # Set failing values to null
-            working_df = working_df.with_columns(
-                pl.when(passed)
-                .then(pl.col(rule.column))
-                .otherwise(None)
-                .alias(rule.column)
+            failed_col = column_from_values(
+                [not p for p in passed_list], "bool", backend=backend
             )
+            frame = frame.with_null_where(rule.column, failed_col)
 
         elif rule.action == "quarantine":
-            # Mark rows for quarantine
-            quarantine_mask = quarantine_mask | failed
-            failed_list = failed.to_list()
-            for i, is_failed in enumerate(failed_list):
-                if is_failed:
+            for i, is_passed in enumerate(passed_list):
+                if not is_passed:
+                    quarantine_flags[i] = True
                     quarantine_reasons[i].append(
                         f"{rule.column}:{rule.rule_type}"
                     )
 
     # Split into valid and quarantine DataFrames
-    quarantine_df = working_df.filter(quarantine_mask)
-    valid_df = working_df.filter(~quarantine_mask)
+    q_mask = column_from_values(quarantine_flags, "bool", backend=backend)
+    keep_mask = column_from_values(
+        [not q for q in quarantine_flags], "bool", backend=backend
+    )
+    quarantine_frame = frame.filter_mask(q_mask)
+    valid_df = frame.filter_mask(keep_mask).native
 
     # Add quarantine reason column
-    if quarantine_df.height > 0:
-        # Build reason strings for quarantined rows
-        reason_series_data = []
-        quarantine_indices = quarantine_mask.to_list()
-        for i, is_q in enumerate(quarantine_indices):
-            if is_q:
-                reason_series_data.append("; ".join(quarantine_reasons[i]))
-        quarantine_df = quarantine_df.with_columns(
-            pl.Series("__quarantine_reason__", reason_series_data)
-        )
+    if quarantine_frame.height > 0:
+        reason_series_data = [
+            "; ".join(quarantine_reasons[i])
+            for i, is_q in enumerate(quarantine_flags)
+            if is_q
+        ]
+        quarantine_df = quarantine_frame.with_column(
+            "__quarantine_reason__",
+            column_from_values(reason_series_data, "utf8", backend=backend),
+        ).native
     else:
-        quarantine_df = quarantine_df.with_columns(
+        quarantine_df = quarantine_frame.native.with_columns(
             pl.Series("__quarantine_reason__", [], dtype=pl.Utf8)
         )
 
