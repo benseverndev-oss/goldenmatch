@@ -110,8 +110,8 @@ def test_fused_golden_byte_identical_to_classic(monkeypatch):
 
     assert fused["golden"] is not None
     assert classic["golden"] is not None
-    a = fused["golden"].sort("__cluster_id__")
-    b = classic["golden"].sort("__cluster_id__")
+    a = pl.from_arrow(fused["golden"]).sort("__cluster_id__")
+    b = pl.from_arrow(classic["golden"]).sort("__cluster_id__")
     assert_frame_equal(a, b, check_column_order=False, check_row_order=False)
 
 
@@ -122,7 +122,7 @@ def test_kill_switch_uses_classic(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_GOLDEN_FUSED", "0")
     res = run_dedupe_df(df, cfg)
     assert res["golden_fused_used"] is False
-    assert res["golden"] is not None and res["golden"].height > 0
+    assert res["golden"] is not None and res["golden"].num_rows > 0
 
 
 def test_full_provenance_declines_fused(monkeypatch):
@@ -134,7 +134,7 @@ def test_full_provenance_declines_fused(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_GOLDEN_FUSED", raising=False)
     res = run_dedupe_df(df, cfg)
     assert res["golden_fused_used"] is False
-    assert res["golden"] is not None and res["golden"].height > 0
+    assert res["golden"] is not None and res["golden"].num_rows > 0
 
 
 def _write_nonstring_csv(path) -> None:
@@ -171,9 +171,10 @@ def test_file_path_nonstring_golden_byte_identical(tmp_path, monkeypatch):
     assert classic["golden_fused_used"] is False
 
     assert fused["golden"] is not None and classic["golden"] is not None
-    # The classic slow path emits `age` as Utf8; the fix makes fused match.
-    assert classic["golden"].schema["age"] == pl.Utf8
-    assert fused["golden"].schema["age"] == pl.Utf8
-    a = fused["golden"].sort("__cluster_id__")
-    b = classic["golden"].sort("__cluster_id__")
+    a = pl.from_arrow(fused["golden"]).sort("__cluster_id__")
+    b = pl.from_arrow(classic["golden"]).sort("__cluster_id__")
+    # The classic slow path emits `age` as Utf8; the fix makes fused match
+    # (asserted on the polars view of the arrow tables).
+    assert b["age"].dtype == pl.Utf8
+    assert a["age"].dtype == pl.Utf8
     assert_frame_equal(a, b, check_column_order=False, check_row_order=False)

@@ -18,9 +18,12 @@ array-ization is leaf-local (`to_list`/`to_numpy` before rapidfuzz).
   oversized id sets, and the collected-frame splits run on ArrowFrame seam ops
   (`filter_in`/`filter_not_in`/`with_gt_column`). `_to_result_table` already
   passes pa.Table through — no consumer breaks. ~10 pl uses out of the lane.
-- **D2 — fused golden slot arrow**: `_try_fused_golden`/`run_golden_fused_arrow`
-  returns arrow; `golden_df` slot retyped `Frame`-polymorphic. Slow-path
-  `_golden_records_to_df` untouched (fused lane never hits it).
+- **D2 — fused golden slot arrow (RE-ORDERED after D3/D4, recon 2026-07-12)**:
+  run_golden_fused_arrow's kernel returns INDICES and the Python side GATHERS
+  on the multi_df frame (_gather_with_nulls over pl.Series) -- an arrow output
+  is only an end-conversion until multi_df itself arrives as arrow, which
+  requires collected_df unification (D3) / ClusterFrames (D4). Deep D2 =
+  gather on ArrowColumn once the input is arrow.
 - **D3 — terminal splits + result dict via the seam** (pipeline.py ~3098-3230):
   dupes/unique splits via `filter_in` on `to_frame(collected_df)`; BOTH lanes
   emit pa.Table in the INTERNAL dict. Must migrate the internal-dict consumers

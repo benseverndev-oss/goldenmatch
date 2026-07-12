@@ -921,6 +921,15 @@ def run_dedupe(
     )
 
 
+def _dict_frame_to_arrow(obj):
+    """D3 (arrow descent): the INTERNAL pipeline dicts emit pa.Table for their
+    frame values on BOTH lanes. polars frames convert zero-copy; pa passes
+    through; None stays None. _api._to_result_table is a passthrough now."""
+    if obj is None or hasattr(obj, "num_rows"):
+        return obj
+    return obj.to_arrow()
+
+
 def _prep_cache_signature(config: GoldenMatchConfig) -> str:
     """Stable string signature of the prep-step config slots.
 
@@ -1557,11 +1566,11 @@ def _run_fused_match_short_circuit(
 
     return {
         "clusters": clusters,
-        "golden": golden_df,
-        "unique": unique_df,
-        "dupes": dupes_df,
+        "golden": _dict_frame_to_arrow(golden_df),
+        "unique": _dict_frame_to_arrow(unique_df),
+        "dupes": _dict_frame_to_arrow(dupes_df),
         "report": report,
-        "quarantine": quarantine_df,
+        "quarantine": _dict_frame_to_arrow(quarantine_df),
         "postflight_report": None,
         "memory_stats": None,
         "identity_summary": None,
@@ -3104,8 +3113,11 @@ def _run_dedupe_pipeline(
             dupe_row_ids.update(clusters[cid]["members"])
     unique_row_ids = set(all_ids) - dupe_row_ids
 
-    dupes_df = collected_df.filter(pl.col("__row_id__").is_in(list(dupe_row_ids)))
-    unique_df = collected_df.filter(pl.col("__row_id__").is_in(list(unique_row_ids)))
+    from goldenmatch.core.frame import to_frame as _to_frame_d3
+
+    _cf = _to_frame_d3(collected_df)
+    dupes_df = _cf.filter_in("__row_id__", list(dupe_row_ids)).native
+    unique_df = _cf.filter_in("__row_id__", list(unique_row_ids)).native
 
     # ── Step 6: REPORT ──
     report = None
@@ -3221,11 +3233,11 @@ def _run_dedupe_pipeline(
 
     results = {
         "clusters": _clusters_dict(),
-        "golden": golden_df,
-        "unique": unique_df,
-        "dupes": dupes_df,
+        "golden": _dict_frame_to_arrow(golden_df),
+        "unique": _dict_frame_to_arrow(unique_df),
+        "dupes": _dict_frame_to_arrow(dupes_df),
         "report": report,
-        "quarantine": quarantine_df,
+        "quarantine": _dict_frame_to_arrow(quarantine_df),
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
         "identity_summary": identity_summary,
@@ -3687,8 +3699,8 @@ def _run_match_pipeline(
             memory_store.close()
 
     return {
-        "matched": matched_df,
-        "unmatched": unmatched_df,
+        "matched": _dict_frame_to_arrow(matched_df),
+        "unmatched": _dict_frame_to_arrow(unmatched_df),
         "report": report,
         "quarantine": quarantine_df_match,
         "postflight_report": postflight_report,
