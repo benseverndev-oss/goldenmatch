@@ -21,10 +21,21 @@ pub fn json_to_polars_df(py: Python<'_>, json_records: &str) -> Result<PyObject,
     Ok(df.into_pyobject(py).unwrap().unbind())
 }
 
-/// Convert a Python Polars DataFrame to a JSON string of records.
+/// Convert a Python Polars DataFrame (or a pyarrow Table) to a JSON string of records.
+///
+/// v3.0.0: `DedupeResult.golden` / `MatchResult.matched` are now pyarrow Tables
+/// (no `write_json`). Convert arrow -> polars at this seam; a genuine polars frame
+/// (which has `write_json`) passes through unchanged.
 pub fn polars_df_to_json(py: Python<'_>, df: &PyObject) -> Result<String, BridgeError> {
-    let json_bytes = df.call_method0(py, "write_json")?;
-    let json_str: String = json_bytes.extract(py)?;
+    let bound = df.bind(py);
+    let frame = if bound.hasattr("write_json")? {
+        bound.clone()
+    } else {
+        let pl = py.import("polars")?;
+        pl.call_method1("from_arrow", (bound,))?
+    };
+    let json_bytes = frame.call_method0("write_json")?;
+    let json_str: String = json_bytes.extract()?;
     Ok(json_str)
 }
 

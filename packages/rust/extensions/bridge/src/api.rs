@@ -493,6 +493,13 @@ pub fn match_pairs(
         if matched.is_none() {
             return Ok(vec![]);
         }
+        // v3.0.0: `MatchResult.matched` is a pyarrow Table (indexing yields a
+        // ChunkedArray, which has no `to_list`). Convert to polars at the seam so
+        // the column-extract below (`[col].to_list()`) keeps working unchanged.
+        let matched = {
+            let pl = matched.py().import("polars")?;
+            pl.call_method1("from_arrow", (&matched,))?
+        };
 
         // Pull the three linkage columns off the matched Polars DataFrame as
         // Python lists (matched[col].to_list()). The id columns are Int64; the
@@ -816,8 +823,7 @@ pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, Bridge
         } else {
             conflicts_kwargs.set_item("dataset", dataset)?;
         }
-        let edges =
-            find_conflicts.call((store.clone(),), Some(&conflicts_kwargs))?;
+        let edges = find_conflicts.call((store.clone(),), Some(&conflicts_kwargs))?;
         let _ = store.call_method0("close");
         let json_mod = py.import("json")?;
         let dumps_kwargs = PyDict::new(py);
@@ -831,11 +837,7 @@ pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, Bridge
 
 /// List identities filtered by dataset/status as a JSON array.
 /// Empty strings = no filter on that dimension.
-pub fn identity_list(
-    dataset: &str,
-    status: &str,
-    db_path: &str,
-) -> Result<String, BridgeError> {
+pub fn identity_list(dataset: &str, status: &str, db_path: &str) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let identity = py.import("goldenmatch.identity")?;
@@ -916,7 +918,10 @@ pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError
             "dataset is required and must be non-empty".into(),
         ));
     }
-    if !matches!(args.decision, "approve" | "reject" | "field_correct" | "cluster_decision") {
+    if !matches!(
+        args.decision,
+        "approve" | "reject" | "field_correct" | "cluster_decision"
+    ) {
         return Err(BridgeError::Validation(format!(
             "invalid decision {:?}; expected approve, reject, field_correct, or cluster_decision",
             args.decision,
@@ -944,8 +949,10 @@ pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError
 
         // Build Correction kwargs based on shape.
         let kwargs = PyDict::new(py);
-        let new_id: String = uuid_mod.call_method0("uuid4")?
-            .call_method0("__str__")?.extract()?;
+        let new_id: String = uuid_mod
+            .call_method0("uuid4")?
+            .call_method0("__str__")?
+            .extract()?;
         kwargs.set_item("id", &new_id)?;
         kwargs.set_item("source", source)?;
         kwargs.set_item("trust", trust)?;
@@ -954,27 +961,26 @@ pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError
         kwargs.set_item("dataset", args.dataset)?;
         kwargs.set_item("reason", args.reason)?;
         kwargs.set_item("matchkey_name", args.matchkey_name)?;
-        kwargs.set_item("created_at", datetime_mod.call_method0("datetime")?
-            .getattr("now")?.call0()?)?;
+        kwargs.set_item(
+            "created_at",
+            datetime_mod
+                .call_method0("datetime")?
+                .getattr("now")?
+                .call0()?,
+        )?;
         kwargs.set_item("decision", args.decision)?;
 
         match args.decision {
             "field_correct" => {
                 let field_name = args.field_name.ok_or_else(|| {
-                    BridgeError::Validation(
-                        "field_correct requires field_name".into(),
-                    )
+                    BridgeError::Validation("field_correct requires field_name".into())
                 })?;
                 let corrected_value = args.corrected_value.ok_or_else(|| {
-                    BridgeError::Validation(
-                        "field_correct requires corrected_value".into(),
-                    )
+                    BridgeError::Validation("field_correct requires corrected_value".into())
                 })?;
-                let cluster_id = args.cluster_id
-                    .or(args.id_a)
-                    .ok_or_else(|| BridgeError::Validation(
-                        "field_correct requires cluster_id".into(),
-                    ))?;
+                let cluster_id = args.cluster_id.or(args.id_a).ok_or_else(|| {
+                    BridgeError::Validation("field_correct requires cluster_id".into())
+                })?;
                 kwargs.set_item("id_a", cluster_id)?;
                 kwargs.set_item("id_b", 0i64)?;
                 kwargs.set_item("original_score", 0.0f64)?;
@@ -984,30 +990,26 @@ pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError
             }
             "cluster_decision" => {
                 let score = args.cluster_score.ok_or_else(|| {
-                    BridgeError::Validation(
-                        "cluster_decision requires cluster_score".into(),
-                    )
+                    BridgeError::Validation("cluster_decision requires cluster_score".into())
                 })?;
                 let outcome = args.cluster_outcome.ok_or_else(|| {
-                    BridgeError::Validation(
-                        "cluster_decision requires cluster_outcome".into(),
-                    )
+                    BridgeError::Validation("cluster_decision requires cluster_outcome".into())
                 })?;
                 if !matches!(outcome, "approve" | "reject") {
                     return Err(BridgeError::Validation(format!(
-                        "cluster_outcome must be approve or reject; got {:?}", outcome,
+                        "cluster_outcome must be approve or reject; got {:?}",
+                        outcome,
                     )));
                 }
                 if !(0.0..=1.0).contains(&score) {
                     return Err(BridgeError::Validation(format!(
-                        "cluster_score must be in [0, 1]; got {}", score,
+                        "cluster_score must be in [0, 1]; got {}",
+                        score,
                     )));
                 }
-                let cluster_id = args.cluster_id
-                    .or(args.id_a)
-                    .ok_or_else(|| BridgeError::Validation(
-                        "cluster_decision requires cluster_id".into(),
-                    ))?;
+                let cluster_id = args.cluster_id.or(args.id_a).ok_or_else(|| {
+                    BridgeError::Validation("cluster_decision requires cluster_id".into())
+                })?;
                 kwargs.set_item("id_a", cluster_id)?;
                 kwargs.set_item("id_b", 0i64)?;
                 kwargs.set_item("original_score", 0.0f64)?;
@@ -1015,12 +1017,12 @@ pub fn correction_add(args: CorrectionAddArgs<'_>) -> Result<String, BridgeError
                 kwargs.set_item("cluster_outcome", outcome)?;
             }
             "approve" | "reject" => {
-                let id_a = args.id_a.ok_or_else(|| BridgeError::Validation(
-                    format!("{} requires id_a", args.decision),
-                ))?;
-                let id_b = args.id_b.ok_or_else(|| BridgeError::Validation(
-                    format!("{} requires id_b", args.decision),
-                ))?;
+                let id_a = args.id_a.ok_or_else(|| {
+                    BridgeError::Validation(format!("{} requires id_a", args.decision))
+                })?;
+                let id_b = args.id_b.ok_or_else(|| {
+                    BridgeError::Validation(format!("{} requires id_b", args.decision))
+                })?;
                 kwargs.set_item("id_a", id_a)?;
                 kwargs.set_item("id_b", id_b)?;
                 kwargs.set_item("original_score", args.original_score.unwrap_or(0.0))?;
@@ -1582,7 +1584,10 @@ pub fn preflight(rows_json: &str, config_json: &str) -> Result<String, BridgeErr
             }
             let result = PyDict::new(py);
             result.set_item("has_errors", report.getattr("has_errors")?)?;
-            result.set_item("config_was_modified", report.getattr("config_was_modified")?)?;
+            result.set_item(
+                "config_was_modified",
+                report.getattr("config_was_modified")?,
+            )?;
             result.set_item("findings", findings)?;
             py_json_dumps(py, result.into_any())
         })();
@@ -1614,8 +1619,7 @@ pub fn postflight(rows_json: &str, config_json: &str) -> Result<String, BridgeEr
 
             let post_kwargs = PyDict::new(py);
             post_kwargs.set_item("pair_scores", scored_pairs)?;
-            let report =
-                verify.call_method("postflight", (df, config), Some(&post_kwargs))?;
+            let report = verify.call_method("postflight", (df, config), Some(&post_kwargs))?;
 
             let adjustments = pyo3::types::PyList::empty(py);
             for a in report.getattr("adjustments")?.try_iter()? {
@@ -1805,7 +1809,10 @@ pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String,
                 // NULL out via this path; preserve the input to be safe.)
                 return Ok(None);
             }
-            let s: String = py.import("builtins")?.call_method1("str", (result,))?.extract()?;
+            let s: String = py
+                .import("builtins")?
+                .call_method1("str", (result,))?
+                .extract()?;
             Ok(Some(s))
         })()
         .unwrap_or(None);
@@ -1972,9 +1979,8 @@ mod tests {
                 let cfg_v: serde_json::Value =
                     serde_json::from_str(&result.config_json).expect("config_json not valid JSON");
                 assert!(cfg_v.is_object(), "config_json not an object");
-                let tel_v: serde_json::Value =
-                    serde_json::from_str(&result.telemetry_json)
-                        .expect("telemetry_json not valid JSON");
+                let tel_v: serde_json::Value = serde_json::from_str(&result.telemetry_json)
+                    .expect("telemetry_json not valid JSON");
                 assert!(tel_v.is_object(), "telemetry_json not an object");
             }
             Err(e) => require_or_skip(e, "autoconfig_returns_config_and_telemetry"),
@@ -2099,7 +2105,11 @@ mod tests {
                 // Scores must be finite and in [0, 1].
                 for p in &pairs {
                     assert!(p.score.is_finite(), "non-finite score: {}", p.score);
-                    assert!((0.0..=1.0).contains(&p.score), "score out of range: {}", p.score);
+                    assert!(
+                        (0.0..=1.0).contains(&p.score),
+                        "score out of range: {}",
+                        p.score
+                    );
                 }
             }
             Err(e) => require_or_skip(e, "dedupe_pairs"),
@@ -2135,8 +2145,7 @@ mod tests {
 
     #[test]
     fn test_identity_resolve_not_found() {
-        let dir = std::env::temp_dir()
-            .join(format!("gm-id-resolve-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gm-id-resolve-{}", std::process::id()));
         let db_path = dir.join("identity.db").to_string_lossy().into_owned();
         match identity_resolve("nosource:999", &db_path) {
             Ok(json) => {
@@ -2154,8 +2163,7 @@ mod tests {
 
     #[test]
     fn test_identity_view_not_found() {
-        let dir = std::env::temp_dir()
-            .join(format!("gm-id-view-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gm-id-view-{}", std::process::id()));
         let db_path = dir.join("identity.db").to_string_lossy().into_owned();
         match identity_view("nonexistent-entity-id", &db_path) {
             Ok(json) => {
@@ -2172,8 +2180,7 @@ mod tests {
 
     #[test]
     fn test_identity_history_not_found() {
-        let dir = std::env::temp_dir()
-            .join(format!("gm-id-hist-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gm-id-hist-{}", std::process::id()));
         let db_path = dir.join("identity.db").to_string_lossy().into_owned();
         match identity_history("nonexistent-entity-id", &db_path) {
             Ok(json) => {
@@ -2191,8 +2198,7 @@ mod tests {
 
     #[test]
     fn test_identity_conflicts_empty_db() {
-        let dir = std::env::temp_dir()
-            .join(format!("gm-id-conflicts-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gm-id-conflicts-{}", std::process::id()));
         let db_path = dir.join("identity.db").to_string_lossy().into_owned();
         match identity_conflicts("", &db_path) {
             Ok(json) => {
@@ -2209,8 +2215,7 @@ mod tests {
 
     #[test]
     fn test_identity_list_empty_db() {
-        let dir = std::env::temp_dir()
-            .join(format!("gm-id-list-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gm-id-list-{}", std::process::id()));
         let db_path = dir.join("identity.db").to_string_lossy().into_owned();
         match identity_list("", "", &db_path) {
             Ok(json) => {
@@ -2260,7 +2265,11 @@ mod tests {
         match correction_add(args) {
             Ok(_) => panic!("expected validation error for bad decision"),
             Err(BridgeError::Validation(msg)) => {
-                assert!(msg.contains("decision") || msg.contains("invalid"), "msg: {}", msg);
+                assert!(
+                    msg.contains("decision") || msg.contains("invalid"),
+                    "msg: {}",
+                    msg
+                );
             }
             Err(e) => eprintln!("correction_add bad_decision (non-validation err): {e}"),
         }
@@ -2270,8 +2279,7 @@ mod tests {
 
     #[test]
     fn test_correction_list_empty_store() {
-        let dir = std::env::temp_dir()
-            .join(format!("gm-corr-list-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gm-corr-list-{}", std::process::id()));
         let path = dir.join("memory.db").to_string_lossy().into_owned();
         match correction_list(None, Some(&path)) {
             Ok(json) => {
@@ -2305,7 +2313,10 @@ mod tests {
     #[test]
     fn test_suggest_threshold_bimodal() {
         // Bimodal distribution -> expect Some(threshold in (0, 1)).
-        let scores: Vec<f64> = (0..50).map(|_| 0.1_f64).chain((0..50).map(|_| 0.9_f64)).collect();
+        let scores: Vec<f64> = (0..50)
+            .map(|_| 0.1_f64)
+            .chain((0..50).map(|_| 0.9_f64))
+            .collect();
         let scores_json = serde_json::to_string(&scores).unwrap();
         match suggest_threshold(&scores_json) {
             Ok(Some(t)) => {
@@ -2486,7 +2497,11 @@ mod tests {
                 let v: serde_json::Value =
                     serde_json::from_str(&json).expect("autofix_table not valid JSON");
                 assert!(v.is_object(), "expected JSON object");
-                assert!(v.get("fixed_rows").is_some(), "missing fixed_rows key; got: {}", json);
+                assert!(
+                    v.get("fixed_rows").is_some(),
+                    "missing fixed_rows key; got: {}",
+                    json
+                );
                 assert!(v.get("fixes").is_some(), "missing fixes key");
             }
             Err(e) => require_or_skip(e, "autofix_table"),
@@ -2519,8 +2534,16 @@ mod tests {
                 // serialization can embed raw control chars in string values,
                 // which strict JSON parsing rejects -- not a marshalling fault.
                 assert!(!json.is_empty(), "preflight returned empty");
-                assert!(json.trim_start().starts_with('{'), "preflight not a JSON object; got: {}", json);
-                assert!(json.contains("\"has_errors\""), "missing has_errors; got: {}", json);
+                assert!(
+                    json.trim_start().starts_with('{'),
+                    "preflight not a JSON object; got: {}",
+                    json
+                );
+                assert!(
+                    json.contains("\"has_errors\""),
+                    "missing has_errors; got: {}",
+                    json
+                );
                 assert!(json.contains("\"findings\""), "missing findings");
             }
             Err(e) => require_or_skip(e, "preflight_clean_run"),
@@ -2536,8 +2559,16 @@ mod tests {
             Ok(json) => {
                 // Structural check (not strict from_str): see preflight note.
                 assert!(!json.is_empty(), "postflight returned empty");
-                assert!(json.trim_start().starts_with('{'), "postflight not a JSON object; got: {}", json);
-                assert!(json.contains("\"signals\""), "missing signals; got: {}", json);
+                assert!(
+                    json.trim_start().starts_with('{'),
+                    "postflight not a JSON object; got: {}",
+                    json
+                );
+                assert!(
+                    json.contains("\"signals\""),
+                    "missing signals; got: {}",
+                    json
+                );
                 assert!(json.contains("\"adjustments\""), "missing adjustments");
             }
             Err(e) => require_or_skip(e, "postflight_basic"),
@@ -2570,7 +2601,11 @@ mod tests {
                 // Structural check (not strict from_str): see preflight note.
                 // Fail-soft: either a proper EMResult object or {"error": ...}.
                 assert!(!json.is_empty(), "train_em returned empty string");
-                assert!(json.trim_start().starts_with('{'), "train_em not a JSON object; got: {}", json);
+                assert!(
+                    json.trim_start().starts_with('{'),
+                    "train_em not a JSON object; got: {}",
+                    json
+                );
             }
             Err(e) => require_or_skip(e, "train_em_minimal"),
         }
@@ -2597,7 +2632,10 @@ mod tests {
         // Unknown transform -> fail-open, returns input unchanged.
         match goldenflow_transform("definitely_not_a_real_transform", "hello world") {
             Ok(result) => {
-                assert_eq!(result, "hello world", "fail-open should return input unchanged");
+                assert_eq!(
+                    result, "hello world",
+                    "fail-open should return input unchanged"
+                );
             }
             Err(e) => require_or_skip(e, "goldenflow_transform_unknown_passthrough"),
         }
@@ -2613,7 +2651,10 @@ mod tests {
             Ok(result) => {
                 // Either normalized (goldenflow present) or passthrough (absent).
                 // Both are correct: just verify non-empty and valid UTF-8.
-                assert!(!result.is_empty(), "goldenflow_transform returned empty string");
+                assert!(
+                    !result.is_empty(),
+                    "goldenflow_transform returned empty string"
+                );
             }
             Err(e) => require_or_skip(e, "goldenflow_transform_email_normalize"),
         }
