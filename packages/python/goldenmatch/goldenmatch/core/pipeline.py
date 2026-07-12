@@ -1436,13 +1436,18 @@ def _run_fused_match_short_circuit(
     if _preflight is not None and not getattr(config, "_strict_autoconfig", False):
         return None
 
+    # D2s-c: seam reads (dual-rep once the spine hands Frames at D2s-d).
+    from goldenmatch.core.frame import to_frame as _tf_entry
     from goldenmatch.core.fused_match import (
         run_match_fused_arrow,
         run_match_fused_multipass_arrow,
     )
 
-    n_rows = collected_df.height
-    columns = {c: collected_df[c].to_arrow() for c in _fused_needed_src_cols(config)}
+    _cf_entry = _tf_entry(collected_df)
+    n_rows = _cf_entry.height
+    columns = {
+        c: _cf_entry.column(c).to_arrow() for c in _fused_needed_src_cols(config)
+    }
     fused_tbl = run_match_fused_arrow(
         columns, config, n_rows=n_rows
     ) or run_match_fused_multipass_arrow(columns, config, n_rows=n_rows)

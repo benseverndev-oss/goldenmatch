@@ -227,6 +227,16 @@ class Frame(Protocol):
     # polars groups by VALUE (split runs merge), arrow run_end_encode is
     # adjacency-based; they agree ONLY on sorted input (probed 2026-07-12).
     def run_lengths(self, key: str) -> list[int]: ...
+    # D2s-c: bucket assignment for score_buckets' first-level partition.
+    # PER-LANE contract (W4e precedent): buckets are shard-internal and never
+    # output-visible (workers sort by __block_key__ inside each bucket), so
+    # the two backends need NOT agree on assignments -- only on the shape:
+    # values in [0, n_buckets), deterministic within a lane, equal keys ->
+    # equal bucket. polars = the pipeline's hash(seed) % n expr VERBATIM;
+    # arrow = dictionary-encode codes % n (vectorized, no hash kernel in pc).
+    def with_bucket_column(
+        self, key: str, dst: str, n_buckets: int, seed: int
+    ) -> Frame: ...
     # D5c: row-dict projection (probabilistic's select(cols).to_dicts()).
     def select_dicts(self, cols: Sequence[str]) -> list[dict]: ...
     def evaluate_validation_rule(
@@ -764,6 +774,16 @@ class PolarsFrame:
             .agg(pl.len().alias("__size__"))
             .collect()["__size__"]
             .to_list()
+        )
+
+    def with_bucket_column(
+        self, key: str, dst: str, n_buckets: int, seed: int
+    ) -> PolarsFrame:
+        # score_buckets' bucket_hash_modulo stage VERBATIM.
+        return PolarsFrame(
+            self._df.with_columns(
+                (pl.col(key).hash(seed=seed) % n_buckets).alias(dst)
+            )
         )
 
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
@@ -1652,6 +1672,27 @@ class ArrowFrame:
             return []
         ends = pc.run_end_encode(arr).run_ends.to_pylist()
         return [ends[0]] + [ends[i] - ends[i - 1] for i in range(1, len(ends))]
+
+    def with_bucket_column(
+        self, key: str, dst: str, n_buckets: int, seed: int
+    ) -> ArrowFrame:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        # Per-lane assignment (see the protocol note): dictionary codes are
+        # dense first-appearance ints, so % n_buckets spreads distinct keys
+        # round-robin. seed is unused on this lane (no pc hash kernel); null
+        # keys get code null -> fill 0 (they land in one bucket, same as the
+        # polars lane where hash(null) is a single value).
+        arr = self._tbl.column(key).combine_chunks()
+        codes = pc.fill_null(arr.dictionary_encode().indices, 0)
+        codes64 = pc.cast(codes, pa.int64())
+        # pc has no mod kernel: x - (x // n) * n (codes are non-negative;
+        # integer pc.divide truncates like //).
+        bucket = pc.subtract(
+            codes64, pc.multiply(pc.divide(codes64, n_buckets), n_buckets)
+        )
+        return ArrowFrame(self._tbl.append_column(dst, bucket))
 
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         return self._tbl.select(list(cols)).to_pylist()
