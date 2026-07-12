@@ -2,6 +2,24 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.0.2] - 2026-07-12
+
+### Performance
+- **Iterative hotspot pass on the Arrow scan path -- ~2x faster** (1M x 7 columns:
+  scan_file 3.74s -> 1.91s, native; findings unchanged, differential Jaccard 1.000).
+  - `str_match_count` / `str_replace_all` / `str_to_date` now prefer **vectorized**
+    `pyarrow.compute` (`match_substring_regex` / `replace_substring_regex` / `strptime`)
+    over the list-based native kernel, which forced `to_pylist()` materialization of
+    the whole column (the single largest scan cost at 1M rows). The native kernel
+    remains the fallback for patterns pyarrow's RE2 cannot compile (e.g. `\uXXXX`).
+  - `value_counts_desc` uses `pc.value_counts` (C++) instead of a Python `Counter`
+    over a materialized list.
+  - `ArrowFrame` caches wrapped columns and `ArrowColumn` memoizes
+    `n_unique`/`drop_nulls`/`numeric_stats`, so those run once per column instead of
+    once per profiler (all seam profilers share one frame).
+  - Net effect: the compiled kernel (`[native]`) now measurably accelerates a scan
+    (1.91s vs 3.04s pyarrow-only) where before the string/cast overhead masked it.
+
 ## [3.0.1] - 2026-07-12
 
 ### Performance
