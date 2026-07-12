@@ -226,6 +226,13 @@ class Frame(Protocol):
         self, column: str, rule_type: str, params: dict
     ) -> Column: ...
     def with_null_where(self, col: str, mask: Column) -> Frame: ...
+    # W5b-3b: auto_fix_dataframe's seven fixes as ONE op (the
+    # apply_weak_quality verbatim-block precedent). PROBED arrow recipes:
+    # \s{2,} collapse needs the W2a explicit class
+    # [\t\n\x0b\f\r\x{0085}\p{Z}] (RE2 \s is ASCII; polars Rust-regex is
+    # Unicode -- NBSP/em-space diverge otherwise); the control-char class is
+    # pure ASCII so RE2 == Python re.sub there; BOM replace is literal.
+    def auto_fix(self, profile: dict | None = None) -> tuple[Frame, list[dict]]: ...
 
 
 class PolarsColumn:
@@ -787,6 +794,143 @@ class PolarsFrame:
                 pl.when(m).then(None).otherwise(pl.col(col)).alias(col)
             )
         )
+
+    def auto_fix(self, profile: dict | None = None) -> tuple[PolarsFrame, list[dict]]:
+        # core/autofix.py's body VERBATIM (moved in; autofix.py is the thin
+        # caller now).
+        import re as _re_mod
+
+        _NULL_STRINGS = frozenset({
+            "NULL", "N/A", "NA", "n/a", "None", "none", "", "-", ".", "nan", "NaN",
+        })
+        _CONTROL_CHAR_RE = _re_mod.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+        df = self._df
+        fixes: list[dict] = []
+        string_cols = [c for c in df.columns if df[c].dtype in (pl.Utf8, pl.String)]
+
+        bom_affected = 0
+        if string_cols:
+            for col in string_cols:
+                non_null = df[col].drop_nulls()
+                if len(non_null) > 0:
+                    count = int(non_null.str.contains("\ufeff").sum())
+                    if count > 0:
+                        bom_affected += count
+                        df = df.with_columns(
+                            pl.col(col).str.replace_all("\ufeff", "").alias(col)
+                        )
+        fixes.append({
+            "fix": "strip_bom", "column": None, "rows_affected": bom_affected,
+            "detail": f"Removed BOM characters from {bom_affected} cell(s)",
+        })
+
+        empty_conditions = []
+        for col in df.columns:
+            if df[col].dtype in (pl.Utf8, pl.String):
+                empty_conditions.append(
+                    pl.col(col).is_null() | (pl.col(col).str.strip_chars() == "")
+                )
+            else:
+                empty_conditions.append(pl.col(col).is_null())
+        if empty_conditions:
+            all_empty_expr = empty_conditions[0]
+            for cond in empty_conditions[1:]:
+                all_empty_expr = all_empty_expr & cond
+            empty_count = int(df.select(all_empty_expr.alias("__empty__"))["__empty__"].sum())
+            if empty_count > 0:
+                df = df.filter(~all_empty_expr)
+        else:
+            empty_count = 0
+        fixes.append({
+            "fix": "drop_empty_rows", "column": None, "rows_affected": empty_count,
+            "detail": f"Dropped {empty_count} fully empty row(s)",
+        })
+
+        null_cols_dropped: list[str] = []
+        if profile is not None and "columns" in profile:
+            for cp in profile["columns"]:
+                if cp["name"] in df.columns and cp["null_rate"] >= 1.0:
+                    null_cols_dropped.append(cp["name"])
+        else:
+            for col in df.columns:
+                if df[col].null_count() == df.height:
+                    null_cols_dropped.append(col)
+        if null_cols_dropped:
+            df = df.drop(null_cols_dropped)
+        fixes.append({
+            "fix": "drop_null_columns",
+            "column": ", ".join(null_cols_dropped) if null_cols_dropped else None,
+            "rows_affected": len(null_cols_dropped),
+            "detail": f"Dropped {len(null_cols_dropped)} fully null column(s): {null_cols_dropped}" if null_cols_dropped else "No fully null columns found",
+        })
+
+        string_cols = [c for c in df.columns if df[c].dtype in (pl.Utf8, pl.String)]
+
+        trim_affected = 0
+        for col in string_cols:
+            non_null = df[col].drop_nulls()
+            if len(non_null) > 0:
+                count = int((non_null != non_null.str.strip_chars()).sum())
+                if count > 0:
+                    trim_affected += count
+                    df = df.with_columns(pl.col(col).str.strip_chars().alias(col))
+        fixes.append({
+            "fix": "trim_whitespace", "column": None, "rows_affected": trim_affected,
+            "detail": f"Trimmed whitespace in {trim_affected} cell(s)",
+        })
+
+        null_norm_affected = 0
+        for col in string_cols:
+            non_null = df[col].drop_nulls()
+            if len(non_null) > 0:
+                count = int(non_null.is_in(list(_NULL_STRINGS)).sum())
+                if count > 0:
+                    null_norm_affected += count
+                    df = df.with_columns(
+                        pl.when(pl.col(col).is_in(list(_NULL_STRINGS)))
+                        .then(None).otherwise(pl.col(col)).alias(col)
+                    )
+        fixes.append({
+            "fix": "normalize_nulls", "column": None, "rows_affected": null_norm_affected,
+            "detail": f"Normalized {null_norm_affected} null-like string(s) to actual null",
+        })
+
+        string_cols = [c for c in df.columns if df[c].dtype in (pl.Utf8, pl.String)]
+
+        collapse_affected = 0
+        for col in string_cols:
+            non_null = df[col].drop_nulls()
+            if len(non_null) > 0:
+                count = int((non_null != non_null.str.replace_all(r"\s{2,}", " ")).sum())
+                if count > 0:
+                    collapse_affected += count
+                    df = df.with_columns(
+                        pl.col(col).str.replace_all(r"\s{2,}", " ").alias(col)
+                    )
+        fixes.append({
+            "fix": "collapse_whitespace", "column": None, "rows_affected": collapse_affected,
+            "detail": f"Collapsed repeated whitespace in {collapse_affected} cell(s)",
+        })
+
+        nonprint_affected = 0
+        for col in string_cols:
+            non_null = df[col].drop_nulls()
+            if len(non_null) > 0:
+                count = int(non_null.str.contains(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]").sum())
+                if count > 0:
+                    nonprint_affected += count
+                    df = df.with_columns(
+                        pl.col(col).map_elements(
+                            lambda v, _re=_CONTROL_CHAR_RE: _re.sub("", v) if v is not None else None,
+                            return_dtype=pl.Utf8,
+                        ).alias(col)
+                    )
+        fixes.append({
+            "fix": "remove_non_printable", "column": None, "rows_affected": nonprint_affected,
+            "detail": f"Removed non-printable characters from {nonprint_affected} cell(s)",
+        })
+
+        return PolarsFrame(df), fixes
 
 
 class ArrowColumn:
@@ -1516,6 +1660,134 @@ class ArrowFrame:
         src = self._tbl.column(col).combine_chunks()
         nulled = pc.if_else(pc.fill_null(m, False), None, src)
         return ArrowFrame(self._tbl.set_column(idx, col, nulled))
+
+    def auto_fix(self, profile: dict | None = None) -> tuple[ArrowFrame, list[dict]]:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        _NULL_STRINGS = [
+            "NULL", "N/A", "NA", "n/a", "None", "none", "", "-", ".", "nan", "NaN",
+        ]
+        # W2a class: RE2 \s is ASCII; this matches polars' Unicode \s.
+        _WS2 = r"[\t\n\x0b\f\r\x{0085}\p{Z}]{2,}"
+        _CTRL = r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
+        tbl = self._tbl
+
+        def _is_text(t) -> bool:
+            return pa.types.is_string(t) or pa.types.is_large_string(t)
+
+        def _set(t, name, arr):
+            return t.set_column(t.column_names.index(name), name, arr)
+
+        def _text_cols(t):
+            return [c for c in t.column_names if _is_text(t.schema.field(c).type)]
+
+        fixes: list[dict] = []
+
+        bom_affected = 0
+        for col in _text_cols(tbl):
+            arr = tbl.column(col).combine_chunks()
+            hits = pc.sum(pc.match_substring(arr, "\ufeff")).as_py() or 0
+            if hits > 0:
+                bom_affected += hits
+                tbl = _set(tbl, col, pc.replace_substring(arr, pattern="\ufeff", replacement=""))
+        fixes.append({
+            "fix": "strip_bom", "column": None, "rows_affected": bom_affected,
+            "detail": f"Removed BOM characters from {bom_affected} cell(s)",
+        })
+
+        empty_mask = None
+        for col in tbl.column_names:
+            arr = tbl.column(col).combine_chunks()
+            if _is_text(tbl.schema.field(col).type):
+                cond = pc.or_(
+                    pc.is_null(arr),
+                    pc.equal(pc.utf8_trim_whitespace(pc.fill_null(arr, "x")), ""),
+                )
+            else:
+                cond = pc.is_null(arr)
+            empty_mask = cond if empty_mask is None else pc.and_(empty_mask, cond)
+        if empty_mask is not None:
+            empty_count = pc.sum(empty_mask).as_py() or 0
+            if empty_count > 0:
+                tbl = tbl.filter(pc.invert(empty_mask))
+        else:
+            empty_count = 0
+        fixes.append({
+            "fix": "drop_empty_rows", "column": None, "rows_affected": empty_count,
+            "detail": f"Dropped {empty_count} fully empty row(s)",
+        })
+
+        null_cols_dropped: list[str] = []
+        if profile is not None and "columns" in profile:
+            for cp in profile["columns"]:
+                if cp["name"] in tbl.column_names and cp["null_rate"] >= 1.0:
+                    null_cols_dropped.append(cp["name"])
+        else:
+            for col in tbl.column_names:
+                if tbl.column(col).null_count == tbl.num_rows:
+                    null_cols_dropped.append(col)
+        if null_cols_dropped:
+            tbl = tbl.drop_columns(null_cols_dropped)
+        fixes.append({
+            "fix": "drop_null_columns",
+            "column": ", ".join(null_cols_dropped) if null_cols_dropped else None,
+            "rows_affected": len(null_cols_dropped),
+            "detail": f"Dropped {len(null_cols_dropped)} fully null column(s): {null_cols_dropped}" if null_cols_dropped else "No fully null columns found",
+        })
+
+        trim_affected = 0
+        for col in _text_cols(tbl):
+            arr = tbl.column(col).combine_chunks()
+            trimmed = pc.utf8_trim_whitespace(arr)
+            count = pc.sum(pc.not_equal(arr, trimmed)).as_py() or 0
+            if count > 0:
+                trim_affected += count
+                tbl = _set(tbl, col, trimmed)
+        fixes.append({
+            "fix": "trim_whitespace", "column": None, "rows_affected": trim_affected,
+            "detail": f"Trimmed whitespace in {trim_affected} cell(s)",
+        })
+
+        null_norm_affected = 0
+        for col in _text_cols(tbl):
+            arr = tbl.column(col).combine_chunks()
+            is_null_str = pc.is_in(arr, value_set=pa.array(_NULL_STRINGS))
+            count = pc.sum(is_null_str).as_py() or 0
+            if count > 0:
+                null_norm_affected += count
+                tbl = _set(tbl, col, pc.if_else(pc.fill_null(is_null_str, False), None, arr))
+        fixes.append({
+            "fix": "normalize_nulls", "column": None, "rows_affected": null_norm_affected,
+            "detail": f"Normalized {null_norm_affected} null-like string(s) to actual null",
+        })
+
+        collapse_affected = 0
+        for col in _text_cols(tbl):
+            arr = tbl.column(col).combine_chunks()
+            collapsed = pc.replace_substring_regex(arr, pattern=_WS2, replacement=" ")
+            count = pc.sum(pc.not_equal(arr, collapsed)).as_py() or 0
+            if count > 0:
+                collapse_affected += count
+                tbl = _set(tbl, col, collapsed)
+        fixes.append({
+            "fix": "collapse_whitespace", "column": None, "rows_affected": collapse_affected,
+            "detail": f"Collapsed repeated whitespace in {collapse_affected} cell(s)",
+        })
+
+        nonprint_affected = 0
+        for col in _text_cols(tbl):
+            arr = tbl.column(col).combine_chunks()
+            count = pc.sum(pc.match_substring_regex(arr, _CTRL)).as_py() or 0
+            if count > 0:
+                nonprint_affected += count
+                tbl = _set(tbl, col, pc.replace_substring_regex(arr, pattern=_CTRL, replacement=""))
+        fixes.append({
+            "fix": "remove_non_printable", "column": None, "rows_affected": nonprint_affected,
+            "detail": f"Removed non-printable characters from {nonprint_affected} cell(s)",
+        })
+
+        return ArrowFrame(tbl), fixes
 
 
 def to_frame(obj: Any) -> Frame:
