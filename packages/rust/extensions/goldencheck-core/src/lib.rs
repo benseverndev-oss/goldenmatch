@@ -25,12 +25,14 @@ mod age;
 mod aggregate;
 mod arrow_support;
 mod benford;
+mod correlation;
 mod csv_infer;
 mod date;
 mod dc;
 mod duplicate;
 mod freshness;
 mod fuzzy;
+mod gof;
 mod keys;
 mod regex;
 mod sequence;
@@ -40,12 +42,14 @@ pub use age::{age_mismatch, AgeStats};
 pub use aggregate::{column_aggregate, dtype_category, ColumnAgg, DtypeCat};
 pub use arrow_support::intern_column;
 pub use benford::{benford_leading_digits, benford_leading_digits_slice};
+pub use correlation::{chi2_contingency_stat, pearson_r};
 pub use csv_infer::{infer_and_type, read_csv_bytes, read_csv_owned_bytes, TypedColumn};
 pub use date::str_to_date;
 pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
 pub use duplicate::{duplicate_signatures, DupStats};
 pub use freshness::{date_freshness, FreshStats};
 pub use fuzzy::{near_duplicate_clusters, near_duplicate_clusters_slice};
+pub use gof::chi2_gof;
 pub use keys::{
     composite_key_search, composite_key_search_slice, discover_approximate_fds,
     discover_approximate_fds_slice, discover_functional_dependencies,

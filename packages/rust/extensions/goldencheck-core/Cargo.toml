@@ -37,6 +37,17 @@ arrow = { version = "59", default-features = false }
 # type-inference kernel (`csv_infer`) -- mirrors the stdlib `csv` module the
 # Python reference uses.
 csv = "1"
+# Chi-squared goodness-of-fit p-value (`gof` kernel): we call
+# `statrs::function::gamma::gamma_ur` (the UPPER regularized incomplete gamma =
+# scipy's `chdtrc`/`gammaincc`) directly, so the p-value is tail-accurate (no
+# `1 - cdf` catastrophic cancellation in the small-p tail). `default-features =
+# false` is LOAD-BEARING for wasm: it drops the `rand`/`nalgebra`->`getrandom`
+# transitive chain (getrandom 0.2 is a COMPILE-TIME error on
+# `wasm32-unknown-unknown` without its `js` feature; the `function` module we
+# use needs no rng). NOTE the version: 0.17 default-features=false STILL pulled
+# `rand` (via `nalgebra`) and broke the wasm build; 0.18 drops it cleanly, so
+# goldencheck-wasm stays green with NO feature gate. Pin 0.18+.
+statrs = { version = "0.18", default-features = false }
 
 [dev-dependencies]
 # Property/parity checks for the Benford leading-digit extraction, plus the

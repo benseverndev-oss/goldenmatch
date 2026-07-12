@@ -25,6 +25,7 @@ except ImportError as _err:  # pragma: no cover
 
 from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import CorrelationEntry
+from goldencheck.core._native_loader import native_enabled, native_module
 
 if TYPE_CHECKING:
     pass
@@ -76,6 +77,20 @@ def _pearson_entry(df: pl.DataFrame, col_a: str, col_b: str) -> CorrelationEntry
         return None
 
     corr, _ = pearsonr(a_vals, b_vals)
+    # Shadow (W4): also compute the native pearson_r kernel and discard it. The
+    # emitted CorrelationEntry stays scipy until the Flip; the guard + swallow
+    # ensure this shadow compute can never raise out or alter the finding.
+    if native_enabled("pearson_r"):
+        try:
+            import pyarrow as pa
+
+            # Cast to float64 -- the kernel downcasts to Float64Array (numeric
+            # columns may arrive as int dtype). Mirrors the benford kernel path.
+            xa = pa.array(np.asarray(a_vals, dtype=np.float64))
+            ya = pa.array(np.asarray(b_vals, dtype=np.float64))
+            native_module().pearson_r(xa, ya)
+        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException
+            logger.debug("native pearson_r shadow failed", exc_info=True)
     if not np.isfinite(corr):
         return None
 
@@ -128,6 +143,17 @@ def _cramers_v(df: pl.DataFrame, col_a: str, col_b: str) -> CorrelationEntry | N
     except Exception as exc:
         logger.debug("Chi2 contingency failed for (%s, %s): %s", col_a, col_b, exc)
         return None
+
+    # Shadow (W4): also compute the native chi2_contingency_stat kernel and
+    # discard it. Only reached when scipy did not raise (so the matrix is
+    # well-formed); the guard + swallow keep the finding scipy-authoritative.
+    if native_enabled("chi2_contingency"):
+        try:
+            native_module().chi2_contingency_stat(
+                matrix.flatten().tolist(), matrix.shape[0], matrix.shape[1]
+            )
+        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException
+            logger.debug("native chi2_contingency shadow failed", exc_info=True)
 
     n = int(matrix.sum())
     if n == 0:
