@@ -32,12 +32,26 @@ array-ization is leaf-local (`to_list`/`to_numpy` before rapidfuzz).
 - **D4 — ClusterFrames + golden-from-frames dual-backend** (pipeline.py ~2650,
   ~2925): ClusterFrames.metadata/assignments as Frames; the stats/member-id
   reads (`pl.col("size")>1 & ~oversized`) via seam ops. Real port work.
-- **D5 — classic fuzzy scoring on the seam** (largest; REQUIRED before dep
-  removal because configs the fused kernel declines still need block/score on
-  arrow): build_blocks' per-block frames + score_blocks_parallel orchestration
-  go Frame; leaf extraction (`to_list`/`to_numpy` for rapidfuzz) works on
-  ArrowColumn. Probabilistic + semantic-blocking + bucket paths follow the
-  same shape. Wall-gated per stage (>10% → owned kernel rule stands).
+- **D5 — classic fuzzy scoring on the seam (SUB-BATCHED, recon 2026-07-12;
+  order D5a → D5c → D5b → D5d)**. Findings: BlockResult.df is an
+  eagerly-collected group re-wrapped `.lazy()` (blocker.py:470-473), NOT a
+  live filter; grouping already seam-routed (group_partitions :378);
+  score_buckets' kernel is ALREADY arrow at the FFI (:762-766) -- only its
+  polars scaffolding ports; _find_exact_match_ids + cross-source filter
+  already seam.
+  - D5a (wall-neutral, zero new ops): leaf-extraction migration --
+    block_df["x"].to_list()/.to_numpy()/.unique().to_list() sites in
+    find_fuzzy_matches (:1096), _score_one_block (:1350-1353), probabilistic
+    (:1263-1339), bucket fallback (score_buckets:822-825) → seam column reads.
+  - D5c (narrow): _get_transformed_values fallback (:429) →
+    derive_transformed_column (seam twin exists); probabilistic .to_dicts()
+    (:1263) needs the ONE missing seam op.
+  - D5b (WALL-GATED 100K/1M): BlockResult.df becomes a seam Frame
+    (materialized, score_buckets slice model); drop .lazy()/.collect()
+    round-trips; candidate probe → Frame.height.
+  - D5d (heaviest, THE hot path, strictest gate): score_buckets' polars
+    scaffolding (with_columns/hash/partition_by/sort/slice, :953/:997/:1035)
+    → seam; compute core already arrow.
 - **D6 — the deletion**: default already arrow; delete the `polars` opt-out
   value + PolarsFrame + `_polars_dtype` + polars constructor branches;
   `_polars_lazy` proxy SURVIVES only in the extra-gated integration modules

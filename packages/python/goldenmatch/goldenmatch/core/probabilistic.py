@@ -1263,7 +1263,9 @@ def score_probabilistic(
     for row in block_df.select(["__row_id__"] + cols).to_dicts():
         row_lookup[row["__row_id__"]] = row
 
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+    row_ids = _to_frame_d5(block_df).column("__row_id__").to_list()
 
     # Compute weight range for normalization
     max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
@@ -1336,7 +1338,10 @@ def _field_values_from_list(raw: list | None, f, n: int) -> list[str | None]:
 def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | None]:
     """Transformed per-field values for a block, matching comparison_vector.
     Missing column -> all-null (slow path: level 0)."""
-    raw = block_df[f.field].to_list() if f.field in block_df.columns else None
+    from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+    _bf = _to_frame_d5(block_df)
+    raw = _bf.column(f.field).to_list() if f.field in _bf.columns else None
     return _field_values_from_list(raw, f, n)
 
 
