@@ -819,9 +819,12 @@ def score_buckets(
 
         # Python per-pair fallback: materialize the columns as lists.
         # field_specs: list of (xform_col, weight, score_fn, scorer_name).
-        row_ids = sorted_df["__row_id__"].to_list()
+        from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+        _sf = _to_frame_d5(sorted_df)
+        row_ids = _sf.column("__row_id__").to_list()
         field_arrays = [
-            sorted_df[col].to_list() for col, _w, _fn, _name in field_specs
+            _sf.column(col).to_list() for col, _w, _fn, _name in field_specs
         ]
         score_fns = [fn for _col, _w, fn, _name in field_specs]
         n_fields = len(field_specs)
