@@ -126,3 +126,11 @@ drift = [f for f in findings if f.source == "baseline_drift"]
 ## Benchmark
 
 GoldenCheck scores 88.40 on DQBench (versus Pandera 32.51, Great Expectations 21.68, Soda 22.36), at roughly 482K rows/sec.
+
+The Arrow-native scan that shipped in 3.0.0 got roughly **3.8x faster** across the
+3.0.x and 3.1.x releases (a 1M-row x 7-column mixed scan went 3.74s to about 1.0s),
+each release byte-identical to the last. The wins come from vectorized pyarrow ops,
+fused single-pass kernels, and a deterministic parallel scan. The scan thread pool
+is tunable with `GOLDENCHECK_SCAN_THREADS` (default parallel; set it to `1` to force
+sequential). Installing `goldencheck[native]` accelerates the scan further. See
+[Native acceleration](/goldencheck/native) for the details.

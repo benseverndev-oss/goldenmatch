@@ -11,7 +11,8 @@
 - REST API: `goldencheck serve` on port 8000
 
 ## Install
-- `pip install goldencheck` — Arrow-native, Polars-free: full scan (`scan_file`/`scan_dataframe`) of CSV/Parquet/Excel (pyarrow is a base dep since 3.0.0)
+- `pip install goldencheck` — Arrow-native, Polars-free: full scan (`scan_file`/`scan_dataframe`) of CSV/Parquet/Excel (pyarrow is a base dep since 3.0.0); fast by default (fused single-pass kernels + parallel scan)
+- `pip install goldencheck[native]` — compiled Rust kernels; now measurably accelerate the scan (~1.9s vs ~3.0s on 1M x 7), still optional (base install scans polars-free via pyarrow.compute)
 - `pip install goldencheck[baseline]` — deep statistical profiling & drift detection (pulls scipy/numpy + Polars)
 - `pip install goldencheck[polars]` — only for the `scan_dataframe(pl.DataFrame)` convenience overload
 - `pip install goldencheck[llm]` — LLM boost (~$0.01/scan)
@@ -126,6 +127,9 @@ ignore:
 
 ## Performance
 - 1M rows in 2.07s (482K rows/sec)
+- Default Arrow scan got ~3.8x faster across 3.0.x/3.1.x (1M x 7: 3.74s -> ~1.0s), each release byte-identical
+- `GOLDENCHECK_SCAN_THREADS` tunes the scan thread pool (default parallel = min(cpu, 8, ncols) at >=2 cols and >=50k rows; set `1` for sequential/reproducible profiling)
+- `goldencheck[native]` accelerates the scan (~1.9s vs ~3.0s on 1M x 7); accelerator, not a requirement
 - LLM boost: ~$0.01 per scan
 - 3 domain packs: healthcare, finance, ecommerce
 
