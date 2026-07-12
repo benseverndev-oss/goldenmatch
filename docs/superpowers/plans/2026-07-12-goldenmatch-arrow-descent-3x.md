@@ -115,6 +115,34 @@ cannot move while downstream still takes pl.LazyFrame):**
   `collected_df[c].to_arrow()` -> seam column reads).
 - D2s-d: move the :900 shim below collect for the eager-eligible arrow path
   (collected_df becomes Frame-typed); wall+RSS gate at 100K/1M.
+  **CONSUMER AUDIT (Explore, 2026-07-12) -- sub-batch spec:**
+  - D2s-d1 (mechanical, behavior-preserving both lanes): rewrite the B-class
+    collected_df reads via to_frame -- .height 1916/2601/3159 (+len at
+    3200/3203, quarantine 1784), .columns 2404/2473/2539/2913,
+    [col].to_list 2449/2615, select+to_dicts 1929 (select_dicts twin),
+    filter(is_in) 2861/2983 (filter_in), cast/fill_null/to_list 2475/2546
+    (Column.cast_str+fill_null), schema.items 2536 (rewrite over columns +
+    semantic_dtype). score_buckets prepared_df/slim_df: .height 486/528/
+    1012/1018, .columns 335/418/577-594/1097, .select 595; workers:
+    filter(pl.Series(mask)) 756 -> filter_mask, [col].to_list 831,
+    null_count 844; native-kernel extraction 760-764 is a no-op on arrow
+    (ArrowColumn.to_arrow already returns the pa array).
+  - D2s-d2 (the flip): eager-arrow path keeps _combined as ArrowFrame;
+    collected via precompute_matchkey_transforms_frame (producer twin
+    DONE); exact lane already dual-rep (D2s-a: _find_exact_match_ids
+    accepts Frame -- kill the combined_lf=collected_df.lazy() alias for
+    this path); score_buckets Frame entry (post-d1); GOLDEN BRIDGE:
+    multi_df -> pl.from_arrow at the golden-builder boundary ONLY (the
+    shim moves DOWN, not out; deep-D2 removes it). DECLINE the Frame lane
+    (fall back to today's :900 shim) when any C-class flag is set:
+    auto_suggest, memory store, pre/postflight, adaptive golden rules,
+    quality_weighting, rerank, llm scorer/boost, probabilistic EM,
+    NE-on-exact, identity, lineage. _semantic_blocking_pairs already
+    excluded by _eager_ok. _run_fused_match_short_circuit is seam-clean;
+    result frames already sink via _dict_frame_to_arrow.
+  - GATES: differential harness (bucket + fused datasets) + 100K/1M wall
+    A/B + RSS hold; the decline list must be asserted by a fixture per
+    flag (Frame lane refuses, classic lane output identical).
 - Deep-D2 proper (golden_fused dual-rep: seam sort/filter/gather;
   `gather_with_nulls` becomes a seam op; arrow twin = `take` with null
   indices) once multi_df is arrow.

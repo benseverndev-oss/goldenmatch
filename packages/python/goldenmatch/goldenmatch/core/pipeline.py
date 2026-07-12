@@ -1562,7 +1562,7 @@ def _run_fused_match_short_circuit(
     report = None
     if output_report:
         report = generate_dedupe_report(
-            total_records=collected_df.height,
+            total_records=collected_frame.height,
             total_clusters=len(clusters),
             cluster_sizes=[c["size"] for c in clusters.values()],
             oversized_clusters=len(oversized_ids),
@@ -1912,8 +1912,15 @@ def _run_dedupe_pipeline(
     )
     _columnar_pairs_df: pl.DataFrame | None = None
 
+    # D2s-d1: collected_df is dual-rep from here down (Frame at D2s-d2);
+    # always-on reads go through the seam. Decline-listed blocks (throughput
+    # tier, quality_weighting, llm boost/scorer, semantic) keep raw polars --
+    # they force the classic polars lane at D2s-d2.
+    from goldenmatch.core.frame import to_frame as _tf_d2s
+
+    _collected_frame = _tf_d2s(collected_df)
     # Top-line metric: every downstream pair-count ratio depends on N.
-    record_metric("record_count", collected_df.height)
+    record_metric("record_count", _collected_frame.height)
     record_metrics({
         "matchkey_count": len(matchkeys),
         "exact_matchkey_count": sum(1 for mk in matchkeys if mk.type == "exact"),
@@ -1926,7 +1933,7 @@ def _run_dedupe_pipeline(
     # Build source lookup for across_files_only filtering
     source_lookup = {}
     if across_files_only:
-        for row in collected_df.select("__row_id__", "__source__").to_dicts():
+        for row in _collected_frame.select_dicts(["__row_id__", "__source__"]):
             source_lookup[row["__row_id__"]] = row["__source__"]
 
     # Phase 1: Exact matchkeys (fast)
@@ -2612,7 +2619,7 @@ def _run_dedupe_pipeline(
             )
 
     # ── Step 4: CLUSTER ──
-    all_ids = collected_df["__row_id__"].to_list()
+    all_ids = _collected_frame.column("__row_id__").to_list()
     max_cluster_size = 100
     weak_threshold = 0.3
     auto_split = True
@@ -2910,7 +2917,7 @@ def _run_dedupe_pipeline(
                 from goldenmatch.core.frame import to_frame as _tf_golden
 
                 _golden_source = _tf_golden(collected_df).select([
-                    c for c in collected_df.columns
+                    c for c in _collected_frame.columns
                     if not any(c.startswith(p) for p in _internal_prefixes)
                 ]).native
             # Source per-cluster pair scores from the view so the slow builder's
@@ -2980,9 +2987,9 @@ def _run_dedupe_pipeline(
                     member_ids_all = list(row_to_cluster.keys())
 
                 with stage("golden_multi_df_filter"):
-                    multi_df = collected_df.filter(
-                        pl.col("__row_id__").is_in(member_ids_all)
-                    )
+                    multi_df = _collected_frame.filter_in(
+                        "__row_id__", member_ids_all
+                    ).native
 
                 # Slim projection (PR #595). v32 attribution localized the
                 # +9 GB peak jump entirely to golden_attach_cluster_id's
@@ -3156,7 +3163,7 @@ def _run_dedupe_pipeline(
             )
             total_clusters = len(clusters)
         report = generate_dedupe_report(
-            total_records=len(collected_df),
+            total_records=_collected_frame.height,
             total_clusters=total_clusters,
             cluster_sizes=cluster_sizes,
             oversized_clusters=oversized_count,

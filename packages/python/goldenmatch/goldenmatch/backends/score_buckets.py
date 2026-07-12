@@ -332,7 +332,9 @@ def _resolve_ne_specs(
         if fn is None:
             continue
         xform_col = _xform_sig(ne)
-        if xform_col not in prepared_df.columns:
+        from goldenmatch.core.frame import to_frame as _tf_cols
+
+        if xform_col not in _tf_cols(prepared_df).columns:
             continue
         out.append((xform_col, fn, float(ne.threshold), float(ne.penalty)))
     return out
@@ -415,7 +417,9 @@ def _resolve_fast_path(
             _decline(f"_resolve_score_pair_callable({scorer!r}) is None")
             return None
         xform_col = _xform_sig(f)
-        if xform_col not in prepared_df.columns:
+        from goldenmatch.core.frame import to_frame as _tf_cols
+
+        if xform_col not in _tf_cols(prepared_df).columns:
             return None
         field_specs.append((xform_col, float(weight), fn, scorer))
         total_weight += float(weight)
@@ -483,7 +487,12 @@ def score_buckets(
     Returns:
         All fuzzy pairs as (id_a, id_b, score) tuples.
     """
-    if prepared_df.height == 0:
+    # D2s-d1: dual-rep entry (Frame at D2s-d2); scalar reads via the seam.
+    from goldenmatch.core.frame import to_frame as _tf_entry
+
+    _prep_frame = _tf_entry(prepared_df)
+    prepared_df = _prep_frame.native
+    if _prep_frame.height == 0:
         return []
     # Resolve the block-key list HONORING multi-pass blocking: a `multi_pass`
     # config carries its keys in `.passes` with `.keys` empty (the schema
@@ -525,7 +534,7 @@ def score_buckets(
     # Three 5M Linux runs hung mid-score_buckets with no substage closing;
     # these prints expose the actual hang line.
     _t0 = time.perf_counter()
-    print(f"[score_buckets] entry: prepared_df.height={prepared_df.height} n_buckets={n_buckets}", flush=True)
+    print(f"[score_buckets] entry: prepared_df.height={_prep_frame.height} n_buckets={n_buckets}", flush=True)
 
     # Verbose per-bucket timing breakdown (issue #688 diagnosis aid). OFF by
     # default; set GOLDENMATCH_BUCKET_DEBUG=1 to split every native bucket call
@@ -574,15 +583,15 @@ def score_buckets(
     if os.environ.get("GOLDENMATCH_BUCKET_SLIM_PROJECTION", "1") != "0":
         with stage("bucket_slim_projection"):
             keep: list[str] = ["__row_id__"]
-            if "__source__" in prepared_df.columns:
+            if "__source__" in _prep_frame.columns:
                 keep.append("__source__")
-            keep.extend(c for c in prepared_df.columns if c.startswith("__xform_"))
+            keep.extend(c for c in _prep_frame.columns if c.startswith("__xform_"))
             # Probabilistic scoring (score_probabilistic_vectorized) reads the
             # RAW field columns and applies transforms itself, so keep them
             # (the weighted fast path uses __xform_* and doesn't need these).
             if is_probabilistic:
                 for f in mk.fields:
-                    if f.field in prepared_df.columns and f.field not in keep:
+                    if f.field in _prep_frame.columns and f.field not in keep:
                         keep.append(f.field)
             # Source fields the block-key expression reads. Multi-key blocking
             # (rare today) accumulates fields across every key in the config.
@@ -590,15 +599,17 @@ def score_buckets(
             for key in pass_keys:
                 block_key_sources.update(key.fields)
             for col in block_key_sources:
-                if col in prepared_df.columns and col not in keep:
+                if col in _prep_frame.columns and col not in keep:
                     keep.append(col)
-            slim_df = prepared_df.select(keep)
+            slim_frame = _prep_frame.select(keep)
+            slim_df = slim_frame.native
             print(
                 f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: slim projection "
-                f"{len(prepared_df.columns)} -> {len(keep)} cols",
+                f"{len(_prep_frame.columns)} -> {len(keep)} cols",
                 flush=True,
             )
     else:
+        slim_frame = _prep_frame
         slim_df = prepared_df
 
     # Freeze the exclude set ONCE across ALL passes (parity with polars-direct,
@@ -753,15 +764,32 @@ def score_buckets(
                 import numpy as np
 
                 row_mask = np.repeat(np.array(keep, dtype=bool), size_list)
-                native_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                if isinstance(sorted_df, pl.DataFrame):
+                    native_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                else:  # pa.Table lane: Table.filter takes a boolean array
+                    import pyarrow as _pa
+
+                    native_sorted_df = sorted_df.filter(_pa.array(row_mask))
                 kept_size_list = [s for s, k in zip(size_list, keep) if k]
                 if not kept_size_list:
                     return [], 0
-            row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
-            field_arrays_arrow = [
-                native_sorted_df[col].to_arrow()
-                for col, _w, _fn, _name in field_specs
-            ]
+            if isinstance(native_sorted_df, pl.DataFrame):
+                row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
+                field_arrays_arrow = [
+                    native_sorted_df[col].to_arrow()
+                    for col, _w, _fn, _name in field_specs
+                ]
+            else:  # pa.Table lane: already arrow -- combine chunks for the FFI
+                import pyarrow as _pa
+                import pyarrow.compute as _pc
+
+                row_ids_arrow = _pc.cast(
+                    native_sorted_df.column("__row_id__").combine_chunks(), _pa.int64()
+                )
+                field_arrays_arrow = [
+                    native_sorted_df.column(col).combine_chunks()
+                    for col, _w, _fn, _name in field_specs
+                ]
             size_list = kept_size_list
             _tk0 = time.perf_counter() if _bucket_debug else 0.0
             # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
@@ -828,7 +856,7 @@ def score_buckets(
         n_fields = len(field_specs)
         # NE per-pair specs (post-2026-05-29 widening). Pre-materialize the
         # NE xform columns; empty when NE missing / all-broken (no overhead).
-        ne_arrays = [sorted_df[col].to_list() for col, _fn, _t, _p in ne_specs]
+        ne_arrays = [_sf.column(col).to_list() for col, _fn, _t, _p in ne_specs]
         ne_fns = [fn for _col, fn, _t, _p in ne_specs]
         ne_thresholds = [t for _col, _fn, t, _p in ne_specs]
         ne_penalties = [p for _col, _fn, _t, p in ne_specs]
@@ -841,7 +869,7 @@ def score_buckets(
         # gain, so a column with nulls falls back to the per-pair loop wholesale.
         vec_scorer_names: list[str] | None = None
         if n_ne == 0 and all(name in _VEC_SUPPORTED for _c, _w, _fn, name in field_specs):
-            if all(sorted_df[col].null_count() == 0 for col, _w, _fn, _name in field_specs):
+            if all(_sf.column(col).null_count() == 0 for col, _w, _fn, _name in field_specs):
                 vec_scorer_names = [name for _c, _w, _fn, name in field_specs]
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
@@ -1009,13 +1037,14 @@ def score_buckets(
         # straight to treating `keyed` as the single bucket and scoring.
         # On the streaming-block sync caller, this hits on every per-block
         # invocation (block size ~8, n_buckets default 32-128).
-        if prepared_df.height < n_buckets:
+        if _prep_frame.height < n_buckets:
             bucketed = keyed
-            # Wrap in a single-bucket dict to share the scoring path below.
-            buckets_dict: dict[Any, pl.DataFrame] = {0: bucketed}
+            # Wrap in a single-bucket dict to share the scoring path below
+            # (native frames: pl.DataFrame or pa.Table by lane).
+            buckets_dict: dict[Any, Any] = {0: bucketed}
             print(
                 f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
-                f"small-block fast path (height={prepared_df.height} < n_buckets={n_buckets}); "
+                f"small-block fast path (height={_prep_frame.height} < n_buckets={n_buckets}); "
                 f"skipping hash+partition_by. See #422.",
                 flush=True,
             )
@@ -1094,7 +1123,7 @@ def score_buckets(
     all_pairs: list[tuple[int, int, float]] = []
     total_blocks_scored = 0
     total_non_empty = 0
-    slim_cols = set(slim_df.columns)
+    slim_cols = set(slim_frame.columns)
     for key in pass_keys:
         if not set(key.fields) <= slim_cols:
             logger.warning(
