@@ -37,6 +37,7 @@ mod keys;
 mod regex;
 mod sequence;
 mod stats;
+mod string_digest;
 
 pub use age::{age_mismatch, AgeStats};
 pub use aggregate::{column_aggregate, dtype_category, ColumnAgg, DtypeCat};
@@ -59,3 +60,4 @@ pub use keys::{
 pub use regex::{str_contains_count, str_filter_mask, str_replace_all};
 pub use sequence::{sequence_analysis, SeqStats};
 pub use stats::{column_numeric_stats, count_outside, NumStats};
+pub use string_digest::{string_column_digest, StringDigest};
