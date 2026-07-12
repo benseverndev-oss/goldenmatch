@@ -120,3 +120,23 @@ def test_batched_equals_per_block(monkeypatch):
     norm = lambda ps: sorted((min(a, b), max(a, b), round(s, 6)) for a, b, s in ps)
     assert norm(got) == norm(ref)
     assert got, "sanity: the smith/jones/lee blocks should yield some pairs"
+
+
+def test_batched_equals_per_block_solo_path(monkeypatch):
+    """Force the multi-row blocks through the SOLO branch (batch of 1) and
+    confirm byte-identity still holds -- covers _score_block_batch's single-block
+    path, the 'big block gets its own future' case."""
+    from goldenmatch.core import scorer
+    df = _mixed_person_frame()
+    blocks, mk = _blocks_and_mk(df)
+
+    ref = _per_block_reference(blocks, mk)
+
+    # Threshold of 1 pair -> every block with >=2 rows goes solo; singletons
+    # (0 pairs) still bin. Exercises both the solo and small branches.
+    monkeypatch.setattr(scorer, "_SOLO_BLOCK_MIN_PAIRS", 1)
+    got = scorer.score_blocks_parallel(list(blocks), mk, set(), max_workers=4)
+
+    norm = lambda ps: sorted((min(a, b), max(a, b), round(s, 6)) for a, b, s in ps)
+    assert norm(got) == norm(ref)
+    assert got, "sanity: grouped blocks should yield pairs on the solo path too"

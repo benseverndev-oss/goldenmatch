@@ -1383,7 +1383,13 @@ def _score_one_block(
     return pairs
 
 
-def _score_block_batch(batch, mk, frozen_exclude, across_files_only, source_lookup):
+def _score_block_batch(
+    batch: list,
+    mk: MatchkeyConfig,
+    frozen_exclude: frozenset[tuple[int, int]],
+    across_files_only: bool,
+    source_lookup: dict[int, str] | None,
+) -> list[tuple[int, int, float]]:
     """Score every block in one batch on a single worker thread.
 
     Loops _score_one_block with the SAME args the per-block path used, so the
