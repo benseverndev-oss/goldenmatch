@@ -2,6 +2,21 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.0.1] - 2026-07-12
+
+### Performance
+- **Vectorized `ArrowColumn.cast` (string -> numeric).** The 3.0.0 implementation
+  parsed string columns element-by-element in a Python loop (`float(v)`/`int(v)`
+  with try/except), which made `type_inference`'s numeric probe the dominant cost
+  of a scan and scaled linearly with row count -- ~2M `float()`+`append` calls on
+  a 1M-row string column, and catastrophic on larger data. Replaced with a single
+  vectorized `pyarrow.compute` pass: regex-mask non-numeric literals to null, then
+  one `pc.cast`. Roughly halves column-profiling wall on string-heavy data and
+  removes the O(N) Python loop entirely. Findings are unchanged (the finding-set
+  differential stays at Jaccard 1.000; owned contract: a value is numeric if it
+  matches a standard decimal/float literal, so non-standard tokens like `inf`/`nan`
+  or underscored digits are treated as non-numeric).
+
 ## [3.0.0] - 2026-07-11
 
 ### Changed (BREAKING)
