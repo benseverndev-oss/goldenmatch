@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from goldencheck._polars_lazy import pl
+from goldencheck.core._native_loader import native_enabled, native_module
 
 logger = logging.getLogger(__name__)
 
@@ -194,16 +195,32 @@ def _check_value_signals(non_null: pl.Series, col: pl.Series, signals: dict) -> 
                 return False
     return True
 
+def _count_matches(non_null: pl.Series, pattern: str) -> int:
+    """Count values in ``non_null`` matching ``pattern`` (Polars-authoritative).
+
+    W6 shadow-wire: when the ``regex`` kernel is enabled, ALSO compute the count
+    via the Rust ``str_contains_count`` kernel (both Polars ``str.contains`` and
+    the kernel use the Rust ``regex`` crate, so the counts are byte-identical).
+    The kernel result is discarded -- the authoritative count stays Polars until
+    the Flip. Mirrors the profiler call form (``PyColumn.str_match_count``):
+    ``str_contains_count(<list of non-null values>, pattern) -> int``.
+    """
+    matches = int(non_null.str.contains(pattern, literal=False).sum())
+    if native_enabled("regex"):
+        try:  # noqa: SIM105 - shadow compute, discard result, never fail the caller
+            native_module().str_contains_count(non_null.to_list(), pattern)
+        except BaseException:  # noqa: BLE001 - shadow must never affect the return
+            pass
+    return matches
+
+
 def _check_format_match(non_null: pl.Series, format_type: str) -> bool:
     if non_null.dtype not in (pl.Utf8, pl.String):
         return False
     if format_type == "email":
-        matches = non_null.str.contains(r"@.*\.", literal=False).sum()
-        return matches / len(non_null) >= 0.70
+        return _count_matches(non_null, r"@.*\.") / len(non_null) >= 0.70
     elif format_type == "phone":
-        matches = non_null.str.contains(r"\d{3}.*\d{3}.*\d{4}", literal=False).sum()
-        return matches / len(non_null) >= 0.70
+        return _count_matches(non_null, r"\d{3}.*\d{3}.*\d{4}") / len(non_null) >= 0.70
     elif format_type == "date":
-        matches = non_null.str.contains(r"\d{4}-\d{2}-\d{2}", literal=False).sum()
-        return matches / len(non_null) >= 0.50
+        return _count_matches(non_null, r"\d{4}-\d{2}-\d{2}") / len(non_null) >= 0.50
     return False
