@@ -42,7 +42,7 @@ class EncodingDetectionProfiler(BaseProfiler):
         # 1. Zero-width Unicode characters (confidence: 0.8 — almost always wrong)
         zw_count = non_null.str_match_count(ZERO_WIDTH_PATTERN)
         if zw_count > 0:
-            sample = non_null.str_filter(ZERO_WIDTH_PATTERN, matching=True).to_list()[:5]
+            sample = non_null.str_filter(ZERO_WIDTH_PATTERN, matching=True).slice(0, 5).to_list()
             findings.append(Finding(
                 severity=Severity.WARNING,
                 column=column,
@@ -60,7 +60,7 @@ class EncodingDetectionProfiler(BaseProfiler):
         # 2. Smart/curly quotes (confidence: 0.6 — could be intentional)
         sq_count = non_null.str_match_count(SMART_QUOTES_PATTERN)
         if sq_count > 0:
-            sample = non_null.str_filter(SMART_QUOTES_PATTERN, matching=True).to_list()[:5]
+            sample = non_null.str_filter(SMART_QUOTES_PATTERN, matching=True).slice(0, 5).to_list()
             findings.append(Finding(
                 severity=Severity.INFO,
                 column=column,
@@ -80,7 +80,7 @@ class EncodingDetectionProfiler(BaseProfiler):
         if na_count > 0:
             # Only flag if zero-width chars were NOT already found for the same rows
             # (avoid duplicate noise), but still report non-ASCII separately
-            sample = non_null.str_filter(NON_ASCII_PATTERN, matching=True).to_list()[:5]
+            sample = non_null.str_filter(NON_ASCII_PATTERN, matching=True).slice(0, 5).to_list()
             findings.append(Finding(
                 severity=Severity.INFO,
                 column=column,
@@ -98,7 +98,7 @@ class EncodingDetectionProfiler(BaseProfiler):
         # 4. Control characters (confidence: 0.8 — rarely valid in data)
         ctrl_count = non_null.str_match_count(CONTROL_CHAR_PATTERN)
         if ctrl_count > 0:
-            sample = non_null.str_filter(CONTROL_CHAR_PATTERN, matching=True).to_list()[:5]
+            sample = non_null.str_filter(CONTROL_CHAR_PATTERN, matching=True).slice(0, 5).to_list()
             findings.append(Finding(
                 severity=Severity.WARNING,
                 column=column,
