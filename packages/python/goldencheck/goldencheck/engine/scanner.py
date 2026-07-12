@@ -6,14 +6,12 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from goldencheck._polars_lazy import pl
-
 if TYPE_CHECKING:
     from goldencheck.baseline.models import BaselineProfile
-from goldencheck.core._native_loader import native_enabled, native_module
-from goldencheck.core.frame import PyFrame, dtype_category
+from goldencheck.core._native_loader import native_enabled
+from goldencheck.core.frame import PyFrame
 from goldencheck.engine.confidence import apply_corroboration_boost
-from goldencheck.engine.reader import read_columns, read_file
+from goldencheck.engine.reader import read_columns
 from goldencheck.engine.sampler import maybe_sample
 from goldencheck.models.finding import Finding, Severity
 from goldencheck.models.profile import ColumnProfile, DatasetProfile
@@ -85,20 +83,28 @@ RELATION_PROFILERS = [
 ]
 
 def _post_classification_checks(
-    sample: pl.DataFrame,
+    sample,
     findings: list[Finding],
     column_types: dict,
 ) -> list[Finding]:
-    """Add findings that require semantic type knowledge."""
+    """Add findings that require semantic type knowledge.
+
+    Routes through the Frame/Column seam so ``sample`` may be an Arrow-native
+    ``ArrowFrame`` (default scan path) or a ``PolarsFrame``.
+    """
+    from goldencheck.core.frame import to_frame
+
+    frame = to_frame(sample)
+    cols = frame.columns
     new_findings = list(findings)
 
     for col_name, classification in column_types.items():
         if classification.type_name != "person_name":
             continue
-        if col_name not in sample.columns:
+        if col_name not in cols:
             continue
-        col = sample[col_name]
-        if dtype_category(col.dtype) != "str":
+        col = frame.column(col_name)
+        if col.dtype != "str":
             continue
 
         # Detect digit characters in person name columns
@@ -106,13 +112,12 @@ def _post_classification_checks(
         if len(non_null) == 0:
             continue
 
-        digit_mask = non_null.str.contains(r"\d")
-        digit_count = int(digit_mask.sum())
+        digit_count = non_null.str_match_count(r"\d")
         if digit_count > 0:
             digit_pct = digit_count / len(non_null)
             # Only flag if it's a minority (< 10%) — widespread digits means it's not really a name column
             if 0 < digit_pct < 0.10:
-                sample_vals = non_null.filter(digit_mask).head(5).to_list()
+                sample_vals = non_null.str_filter(r"\d", matching=True).slice(0, 5).to_list()
                 new_findings.append(Finding(
                     severity=Severity.WARNING,
                     column=col_name,
@@ -129,7 +134,6 @@ def _post_classification_checks(
 
     # --- Code-like format inconsistency (e.g. 5-digit vs 9-digit zip) ---
     # Only add if no pattern_consistency finding already exists at WARNING+ for this column
-    from goldencheck.profilers.pattern_consistency import _generalize_series
     existing_pc_cols = {
         f.column for f in new_findings
         if f.check == "pattern_consistency" and f.severity in (Severity.WARNING, Severity.ERROR)
@@ -139,32 +143,31 @@ def _post_classification_checks(
             continue
         if col_name in existing_pc_cols:
             continue
-        if col_name not in sample.columns:
+        if col_name not in cols:
             continue
-        col = sample[col_name]
-        if dtype_category(col.dtype) != "str":
+        col = frame.column(col_name)
+        if col.dtype != "str":
             continue
         non_null = col.drop_nulls()
         total = len(non_null)
         if total == 0:
             continue
-        # Check for mixed-length patterns (e.g. DDDDD vs DDDDD-DDDD).
-        # Vectorised via Polars regex — see _generalize_series docstring;
-        # the previous map_elements(_generalize) was a top-3 self-time
-        # hot spot in the scale-audit cProfile.
-        patterns = _generalize_series(non_null)
-        pattern_counts = patterns.value_counts().sort("count", descending=True)
+        # Generalise each value to its digit/letter skeleton (letters -> L, then
+        # digits -> D; order matches PatternConsistencyProfiler / _generalize_series),
+        # then tally the skeletons via the seam.
+        patterns = non_null.str_replace_all(r"\p{L}", "L").str_replace_all(r"\d", "D")
+        pattern_counts = patterns.value_counts_desc()
         if len(pattern_counts) < 2:
             continue
-        dominant_pattern = pattern_counts[col_name][0]
+        dominant_pattern = pattern_counts[0][0]
         # Only check code-like patterns (mostly digits)
         digit_ratio = sum(1 for c in dominant_pattern if c == "D") / max(len(dominant_pattern), 1)
         if digit_ratio < 0.5:
             continue
         # Look for any secondary pattern with different length
         for i in range(1, len(pattern_counts)):
-            minority_pattern = pattern_counts[col_name][i]
-            minority_count = int(pattern_counts["count"][i])
+            minority_pattern, minority_count = pattern_counts[i]
+            minority_count = int(minority_count)
             if abs(len(dominant_pattern) - len(minority_pattern)) > 1:
                 new_findings.append(Finding(
                     severity=Severity.WARNING,
@@ -176,7 +179,7 @@ def _post_classification_checks(
                         f"'{dominant_pattern}'"
                     ),
                     affected_rows=minority_count,
-                    sample_values=non_null.filter(patterns == minority_pattern).head(5).to_list(),
+                    sample_values=non_null.filter_by(patterns.eq(minority_pattern)).slice(0, 5).to_list(),
                     suggestion="Standardize values to a single format/pattern",
                     confidence=0.8,
                     metadata={"dominant_pattern": dominant_pattern, "minority_pattern": minority_pattern},
@@ -186,11 +189,11 @@ def _post_classification_checks(
     # --- String length format check for identifier-like columns ---
     _ID_NAME_KEYWORDS = ("id", "number", "code", "auth", "key")
     _ID_NAME_EXCLUDE = ("phone", "npi")
-    for col_name in sample.columns:
-        col = sample[col_name]
+    for col_name in cols:
+        col = frame.column(col_name)
 
         # Accept string or numeric columns (numeric IDs are common)
-        _cat = dtype_category(col.dtype)
+        _cat = col.dtype
         is_string = _cat == "str"
         is_numeric = _cat in ("int", "uint", "float")
         if not (is_string or is_numeric):
@@ -209,22 +212,23 @@ def _post_classification_checks(
             continue
 
         # Cast to string for length analysis
-        str_vals = non_null.cast(pl.String) if is_numeric else non_null
-        lengths = str_vals.str.len_chars().alias("_len")
-        length_counts = lengths.value_counts().sort("count", descending=True)
+        str_vals = non_null.cast("str") if is_numeric else non_null
+        lengths = str_vals.str_len_chars()
+        length_counts = lengths.value_counts_desc()
 
         if len(length_counts) == 0:
             continue
 
-        dominant_length = int(length_counts["_len"][0])
-        dominant_count = int(length_counts["count"][0])
+        dominant_length = int(length_counts[0][0])
+        dominant_count = int(length_counts[0][1])
         dominant_pct = dominant_count / total
 
         outlier_count = total - dominant_count
 
         if dominant_pct > 0.90 and outlier_count > 0:
-            sample_mask = lengths != dominant_length
-            sample_vals = str_vals.filter(sample_mask).head(5).to_list()
+            _lens = lengths.to_list()
+            _svals = str_vals.to_list()
+            sample_vals = [_svals[i] for i in range(len(_lens)) if _lens[i] != dominant_length][:5]
             new_findings.append(Finding(
                 severity=Severity.WARNING,
                 column=col_name,
@@ -287,7 +291,7 @@ def scan_file_columns(path: Path) -> list[Finding]:
 
 
 def scan_dataframe(
-    df: pl.DataFrame,
+    df,
     file_path: str | Path = "<dataframe>",
     sample_size: int = 100_000,
     return_sample: bool = False,
@@ -296,22 +300,22 @@ def scan_dataframe(
     schema: object | None = None,
     deep: bool = False,
     denial: bool = False,
-) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
-    """Scan an already-loaded Polars DataFrame.
+) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, object]:
+    """Scan an already-loaded table.
 
-    Same semantics as :func:`scan_file` but accepts a DataFrame directly.
-    The CSV round-trip in `goldenmatch.core.quality.run_quality_check` was
-    surfacing as 121s of `pipeline_prep_quality_scan` wall on the 10M
-    quality-invariant-scale bench: writing the full df to a temp CSV
-    just so this function could read it back. With this entry point the
-    caller hands the in-memory frame straight to the scanner.
+    Accepts a ``pyarrow.Table`` natively (wrapped in an Arrow-native
+    ``ArrowFrame``); a ``polars.DataFrame`` is a convenience overload, converted
+    via ``.to_arrow()`` when Polars is importable. Same semantics as
+    :func:`scan_file` but the caller hands the in-memory table straight to the
+    scanner (skips a CSV round-trip -- the 10M QIS bench spent 121s of
+    `pipeline_prep_quality_scan` wall writing df to a temp CSV just to read it
+    back).
 
-    `file_path` is purely cosmetic (populates `DatasetProfile.file_path`
-    for downstream reports / drift checks); pass it when you have a real
-    path, otherwise the default `"<dataframe>"` sentinel is fine.
+    `file_path` is purely cosmetic (populates `DatasetProfile.file_path`).
     """
+    frame = _coerce_to_arrow_frame(df)
     return _scan_dataframe_impl(
-        df,
+        frame,
         file_path=str(file_path),
         sample_size=sample_size,
         return_sample=return_sample,
@@ -332,10 +336,13 @@ def scan_file(
     schema: object | None = None,  # goldencheck_types.InferredSchema; loose typing avoids hard import dep
     deep: bool = False,
     denial: bool = False,
-) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
-    df = read_file(path)
+) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, object]:
+    from goldencheck.core.frame import ArrowFrame
+    from goldencheck.engine.reader import read_file_arrow
+
+    frame = ArrowFrame(read_file_arrow(path))
     return _scan_dataframe_impl(
-        df,
+        frame,
         file_path=str(path),
         sample_size=sample_size,
         return_sample=return_sample,
@@ -347,8 +354,58 @@ def scan_file(
     )
 
 
+def _coerce_to_arrow_frame(data):
+    """Wrap ``data`` in an Arrow-native ``ArrowFrame``. Accepts a ``pyarrow.Table``
+    or (convenience) a ``polars.DataFrame`` (converted via ``.to_arrow()`` only
+    when Polars imports) or an already-wrapped ``ArrowFrame``."""
+    from goldencheck.core.frame import ArrowFrame
+
+    import pyarrow as pa
+
+    if isinstance(data, ArrowFrame):
+        return data
+    if isinstance(data, pa.Table):
+        return ArrowFrame(data)
+    try:
+        import polars as _pl
+    except ImportError:
+        raise TypeError(
+            f"scan_dataframe expects a pyarrow.Table or polars.DataFrame; got {type(data)!r}"
+        )
+    if isinstance(data, _pl.DataFrame):
+        return ArrowFrame(data.to_arrow())
+    raise TypeError(
+        f"scan_dataframe expects a pyarrow.Table or polars.DataFrame; got {type(data)!r}"
+    )
+
+
+def _to_polars(frame):
+    """Materialise a seam Frame back to a ``polars.DataFrame`` for the off-default
+    branches (baseline drift, learned rules, denial) that still run on Polars."""
+    import polars as _pl
+
+    native = frame.native
+    if isinstance(native, _pl.DataFrame):
+        return native
+    return _pl.from_arrow(native)
+
+
+def _sample_for_return(frame):
+    """The ``return_sample=True`` payload: a ``polars.DataFrame`` when Polars is
+    importable (downstream LLM sample-block builder consumes Polars), else the
+    Arrow-native ``pyarrow.Table``."""
+    native = frame.native
+    try:
+        import polars as _pl
+    except ImportError:
+        return native
+    if isinstance(native, _pl.DataFrame):
+        return native
+    return _pl.from_arrow(native)
+
+
 def _scan_dataframe_impl(
-    df: pl.DataFrame,
+    frame,
     *,
     file_path: str,
     sample_size: int,
@@ -358,52 +415,39 @@ def _scan_dataframe_impl(
     schema: object | None,
     deep: bool = False,
     denial: bool = False,
-) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, pl.DataFrame]:
-    row_count = len(df)
+) -> tuple[list[Finding], DatasetProfile] | tuple[list[Finding], DatasetProfile, object]:
+    from goldencheck.core.frame import to_frame
+
+    frame = to_frame(frame)   # idempotent; normalises to a seam Frame
+    columns = frame.columns
+    row_count = frame.height
     # Deep mode profiles the FULL population (no 100K sample cap) -- removes
     # sampling error on cardinality / uniqueness / rare-value / composite-key
-    # checks. Heavier, but the Polars profilers are vectorized and the native
-    # kernels (when goldencheck[native] is installed) carry the CPU-bound work.
-    sample = df if deep else maybe_sample(df, max_rows=sample_size)
+    # checks. Heavier, but the seam profilers are vectorized and the native
+    # kernels carry the CPU-bound work.
+    sample = frame if deep else maybe_sample(frame, max_rows=sample_size)
     logger.info(
         "Scanning %d rows, %d columns%s",
-        row_count, len(df.columns), " (deep: full population)" if deep else "",
+        row_count, len(columns), " (deep: full population)" if deep else "",
     )
 
     all_findings: list[Finding] = []
     column_profiles: list[ColumnProfile] = []
     profiler_context: dict = {}
 
-    for col_name in df.columns:
-        col = df[col_name]
+    for col_name in columns:
+        col = frame.column(col_name)
         non_null = col.drop_nulls()
         non_null_len = len(non_null)
-        # Cache n_unique + null_count once per column. The prior code called
-        # non_null.n_unique() TWICE in the same ColumnProfile kwarg list (for
-        # unique_count and unique_pct) and col.null_count() twice (null_count
-        # and null_pct). At the QIS 10M bench (6 columns) that was 12 full-
-        # frame Polars hash-aggregations + 12 null counts in the column-
-        # profile loop alone -- the dominant cost of pipeline_prep_quality_scan
-        # at 120.8s (v17 measured no change after PR #562's CSV round-trip
-        # removal, confirming the bottleneck was inside this loop, not the
-        # surrounding I/O). Strict 2x reduction; zero behavioral change.
+        # Cache n_unique + null_count once per column (both feed two ColumnProfile
+        # kwargs each). The kernel-backed ArrowColumn carries the CPU work.
         n_unique = non_null.n_unique() if non_null_len > 0 else 0
         null_count = col.null_count()
-        # Shadow-compute the fused native column_aggregate kernel on the real
-        # scan path so it runs against production shapes ahead of the Flip
-        # (see tests/engine/test_column_aggregate_shadow.py for the parity
-        # assertion). NOT authoritative -- the ColumnProfile below is built
-        # from the Polars values above exactly as before this shadow wire.
-        if native_enabled("column_aggregate"):
-            try:
-                native_module().column_aggregate(col.to_arrow())
-            except Exception as e:  # noqa: BLE001 - shadow-only, never affects output
-                logger.debug(
-                    "column_aggregate shadow compute failed on column %s: %s", col_name, e
-                )
         cp = ColumnProfile(
             name=col_name,
-            inferred_type=str(col.dtype),
+            # OWNED dtype contract: neutral vocabulary (str/int/uint/float/date/
+            # datetime/bool/other) via the Arrow seam, not raw `str(pl.dtype)`.
+            inferred_type=col.dtype_repr(),
             null_count=null_count,
             null_pct=null_count / row_count if row_count > 0 else 0,
             unique_count=n_unique,
@@ -430,9 +474,9 @@ def _scan_dataframe_impl(
     # population; otherwise the same sample every other profiler ran on.
     if denial:
         from goldencheck.denial.mine import DenialConstraintProfiler
-        target = df if deep else sample
+        target = frame if deep else sample
         try:
-            all_findings.extend(DenialConstraintProfiler().profile(target))
+            all_findings.extend(DenialConstraintProfiler().profile(_to_polars(target)))
         except Exception as e:
             logger.warning("DenialConstraintProfiler failed: %s", e)
 
@@ -465,7 +509,7 @@ def _scan_dataframe_impl(
         if unmapped_cols:
             cols_in_sample = [c for c in unmapped_cols if c in sample.columns]
             if cols_in_sample:
-                heuristic = classify_columns(sample.select(cols_in_sample), type_defs=type_defs)
+                heuristic = classify_columns(sample, type_defs=type_defs, only=cols_in_sample)
             else:
                 heuristic = {}
         else:
@@ -500,7 +544,7 @@ def _scan_dataframe_impl(
             from goldencheck.llm.rule_generator import apply_rules, load_rules
             rules = load_rules(rules_path)
             if rules:
-                rule_findings = apply_rules(sample, rules)
+                rule_findings = apply_rules(_to_polars(sample), rules)
                 all_findings.extend(rule_findings)
                 logger.info("Applied %d learned rules, got %d findings", len(rules), len(rule_findings))
         except Exception as e:
@@ -535,7 +579,7 @@ def _scan_dataframe_impl(
                 "Baseline source %r doesn't match scan file %r",
                 baseline.source_filename, scan_basename,
             )
-        drift_findings = run_drift_checks(sample, baseline)
+        drift_findings = run_drift_checks(_to_polars(sample), baseline)
         all_findings.extend(drift_findings)
 
     # Suppress PatternConsistencyProfiler findings for baseline-covered columns
@@ -547,9 +591,9 @@ def _scan_dataframe_impl(
         ]
 
     all_findings.sort(key=lambda f: f.severity, reverse=True)
-    profile = DatasetProfile(file_path=file_path, row_count=row_count, column_count=len(df.columns), columns=column_profiles)
+    profile = DatasetProfile(file_path=file_path, row_count=row_count, column_count=len(columns), columns=column_profiles)
     if return_sample:
-        return all_findings, profile, sample
+        return all_findings, profile, _sample_for_return(sample)
     return all_findings, profile
 
 

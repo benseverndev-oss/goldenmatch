@@ -20,7 +20,7 @@ information, not a violation.
 from __future__ import annotations
 
 from goldencheck.core._native_loader import native_enabled, native_module
-from goldencheck.core.frame import _neutral_dtype, to_frame
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 # A key wider than this is rarely a meaningful natural key and the search space
@@ -35,12 +35,13 @@ MAX_REPORTED_KEYS = 3
 _SUPPORTED = frozenset({"str", "int", "uint", "float", "bool"})
 
 
-def _select_candidates(df, n_rows: int) -> list[str]:
+def _select_candidates(frame, n_rows: int) -> list[str]:
     """Non-constant, supported-dtype columns, most-discriminative first, capped."""
+    frame = to_frame(frame)
     scored: list[tuple[int, str]] = []
-    for col in df.columns:
-        series = df[col]
-        if _neutral_dtype(series.dtype) not in _SUPPORTED:
+    for col in frame.columns:
+        series = frame.column(col)
+        if series.dtype not in _SUPPORTED:
             continue
         nu = series.n_unique()
         if nu <= 1:  # constant column can never help form a key
@@ -51,16 +52,16 @@ def _select_candidates(df, n_rows: int) -> list[str]:
     return [col for _nu, col in scored[:MAX_CANDIDATE_COLS]]
 
 
-def _has_single_column_key(df, n_rows: int) -> bool:
-    for col in df.columns:
-        series = df[col]
+def _has_single_column_key(frame, n_rows: int) -> bool:
+    for col in frame.columns:
+        series = frame.column(col)
         if series.null_count() == 0 and series.n_unique() == n_rows:
             return True
     return False
 
 
 def _python_search(
-    df, candidates: list[str], n_rows: int, max_size: int
+    frame, candidates: list[str], n_rows: int, max_size: int
 ) -> list[list[int]]:
     """Polars-free mirror of goldencheck_core::composite_key_search.
 
@@ -69,9 +70,10 @@ def _python_search(
     and supersets of a found key are pruned. The distinct-tuple test runs in
     pure Python (``len(set(zip(...)))``) rather than Polars ``n_unique`` — the
     Rust kernel is the fast reference; this is the correctness fallback when the
-    native wheel isn't installed. Columns are pulled out of the Polars frame once
-    with ``to_list``; the Polars *engine* no longer runs the distinct counts."""
-    col_values = [df[c].to_list() for c in candidates]
+    native wheel isn't installed. Columns are pulled out of the frame once
+    with ``to_list``; the engine no longer runs the distinct counts."""
+    frame = to_frame(frame)
+    col_values = [frame.column(c).to_list() for c in candidates]
     idxs = list(range(len(candidates)))
     found: list[list[int]] = []
     cap = min(max_size, len(idxs))
@@ -101,15 +103,14 @@ class CompositeKeyProfiler:
 
     def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
-        n_rows = df.height
+        n_rows = frame.height
         if n_rows < 2 or len(frame.columns) < 2:
             return []
         # Only interesting when there's no single-column key.
-        if _has_single_column_key(df, n_rows):
+        if _has_single_column_key(frame, n_rows):
             return []
 
-        candidates = _select_candidates(df, n_rows)
+        candidates = _select_candidates(frame, n_rows)
         if len(candidates) < 2:
             return []
 
@@ -125,9 +126,9 @@ class CompositeKeyProfiler:
                     arrays, MAX_KEY_SIZE, single_unique
                 )
             except Exception:  # noqa: BLE001 - any native failure -> Python path
-                keys_idx = _python_search(df, candidates, n_rows, MAX_KEY_SIZE)
+                keys_idx = _python_search(frame, candidates, n_rows, MAX_KEY_SIZE)
         else:
-            keys_idx = _python_search(df, candidates, n_rows, MAX_KEY_SIZE)
+            keys_idx = _python_search(frame, candidates, n_rows, MAX_KEY_SIZE)
 
         if not keys_idx:
             return []

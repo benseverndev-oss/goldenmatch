@@ -21,7 +21,7 @@ grouping columns qualify.
 from __future__ import annotations
 
 from goldencheck.core._native_loader import native_enabled, native_module
-from goldencheck.core.frame import _neutral_dtype, to_frame
+from goldencheck.core.frame import to_frame
 from goldencheck.models.finding import Finding, Severity
 
 _MIN_ROWS = 100
@@ -33,11 +33,12 @@ _MAX_FINDINGS = 8
 _SUPPORTED = frozenset({"str", "int", "uint", "bool"})
 
 
-def _select_candidates(df) -> list[str]:
+def _select_candidates(frame) -> list[str]:
+    frame = to_frame(frame)
     scored: list[tuple[int, str]] = []
-    for col in df.columns:
-        series = df[col]
-        if _neutral_dtype(series.dtype) not in _SUPPORTED:
+    for col in frame.columns:
+        series = frame.column(col)
+        if series.dtype not in _SUPPORTED:
             continue
         nu = series.n_unique()
         if nu <= 1:
@@ -107,11 +108,10 @@ class ApproximateFDProfiler:
 
     def profile(self, frame) -> list[Finding]:
         frame = to_frame(frame)
-        df = frame.native
-        n_rows = df.height
+        n_rows = frame.height
         if n_rows < _MIN_ROWS or len(frame.columns) < 2:
             return []
-        cols = _select_candidates(df)
+        cols = _select_candidates(frame)
         if len(cols) < 2:
             return []
 
@@ -125,9 +125,9 @@ class ApproximateFDProfiler:
                 for i, j, _v in triples[:_MAX_FINDINGS]:
                     violations_of[(i, j)] = native_module().fd_violation_rows(arrays[i], arrays[j])
             except Exception:  # noqa: BLE001 - any native failure -> Python path
-                triples, violations_of = self._python(df, cols, n_rows)
+                triples, violations_of = self._python(frame, cols, n_rows)
         else:
-            triples, violations_of = self._python(df, cols, n_rows)
+            triples, violations_of = self._python(frame, cols, n_rows)
 
         if not triples:
             return []
@@ -170,9 +170,9 @@ class ApproximateFDProfiler:
         return findings
 
     def _python(
-        self, df, cols: list[str], n_rows: int
+        self, frame, cols: list[str], n_rows: int
     ) -> tuple[list[tuple[int, int, int]], dict[tuple[int, int], list[int]]]:
-        cols_ids = [_intern(df[c].to_list()) for c in cols]
+        cols_ids = [_intern(frame.column(c).to_list()) for c in cols]
         triples = _discover_python(cols_ids, n_rows, _MIN_CONFIDENCE)
         triples.sort(key=lambda t: t[2])
         violations_of = {
