@@ -221,7 +221,7 @@ def _membership_recall(df: pl.DataFrame, cfg, truth: set[tuple[int, int]]) -> fl
     blocks = build_blocks(df_rid.lazy(), cfg)
     row_to_blocks: dict[int, set[int]] = defaultdict(set)
     for bi, b in enumerate(blocks):
-        bdf = b.df.collect() if hasattr(b.df, "collect") else b.df
+        bdf = b.materialize().native if hasattr(b.df, "collect") else b.df
         for rid in bdf["__row_id__"].to_list():
             row_to_blocks[int(rid)].add(bi)
     covered = sum(1 for a, c in truth if row_to_blocks[a] & row_to_blocks[c])

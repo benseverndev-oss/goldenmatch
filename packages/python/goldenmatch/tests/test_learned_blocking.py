@@ -101,7 +101,7 @@ class TestApplyLearnedBlocks:
         blocks = apply_learned_blocks(df.lazy(), rules)
         # Should be deduplicated
         block_keys = [b.block_key for b in blocks]
-        assert len(block_keys) == len(set(b.df.collect()["__row_id__"].to_list()[0] for b in blocks)) or True
+        assert len(block_keys) == len(set(b.materialize().native["__row_id__"].to_list()[0] for b in blocks)) or True
         # Just verify no crash and blocks exist
         assert len(blocks) > 0
 

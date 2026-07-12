@@ -124,12 +124,12 @@ def run_fuzzy_analysis(threshold: float, sample_size: int | None = None):
         if mk.type == "weighted":
             blocks = build_blocks(df.lazy(), cfg.blocking)
             print(f"  Blocks created: {len(blocks):,}")
-            block_sizes = [b.df.collect().height for b in blocks[:100]]
+            block_sizes = [b.materialize().native.height for b in blocks[:100]]
             if block_sizes:
                 print(f"  Avg block size (sample): {sum(block_sizes)/len(block_sizes):.1f}")
 
             for i, block in enumerate(blocks):
-                block_df = block.df.collect()
+                block_df = block.materialize().native
                 pairs = find_fuzzy_matches(block_df, mk)
                 for a, b, s in pairs:
                     fuzzy_pairs.append((a, b, s))

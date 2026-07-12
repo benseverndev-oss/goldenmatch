@@ -211,7 +211,7 @@ def bench_probabilistic_dblp_acm(df, gt):
     blocks = build_blocks(collected.lazy(), blocking)
     all_pairs = []
     for block in blocks:
-        block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+        block_df = block.materialize().native if hasattr(block.df, 'collect') else block.df
         pairs = score_probabilistic(block_df, mk, em_result)
         all_pairs.extend(pairs)
 
@@ -259,7 +259,7 @@ def bench_static_blocking_dblp_acm(df, gt):
     collected = lf.collect()
     blocks = build_blocks(collected.lazy(), blocking)
     n_blocks = len(blocks)
-    total_block_records = sum(b.df.collect().height for b in blocks)
+    total_block_records = sum(b.materialize().native.height for b in blocks)
 
     matched_pairs: set[tuple[int, int]] = set()
     pairs = score_blocks_parallel(blocks, mk, matched_pairs)
@@ -324,7 +324,7 @@ def bench_learned_blocking_dblp_acm(df, gt):
     # Phase 3: Apply learned blocks to full dataset
     learned_blocks = apply_learned_blocks(collected.lazy(), rules, max_block_size=500)
     n_blocks = len(learned_blocks)
-    total_block_records = sum(b.df.collect().height for b in learned_blocks)
+    total_block_records = sum(b.materialize().native.height for b in learned_blocks)
 
     matched_pairs2: set[tuple[int, int]] = set()
     pairs = score_blocks_parallel(learned_blocks, mk, matched_pairs2)

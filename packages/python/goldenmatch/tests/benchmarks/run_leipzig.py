@@ -107,7 +107,7 @@ def run_matching(
         elif mk.type == "weighted" and blocking:
             blocks = build_blocks(combined.lazy(), blocking)
             for block in blocks:
-                bdf = block.df.collect()
+                bdf = block.materialize().native
                 pairs = find_fuzzy_matches(bdf, mk, pre_scored_pairs=block.pre_scored_pairs)
                 all_pairs.extend(pairs)
 

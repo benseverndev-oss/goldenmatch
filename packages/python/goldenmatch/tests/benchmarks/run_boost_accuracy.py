@@ -95,7 +95,7 @@ def run_abt_buy():
     blocks = build_blocks(cdf.lazy(), blk)
     candidate_pairs = []
     for b in blocks:
-        bdf = b.df.collect()
+        bdf = b.materialize().native
         candidate_pairs.extend(find_fuzzy_matches(bdf, mk, pre_scored_pairs=b.pre_scored_pairs))
 
     # Filter to cross-source only

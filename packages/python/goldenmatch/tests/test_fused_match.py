@@ -267,7 +267,7 @@ def test_match_fused_fs_matches_pipeline_fs_block_scorer():
     scorer = probabilistic_block_scorer(config.get_matchkeys()[0], em)
     pairs = []
     for br in build_blocks(df.lazy(), config.blocking):
-        g = br.df.collect() if hasattr(br.df, "collect") else br.df
+        g = br.materialize().native if hasattr(br.df, "collect") else br.df
         pairs += scorer(g)
     parent = list(range(df.height))
 

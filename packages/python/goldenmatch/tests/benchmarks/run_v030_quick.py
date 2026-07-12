@@ -140,7 +140,7 @@ print(f"    Scoring {len(blocks_fs)} blocks (vectorized, full blocks)...", flush
 fs_scorer = probabilistic_block_scorer(mk_fs, em)
 pairs_fs = []
 for i, block in enumerate(blocks_fs):
-    block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+    block_df = block.materialize().native if hasattr(block.df, 'collect') else block.df
     pairs_fs.extend(fs_scorer(block_df))
     if (i + 1) % 20 == 0:
         print(f"    Block {i+1}/{len(blocks_fs)}, {len(pairs_fs)} pairs so far...", flush=True)
@@ -161,7 +161,7 @@ print("  Running static blocking...", flush=True)
 t0 = time.perf_counter()
 static_blocks = build_blocks(collected.lazy(), blocking)
 n_static = len(static_blocks)
-total_static = sum(b.df.collect().height for b in static_blocks)
+total_static = sum(b.materialize().native.height for b in static_blocks)
 matched2 = set()
 pairs_static = score_blocks_parallel(static_blocks, mk_w, matched2)
 t_static = time.perf_counter() - t0
@@ -195,7 +195,7 @@ for r in rules[:3]:
 
 learned_blocks = apply_learned_blocks(collected.lazy(), rules, max_block_size=1000)
 n_learned = len(learned_blocks)
-total_learned = sum(b.df.collect().height for b in learned_blocks)
+total_learned = sum(b.materialize().native.height for b in learned_blocks)
 matched3 = set()
 pairs_learned_raw = score_blocks_parallel(learned_blocks, mk_w, matched3)
 # Deduplicate pairs (same pair can appear in multiple learned blocks)
