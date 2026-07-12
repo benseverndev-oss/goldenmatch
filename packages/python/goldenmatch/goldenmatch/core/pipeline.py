@@ -845,10 +845,42 @@ def run_dedupe(
     from goldenmatch.core.frame import ArrowFrame as _AF
     from goldenmatch.core.frame import concat_frames as _concat_frames
 
+    _eager_done: frozenset[str] = frozenset()
     if frames and all(isinstance(f, _AF) for f in frames):
         _combined = _concat_frames(frames)
-        # W5b-1 shim (single, post-ingest): the expression stages below are
-        # still polars-lazy; removal point is W5b-2+.
+        # W5b-2: run standardize + exact matchkeys EAGERLY on the arrow frame
+        # when nothing polars-bound sits between them (domain extraction and
+        # semantic blocking both inject columns between the two stages --
+        # decline the eager path when either is configured; the polars stages
+        # then run as before). _run_dedupe_pipeline skips whatever is listed
+        # in _eager_stages_done -- re-running standardize is NOT idempotent.
+        _eager_ok = (
+            config.semantic_blocking is None
+            and not (config.domain and config.domain.enabled)
+        )
+        if _eager_ok:
+            done: set[str] = set()
+            if config.standardization and config.standardization.rules:
+                for _col, _std_names in config.standardization.rules.items():
+                    if _col not in _combined.columns:
+                        continue
+                    _combined = _combined.with_column(
+                        _col, _combined.derive_standardized_column(_col, _std_names)
+                    )
+                done.add("standardize")
+            _exact_mks = [mk for mk in matchkeys if mk.type == "exact"]
+            if _exact_mks:
+                for mk in _exact_mks:
+                    _combined = _combined.with_column(
+                        f"__mk_{mk.name}__",
+                        _combined.derive_matchkey(
+                            [(f.field, list(f.transforms or [])) for f in mk.fields]
+                        ),
+                    )
+                done.add("compute_matchkeys")
+            _eager_done = frozenset(done)
+        # W5b-1 shim (single, post-eager-stages): everything below is still
+        # polars-lazy; removal point is W5b-3 (prep-block integrations).
         combined_df = cast("pl.DataFrame", pl.from_arrow(_combined.native))
     else:
         combined_df = pl.concat([f.collect() for f in frames])
@@ -869,6 +901,7 @@ def run_dedupe(
         # and serve the stale prepared frame -- silently dropping the second
         # input's extra rows. Height disambiguates same-schema/different-rows.
         _prep_cache_seed=(id(combined_lf), combined_df.height),
+        _eager_stages_done=_eager_done,
     )
 
 
@@ -1530,6 +1563,7 @@ def _run_dedupe_pipeline(
     llm_max_labels: int = 500,
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
+    _eager_stages_done: frozenset[str] = frozenset(),
     _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
 ) -> dict:
@@ -1752,7 +1786,11 @@ def _run_dedupe_pipeline(
                 pl.col(_sem_name_col).alias(_raw_col)
             )
 
-    if config.standardization and config.standardization.rules:
+    if (
+        config.standardization
+        and config.standardization.rules
+        and "standardize" not in _eager_stages_done
+    ):
         with stage("standardize"):
             combined_lf = apply_standardization(combined_lf, config.standardization.rules)
         combined_lf = _force_collect_if_staged(combined_lf, "standardize")
@@ -1767,9 +1805,16 @@ def _run_dedupe_pipeline(
         _apply_memory_pre(memory_store, config, matchkeys)
 
     # ── Step 2: TRANSFORM ──
-    with stage("compute_matchkeys"):
-        combined_lf = compute_matchkeys(combined_lf, matchkeys)
-    combined_lf = _force_collect_if_staged(combined_lf, "compute_matchkeys")
+    if "compute_matchkeys" not in _eager_stages_done:
+        with stage("compute_matchkeys"):
+            combined_lf = compute_matchkeys(combined_lf, matchkeys)
+        combined_lf = _force_collect_if_staged(combined_lf, "compute_matchkeys")
+    else:
+        # Eager arrow path already derived the __mk_*__ columns; keep the
+        # telemetry surface identical (compute_matchkeys emits this).
+        from goldenmatch.core.matchkey import _emit_matchkey_profile
+
+        _emit_matchkey_profile(combined_lf, matchkeys)
 
     # ── Step 2.5: AUTO-SUGGEST blocking keys ──
     # Hoist matchkey transforms onto the materialized df once — eliminates
