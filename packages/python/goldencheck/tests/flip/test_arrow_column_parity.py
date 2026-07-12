@@ -12,6 +12,7 @@ is measured by the differential instead.
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +28,12 @@ pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 from goldencheck.core.frame import ArrowColumn, PolarsColumn  # noqa: E402
 
-CORPUS = Path(__file__).parent / "corpus"
+# Per-xdist-worker corpus dir: the corpus is (re)generated at collection time, and
+# under `pytest -n auto` multiple workers would otherwise write the SAME parquet files
+# concurrently -> a reader sees a half-written file ("Invalid thrift: protocol error").
+# A worker-local dir gives each worker its own (deterministic, identical) corpus.
+_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
+CORPUS = Path(__file__).parent / (f"corpus_{_WORKER}" if _WORKER else "corpus")
 NUMERIC = {"int", "uint", "float"}
 
 
