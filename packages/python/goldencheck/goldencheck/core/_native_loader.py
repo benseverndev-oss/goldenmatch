@@ -118,6 +118,9 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "date_freshness": ("date_freshness",),
     "duplicate_signatures": ("duplicate_signatures",),
     "age_mismatch": ("age_mismatch",),
+    "pearson_r": ("pearson_r",),
+    "chi2_contingency": ("chi2_contingency_stat",),
+    "chi2_gof": ("chi2_gof",),
 }
 
 

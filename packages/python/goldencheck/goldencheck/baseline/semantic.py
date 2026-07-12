@@ -139,6 +139,13 @@ def _infer_with_embeddings(df: pl.DataFrame) -> dict[str, list[str]]:  # noqa: P
     """Classify columns using sentence-transformer cosine similarity.
 
     Raises ``ImportError`` if *sentence_transformers* is not installed.
+
+    W6 DECLINE (Rust-source-of-truth program, decline inventory #1): this
+    embeddings path STAYS Python/ML. Semantic-type inference via
+    ``sentence_transformers`` + cosine similarity is a non-deterministic ML model
+    (varies across versions/hardware) -- not a fused-kernel candidate. The
+    deterministic keyword fallback (``_infer_with_keywords``) is pure-Python
+    dict/substring matching with no heavy compute, so it needs no Rust either.
     """
     import numpy as np  # type: ignore[import]
     from sentence_transformers import SentenceTransformer  # type: ignore[import]

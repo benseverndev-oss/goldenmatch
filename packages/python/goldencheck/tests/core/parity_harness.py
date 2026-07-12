@@ -30,6 +30,7 @@ from goldencheck.relations import approx_fd as afd
 from goldencheck.relations import composite_key as ck
 from goldencheck.relations import functional_dependency as fd
 from goldencheck.relations.approx_duplicate import _exact_signature, _normalized_signature
+from scipy import stats as _scipy_stats
 
 # Reuse the fixture generators + Python-fallback helpers the hard-coded parity
 # test already defines instead of duplicating them.
@@ -723,6 +724,132 @@ def _agesig_fallback(fx: tuple[pl.Series, pl.Series]) -> tuple[int, list]:
     return (count, [str(v) for v in age.filter(mismatch_mask).head(5).to_list()])
 
 
+# ---------------------------------------------------------------------------
+# pearson_r + chi2_contingency (correlation.py) -- W4 baseline-stat kernels.
+#
+# These kernels have NO pure-Python fallback: the profiler consumes the scipy
+# STATISTIC directly (`pearsonr(a,b)[0]`, `chi2_contingency(m)[0]`), so the
+# harness's `run_fallback` calls SCIPY itself as the parity oracle. Both are
+# pure-arithmetic (deterministic), so a float-reduction-tight canonicalisation
+# (`_canon_float`, ~9 sig-figs, applied in BOTH lanes) collapses the last-digit
+# noise while still tripping the oracle on any real divergence -- so this stays
+# an exact-`!=` check and ACCEPTED_DIVERGENCES remains EMPTY.
+# ---------------------------------------------------------------------------
+
+
+def _pearson_fixtures(seed: int) -> list[tuple[list[float], list[float]]]:
+    rng = random.Random(seed)
+    n = rng.randint(30, 250)
+    # Correlated pair: y = slope*x + noise, so r lands across the whole range.
+    xs = [rng.uniform(-100, 100) for _ in range(n)]
+    slope = rng.choice([-2.0, -0.5, 0.3, 1.5])
+    ys = [slope * x + rng.gauss(0, 20) for x in xs]
+    # Adversarial, seed-invariant: perfect +1 / perfect -1 (must clamp exactly).
+    pos = [float(i) for i in range(40)]
+    perfect_pos = ([v for v in pos], [2.0 * v + 1.0 for v in pos])
+    perfect_neg = ([v for v in pos], [-3.0 * v + 5.0 for v in pos])
+    # A near-zero-correlation symmetric pair.
+    zx = [float(i) for i in range(1, 41)]
+    zy = [1.0 if i % 2 else -1.0 for i in range(40)]
+    return [(xs, ys), perfect_pos, perfect_neg, (zx, zy)]
+
+
+def _pearson_native(fx: tuple[list[float], list[float]]) -> str:
+    a, b = fx
+    r = native_module().pearson_r(pa.array(a, type=pa.float64()), pa.array(b, type=pa.float64()))
+    return _canon_float(r)
+
+
+def _pearson_fallback(fx: tuple[list[float], list[float]]) -> str:
+    a, b = fx
+    r = _scipy_stats.pearsonr(a, b)[0]
+    return _canon_float(r)
+
+
+def _chi2_contingency_fixtures(seed: int) -> list[tuple[list[list[float]], int, int]]:
+    rng = random.Random(seed)
+    fixtures: list[tuple[list[list[float]], int, int]] = []
+    # A random 2x2 (Yates path) and a random 3x3 / 2x4 (no correction).
+    m2 = [[float(rng.randint(5, 60)) for _ in range(2)] for _ in range(2)]
+    fixtures.append((m2, 2, 2))
+    m3 = [[float(rng.randint(5, 80)) for _ in range(3)] for _ in range(3)]
+    fixtures.append((m3, 3, 3))
+    m24 = [[float(rng.randint(5, 50)) for _ in range(4)] for _ in range(2)]
+    fixtures.append((m24, 2, 4))
+    # Seed-invariant adversarials: 2x2 with all |obs-exp| < 0.5 (Yates clips each
+    # residual to 0 -> chi2 == 0), a strong 2x2, and a clean 3x2.
+    fixtures.append(([[5.0, 5.0], [5.0, 6.0]], 2, 2))
+    fixtures.append(([[1.0, 9.0], [9.0, 1.0]], 2, 2))
+    fixtures.append(([[10.0, 20.0], [30.0, 20.0], [10.0, 30.0]], 3, 2))
+    return fixtures
+
+
+def _chi2_contingency_native(fx: tuple[list[list[float]], int, int]) -> str:
+    matrix, nrows, ncols = fx
+    flat = [v for row in matrix for v in row]
+    return _canon_float(native_module().chi2_contingency_stat(flat, nrows, ncols))
+
+
+def _chi2_contingency_fallback(fx: tuple[list[list[float]], int, int]) -> str:
+    matrix, _nrows, _ncols = fx
+    return _canon_float(_scipy_stats.chi2_contingency(matrix)[0])
+
+
+# ---------------------------------------------------------------------------
+# chi2_gof (statistical.py Benford) -- W4 chi-squared goodness-of-fit kernel.
+#
+# The Benford profiler's `_compute_benford` calls `scipy.stats.chisquare(f_obs,
+# f_exp)` and consumes BOTH the statistic and the p-value. This kernel has NO
+# pure-Python fallback: scipy IS the oracle, so `run_fallback` calls
+# `scipy.stats.chisquare` directly. The statistic is deterministic (exact under
+# canon); the p-value is the ONE owned epsilon divergence class (statrs
+# `gamma_ur` vs scipy's `chdtrc`), collapsed by the same ~9-sig-fig
+# `_canon_float` applied in BOTH lanes -- so this stays an exact-`!=` check and
+# ACCEPTED_DIVERGENCES remains EMPTY. Fixtures mirror the profiler exactly:
+# `observed` = integer leading-digit counts, `expected` = Benford proportions *
+# total, so the two sums agree (scipy's chisquare enforces that).
+# ---------------------------------------------------------------------------
+import math as _math_mod  # noqa: E402
+
+# Benford expected proportions for leading digits 1-9 (sum to 1.0), matching
+# statistical.py `_compute_benford`.
+_BENFORD_PROPS = [_math_mod.log10(1 + 1 / d) for d in range(1, 10)]
+
+
+def _chi2_gof_fixtures(seed: int) -> list[tuple[list[float], list[float]]]:
+    rng = random.Random(seed)
+    fixtures: list[tuple[list[float], list[float]]] = []
+    # Benford-shaped: counts drawn near the Benford proportions of a random total.
+    for _ in range(3):
+        total = rng.randint(300, 5000)
+        counts = [max(0, round(p * total + rng.gauss(0, p * total * 0.15))) for p in _BENFORD_PROPS]
+        t = sum(counts)
+        if t == 0:
+            continue
+        expected = [p * t for p in _BENFORD_PROPS]
+        fixtures.append(([float(c) for c in counts], expected))
+    # A random non-Benford count vector (still equal sums via expected = prop*t).
+    counts = [float(rng.randint(1, 200)) for _ in range(9)]
+    t = sum(counts)
+    fixtures.append((counts, [p * t for p in _BENFORD_PROPS]))
+    # Seed-invariant adversarials: perfect fit (chi2=0/p=1) + a strong skew.
+    fixtures.append(([10.0, 10.0, 10.0, 10.0], [10.0, 10.0, 10.0, 10.0]))
+    fixtures.append(([40.0, 10.0, 5.0, 5.0], [15.0, 15.0, 15.0, 15.0]))
+    return fixtures
+
+
+def _chi2_gof_native(fx: tuple[list[float], list[float]]) -> tuple[str, str]:
+    obs, exp = fx
+    chi2, pvalue = native_module().chi2_gof(obs, exp)
+    return (_canon_float(chi2), _canon_float(pvalue))
+
+
+def _chi2_gof_fallback(fx: tuple[list[float], list[float]]) -> tuple[str, str]:
+    obs, exp = fx
+    chi2, pvalue = _scipy_stats.chisquare(f_obs=obs, f_exp=exp)
+    return (_canon_float(chi2), _canon_float(pvalue))
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -763,4 +890,12 @@ REGISTERED_COMPONENTS: list[Component] = [
     ),
     Component("duplicate_signatures", _dupsig_native, _dupsig_fallback, _dupsig_fixtures),
     Component("age_mismatch", _agesig_native, _agesig_fallback, _agesig_fixtures),
+    Component("pearson_r", _pearson_native, _pearson_fallback, _pearson_fixtures),
+    Component(
+        "chi2_contingency",
+        _chi2_contingency_native,
+        _chi2_contingency_fallback,
+        _chi2_contingency_fixtures,
+    ),
+    Component("chi2_gof", _chi2_gof_native, _chi2_gof_fallback, _chi2_gof_fixtures),
 ]
