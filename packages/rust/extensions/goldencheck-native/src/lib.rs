@@ -21,6 +21,7 @@ mod dc;
 mod duplicate;
 mod freshness;
 mod fuzzy;
+mod gof;
 mod keys;
 mod profile;
 mod regex;
@@ -52,5 +53,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(age::age_mismatch, m)?)?;
     m.add_function(wrap_pyfunction!(correlation::pearson_r, m)?)?;
     m.add_function(wrap_pyfunction!(correlation::chi2_contingency_stat, m)?)?;
+    m.add_function(wrap_pyfunction!(gof::chi2_gof, m)?)?;
     Ok(())
 }

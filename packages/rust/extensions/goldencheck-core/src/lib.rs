@@ -32,6 +32,7 @@ mod dc;
 mod duplicate;
 mod freshness;
 mod fuzzy;
+mod gof;
 mod keys;
 mod regex;
 mod sequence;
@@ -48,6 +49,7 @@ pub use dc::{dc_pair_evidence, dc_row_evidence, Pred};
 pub use duplicate::{duplicate_signatures, DupStats};
 pub use freshness::{date_freshness, FreshStats};
 pub use fuzzy::{near_duplicate_clusters, near_duplicate_clusters_slice};
+pub use gof::chi2_gof;
 pub use keys::{
     composite_key_search, composite_key_search_slice, discover_approximate_fds,
     discover_approximate_fds_slice, discover_functional_dependencies,

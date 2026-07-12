@@ -21,7 +21,6 @@ from typing import Any
 import numpy as np
 import polars as pl
 import pyarrow as pa
-from scipy import stats as _scipy_stats
 from goldencheck import cell_quality as _cell_quality
 from goldencheck import functional_dependencies as _fd_bridge
 from goldencheck.core._native_loader import native_module
@@ -31,6 +30,7 @@ from goldencheck.relations import approx_fd as afd
 from goldencheck.relations import composite_key as ck
 from goldencheck.relations import functional_dependency as fd
 from goldencheck.relations.approx_duplicate import _exact_signature, _normalized_signature
+from scipy import stats as _scipy_stats
 
 # Reuse the fixture generators + Python-fallback helpers the hard-coded parity
 # test already defines instead of duplicating them.
@@ -795,6 +795,61 @@ def _chi2_contingency_fallback(fx: tuple[list[list[float]], int, int]) -> str:
     return _canon_float(_scipy_stats.chi2_contingency(matrix)[0])
 
 
+# ---------------------------------------------------------------------------
+# chi2_gof (statistical.py Benford) -- W4 chi-squared goodness-of-fit kernel.
+#
+# The Benford profiler's `_compute_benford` calls `scipy.stats.chisquare(f_obs,
+# f_exp)` and consumes BOTH the statistic and the p-value. This kernel has NO
+# pure-Python fallback: scipy IS the oracle, so `run_fallback` calls
+# `scipy.stats.chisquare` directly. The statistic is deterministic (exact under
+# canon); the p-value is the ONE owned epsilon divergence class (statrs
+# `gamma_ur` vs scipy's `chdtrc`), collapsed by the same ~9-sig-fig
+# `_canon_float` applied in BOTH lanes -- so this stays an exact-`!=` check and
+# ACCEPTED_DIVERGENCES remains EMPTY. Fixtures mirror the profiler exactly:
+# `observed` = integer leading-digit counts, `expected` = Benford proportions *
+# total, so the two sums agree (scipy's chisquare enforces that).
+# ---------------------------------------------------------------------------
+import math as _math_mod  # noqa: E402
+
+# Benford expected proportions for leading digits 1-9 (sum to 1.0), matching
+# statistical.py `_compute_benford`.
+_BENFORD_PROPS = [_math_mod.log10(1 + 1 / d) for d in range(1, 10)]
+
+
+def _chi2_gof_fixtures(seed: int) -> list[tuple[list[float], list[float]]]:
+    rng = random.Random(seed)
+    fixtures: list[tuple[list[float], list[float]]] = []
+    # Benford-shaped: counts drawn near the Benford proportions of a random total.
+    for _ in range(3):
+        total = rng.randint(300, 5000)
+        counts = [max(0, round(p * total + rng.gauss(0, p * total * 0.15))) for p in _BENFORD_PROPS]
+        t = sum(counts)
+        if t == 0:
+            continue
+        expected = [p * t for p in _BENFORD_PROPS]
+        fixtures.append(([float(c) for c in counts], expected))
+    # A random non-Benford count vector (still equal sums via expected = prop*t).
+    counts = [float(rng.randint(1, 200)) for _ in range(9)]
+    t = sum(counts)
+    fixtures.append((counts, [p * t for p in _BENFORD_PROPS]))
+    # Seed-invariant adversarials: perfect fit (chi2=0/p=1) + a strong skew.
+    fixtures.append(([10.0, 10.0, 10.0, 10.0], [10.0, 10.0, 10.0, 10.0]))
+    fixtures.append(([40.0, 10.0, 5.0, 5.0], [15.0, 15.0, 15.0, 15.0]))
+    return fixtures
+
+
+def _chi2_gof_native(fx: tuple[list[float], list[float]]) -> tuple[str, str]:
+    obs, exp = fx
+    chi2, pvalue = native_module().chi2_gof(obs, exp)
+    return (_canon_float(chi2), _canon_float(pvalue))
+
+
+def _chi2_gof_fallback(fx: tuple[list[float], list[float]]) -> tuple[str, str]:
+    obs, exp = fx
+    chi2, pvalue = _scipy_stats.chisquare(f_obs=obs, f_exp=exp)
+    return (_canon_float(chi2), _canon_float(pvalue))
+
+
 REGISTERED_COMPONENTS: list[Component] = [
     Component("benford", _benford_native, _benford_fallback, _benford_fixtures),
     Component("composite_keys", _keys_native, _keys_fallback, _keys_fixtures),
@@ -842,4 +897,5 @@ REGISTERED_COMPONENTS: list[Component] = [
         _chi2_contingency_fallback,
         _chi2_contingency_fixtures,
     ),
+    Component("chi2_gof", _chi2_gof_native, _chi2_gof_fallback, _chi2_gof_fixtures),
 ]
