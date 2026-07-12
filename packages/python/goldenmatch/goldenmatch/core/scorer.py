@@ -1938,6 +1938,38 @@ def _score_one_block_columnar(
     return pairs_df
 
 
+def _score_block_batch_columnar(
+    batch: list,
+    mk: MatchkeyConfig,
+    frozen_exclude: frozenset[tuple[int, int]],
+    across_files_only: bool,
+    source_lookup: dict[int, str] | None,
+) -> pl.DataFrame:
+    """Columnar twin of :func:`_score_block_batch`. Loops
+    ``_score_one_block_columnar`` over every block in one batch on a single
+    worker thread and concatenates into a single pair-stream DataFrame (via
+    ``_concat_pair_frames``, the same helper the aggregation loop uses) --
+    an empty pair-stream frame if the batch produced no pairs.
+
+    No ``matched_pairs`` mutation here -- the real columnar path updates
+    ``matched_pairs`` in the MAIN collection loop, and those (min, max) adds
+    are set-based / order-invariant, so the collection loop stays the sole
+    writer over the batch's concatenated frame.
+    """
+    frames = []
+    for block in batch:
+        dfp = _score_one_block_columnar(
+            block, mk, frozen_exclude,
+            across_files_only=across_files_only,
+            source_lookup=source_lookup,
+        )
+        if dfp is not None and not dfp.is_empty():
+            frames.append(dfp)
+    if not frames:
+        return _empty_pair_stream_df()
+    return _concat_pair_frames(frames)
+
+
 def score_blocks_columnar(
     blocks: list,
     mk: MatchkeyConfig,
@@ -2019,13 +2051,15 @@ def score_blocks_columnar(
     frozen_exclude = frozenset(matched_pairs)
     frames = []
     total_blocks = len(blocks)
-    log_interval = max(total_blocks // 10, 1)
+    batches = _plan_block_batches(blocks, max_workers)
+    total_batches = len(batches)
+    log_interval = max(total_batches // 10, 1)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {}
-        for i, block in enumerate(blocks):
+        for i, batch in enumerate(batches):
             future = executor.submit(
-                _score_one_block_columnar, block, mk, frozen_exclude,
+                _score_block_batch_columnar, batch, mk, frozen_exclude,
                 across_files_only, source_lookup,
             )
             future_to_idx[future] = i
@@ -2049,9 +2083,9 @@ def score_blocks_columnar(
                 # Match the list path's log line shape (without the
                 # exact pair count since aggregation is deferred).
                 logger.info(
-                    "Scoring progress (columnar): %d/%d blocks (%d%%)",
-                    completed, total_blocks,
-                    int(completed / total_blocks * 100),
+                    "Scoring progress (columnar): %d/%d batches (%d%%)",
+                    completed, total_batches,
+                    int(completed / total_batches * 100),
                 )
 
     if not frames:
