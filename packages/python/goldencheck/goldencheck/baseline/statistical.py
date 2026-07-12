@@ -324,6 +324,16 @@ def _compute_benford(values: np.ndarray) -> dict[str, float]:
 
     # Chi-squared test
     chi2, pvalue = _stats.chisquare(f_obs=observed_props, f_exp=expected_vals)
+    # Shadow (W4): also compute the native chi2_gof kernel (statistic + p-value)
+    # on the same inputs scipy got, and discard it. The emitted chi2_pvalue stays
+    # scipy until the Flip; the guard + swallow keep it output-invariant.
+    if native_enabled("chi2_gof"):
+        try:
+            native_module().chi2_gof(
+                [float(x) for x in observed_props], [float(x) for x in expected_vals]
+            )
+        except BaseException:  # noqa: BLE001 - swallow even PyO3 PanicException
+            logger.debug("native chi2_gof shadow failed", exc_info=True)
     result["chi2_pvalue"] = round(float(pvalue), 6)
 
     return result
