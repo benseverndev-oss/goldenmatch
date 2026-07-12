@@ -90,9 +90,14 @@ assertions migrate to Arrow, results become `pa.Table`. W0-W4 merged/queued
   to_csv re-render, migration guide (pl.from_arrow one-liner), input
   polymorphism already in place. Fused/golden_fused backend-conditional
   audit. Ingest loop → pa.concat_tables.
-- **W5d** — test migration (~334 files; mechanical to_dicts/pl.DataFrame →
-  arrow equivalents in waves by directory, shard-aware per
-  [[feedback_pytest_split_shard_shift_clobber]]).
+- **W5d (RESCOPED 2026-07-12: collapses into W5c-2)** — the ~334-file count
+  measured ANY pl usage in tests; the REAL result-assertion surface is 13
+  files / 16 call sites (grep: .golden/.dupes/.unique/.matched/.unmatched
+  followed by a polars method). Everything else constructs polars INPUTS —
+  which stay valid forever: inputs are polymorphic (Arrow C stream), and
+  polars remains a DEV/TEST dependency after leaving the runtime deps (the
+  spec's "dependency list" is install_requires). The 16 sites migrate IN the
+  flip PR. The differential/parity suites collapse per W5e as planned.
 - **W5e** — the deletion: polars out of deps ([polars] nowhere), PolarsFrame
   + _polars_dtype + polars constructor branches + env var + _polars_lazy
   proxy deleted; parity suites collapse to single-backend; fallback-contract
