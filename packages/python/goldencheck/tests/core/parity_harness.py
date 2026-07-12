@@ -428,6 +428,7 @@ def _numeric_stats_normalized(
     mean: object,
     std: object,
     outlier: tuple[int, list[str]],
+    n_unique: int,
 ) -> tuple:
     return (
         count,
@@ -437,6 +438,7 @@ def _numeric_stats_normalized(
         _canon_float(std),
         outlier[0],
         tuple(outlier[1]),
+        n_unique,
     )
 
 
@@ -451,16 +453,18 @@ def _numeric_stats_outlier_bounds(s: pl.Series) -> tuple[float, float] | None:
 
 
 def _numeric_stats_native(s: pl.Series) -> tuple:
-    count, mn, mx, mean, std, _sum = native_module().column_numeric_stats(s.to_arrow())
+    count, mn, mx, mean, std, _sum, n_unique = native_module().column_numeric_stats(s.to_arrow())
     bounds = _numeric_stats_outlier_bounds(s)
     if bounds is None:
         outlier = (0, [])
     else:
         outlier = tuple(native_module().count_outside(s.to_arrow(), bounds[0], bounds[1]))
-    return _numeric_stats_normalized(count, mn, mx, mean, std, outlier)
+    return _numeric_stats_normalized(count, mn, mx, mean, std, outlier, n_unique)
 
 
 def _numeric_stats_fallback(s: pl.Series) -> tuple:
+    import pyarrow.compute as _pc
+
     count = s.len() - s.null_count()
     bounds = _numeric_stats_outlier_bounds(s)
     if bounds is None:
@@ -469,7 +473,8 @@ def _numeric_stats_fallback(s: pl.Series) -> tuple:
         non_null = s.drop_nulls()
         out = non_null.filter((non_null < bounds[0]) | (non_null > bounds[1]))
         outlier = (len(out), [str(v) for v in out.to_list()[:5]])
-    return _numeric_stats_normalized(count, s.min(), s.max(), s.mean(), s.std(), outlier)
+    n_unique = int(_pc.count_distinct(s.to_arrow(), mode="all").as_py())
+    return _numeric_stats_normalized(count, s.min(), s.max(), s.mean(), s.std(), outlier, n_unique)
 
 
 # ---------------------------------------------------------------------------
