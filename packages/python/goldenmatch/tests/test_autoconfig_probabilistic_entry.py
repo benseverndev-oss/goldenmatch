@@ -34,7 +34,7 @@ def test_config_runs_through_dedupe():
     result = goldenmatch.dedupe_df(df, config=cfg)
     # John/Jon+Smith+same email, Jane, Bob/Bobby+Jones+same email -> 3 clusters.
     assert len(result.clusters) == 3
-    assert result.unique.height == 1
+    assert result.unique.num_rows == 1
 
 
 def test_accepts_lazyframe():

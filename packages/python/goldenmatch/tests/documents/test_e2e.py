@@ -59,8 +59,8 @@ def test_extracted_frame_feeds_dedupe_df_and_finds_the_dupe(tmp_path):
     assert len(dupe_clusters) == 1
     assert dupe_clusters[0]["size"] == 2
     # Grace (no duplicate) surfaces in the unique table, not in a multi-member cluster.
-    assert result.unique is not None and result.unique.height == 1
-    assert result.unique["full_name"].to_list() == ["Grace Hopper"]
+    assert result.unique is not None and result.unique.num_rows == 1
+    assert result.unique["full_name"].to_pylist() == ["Grace Hopper"]
 
 
 INV = get_template("invoice")

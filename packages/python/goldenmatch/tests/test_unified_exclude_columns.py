@@ -281,10 +281,10 @@ def test_e2e_hand_written_config_exclude_columns_propagates_to_transform():
     # The golden output is downstream of GoldenFlow -- assert hashes
     # survived. The actual columns present depend on the pipeline's
     # output shape, but record_hash must be byte-identical where present.
-    if result.dupes is not None and "record_hash" in result.dupes.columns:
-        assert set(result.dupes["record_hash"].to_list()) <= set(original_hashes)
-    if result.unique is not None and "record_hash" in result.unique.columns:
-        assert set(result.unique["record_hash"].to_list()) <= set(original_hashes)
+    if result.dupes is not None and "record_hash" in result.dupes.column_names:
+        assert set(result.dupes["record_hash"].to_pylist()) <= set(original_hashes)
+    if result.unique is not None and "record_hash" in result.unique.column_names:
+        assert set(result.unique["record_hash"].to_pylist()) <= set(original_hashes)
 
 
 if __name__ == "__main__":  # pragma: no cover

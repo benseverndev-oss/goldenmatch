@@ -77,15 +77,15 @@ class TestGoldenPartitionOutput:
         # build_golden_record skips oversized; with max_block_size=100 and
         # cluster sizes of 3, nothing is oversized.
         assert result.golden is not None
-        assert result.golden.height == multi_member_count
-        assert result.golden.height == 15
+        assert result.golden.num_rows == multi_member_count
+        assert result.golden.num_rows == 15
 
     def test_no_duplicate_cluster_ids_in_golden(self):
         """The partitioned path must not emit two goldens for one cluster."""
         df = _cluster_df_with_dupes(n_clusters=25, members_per_cluster=4)
         result = dedupe_df(df, config=self._config())
         assert result.golden is not None
-        cids = result.golden["__cluster_id__"].to_list()
+        cids = result.golden["__cluster_id__"].to_pylist()
         assert len(cids) == len(set(cids)), (
             f"Found duplicate cluster ids in golden output: {sorted(cids)}"
         )
@@ -113,7 +113,7 @@ class TestGoldenPartitionOutput:
             cluster_zip_sets[cid] = member_zips
 
         # Every golden row's zip must be in its cluster's member-zip set.
-        for row in result.golden.iter_rows(named=True):
+        for row in result.golden.to_pylist():
             cid = row["__cluster_id__"]
             zip_val = str(row["zip"])
             assert zip_val in cluster_zip_sets[cid], (
@@ -161,7 +161,7 @@ class TestGoldenPartitionOutput:
             cid for cid, info in result.clusters.items()
             if info.get("oversized")
         }
-        golden_cids = set(result.golden["__cluster_id__"].to_list())
+        golden_cids = set(result.golden["__cluster_id__"].to_pylist())
         assert oversized_cids.isdisjoint(golden_cids), (
             f"Oversized clusters {oversized_cids} leaked into golden {golden_cids}"
         )

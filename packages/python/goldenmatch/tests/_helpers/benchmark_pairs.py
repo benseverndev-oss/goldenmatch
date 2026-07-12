@@ -45,7 +45,7 @@ def pairs_from_match_result(
     """Direct extraction from MatchResult.matched. No closure needed --
     each row is one (target_id, ref_id) pair. Pairs NOT canonicalized
     (target/ref are semantically distinct, e.g. DBLP vs ACM)."""
-    if result.matched is None or result.matched.height == 0:
+    if result.matched is None or result.matched.num_rows == 0:
         return set()
     return {
         (row[target_id_col], row[ref_id_col])

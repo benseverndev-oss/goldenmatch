@@ -127,7 +127,7 @@ def test_non_throughput_still_builds_golden():
 
     res = dedupe_df(df)
     assert res.throughput_posture is None
-    assert res.golden is not None and res.golden.height >= 1, (
+    assert res.golden is not None and res.golden.num_rows >= 1, (
         "normal run must still produce golden records"
     )
 

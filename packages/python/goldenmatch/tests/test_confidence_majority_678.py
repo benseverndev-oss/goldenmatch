@@ -168,5 +168,5 @@ def test_pipeline_threads_pair_scores_into_confidence_majority() -> None:
     # "Bravo", NOT the count-majority winner "Alpha". This is byte-for-byte
     # the value that flips if the pipeline stops passing cluster_pair_scores.
     assert result.golden is not None
-    assert result.golden.height == 1
-    assert result.golden["name"][0] == "Bravo"
+    assert result.golden.num_rows == 1
+    assert result.golden.column("name")[0].as_py() == "Bravo"

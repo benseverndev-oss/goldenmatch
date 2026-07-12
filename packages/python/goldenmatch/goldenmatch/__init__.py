@@ -5,7 +5,7 @@ Quick start:
 
     # Deduplicate a CSV
     result = gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85})
-    result.golden.write_csv("deduped.csv")
+    result.to_csv("deduped.csv")  # result frames are pa.Table (v3.0.0)
 
     # Match across files
     result = gm.match("targets.csv", "reference.csv", fuzzy={"name": 0.85})
@@ -28,7 +28,7 @@ Quick start:
 All features are accessible via `import goldenmatch as gm`.
 """
 
-__version__ = "2.8.0"
+__version__ = "3.0.0"
 
 # ── Native Core surface ───────────────────────────────────────────────────
 # goldenmatch.native: graph/pair primitives + native string scorers, re-exported
