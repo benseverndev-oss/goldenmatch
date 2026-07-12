@@ -1260,7 +1260,9 @@ def score_probabilistic(
     # Build row lookup
     cols = [f.field for f in mk.fields if f.field != "__record__"]
     row_lookup: dict[int, dict] = {}
-    for row in block_df.select(["__row_id__"] + cols).to_dicts():
+    from goldenmatch.core.frame import to_frame as _tf_d5c
+
+    for row in _tf_d5c(block_df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
 
     from goldenmatch.core.frame import to_frame as _to_frame_d5
