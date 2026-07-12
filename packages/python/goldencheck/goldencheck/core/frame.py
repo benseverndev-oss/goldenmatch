@@ -444,7 +444,7 @@ class ArrowColumn:
     ``max()`` on a date column returns a ``datetime.date`` (freshness needs it).
     """
 
-    __slots__ = ("_arr", "_cat", "_num_stats")
+    __slots__ = ("_arr", "_cat", "_num_stats", "_n_unique", "_dropna")
 
     def __init__(self, arr: Any) -> None:
         pa, _ = _arrow()
@@ -453,6 +453,8 @@ class ArrowColumn:
         self._arr = arr
         self._cat = _arrow_neutral_dtype(arr.type)
         self._num_stats: Any = None   # None=unset, False=empty/all-null, tuple=cached
+        self._n_unique: int | None = None      # memoized across profilers (see ArrowFrame cache)
+        self._dropna: ArrowColumn | None = None
 
     # -- numeric stats (cached single kernel call) ----------------------------
     def _numeric_stats(self):
@@ -515,12 +517,20 @@ class ArrowColumn:
         return self._arr.null_count
 
     def n_unique(self) -> int:
-        _, pc = _arrow()
-        return int(pc.count_distinct(self._arr, mode="all").as_py())   # nulls = 1 distinct (Polars parity)
+        # Memoized: cardinality + uniqueness + the scan-loop ColumnProfile each ask
+        # for this on the SAME cached column (ArrowFrame reuses instances), so
+        # count_distinct runs once per column instead of ~3x. nulls = 1 distinct.
+        if self._n_unique is None:
+            _, pc = _arrow()
+            self._n_unique = int(pc.count_distinct(self._arr, mode="all").as_py())
+        return self._n_unique
 
     def drop_nulls(self) -> ArrowColumn:
-        _, pc = _arrow()
-        return ArrowColumn(pc.drop_null(self._arr))
+        # Memoized: several profilers drop_nulls the same column; do it once.
+        if self._dropna is None:
+            _, pc = _arrow()
+            self._dropna = ArrowColumn(pc.drop_null(self._arr))
+        return self._dropna
 
     def unique(self) -> ArrowColumn:
         _, pc = _arrow()
@@ -589,11 +599,21 @@ class ArrowColumn:
         return int(r or 0)
 
     def str_match_count(self, pattern: str) -> int:
-        if native_enabled("regex"):
-            return _regex_kernel().str_contains_count(self._arr.to_pylist(), pattern)
+        # Prefer the VECTORIZED pyarrow path (pc.match_substring_regex + pc.sum, C++,
+        # no Python-list materialization). The native kernel is list-based, so routing
+        # through it forces `self._arr.to_pylist()` on the whole column -- at 1M rows
+        # that to_pylist was the single largest scan cost. pyarrow's RE2 agrees with
+        # the kernel/Polars on the format/pattern-consistency patterns (verified by
+        # the finding-set differential). Fall back to the kernel only when RE2 cannot
+        # compile the pattern (e.g. \uXXXX escapes the encoding checks use).
         _, pc = _arrow()
-        mask = pc.match_substring_regex(self._arr, pattern)   # null preserved on null input
-        return int(pc.sum(mask, skip_nulls=True).as_py() or 0)
+        try:
+            mask = pc.match_substring_regex(self._arr, pattern)   # null preserved on null input
+            return int(pc.sum(mask, skip_nulls=True).as_py() or 0)
+        except Exception:  # noqa: BLE001 - RE2 compile error -> kernel fallback
+            if native_enabled("regex"):
+                return _regex_kernel().str_contains_count(self._arr.to_pylist(), pattern)
+            raise
 
     def str_filter(self, pattern: str, *, matching: bool) -> ArrowColumn:
         pa, pc = _arrow()
@@ -693,15 +713,17 @@ class ArrowColumn:
         return ArrowColumn(self._arr.slice(offset, length))
 
     def str_replace_all(self, pattern: str, value: str) -> ArrowColumn:
+        # Prefer VECTORIZED pyarrow (no to_pylist round-trip); RE2 preserves nulls,
+        # matching Polars' str.replace_all. Kernel fallback only on RE2 compile error.
         pa, pc = _arrow()
-        if native_enabled("regex"):
-            out = _regex_kernel().str_replace_all(self._arr.to_pylist(), pattern, value)
-            return ArrowColumn(pa.array(out, type=pa.string()))
-        # pyarrow fallback: replace_substring_regex preserves nulls, matching
-        # Polars' str.replace_all. Cast to string() so the result column dtype
-        # matches the native path (input may be large_string).
-        out = pc.replace_substring_regex(self._arr, pattern, value)
-        return ArrowColumn(pc.cast(out, pa.string()))
+        try:
+            out = pc.replace_substring_regex(self._arr, pattern, value)
+            return ArrowColumn(pc.cast(out, pa.string()))
+        except Exception:  # noqa: BLE001 - RE2 compile error -> kernel fallback
+            if native_enabled("regex"):
+                out = _regex_kernel().str_replace_all(self._arr.to_pylist(), pattern, value)
+                return ArrowColumn(pa.array(out, type=pa.string()))
+            raise
 
     def str_len_chars(self) -> ArrowColumn:
         # pc.utf8_length -> per-value character count (nulls preserved), matching
@@ -711,7 +733,15 @@ class ArrowColumn:
         return ArrowColumn(pc.utf8_length(self._arr))
 
     def value_counts_desc(self) -> list[tuple[Any, int]]:
-        return sorted(Counter(self._arr.to_pylist()).items(), key=_VC_KEY)
+        # pc.value_counts counts in C++ (no Python Counter over a materialized 1M
+        # list); only the DISTINCT values are pulled to Python. pyarrow includes
+        # null as a value (like Polars value_counts), so _VC_KEY's nulls-last rule
+        # still applies. Same (value, count) pairs -> identical _VC_KEY ordering.
+        _, pc = _arrow()
+        vc = pc.value_counts(self._arr)
+        values = vc.field("values").to_pylist()
+        counts = vc.field("counts").to_pylist()
+        return sorted(zip(values, counts), key=_VC_KEY)
 
     def eq(self, value: Any) -> ArrowColumn:
         _, pc = _arrow()
@@ -768,10 +798,11 @@ class ArrowColumn:
 class ArrowFrame:
     """``pyarrow.Table``-backed frame implementing the ``Frame`` Protocol."""
 
-    __slots__ = ("_tbl",)
+    __slots__ = ("_tbl", "_col_cache")
 
     def __init__(self, tbl: Any) -> None:
         self._tbl = tbl
+        self._col_cache: dict[str, ArrowColumn] = {}
 
     @property
     def columns(self) -> list[str]:
@@ -786,7 +817,16 @@ class ArrowFrame:
         return self._tbl
 
     def column(self, name: str) -> ArrowColumn:
-        return ArrowColumn(self._tbl.column(name))
+        # Cache the wrapped column: every seam profiler on the scan loop calls
+        # frame.column(name) for the same column, and they all share this one
+        # ArrowFrame (to_frame is idempotent). Reusing the instance means
+        # combine_chunks + the memoized n_unique/drop_nulls/numeric_stats run
+        # ONCE per column instead of once per profiler.
+        col = self._col_cache.get(name)
+        if col is None:
+            col = ArrowColumn(self._tbl.column(name))
+            self._col_cache[name] = col
+        return col
 
 
 def to_frame(native: Any) -> Frame:

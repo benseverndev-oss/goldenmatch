@@ -44,3 +44,6 @@ packages/goldencheck-js/package-lock.json
 # Flip differential: regenerable corpus + captured findings (scripts/flip_corpus.py)
 tests/flip/corpus/
 tests/flip/authoritative_findings.json
+packages/python/goldencheck/scripts/_perf_scan.parquet
+
+scripts/_perf_scan.parquet
