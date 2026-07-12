@@ -785,14 +785,20 @@ class ArrowColumn:
         pa, pc = _arrow()
         if strict:
             raise NotImplementedError("goldencheck str_to_date supports strict=False only")
-        if native_enabled("str_to_date"):
-            iso = _date_kernel().str_to_date(self._arr.to_pylist(), fmt)
-            vals = [date.fromisoformat(s) if s is not None else None for s in iso]
-            return ArrowColumn(pa.array(vals, type=pa.date32()))
-        # pyarrow fallback: strptime with error_is_null (== Polars strict=False:
-        # unparseable -> null) then narrow the timestamp to date32.
-        ts = pc.strptime(self._arr, format=fmt, unit="s", error_is_null=True)
-        return ArrowColumn(pc.cast(ts, pa.date32()))
+        # Prefer VECTORIZED pyarrow strptime (error_is_null == Polars strict=False).
+        # The native path forced to_pylist AND a second Python fromisoformat loop --
+        # two O(N) passes. Both parse an EXPLICIT format, so strptime matches the
+        # kernel's directive parsing; fall back to the kernel only if strptime cannot
+        # handle the format string.
+        try:
+            ts = pc.strptime(self._arr, format=fmt, unit="s", error_is_null=True)
+            return ArrowColumn(pc.cast(ts, pa.date32()))
+        except Exception:  # noqa: BLE001 - unsupported format directive -> kernel fallback
+            if native_enabled("str_to_date"):
+                iso = _date_kernel().str_to_date(self._arr.to_pylist(), fmt)
+                vals = [date.fromisoformat(s) if s is not None else None for s in iso]
+                return ArrowColumn(pa.array(vals, type=pa.date32()))
+            raise
 
 
 class ArrowFrame:
