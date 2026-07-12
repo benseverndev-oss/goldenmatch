@@ -414,3 +414,21 @@ class TestNullBlockKeyFilter:
             f"Found 'nan' block in {keys}: NaN records should be "
             "filtered before group_by. See #372."
         )
+
+
+def test_block_result_n_rows_populated_on_static_path():
+    """build_blocks populates BlockResult.n_rows from the group size that is
+    already computed at construction (no extra .collect())."""
+    df = pl.DataFrame({
+        "__row_id__": list(range(6)),
+        "city": ["nyc", "nyc", "nyc", "la", "la", "sf"],
+    })
+    config = BlockingConfig(
+        strategy="static",
+        keys=[BlockingKeyConfig(fields=["city"], transforms=["lowercase"])],
+    )
+    blocks = build_blocks(df.lazy(), config)
+    assert blocks, "expected at least one block"
+    for b in blocks:
+        assert b.n_rows is not None, f"block {b.block_key!r} has n_rows=None"
+        assert b.n_rows == b.df.collect().height

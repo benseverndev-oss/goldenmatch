@@ -248,6 +248,11 @@ class BlockResult:
     depth: int = 0
     parent_key: str | None = None
     pre_scored_pairs: list[tuple[int, int, float]] | None = None
+    n_rows: int | None = None
+    """Row count of this block when known cheaply at construction (group size).
+    None when the constructing path can't supply it for free -- the scorer's
+    batch planner treats None as 'small' and round-robin bins it. NEVER derive
+    this via a per-block .collect() at call sites (the #295/#301/#303 OOM leak)."""
 
 
 def collect_blocking_fields(config: BlockingConfig) -> list[str]:
@@ -470,6 +475,7 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
             results.append(BlockResult(
                 block_key=key_str,
                 df=group_df.lazy(),
+                n_rows=size,
             ))
 
     if hot_blocks_split or hot_blocks_skipped:
@@ -581,6 +587,7 @@ def _ann_sub_block(
             block_key=f"{parent_key}_ann_{min(member_list)}",
             df=sub_df.lazy(),
             strategy="ann",
+            n_rows=len(member_list),
         ))
 
     logger.info(
@@ -664,6 +671,7 @@ def _sub_block(
                 strategy="adaptive",
                 depth=depth,
                 parent_key=parent_key,
+                n_rows=size,
             ))
 
     return results
@@ -738,6 +746,7 @@ def _auto_split_block(
             strategy="adaptive",
             depth=1,
             parent_key=parent_key,
+            n_rows=group_frame.height,
         ))
 
     logger.info(
@@ -789,6 +798,7 @@ def _build_sorted_neighborhood_blocks(
                 block_key="sorted_window_0",
                 df=df.lazy(),
                 strategy="sorted_neighborhood",
+                n_rows=n,
             ))
         return results
 
@@ -799,6 +809,7 @@ def _build_sorted_neighborhood_blocks(
             block_key=f"sorted_window_{i}",
             df=window_df.lazy(),
             strategy="sorted_neighborhood",
+            n_rows=window_size,
         ))
 
     return results
@@ -891,6 +902,7 @@ def _build_ann_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockRes
             block_key=f"ann_{min(member_list)}",
             df=block_df.lazy(),
             strategy="ann",
+            n_rows=len(member_list),
         ))
 
     return results
@@ -1053,6 +1065,7 @@ def _build_canopy_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
             block_key=f"canopy_{i}",
             df=block_df.lazy(),
             strategy="canopy",
+            n_rows=len(members),
         ))
 
     return results
