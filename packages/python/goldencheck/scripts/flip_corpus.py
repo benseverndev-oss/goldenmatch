@@ -10,6 +10,7 @@ Writes one .parquet per dataset. Seeded; byte-stable across runs.
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -22,8 +23,12 @@ EPOCH_DAY = np.datetime64("1970-01-01")
 
 
 def _rng(tag: str) -> np.random.Generator:
-    # Distinct but deterministic stream per dataset (no wall-clock).
-    return np.random.default_rng(SEED + (abs(hash(tag)) % 100_000))
+    # Distinct but deterministic stream per dataset. Uses a STABLE hash (md5) --
+    # Python's builtin hash() salts str hashes per process (PYTHONHASHSEED), so
+    # hash(tag) would make the "deterministic" corpus differ every run and the
+    # parity test flaky (bit us: CI regenerated a different f32 column than local).
+    offset = int(hashlib.md5(tag.encode()).hexdigest(), 16) % 100_000
+    return np.random.default_rng(SEED + offset)
 
 
 def ds_numeric_outliers(n: int = 5_000) -> pa.Table:

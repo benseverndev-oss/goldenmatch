@@ -23,6 +23,7 @@ import pytest
 # minimal-deps CI job where any of these is absent (e.g. numpy is not a base dep).
 pl = pytest.importorskip("polars")
 pytest.importorskip("numpy")  # corpus generator dependency
+pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 from goldencheck.core.frame import ArrowColumn, PolarsColumn  # noqa: E402
 
@@ -33,8 +34,10 @@ NUMERIC = {"int", "uint", "float"}
 def _ensure_corpus() -> list[Path]:
     files = sorted(CORPUS.glob("*.parquet"))
     if not files:
-        script = Path(__file__).parent.parent / "scripts" / "flip_corpus.py"
-        subprocess.run([sys.executable, str(script)], check=True)
+        # scripts/ lives at the PACKAGE root: tests/flip/<this> -> parents[2].
+        # Pass the corpus dir explicitly so the generator writes where we read.
+        script = Path(__file__).parents[2] / "scripts" / "flip_corpus.py"
+        subprocess.run([sys.executable, str(script), str(CORPUS)], check=True)
         files = sorted(CORPUS.glob("*.parquet"))
     return files
 
@@ -94,18 +97,21 @@ def test_arrow_matches_polars(dataset: str, column: str) -> None:
 
     # --- numeric-only --------------------------------------------------------
     if pol.dtype in NUMERIC:
-        _both_none_or_close(pol.mean(), arr.mean())
-        # std is a variance reduction: Polars and the Rust kernel use different
-        # summation, so they agree to ~7 sig-figs (looser than the mean epsilon),
-        # widened further on float32/uint32 source.
-        _both_none_or_close(pol.std(), arr.std(), rel=1e-6)
+        # float32 accumulates in lower precision: Polars reduces in the source
+        # precision while pyarrow/the kernel promote to f64, so f32 columns diverge
+        # at ~1e-6 rel (a genuine stat epsilon that does NOT move findings -- the
+        # finding-set differential is 1.000 including f32). Widen the tolerance for
+        # f32 sources; f64 stays tight (a real bug would diverge far more).
+        is_f32 = pa.types.is_float32(tbl.column(column).type)
+        num_rel = 1e-5 if is_f32 else 1e-9
+        _both_none_or_close(pol.mean(), arr.mean(), rel=num_rel)
+        # std is a variance reduction (looser than mean), widened further on f32.
+        _both_none_or_close(pol.std(), arr.std(), rel=max(1e-6, num_rel))
         # sum: exact for int/uint, close for float
         if pol.dtype in ("int", "uint"):
             assert pol.sum() == arr.sum(), f"sum: pl={pol.sum()} arrow={arr.sum()}"
         else:
-            # float sum accumulates: Polars sums in the source precision, the
-            # kernel in f64, so float32 columns diverge at ~1e-6 rel (stat epsilon).
-            _both_none_or_close(pol.sum(), arr.sum(), rel=1e-6)
+            _both_none_or_close(pol.sum(), arr.sum(), rel=max(1e-6, num_rel))
 
         # filter_outside using the population's own 3-sigma band
         m, s = pol.mean(), pol.std()
