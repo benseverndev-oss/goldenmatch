@@ -4,6 +4,16 @@
 **Branch:** `spec/goldenpipe-inprocess` (off `origin/main` HEAD).
 **Author context:** architect sounding-board follow-up to the "arrow-native suite opens pipeline optimization" thread.
 
+> **Implementation note (2026-07-12).** Move 1 and the `clean_and_dedupe` half of
+> Move 2 are implemented (PR #1704). Running the real pipeline corrected two
+> details below: (1) `artifacts["golden"]` is a **`pa.Table`** on the current
+> goldenmatch build (not always a `pl.DataFrame`), so the composite normalizes
+> via `pl.from_arrow` before writing; (2) `dedupe_file` was **left as-is** — it
+> writes no intermediate CSV (its `auto_configure` step only reads), so the
+> disk-round-trip win is marginal and converting it would either change its
+> dedupe-only semantics or drop its `auto_configure` config-transparency block.
+> Only `clean_and_dedupe` (the true CSV-chaining composite) was converted.
+
 ## Thesis
 
 The suite's in-process currency is already a `pl.DataFrame` (Arrow-backed), so

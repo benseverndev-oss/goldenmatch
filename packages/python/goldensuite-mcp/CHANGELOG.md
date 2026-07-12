@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`clean_and_dedupe` now runs check→flow→dedupe in-process via GoldenPipe**
+  instead of chaining `run_transforms` → `agent_deduplicate` through an
+  intermediate `cleaned.csv` on disk. One `goldenpipe.run` call keeps the frame
+  in memory across cleaning and dedupe, writing golden once (no `cleaned.csv`).
+  The `steps[]` list carries a single `pipeline` step (was `clean` +
+  `deduplicate`); `outputs` (`golden_path`/`golden_records`/`total_records`) and
+  the `summary` are unchanged, and `exclude_columns` is honored (threaded via the
+  same `_RUNTIME_EXCLUDE_COLUMNS` ContextVar `agent_deduplicate` uses). The
+  confidence buckets in the summary are reconstructed from the pipeline's
+  `scored_pairs` via `review_queue.gate_pairs`. If GoldenPipe is unavailable, the
+  composite falls back to the previous tool-dispatch CSV chain. `dedupe_file`,
+  `match_sources`, and `assess_file` are unchanged.
+
 ## 0.5.0 (2026-07-11)
 
 ### Added
