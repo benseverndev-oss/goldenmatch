@@ -63,3 +63,60 @@ def test_every_block_scored_exactly_once_mixed(monkeypatch):
     seen = [blk.block_key for batch in batches for blk in batch]
     assert sorted(seen) == sorted(b.block_key for b in blocks)
     assert len(seen) == len(blocks), "no block duplicated or dropped"
+
+
+def _mixed_person_frame():
+    import polars as pl
+    rows = []
+    rid = 0
+    for surname, n in [("smith", 6), ("jones", 5), ("lee", 4)]:
+        for k in range(n):
+            rows.append({"__row_id__": rid, "first": f"john{k%2}", "last": surname})
+            rid += 1
+    for i in range(40):  # singletons
+        rows.append({"__row_id__": rid, "first": f"uniq{i}", "last": f"sur{i}"})
+        rid += 1
+    return pl.DataFrame(rows)
+
+
+def _blocks_and_mk(df):
+    from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.config.schemas import (
+        BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField,
+    )
+    blocking = BlockingConfig(
+        strategy="static",
+        keys=[BlockingKeyConfig(fields=["last"], transforms=["lowercase"])],
+    )
+    blocks = build_blocks(df.lazy(), blocking)
+    mk = MatchkeyConfig(
+        name="mk", type="weighted", threshold=0.7,
+        fields=[MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)],
+    )
+    return blocks, mk
+
+
+def _per_block_reference(blocks, mk):
+    """Ground truth = today's behavior: score each block directly, no batching."""
+    from goldenmatch.core.scorer import _score_one_block
+    out = []
+    for b in blocks:
+        out.extend(_score_one_block(b, mk, set(), across_files_only=False,
+                                    source_lookup=None))
+    return out
+
+
+def test_batched_equals_per_block(monkeypatch):
+    from goldenmatch.core import scorer
+    df = _mixed_person_frame()
+    blocks, mk = _blocks_and_mk(df)
+
+    ref = _per_block_reference(blocks, mk)
+
+    monkeypatch.setattr(scorer, "_SOLO_BLOCK_MIN_PAIRS", 10_000)
+    monkeypatch.setattr(scorer, "_BATCH_BINS_PER_WORKER", 4)
+    got = scorer.score_blocks_parallel(list(blocks), mk, set(), max_workers=4)
+
+    norm = lambda ps: sorted((min(a, b), max(a, b), round(s, 6)) for a, b, s in ps)
+    assert norm(got) == norm(ref)
+    assert got, "sanity: the smith/jones/lee blocks should yield some pairs"

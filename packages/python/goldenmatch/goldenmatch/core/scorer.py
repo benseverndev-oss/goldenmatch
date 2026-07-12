@@ -1383,6 +1383,25 @@ def _score_one_block(
     return pairs
 
 
+def _score_block_batch(batch, mk, frozen_exclude, across_files_only, source_lookup):
+    """Score every block in one batch on a single worker thread.
+
+    Loops _score_one_block with the SAME args the per-block path used, so the
+    emitted pairs are identical. A solo (big) block is a batch of one, so this
+    is the uniform executor work unit.
+    """
+    out = []
+    for block in batch:
+        out.extend(
+            _score_one_block(
+                block, mk, frozen_exclude,
+                across_files_only=across_files_only,
+                source_lookup=source_lookup,
+            )
+        )
+    return out
+
+
 _DEFAULT_MAX_WORKERS = 4
 """Default thread-pool size for score_blocks_parallel.
 
@@ -1589,13 +1608,15 @@ def score_blocks_parallel(
 
     all_pairs = []
     total_blocks = len(blocks)
-    log_interval = max(total_blocks // 10, 1)  # log ~10 progress updates
+    batches = _plan_block_batches(blocks, max_workers)
+    total_batches = len(batches)
+    log_interval = max(total_batches // 10, 1)  # log ~10 progress updates
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {}
-        for i, block in enumerate(blocks):
+        for i, batch in enumerate(batches):
             future = executor.submit(
-                _score_one_block, block, mk, frozen_exclude,
+                _score_block_batch, batch, mk, frozen_exclude,
                 across_files_only, source_lookup,
             )
             future_to_idx[future] = i
@@ -1615,15 +1636,15 @@ def score_blocks_parallel(
             completed += 1
             if completed % log_interval == 0:
                 logger.info(
-                    "Scoring progress: %d/%d blocks (%d%%), %d pairs so far",
-                    completed, total_blocks,
-                    int(completed / total_blocks * 100),
+                    "Scoring progress: %d/%d batches (%d%%), %d pairs so far",
+                    completed, total_batches,
+                    int(completed / total_batches * 100),
                     len(all_pairs),
                 )
 
     logger.info(
-        "Parallel scoring: %d blocks, %d workers, %d pairs found",
-        total_blocks, max_workers, len(all_pairs),
+        "Parallel scoring: %d blocks in %d batches, %d workers, %d pairs found",
+        total_blocks, total_batches, max_workers, len(all_pairs),
     )
     _emit_scoring_profile(all_pairs, mk.fuzzy_threshold, candidates_compared=total_candidates)
     return all_pairs
