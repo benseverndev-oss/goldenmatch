@@ -80,6 +80,10 @@ def run_goldenmatch_dedupe(
     output_df = result.get("golden")
     if output_df is None:
         output_df = result.get("output")
+    # D3: the pipeline dict emits pa.Table; tests (and any legacy caller)
+    # may still hand a polars frame -- normalize to Arrow here.
+    if output_df is not None and not hasattr(output_df, "num_rows"):
+        output_df = output_df.to_arrow()
 
     # v1.18.x Phase 3: optional field-level correction overrides from
     # MemoryStore. Iterate field-level corrections for this dataset and
