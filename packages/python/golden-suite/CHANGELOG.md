@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.0] - 2026-07-12
+
+### Changed
+- **goldenmatch floor raised to `>=3.0`** -- goldenmatch 3.0.0 returns
+  Arrow-native results (`pyarrow.Table`; migrate with
+  `pl.from_arrow(result.golden)`) and defaults to the Arrow frame backend
+  (~36% faster on the 100K zero-config benchmark;
+  `GOLDENMATCH_FRAME=polars` is the opt-out). See goldenmatch's
+  migrating-to-v3 guide.
+
 ## [0.1.10] - 2026-07-11
 
 ### Changed
