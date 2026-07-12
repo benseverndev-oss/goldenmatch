@@ -95,7 +95,13 @@ def _write_agent_correction(
 AGENT_TOOLS = [
     Tool(
         name="analyze_data",
-        description="Profile data, detect domain, recommend ER strategy",
+        description=(
+            "Profile a dataset (read-only, runs no matching and writes nothing): "
+            "column stats, the detected domain/entity type, data-quality signals, "
+            "and a recommended entity-resolution strategy. Takes a file path or an "
+            "uploaded dataset. Use it before deduplicating to understand the data "
+            "and preview the strategy the auto-config would pick."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -148,7 +154,15 @@ AGENT_TOOLS = [
     ),
     Tool(
         name="agent_deduplicate",
-        description="Run full ER pipeline with confidence gating and reasoning",
+        description=(
+            "Deduplicate ONE dataset: auto-configures matching, runs the full "
+            "entity-resolution pipeline, and returns the duplicate clusters with "
+            "confidence gating (auto-merge / needs-review / reject) plus "
+            "per-decision reasoning. Takes a file path or an uploaded dataset; "
+            "pass output_path to also write the golden (deduplicated) records to "
+            "CSV. Operates on a single source -- to link records across TWO "
+            "datasets use agent_match_sources instead."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -168,7 +182,14 @@ AGENT_TOOLS = [
     ),
     Tool(
         name="agent_match_sources",
-        description="Match two files with intelligent strategy selection",
+        description=(
+            "Link records across TWO datasets (not dedupe one): auto-selects a "
+            "matching strategy, scores cross-source pairs, and returns the matched "
+            "pairs with confidence. Takes two file paths or uploaded datasets "
+            "(file_a / file_b); pass output_path to also write the matched pairs "
+            "to CSV. To find duplicates WITHIN a single dataset use "
+            "agent_deduplicate instead."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
