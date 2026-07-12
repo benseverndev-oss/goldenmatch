@@ -119,6 +119,35 @@ def _detect_llm_provider() -> str | None:
     return None
 
 
+# -- W5c: type-agnostic result-frame accessors ------------------------------
+# The v3.0.0 flip turns the result frames into pa.Table; these helpers make
+# every result surface (_repr_html_, to_csv, counts) work on BOTH types now,
+# so the flip is a field-type change rather than a method rewrite.
+
+
+def _frame_height(obj: Any) -> int:
+    return obj.num_rows if hasattr(obj, "num_rows") else obj.height
+
+
+def _frame_columns(obj: Any) -> list[str]:
+    return list(obj.column_names) if hasattr(obj, "column_names") else list(obj.columns)
+
+
+def _frame_head_dicts(obj: Any, cols: list[str], n: int) -> list[dict]:
+    if hasattr(obj, "num_rows"):  # pa.Table
+        return obj.select(cols).slice(0, n).to_pylist()
+    return obj.select(cols).head(n).to_dicts()
+
+
+def _frame_write_csv(obj: Any, path: Any) -> None:
+    if hasattr(obj, "num_rows"):  # pa.Table
+        from pyarrow import csv as _pacsv
+
+        _pacsv.write_csv(obj, str(path))
+        return
+    obj.write_csv(path)
+
+
 @dataclass
 class DedupeResult:
     """Result of a deduplication run.
@@ -198,20 +227,20 @@ class DedupeResult:
         """
         p = Path(path)
         if which == "golden" and self.golden is not None:
-            self.golden.write_csv(p)
+            _frame_write_csv(self.golden, p)
         elif which == "dupes" and self.dupes is not None:
-            self.dupes.write_csv(p)
+            _frame_write_csv(self.dupes, p)
         elif which == "unique" and self.unique is not None:
-            self.unique.write_csv(p)
+            _frame_write_csv(self.unique, p)
         elif which == "all":
             stem = p.stem
             parent = p.parent
             if self.golden is not None:
-                self.golden.write_csv(parent / f"{stem}_golden.csv")
+                _frame_write_csv(self.golden, parent / f"{stem}_golden.csv")
             if self.dupes is not None:
-                self.dupes.write_csv(parent / f"{stem}_dupes.csv")
+                _frame_write_csv(self.dupes, parent / f"{stem}_dupes.csv")
             if self.unique is not None:
-                self.unique.write_csv(parent / f"{stem}_unique.csv")
+                _frame_write_csv(self.unique, parent / f"{stem}_unique.csv")
         return p
 
     @property
@@ -240,8 +269,8 @@ class DedupeResult:
             ("Total Records", str(self.total_records)),
             ("Clusters", str(self.total_clusters)),
             ("Match Rate", f"{self.match_rate:.1%}"),
-            ("Duplicates", str(self.dupes.height) if self.dupes is not None else "0"),
-            ("Unique", str(self.unique.height) if self.unique is not None else "0"),
+            ("Duplicates", str(_frame_height(self.dupes)) if self.dupes is not None else "0"),
+            ("Unique", str(_frame_height(self.unique)) if self.unique is not None else "0"),
         ]
         html = "<h3>GoldenMatch Dedupe Result</h3>"
         html += '<table style="border-collapse:collapse">'
@@ -249,16 +278,15 @@ class DedupeResult:
             html += f'<tr><td style="padding:4px 12px;font-weight:bold">{label}</td>'
             html += f'<td style="padding:4px 12px">{val}</td></tr>'
         html += "</table>"
-        if self.golden is not None and self.golden.height > 0:
+        if self.golden is not None and _frame_height(self.golden) > 0:
             html += "<h4>Golden Records (first 10)</h4>"
-            display_cols = [c for c in self.golden.columns if not c.startswith("__")][:6]
-            sample = self.golden.select(display_cols).head(10)
+            display_cols = [c for c in _frame_columns(self.golden) if not c.startswith("__")][:6]
             html += '<table style="border-collapse:collapse;border:1px solid #ddd">'
             html += "<tr>" + "".join(
                 f'<th style="padding:4px 8px;border:1px solid #ddd;background:#f5f5f5">{c}</th>'
                 for c in display_cols
             ) + "</tr>"
-            for row in sample.to_dicts():
+            for row in _frame_head_dicts(self.golden, display_cols, 10):
                 html += "<tr>" + "".join(
                     f'<td style="padding:4px 8px;border:1px solid #ddd">{row.get(c, "")}</td>'
                     for c in display_cols
@@ -291,29 +319,28 @@ class MatchResult:
         """Write matched results to CSV."""
         p = Path(path)
         if self.matched is not None:
-            self.matched.write_csv(p)
+            _frame_write_csv(self.matched, p)
         return p
 
     def __repr__(self) -> str:
-        n_matched = self.matched.height if self.matched is not None else 0
-        n_unmatched = self.unmatched.height if self.unmatched is not None else 0
+        n_matched = _frame_height(self.matched) if self.matched is not None else 0
+        n_unmatched = _frame_height(self.unmatched) if self.unmatched is not None else 0
         return f"MatchResult(matched={n_matched}, unmatched={n_unmatched})"
 
     def _repr_html_(self) -> str:
         """Rich HTML display for Jupyter notebooks."""
-        n_matched = self.matched.height if self.matched is not None else 0
-        n_unmatched = self.unmatched.height if self.unmatched is not None else 0
+        n_matched = _frame_height(self.matched) if self.matched is not None else 0
+        n_unmatched = _frame_height(self.unmatched) if self.unmatched is not None else 0
         html = "<h3>GoldenMatch Match Result</h3>"
         html += f"<p>Matched: {n_matched} | Unmatched: {n_unmatched}</p>"
-        if self.matched is not None and self.matched.height > 0:
-            display_cols = [c for c in self.matched.columns if not c.startswith("__")][:6]
-            sample = self.matched.select(display_cols).head(10)
+        if self.matched is not None and _frame_height(self.matched) > 0:
+            display_cols = [c for c in _frame_columns(self.matched) if not c.startswith("__")][:6]
             html += '<table style="border-collapse:collapse;border:1px solid #ddd">'
             html += "<tr>" + "".join(
                 f'<th style="padding:4px 8px;border:1px solid #ddd;background:#f5f5f5">{c}</th>'
                 for c in display_cols
             ) + "</tr>"
-            for row in sample.to_dicts():
+            for row in _frame_head_dicts(self.matched, display_cols, 10):
                 html += "<tr>" + "".join(
                     f'<td style="padding:4px 8px;border:1px solid #ddd">{row.get(c, "")}</td>'
                     for c in display_cols
