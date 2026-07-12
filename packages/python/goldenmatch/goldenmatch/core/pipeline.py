@@ -921,7 +921,7 @@ def run_dedupe(
     )
 
 
-def _dict_frame_to_arrow(obj):
+def _dict_frame_to_arrow(obj: Any) -> Any:
     """D3 (arrow descent): the INTERNAL pipeline dicts emit pa.Table for their
     frame values on BOTH lanes. polars frames convert zero-copy; pa passes
     through; None stays None. _api._to_result_table is a passthrough now."""
