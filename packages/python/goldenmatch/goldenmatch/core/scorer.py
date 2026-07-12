@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -1408,6 +1409,69 @@ Until (b) ships, keep workers at 4 -- it's the safe default that's
 been proven to fit on the bench runner. Callers can override
 explicitly via the max_workers kwarg when their workload doesn't
 exhibit this pathology."""
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# Blocks whose candidate-pair count (n*(n-1)/2) reaches this get their own
+# future (full parallelism where scoring work is real). Below it, blocks are
+# bin-packed. Default pinned by the bench sweep in Task 6.
+_SOLO_BLOCK_MIN_PAIRS = _env_int("GOLDENMATCH_SCORER_SOLO_BLOCK_MIN_PAIRS", 10_000)
+
+# Number of small-block bins per worker (bins = max_workers * this).
+_BATCH_BINS_PER_WORKER = _env_int("GOLDENMATCH_SCORER_BATCH_BINS_PER_WORKER", 4)
+
+
+def _plan_block_batches(blocks, max_workers):
+    """Group blocks into a small number of work units.
+
+    Adaptive: a block with >= _SOLO_BLOCK_MIN_PAIRS candidate pairs (from its
+    cheap .n_rows) becomes its own single-element batch. All other blocks --
+    including any with n_rows=None -- are distributed by greedy LPT bin-packing
+    into at most ``max_workers * _BATCH_BINS_PER_WORKER`` bins, balancing bins
+    by summed candidate-pair count (None counted as 1, so round-robin-ish).
+
+    Pure function: reads only block.n_rows. NEVER materializes a block.
+    Returns list[list[block]]; every input block appears in exactly one batch.
+    """
+    if not blocks:
+        return []
+
+    solo = []
+    small = []
+    for b in blocks:
+        n = getattr(b, "n_rows", None)
+        if n is not None and (n * (n - 1) // 2) >= _SOLO_BLOCK_MIN_PAIRS:
+            solo.append([b])
+        else:
+            small.append(b)
+
+    batches = list(solo)
+
+    if small:
+        n_bins = min(len(small), max(1, max_workers * _BATCH_BINS_PER_WORKER))
+        # LPT: heaviest first, drop each onto the currently-lightest bin.
+        def _cost(b):
+            n = getattr(b, "n_rows", None) or 1
+            return n * (n - 1) // 2 if n > 1 else 1
+        ordered = sorted(small, key=_cost, reverse=True)
+        bins = [[] for _ in range(n_bins)]
+        loads = [0] * n_bins
+        for b in ordered:
+            j = min(range(n_bins), key=lambda i: loads[i])
+            bins[j].append(b)
+            loads[j] += _cost(b)
+        batches.extend(bin_ for bin_ in bins if bin_)
+
+    return batches
 
 
 def score_blocks_parallel(
