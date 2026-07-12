@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.1] - 2026-07-12
+
+### Changed
+- **goldencheck floor raised to `goldencheck[polars]>=3.0.0`** -- goldencheck 3.0.0
+  flips the default scan path to Arrow-native and Polars-free (`pip install
+  goldencheck` scans CSV/Parquet/Excel end to end with no Polars; pyarrow is a base
+  dep). `[polars]` is retained because the suite bundles goldenmatch, whose quality
+  bridge calls `scan_dataframe(pl.DataFrame)`, and goldenmatch pulls Polars anyway.
+  Cut after goldencheck 3.0.0 landed on PyPI (member-on-PyPI-first lockstep).
+
 ## [0.2.0] - 2026-07-12
 
 ### Changed
