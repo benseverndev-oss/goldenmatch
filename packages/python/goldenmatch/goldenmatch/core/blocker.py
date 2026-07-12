@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
@@ -332,7 +332,7 @@ def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
         return pl.concat_str(field_exprs, separator="||").alias("__block_key__")
 
 
-def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
+def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
     """Build static blocks — original blocking logic.
 
     Groups records by each blocking key, skipping blocks with < 2 records
@@ -377,18 +377,35 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
         # because they're real values (an explicit empty-cell in the
         # source); dropping them aggressively lost 3 records on the
         # cross-file dedupe regression suite (PR #390 fix).
-        df_with_key = (
-            lf
-            .with_columns(block_key_expr)
-            .filter(
-                pl.col("__block_key__").is_not_null()
-                & ~pl.col("__block_key__")
-                    .str.strip_chars()
-                    .str.to_lowercase()
-                    .is_in(["nan", "null", "none"])
+        if isinstance(lf, pl.LazyFrame):
+            df_with_key = (
+                lf
+                .with_columns(block_key_expr)
+                .filter(
+                    pl.col("__block_key__").is_not_null()
+                    & ~pl.col("__block_key__")
+                        .str.strip_chars()
+                        .str.to_lowercase()
+                        .is_in(["nan", "null", "none"])
+                )
+                .collect()
             )
-            .collect()
-        )
+        else:
+            # D2s-a: seam Frame (or eager native) entry -- derive_block_key is
+            # the twin of _build_block_key_expr; filter_valid_key is the
+            # sentinel guard verbatim. The lazy branch above stays raw Polars:
+            # its fused with_columns+filter+collect is RSS-load-bearing (#375)
+            # and legacy callers hand genuinely-lazy frames.
+            from goldenmatch.core.frame import to_frame as _tf
+
+            _f = _tf(lf)
+            _f = _f.with_column(
+                "__block_key__",
+                _f.derive_block_key(
+                    key_config.fields, key_config.transforms or []
+                ),
+            )
+            df_with_key = _f.filter_valid_key("__block_key__").native
 
         # Group by block key (W2c/W2d seam: group_partitions is the
         # hash-grouped twin of group_by iteration -- deterministic
@@ -1137,7 +1154,7 @@ def select_best_blocking_key(
     return best_key
 
 
-def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
+def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
     """Build blocks from a LazyFrame based on blocking configuration.
 
     Routes by config.strategy:
@@ -1154,6 +1171,22 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
     Returns:
         List of BlockResult, one per valid block.
     """
+    # D2s-a: every non-static strategy + key auto-select + profile emission
+    # still takes a polars LazyFrame, so a seam Frame (or eager native)
+    # normalizes ONCE here (lossless -- polars stays a dependency until D6).
+    # Only the static/adaptive primary builder is dual-rep; it receives the
+    # ORIGINAL entry object so the arrow lane skips the polars round-trip.
+    _lf_entry = lf
+    if not isinstance(lf, pl.LazyFrame):
+        from goldenmatch.core.frame import Frame
+
+        native = lf.native if isinstance(lf, Frame) else lf
+        lf = (
+            native.lazy()
+            if isinstance(native, pl.DataFrame)
+            else cast(pl.DataFrame, pl.from_arrow(native)).lazy()
+        )
+
     # Auto-select: pick best key based on histogram analysis
     if config.auto_select and config.keys and len(config.keys) > 1:
         best_key = select_best_blocking_key(lf, config.keys, config.max_block_size)
@@ -1211,12 +1244,12 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
         return blocks
 
     if config.strategy == "static":
-        blocks = _build_static_blocks(lf, config)
+        blocks = _build_static_blocks(_lf_entry, config)
         _emit_blocking_profile(blocks, config, lf)
         return blocks
 
     # strategy == "adaptive"
-    primary_blocks = _build_static_blocks(lf, config)
+    primary_blocks = _build_static_blocks(_lf_entry, config)
     sub_block_keys = config.sub_block_keys or []
 
     results: list[BlockResult] = []

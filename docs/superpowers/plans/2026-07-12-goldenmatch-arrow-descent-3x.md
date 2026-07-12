@@ -70,6 +70,57 @@ array-ization is leaf-local (`to_list`/`to_numpy` before rapidfuzz).
   only when the gated stages run); polars moves runtime→dev-dep group; parity
   suites collapse to single-backend; docs sweep; 3.x minor release.
 
+## Recon 2026-07-12 (post-D5d): the spine blocks deep-D2 and D6
+
+D1/D3/D4/D5a-d are MERGED (#1701/#1708/#1712/#1714/#1717/#1718+#1719/#1720).
+Deep-D2's precondition is NOT met: `combined_lf` is a polars LazyFrame on BOTH
+lanes (pipeline.py ~1864 `combined_lf.collect()` -> `collected_df:
+pl.DataFrame` -> `multi_df` polars everywhere). The GOLDENMATCH_FRAME=arrow
+lane flips seam ops, but the pipeline SPINE (ingest scan_csv/scan_parquet ->
+prep exprs -> precompute_matchkey_transforms -> collect) still materializes
+polars. Consequently:
+
+- Deep-D2 (gather on ArrowColumn) would be dead code today -- no caller can
+  hand golden_fused an arrow multi_df, and no gate can exercise it e2e.
+- D6 (polars out of runtime deps) is blocked on the same spine: as long as
+  the collect boundary yields pl.DataFrame, polars is load-bearing on every
+  run regardless of lane.
+
+**Spine map (Explore recon 2026-07-12).** Ingest front (load_file rename/
+validate/__source__/ensure_row_ids) + eager standardize/exact-matchkeys
+ALREADY run on ArrowFrame when `_eager_ok` (pipeline.py:811-897); the
+arrow->polars shim is `pl.from_arrow(_combined.native)` at pipeline.py:900
+(W5b-1). Between the shim and the collect at :1864: prep-cache, gated
+quality/transform (default-ON, decline the eager lane), auto_fix
+(validation.auto_fix), quarantine split (validation.rules), semantic raw
+capture, standardize, domain, compute_matchkeys, then
+`precompute_matchkey_transforms` (matchkey.py:291 -- ALWAYS runs, polars-only;
+per-column seam twins exist via derive_transformed_column but the batched
+one-pass with_columns orchestration does not). Post-re-wrap (:1868) lazy
+consumers: _find_exact_match_ids, find_exact_matches, build_blocks x2,
+_semantic_blocking_pairs; everything else drives off eager collected_df.
+
+**Next batch series (D2s -- spine descent, CONSUMERS-FIRST; the boundary
+cannot move while downstream still takes pl.LazyFrame):**
+- D2s-a: exact-match consumers dual-rep -- _find_exact_match_ids /
+  find_exact_matches accept Frame (seam group ops exist); build_blocks entry
+  Frame-typed (blocker grouping already seam-routed).
+- D2s-b: Frame-level precompute_matchkey_transforms -- arrow path loops
+  derive_transformed_column (column-append is cheap on arrow); polars path
+  keeps the existing batched one-pass with_columns VERBATIM (the 90s-at-10M
+  lesson in its docstring). NE derived columns need a fill_null("")
+  space-join twin (check derive_block_key sep-null semantics first).
+- D2s-c: bucket hash + remaining engine-segment `pl.` residue per-lane
+  (score_buckets keyed hash, _run_fused_match_short_circuit entry columns
+  `collected_df[c].to_arrow()` -> seam column reads).
+- D2s-d: move the :900 shim below collect for the eager-eligible arrow path
+  (collected_df becomes Frame-typed); wall+RSS gate at 100K/1M.
+- Deep-D2 proper (golden_fused dual-rep: seam sort/filter/gather;
+  `gather_with_nulls` becomes a seam op; arrow twin = `take` with null
+  indices) once multi_df is arrow.
+- D6 after the spine holds a full-suite arrow lane with zero polars imports
+  (assert via an import-hook test, the goldencheck 2.0.0 precedent).
+
 ## Risks
 
 | Risk | Mitigation |
