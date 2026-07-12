@@ -10,7 +10,8 @@ import os
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 def _env_int(name: str, default: int) -> int:
@@ -34,7 +35,7 @@ class SessionStore:
             "GOLDENMATCH_MCP_SESSION_TTL", 3600)
         self._clock = clock
         self._lock = threading.Lock()
-        self._entries: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
+        self._entries: OrderedDict[str, tuple[Any, float]] = OrderedDict()
 
     def put(self, session_id: str, session: Any) -> None:
         with self._lock:
