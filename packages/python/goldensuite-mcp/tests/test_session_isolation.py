@@ -126,3 +126,21 @@ def test_isolation_through_real_call_tool(tmp_path, monkeypatch):
             low.request_ctx.reset(tok)
 
     asyncio.run(run_b())
+
+
+def test_cold_call_is_clean_error_not_crash(monkeypatch):
+    """The ORIGINAL bug: list_clusters via the aggregator raised AttributeError.
+    Now (no run loaded) it must return a clean error, never AttributeError."""
+    from goldenmatch.mcp import _session_ctx as ctx
+    from goldenmatch.mcp import server as gm
+    for g in ("_result", "_config", "_engine"):
+        monkeypatch.setattr(gm, g, None)
+    monkeypatch.setattr(gm, "_rows", [])
+    monkeypatch.setattr(gm, "_id_to_idx", {})
+    tok = ctx.set_current_session_id("cold")
+    try:
+        res = gm.dispatch("list_clusters", {})
+        assert "error" in res
+        assert "AttributeError" not in str(res)
+    finally:
+        ctx.reset_current_session_id(tok)

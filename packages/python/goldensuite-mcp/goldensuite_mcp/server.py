@@ -74,16 +74,12 @@ CURATED_TOOLS: frozenset[str] = frozenset({
 # full catalog / suite_find_tools keep each package's base description.
 # Every key MUST be in CURATED_TOOLS (enforced by test).
 #
-# NOTE: suffixes for the session-stateful goldenmatch tools (list_clusters,
-# get_cluster, get_golden_record, explain_match, evaluate, export_results,
-# match_record, find_duplicates) were deliberately NOT added. Those tools read
-# module-global run state populated only by the standalone goldenmatch server's
-# startup (`create_server(file_paths=...)`); the aggregator imports gm.TOOLS /
-# gm.dispatch directly and never sets it, so they currently raise AttributeError
-# via the suite endpoint regardless of any prior call (agent_deduplicate uses a
-# separate stateless AgentSession). Telling an LLM to "run agent_deduplicate
-# first" would be a plausible-but-false remediation. Tracked as a separate bug
-# (curate-out or wire the state); no misleading suffix here.
+# NOTE: the session-stateful goldenmatch tools (list_clusters, get_cluster,
+# get_golden_record, explain_match, evaluate, export_results, match_record,
+# find_duplicates) are session-backed via goldenmatch's _resolve_run_state +
+# per-MCP-session AgentSession store: after agent_deduplicate/match_sources in a
+# session they read that run; with no run loaded they return a clean "no run
+# loaded" error (not a crash). No prior-run suffix is needed here.
 _CURATED_DESCRIPTION_SUFFIXES: dict[str, str] = {
     # composite one-call alternatives (the primitive points at the composite)
     "agent_deduplicate": (
