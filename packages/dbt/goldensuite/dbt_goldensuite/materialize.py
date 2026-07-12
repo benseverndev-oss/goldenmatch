@@ -104,10 +104,11 @@ def run_goldenmatch_dedupe(
             and getattr(c, "field_name", None)
             and getattr(c, "corrected_value", None) is not None
         ]
-        if field_level and "__cluster_id__" in output_df.columns:
-            # W5: results become pa.Table at v3.0.0 -- this patch loop and the
-            # duckdb registration flip with the results type.
-            import polars as pl
+        if field_level and "__cluster_id__" in output_df.column_names:
+            # D3 (arrow descent): the internal dict emits pa.Table; the patch
+            # loop and the duckdb registration run on Arrow (duckdb's
+            # replacement scan reads pa.Table natively).
+            import pyarrow as pa
 
             # Build a Python-side patch map then materialize.
             patches: dict[tuple[int, str], str] = {}
@@ -119,12 +120,12 @@ def run_goldenmatch_dedupe(
 
             # Apply patches column-by-column. For each touched column we
             # build an array of overrides aligned to output_df rows.
-            cluster_ids = output_df["__cluster_id__"].to_list()
+            cluster_ids = output_df["__cluster_id__"].to_pylist()
             for fname in {f for _, f in patches.keys()}:
-                if fname not in output_df.columns:
+                if fname not in output_df.column_names:
                     stale += sum(1 for k in patches if k[1] == fname)
                     continue
-                col_vals = output_df[fname].to_list()
+                col_vals = output_df[fname].to_pylist()
                 changed = False
                 for i, cid in enumerate(cluster_ids):
                     new = patches.get((int(cid), fname))
@@ -133,8 +134,9 @@ def run_goldenmatch_dedupe(
                         applied += 1
                         changed = True
                 if changed:
-                    output_df = output_df.with_columns(
-                        pl.Series(name=fname, values=col_vals)
+                    idx = output_df.column_names.index(fname)
+                    output_df = output_df.set_column(
+                        idx, fname, pa.array(col_vals, type=output_df.schema.field(fname).type)
                     )
 
     if output_df is not None:
@@ -147,7 +149,7 @@ def run_goldenmatch_dedupe(
     conn.close()
     return {
         "input_rows": df.height,
-        "output_rows": output_df.height if output_df is not None else 0,
+        "output_rows": output_df.num_rows if output_df is not None else 0,
         "clusters": stats.get("total_clusters", 0),
         "applied_corrections": applied,
         "stale_corrections": stale,

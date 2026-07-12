@@ -379,12 +379,19 @@ def canonicalize_result(result: dict, row_keys: list[str]) -> dict:
     golden: dict[str, dict[str, str | None]] = {}
     golden_df = result.get("golden")
     if golden_df is not None:
-        user_cols = [
-            c
-            for c in golden_df.columns
-            if not c.startswith("__") and c != "row_key"
-        ]
-        for row in golden_df.iter_rows(named=True):
+        # D3: the internal dict emits pa.Table.
+        _cols = (
+            list(golden_df.column_names)
+            if hasattr(golden_df, "column_names")
+            else list(golden_df.columns)
+        )
+        user_cols = [c for c in _cols if not c.startswith("__") and c != "row_key"]
+        _rows = (
+            golden_df.to_pylist()
+            if hasattr(golden_df, "num_rows")
+            else golden_df.iter_rows(named=True)
+        )
+        for row in _rows:
             cid = row["__cluster_id__"]
             keys = cid_to_sorted_keys.get(cid)
             if keys is None:

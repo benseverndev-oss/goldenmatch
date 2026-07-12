@@ -99,21 +99,22 @@ def _execute_match(
 
     result = run_match_df(target_df, ref_df, config, auto_config=False)
 
-    matched: pl.DataFrame | None = result.get("matched")
-    unmatched: pl.DataFrame | None = result.get("unmatched")
+    # D3: the internal dict emits pa.Table.
+    matched = result.get("matched")
+    unmatched = result.get("unmatched")
 
     matched_rows = (
-        matched.head(ROW_CAP).to_dicts() if matched is not None else []
+        matched.slice(0, ROW_CAP).to_pylist() if matched is not None else []
     )
     unmatched_rows = (
-        unmatched.head(ROW_CAP).to_dicts() if unmatched is not None else []
+        unmatched.slice(0, ROW_CAP).to_pylist() if unmatched is not None else []
     )
 
-    matched_total = matched.height if matched is not None else 0
-    unmatched_total = unmatched.height if unmatched is not None else 0
+    matched_total = matched.num_rows if matched is not None else 0
+    unmatched_total = unmatched.num_rows if unmatched is not None else 0
     target_total = target_df.height
     matched_targets = (
-        len(set(matched["__target_row_id__"].to_list())) if matched is not None else 0
+        len(set(matched["__target_row_id__"].to_pylist())) if matched is not None else 0
     )
 
     return {

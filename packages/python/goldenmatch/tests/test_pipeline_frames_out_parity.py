@@ -172,7 +172,8 @@ def _golden_as_setrows(results):
     if golden is None:
         return None
     rows = []
-    for row in golden.iter_rows(named=True):
+    _iter = golden.to_pylist() if hasattr(golden, 'num_rows') else golden.iter_rows(named=True)
+    for row in _iter:
         norm = {}
         for k, v in row.items():
             norm[k] = frozenset(v) if isinstance(v, list) else v
