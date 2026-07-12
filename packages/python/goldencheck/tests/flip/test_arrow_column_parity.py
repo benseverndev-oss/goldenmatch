@@ -139,6 +139,11 @@ def test_arrow_matches_polars(dataset: str, column: str) -> None:
         for pv, av in zip(p_cast, a_cast):
             _both_none_or_close(pv, av)
 
+        # str_len_chars(): per-value character count (nulls preserved) + its mean
+        # (the seam op the semantic classifier's avg_length signals rely on).
+        assert pol.str_len_chars().to_list() == arr.str_len_chars().to_list(), "str_len_chars diverged"
+        _both_none_or_close(pol.str_len_chars().mean(), arr.str_len_chars().mean())
+
 
 def test_dtype_repr_is_owned_divergence() -> None:
     """dtype_repr is the ONE intentional divergence: ArrowColumn returns the

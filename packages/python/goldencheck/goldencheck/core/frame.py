@@ -44,6 +44,7 @@ class Column(Protocol):
     def filter_outside(self, lower: Any, upper: Any) -> Column: ...
     def slice(self, offset: int, length: int | None = None) -> Column: ...
     def str_replace_all(self, pattern: str, value: str) -> Column: ...
+    def str_len_chars(self) -> Column: ...
     def value_counts_desc(self) -> list[tuple[Any, int]]: ...
     def eq(self, value: Any) -> Column: ...
     def filter_by(self, mask: Column) -> Column: ...
@@ -212,6 +213,9 @@ class PolarsColumn:
     def str_replace_all(self, pattern: str, value: str) -> PolarsColumn:
         return PolarsColumn(self._s.str.replace_all(pattern, value))
 
+    def str_len_chars(self) -> PolarsColumn:
+        return PolarsColumn(self._s.str.len_chars())
+
     def value_counts_desc(self) -> list[tuple[Any, int]]:
         vc = self._s.value_counts()
         pairs = zip(vc[self._s.name].to_list(), vc["count"].to_list())   # (value, count)
@@ -327,6 +331,9 @@ class PyColumn:
 
     def str_replace_all(self, pattern: str, value: str) -> PyColumn:
         return PyColumn(_regex_kernel().str_replace_all(self._v, pattern, value))
+
+    def str_len_chars(self) -> PyColumn:
+        return PyColumn([None if v is None else len(v) for v in self._v])
 
     def value_counts_desc(self) -> list[tuple[Any, int]]:
         return sorted(Counter(self._v).items(), key=_VC_KEY)
@@ -646,6 +653,13 @@ class ArrowColumn:
         out = _regex_kernel().str_replace_all(self._arr.to_pylist(), pattern, value)
         return ArrowColumn(pa.array(out, type=pa.string()))
 
+    def str_len_chars(self) -> ArrowColumn:
+        # pc.utf8_length -> per-value character count (nulls preserved), matching
+        # pl.Series.str.len_chars(). The result is an integer column so
+        # ``.mean()`` routes through the numeric-stats kernel like Polars' mean.
+        _, pc = _arrow()
+        return ArrowColumn(pc.utf8_length(self._arr))
+
     def value_counts_desc(self) -> list[tuple[Any, int]]:
         return sorted(Counter(self._arr.to_pylist()).items(), key=_VC_KEY)
 
@@ -674,6 +688,12 @@ class ArrowColumn:
         return ArrowColumn(pc.fill_null(self._arr, value))
 
     def sum(self) -> Any:
+        if self._cat == "bool":
+            # Polars Series.sum() on Boolean returns the count of True (nulls
+            # skipped) as an int; pc.sum over a bool array does the same.
+            _, pc = _arrow()
+            r = pc.sum(self._arr).as_py()
+            return int(r or 0)
         if not self._is_numeric():
             return None
         s = self._numeric_stats()
