@@ -2,6 +2,22 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.1.0] - 2026-07-12
+
+### Performance
+- **Fused single-pass string-column digest.** A new native kernel
+  (`string_column_digest`) computes a string column's `null_count`, `n_unique`, and
+  the match count for all 7 fixed scan patterns (email/phone/url + 4 encoding
+  patterns) in ONE pass over the data, instead of ~10 separate passes (each
+  `str_match_count` was its own scan; the 4 encoding patterns went through a
+  `to_pylist` + regex-kernel round-trip). `ArrowColumn` computes+caches the digest on
+  the first known-pattern `str_match_count` for a string column; subsequent
+  known-pattern counts and `n_unique`/`null_count` read the cache. Findings are
+  unchanged (differential Jaccard 1.000; all 7 patterns compile in the regex crate).
+  1M x 7 scan_file: 1.36s -> **0.98s** (with the 3.0.3 parallel scan); string-heavy
+  data benefits most. Cumulative 3.0.1 -> 3.1.0: 3.74s -> 0.98s (~3.8x). The pyarrow
+  fallback is unchanged when the native kernel is absent.
+
 ## [3.0.3] - 2026-07-12
 
 ### Performance

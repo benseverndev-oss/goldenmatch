@@ -27,6 +27,7 @@ mod profile;
 mod regex;
 mod sequence;
 mod stats;
+mod string_digest;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -35,6 +36,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aggregate::column_aggregate, m)?)?;
     m.add_function(wrap_pyfunction!(stats::column_numeric_stats, m)?)?;
     m.add_function(wrap_pyfunction!(stats::count_outside, m)?)?;
+    m.add_function(wrap_pyfunction!(string_digest::string_column_digest, m)?)?;
     m.add_function(wrap_pyfunction!(sequence::sequence_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(freshness::date_freshness, m)?)?;
     m.add_function(wrap_pyfunction!(keys::composite_key_search, m)?)?;
