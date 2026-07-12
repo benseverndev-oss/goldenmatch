@@ -2728,12 +2728,26 @@ def _run_dedupe_pipeline(
         is populated, WITHOUT materializing the full cluster dict on the
         frames-out path."""
         if cluster_frames is not None:
-            keep = cluster_frames.metadata.filter(
-                (pl.col("size") > 1) & (~pl.col("oversized"))
-            )["cluster_id"].to_list()
-            return cluster_frames.assignments.filter(
-                pl.col("cluster_id").is_in(keep)
-            )["member_id"].to_list()
+            # D4: representation-agnostic reads (metadata is one row per
+            # cluster -- Python folds over seam columns, byte-identical).
+            from goldenmatch.core.frame import to_frame
+
+            _m = to_frame(cluster_frames.metadata)
+            keep = [
+                c
+                for c, n, o in zip(
+                    _m.column("cluster_id").to_list(),
+                    _m.column("size").to_list(),
+                    _m.column("oversized").to_list(),
+                )
+                if n > 1 and not o
+            ]
+            return (
+                to_frame(cluster_frames.assignments)
+                .filter_in("cluster_id", keep)
+                .column("member_id")
+                .to_list()
+            )
         return [
             mid
             for info in clusters.values()
@@ -2746,14 +2760,15 @@ def _run_dedupe_pipeline(
     if cluster_frames is not None:
         # Stats from frame aggregates (no dict materialization). Matches the
         # dict path's len(clusters) / size>1 / oversized counts exactly.
+        from goldenmatch.core.frame import to_frame as _tf_d4
+
+        _m = _tf_d4(cluster_frames.metadata)
+        _m_sizes = _m.column("size").to_list()
+        _m_over = _m.column("oversized").to_list()
         record_metrics({
-            "cluster_count": cluster_frames.metadata.height,
-            "multi_member_cluster_count": cluster_frames.metadata.filter(
-                pl.col("size") > 1
-            ).height,
-            "oversized_cluster_count": cluster_frames.metadata.filter(
-                pl.col("oversized")
-            ).height,
+            "cluster_count": _m.height,
+            "multi_member_cluster_count": sum(1 for n in _m_sizes if n > 1),
+            "oversized_cluster_count": sum(1 for o in _m_over if o),
         })
     else:
         record_metrics({
@@ -3092,17 +3107,25 @@ def _run_dedupe_pipeline(
         golden_df = _golden_records_to_df(golden_records)
 
     # Classify records
+    from goldenmatch.core.frame import to_frame as _to_frame_d4
+
     if cluster_frames is not None:
         # SP-B: dupe row ids from the frame aggregates -- members of every
         # size>1 cluster. OVERSIZED-INCLUDED to match the dict path (which
         # filters size>1 only; oversized clusters' members are still dupes).
+        _m = _to_frame_d4(cluster_frames.metadata)
+        _multi_cids = [
+            c
+            for c, n in zip(
+                _m.column("cluster_id").to_list(), _m.column("size").to_list()
+            )
+            if n > 1
+        ]
         dupe_row_ids = set(
-            cluster_frames.assignments.join(
-                cluster_frames.metadata.filter(pl.col("size") > 1).select(
-                    "cluster_id"
-                ),
-                on="cluster_id",
-            )["member_id"].to_list()
+            _to_frame_d4(cluster_frames.assignments)
+            .filter_in("cluster_id", _multi_cids)
+            .column("member_id")
+            .to_list()
         )
     else:
         multi_cluster_ids = [
@@ -3124,11 +3147,10 @@ def _run_dedupe_pipeline(
     if output_report:
         if cluster_frames is not None:
             # SP-B: report stats from the metadata frame -- no dict build.
-            cluster_sizes = cluster_frames.metadata["size"].to_list()
-            oversized_count = cluster_frames.metadata.filter(
-                pl.col("oversized")
-            ).height
-            total_clusters = cluster_frames.metadata.height
+            _m = _to_frame_d4(cluster_frames.metadata)
+            cluster_sizes = _m.column("size").to_list()
+            oversized_count = sum(1 for o in _m.column("oversized").to_list() if o)
+            total_clusters = _m.height
         else:
             cluster_sizes = [c["size"] for c in clusters.values()]
             oversized_count = sum(
