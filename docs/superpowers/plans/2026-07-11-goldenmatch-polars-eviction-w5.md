@@ -106,6 +106,11 @@ assertions migrate to Arrow, results become `pa.Table`. W0-W4 merged/queued
   polars remains a DEV/TEST dependency after leaving the runtime deps (the
   spec's "dependency list" is install_requires). The 16 sites migrate IN the
   flip PR. The differential/parity suites collapse per W5e as planned.
+- **W5e WALL GATE PASSED (2026-07-12, measured)**: 100K zero-config A/B on
+  identical runner + bench config, 5-run medians -- polars lane 119.12s
+  (run 29176760816) vs ARROW LANE 76.44s (run 29176760301): the arrow lane
+  is 36% FASTER. No fused multi-column derive op needed; the default flip
+  is justified by measurement.
 - **W5e** — the deletion: polars out of deps ([polars] nowhere), PolarsFrame
   + _polars_dtype + polars constructor branches + env var + _polars_lazy
   proxy deleted; parity suites collapse to single-backend; fallback-contract
