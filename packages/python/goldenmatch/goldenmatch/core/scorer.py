@@ -348,7 +348,7 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
 
 
 def find_exact_matches(
-    lf: pl.LazyFrame, mk: MatchkeyConfig
+    lf: Any, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:
     """Find exact matches by grouping on the matchkey column.
 
@@ -363,7 +363,7 @@ def find_exact_matches(
 
 
 def _find_exact_match_ids(
-    lf: pl.LazyFrame, mk: MatchkeyConfig,
+    lf: Any, mk: MatchkeyConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Same Polars self-join as ``find_exact_matches`` but returns the two
     row-id columns as zero-copy int64 numpy arrays -- skipping the
@@ -382,7 +382,13 @@ def _find_exact_match_ids(
     from goldenmatch.core.frame import to_frame
 
     mk_col = f"__mk_{mk.name}__"
-    df = lf.select("__row_id__", mk_col).collect()
+    # D2s-a (spine descent): dual-rep entry. Legacy pl.LazyFrame callers keep
+    # the lazy projection+collect verbatim; a seam Frame (or eager native)
+    # projects via the seam so the arrow lane never round-trips polars.
+    if isinstance(lf, pl.LazyFrame):
+        df = lf.select("__row_id__", mk_col).collect()
+    else:
+        df = to_frame(lf).select(["__row_id__", mk_col]).native
     # Exclude null AND empty/blank matchkey values (filter_nonblank_key). Two
     # records both missing a field (e.g. a blanked phone -> "") must NOT be an
     # exact match: otherwise every blank-valued record joins on "" and
