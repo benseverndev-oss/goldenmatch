@@ -886,7 +886,11 @@ def run_dedupe(
                     _combined = _combined.with_column(
                         f"__mk_{mk.name}__",
                         _combined.derive_matchkey(
-                            [(f.field, list(f.transforms or [])) for f in mk.fields]
+                            [
+                                (f.field, list(f.transforms or []))
+                                for f in mk.fields
+                                if f.field is not None
+                            ]
                         ),
                     )
                 done.add("compute_matchkeys")

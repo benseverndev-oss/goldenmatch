@@ -154,7 +154,9 @@ def _frame_write_csv(obj: Any, path: Any) -> None:
     if hasattr(obj, "num_rows"):  # pa.Table
         from pyarrow import csv as _pacsv
 
-        _pacsv.write_csv(obj, str(path))
+        # pyarrow.csv re-exports write_csv at runtime but doesn't list it in
+        # __all__, so pyright flags reportPrivateImportUsage on the attribute.
+        _pacsv.write_csv(obj, str(path))  # pyright: ignore[reportPrivateImportUsage]
         return
     obj.write_csv(path)
 

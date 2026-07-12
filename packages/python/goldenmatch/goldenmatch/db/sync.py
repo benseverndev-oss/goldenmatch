@@ -371,7 +371,10 @@ def _full_scan_pipeline(
     logger.info("Pipeline: dispatching to dedupe_df (routes through v3 planner)...")
     result = dedupe_df(df, config=config, confidence_required=False)
     clusters = result.clusters
-    golden_df = result.golden
+    # v3.0.0: result.golden is a pa.Table. The DB write-back path
+    # (write_golden_records / writer.py) uses polars semantics (.filter,
+    # pl.col, column indexing), so materialize back to polars at this seam.
+    golden_df = pl.from_arrow(result.golden) if result.golden is not None else None
     all_pairs = list(result.scored_pairs)
     logger.info(
         "Pipeline: dedupe_df returned %d scored pairs, %d clusters",

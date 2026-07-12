@@ -89,7 +89,14 @@ def run(
                 console.print(f"  {k}: {v:.2f}s")
 
     if output and result.artifacts.get("golden") is not None:
-        result.artifacts["golden"].write_csv(output)
+        golden = result.artifacts["golden"]
+        # v3.0.0: the golden artifact is a pa.Table (no write_csv); route through
+        # pyarrow.csv. The polars branch stays for GOLDENMATCH_FRAME=polars.
+        if hasattr(golden, "num_rows"):  # pa.Table
+            from pyarrow import csv as _pacsv
+            _pacsv.write_csv(golden, str(output))
+        else:
+            golden.write_csv(output)
         console.print(f"\nGolden records written to {output}")
 
 

@@ -44,6 +44,11 @@ def surface_golden_provenance(result, clusters):
         dupes = getattr(result, "dupes", None)
         if dupes is None or not clusters or rules is None:
             return None
+        # v3.0.0: result.dupes is a pa.Table; golden_provenance_for_run joins it
+        # with pl.DataFrame, so materialize back to polars at this seam.
+        if hasattr(dupes, "num_rows"):  # pa.Table
+            import polars as pl
+            dupes = pl.from_arrow(dupes)
         return golden_provenance_for_run(dupes, clusters, rules)
     except Exception:
         return None
