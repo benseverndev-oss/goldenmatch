@@ -1,12 +1,11 @@
 # Task 1.1 spike result — golden extraction, verified working:
 #   raw = AgentSession().deduplicate(file_path)
-#   golden_df = raw["results"].golden          # polars.DataFrame | None, populated by default
+#   golden_tbl = raw["results"].golden         # pyarrow.Table | None (3.0.0 Arrow flip), populated by default
 # The match side exposes the linked frame as `raw["results"].matched` (MatchResult.matched).
-# Both frames may carry `__`-prefixed internal columns which are stripped before write_csv.
+# Both tables may carry `__`-prefixed internal columns which are stripped before the pyarrow CSV write.
 from pathlib import Path
 
 import polars as pl
-
 from goldenmatch.core.agent import AgentSession
 
 
@@ -32,7 +31,7 @@ def test_dedupe_result_exposes_golden(tmp_path):
     raw = AgentSession().deduplicate(_fixture_csv(tmp_path))
     result = raw["results"]
     assert getattr(result, "golden", None) is not None
-    assert result.golden.height >= 1
+    assert result.golden.num_rows >= 1
 
 
 def test_agent_deduplicate_writes_golden(tmp_path):

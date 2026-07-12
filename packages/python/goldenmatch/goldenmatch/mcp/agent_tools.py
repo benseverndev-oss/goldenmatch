@@ -592,9 +592,14 @@ def _write_frame_csv(
             "error": f"output_path rejected: {validated['error']}",
         }
 
-    cols = [c for c in frame.columns if not c.startswith("__")]
-    frame.select(cols).write_csv(str(validated))
-    return {path_key: str(validated), records_key: frame.height}
+    # Results are Arrow-native post-3.0.0 (the W5 pa.Table flip); write via
+    # pyarrow's CSV writer, mirroring server.py's export_results path. Do NOT
+    # reintroduce polars here (the eviction program removed it from this seam).
+    from pyarrow import csv as _pacsv
+
+    cols = [c for c in frame.column_names if not c.startswith("__")]
+    _pacsv.write_csv(frame.select(cols), str(validated))
+    return {path_key: str(validated), records_key: frame.num_rows}
 
 
 def handle_agent_tool(name: str, arguments: dict) -> list[TextContent]:
