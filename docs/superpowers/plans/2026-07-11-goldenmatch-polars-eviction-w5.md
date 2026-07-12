@@ -67,10 +67,19 @@ assertions migrate to Arrow, results become `pa.Table`. W0-W4 merged/queued
     Frame; shim right before build_blocks/block_scorer (blocker already
     seam-internal, blocker.py:381/737; scorer takes a clean DF handoff).
     Domain extraction (gated) declines the eager path when enabled.
-  - W5b-3: prep-block integrations rewire to the subsystems' OWN arrow
-    surfaces (goldencheck's covered PyFrame backend; goldenflow's evicted
-    core; autofix/validate get seam twins) — REQUIRED before W5e since
-    polars dies; each integration its own PR with subsystem parity gates.
+  - W5b-3 (RESCOPED 2026-07-12): goldenmatch's polars removal does NOT
+    require goldencheck/goldenflow to be polars-free. At W5e the
+    quality/transform integrations become EXTRA-GATED: config.quality
+    requires goldencheck (which carries polars as ITS dep until its own
+    3.0 arrow program lands — project_goldencheck_arrow_fused_scan);
+    the integration functions import polars lazily inside the gated path
+    (transitively available when the extra is installed), so goldenmatch
+    core never imports it. goldencheck's scan_dataframe takes pl.DataFrame
+    (scanner.py:289; PyFrame.from_columns exists internally — a pa entry
+    point rides goldencheck 3.0, not this program). W5b-3 therefore =
+    seam ports for the goldenmatch-INTERNAL prep stages only: autofix
+    (core/autofix.py ~15 pl uses) + validate (core/validate.py ~9);
+    autoconfig already Frame-accepting since W3e.
   - Prep cache stores pl.DataFrame (pipeline.py:899) — becomes
     backend-typed at W5b-3.
   - Differential harness proves END-TO-END parity each step (controller
