@@ -415,3 +415,66 @@ def precompute_matchkey_transforms(
     # reasons other than chunk consolidation. Lane closed; remove the
     # experiment plumbing to keep this hot path free of dead code.
     return df
+
+
+def precompute_matchkey_transforms_frame(frame, matchkeys: list[MatchkeyConfig]):
+    """Frame-level twin of ``precompute_matchkey_transforms`` (D2s-b, spine
+    descent). Accepts a seam ``Frame`` (or a native frame) and returns a Frame
+    of the same backend with the identical ``__xform_<sig>__`` / derived-NE
+    columns appended.
+
+    - Polars lane: delegates to ``precompute_matchkey_transforms`` VERBATIM --
+      the batched one-pass ``with_columns`` there is wall-load-bearing (one
+      fused pass vs 6 full-frame passes was 90s at 10M; see its docstring).
+    - Arrow lane: per-signature ``derive_transformed_column`` appends (cheap:
+      ``pa.Table`` column append is zero-copy on existing columns) + the
+      ``derive_ne_joined`` twin for synthesized NE columns. Cast-then-chain
+      equals the legacy raw-value python fallback for every viable input: the
+      python fallback calls ``str`` methods directly, so it only ever runs
+      over string columns (non-string would raise today), where the pre-cast
+      is a no-op.
+
+    Signature dedup, the record_embedding skip, absent-field skip, and the
+    "already present" reuse mirror the legacy function exactly.
+    """
+    from goldenmatch.core.frame import PolarsFrame, to_frame
+
+    f = to_frame(frame)
+    if isinstance(f, PolarsFrame):
+        return PolarsFrame(precompute_matchkey_transforms(f.native, matchkeys))
+
+    # Synthesized NE columns first (matchkey.py legacy order): a derived NE
+    # field must exist before its xform signature materializes below.
+    seen_derived: set[str] = set()
+    for mk in matchkeys:
+        for ne in (getattr(mk, "negative_evidence", None) or []):
+            src = getattr(ne, "derive_from", None)
+            if not src or ne.field in f.columns or ne.field in seen_derived:
+                continue
+            if not all(c in f.columns for c in src):
+                continue
+            seen_derived.add(ne.field)
+            f = f.with_column(ne.field, f.derive_ne_joined(list(src)))
+
+    seen: set[str] = set()
+
+    def _materialize(f, field_obj):
+        if getattr(field_obj, "scorer", None) == "record_embedding":
+            return f
+        if field_obj.field not in f.columns:
+            return f
+        sig = _xform_sig(field_obj)
+        if sig in seen or sig in f.columns:
+            return f
+        seen.add(sig)
+        return f.with_column(
+            sig,
+            f.derive_transformed_column(field_obj.field, list(field_obj.transforms or [])),
+        )
+
+    for mk in matchkeys:
+        for field in mk.fields:
+            f = _materialize(f, field)
+        for ne in (getattr(mk, "negative_evidence", None) or []):
+            f = _materialize(f, ne)
+    return f

@@ -59,3 +59,95 @@ def test_build_static_blocks_dual_rep(rep):
     blocks = build_blocks(_entries()[rep], cfg)
     keyed = {b.block_key: sorted(b.materialize().column("__row_id__").to_list()) for b in blocks}
     assert keyed == {"ann": [0, 1]}
+
+
+# -- D2s-b: Frame-level precompute_matchkey_transforms ------------------------------
+
+
+def _mk_cfgs():
+    from goldenmatch.config.schemas import NegativeEvidenceField
+
+    return [
+        MatchkeyConfig(
+            name="a",
+            type="weighted", threshold=0.8,
+            fields=[
+                MatchkeyField(field="first", transforms=["lowercase", "strip"], scorer="jaro_winkler", weight=1.0),
+                MatchkeyField(field="last", transforms=["soundex"], scorer="jaro_winkler", weight=1.0),
+                MatchkeyField(field="plain", scorer="exact", weight=1.0),
+            ],
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="full_name",
+                    derive_from=["first", "last"],
+                    scorer="jaro_winkler",
+                    threshold=0.9,
+                    penalty=0.5,
+                )
+            ],
+        ),
+        # Same (field, transforms) as mk "a" -> signature reuse, no dup column.
+        MatchkeyConfig(
+            name="b",
+            type="weighted", threshold=0.8,
+            fields=[MatchkeyField(field="first", transforms=["lowercase", "strip"], scorer="jaro_winkler", weight=1.0)],
+        ),
+    ]
+
+
+def test_precompute_frame_arrow_matches_legacy_polars():
+    from goldenmatch.core.matchkey import (
+        precompute_matchkey_transforms,
+        precompute_matchkey_transforms_frame,
+    )
+
+    df = pl.DataFrame(
+        {
+            "__row_id__": pl.Series([0, 1, 2], dtype=pl.Int64),
+            "first": ["  Ann ", None, "BOB"],
+            "last": ["Smith", "Jones", None],
+            "plain": ["x", None, "z"],
+        }
+    )
+    mks = _mk_cfgs()
+    legacy = precompute_matchkey_transforms(df, mks)
+    arrow = precompute_matchkey_transforms_frame(ArrowFrame(df.to_arrow()), mks)
+    # Column ORDER is not part of the contract (consumers read __xform_*__
+    # by name; legacy batches python-fallback columns after all native ones).
+    assert set(arrow.columns) == set(legacy.columns)
+    for c in legacy.columns:
+        assert arrow.column(c).to_list() == legacy[c].to_list(), c
+
+
+def test_precompute_frame_polars_delegates_verbatim():
+    from goldenmatch.core.matchkey import (
+        precompute_matchkey_transforms,
+        precompute_matchkey_transforms_frame,
+    )
+
+    df = pl.DataFrame({"__row_id__": [0, 1], "first": ["A", "b"]})
+    mks = [
+        MatchkeyConfig(
+            name="a", type="weighted", threshold=0.8, fields=[MatchkeyField(field="first", transforms=["lowercase"], scorer="jaro_winkler", weight=1.0)]
+        )
+    ]
+    out = precompute_matchkey_transforms_frame(PolarsFrame(df), mks)
+    assert out.native.equals(precompute_matchkey_transforms(df, mks))
+
+
+def test_precompute_frame_skips_record_embedding_and_missing_fields():
+    from goldenmatch.core.matchkey import precompute_matchkey_transforms_frame
+
+    df = pl.DataFrame({"__row_id__": [0], "first": ["a"]})
+    mks = [
+        MatchkeyConfig(
+            name="a",
+            type="weighted", threshold=0.8,
+            fields=[
+                MatchkeyField(field="first", scorer="record_embedding", columns=["first"], weight=1.0),
+                MatchkeyField(field="absent", scorer="exact", weight=1.0),
+            ],
+        )
+    ]
+    out = precompute_matchkey_transforms_frame(ArrowFrame(df.to_arrow()), mks)
+    assert list(out.columns) == ["__row_id__", "first"]
