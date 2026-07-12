@@ -37,3 +37,9 @@ So W5 = **shadow-wire `chi2_gof` + `pearson_r` into `drift/detector.py`** (mirro
 
 ## Non-goals
 - No new kernels. No kstest/distribution-fit reproduction (declined, same as W4). No entropy/bounds kernel (pure arithmetic, no scipy, low value). No re-wiring drift's fd/keys/regex checks (already native via their own kernels). No changing user-visible output (shadow). No polars-free wiring (Flip).
+
+## Review corrections (folded — 2026-07-11)
+- **[nit] `_check_distribution_drift` does NOT call `dist.fit()`** — the fit happens at baseline-profile time (baseline's `_fit_distribution`); drift reconstructs `fit_params` from the SAVED `sp.params` and only calls `kstest`. The decline is unchanged (kstest's Kolmogorov p-value is the non-reproducible surface), but the described surface was slightly off.
+- **[nit] detector.py imports NEITHER `native_enabled`/`native_module` NOR `pyarrow`** (unlike baseline/statistical.py) — W5 must ADD both imports.
+- **[nit] shadow test must gate on / assert `native_enabled("chi2_gof")` + `native_enabled("pearson_r")`** so a bad W4 rebase that drops the `_COMPONENT_SYMBOLS` entries surfaces as a SKIP (visible), not a silent false-green (the kernels no-op if the symbol is missing).
+- **[confirmed] the two existing handlers are `except Exception` (detector.py:348, :701)** — the shadow blocks MUST have their OWN `try/except BaseException` (pyo3 PanicException is a BaseException and would escape the surrounding `except Exception`).
