@@ -2,6 +2,18 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.1.3] - 2026-07-12
+
+### Performance
+- **Parallel relation-profiler loop.** 3.0.3 parallelized the column loop; the relation
+  profilers (temporal / duplicate / functional-dependency / composite-key / age / ...)
+  still ran sequentially. Each is independent and only READS the (cache-populated) frame,
+  so they now fan across the same thread pool and merge in `RELATION_PROFILERS` order --
+  byte-identical to sequential (verified: `scan_file` 1-thread vs 8-thread findings
+  identical incl. order; differential Jaccard 1.000). Relation/date-heavy scans (many
+  temporal pairs): a 6-date-column scan went 0.856s -> 0.612s (~1.4x). No regression on
+  column-bound scans. Same `GOLDENCHECK_SCAN_THREADS` gate.
+
 ## [3.1.2] - 2026-07-12
 
 ### Performance

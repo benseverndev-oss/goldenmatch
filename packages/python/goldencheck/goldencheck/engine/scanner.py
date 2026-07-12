@@ -452,6 +452,18 @@ def _profile_column(frame, sample, col_name: str, row_count: int):
     return cp, findings
 
 
+def _run_relation(profiler, sample) -> list[Finding]:
+    """Run ONE relation profiler over the whole (sampled) frame. Each relation
+    profiler is independent and only READS the frame (its column caches are already
+    populated by the column loop; it builds any derived data locally), so relations
+    are safe to run concurrently -- results are merged in RELATION_PROFILERS order."""
+    try:
+        return list(profiler.profile(sample))
+    except Exception as e:  # noqa: BLE001 - one relation profiler failing must not sink the scan
+        logger.warning("Relation profiler %s failed: %s", type(profiler).__name__, e)
+        return []
+
+
 def _scan_dataframe_impl(
     frame,
     *,
@@ -507,12 +519,17 @@ def _scan_dataframe_impl(
         column_profiles.append(cp)
         all_findings.extend(findings)
 
-    for profiler in RELATION_PROFILERS:
-        try:
-            findings = profiler.profile(sample)
-            all_findings.extend(findings)
-        except Exception as e:
-            logger.warning("Relation profiler %s failed: %s", type(profiler).__name__, e)
+    # Relation profilers are independent of each other and only READ the (now
+    # cache-populated) frame, so fan them across the same thread pool and merge in
+    # RELATION_PROFILERS order (deterministic, byte-identical to sequential).
+    if n_threads > 1 and len(RELATION_PROFILERS) > 1:
+        with ThreadPoolExecutor(max_workers=min(n_threads, len(RELATION_PROFILERS))) as pool:
+            rel_results = list(pool.map(lambda pr: _run_relation(pr, sample), RELATION_PROFILERS))
+        for fs in rel_results:
+            all_findings.extend(fs)
+    else:
+        for profiler in RELATION_PROFILERS:
+            all_findings.extend(_run_relation(profiler, sample))
 
     # Denial-constraint discovery is opt-in (NOT part of RELATION_PROFILERS) --
     # it is a heavier cross-column miner. Under --deep it sees the full
