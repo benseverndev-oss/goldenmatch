@@ -39,16 +39,23 @@ pip install goldencheck[db]                  # database scanning
 pip install goldencheck[mcp]                 # MCP server
 ```
 
-## Polars is optional (2.0.0)
+## Polars-free by default (3.0.0)
 
-As of 2.0.0, `pip install goldencheck` does not pull in Polars. `import goldencheck`,
-`scan_columns(...)`, and Parquet/Excel reading via `read_columns`/`scan_file_columns` all
-work without it.
+As of 3.0.0 the default scan path is **Arrow-native** and needs no Polars. `pip install
+goldencheck` scans CSV, Parquet, and Excel end-to-end — `scan_file`, `scan_dataframe`, and
+the CLI all run on a `pyarrow.Table` (a base dependency now). The 2.0.0 rule that CSV and the
+full scan needed `goldencheck[polars]` no longer applies.
 
-Install `goldencheck[polars]` for CSV reading and the full `scan_file`/`scan_dataframe` scan
-— Polars' CSV dtype inference isn't reproducible without it, and the full scan is Polars-native.
-Calling a Polars-only path without the extra raises a clear `ImportError` telling you which
-extra to add.
+Polars is only used by two opt-in extras:
+
+- `goldencheck[baseline]` — pulls Polars (plus scipy/numpy) for the statistical, drift, and
+  correlation subsystems, which still run on Polars.
+- `goldencheck[polars]` — only for the `scan_dataframe(pl.DataFrame)` convenience overload.
+  `scan_dataframe` accepts a `pyarrow.Table` natively; a `polars.DataFrame` is converted via
+  `.to_arrow()` when Polars is present.
+
+`inferred_type` reports a neutral dtype vocabulary (`str`, `int`, `uint`, `float`, `date`,
+`datetime`, `bool`, `other`) rather than raw Polars dtype names.
 
 ## Quickstart
 

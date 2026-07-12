@@ -4,9 +4,9 @@ description: "GoldenCheck's optional Rust/Arrow runtime and the deep-profiling c
 keywords: ["goldencheck", "native", "rust", "arrow", "deep profiling", "functional dependency", "composite key", "fuzzy", "referential integrity", "freshness", "denial constraint"]
 ---
 
-GoldenCheck is pure-Python; the full scan is Polars-backed (via the `[polars]`
-extra since 2.0.0), so the everyday sampled scan is fast, while the structural
-`scan_columns` checks and Parquet/Excel reading run Polars-free. For the
+GoldenCheck is pure-Python; as of 3.0.0 the everyday scan is **Arrow-native** and
+Polars-free — `scan_file`, `scan_dataframe`, and the CLI run on a `pyarrow.Table`
+(a base dependency), so CSV/Parquet/Excel scanning needs no Polars. For the
 CPU-heavy **deep-profiling** checks there's an optional compiled runtime, and
 the package falls back to pure Python when it isn't installed — behaviour is
 identical either way, native only changes wall-clock.
@@ -19,17 +19,16 @@ pip install goldencheck[native]
 your code changes. Control it with `GOLDENCHECK_NATIVE=auto|0|1` (`auto` is the
 default: use native where available, fall back otherwise).
 
-goldencheck-native also backs the **Polars-free structural checks** — the format,
-encoding, pattern, and temporal profilers that run inside `scan_columns` (and the
-Parquet/Excel `read_columns`/`scan_file_columns` paths). That means a Polars-absent
-install (`pip install goldencheck[native]`, without `[polars]`) can still run those
-checks at native speed; only CSV reading and the full `scan_file`/`scan_dataframe`
-scan need `goldencheck[polars]`.
+goldencheck-native also accelerates the **format, encoding, pattern, and temporal
+profilers** that run on the Arrow-native scan path. Since the whole scan is
+Polars-free in 3.0.0, `pip install goldencheck[native]` runs those checks at native
+speed on any CSV/Parquet/Excel source with no Polars installed.
 
-Extras at a glance: `[polars]` adds Polars for CSV reading and the full scan;
-`[parquet]` adds pyarrow alone for Polars-free Parquet reading; `[native]` adds the
-Rust kernels below (works with or without Polars installed); `[baseline]` adds
-scipy/numpy for deep profiling and drift detection.
+Extras at a glance: `[native]` adds the Rust kernels below (Polars not required);
+`[baseline]` adds scipy/numpy **and Polars** for the deep statistical profiling,
+drift, and correlation subsystems; `[polars]` adds Polars only for the
+`scan_dataframe(pl.DataFrame)` convenience overload. `pyarrow` is a base dependency
+(the scan frame), so Parquet/Excel reading works out of the box with no extra.
 
 ## How the kernels earn their place
 

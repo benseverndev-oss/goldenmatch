@@ -39,18 +39,18 @@ Built by [Ben Severn](https://bensevern.dev).
 pip install goldencheck
 ```
 
-The base install is Polars-free: `scan_columns`, `read_columns`, and `scan_file_columns`
-work out of the box for Parquet and Excel sources. For CSV reading and the full
-`scan_file`/`scan_dataframe` scan, add the `[polars]` extra:
+The base install is Polars-free and scans everything: `scan_file`, `scan_dataframe`,
+and the CLI run Arrow-native (the scan frame is a `pyarrow.Table`), so CSV, Parquet,
+and Excel all work out of the box with no Polars installed.
 
-```bash
-pip install goldencheck[polars]
-```
-
-> **2.0.0 breaking change:** Polars moved from a hard dependency to the `[polars]` extra.
-> If your code reads CSVs or calls `scan_file`/`scan_dataframe`, add `goldencheck[polars]`
-> when upgrading — calling those paths without it raises a clear `ImportError` naming the
-> extra to install.
+> **3.0.0 breaking change:** The default scan path is Arrow-native and Polars-free —
+> including CSV, which needed `goldencheck[polars]` in 2.0.0 and no longer does.
+> `pyarrow` is now a base dependency. Polars moved to two opt-in extras: add
+> `goldencheck[baseline]` for the scipy-backed statistical / drift / correlation
+> features (they still run on Polars), and `goldencheck[polars]` only if you call
+> `scan_dataframe(pl.DataFrame)` with a Polars frame (it accepts a `pyarrow.Table`
+> natively). `inferred_type` now reports a neutral dtype vocabulary (`str`, `int`,
+> `float`, `date`, ...) instead of raw Polars dtype names.
 
 With LLM boost support:
 
@@ -88,8 +88,8 @@ import { readFile, scanData } from "goldencheck/node";
 
 ## Quick Start
 
-CSV scanning below needs `pip install goldencheck[polars]` (see [Install](#install)).
-Parquet/Excel scanning works with the base install.
+CSV, Parquet, and Excel scanning all work with the base install — the scan path
+is Arrow-native and needs no Polars.
 
 ```bash
 # Scan a file — discovers issues, launches interactive TUI
@@ -555,7 +555,8 @@ Tested on a custom benchmark with 341 planted data quality issues across 9 categ
 
 | Dependency | Purpose |
 |-----------|---------|
-| [Polars](https://pola.rs/) | CSV reading + the full scan (optional, `[polars]`) |
+| [pyarrow](https://arrow.apache.org/docs/python/) | Arrow-native scan frame (base dep) — CSV/Parquet/Excel scanning, no Polars |
+| [Polars](https://pola.rs/) | Optional: `[baseline]` stat/drift features + the `scan_dataframe(pl.DataFrame)` overload (`[polars]`) |
 | [Typer](https://typer.tiangolo.com/) | CLI framework |
 | [Textual](https://textual.textualize.io/) | Interactive TUI |
 | [Rich](https://rich.readthedocs.io/) | CLI output formatting |

@@ -2,6 +2,46 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.0.0] - 2026-07-11
+
+### Changed (BREAKING)
+- **The default scan path is now Arrow-native and Polars-free.** `scan_file`,
+  `scan_dataframe`, and the CLI `check`/`scan` run WITHOUT Polars -- including
+  CSV. `scan_file` reads through an Arrow-native reader (`read_file_arrow`) and
+  the scan frame is a `pyarrow.Table`, so a plain `pip install goldencheck` can
+  scan CSV/Parquet/Excel end-to-end with no Polars installed. The 2.0.0 rule
+  that "CSV reading and the full scan still require `goldencheck[polars]`" is no
+  longer true.
+- **`pyarrow` is now a base dependency** (the scan frame is a `pyarrow.Table`).
+- **Polars is no longer needed for the default scan.** It moved to two opt-in
+  extras: `goldencheck[baseline]` now pulls `polars>=1.0` for the scipy-backed
+  statistical / drift / correlation subsystems (which still run on Polars), and
+  `goldencheck[polars]` remains only for the `scan_dataframe(pl.DataFrame)`
+  convenience overload. `scan_dataframe` accepts a `pyarrow.Table` natively; a
+  `polars.DataFrame` is converted via `.to_arrow()` only when Polars is present.
+- **`inferred_type` now emits a neutral dtype vocabulary** (`str`, `int`,
+  `uint`, `float`, `date`, `datetime`, `bool`, `other`) instead of raw Polars
+  dtype strings (`Int64`, `Utf8`, ...). Scan output, profiles, and the MCP/agent
+  `type` fields report the neutral names.
+- **Sampling is an owned deterministic sample.** The large-file sampler replaced
+  the Polars PRNG (`df.sample(seed=42)`) with an owned deterministic stride
+  sample over the Arrow table -- stable across runs and `--workers`, registered
+  as an accepted divergence from the old Polars-native sample.
+
+### Notes
+- The compiled native kernel (`goldencheck[native]`) still accelerates the
+  numeric / sequence / date / regex checks; the profilers self-skip those when
+  it is absent (graceful degradation, unchanged pattern).
+- The `nopolars` CI lane now asserts the **full** scan (CSV + `scan_file` +
+  the CLI) succeeds with Polars uninstalled -- previously it asserted only the
+  covered-columns subset ran Polars-free.
+
+### Migration
+- Most users need no change: `pip install goldencheck` now scans everything
+  without Polars. Only add `goldencheck[polars]` if you call
+  `scan_dataframe(pl.DataFrame)` with a Polars frame, and `goldencheck[baseline]`
+  if you use the statistical baseline / drift / correlation features.
+
 ## [2.0.0] - 2026-07-11
 
 ### Changed (BREAKING)

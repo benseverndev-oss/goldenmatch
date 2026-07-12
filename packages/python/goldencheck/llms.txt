@@ -7,15 +7,14 @@
 - Remote MCP: https://goldencheck-mcp-production.up.railway.app/mcp/ (19 tools, Smithery: https://smithery.ai/servers/benzsevern/goldencheck)
 - A2A Server: `goldencheck agent-serve --port 8100` (9 skills)
 - CLI: `goldencheck scan`, `goldencheck validate`, + 14 more commands
-- Python API: `from goldencheck import scan_file, scan_columns, scan_file_columns, read_columns, validate_file, health_score, create_baseline` (scan_columns / read_columns / scan_file_columns are the Polars-free structural path)
+- Python API: `from goldencheck import scan_file, scan_dataframe, validate_file, health_score, create_baseline` (the default scan path is Arrow-native and Polars-free; `scan_dataframe` accepts a `pyarrow.Table` natively)
 - REST API: `goldencheck serve` on port 8000
 
 ## Install
-- `pip install goldencheck` — Polars-free base: structural scan (`scan_columns`) + Parquet/Excel reading (`read_columns`/`scan_file_columns`)
-- `pip install goldencheck[polars]` — CSV reading + the full `scan_file`/`scan_dataframe` scan (Polars; since 2.0.0 Polars is optional)
-- `pip install goldencheck[parquet]` — Polars-free Parquet reading (pyarrow)
+- `pip install goldencheck` — Arrow-native, Polars-free: full scan (`scan_file`/`scan_dataframe`) of CSV/Parquet/Excel (pyarrow is a base dep since 3.0.0)
+- `pip install goldencheck[baseline]` — deep statistical profiling & drift detection (pulls scipy/numpy + Polars)
+- `pip install goldencheck[polars]` — only for the `scan_dataframe(pl.DataFrame)` convenience overload
 - `pip install goldencheck[llm]` — LLM boost (~$0.01/scan)
-- `pip install goldencheck[baseline]` — deep profiling & drift detection
 - `pip install goldencheck[mcp]` — MCP server for Claude Desktop
 
 ## Quick Examples
