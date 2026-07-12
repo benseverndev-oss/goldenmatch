@@ -34,6 +34,20 @@ def test_key_from_context_absent_or_raising():
     assert ctx.session_key_from_context(_NoneSession()) is None
 
 
+def test_key_stable_per_session_and_unique_across():
+    from goldenmatch.mcp._session_ctx import session_key_from_context
+    class _S: ...
+    class _Ctx:
+        def __init__(self, s): self.session = s
+    class _Srv:
+        def __init__(self, s): self.request_context = _Ctx(s)
+    s1 = _S(); srv1 = _Srv(s1)
+    k1a = session_key_from_context(srv1); k1b = session_key_from_context(srv1)
+    assert k1a == k1b and k1a.startswith("sess-")   # stable across calls
+    s2 = _S(); k2 = session_key_from_context(_Srv(s2))
+    assert k2 != k1a                                 # distinct sessions distinct keys
+
+
 def test_key_from_real_request_ctx():
     """Drive session_key_from_context through the SDK's actual request_ctx var,
     not just a fake server -- proves the call_tool wiring will resolve a key."""

@@ -77,9 +77,10 @@ CURATED_TOOLS: frozenset[str] = frozenset({
 # NOTE: the session-stateful goldenmatch tools (list_clusters, get_cluster,
 # get_golden_record, explain_match, evaluate, export_results, match_record,
 # find_duplicates) are session-backed via goldenmatch's _resolve_run_state +
-# per-MCP-session AgentSession store: after agent_deduplicate/match_sources in a
-# session they read that run; with no run loaded they return a clean "no run
-# loaded" error (not a crash). No prior-run suffix is needed here.
+# per-MCP-session AgentSession store: after agent_deduplicate (or, for the
+# result-reading tools, agent_match_sources) in a session they read that run;
+# with no run loaded they return a clean "no run loaded" error (not a crash).
+# No prior-run suffix is needed here.
 _CURATED_DESCRIPTION_SUFFIXES: dict[str, str] = {
     # composite one-call alternatives (the primitive points at the composite)
     "agent_deduplicate": (

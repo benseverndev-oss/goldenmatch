@@ -990,7 +990,7 @@ def _resolve_run_state() -> _RunState:
     if sess is None or getattr(sess, "result", None) is None:
         return _RunState(None, None, None, [], {})
     raw = sess.data
-    if getattr(sess, "_mcp_src", None) is not raw:
+    if not hasattr(sess, "_mcp_data") or sess._mcp_src is not raw:
         df = raw
         if df is not None and "__row_id__" not in df.columns:
             df = df.with_row_index("__row_id__")
@@ -1160,8 +1160,11 @@ def _tool_list_clusters(min_size: int, limit: int) -> dict:
     rs = _resolve_run_state()
     if rs.result is None:
         return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    result_clusters = getattr(rs.result, "clusters", None)
+    if result_clusters is None:
+        return {"error": "No clusters on this run (a match_sources run has matched/unmatched records, not clusters)."}
     clusters = []
-    for cid, info in rs.result.clusters.items():
+    for cid, info in result_clusters.items():
         if info["size"] >= min_size:
             clusters.append({
                 "cluster_id": cid,
@@ -1176,7 +1179,10 @@ def _tool_get_cluster(cluster_id: int) -> dict:
     rs = _resolve_run_state()
     if rs.result is None:
         return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
-    info = rs.result.clusters.get(cluster_id)
+    result_clusters = getattr(rs.result, "clusters", None)
+    if result_clusters is None:
+        return {"error": "No clusters on this run (a match_sources run has matched/unmatched records, not clusters)."}
+    info = result_clusters.get(cluster_id)
     if not info:
         return {"error": f"Cluster {cluster_id} not found"}
 
@@ -1194,14 +1200,15 @@ def _tool_get_golden_record(cluster_id: int) -> dict:
     rs = _resolve_run_state()
     if rs.result is None:
         return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
-    if rs.result.golden is None:
+    golden = getattr(rs.result, "golden", None)
+    if golden is None:
         return {"error": "No golden records available"}
 
     import pyarrow.compute as pc
 
-    golden_rows = rs.result.golden.filter(
-        pc.equal(rs.result.golden.column("__cluster_id__"), cluster_id)
-    ) if "__cluster_id__" in rs.result.golden.column_names else None
+    golden_rows = golden.filter(
+        pc.equal(golden.column("__cluster_id__"), cluster_id)
+    ) if "__cluster_id__" in golden.column_names else None
 
     if golden_rows is None or golden_rows.num_rows == 0:
         return {"error": f"No golden record for cluster {cluster_id}"}
@@ -1444,23 +1451,24 @@ def _tool_export_results(output_path: str, fmt: str) -> dict:
     path = _safe_path_or_error(output_path)
     if isinstance(path, dict):
         return path
+    golden = getattr(rs.result, "golden", None)
     if fmt == "json":
-        if rs.result.golden is not None:
-            golden_dicts = rs.result.golden.to_pylist()
+        if golden is not None:
+            golden_dicts = golden.to_pylist()
             clean = [{k: v for k, v in r.items() if not k.startswith("__")} for r in golden_dicts]
             path.write_text(json.dumps(clean, default=str, indent=2))
         else:
             path.write_text("[]")
     else:
-        if rs.result.golden is not None:
+        if golden is not None:
             from pyarrow import csv as _pacsv
 
-            cols = [c for c in rs.result.golden.column_names if not c.startswith("__")]
-            _pacsv.write_csv(rs.result.golden.select(cols), str(path))
+            cols = [c for c in golden.column_names if not c.startswith("__")]
+            _pacsv.write_csv(golden.select(cols), str(path))
         else:
             path.write_text("")
 
-    return {"exported": str(path), "format": fmt, "records": rs.result.golden.num_rows if rs.result.golden is not None else 0}
+    return {"exported": str(path), "format": fmt, "records": golden.num_rows if golden is not None else 0}
 
 
 def _tool_list_domains() -> dict:
@@ -1669,11 +1677,14 @@ def _tool_evaluate(ground_truth_path: str, col_a: str = "id_a", col_b: str = "id
     rs = _resolve_run_state()
     if rs.result is None:
         return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    result_clusters = getattr(rs.result, "clusters", None)
+    if result_clusters is None:
+        return {"error": "No clusters on this run (a match_sources run has matched/unmatched records, not clusters)."}
     validated = _safe_path_or_error(ground_truth_path)
     if isinstance(validated, dict):
         return validated
     gt = load_ground_truth_csv(str(validated), col_a, col_b)
-    return evaluate_clusters(rs.result.clusters, gt).summary()
+    return evaluate_clusters(result_clusters, gt).summary()
 
 
 def _tool_analyze_blocking(

@@ -162,3 +162,38 @@ def test_tools_clean_error_when_nothing_loaded(monkeypatch):
         assert "error" in res and "AttributeError" not in str(res)
     finally:
         ctx.reset_current_session_id(tok)
+
+
+def test_match_sources_then_tools_no_crash(tmp_path, monkeypatch):
+    """agent_match_sources sets result+config but not data. The resolver must
+    not crash; result-reading tools work, data-needing tools clean-error."""
+    import csv
+
+    from goldenmatch.mcp import _session_store as store
+    from goldenmatch.mcp import server as gm
+    for g in ("_result", "_config", "_engine"):
+        monkeypatch.setattr(gm, g, None)
+    monkeypatch.setattr(gm, "_rows", []); monkeypatch.setattr(gm, "_id_to_idx", {})
+    monkeypatch.setattr(store, "_STORE", store.SessionStore(clock=lambda: 0.0))
+
+    def _mk(names, tag):
+        p = tmp_path / f"{tag}.csv"
+        with open(p, "w", newline="") as f:
+            w = csv.writer(f); w.writerow(["name", "email"])
+            for n in names:
+                w.writerow([n, f"{n.split()[0].lower()}@x.com"])
+        return str(p)
+    a = _mk(["John Smith", "Mary Jones"], "a")
+    b = _mk(["Jon Smith", "Karen White"], "b")
+
+    tok = ctx.set_current_session_id("ms")
+    try:
+        _dispatch("agent_match_sources", {"file_a": a, "file_b": b}, AgentSession)
+        # must NOT raise AttributeError; result-reading tool works
+        r_lc = gm._tool_list_clusters(min_size=1, limit=100)
+        assert "AttributeError" not in str(r_lc)
+        # data-needing tool degrades to a clean error, not a crash
+        r_md = gm._tool_match_record({"name": "John Smith"}, None, 5)
+        assert isinstance(r_md, dict) and "AttributeError" not in str(r_md)
+    finally:
+        ctx.reset_current_session_id(tok)

@@ -23,15 +23,25 @@ def current_session_id() -> str | None:
 
 
 def session_key_from_context(server: Any) -> str | None:
-    """Stable per-connection key for the active MCP session, or None.
+    """Stable, unique-per-session key for the active MCP session, or None.
 
-    `id(session)` is stable for the life of one Streamable-HTTP connection and
-    distinct across connections -- the isolation boundary we need. Returns None
-    outside an active request (request_context raises LookupError) or when there
-    is no session (stdio / standalone global path)."""
+    Uses a uuid cached on the session object (lives exactly as long as the
+    session, and -- unlike id() -- is never reused after GC, so a stored run
+    can't leak to a later connection that reuses the freed address). Returns
+    None outside an active request or when there is no session."""
     try:
         ctx = server.request_context
         sess = getattr(ctx, "session", None)
-        return f"sess-{id(sess)}" if sess is not None else None
+        if sess is None:
+            return None
+        sid = getattr(sess, "_gm_session_id", None)
+        if sid is None:
+            import uuid
+            sid = f"sess-{uuid.uuid4().hex}"
+            try:
+                sess._gm_session_id = sid
+            except Exception:
+                return f"sess-{id(sess)}"  # session not settable (slots) -> best effort
+        return sid
     except Exception:
         return None
