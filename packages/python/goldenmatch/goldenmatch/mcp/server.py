@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from mcp.server import Server
@@ -946,6 +947,49 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
     return server
+
+
+@dataclass
+class _RunState:
+    result: object | None
+    config: object | None
+    data: object | None
+    rows: list
+    id_to_idx: dict
+
+
+def _resolve_run_state() -> _RunState:
+    """Active run state: module globals when set (standalone --file, byte-
+    identical), else the current MCP session's AgentSession (aggregator path),
+    else all-None (callers return a clean 'no run loaded' error).
+
+    The session path returns a __row_id__-augmented frame as `data` (raw
+    AgentSession.data lacks it; match_one requires it), built once and cached on
+    the session as _mcp_data/_mcp_rows/_mcp_id_to_idx."""
+    if _result is not None or _config is not None or _engine is not None:
+        return _RunState(
+            result=_result,
+            config=_config,
+            data=_engine.data if _engine is not None else None,
+            rows=_rows,
+            id_to_idx=_id_to_idx,
+        )
+    from goldenmatch.mcp._session_ctx import current_session_id
+    from goldenmatch.mcp._session_store import _STORE
+    sid = current_session_id()
+    sess = _STORE.get(sid) if sid else None
+    if sess is None or getattr(sess, "result", None) is None:
+        return _RunState(None, None, None, [], {})
+    df = sess.data
+    if df is not None and "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__")
+    if getattr(sess, "_mcp_data", None) is not df:
+        sess._mcp_data = df
+        rows = df.to_dicts() if df is not None else []
+        sess._mcp_rows = rows
+        sess._mcp_id_to_idx = {r["__row_id__"]: i for i, r in enumerate(rows)}
+    return _RunState(sess.result, sess.config, sess._mcp_data,
+                     sess._mcp_rows, sess._mcp_id_to_idx)
 
 
 def _handle_tool(name: str, args: dict) -> dict:
