@@ -1230,7 +1230,6 @@ source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "diptest" },
     { name = "duckdb" },
-    { name = "golden-diagnostics" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'" },
     { name = "jellyfish" },
     { name = "numpy" },
@@ -1394,7 +1393,6 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
     { name = "faiss-cpu", marker = "extra == 'embeddings'", specifier = ">=1.7" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
-    { name = "golden-diagnostics", editable = "packages/python/golden-diagnostics" },
     { name = "goldencheck", extras = ["polars"], marker = "extra == 'quality'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", marker = "extra == 'transform'", editable = "packages/python/goldenflow" },
     { name = "goldenmatch", extras = ["embeddings", "llm", "postgres", "mcp", "quality", "transform", "web", "vision", "audio"], marker = "extra == 'all'", editable = "packages/python/goldenmatch" },

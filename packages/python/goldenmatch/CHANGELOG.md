@@ -8,8 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Added
 
-- **Anomaly diagnostics with prefilled GitHub issue prompts** (new
-  `golden-diagnostics` dependency). When GoldenMatch hits a state that is
+- **Anomaly diagnostics with prefilled GitHub issue prompts** (via the new
+  `golden-diagnostics` package; a guarded, optional import -- not yet a hard
+  dependency, so it activates wherever `golden-diagnostics` is installed and is a
+  graceful no-op otherwise). When GoldenMatch hits a state that is
   probably its own bug, it emits an actionable message with a prefilled issue
   URL. Fires only on *anomalies* — never on expected fallbacks or user errors:
   (1) a native **wheel-skew** slow path (the kernel symbol is missing from the

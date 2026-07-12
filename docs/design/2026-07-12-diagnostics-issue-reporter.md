@@ -87,15 +87,23 @@ the user-input builtins.
 - Every wire is wrapped so diagnostics **never** breaks a run.
 - Default-on is safe because nothing is transmitted.
 
-## Release sequencing (golden-suite lockstep)
+## Release sequencing (publish first, then depend)
 
-`golden-diagnostics` is a new **required** dependency of goldenmatch. Dev/CI
-resolve it via the uv workspace immediately. The **published** goldenmatch wheel
-gains `Requires-Dist: golden-diagnostics`, so **`golden-diagnostics` must be
-published to PyPI before goldenmatch's next release** or `pip install goldenmatch`
-is unsatisfiable — the same lockstep the other suite members follow. The import is
-additionally guarded, so even a transiently-missing package degrades to "no
-prompts," never a crash.
+`golden-diagnostics` is a **workspace member but deliberately NOT a runtime
+dependency** of goldenmatch yet. It is not on PyPI, and a hard requirement on an
+unpublished dist breaks every plain `pip install goldenmatch` lane — the
+`web_ui_e2e` lane and the bench/eval lanes install with plain pip, which does not
+read the uv workspace and so tries (and fails) to resolve `golden-diagnostics`
+from PyPI. (The first push of this feature declared the hard dep and reddened
+`web_ui_e2e` for exactly this reason.)
+
+So the sequencing is: the feature ships **active where `golden-diagnostics` is
+installed** — dev checkouts and the `uv sync --all-packages` CI lanes, which
+install every workspace member — and **gracefully dormant** everywhere else (the
+`goldenmatch.core.diagnostics` import is guarded → no prompts, never a crash).
+The follow-up is to **publish `golden-diagnostics` to PyPI, then promote it to a
+runtime dependency** (or a `[diagnostics]` extra) so end users on `pip install
+goldenmatch` get the prompts too. Publish first, then depend — never the reverse.
 
 ## Follow-ups (not in this slice)
 

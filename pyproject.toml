@@ -25,7 +25,11 @@ infermap = { workspace = true }
 goldensuite-mcp = { workspace = true }
 goldencheck-types = { workspace = true }
 goldenanalysis = { workspace = true }
-golden-diagnostics = { workspace = true }
+# golden-diagnostics is a workspace member (installed by `uv sync --all-packages`)
+# but nothing DECLARES a dependency on it yet -- it is not on PyPI, so a hard dep
+# would break plain `pip install goldenmatch`. Re-add this source line together
+# with the runtime dep once golden-diagnostics is published. See
+# packages/python/goldenmatch/pyproject.toml.
 # goldenmatch-native is the optional compiled runtime (goldenmatch[native]).
 # It's NOT a workspace member (it's a maturin/Rust crate under packages/rust/),
 # so point uv at the path for dev/CI resolution. uv reads its static PEP 621
