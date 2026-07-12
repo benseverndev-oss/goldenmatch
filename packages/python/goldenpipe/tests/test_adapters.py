@@ -21,17 +21,67 @@ class TestScanStage:
             s.validate(PipeContext())
 
     @patch("goldenpipe.adapters.check.HAS_CHECK", True)
-    def test_run_success(self, sample_df):
+    def test_run_scans_frame_not_file(self, sample_df):
+        # With a frame present, the stage scans ctx.df via scan_dataframe --
+        # NOT the source path via scan_file (the redundant-re-read seam).
         from goldenpipe.adapters import check
-        mock_result = MagicMock()
-        mock_result.findings = [{"severity": "warning", "check": "nulls"}]
-        with patch.object(check, "_scan", return_value=mock_result):
+        findings = [{"severity": "warning", "check": "nulls"}]
+        profile = MagicMock()
+        with patch.object(check, "_scan_df", return_value=(findings, profile)) as m_df, \
+                patch.object(check, "_scan") as m_file:
             from goldenpipe.adapters.check import ScanStage
             s = ScanStage()
             ctx = PipeContext(df=sample_df, metadata={"source": "test.csv"})
             result = s.run(ctx)
             assert result.status == StageStatus.SUCCESS
-            assert "findings" in ctx.artifacts
+            assert ctx.artifacts["findings"] == findings
+            assert ctx.artifacts["profile"] is profile
+            # scanned the frame, not the path
+            m_df.assert_called_once()
+            assert m_df.call_args.args[0] is sample_df
+            assert m_df.call_args.kwargs.get("file_path") == "test.csv"
+            m_file.assert_not_called()
+
+    @patch("goldenpipe.adapters.check.HAS_CHECK", True)
+    def test_run_dataframe_source_still_scans(self, sample_df):
+        # Regression: a "<DataFrame>" source is not a readable path, so the old
+        # scan_file(source) produced no profile. Scanning ctx.df fixes it.
+        from goldenpipe.adapters import check
+        with patch.object(check, "_scan_df", return_value=([], MagicMock())) as m_df, \
+                patch.object(check, "_scan") as m_file:
+            from goldenpipe.adapters.check import ScanStage
+            s = ScanStage()
+            ctx = PipeContext(df=sample_df, metadata={"source": "<DataFrame>"})
+            result = s.run(ctx)
+            assert result.status == StageStatus.SUCCESS
+            assert ctx.artifacts["profile"] is not None
+            m_df.assert_called_once()
+            m_file.assert_not_called()
+
+    @patch("goldenpipe.adapters.check.HAS_CHECK", True)
+    def test_run_forwards_stage_config(self, sample_df):
+        from goldenpipe.adapters import check
+        with patch.object(check, "_scan_df", return_value=([], MagicMock())) as m_df:
+            from goldenpipe.adapters.check import ScanStage
+            s = ScanStage()
+            ctx = PipeContext(df=sample_df, metadata={"source": "test.csv"},
+                              stage_config={"deep": True})
+            s.run(ctx)
+            assert m_df.call_args.kwargs.get("deep") is True
+
+    @patch("goldenpipe.adapters.check.HAS_CHECK", True)
+    def test_run_falls_back_to_scan_file_without_frame(self):
+        # No ctx.df (defensive path) -> scan_file(source).
+        from goldenpipe.adapters import check
+        with patch.object(check, "_scan", return_value=([], MagicMock())) as m_file, \
+                patch.object(check, "_scan_df") as m_df:
+            from goldenpipe.adapters.check import ScanStage
+            s = ScanStage()
+            ctx = PipeContext(df=None, metadata={"source": "test.csv"})
+            result = s.run(ctx)
+            assert result.status == StageStatus.SUCCESS
+            m_file.assert_called_once()
+            m_df.assert_not_called()
 
 
 class TestTransformStage:
