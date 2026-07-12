@@ -58,11 +58,14 @@ pip install golden-suite    # the WHOLE suite (Check + Flow + Match + Analysis +
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
+> **v3.0.0** — **v3.0.0 — Arrow-native results.** Result frames are now `pyarrow.Table`
+(migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
+Arrow frame backend is the default — measured ~36% faster end-to-end on the
+100K zero-config benchmark — with `GOLDENMATCH_FRAME=polars` as the opt-out.
+>
 > **v2.4.0 — The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 >
 > **v2.3.0 — Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
->
-> **v2.2.0 — Semantic blocking** — an opt-in recall lever for abbreviations and aliases. `dedupe_df(semantic_blocking=...)` unions extra candidate sources (initialism/abbreviation blocking, a business-alias canonical-form table, and an embedding ANN pass) into the pipeline. Off by default; on the abbreviation-heavy benchmark it adds **+5.3pp recall at zero precision cost**.
 <!-- README-callouts:end -->
 
 ---

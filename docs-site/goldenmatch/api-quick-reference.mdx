@@ -43,9 +43,9 @@ result = goldenmatch.dedupe_df(
 ## `DedupeResult` fields
 
 ```python
-result.golden          # pl.DataFrame | None - canonical records with __cluster_id__
-result.dupes           # pl.DataFrame | None - duplicate records with __row_id__
-result.unique          # pl.DataFrame | None - non-duplicate records
+result.golden          # pa.Table | None - canonical records with __cluster_id__ (v3: pl.from_arrow(...) for a Polars frame)
+result.dupes           # pa.Table | None - duplicate records with __row_id__
+result.unique          # pa.Table | None - non-duplicate records
 result.clusters        # dict[int, dict] - {cluster_id: {"members": [row_ids], "pair_scores": {(a,b): score}}}
 result.scored_pairs    # list[tuple[int, int, float]] - all matched pairs
 result.stats           # dict - total_records, total_clusters, matched_records, match_rate
