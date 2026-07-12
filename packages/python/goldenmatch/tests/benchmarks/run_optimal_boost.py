@@ -60,7 +60,7 @@ def get_pairs(combined, matchkeys, blocking):
         if mk.type == "weighted" and blocking:
             blocks = build_blocks(df.lazy(), blocking)
             for block in blocks:
-                bdf = block.df.collect()
+                bdf = block.materialize().native
                 p = find_fuzzy_matches(bdf, mk, pre_scored_pairs=block.pre_scored_pairs)
                 all_pairs.extend(p)
     return all_pairs, df

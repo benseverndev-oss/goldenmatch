@@ -197,7 +197,7 @@ def score_blocks_ray(
             if hasattr(block, 'df') and hasattr(block.df, 'collect'):
                 collected_block = type(block)(
                     block_key=block.block_key,
-                    df=block.df.collect().lazy(),
+                    df=block.materialize().native,
                     strategy=block.strategy,
                     depth=getattr(block, 'depth', 0),
                     parent_key=getattr(block, 'parent_key', None),

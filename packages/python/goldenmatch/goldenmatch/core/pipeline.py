@@ -2067,7 +2067,7 @@ def _run_dedupe_pipeline(
                     # has no ambiguity.
                     assignment_parts = []
                     for blk in blocks:
-                        lf = blk.df if isinstance(blk.df, pl.LazyFrame) else blk.df.lazy()
+                        lf = blk.materialize().native.lazy()
                         assignment_parts.append(
                             lf.select("__row_id__").with_columns(
                                 pl.lit(blk.block_key).alias("__block_key__"),
@@ -2110,12 +2110,7 @@ def _run_dedupe_pipeline(
                 if len(blocks) <= _BLOCK_SAMPLE_SKIP_THRESHOLD:
                     for blk in blocks:
                         try:
-                            df_blk = blk.df
-                            if isinstance(df_blk, pl.LazyFrame):
-                                size = int(df_blk.select(pl.len()).collect().item())
-                            else:
-                                size = int(df_blk.height)
-                            block_size_samples.append(size)
+                            block_size_samples.append(blk.n_rows())
                         except Exception:  # pragma: no cover -- defensive
                             continue
                 else:
@@ -2280,9 +2275,7 @@ def _run_dedupe_pipeline(
                     # filtering, so `pairs` is the emitted set directly.
                     for block in blocks:
                         block_df = (
-                            block.df.collect()
-                            if isinstance(block.df, pl.LazyFrame)
-                            else block.df
+                            block.materialize().native
                         )
                         _accumulate_block_candidate_pairs(
                             block_df, _bench_candidate_pairs
@@ -2301,7 +2294,7 @@ def _run_dedupe_pipeline(
                 # is exact (the batched path doesn't expose per-block candidates).
                 block_scorer = probabilistic_block_scorer(mk, em_result)
                 for block in blocks:
-                    block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+                    block_df = block.materialize().native
                     _accumulate_block_candidate_pairs(
                         block_df, _bench_candidate_pairs
                     )

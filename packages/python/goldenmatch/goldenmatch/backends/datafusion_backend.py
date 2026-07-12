@@ -166,7 +166,7 @@ def _materialize_blocks_to_arrow(
     values_chunks: list[list[str]] = []
 
     for block in blocks:
-        block_df = block.df.collect()
+        block_df = block.materialize().native
         if block_df.height < 2:
             continue
         if across_files_only and source_lookup:

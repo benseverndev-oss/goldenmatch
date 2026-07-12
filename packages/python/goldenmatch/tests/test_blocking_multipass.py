@@ -21,7 +21,7 @@ from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
 def _members(blocks):
     out = []
     for b in blocks:
-        bdf = b.df.collect() if hasattr(b.df, "collect") else b.df
+        bdf = b.materialize().native if hasattr(b.df, "collect") else b.df
         out.append(frozenset(bdf["__row_id__"].to_list()))
     return out
 

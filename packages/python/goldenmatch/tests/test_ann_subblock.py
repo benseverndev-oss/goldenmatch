@@ -68,7 +68,7 @@ class TestANNSubBlock:
         for block in result:
             assert block.strategy == "ann"
         # Total records in sub-blocks should be <= original
-        total = sum(len(b.df.collect()) for b in result)
+        total = sum(len(b.materialize().native) for b in result)
         assert total <= n
 
 

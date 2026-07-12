@@ -1352,7 +1352,7 @@ def _score_one_block(
     ``_score_one_block_columnar`` via ``_cross_source_filter_df`` -- the old
     "mirror any change" rule is retired.
     """
-    block_df = block.df.collect()
+    block_df = block.materialize().native
 
     if across_files_only and source_lookup:
         from goldenmatch.core.frame import to_frame as _to_frame_d5
@@ -1467,7 +1467,7 @@ def score_blocks_parallel(
         all_pairs = []
         total_candidates = 0
         for block in blocks:
-            block_df = block.df.collect()
+            block_df = block.materialize().native
             n = block_df.height
             total_candidates += n * (n - 1) // 2
             pairs = _score_one_block(
@@ -1518,7 +1518,7 @@ def score_blocks_parallel(
         total_candidates = 0
         for block in blocks:
             try:
-                n = int(block.df.select(pl.len()).collect().item())
+                n = block.n_rows()
             except Exception:
                 n = 0
             total_candidates += n * (n - 1) // 2
@@ -1834,7 +1834,7 @@ def _score_one_block_columnar(
     ``_score_one_block(..., _emit_dataframe=True)`` via
     ``_cross_source_filter_df`` -- the old mirror rule is retired.
     """
-    block_df = block.df.collect()
+    block_df = block.materialize().native
 
     if across_files_only and source_lookup:
         sources_in_block = block_df["__source__"].unique().to_list()

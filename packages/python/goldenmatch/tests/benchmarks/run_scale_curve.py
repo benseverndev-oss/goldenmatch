@@ -148,7 +148,7 @@ def run_benchmark(n: int) -> dict:
 
     t0 = time.perf_counter()
     for block in blocks:
-        bdf = block.df.collect()
+        bdf = block.materialize().native
         pairs = find_fuzzy_matches(bdf, mk_fuzzy, exclude_pairs=matched_pairs,
                                     pre_scored_pairs=block.pre_scored_pairs)
         all_pairs.extend(pairs)

@@ -164,5 +164,5 @@ class TestCanopyBlockerIntegration:
 
         blocks = build_blocks(df, config)
         for block in blocks:
-            block_df = block.df.collect()
+            block_df = block.materialize().native
             assert len(block_df) >= 2, "Canopy blocks should have at least 2 members"

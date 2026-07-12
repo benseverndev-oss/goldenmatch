@@ -469,7 +469,7 @@ def _sample_blocked_pairs(
 
     for bi in order:
         block = blocks[bi]
-        block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+        block_df = block.materialize().native
         row_ids = sorted(block_df["__row_id__"].to_list())  # canonical order before the seeded sample
         if len(row_ids) < 2:
             continue
@@ -1696,7 +1696,6 @@ def score_probabilistic_blocks_batched(
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    import polars as pl
 
     if exclude_pairs is None:
         exclude_pairs = set()
@@ -1711,7 +1710,7 @@ def score_probabilistic_blocks_batched(
     base_excl = set(exclude_pairs)
 
     def _bdf(block):
-        return block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+        return block.materialize().native
 
     # Split the work into independent scoring units + a per-unit scorer. Native/
     # scalar path: one unit per block. Vectorized path: row-capped batches of

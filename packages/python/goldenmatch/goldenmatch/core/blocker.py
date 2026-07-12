@@ -54,7 +54,7 @@ def _emit_blocking_profile(
     sizes: list[int] = []
     for b in blocks:
         try:
-            size = b.df.select(pl.len()).collect().item()
+            size = b.n_rows()
         except Exception:
             size = 0
         sizes.append(size)
@@ -200,7 +200,7 @@ def measure_blocking_profile(
             sizes = []
             for b in build_blocks(lf, blocking_cfg):
                 try:
-                    sizes.append(b.df.select(pl.len()).collect().item())
+                    sizes.append(b.n_rows())
                 except Exception:
                     sizes.append(0)
             chao1_f1: int | None = None
@@ -240,14 +240,35 @@ def measure_blocking_profile(
 
 @dataclass
 class BlockResult:
-    """Result of blocking: a block key and its associated LazyFrame."""
+    """Result of blocking: a block key and its member rows.
+
+    D5b (arrow descent): ``df`` accepts a legacy ``pl.LazyFrame`` (usually an
+    eagerly-collected group re-wrapped lazy), an eager ``pl.DataFrame``, or a
+    seam ``Frame``. Consumers use ``materialize()`` / ``n_rows()`` -- the
+    representation-agnostic reads -- instead of ``.collect()`` round-trips.
+    """
 
     block_key: str
-    df: pl.LazyFrame
+    df: Any
     strategy: str = "static"
     depth: int = 0
     parent_key: str | None = None
     pre_scored_pairs: list[tuple[int, int, float]] | None = None
+
+    def materialize(self):
+        """The block's rows as a seam Frame (collects a legacy LazyFrame once)."""
+        from goldenmatch.core.frame import Frame, to_frame
+
+        d = self.df
+        if isinstance(d, Frame):
+            return d
+        if isinstance(d, pl.LazyFrame):
+            d = d.collect()
+        return to_frame(d)
+
+    def n_rows(self) -> int:
+        """Row count without a full materialization round-trip at call sites."""
+        return self.materialize().height
 
 
 def collect_blocking_fields(config: BlockingConfig) -> list[str]:
@@ -429,7 +450,7 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
                     useful_subs: list[BlockResult] = []
                     for b in sub_blocks:
                         try:
-                            sub_size = b.df.collect().height if isinstance(b.df, pl.LazyFrame) else len(b.df)
+                            sub_size = b.n_rows()
                         except Exception:
                             sub_size = size + 1  # treat unknown as not-useful
                         if sub_size < size and sub_size >= 2:
@@ -469,7 +490,7 @@ def _build_static_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Block
 
             results.append(BlockResult(
                 block_key=key_str,
-                df=group_df.lazy(),
+                df=group_df,  # D5b: eager (was group_df.lazy() -- a re-wrap)
             ))
 
     if hot_blocks_split or hot_blocks_skipped:
@@ -985,7 +1006,7 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
 
     scored_pairs = []
     for block in sample_blocks:
-        block_df = block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+        block_df = block.materialize().native
         pairs = find_fuzzy_matches(block_df, score_mk)
         scored_pairs.extend(pairs)
 
@@ -1200,7 +1221,7 @@ def build_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
 
     results: list[BlockResult] = []
     for block in primary_blocks:
-        block_df = block.df.collect()
+        block_df = block.materialize().native
         size = len(block_df)
 
         if size > config.max_block_size and sub_block_keys:
