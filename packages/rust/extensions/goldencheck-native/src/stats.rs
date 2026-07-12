@@ -4,16 +4,28 @@ use arrow::pyarrow::PyArrowType;
 use pyo3::prelude::*;
 
 /// Single-pass numeric summary matching Polars `.min()/.max()/.mean()/.std()`
-/// (sample std, ddof=1). Returns `(count_nonnull, min, max, mean, std, sum)`.
-/// Fields carry `NaN` where Polars would return `None` (empty / all-NaN
-/// min-max, or `n<2` std) or where IEEE arithmetic propagates `NaN`. Decodes
-/// the pyarrow array and delegates to `goldencheck_core::column_numeric_stats`,
-/// which owns the downcast + null handling + NaN/inf parity.
+/// (sample std, ddof=1) plus `n_unique` matching pyarrow
+/// `count_distinct(mode="all")`. Returns
+/// `(count_nonnull, min, max, mean, std, sum, n_unique)`. The stat fields carry
+/// `NaN` where Polars would return `None` (empty / all-NaN min-max, or `n<2`
+/// std) or where IEEE arithmetic propagates `NaN`. Decodes the pyarrow array and
+/// delegates to `goldencheck_core::column_numeric_stats`, which owns the
+/// downcast + null handling + NaN/inf parity + the fused distinct pass.
 #[pyfunction]
-pub fn column_numeric_stats(array: PyArrowType<ArrayData>) -> (usize, f64, f64, f64, f64, f64) {
+pub fn column_numeric_stats(
+    array: PyArrowType<ArrayData>,
+) -> (usize, f64, f64, f64, f64, f64, usize) {
     let arr = make_array(array.0);
     let s = goldencheck_core::column_numeric_stats(arr.as_ref());
-    (s.count_nonnull, s.min, s.max, s.mean, s.std, s.sum)
+    (
+        s.count_nonnull,
+        s.min,
+        s.max,
+        s.mean,
+        s.std,
+        s.sum,
+        s.n_unique,
+    )
 }
 
 /// Count values strictly outside `[lower, upper]` (matching Polars
