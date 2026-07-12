@@ -73,14 +73,17 @@ CURATED_TOOLS: frozenset[str] = frozenset({
 # non-destructively (model_copy) to the curated list ONLY; dispatch and the
 # full catalog / suite_find_tools keep each package's base description.
 # Every key MUST be in CURATED_TOOLS (enforced by test).
-_RUN_REQUIRED = (
-    "Requires a completed run in this session -- call `agent_deduplicate` or "
-    "`dedupe_file` first."
-)
-_LOADED_REQUIRED = (
-    "Requires a dataset already loaded/configured in this session (e.g. from a "
-    "prior dedupe or match run)."
-)
+#
+# NOTE: suffixes for the session-stateful goldenmatch tools (list_clusters,
+# get_cluster, get_golden_record, explain_match, evaluate, export_results,
+# match_record, find_duplicates) were deliberately NOT added. Those tools read
+# module-global run state populated only by the standalone goldenmatch server's
+# startup (`create_server(file_paths=...)`); the aggregator imports gm.TOOLS /
+# gm.dispatch directly and never sets it, so they currently raise AttributeError
+# via the suite endpoint regardless of any prior call (agent_deduplicate uses a
+# separate stateless AgentSession). Telling an LLM to "run agent_deduplicate
+# first" would be a plausible-but-false remediation. Tracked as a separate bug
+# (curate-out or wire the state); no misleading suffix here.
 _CURATED_DESCRIPTION_SUFFIXES: dict[str, str] = {
     # composite one-call alternatives (the primitive points at the composite)
     "agent_deduplicate": (
@@ -94,15 +97,6 @@ _CURATED_DESCRIPTION_SUFFIXES: dict[str, str] = {
     ),
     "analyze_data": "For profiling PLUS a data-quality scan in one call, use `assess_file`.",
     "transform": "To clean and then deduplicate in one call, use `clean_and_dedupe`.",
-    # tools that read prior session state
-    "list_clusters": _RUN_REQUIRED,
-    "get_cluster": _RUN_REQUIRED,
-    "get_golden_record": _RUN_REQUIRED,
-    "explain_match": _RUN_REQUIRED,
-    "evaluate": _RUN_REQUIRED,
-    "export_results": _RUN_REQUIRED,
-    "match_record": _LOADED_REQUIRED,
-    "find_duplicates": _LOADED_REQUIRED,
     # map (goldenflow) vs apply (infermap) -- easily confused names
     "map": (
         "Distinct from `apply` (infermap): `map` auto-DERIVES a column alignment "
