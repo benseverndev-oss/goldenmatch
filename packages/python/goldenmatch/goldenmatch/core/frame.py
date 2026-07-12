@@ -222,6 +222,8 @@ class Frame(Protocol):
     # documented owned contract for user patterns (Rust-regex on polars;
     # exotic constructs may differ, same stance as the W2a derive chains).
     # with_null_where nulls COL where mask is True, dtype-preserving.
+    # D5c: row-dict projection (probabilistic's select(cols).to_dicts()).
+    def select_dicts(self, cols: Sequence[str]) -> list[dict]: ...
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict
     ) -> Column: ...
@@ -747,6 +749,10 @@ class PolarsFrame:
         if offset > 0:
             df = df.with_columns((pl.col(name) + offset).alias(name))
         return PolarsFrame(df.with_columns(pl.col(name).cast(pl.Int64)))
+
+    def select_dicts(self, cols: Sequence[str]) -> list[dict]:
+        # probabilistic.py row_lookup build: select(cols).to_dicts().
+        return self._df.select(list(cols)).to_dicts()
 
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict
@@ -1621,6 +1627,9 @@ class ArrowFrame:
         arr = pc.cast(arr, pa.int64())
         idx = tbl.column_names.index(name)
         return ArrowFrame(tbl.set_column(idx, name, arr))
+
+    def select_dicts(self, cols: Sequence[str]) -> list[dict]:
+        return self._tbl.select(list(cols)).to_pylist()
 
     def evaluate_validation_rule(
         self, column: str, rule_type: str, params: dict

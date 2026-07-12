@@ -417,7 +417,7 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
     find_fuzzy_matches directly).
     """
     from goldenmatch.core.frame import to_frame
-    from goldenmatch.core.matchkey import _try_native_chain, _xform_sig
+    from goldenmatch.core.matchkey import _xform_sig
 
     frame = to_frame(block_df)
     sig = _xform_sig(field)
@@ -426,10 +426,11 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
 
     col = field.field
     assert col is not None, "field.field must be set; upstream validation enforces"
-    native_expr = _try_native_chain(col, field.transforms)
-    if native_expr is not None:
-        result_df = block_df.select(native_expr.alias("__tmp__"))
-        return result_df["__tmp__"].to_list()
+    # D5c: derive_transformed_column IS the seam twin of the old
+    # _try_native_chain select (native chain when portable, RAW-value python
+    # fallback otherwise -- same branches, both backends).
+    if field.transforms:
+        return frame.derive_transformed_column(col, list(field.transforms)).to_list()
 
     values = frame.column(col).to_list()
     return [apply_transforms(v, field.transforms) if v is not None else None for v in values]

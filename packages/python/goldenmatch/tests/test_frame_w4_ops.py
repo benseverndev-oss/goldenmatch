@@ -392,3 +392,30 @@ def test_auto_fix_drops_empty_rows_and_null_cols_both_backends():
     pf, _ = PolarsFrame(df).auto_fix()
     af, _ = ArrowFrame(df.to_arrow()).auto_fix()
     assert pf.native.height == af.native.num_rows == 1
+
+
+# -- D5c pins ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_select_dicts(backend):
+    # probabilistic row_lookup shape: select(cols).to_dicts() / to_pylist().
+    f = _mk({"__row_id__": [1, 2], "name": ["a", None], "x": [9, 8]}, backend)
+    assert f.select_dicts(["__row_id__", "name"]) == [
+        {"__row_id__": 1, "name": "a"},
+        {"__row_id__": 2, "name": None},
+    ]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("chain", [["lowercase"], ["soundex"], ["lowercase", "soundex"]])
+def test_derive_transformed_column_matches_python_oracle(backend, chain):
+    # D5c pins the _get_transformed_values fallback collapse: derive ==
+    # [apply_transforms(v, chain) if v is not None else None] on both
+    # backends, native AND non-native chains.
+    from goldenmatch.utils.transforms import apply_transforms
+
+    vals = ["  José Müller ", "SMITH-jones", None, "o'brien", ""]
+    f = _mk({"name": vals}, backend)
+    legacy = [apply_transforms(v, chain) if v is not None else None for v in vals]
+    assert f.derive_transformed_column("name", chain).to_list() == legacy
