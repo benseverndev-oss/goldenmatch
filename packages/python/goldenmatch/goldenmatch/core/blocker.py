@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
@@ -1184,7 +1184,7 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
         lf = (
             native.lazy()
             if isinstance(native, pl.DataFrame)
-            else pl.from_arrow(native).lazy()
+            else cast(pl.DataFrame, pl.from_arrow(native)).lazy()
         )
 
     # Auto-select: pick best key based on histogram analysis

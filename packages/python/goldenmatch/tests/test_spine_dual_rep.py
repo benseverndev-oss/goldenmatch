@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.frame import ArrowFrame, PolarsFrame
 from goldenmatch.core.scorer import _find_exact_match_ids, find_exact_matches
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig, MatchkeyField
 
 
 def _df() -> pl.DataFrame:
