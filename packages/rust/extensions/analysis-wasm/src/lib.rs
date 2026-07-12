@@ -147,4 +147,70 @@ mod wasm {
     pub fn cluster_size_histogram(sizes: &[f64]) -> Vec<f64> {
         cluster_size_histogram_impl(sizes)
     }
+
+    // --- Spike (Wave 1b unblock): frame kernels via the minimal C-Data ABI ---
+    //
+    // The previously-deferred frame kernels (duplicate_row_ratio / distinct_count)
+    // run here with NO arrow-rs. The column-handle pattern mirrors building an
+    // Arrow RecordBatch column-by-column: JS writes each column's raw buffers
+    // (values + a byte-per-row validity mask; utf8 also offsets + bytes) straight
+    // into wasm linear memory, and the SHARED `analysis_core` interner turns them
+    // into dense u64 ids -- the exact code the native wheel will use, so parity is
+    // by construction (see analysis-core's intern_* fixture tests), not a re-mirror.
+
+    /// Accumulates interned columns of a frame, then runs `duplicate_row_ratio`.
+    /// Usage from JS: `const fi = new FrameInterner(n); fi.push_f64(vals, valid);
+    /// fi.push_str(offsets, bytes, valid); fi.duplicate_row_ratio();`
+    #[wasm_bindgen]
+    pub struct FrameInterner {
+        cols: Vec<Vec<u64>>,
+        n_rows: usize,
+    }
+
+    #[wasm_bindgen]
+    impl FrameInterner {
+        #[wasm_bindgen(constructor)]
+        pub fn new(n_rows: usize) -> FrameInterner {
+            FrameInterner { cols: Vec::new(), n_rows }
+        }
+
+        /// Push an f64 column (NaN / signed-zero canonicalized in the core).
+        pub fn push_f64(&mut self, values: &[f64], validity: &[u8]) {
+            self.cols.push(analysis_core::intern_f64(values, validity));
+        }
+
+        /// Push an i64 column (JS `BigInt64Array`).
+        pub fn push_i64(&mut self, values: &[i64], validity: &[u8]) {
+            self.cols.push(analysis_core::intern_i64(values, validity));
+        }
+
+        /// Push a utf8 column: Arrow-layout `offsets` (n_rows+1) + concatenated
+        /// `bytes` + validity. An empty slice is a valid empty string, not null.
+        pub fn push_str(&mut self, offsets: &[u32], bytes: &[u8], validity: &[u8]) {
+            self.cols.push(analysis_core::intern_str(offsets, bytes, validity));
+        }
+
+        /// Fraction of rows in an exact-duplicate group (>=2) over the pushed cols.
+        pub fn duplicate_row_ratio(&self) -> f64 {
+            analysis_core::duplicate_row_ratio(&self.cols, self.n_rows)
+        }
+    }
+
+    /// JS entry: distinct value count of one f64 column (null counts as a value).
+    #[wasm_bindgen]
+    pub fn distinct_count_f64(values: &[f64], validity: &[u8]) -> i64 {
+        analysis_core::distinct_count(&analysis_core::intern_f64(values, validity))
+    }
+
+    /// JS entry: distinct value count of one i64 column.
+    #[wasm_bindgen]
+    pub fn distinct_count_i64(values: &[i64], validity: &[u8]) -> i64 {
+        analysis_core::distinct_count(&analysis_core::intern_i64(values, validity))
+    }
+
+    /// JS entry: distinct value count of one utf8 column.
+    #[wasm_bindgen]
+    pub fn distinct_count_str(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> i64 {
+        analysis_core::distinct_count(&analysis_core::intern_str(offsets, bytes, validity))
+    }
 }
