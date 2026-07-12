@@ -628,6 +628,7 @@ def _sub_block(
             strategy="adaptive",
             depth=depth,
             parent_key=parent_key,
+            n_rows=len(block_df),
         )]
 
     current_key_config = sub_block_keys[0]
@@ -694,7 +695,7 @@ def _auto_split_block(
             "Auto-split of %r: no non-internal columns available. Processing as-is.",
             parent_key,
         )
-        return [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key)]
+        return [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key, n_rows=len(block_df))]
 
     # Pick column whose cardinality best splits blocks near max_block_size.
     # Ideal: each group has ~max_block_size records.
@@ -753,7 +754,7 @@ def _auto_split_block(
         "Auto-split %r (%d records) into %d sub-blocks using column %r (cardinality=%d)",
         parent_key, len(block_df), len(results), best_col, best_nunique,
     )
-    return results if results else [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key)]
+    return results if results else [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key, n_rows=n)]
 
 
 def _build_sorted_neighborhood_blocks(
@@ -937,6 +938,9 @@ def _build_ann_pair_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Blo
         for a, b, score in scored_pairs
     ]
 
+    # n_rows intentionally left None: this block carries pre_scored_pairs
+    # (scoring already done), so the batch planner never scores it and a
+    # size hint would be moot.
     return [BlockResult(
         block_key="ann_pairs",
         df=df.lazy(),
