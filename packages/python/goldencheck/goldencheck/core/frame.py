@@ -490,8 +490,11 @@ class ArrowColumn:
 
     # -- numeric stats (cached single kernel call) ----------------------------
     def _numeric_stats(self):
-        """Cached ``(count_nonnull, min, max, mean, std, sum)`` for numeric
-        columns, or ``None`` when empty/all-null (guarded before the kernel).
+        """Cached ``(count_nonnull, min, max, mean, std, sum, n_unique)`` for
+        numeric columns, or ``None`` when empty/all-null (guarded before the
+        kernel). ``n_unique`` (fused into the SAME stats pass) matches pyarrow
+        ``count_distinct(mode="all")`` and is read by ``n_unique()`` for numeric
+        columns so cardinality is a free byproduct of the stats scan.
 
         Native ``column_numeric_stats`` is the fast path; when the kernel is
         absent/disabled (``native_enabled("numeric_stats")`` False) a
@@ -513,9 +516,11 @@ class ArrowColumn:
     @staticmethod
     def _numeric_stats_pyarrow(arr):
         """``pyarrow.compute`` mirror of ``column_numeric_stats``: returns
-        ``(count_nonnull, min, max, mean, std, sum)``. ``std`` is ddof=1 (Polars
-        parity) and is ``None`` when <2 non-null values (as the native kernel's
-        std-guard is applied downstream in ``std()``)."""
+        ``(count_nonnull, min, max, mean, std, sum, n_unique)``. ``std`` is
+        ddof=1 (Polars parity) and is ``None`` when <2 non-null values (as the
+        native kernel's std-guard is applied downstream in ``std()``).
+        ``n_unique`` is ``count_distinct(mode="all")`` so the tuple shape and the
+        distinct-count semantics match the native fused kernel exactly."""
         _, pc = _arrow()
         count_nonnull = len(arr) - arr.null_count
         mm = pc.min_max(arr, skip_nulls=True)
@@ -528,7 +533,8 @@ class ArrowColumn:
             std = std_scalar.as_py() if std_scalar.is_valid else None
         else:
             std = None
-        return (count_nonnull, vmin, vmax, mean, std, total)
+        n_unique = int(pc.count_distinct(arr, mode="all").as_py())
+        return (count_nonnull, vmin, vmax, mean, std, total, n_unique)
 
     def _is_numeric(self) -> bool:
         return self._cat in ("int", "uint", "float")
@@ -559,9 +565,21 @@ class ArrowColumn:
         # count_distinct runs once per column instead of ~3x. nulls = 1 distinct.
         # If the fused string digest is already computed, reuse its n_unique (same
         # count_distinct(mode="all") semantics) instead of a separate scan -- but
-        # never force the digest just for this.
+        # never force the digest just for this. For NUMERIC columns, source
+        # n_unique from the fused numeric-stats pass (one kernel call computes it
+        # alongside min/max/sum), instead of a separate count_distinct scan.
         if self._n_unique is None:
-            if self._str_digest is not None:
+            if self._is_numeric():
+                s = self._numeric_stats()
+                if s is not None:
+                    self._n_unique = s[6]
+                else:
+                    # empty/all-null numeric: _numeric_stats guards these to None,
+                    # so read the degenerate distinct-count directly (1 if any
+                    # null slot, 0 if truly empty) to match count_distinct("all").
+                    _, pc = _arrow()
+                    self._n_unique = int(pc.count_distinct(self._arr, mode="all").as_py())
+            elif self._str_digest is not None:
                 self._n_unique = self._str_digest[1]
             else:
                 _, pc = _arrow()
