@@ -2,6 +2,18 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.1.1] - 2026-07-12
+
+### Performance
+- **Fused `n_unique` into the numeric-stats pass.** `column_numeric_stats` now builds
+  a distinct-value hashset alongside count/min/max/mean/std/sum, so a numeric column's
+  `n_unique` is a free byproduct of the ONE stats pass instead of a separate
+  `count_distinct` scan. Matches `pc.count_distinct(mode="all")` exactly on every edge
+  (all-NaN collapse to one; +0.0/-0.0 distinct; null counts as one) -- 52-assertion
+  parity test, differential Jaccard 1.000. Numeric-heavy scans (many int/float columns):
+  ~20-28% faster; mixed scans unchanged (no regression). pyarrow fallback returns the
+  matching value when the native kernel is absent.
+
 ## [3.1.0] - 2026-07-12
 
 ### Performance

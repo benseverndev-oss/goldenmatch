@@ -32,8 +32,16 @@ use arrow::array::{
     UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::DataType;
+use rustc_hash::FxHashSet;
 
-/// Single-pass numeric summary matching Polars `.min()/.max()/.mean()/.std()`.
+/// Canonical NaN hashset key so every NaN bit-pattern collapses to ONE distinct
+/// value, matching pyarrow `count_distinct(mode="all")` (which treats all NaN as
+/// equal). Signed zeros are deliberately NOT canonicalised (`+0.0` and `-0.0`
+/// have distinct bit patterns and pyarrow keeps them distinct).
+const CANONICAL_NAN_U64: u64 = 0x7ff8_0000_0000_0000; // f64::NAN.to_bits()
+
+/// Single-pass numeric summary matching Polars `.min()/.max()/.mean()/.std()`,
+/// plus `n_unique` matching pyarrow `count_distinct(mode="all")`.
 /// f64 fields carry `NaN` where Polars would return `None` (empty / all-NaN
 /// min-max, or `n<2` std) or where IEEE arithmetic propagates `NaN`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,6 +52,7 @@ pub struct NumStats {
     pub mean: f64,
     pub std: f64,
     pub sum: f64,
+    pub n_unique: usize,
 }
 
 /// Compute the summary from the already-extracted non-null values (as f64).
@@ -57,6 +66,7 @@ fn stats_from_values(vals: &[f64]) -> NumStats {
             mean: f64::NAN,
             std: f64::NAN,
             sum: 0.0,
+            n_unique: 0,
         };
     }
 
@@ -108,39 +118,85 @@ fn stats_from_values(vals: &[f64]) -> NumStats {
         mean,
         std,
         sum,
+        n_unique: 0, // filled in by `column_numeric_stats` (fused distinct pass)
     }
 }
 
 /// One fused pass over a numeric Arrow column (Int*/UInt*/Float*), null-aware.
-/// Non-numeric dtypes yield an empty (count 0, NaN) summary -- the profiler only
-/// calls this on int/uint/float columns (after the `mostly_numeric` cast).
+/// Computes the min/max/mean/std/sum summary AND `n_unique` (distinct-count) in
+/// the SAME streaming pass -- a distinct hashset is built alongside the stat
+/// accumulation so numeric cardinality is a free byproduct of the stats scan.
+/// `n_unique` matches pyarrow `count_distinct(mode="all")`: NaN collapses to one
+/// distinct, signed zeros stay distinct, and any null slot adds one distinct.
+/// Non-numeric dtypes yield an empty (count 0, NaN, n_unique 0) summary -- the
+/// profiler only calls this on int/uint/float columns (after `mostly_numeric`).
 pub fn column_numeric_stats(array: &dyn Array) -> NumStats {
-    macro_rules! collect {
+    let mut set: FxHashSet<u64> = FxHashSet::default();
+    let mut has_null = false;
+
+    // Integer/uint arrays: raw integer value is the distinct key (`as u64` is a
+    // bijection within a single fixed-width type, so no false collisions). No
+    // NaN concern.
+    macro_rules! collect_int {
         ($arrty:ty) => {{
             let arr = array.as_any().downcast_ref::<$arrty>().unwrap();
             let mut vals: Vec<f64> = Vec::with_capacity(arr.len());
+            set.reserve(arr.len());
             for i in 0..arr.len() {
-                if !arr.is_null(i) {
-                    vals.push(arr.value(i) as f64);
+                if arr.is_null(i) {
+                    has_null = true;
+                    continue;
                 }
+                let v = arr.value(i);
+                set.insert(v as u64);
+                vals.push(v as f64);
+            }
+            vals
+        }};
+    }
+    // Float arrays: key on the IEEE bits so `+0.0`/`-0.0` stay distinct, but map
+    // every NaN bit-pattern to the canonical NaN key so they collapse to one.
+    // Float32 promotes to f64 losslessly (distinctness + signed-zero + NaN all
+    // preserved), matching pyarrow's per-dtype count_distinct.
+    macro_rules! collect_float {
+        ($arrty:ty) => {{
+            let arr = array.as_any().downcast_ref::<$arrty>().unwrap();
+            let mut vals: Vec<f64> = Vec::with_capacity(arr.len());
+            set.reserve(arr.len());
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    has_null = true;
+                    continue;
+                }
+                let v = arr.value(i) as f64;
+                let key = if v.is_nan() {
+                    CANONICAL_NAN_U64
+                } else {
+                    v.to_bits()
+                };
+                set.insert(key);
+                vals.push(v);
             }
             vals
         }};
     }
     let vals: Vec<f64> = match array.data_type() {
-        DataType::Int8 => collect!(Int8Array),
-        DataType::Int16 => collect!(Int16Array),
-        DataType::Int32 => collect!(Int32Array),
-        DataType::Int64 => collect!(Int64Array),
-        DataType::UInt8 => collect!(UInt8Array),
-        DataType::UInt16 => collect!(UInt16Array),
-        DataType::UInt32 => collect!(UInt32Array),
-        DataType::UInt64 => collect!(UInt64Array),
-        DataType::Float32 => collect!(Float32Array),
-        DataType::Float64 => collect!(Float64Array),
+        DataType::Int8 => collect_int!(Int8Array),
+        DataType::Int16 => collect_int!(Int16Array),
+        DataType::Int32 => collect_int!(Int32Array),
+        DataType::Int64 => collect_int!(Int64Array),
+        DataType::UInt8 => collect_int!(UInt8Array),
+        DataType::UInt16 => collect_int!(UInt16Array),
+        DataType::UInt32 => collect_int!(UInt32Array),
+        DataType::UInt64 => collect_int!(UInt64Array),
+        DataType::Float32 => collect_float!(Float32Array),
+        DataType::Float64 => collect_float!(Float64Array),
         _ => Vec::new(),
     };
-    stats_from_values(&vals)
+    let mut stats = stats_from_values(&vals);
+    // count_distinct(mode="all"): distinct non-null values + 1 for the null slot.
+    stats.n_unique = set.len() + usize::from(has_null);
+    stats
 }
 
 /// Format an f64 the way Python's `str(float)` / `repr(float)` does: shortest
@@ -262,6 +318,53 @@ mod tests {
         let s = column_numeric_stats(&Int64Array::from(Vec::<Option<i64>>::new()));
         assert_eq!(s.count_nonnull, 0);
         assert!(s.min.is_nan() && s.max.is_nan() && s.mean.is_nan() && s.std.is_nan());
+        assert_eq!(s.n_unique, 0); // truly empty -> 0 distinct
+    }
+
+    #[test]
+    fn n_unique_int_null_adds_one() {
+        // pyarrow count_distinct([1,2,2,None,3], mode="all") == 4.
+        let s = column_numeric_stats(&Int64Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(2),
+            None,
+            Some(3),
+        ]));
+        assert_eq!(s.n_unique, 4);
+    }
+
+    #[test]
+    fn n_unique_nan_collapses_to_one() {
+        // [1.0, NaN, NaN, 2.0] -> {1.0, NaN, 2.0} == 3.
+        let s = column_numeric_stats(&Float64Array::from(vec![1.0, f64::NAN, f64::NAN, 2.0]));
+        assert_eq!(s.n_unique, 3);
+    }
+
+    #[test]
+    fn n_unique_signed_zero_distinct() {
+        // pyarrow keeps +0.0 and -0.0 distinct -> [0.0, -0.0, 1.0] == 3.
+        let s = column_numeric_stats(&Float64Array::from(vec![0.0, -0.0, 1.0]));
+        assert_eq!(s.n_unique, 3);
+    }
+
+    #[test]
+    fn n_unique_nan_and_null_both_present() {
+        // [NaN, None, NaN, 1.0] -> {NaN, 1.0} + null == 3.
+        let s = column_numeric_stats(&Float64Array::from(vec![
+            Some(f64::NAN),
+            None,
+            Some(f64::NAN),
+            Some(1.0),
+        ]));
+        assert_eq!(s.n_unique, 3);
+    }
+
+    #[test]
+    fn n_unique_all_null() {
+        // All-null numeric -> only the null slot -> 1 distinct.
+        let s = column_numeric_stats(&Int64Array::from(vec![None, None, None] as Vec<Option<i64>>));
+        assert_eq!(s.n_unique, 1);
     }
 
     #[test]
