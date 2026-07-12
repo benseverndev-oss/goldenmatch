@@ -2,6 +2,20 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.1.2] - 2026-07-12
+
+### Performance
+- **Eliminated whole-column materialization in sample paths.** Several profilers
+  built findings' `sample_values` (or drift category sets) by materializing the
+  ENTIRE filtered column and then taking the first few -- e.g. `filter(...).to_list()[:5]`
+  on a column with hundreds of thousands of matching rows. Now they `.slice(0, N)`
+  BEFORE `to_list` (11 sites across temporal / numeric_cross / format_detection /
+  encoding_detection / pattern_consistency / range_distribution), and drift builds
+  category sets from `.unique()` (distinct-only) instead of every row. Semantically
+  identical (differential Jaccard 1.000; suite green native + fallback). Date-heavy
+  and dirty/high-finding scans benefit most: a 6-column date scan went 1.393s -> 0.392s
+  (~3.55x). Added `PyColumn.slice` for the polars-free covered-columns backend.
+
 ## [3.1.1] - 2026-07-12
 
 ### Performance

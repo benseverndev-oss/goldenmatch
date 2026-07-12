@@ -337,6 +337,10 @@ class PyColumn:
     def to_list(self) -> list:
         return list(self._v)
 
+    def slice(self, offset: int, length: int | None = None) -> PyColumn:
+        end = None if length is None else offset + length
+        return PyColumn(self._v[offset:end])
+
     @property
     def dtype(self) -> str:
         non_null = [v for v in self._v if v is not None]

@@ -140,8 +140,11 @@ class TemporalOrderProfiler:
         violation_count = violation_mask.sum()
 
         if violation_count > 0:
-            sample_starts = start_series.filter_by(violation_mask).cast("str").to_list()[:3]
-            sample_ends = end_series.filter_by(violation_mask).cast("str").to_list()[:3]
+            # slice to 3 BEFORE cast+to_list: filtering can leave hundreds of
+            # thousands of violation rows, and materializing all of them as strings
+            # just to take the first 3 was the dominant cost of date-heavy scans.
+            sample_starts = start_series.filter_by(violation_mask).slice(0, 3).cast("str").to_list()
+            sample_ends = end_series.filter_by(violation_mask).slice(0, 3).cast("str").to_list()
             samples = [f"{s} > {e}" for s, e in zip(sample_starts, sample_ends)]
 
             return Finding(

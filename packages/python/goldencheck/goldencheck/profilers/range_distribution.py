@@ -53,7 +53,7 @@ class RangeDistributionProfiler(BaseProfiler):
             outliers = non_null.filter_outside(lower, upper)
             outlier_count = len(outliers)
             if outlier_count > 0:
-                sample = outliers.to_list()[:5]
+                sample = outliers.slice(0, 5).to_list()
                 # Determine how many stddevs outliers are
                 # Use max deviation to determine confidence
                 max_dev = max(

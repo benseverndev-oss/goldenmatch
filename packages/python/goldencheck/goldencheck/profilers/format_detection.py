@@ -47,7 +47,7 @@ class FormatDetectionProfiler(BaseProfiler):
                 ))
                 non_match_count = total - match_count
                 if non_match_count > 0:
-                    sample = non_null.str_filter(pattern, matching=False).to_list()[:5]
+                    sample = non_null.str_filter(pattern, matching=False).slice(0, 5).to_list()
                     # Non-matching findings inherit same confidence as detection
                     findings.append(Finding(
                         severity=Severity.WARNING,
