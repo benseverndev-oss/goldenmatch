@@ -1430,7 +1430,7 @@ _SOLO_BLOCK_MIN_PAIRS = _env_int("GOLDENMATCH_SCORER_SOLO_BLOCK_MIN_PAIRS", 10_0
 _BATCH_BINS_PER_WORKER = _env_int("GOLDENMATCH_SCORER_BATCH_BINS_PER_WORKER", 4)
 
 
-def _plan_block_batches(blocks, max_workers):
+def _plan_block_batches(blocks: list, max_workers: int) -> list[list]:
     """Group blocks into a small number of work units.
 
     Adaptive: a block with >= _SOLO_BLOCK_MIN_PAIRS candidate pairs (from its
@@ -1460,7 +1460,8 @@ def _plan_block_batches(blocks, max_workers):
         n_bins = min(len(small), max(1, max_workers * _BATCH_BINS_PER_WORKER))
         # LPT: heaviest first, drop each onto the currently-lightest bin.
         def _cost(b):
-            n = getattr(b, "n_rows", None) or 1
+            n = getattr(b, "n_rows", None)
+            n = 1 if n is None else n
             return n * (n - 1) // 2 if n > 1 else 1
         ordered = sorted(small, key=_cost, reverse=True)
         bins = [[] for _ in range(n_bins)]
