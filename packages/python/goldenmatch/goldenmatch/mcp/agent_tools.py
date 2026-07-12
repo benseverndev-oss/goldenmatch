@@ -155,6 +155,7 @@ AGENT_TOOLS = [
                 "file_path": {"type": "string"},
                 "config": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "output_path": {"type": "string", "description": "Optional. If given, write the golden (deduplicated) records to this CSV path and return golden_path + golden_records. Omit to get the summary only."},
                 "file_content": {
                     "type": "string",
                     "description": "Alternative to file_path: file bytes (base64 default, or raw with encoding='text')",
@@ -175,6 +176,7 @@ AGENT_TOOLS = [
                 "file_b": {"type": "string"},
                 "config": {"type": "object"},
                 "exclude_columns": _EXCLUDE_COLUMNS_SCHEMA,
+                "output_path": {"type": "string", "description": "Optional. If given, write the linked/matched pairs to this CSV path and return matches_path + matched_pairs. Omit to get the summary only."},
                 "file_a_content": {"type": "string", "description": "Alternative to file_a: base64/text bytes"},
                 "file_a_name": {"type": "string"},
                 "file_b_content": {"type": "string", "description": "Alternative to file_b: base64/text bytes"},
@@ -553,6 +555,53 @@ def _serialize_result(result: Any) -> dict:
     return {"value": str(result)}
 
 
+def _write_frame_csv(
+    output_path: str,
+    frame: Any,
+    label: str,
+    *,
+    count_key: str | None = None,
+) -> dict:
+    """Validate *output_path* and write *frame* to CSV, stripping `__` columns.
+
+    Reuses the same ``safe_path`` guard the other file-writing MCP tools use
+    (via ``server._safe_path_or_error``). Returns a dict to merge into the
+    tool response: ``{"<label>_path": str, "<count_key>": height}`` on success,
+    or ``{"<label>_path": None, "<label>_error": ...}`` when no frame exists /
+    the path is rejected.
+    """
+    from goldenmatch.mcp.server import _safe_path_or_error
+
+    path_key = f"{label}_path"
+    error_key = f"{label}_error"
+    records_key = count_key or f"{label}_records"
+
+    if frame is None:
+        return {path_key: None, error_key: f"no {label} frame produced"}
+
+    validated = _safe_path_or_error(output_path)
+    if isinstance(validated, dict):  # {"error": ...} from the guard
+        # Path REJECTION (outside GOLDENMATCH_ALLOWED_ROOT / NUL byte) — set a
+        # top-level `error` too, the convention handle_agent_tool uses for
+        # failure, so an agent that asked to write a file cannot mistake the
+        # buried namespaced error for success. (The benign no-frame case above
+        # stays informational-only: nothing was asked-for-but-refused.)
+        return {
+            path_key: None,
+            error_key: validated["error"],
+            "error": f"output_path rejected: {validated['error']}",
+        }
+
+    # Results are Arrow-native post-3.0.0 (the W5 pa.Table flip); write via
+    # pyarrow's CSV writer, mirroring server.py's export_results path. Do NOT
+    # reintroduce polars here (the eviction program removed it from this seam).
+    from pyarrow import csv as _pacsv
+
+    cols = [c for c in frame.column_names if not c.startswith("__")]
+    _pacsv.write_csv(frame.select(cols), str(validated))
+    return {path_key: str(validated), records_key: frame.num_rows}
+
+
 def handle_agent_tool(name: str, arguments: dict) -> list[TextContent]:
     """Route an agent-level MCP tool call to the appropriate handler.
 
@@ -655,7 +704,7 @@ def _dispatch(
             if _excl_token is not None:
                 from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
                 _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
-        return {
+        out = {
             "reasoning": raw.get("reasoning", {}),
             "confidence_distribution": raw.get("confidence_distribution", {}),
             "storage": raw.get("storage", "memory"),
@@ -663,6 +712,11 @@ def _dispatch(
                 or {"available": False, "source": None},
             "results": _serialize_result(raw.get("results")),
         }
+        output_path = args.get("output_path")
+        if output_path:
+            golden = getattr(raw.get("results"), "golden", None)
+            out.update(_write_frame_csv(output_path, golden, "golden"))
+        return out
 
     if name == "agent_match_sources":
         session = session_cls()
@@ -678,12 +732,21 @@ def _dispatch(
             if _excl_token is not None:
                 from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
                 _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
-        return {
+        out = {
             "reasoning": raw.get("reasoning", {}),
             "telemetry": session.last_telemetry
                 or {"available": False, "source": None},
             "results": _serialize_result(raw.get("results")),
         }
+        output_path = args.get("output_path")
+        if output_path:
+            matched = getattr(raw.get("results"), "matched", None)
+            out.update(
+                _write_frame_csv(
+                    output_path, matched, "matches", count_key="matched_pairs"
+                )
+            )
+        return out
 
     if name == "agent_explain_pair":
         from goldenmatch._api import explain_pair_df
