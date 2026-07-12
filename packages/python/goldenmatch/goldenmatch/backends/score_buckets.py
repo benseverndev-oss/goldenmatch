@@ -40,7 +40,6 @@ from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage
-from goldenmatch.core.blocker import _build_block_key_expr
 
 logger = logging.getLogger(__name__)
 
@@ -715,16 +714,15 @@ def score_buckets(
         assert fast_path_specs is not None  # gated by dispatcher
         threshold, total_weight, field_specs, ne_specs = fast_path_specs
         _te = time.perf_counter() if _bucket_debug else 0.0
-        sorted_df = bucket_df.sort("__block_key__")
-        sizes = (
-            sorted_df.lazy()
-            .group_by("__block_key__", maintain_order=True)
-            .agg(pl.len().alias("__size__"))
-            .collect()
-        )
-        if sizes.height == 0:
+        # D5d: seam sort + run_lengths (== the old maintain_order agg on
+        # key-sorted input; arrow twin is vectorized run_end_encode).
+        from goldenmatch.core.frame import to_frame as _tf
+
+        sorted_frame = _tf(bucket_df).sort(["__block_key__"])
+        sorted_df = sorted_frame.native
+        size_list = sorted_frame.run_lengths("__block_key__")
+        if not size_list:
             return [], 0
-        size_list = sizes["__size__"].to_list()
         weights = [w for _col, w, _fn, _name in field_specs]
 
         # Native Arrow kernel: hand the block-sorted __row_id__ + field columns
@@ -927,18 +925,16 @@ def score_buckets(
         # Sort once, slice per block (zero-copy view over the sorted parent).
         # Avoids partition_by's millions-of-tiny-eager-frames allocation that
         # fragments glibc's malloc arena on Linux (1.4 GB / 30s RSS climb).
-        sorted_df = bucket_df.sort("__block_key__")
-        sizes = (
-            sorted_df.lazy()
-            .group_by("__block_key__", maintain_order=True)
-            .agg(pl.len().alias("__size__"))
-            .collect()
-        )
-        if sizes.height == 0:
+        from goldenmatch.core.frame import to_frame as _tf
+
+        sorted_frame = _tf(bucket_df).sort(["__block_key__"])
+        sorted_df = sorted_frame.native
+        # Pre-materialized run sizes (seam run_lengths == the old
+        # maintain_order agg on key-sorted input; the inner loop stays
+        # Polars-scalar-indexing-free, the hottest line at 1.67M blocks).
+        size_list = sorted_frame.run_lengths("__block_key__")
+        if not size_list:
             return [], 0
-        # Pre-materialize as Python lists so the inner loop avoids per-iter
-        # Polars scalar indexing (the hottest line per block at 1.67M blocks).
-        size_list = sizes["__size__"].to_list()
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
@@ -993,11 +989,17 @@ def score_buckets(
         RSS). Accumulates into a LOCAL pass_pairs -- it must NOT mutate
         matched_pairs (that happens once, after all passes, in the caller).
         """
-        key_expr = _build_block_key_expr(key)
-
         with stage("bucket_assign"):
             _ta = time.perf_counter()
-            keyed = slim_df.with_columns(key_expr)
+            # D5d: seam block-key derivation (derive_block_key is the W2a
+            # twin of _build_block_key_expr, both backends).
+            from goldenmatch.core.frame import to_frame as _tf
+
+            _slim_frame = _tf(slim_df)
+            keyed = _slim_frame.with_column(
+                "__block_key__",
+                _slim_frame.derive_block_key(key.fields, key.transforms or []),
+            ).native
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
 
         # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
@@ -1032,15 +1034,17 @@ def score_buckets(
 
             with stage("bucket_partition"):
                 _tp = time.perf_counter()
-                # First-level partition: N eager DataFrames keyed by bucket id.
-                # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
-                # single partition column; unwrap below.
-                buckets_dict = bucketed.partition_by(
-                    "__bucket__", as_dict=True,
-                )
+                # First-level partition via the seam (group_partitions ==
+                # partition_by with unwrapped keys; N eager frames).
+                from goldenmatch.core.frame import to_frame as _tf
+
+                buckets_dict = {
+                    k: part.native
+                    for k, part in _tf(bucketed).group_partitions("__bucket__")
+                }
                 # Free the pre-partition `keyed` and `bucketed` parents.
-                # partition_by built N independent eager frames; the original
-                # contiguous parents are dead weight from this point forward.
+                # group_partitions built N independent eager frames; the
+                # original contiguous parents are dead weight now.
                 del keyed
                 del bucketed
                 print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)

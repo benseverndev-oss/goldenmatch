@@ -222,6 +222,11 @@ class Frame(Protocol):
     # documented owned contract for user patterns (Rust-regex on polars;
     # exotic constructs may differ, same stance as the W2a derive chains).
     # with_null_where nulls COL where mask is True, dtype-preserving.
+    # D5d: adjacent-run sizes of KEY on input SORTED BY KEY (the bucket
+    # workers' block-size derivation). PRECONDITION: rows sorted by `key` --
+    # polars groups by VALUE (split runs merge), arrow run_end_encode is
+    # adjacency-based; they agree ONLY on sorted input (probed 2026-07-12).
+    def run_lengths(self, key: str) -> list[int]: ...
     # D5c: row-dict projection (probabilistic's select(cols).to_dicts()).
     def select_dicts(self, cols: Sequence[str]) -> list[dict]: ...
     def evaluate_validation_rule(
@@ -749,6 +754,17 @@ class PolarsFrame:
         if offset > 0:
             df = df.with_columns((pl.col(name) + offset).alias(name))
         return PolarsFrame(df.with_columns(pl.col(name).cast(pl.Int64)))
+
+    def run_lengths(self, key: str) -> list[int]:
+        # score_buckets' block sizes: group_by(maintain_order).agg(len) on
+        # key-sorted input (see the protocol precondition).
+        return (
+            self._df.lazy()
+            .group_by(key, maintain_order=True)
+            .agg(pl.len().alias("__size__"))
+            .collect()["__size__"]
+            .to_list()
+        )
 
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         # probabilistic.py row_lookup build: select(cols).to_dicts().
@@ -1627,6 +1643,15 @@ class ArrowFrame:
         arr = pc.cast(arr, pa.int64())
         idx = tbl.column_names.index(name)
         return ArrowFrame(tbl.set_column(idx, name, arr))
+
+    def run_lengths(self, key: str) -> list[int]:
+        import pyarrow.compute as pc
+
+        arr = self._tbl.column(key).combine_chunks()
+        if len(arr) == 0:
+            return []
+        ends = pc.run_end_encode(arr).run_ends.to_pylist()
+        return [ends[0]] + [ends[i] - ends[i - 1] for i in range(1, len(ends))]
 
     def select_dicts(self, cols: Sequence[str]) -> list[dict]:
         return self._tbl.select(list(cols)).to_pylist()
