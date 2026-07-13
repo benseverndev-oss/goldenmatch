@@ -25,6 +25,7 @@ mod numeric;
 mod numeric_columnar;
 mod phone;
 mod phonetic;
+mod profile;
 mod split_columnar;
 mod text;
 mod url;
@@ -64,6 +65,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phone::phone_country_code_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_valid_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phone::phone_digits_arrow, m)?)?;
+    m.add_function(wrap_pyfunction!(profile::infer_type_list_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phonetic::soundex_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(phonetic::double_metaphone_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(identifiers::cc_validate_arrow, m)?)?;
