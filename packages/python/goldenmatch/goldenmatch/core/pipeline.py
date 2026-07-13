@@ -3555,7 +3555,7 @@ def _run_dedupe_pipeline(
 
 
 def run_dedupe_df(
-    df: pl.DataFrame,
+    df: Any,  # pl.DataFrame | pa.Table | Frame -- coerced via to_frame (PR-6)
     config: GoldenMatchConfig,
     source_name: str = "dataframe",
     output_golden: bool = False,
@@ -3575,32 +3575,58 @@ def run_dedupe_df(
     When None and ``config.prepared_record_store=True``, opens a
     per-call store (Phase 2 stopgap for non-controller paths).
     """
-    # Attack C cache seed: stash the caller's df id BEFORE the .cast() below
-    # creates a new DataFrame. The seed is the stable identity the controller's
+    # Boundary flip (autoconfig arrow-port PR-6): route the front-door through
+    # the frame seam so an arrow input (zero-config `dedupe_df(pa.Table)`) never
+    # touches polars. `to_frame` is idempotent-coercion (pl.DataFrame ->
+    # PolarsFrame, pa.Table/dict -> ArrowFrame, Frame -> itself), so existing
+    # polars callers are unchanged.
+    from goldenmatch.core.frame import PolarsFrame as _PolarsFrame
+    from goldenmatch.core.frame import to_frame as _to_frame
+
+    frame = _to_frame(df)
+    # Attack C cache seed: stash the caller's df id BEFORE cast_all_str below
+    # creates a new frame. The seed is the stable identity the controller's
     # iteration loop reuses across 5 dedupe_df calls on the same `sample`.
-    # Without it, each iteration's freshly-wrapped LazyFrame had a different
-    # id() and the cache never hit.
+    # Without it, each iteration's freshly-wrapped frame had a different id()
+    # and the cache never hit.
     #
-    # `df.height` (O(1) on an eager frame) is folded into the seed so a
-    # recycled id() slot can't serve a stale prep across logically distinct
-    # inputs. The schema-name fingerprint in the key alone does NOT defend
-    # against this: an empty df and a populated df of the same schema share
-    # column names AND can land on the same id() slot after GC, producing a
-    # stale cache HIT (the source of the `test_dedupe_df_empty` `assert 3 == 0`
-    # flake under `pytest -n auto`). Height distinguishes them.
-    cache_seed = (id(df), df.height)
-    # Cast all columns to string to prevent schema mismatch errors when
-    # mixed-type columns (e.g. birth_year inferred as i64 in some rows,
-    # str in others) reach blocking/scoring operations.
-    df = df.cast({col: pl.Utf8 for col in df.columns if not col.startswith("__")})
+    # `frame.height` (O(1) on both backends -- pa.Table has no `.height`) is
+    # folded into the seed so a recycled id() slot can't serve a stale prep
+    # across logically distinct inputs. The schema-name fingerprint in the key
+    # alone does NOT defend against this: an empty df and a populated df of the
+    # same schema share column names AND can land on the same id() slot after
+    # GC, producing a stale cache HIT (the source of the `test_dedupe_df_empty`
+    # `assert 3 == 0` flake under `pytest -n auto`). Height distinguishes them.
+    cache_seed = (id(df), frame.height)
+    # Cast all non-`__` columns to string to prevent schema mismatch errors when
+    # mixed-type columns (e.g. birth_year inferred as i64 in some rows, str in
+    # others) reach blocking/scoring operations. Byte-identical to the pre-flip
+    # `df.cast({c: pl.Utf8 ...})` (PR-1 seam op).
+    frame = frame.cast_all_str()
     matchkeys = [] if auto_config else config.get_matchkeys()
-    lf = df.lazy()
     if not auto_config:
+        # Column-existence check (was `validate_columns(lf, required)` on the
+        # LazyFrame -- a pure name check, so it runs off `frame.columns` with no
+        # polars round-trip; same error-message shape).
         required = _get_required_columns(config)
-        validate_columns(lf, required)
-    lf = lf.with_columns(pl.lit(source_name).alias("__source__"))
-    lf = _add_row_ids(lf, offset=0)
-    combined_lf = lf.collect().lazy()
+        _available = list(frame.columns)
+        _missing = [c for c in required if c not in _available]
+        if _missing:
+            raise ValueError(
+                f"Missing required columns: {_missing}. "
+                f"Available columns: {_available}"
+            )
+    frame = frame.with_literal_column("__source__", source_name)
+    frame = frame.ensure_row_ids(offset=0)
+
+    # Back-compat routing: a polars input keeps the classic polars-LazyFrame
+    # path (byte-identical to the pre-flip `lf.collect().lazy()` -- the seam ops
+    # above are the verbatim polars twins); an arrow input flows through as a
+    # seam Frame so `_run_dedupe_pipeline`'s arrow lane (the
+    # `is_polars_lazyframe` router) carries it polars-free.
+    combined_lf: Any = (
+        frame.native.lazy() if isinstance(frame, _PolarsFrame) else frame
+    )
 
     # Phase 2 stopgap: when prepared_record_store=True and no caller-provided
     # _prep_store (Phase 3's controller will supply one), open our own store

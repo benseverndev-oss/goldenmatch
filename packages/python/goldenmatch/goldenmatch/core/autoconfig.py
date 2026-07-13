@@ -3647,14 +3647,14 @@ def _maybe_detect_field_groups(df: Any, config: Any) -> None:
 
 
 def auto_configure_df(
-    df: pl.DataFrame | pl.LazyFrame,
+    df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table | Frame | ray.data.Dataset
     llm_provider: str | None = None,
     domain_config: Any = None,
     llm_auto: bool = False,
     strict: bool = False,
     allow_remote_assets: bool = False,
     *,
-    reference: pl.DataFrame | pl.LazyFrame | None = None,
+    reference: Any = None,  # pl.DataFrame | pl.LazyFrame | pa.Table | Frame | None
     _skip_finalize: bool = False,
     confidence_required: bool = True,
     allow_red_config: bool = False,
@@ -3692,24 +3692,40 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
-    # W3e entry boundary: accept a Frame, unwrapped AT THE TOP -- the
-    # throughput early-check and the exclusions gate below are both
-    # isinstance-DataFrame-guarded; a still-wrapped Frame would silently
-    # skip them. PolarsFrame unwraps to today's path; ArrowFrame goes
-    # through the pl.from_arrow shim (W2d explicit-boundary pattern --
-    # REMOVE in W5 when arrow flows past ingest). `reference` stays
-    # Polars-only deliberately: match-mode arrow can't flow until W5.
-    from goldenmatch.core.frame import ArrowFrame, Frame, PolarsFrame
+    # W5/PR-6 boundary flip: accept pl.DataFrame | pl.LazyFrame | pa.Table |
+    # dict-of-arrays | Frame | ray.data.Dataset. A polars / ray / lazy input is
+    # left for the existing coercion block below (byte-identical); a Frame /
+    # pa.Table / dict is coerced to a polars DataFrame HERE.
+    #
+    # HONEST NOTE -- the remaining polars island: the profile/exclusion helpers
+    # below are already Frame-capable (each re-coerces via to_frame), but the
+    # CONTROLLER and the v0 heuristic are NOT arrow-ported yet --
+    # `AutoConfigController.run`'s all-null gate subscripts `df[col]`, and
+    # `_legacy_auto_configure_v0` has ~15 `df[col]` / `df.filter(pl.col(...))`
+    # sites. So an arrow input is bridged to polars HERE via `pl.from_arrow`.
+    # This bridge is the reason zero-config is not YET fully polars-free; lifting
+    # it needs the controller + v0-heuristic arrow port (tracked follow-up). The
+    # old W2d ArrowFrame-only shim (which also raised TypeError on a bare
+    # pa.Table public input) is subsumed by this general seam coercion.
+    from goldenmatch.core.frame import (
+        PolarsFrame,
+        is_polars_dataframe,
+        is_polars_lazyframe,
+        to_frame,
+    )
+    from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_boundary
 
-    if isinstance(df, Frame):
-        if isinstance(df, ArrowFrame):
-            df = cast("pl.DataFrame", pl.from_arrow(df.native))
-        elif isinstance(df, PolarsFrame):
-            df = df.native
-        else:  # pragma: no cover -- future backend without a shim
-            raise TypeError(
-                f"auto_configure_df cannot unwrap Frame backend {type(df).__name__}"
-            )
+    if not (
+        _is_ray_boundary(df)
+        or is_polars_lazyframe(df)
+        or is_polars_dataframe(df)
+    ):
+        _boundary_frame = to_frame(df)
+        df = (
+            _boundary_frame.native
+            if isinstance(_boundary_frame, PolarsFrame)
+            else cast("pl.DataFrame", pl.from_arrow(_boundary_frame.native))
+        )
 
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.

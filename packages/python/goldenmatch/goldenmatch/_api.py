@@ -472,7 +472,7 @@ def dedupe(
 
 
 def dedupe_df(
-    df: pl.DataFrame,
+    df: Any,  # pl.DataFrame | pa.Table | Frame -- coerced via to_frame downstream (PR-6)
     *,
     config: Any | None = None,
     exact: list[str] | None = None,
