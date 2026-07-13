@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from mcp.server import Server
@@ -919,33 +920,87 @@ def create_server(file_paths: list[str] | None = None, config_path: str | None =
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        name = _resolve_alias(name)
-        # Anonymous, opt-in usage event: the TOOL NAME only -- never `arguments`
-        # (which can carry user data). No-op unless GOLDENMATCH_ANALYTICS=1.
+        from goldenmatch.mcp._session_ctx import (
+            reset_current_session_id,
+            session_key_from_context,
+            set_current_session_id,
+        )
+        _tok = set_current_session_id(session_key_from_context(server))
         try:
-            from goldenmatch.core.analytics import capture
-            capture("mcp_tool_call", {"surface": "mcp", "tool": name})
-        except Exception:  # noqa: BLE001 - analytics is never load-bearing
-            pass
-        # Delegate agent-level tools to the agent handler
-        if name in _AGENT_TOOL_NAMES:
-            return handle_agent_tool(name, arguments)
-        if name in _MEMORY_TOOL_NAMES:
-            return handle_memory_tool(name, arguments)
-        if name in IDENTITY_TOOL_NAMES:
-            return await handle_identity_tool(name, arguments)
-        try:
-            if name in DOCUMENT_TOOL_NAMES:
-                result = handle_document_tool(name, arguments)
-            elif name in ROUTING_TOOL_NAMES:
-                result = handle_routing_tool(name, arguments)
-            else:
-                result = _handle_tool(name, arguments)
-            return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
-        except Exception as e:
-            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+            name = _resolve_alias(name)
+            # Anonymous, opt-in usage event: the TOOL NAME only -- never `arguments`
+            # (which can carry user data). No-op unless GOLDENMATCH_ANALYTICS=1.
+            try:
+                from goldenmatch.core.analytics import capture
+                capture("mcp_tool_call", {"surface": "mcp", "tool": name})
+            except Exception:  # noqa: BLE001 - analytics is never load-bearing
+                pass
+            # Delegate agent-level tools to the agent handler
+            if name in _AGENT_TOOL_NAMES:
+                return handle_agent_tool(name, arguments)
+            if name in _MEMORY_TOOL_NAMES:
+                return handle_memory_tool(name, arguments)
+            if name in IDENTITY_TOOL_NAMES:
+                return await handle_identity_tool(name, arguments)
+            try:
+                if name in DOCUMENT_TOOL_NAMES:
+                    result = handle_document_tool(name, arguments)
+                elif name in ROUTING_TOOL_NAMES:
+                    result = handle_routing_tool(name, arguments)
+                else:
+                    result = _handle_tool(name, arguments)
+                return [TextContent(type="text", text=json.dumps(result, default=str, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+        finally:
+            reset_current_session_id(_tok)
 
     return server
+
+
+@dataclass
+class _RunState:
+    result: object | None
+    config: object | None
+    data: object | None
+    rows: list
+    id_to_idx: dict
+
+
+def _resolve_run_state() -> _RunState:
+    """Active run state: module globals when set (standalone --file, byte-
+    identical), else the current MCP session's AgentSession (aggregator path),
+    else all-None (callers return a clean 'no run loaded' error).
+
+    The session path returns a __row_id__-augmented frame as `data` (raw
+    AgentSession.data lacks it; match_one requires it), built once and cached on
+    the session as _mcp_data/_mcp_rows/_mcp_id_to_idx."""
+    if _result is not None or _config is not None or _engine is not None:
+        return _RunState(
+            result=_result,
+            config=_config,
+            data=_engine.data if _engine is not None else None,
+            rows=_rows,
+            id_to_idx=_id_to_idx,
+        )
+    from goldenmatch.mcp._session_ctx import current_session_id
+    from goldenmatch.mcp._session_store import _STORE
+    sid = current_session_id()
+    sess = _STORE.get(sid) if sid else None
+    if sess is None or getattr(sess, "result", None) is None:
+        return _RunState(None, None, None, [], {})
+    raw = sess.data
+    if not hasattr(sess, "_mcp_data") or sess._mcp_src is not raw:
+        df = raw
+        if df is not None and "__row_id__" not in df.columns:
+            df = df.with_row_index("__row_id__")
+        sess._mcp_src = raw
+        sess._mcp_data = df
+        rows = df.to_dicts() if df is not None else []
+        sess._mcp_rows = rows
+        sess._mcp_id_to_idx = {r["__row_id__"]: i for i, r in enumerate(rows)}
+    return _RunState(sess.result, sess.config, sess._mcp_data,
+                     sess._mcp_rows, sess._mcp_id_to_idx)
 
 
 def _handle_tool(name: str, args: dict) -> dict:
@@ -1040,13 +1095,16 @@ def _tool_get_stats() -> dict:
 def _tool_find_duplicates(record: dict, top_k: int) -> dict:
     from goldenmatch.core.explainer import explain_pair
 
-    matchkeys = _config.get_matchkeys()
+    rs = _resolve_run_state()
+    if rs.config is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    matchkeys = rs.config.get_matchkeys()
     results = []
 
     for mk in matchkeys:
         if mk.type != "weighted":
             continue
-        for row in _rows:
+        for row in rs.rows:
             exp = explain_pair(record, row, mk.fields, mk.threshold or 0.80)
             if exp.is_match:
                 clean = {k: v for k, v in row.items() if not k.startswith("__")}
@@ -1063,7 +1121,10 @@ def _tool_find_duplicates(record: dict, top_k: int) -> dict:
 def _tool_explain_match(record_a: dict, record_b: dict) -> dict:
     from goldenmatch.core.explainer import explain_pair
 
-    matchkeys = _config.get_matchkeys()
+    rs = _resolve_run_state()
+    if rs.config is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    matchkeys = rs.config.get_matchkeys()
     fields = []
     threshold = 0.80
     for mk in matchkeys:
@@ -1096,8 +1157,14 @@ def _tool_explain_match(record_a: dict, record_b: dict) -> dict:
 
 
 def _tool_list_clusters(min_size: int, limit: int) -> dict:
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    result_clusters = getattr(rs.result, "clusters", None)
+    if result_clusters is None:
+        return {"error": "No clusters on this run (a match_sources run has matched/unmatched records, not clusters)."}
     clusters = []
-    for cid, info in _result.clusters.items():
+    for cid, info in result_clusters.items():
         if info["size"] >= min_size:
             clusters.append({
                 "cluster_id": cid,
@@ -1109,15 +1176,21 @@ def _tool_list_clusters(min_size: int, limit: int) -> dict:
 
 
 def _tool_get_cluster(cluster_id: int) -> dict:
-    info = _result.clusters.get(cluster_id)
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    result_clusters = getattr(rs.result, "clusters", None)
+    if result_clusters is None:
+        return {"error": "No clusters on this run (a match_sources run has matched/unmatched records, not clusters)."}
+    info = result_clusters.get(cluster_id)
     if not info:
         return {"error": f"Cluster {cluster_id} not found"}
 
     members = []
     for mid in info["members"]:
-        idx = _id_to_idx.get(mid)
+        idx = rs.id_to_idx.get(mid)
         if idx is not None:
-            clean = {k: v for k, v in _rows[idx].items() if not k.startswith("__")}
+            clean = {k: v for k, v in rs.rows[idx].items() if not k.startswith("__")}
             members.append(clean)
 
     return {"cluster_id": cluster_id, "size": info["size"], "members": members}
@@ -1145,7 +1218,10 @@ def _golden_as_table(golden):
 
 
 def _tool_get_golden_record(cluster_id: int) -> dict:
-    golden = _golden_as_table(_result.golden)
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    golden = _golden_as_table(getattr(rs.result, "golden", None))
     if golden is None:
         return {"error": "No golden records available"}
 
@@ -1167,7 +1243,10 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
     """Match a single record against the dataset using match_one."""
     from goldenmatch.core.match_one import match_one
 
-    matchkeys = _config.get_matchkeys()
+    rs = _resolve_run_state()
+    if rs.config is None or rs.data is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    matchkeys = rs.config.get_matchkeys()
     all_matches = []
 
     for mk in matchkeys:
@@ -1179,11 +1258,11 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
         mk_copy = copy.deepcopy(mk)
         mk_copy.threshold = t
 
-        matches = match_one(record, _engine.data, mk_copy)
+        matches = match_one(record, rs.data, mk_copy)
         for row_id, score in matches:
-            idx = _id_to_idx.get(row_id)
+            idx = rs.id_to_idx.get(row_id)
             if idx is not None:
-                clean = {k: v for k, v in _rows[idx].items() if not k.startswith("__")}
+                clean = {k: v for k, v in rs.rows[idx].items() if not k.startswith("__")}
                 all_matches.append({
                     "row_id": row_id,
                     "score": round(score, 4),
@@ -1387,10 +1466,13 @@ def _safe_path_or_error(value: str) -> Path | dict:
 
 
 def _tool_export_results(output_path: str, fmt: str) -> dict:
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
     path = _safe_path_or_error(output_path)
     if isinstance(path, dict):
         return path
-    golden = _golden_as_table(_result.golden)
+    golden = _golden_as_table(getattr(rs.result, "golden", None))
     if fmt == "json":
         if golden is not None:
             golden_dicts = golden.to_pylist()
@@ -1613,13 +1695,17 @@ def _load_clusters_json(path: str) -> dict[int, dict]:
 
 def _tool_evaluate(ground_truth_path: str, col_a: str = "id_a", col_b: str = "id_b") -> dict:
     from goldenmatch.core.evaluate import evaluate_clusters, load_ground_truth_csv
-    if _result is None:
-        return {"error": "No dataset loaded"}
+    rs = _resolve_run_state()
+    if rs.result is None:
+        return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
+    result_clusters = getattr(rs.result, "clusters", None)
+    if result_clusters is None:
+        return {"error": "No clusters on this run (a match_sources run has matched/unmatched records, not clusters)."}
     validated = _safe_path_or_error(ground_truth_path)
     if isinstance(validated, dict):
         return validated
     gt = load_ground_truth_csv(str(validated), col_a, col_b)
-    return evaluate_clusters(_result.clusters, gt).summary()
+    return evaluate_clusters(result_clusters, gt).summary()
 
 
 def _tool_analyze_blocking(

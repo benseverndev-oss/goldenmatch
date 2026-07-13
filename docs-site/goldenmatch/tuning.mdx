@@ -317,6 +317,8 @@ When you expose any server (MCP, REST, A2A, web UI) on a non-loopback host, it i
 | `GOLDENMATCH_ALLOWED_ROOT` | All file-taking surfaces | Opt-in path sandbox. When set, every user-supplied path must resolve under this root or the call is rejected. Recommended for deployed/shared instances (e.g. the Railway MCP server sets it to `/data`). Unset = no containment (correct local-first default). |
 | `GOLDENMATCH_MCP_MAX_UPLOAD_BYTES` | MCP server (inline upload) | Max decoded size for `file_content` / `upload_dataset` inline uploads. Default `67108864` (64 MB). Over the cap the call is rejected — pass a public `http(s)://` URL as `file_path` for larger datasets. |
 | `GOLDENMATCH_MCP_UPLOAD_TTL` | MCP server (inline upload) | Age in seconds after which an inline-uploaded temp file is reaped. Default `86400` (24 h). Uploaded paths are ephemeral scratch; re-upload if you need one older than this. |
+| `GOLDENMATCH_MCP_SESSION_MAX` | MCP server (session state) | Max number of per-MCP-session dedupe/match runs kept in memory so the stateful tools (`list_clusters`, `get_cluster`, `get_golden_record`, `explain_match`, `evaluate`, `export_results`, `match_record`, `find_duplicates`) can read a run made earlier in the same session. Default `64`; least-recently-used sessions evict past the cap. |
+| `GOLDENMATCH_MCP_SESSION_TTL` | MCP server (session state) | Seconds a stored session run stays readable (anchored to when the run was made, not last access). Default `3600` (1 h); past it the stateful tools return a clean "no run loaded" error until you re-run `agent_deduplicate`/`match_sources`. |
 
 **Storage / persistence:**
 

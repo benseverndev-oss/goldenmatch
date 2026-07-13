@@ -74,16 +74,13 @@ CURATED_TOOLS: frozenset[str] = frozenset({
 # full catalog / suite_find_tools keep each package's base description.
 # Every key MUST be in CURATED_TOOLS (enforced by test).
 #
-# NOTE: suffixes for the session-stateful goldenmatch tools (list_clusters,
-# get_cluster, get_golden_record, explain_match, evaluate, export_results,
-# match_record, find_duplicates) were deliberately NOT added. Those tools read
-# module-global run state populated only by the standalone goldenmatch server's
-# startup (`create_server(file_paths=...)`); the aggregator imports gm.TOOLS /
-# gm.dispatch directly and never sets it, so they currently raise AttributeError
-# via the suite endpoint regardless of any prior call (agent_deduplicate uses a
-# separate stateless AgentSession). Telling an LLM to "run agent_deduplicate
-# first" would be a plausible-but-false remediation. Tracked as a separate bug
-# (curate-out or wire the state); no misleading suffix here.
+# NOTE: the session-stateful goldenmatch tools (list_clusters, get_cluster,
+# get_golden_record, explain_match, evaluate, export_results, match_record,
+# find_duplicates) are session-backed via goldenmatch's _resolve_run_state +
+# per-MCP-session AgentSession store: after agent_deduplicate (or, for the
+# result-reading tools, agent_match_sources) in a session they read that run;
+# with no run loaded they return a clean "no run loaded" error (not a crash).
+# No prior-run suffix is needed here.
 _CURATED_DESCRIPTION_SUFFIXES: dict[str, str] = {
     # composite one-call alternatives (the primitive points at the composite)
     "agent_deduplicate": (
@@ -427,16 +424,25 @@ def create_server() -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        handler = dispatch_by_name.get(name)
-        if handler is None:
-            payload: Any = {"error": f"unknown tool: {name}"}
-        else:
-            try:
-                payload = handler(name, arguments or {})
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("tool %s failed", name)
-                payload = {"error": f"{type(exc).__name__}: {exc}"}
-        return [TextContent(type="text", text=json.dumps(payload, default=str, indent=2))]
+        from goldenmatch.mcp._session_ctx import (
+            reset_current_session_id,
+            session_key_from_context,
+            set_current_session_id,
+        )
+        _tok = set_current_session_id(session_key_from_context(server))
+        try:
+            handler = dispatch_by_name.get(name)
+            if handler is None:
+                payload: Any = {"error": f"unknown tool: {name}"}
+            else:
+                try:
+                    payload = handler(name, arguments or {})
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("tool %s failed", name)
+                    payload = {"error": f"{type(exc).__name__}: {exc}"}
+            return [TextContent(type="text", text=json.dumps(payload, default=str, indent=2))]
+        finally:
+            reset_current_session_id(_tok)
 
     return server
 

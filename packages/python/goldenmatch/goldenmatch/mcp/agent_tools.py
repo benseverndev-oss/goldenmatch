@@ -645,6 +645,20 @@ def handle_agent_tool(name: str, arguments: dict) -> list[TextContent]:
         )]
 
 
+def _persist_session(session) -> None:
+    """Store the live AgentSession under the current MCP session id (if any),
+    so the stateful server tools can read this run on later calls. No-op when
+    there's no session id (stdio / standalone global path) or when the session
+    has no result yet (never clobber a usable run with a result-less one)."""
+    if getattr(session, "result", None) is None:
+        return
+    from goldenmatch.mcp._session_ctx import current_session_id
+    from goldenmatch.mcp._session_store import _STORE
+    sid = current_session_id()
+    if sid is not None:
+        _STORE.put(sid, session)
+
+
 def _dispatch(
     name: str,
     args: dict,
@@ -737,6 +751,7 @@ def _dispatch(
         if output_path:
             golden = getattr(raw.get("results"), "golden", None)
             out.update(_write_frame_csv(output_path, golden, "golden"))
+        _persist_session(session)
         return out
 
     if name == "agent_match_sources":
@@ -767,6 +782,7 @@ def _dispatch(
                     output_path, matched, "matches", count_key="matched_pairs"
                 )
             )
+        _persist_session(session)
         return out
 
     if name == "agent_explain_pair":
