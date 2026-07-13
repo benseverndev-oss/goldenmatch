@@ -886,11 +886,18 @@ def run_dedupe(
         # order. auto_fix still declines (inside _frame_lane_eligible). The
         # EAGER standardize/matchkeys shortcut below still requires prep-off
         # (prep mutates data BEFORE standardize -- the E.164 lesson).
-        _lane_ok = (
+        # W-7: semantic + domain no longer force the classic lane -- the
+        # engine Frame branch mirrors the raw-name capture + domain stages
+        # (bridged), and _semantic_blocking_pairs bridges at its call site.
+        # The EAGER shortcut still excludes them: eager standardize would
+        # destroy the pre-standardize raw capture, and eager matchkeys can
+        # reference domain-extracted columns that do not exist yet.
+        _lane_ok = True
+        _eager_extra_ok = (
             config.semantic_blocking is None
             and not (config.domain and config.domain.enabled)
         )
-        _eager_ok = not _prep_will_run and _lane_ok
+        _eager_ok = not _prep_will_run and _eager_extra_ok
         _eager_done: frozenset[str] = frozenset()
         if _eager_ok:
             done: set[str] = set()
@@ -1773,6 +1780,18 @@ def _run_dedupe_pipeline(
         else:
             quarantine_df = None
 
+        if config.semantic_blocking is not None:
+            # Mirror the classic raw-name capture: snapshot the PRE-standardize
+            # name column for the semantic sources (see the classic block).
+            _sem_name_col = _semantic_name_column(
+                config, matchkeys, list(_frame.columns)
+            )
+            if _sem_name_col is not None:
+                _frame = _frame.with_column(
+                    f"{_SEMANTIC_RAW_COL_PREFIX}{_sem_name_col}",
+                    _frame.column(_sem_name_col),
+                )
+
         if (
             "standardize" not in _eager_stages_done
             and config.standardization
@@ -1801,6 +1820,17 @@ def _run_dedupe_pipeline(
                             ]
                         ),
                     )
+
+        if config.domain and config.domain.enabled:
+            # W-7 (TRANSITIONAL): domain extraction is a polars-lazy stage;
+            # round-trip through the bridge in classic order (post-standardize,
+            # pre-matchkeys is satisfied: matchkeys derive below on _frame).
+            with stage("domain_extraction"):
+                _frame = _tf_lane(
+                    _apply_domain_extraction(
+                        _as_polars_df(_frame.native).lazy(), config
+                    ).collect().to_arrow()
+                )
 
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
@@ -2537,8 +2567,15 @@ def _run_dedupe_pipeline(
                 "semantic_blocking is incompatible with COLUMNAR_PIPELINE"
             )
         with stage("semantic_blocking"):
+            # W-7 (TRANSITIONAL): semantic sources read polars; bridge both
+            # handles on the Frame lane (combined_lf is the Frame there).
+            _sem_lf = (
+                combined_lf
+                if isinstance(combined_lf, pl.LazyFrame)
+                else _as_polars_df(collected_df).lazy()
+            )
             _semantic_pairs = _semantic_blocking_pairs(
-                config, combined_lf, collected_df, matchkeys,
+                config, _sem_lf, _as_polars_df(collected_df), matchkeys,
                 matched_pairs, across_files_only,
                 source_lookup if across_files_only else None,
             )
@@ -2547,7 +2584,7 @@ def _run_dedupe_pipeline(
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:
         if mk.type == "weighted" and mk.rerank:
-            all_pairs = rerank_top_pairs(all_pairs, collected_df, mk)
+            all_pairs = rerank_top_pairs(all_pairs, _as_polars_df(collected_df), mk)
             break  # rerank once with the first rerank-enabled matchkey
 
     # ── Step 3.4: LLM SCORER (optional) ──
@@ -2561,7 +2598,7 @@ def _run_dedupe_pipeline(
             # purpose (cluster-mode cost stays None for this task).
             from goldenmatch.core.llm_cluster import llm_cluster_pairs
             all_pairs = _unwrap_llm_pairs(
-                llm_cluster_pairs(all_pairs, collected_df, config=config.llm_scorer)
+                llm_cluster_pairs(all_pairs, _as_polars_df(collected_df), config=config.llm_scorer)
             )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
@@ -2571,7 +2608,8 @@ def _run_dedupe_pipeline(
             _scored, llm_budget_summary = cast(
                 "tuple[list[tuple[int, int, float]], dict | None]",
                 llm_score_pairs(
-                    all_pairs, collected_df, config=config.llm_scorer, return_budget=True
+                    all_pairs, _as_polars_df(collected_df),
+                    config=config.llm_scorer, return_budget=True,
                 ),
             )
             all_pairs = _unwrap_llm_pairs(_scored)
@@ -2583,10 +2621,10 @@ def _run_dedupe_pipeline(
         try:
             from goldenmatch.core.boost import boost_accuracy
             matchable_cols = [
-                c for c in collected_df.columns if not c.startswith("__")
+                c for c in _collected_frame.columns if not c.startswith("__")
             ]
             all_pairs = boost_accuracy(
-                all_pairs, collected_df, matchable_cols,
+                all_pairs, _as_polars_df(collected_df), matchable_cols,
                 provider=llm_provider,
                 api_key=None,  # auto-detect from env/settings
                 model_name=None,  # auto-detect
@@ -2628,7 +2666,10 @@ def _run_dedupe_pipeline(
 
         # all_ids is built in Step 4 below but we need it now for the remap.
         # Derive it early; Step 4 will re-derive from the same collected_df.
-        _tp_all_ids = collected_df["__row_id__"].to_list()
+        # W-7 (TRANSITIONAL): the sketch tier is a polars-local block
+        # (imports _pl_tp); bridge the Frame lane's table once here.
+        _tp_src = _as_polars_df(collected_df)
+        _tp_all_ids = _tp_src["__row_id__"].to_list()
 
         _tp_blocking = config.blocking
         _tp_strategy = getattr(_tp_blocking, "strategy", "lsh") if _tp_blocking else "lsh"
@@ -2652,9 +2693,9 @@ def _run_dedupe_pipeline(
                 # to the LSH path below rather than crash on a None config.
                 _tp_strategy = "lsh"
             else:
-                _tp_col = _tp_sc.column or collected_df.columns[0]
+                _tp_col = _tp_sc.column or _tp_src.columns[0]
                 _tp_texts = (
-                    collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+                    _tp_src[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
                 )
                 try:
                     from goldenmatch.core.embedder import get_embedder as _get_embedder
@@ -2715,10 +2756,10 @@ def _run_dedupe_pipeline(
             else:
                 # Fallback: pick first string-ish column
                 _tp_str_cols = [
-                    c for c, dt in collected_df.schema.items()
+                    c for c, dt in _tp_src.schema.items()
                     if dt in (_pl_tp.Utf8, _pl_tp.String) and not c.startswith("__")
                 ]
-                _tp_col = _tp_str_cols[0] if _tp_str_cols else collected_df.columns[0]
+                _tp_col = _tp_str_cols[0] if _tp_str_cols else _tp_src.columns[0]
                 _tp_mode = "char"
                 _tp_k = 3
                 _tp_num_perms = 128
@@ -2780,7 +2821,7 @@ def _run_dedupe_pipeline(
                 similarity=_tp_sim,
                 bands=_tp_eff_bands,
                 rows=_tp_eff_rows,
-                n_rows=collected_df.height,
+                n_rows=_tp_src.height,
                 candidate_pairs=len(_tp_pos_pairs),
                 verified_pairs=len(all_pairs),
                 semantic_fell_back=False,
@@ -3002,7 +3043,7 @@ def _run_dedupe_pipeline(
             golden_rules = refine_golden_rules(
                 base_rules=golden_rules,
                 clusters=_clusters_dict(),
-                prepared_df=collected_df,
+                prepared_df=_as_polars_df(collected_df),
                 column_profiles=_profiles_for_refiner,
                 memory_store=memory_store,
                 dataset=_dataset_for_refiner,
@@ -4125,8 +4166,8 @@ def _frame_lane_eligible(
     ``writes_outputs`` covers the file-output tail (write_output + lineage),
     which reads ``collected_df`` through polars-bound builders.
     """
-    if getattr(config, "_throughput_plan", None) is not None:
-        return False
+    # W-7: throughput sketch tier no longer declines -- its polars-local
+    # block bridges the table once at entry (TRANSITIONAL).
     if getattr(config, "_preflight_report", None) is not None:
         return False
     # W-4: memory + identity no longer decline -- both bridge (pa->pl) at
@@ -4136,21 +4177,15 @@ def _frame_lane_eligible(
     # W-3: validation rules/auto_fix no longer decline -- both entries are
     # seam-driven dual-rep (auto_fix_dataframe delegates to Frame.auto_fix;
     # validate_dataframe evaluates via the seam with per-lane frames).
-    if config.llm_boost:
-        return False
-    if config.llm_scorer and config.llm_scorer.enabled:
-        return False
-    gr = config.golden_rules
-    # quality_weighting (default True) is BRIDGED at golden_quality_scores,
-    # not declined; adaptive still requires the polars refiner.
-    if gr is not None and getattr(gr, "adaptive", False):
-        return False
-    for mk in matchkeys:
-        # W-6: probabilistic EM + NE-on-exact no longer decline (EM's df
-        # reads are seam-ported; the per-pair scorers read via row_lookup
-        # dicts; NE-on-exact bridges at its call site).
-        if mk.type == "weighted" and getattr(mk, "rerank", None):
-            return False
+    # W-7: llm boost/scorer no longer decline -- both bridge at their call
+    # sites (TRANSITIONAL; they read row text off a polars frame).
+    # W-7: adaptive golden rules no longer decline -- refine_golden_rules
+    # bridges prepared_df at its call site (TRANSITIONAL). quality_weighting
+    # (default True) remains bridged at golden_quality_scores.
+    # W-6: probabilistic EM + NE-on-exact no longer decline (EM's df reads
+    # are seam-ported). W-7: rerank no longer declines (bridges at its call
+    # site; the cross-encoder reads text columns off a polars frame).
+    del matchkeys
     # W-2: writes_outputs no longer declines -- write_output is dual-rep
     # (native parquet; csv/xlsx keep the polars formatting contract via the
     # bridge) and build_lineage reads via the seam.

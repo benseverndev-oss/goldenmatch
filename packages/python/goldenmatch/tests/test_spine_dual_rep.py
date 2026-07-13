@@ -187,10 +187,11 @@ def test_frame_lane_allows_writes_outputs():
     assert _eligible(_base_cfg(), writes_outputs=True) is True
 
 
-def test_frame_lane_declines_throughput_plan():
+def test_frame_lane_allows_throughput_plan():
+    # W-7: the sketch tier bridges its polars-local block at entry.
     cfg = _base_cfg()
     object.__setattr__(cfg, "_throughput_plan", object())
-    assert _eligible(cfg) is False
+    assert _eligible(cfg) is True
 
 
 def test_frame_lane_declines_preflight():
@@ -701,3 +702,93 @@ def test_frame_lane_probabilistic_e2e_parity(tmp_path, monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
     classic = P.run_dedupe([(str(csv), "people")], GoldenMatchConfig(**cfg_kw))
     assert _norm_result(frame_lane) == _norm_result(classic)
+
+
+def test_frame_lane_adaptive_golden_parity(tmp_path, monkeypatch):
+    """W-7: adaptive golden rules run on the Frame lane (refiner bridged)."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        GoldenRulesConfig,
+        QualityConfig,
+        TransformConfig,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+    cfg_kw = dict(
+        matchkeys=[
+            MatchkeyConfig(
+                name="exact_name",
+                type="exact",
+                fields=[MatchkeyField(field="first"), MatchkeyField(field="last")],
+            )
+        ],
+        quality=QualityConfig(mode="disabled"),
+        transform=TransformConfig(mode="disabled"),
+        golden_rules=GoldenRulesConfig(default_strategy="most_complete", adaptive=True),
+    )
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    frame_lane = P.run_dedupe([(str(csv), "people")], GoldenMatchConfig(**cfg_kw))
+    assert hits and hits[0] is True, f"lane not engaged: {hits}"
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic = P.run_dedupe([(str(csv), "people")], GoldenMatchConfig(**cfg_kw))
+    assert _norm_result(frame_lane) == _norm_result(classic)
+
+
+def test_frame_lane_semantic_bridge_called_with_polars(tmp_path, monkeypatch):
+    """W-7: semantic blocking engages the Frame lane; the sources get a
+    POLARS frame via the bridge on both lanes (no model download -- the
+    internals are stubbed; this pins the handoff types + raw capture)."""
+    import goldenmatch.core.pipeline as P
+    import polars as _pl
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        QualityConfig,
+        SemanticBlockingConfig,
+        TransformConfig,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="fuzzy_name", type="weighted", threshold=0.85,
+                fields=[
+                    MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0),
+                    MatchkeyField(field="last", scorer="jaro_winkler", weight=1.0),
+                ],
+            )
+        ],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["last"])]),
+        quality=QualityConfig(mode="disabled"),
+        transform=TransformConfig(mode="disabled"),
+        semantic_blocking=SemanticBlockingConfig(),
+    )
+    seen = {}
+
+    def fake_semantic(config, combined_lf, collected_df, *a, **k):
+        seen["lf_type"] = type(combined_lf).__name__
+        seen["df_type"] = type(collected_df).__name__
+        seen["has_raw"] = any(
+            c.startswith("__raw__") for c in collected_df.columns
+        )
+        return []
+
+    monkeypatch.setattr(P, "_semantic_blocking_pairs", fake_semantic)
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    P.run_dedupe([(str(csv), "people")], cfg)
+    assert hits and hits[0] is True, f"lane not engaged: {hits}"
+    assert seen["lf_type"] == "LazyFrame"
+    assert seen["df_type"] == "DataFrame"
+    assert isinstance(_pl.DataFrame(), _pl.DataFrame)
+    assert seen["has_raw"] is True

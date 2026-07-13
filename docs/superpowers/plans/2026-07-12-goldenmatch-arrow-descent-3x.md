@@ -188,6 +188,19 @@ pattern) before D6. Criterion: default-config impact x port cost.
 | domain extraction | PORT (eager gate exclusion) | W-7 |
 | adaptive golden rules | LATE PORT (refiner reads prepared_df) | W-7 |
 
+**STATUS 2026-07-13: W-1..W-7 ALL IMPLEMENTED** (W-1 #1731; W-2..W-7 stacked
+on the same branch series). The Frame lane now accepts EVERY feature class:
+quality/transform (final extra-gate bridges), writes_outputs/lineage (ported;
+native parquet), validation (seam), identity/memory (transitional bridges),
+auto-suggest/postflight (transitional), probabilistic EM (seam-ported) +
+NE-on-exact, throughput/rerank/llm/semantic/domain/adaptive (transitional
+bridges; semantic raw capture + domain mirrored in the Frame branch, eager
+shortcut still excludes them for stage-order safety). The predicate's only
+remaining declines: NONE -- eligibility is now representation+env gates only.
+TRANSITIONAL bridges (identity, memory, analyzer, postflight, throughput,
+rerank, llm, semantic, domain, adaptive refiner) are the D6-prerequisite
+port list.
+
 W-1 (quality/transform bridges) restructures the engine Frame branch to run
 the stages in CLASSIC PREP ORDER (quality -> transform -> standardize ->
 matchkeys -> precompute; the E.164 stage-order lesson) -- the eager
