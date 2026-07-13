@@ -2,6 +2,22 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-13 — GoldenFlow 2.1.0: owned auto-detect profile kernel (ADR 0037)
+- Zero-config's type-inference *decision* is now an owned `goldenflow_core::profile`
+  kernel: `infer_type(values, hint)` on every surface (Polars columnar, Polars-free
+  list/dict, `goldenflow-native`, `goldenflow-wasm`/TS) + a fused `profile_column`
+  (Path 1) that returns `inferred_type` + null/unique/samples in one Polars-free FFI
+  call. Pure-Python/TS refs stay as byte-matched fallbacks; native-first, opt-out
+  `GOLDENFLOW_NATIVE=0`.
+- Cross-surface byte-parity via `tests/parity/profile_corpus.jsonl` (oracle =
+  goldenflow-core). Wired via a new `profile` `_native_loader` component (floor
+  `infer_type_list_arrow`).
+- Documented as a distinct owned SURFACE (not a `@register_transform` entry, so out
+  of the `test_owned_kernel_boundary.py` buckets) in the owned-kernel boundary doc.
+  Accepted known edge: pure-TS strip-then-slice vs Python/Rust slice-then-strip on
+  the ≤100 sample — a corpus-unexercised follow-up.
+- `goldenflow-native 0.27.0` (base floor bumped) / `goldenflow 2.1.0`. ADR 0037.
+
 ## 2026-07-13 — GoldenMatch 3.1.0: Arrow-native engine, polars optional
 
 The full train merged (#1720-#1736): D5d bucket scaffolding, the D2s spine

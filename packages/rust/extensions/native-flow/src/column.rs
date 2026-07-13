@@ -12,7 +12,8 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use arrow::array::{
-    make_array, Array, ArrayRef, Float64Array, Int64Array, LargeStringArray, StringArray,
+    make_array, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, LargeStringArray,
+    StringArray,
 };
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -20,9 +21,11 @@ use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow::record_batch::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyList};
+use pyo3::types::{PyCapsule, PyDict, PyList};
 
 use goldenflow_core::chain::{apply_chain, apply_chain_nullable};
+use goldenflow_core::float_fmt::float_to_polars_string;
+use goldenflow_core::profile::{profile_column, TypeHint};
 
 use crate::chain::{resolve_chain, ChainOps};
 use crate::csvio::OpRecord;
@@ -256,5 +259,153 @@ impl Column {
             .map(|(n, a)| (n, Column::new(Arc::new(a))))
             .collect();
         Ok((Column::new(Arc::new(src)), new, records))
+    }
+
+    /// Path 1 (columnar): profile this column in one native pass. Returns a dict
+    /// `{null_count, unique_count, samples, inferred_type}`.
+    ///
+    /// The string path (Utf8/LargeUtf8/Utf8View) runs the owned
+    /// `profile_column` over a borrowed `&str` view — null/unique/samples over
+    /// the RAW values plus the type-inference decision. Typed columns
+    /// (Int64/Float64/Boolean/Date/Timestamp) short-circuit the type via the
+    /// hint and compute null/unique/samples off the typed buffer; `samples` are
+    /// formatted to match Polars `cast(Utf8)`.
+    fn profile<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        // Compute off-GIL (borrows only `self.array` + locals, like the sibling
+        // `apply_chain`/`apply_numeric`/`apply_split` closures); build the PyDict
+        // after detach returns the owned tuple.
+        let (null_count, unique_count, samples, inferred_type) =
+            py.detach(|| -> PyResult<(u64, u64, Vec<String>, String)> {
+                Ok(match self.array.data_type() {
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                        // Cast to LargeUtf8 so profile_column sees a single string
+                        // layout — a one-shot cost, unlike the per-transform chain
+                        // path which dispatches on both String and LargeString.
+                        let large = if matches!(self.array.data_type(), DataType::LargeUtf8) {
+                            self.array.clone()
+                        } else {
+                            cast(&self.array, &DataType::LargeUtf8)
+                                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                        };
+                        let s = large
+                            .as_any()
+                            .downcast_ref::<LargeStringArray>()
+                            .ok_or_else(|| PyTypeError::new_err("expected a LargeUtf8 column"))?;
+                        let view: Vec<Option<&str>> = s.iter().collect();
+                        let out = profile_column(&view, TypeHint::Utf8);
+                        (
+                            out.null_count,
+                            out.unique_count,
+                            out.samples,
+                            out.inferred_type,
+                        )
+                    }
+                    DataType::Int64 => {
+                        let a = self.array.as_any().downcast_ref::<Int64Array>().unwrap();
+                        let mut seen: std::collections::HashSet<i64> =
+                            std::collections::HashSet::new();
+                        let mut samples: Vec<String> = Vec::with_capacity(5);
+                        for v in a.iter().flatten() {
+                            seen.insert(v);
+                            if samples.len() < 5 {
+                                samples.push(v.to_string());
+                            }
+                        }
+                        (
+                            a.null_count() as u64,
+                            seen.len() as u64,
+                            samples,
+                            "numeric".to_string(),
+                        )
+                    }
+                    DataType::Float64 => {
+                        let a = self.array.as_any().downcast_ref::<Float64Array>().unwrap();
+                        // Fold -0.0/+0.0 and all NaN together to match Polars n_unique.
+                        let mut seen: std::collections::HashSet<u64> =
+                            std::collections::HashSet::new();
+                        let mut samples: Vec<String> = Vec::with_capacity(5);
+                        for v in a.iter().flatten() {
+                            seen.insert(canon_f64_bits(v));
+                            if samples.len() < 5 {
+                                samples.push(float_to_polars_string(v));
+                            }
+                        }
+                        (
+                            a.null_count() as u64,
+                            seen.len() as u64,
+                            samples,
+                            "numeric".to_string(),
+                        )
+                    }
+                    DataType::Boolean => {
+                        let a = self.array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                        let mut seen: std::collections::HashSet<bool> =
+                            std::collections::HashSet::new();
+                        let mut samples: Vec<String> = Vec::with_capacity(5);
+                        for v in a.iter().flatten() {
+                            seen.insert(v);
+                            if samples.len() < 5 {
+                                samples.push(if v { "true" } else { "false" }.to_string());
+                            }
+                        }
+                        (
+                            a.null_count() as u64,
+                            seen.len() as u64,
+                            samples,
+                            "boolean".to_string(),
+                        )
+                    }
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+                        // Temporal columns short-circuit to "date"; null/unique/samples
+                        // come off a Utf8 cast (arrow's formatting — display-only, the
+                        // inferred_type is fixed and the column-name override is applied
+                        // by the Python caller).
+                        let large = cast(&self.array, &DataType::LargeUtf8)
+                            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                        let s = large
+                            .as_any()
+                            .downcast_ref::<LargeStringArray>()
+                            .ok_or_else(|| PyTypeError::new_err("temporal cast to Utf8 failed"))?;
+                        let mut seen: std::collections::HashSet<&str> =
+                            std::collections::HashSet::new();
+                        let mut samples: Vec<String> = Vec::with_capacity(5);
+                        for v in s.iter().flatten() {
+                            seen.insert(v);
+                            if samples.len() < 5 {
+                                samples.push(v.to_string());
+                            }
+                        }
+                        (
+                            s.null_count() as u64,
+                            seen.len() as u64,
+                            samples,
+                            "date".to_string(),
+                        )
+                    }
+                    other => {
+                        return Err(PyTypeError::new_err(format!(
+                            "Column.profile does not support dtype {other:?}"
+                        )));
+                    }
+                })
+            })?;
+        let dict = PyDict::new(py);
+        dict.set_item("null_count", null_count)?;
+        dict.set_item("unique_count", unique_count)?;
+        dict.set_item("samples", samples)?;
+        dict.set_item("inferred_type", inferred_type)?;
+        Ok(dict)
+    }
+}
+
+/// Fold `-0.0`/`+0.0` to one key and all NaN to one key so the float
+/// `unique_count` matches Polars `n_unique`.
+fn canon_f64_bits(x: f64) -> u64 {
+    if x.is_nan() {
+        0x7ff8_0000_0000_0000
+    } else if x == 0.0 {
+        0.0f64.to_bits()
+    } else {
+        x.to_bits()
     }
 }

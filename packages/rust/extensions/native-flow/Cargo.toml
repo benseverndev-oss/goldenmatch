@@ -5,7 +5,7 @@
 
 [package]
 name = "goldenflow-native"
-version = "0.26.0"
+version = "0.27.0"
 edition = "2021"
 license = "MIT"
 authors = ["Ben Severn <benzsevern@gmail.com>"]
