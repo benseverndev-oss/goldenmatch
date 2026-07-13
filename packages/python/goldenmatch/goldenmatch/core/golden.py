@@ -1292,21 +1292,30 @@ def _multi_df_from_frames(
     # is a different (wrong) predicate.
     # W2c: routed through the Frame seam (select_eligible_clusters carries
     # the load-bearing parenthesization; joins are the W2b named variants).
-    from goldenmatch.core.frame import to_frame
+    from goldenmatch.core.frame import ArrowFrame, to_frame
 
-    multi_cluster_ids = to_frame(frames.metadata).select_eligible_clusters()
+    src_frame = to_frame(source_df)
+    meta = to_frame(frames.metadata)
+    assign = to_frame(frames.assignments)
+    # Deep-D2b: joins are single-backend; normalize the (small) cluster
+    # frames to the SOURCE lane (zero-copy to_arrow on polars natives).
+    if isinstance(src_frame, ArrowFrame) and not isinstance(meta, ArrowFrame):
+        meta = ArrowFrame(frames.metadata.to_arrow())
+        assign = ArrowFrame(frames.assignments.to_arrow())
+
+    multi_cluster_ids = meta.select_eligible_clusters()
 
     # Vectorized join: attach __cluster_id__ to each source row whose
     # __row_id__ appears in the assignments frame. ``inner`` join
     # drops rows that aren't members of any eligible cluster.
     assignments_multi = (
-        to_frame(frames.assignments)
+        assign
         .join_inner(multi_cluster_ids, on="cluster_id")
         .rename({"cluster_id": "__cluster_id__"})
     )
 
     return (
-        to_frame(source_df)
+        src_frame
         .join_inner(assignments_multi, left_on="__row_id__", right_on="member_id")
         .native
     )
@@ -1368,16 +1377,32 @@ def build_golden_records_from_frames(
           ``source_df`` -> ``(None, [])`` (those clusters are silently
           dropped, consistent with the existing pipeline).
     """
-    if source_df.height == 0 or frames.assignments.is_empty():
+    from goldenmatch.core.frame import to_frame as _tf_frames
+
+    _src = _tf_frames(source_df)
+    if _src.height == 0 or frames.assignments.is_empty():
         return None, []
 
-    if "__row_id__" not in source_df.columns:
+    if "__row_id__" not in _src.columns:
         raise ValueError(
             "build_golden_records_from_frames: source_df must contain a "
             "__row_id__ column. Use "
             "source_df.with_row_index(name='__row_id__') if your input "
             "frame doesn't have one.",
         )
+
+    # Deep-D2b: on a non-polars source this builder is the KERNEL-DECLINE
+    # path (the pipeline tried the fused kernel first) -- recompute multi_df
+    # on the POLARS lane from a bridged source rather than bridging the
+    # Acero join output: join ROW ORDER differs between engines, and the
+    # batch builder's tie-breaks (first-occurrence) are order-sensitive.
+    # Recomputing via the polars join is byte-identical to the classic lane
+    # by construction.
+    if not isinstance(source_df, pl.DataFrame):
+        from goldenmatch.core.frame import Frame
+
+        _native = source_df.native if isinstance(source_df, Frame) else source_df
+        source_df = pl.from_arrow(_native)  # type: ignore[assignment]
 
     multi_df = _multi_df_from_frames(source_df, frames)
 

@@ -2992,17 +2992,19 @@ def _run_dedupe_pipeline(
             # survivorship never reads, BEFORE the join, so golden records carry
             # the same columns as the dict path (byte-identical golden). Keep
             # __row_id__ (the from-frames join needs it). Same env opt-out.
-            _golden_source = _as_polars_df(collected_df)
+            # Deep-D2b: lane-native; the fused try consumes it directly and
+            # build_golden_records_from_frames bridges internally on decline.
+            _golden_source = collected_df
             if os.environ.get("GOLDENMATCH_GOLDEN_SLIM_MULTIDF", "1") != "0":
                 _internal_prefixes = (
                     "__xform_", "__mk_", "__block_key__", "__bucket__",
                 )
                 from goldenmatch.core.frame import to_frame as _tf_golden
 
-                _golden_source = _as_polars_df(_tf_golden(collected_df).select([
+                _golden_source = _tf_golden(collected_df).select([
                     c for c in _collected_frame.columns
                     if not any(c.startswith(p) for p in _internal_prefixes)
-                ]).native)
+                ]).native
             # Source per-cluster pair scores from the view so the slow builder's
             # confidence_majority survivorship weights by edge confidence instead
             # of degrading to count-majority (the frames-out cluster dict carries
