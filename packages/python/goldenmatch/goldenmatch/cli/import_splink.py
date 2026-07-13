@@ -63,7 +63,16 @@ def import_splink_cmd(
 
     if conversion.em_model is not None:
         if model_out:
-            conversion.em_model.save_json(model_out)
+            # save_json creates parent dirs itself (os.makedirs), but can
+            # still hit permission errors or invalid path components.
+            try:
+                conversion.em_model.save_json(model_out)
+            except OSError as exc:
+                err_console.print(
+                    f"[red]Could not write trained model to[/red] "
+                    f"[cyan]{model_out}[/cyan]: {exc}"
+                )
+                raise typer.Exit(code=1) from None
             conversion.config.matchkeys[0].model_path = model_out
             console.print(
                 f"[green]Trained model persisted to[/green] [cyan]{model_out}[/cyan] "
@@ -78,8 +87,14 @@ def import_splink_cmd(
             )
 
     dumped = conversion.config.model_dump(exclude_none=True, exclude_defaults=True)
-    with open(output, "w", encoding="utf-8") as fh:
-        yaml.safe_dump(dumped, fh, sort_keys=False)
+    try:
+        with open(output, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(dumped, fh, sort_keys=False)
+    except OSError as exc:
+        err_console.print(
+            f"[red]Could not write config to[/red] [cyan]{output}[/cyan]: {exc}"
+        )
+        raise typer.Exit(code=1) from None
 
     table = _render_report_table(conversion.report.findings)
     if table is not None:

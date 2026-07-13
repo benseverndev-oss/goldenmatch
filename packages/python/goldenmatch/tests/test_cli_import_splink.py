@@ -216,7 +216,31 @@ def test_no_convertible_blocking_rules_fails(tmp_path):
     assert not out_path.exists()
 
 
-# ── 6. Default output path ────────────────────────────────────────────────
+# ── 6. Unwritable output path -> clean CLI error, no traceback ────────────
+
+
+def test_output_into_nonexistent_directory_fails_cleanly(tmp_path):
+    settings_path = _write_settings(tmp_path, _full_settings())
+    out_path = tmp_path / "no_such_dir" / "out.yaml"
+
+    result = runner.invoke(
+        app, ["import-splink", str(settings_path), "-o", str(out_path)]
+    )
+
+    assert result.exit_code == 1
+    assert not out_path.exists()
+    # A clean typer.Exit, not a raw OSError traceback.
+    assert not isinstance(result.exception, OSError)
+    try:
+        stderr = result.stderr
+    except ValueError:  # stderr not separately captured -> already in output
+        stderr = ""
+    combined = result.output + stderr
+    assert "Traceback" not in combined
+    assert "Could not write config" in combined
+
+
+# ── 7. Default output path ────────────────────────────────────────────────
 
 
 def test_default_output_path_is_cwd_goldenmatch_yaml(tmp_path):
