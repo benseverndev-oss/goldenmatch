@@ -7,11 +7,13 @@ the input carried trained m/u probabilities).
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field as dc_field
 from typing import Literal
 
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyField
+from goldenmatch.core.probabilistic import EMResult
 
 Severity = Literal["info", "warning", "error"]
 
@@ -474,3 +476,270 @@ def convert_blocking(rules: list, report: ConversionReport) -> BlockingConfig | 
     if len(keys) == 1:
         return BlockingConfig(strategy="static", keys=keys)
     return BlockingConfig(strategy="multi_pass", keys=keys, passes=keys)
+
+
+# ── Trained-model (m/u) import ───────────────────────────────────────────────
+#
+# Splink lists comparison levels strongest -> weakest (after the null level),
+# and each non-null level MAY carry an EM-trained "m_probability" /
+# "u_probability". GoldenMatch's `EMResult` is the mirror image: level index 0
+# is disagree (Splink's ELSE), index N-1 is the strongest agree level. So
+# importing m/u is a re-indexing exercise, not a re-fit.
+
+
+def detect_trained(settings: dict) -> bool:
+    """True if any comparison level anywhere in ``settings`` carries m/u.
+
+    A bare (untrained) Splink settings dict has comparison levels with only
+    ``sql_condition`` (+ metadata); a trained model additionally carries
+    ``m_probability`` / ``u_probability`` floats on every non-null level.
+    Checking for the presence of the key anywhere is enough to distinguish
+    the two shapes without assuming every level was populated.
+    """
+    for comp in settings.get("comparisons", []):
+        for level in comp.get("comparison_levels", []):
+            if "m_probability" in level or "u_probability" in level:
+                return True
+    return False
+
+
+def import_em(
+    comparisons: list[tuple[dict, int, MatchkeyField]],
+    settings: dict,
+    report: ConversionReport,
+) -> EMResult | None:
+    """Import trained m/u probabilities into an :class:`EMResult`.
+
+    ``comparisons`` is the explicit alignment the caller (the top-level
+    ``convert()``, Task 11) must build: one ``(comp_dict, comp_idx, field)``
+    tuple per Splink comparison that ``convert_comparison`` successfully
+    turned into a ``MatchkeyField``. Re-deriving that alignment here would
+    duplicate `convert_comparison`'s dropping/merging logic; taking it as an
+    explicit parameter keeps this function a pure "does this comparison carry
+    m/u, and if so where does it go" walk over ``comp["comparison_levels"]``,
+    reusing `recognize_level` (imported above) instead of re-implementing SQL
+    recognition.
+
+    Returns ``None`` when no level in any comparison carries m/u at all (a
+    bare, untrained settings dict) or when nothing importable survives.
+    """
+    if not detect_trained(settings):
+        return None
+
+    m_probs: dict[str, list[float]] = {}
+    u_probs: dict[str, list[float]] = {}
+    epsilon = 1e-6
+
+    for comp, comp_idx, fld in comparisons:
+        n = fld.levels
+        m_acc = [0.0] * n
+        u_acc = [0.0] * n
+        assigned = [False] * n
+        lost_m = 0.0
+        lost_u = 0.0
+        had_any_prob = False
+        comp_path = f"comparisons[{comp_idx}]"
+
+        # Resolve a recognized agree-band level to its GoldenMatch index,
+        # by position in the field's own (already-deduped, descending)
+        # thresholds -- mirrors convert_comparison's threshold derivation.
+        if fld.levels == 2:
+            if fld.scorer == "exact":
+                def agree_index_for(r: RecognizedLevel) -> int | None:
+                    return 1 if r.kind == "exact" else None
+            else:
+                partial_threshold = fld.partial_threshold
+
+                def agree_index_for(r: RecognizedLevel, _pt: float = partial_threshold) -> int | None:
+                    if r.sim_threshold is None:
+                        return None
+                    return 1 if abs(r.sim_threshold - _pt) < 1e-9 else None
+        else:
+            thresholds = fld.level_thresholds or []
+
+            def agree_index_for(r: RecognizedLevel, _thresholds: list[float] = thresholds, _n: int = n) -> int | None:
+                if r.sim_threshold is None:
+                    return None
+                for i, t in enumerate(_thresholds):
+                    if abs(t - r.sim_threshold) < 1e-9:
+                        return (_n - 1) - i
+                return None
+
+        for j, level in enumerate(comp.get("comparison_levels", [])):
+            level_path = f"{comp_path}.comparison_levels[{j}]"
+            m_p = level.get("m_probability")
+            u_p = level.get("u_probability")
+            if m_p is None and u_p is None:
+                continue
+            had_any_prob = True
+
+            is_null = bool(level.get("is_null_level"))
+            sql = level.get("sql_condition", "")
+            r = recognize_level(sql, is_null_level=is_null)
+
+            if r is None:
+                # Unrecognized level (already dropped by convert_comparison
+                # when building the field) -- its m/u mass is lost.
+                lost_m += m_p or 0.0
+                lost_u += u_p or 0.0
+                report.warn(
+                    level_path,
+                    "unrecognized level carried m/u probabilities; dropped, "
+                    f"surviving levels for field '{fld.field}' re-normalized",
+                    mapped_to=f"em.m_probs.{fld.field}",
+                )
+                continue
+
+            if r.kind == "null":
+                # Splink convention: null levels carry no evidentiary m/u.
+                # Ignore even if present rather than let them participate.
+                continue
+
+            if r.kind == "else":
+                idx = 0
+            else:
+                idx = agree_index_for(r)
+                if idx is None:
+                    lost_m += m_p or 0.0
+                    lost_u += u_p or 0.0
+                    report.warn(
+                        level_path,
+                        f"level threshold {r.sim_threshold} does not match any "
+                        f"converted threshold for field '{fld.field}'; m/u "
+                        "dropped, surviving levels re-normalized",
+                        mapped_to=f"em.m_probs.{fld.field}",
+                    )
+                    continue
+
+            # Two Splink levels can collapse onto the same GoldenMatch index
+            # (Task 8's threshold dedupe) -- sum their m/u rather than
+            # overwrite.
+            m_acc[idx] += m_p or 0.0
+            u_acc[idx] += u_p or 0.0
+            assigned[idx] = True
+
+        if not had_any_prob:
+            # This comparison carried no trained data at all (mixed
+            # bare/trained input); nothing to import for this field.
+            continue
+
+        if lost_m or lost_u:
+            report.warn(
+                comp_path,
+                f"re-normalizing m/u probabilities for field '{fld.field}' "
+                "after dropping unrecognized level(s)",
+                mapped_to=f"em.m_probs.{fld.field}",
+            )
+
+        for i in range(n):
+            if not assigned[i]:
+                m_acc[i] = epsilon
+                u_acc[i] = epsilon
+                report.warn(
+                    comp_path,
+                    f"field '{fld.field}' level {i} had no m/u probability "
+                    "assigned from the Splink model; filled with epsilon",
+                    mapped_to=f"em.m_probs.{fld.field}",
+                )
+
+        sum_m = sum(m_acc)
+        sum_u = sum(u_acc)
+        m_final = [v / sum_m for v in m_acc] if sum_m > 0 else [1.0 / n] * n
+        u_final = [v / sum_u for v in u_acc] if sum_u > 0 else [1.0 / n] * n
+
+        m_probs[fld.field] = m_final
+        u_probs[fld.field] = u_final
+
+    if not m_probs:
+        return None
+
+    match_weights = {
+        f: [
+            math.log2(max(m, 1e-10) / max(u, 1e-10))
+            for m, u in zip(m_probs[f], u_probs[f])
+        ]
+        for f in m_probs
+    }
+
+    return EMResult(
+        m_probs=m_probs,
+        u_probs=u_probs,
+        match_weights=match_weights,
+        converged=True,
+        iterations=0,
+        proportion_matched=settings.get("probability_two_random_records_match", 0.05),
+        tf_freqs=None,
+        tf_collision=None,
+    )
+
+
+# ── Settings scalar mapping ──────────────────────────────────────────────────
+
+_INFRA_IGNORED_KEYS = (
+    "sql_dialect",
+    "retain_matching_columns",
+    "retain_intermediate_calculation_columns",
+    "bayes_factor_column_prefix",
+)
+
+
+def convert_scalars(settings: dict, report: ConversionReport) -> dict:
+    """Map top-level Splink settings scalars onto ``MatchkeyConfig`` kwargs.
+
+    Returns a kwargs dict suitable for spreading into a ``MatchkeyConfig``
+    constructor call; only keys actually present in ``settings`` are
+    included. Everything not representable as a GoldenMatch config field
+    (file paths, engine infra) is surfaced as a report finding instead of a
+    kwarg -- Splink settings carry no file paths, so `unique_id_column_name`
+    can only ever be advisory guidance for the caller's `InputConfig`.
+    """
+    kwargs: dict = {}
+
+    if "em_convergence" in settings:
+        kwargs["convergence_threshold"] = settings["em_convergence"]
+        report.info(
+            "em_convergence",
+            f"em_convergence={settings['em_convergence']} -> convergence_threshold",
+            mapped_to="matchkeys[?].convergence_threshold",
+        )
+
+    if "max_iterations" in settings:
+        kwargs["em_iterations"] = settings["max_iterations"]
+        report.info(
+            "max_iterations",
+            f"max_iterations={settings['max_iterations']} -> em_iterations",
+            mapped_to="matchkeys[?].em_iterations",
+        )
+
+    if "unique_id_column_name" in settings:
+        col = settings["unique_id_column_name"]
+        report.info(
+            "unique_id_column_name",
+            f"unique_id_column_name={col!r} -> set input.files[*].id_column to "
+            f"'{col}' (no InputConfig emitted; Splink settings carry no file "
+            "paths)",
+            mapped_to="input.files[*].id_column",
+        )
+
+    link_type = settings.get("link_type")
+    if link_type == "link_and_dedupe":
+        report.warn(
+            "link_type",
+            "link_type='link_and_dedupe' has no single GoldenMatch entry "
+            "point -- run dedupe() on each source then match() across "
+            "sources (or vice versa) and combine the results",
+            mapped_to=None,
+        )
+    elif link_type in ("dedupe_only", "link_only"):
+        entry_point = "dedupe()" if link_type == "dedupe_only" else "match()"
+        report.info(
+            "link_type",
+            f"link_type='{link_type}' -> use GoldenMatch's {entry_point}",
+            mapped_to=entry_point,
+        )
+
+    for key in _INFRA_IGNORED_KEYS:
+        if key in settings:
+            report.info(key, f"'{key}' ignored (engine infra)", mapped_to=None)
+
+    return kwargs
