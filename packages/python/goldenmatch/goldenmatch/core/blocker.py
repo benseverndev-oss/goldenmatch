@@ -377,7 +377,9 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
         # because they're real values (an explicit empty-cell in the
         # source); dropping them aggressively lost 3 records on the
         # cross-file dedupe regression suite (PR #390 fix).
-        if isinstance(lf, pl.LazyFrame):
+        from goldenmatch.core.frame import is_polars_lazyframe
+
+        if is_polars_lazyframe(lf):
             df_with_key = (
                 lf
                 .with_columns(block_key_expr)
@@ -1176,14 +1178,16 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
     # normalizes ONCE here (lossless -- polars stays a dependency until D6).
     # Only the static/adaptive primary builder is dual-rep; it receives the
     # ORIGINAL entry object so the arrow lane skips the polars round-trip.
+    from goldenmatch.core.frame import is_polars_dataframe, is_polars_lazyframe
+
     _lf_entry = lf
-    if not isinstance(lf, pl.LazyFrame):
+    if not is_polars_lazyframe(lf):
         from goldenmatch.core.frame import Frame
 
         native = lf.native if isinstance(lf, Frame) else lf
         lf = (
             native.lazy()
-            if isinstance(native, pl.DataFrame)
+            if is_polars_dataframe(native)
             else cast(pl.DataFrame, pl.from_arrow(native)).lazy()
         )
 

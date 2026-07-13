@@ -1865,6 +1865,30 @@ class ArrowFrame:
         return ArrowFrame(tbl), fixes
 
 
+def is_polars_lazyframe(obj: Any) -> bool:
+    """Import-free type guard (D6 zero-polars gate): a pl.LazyFrame can only
+    exist if polars is already imported, so an unloaded polars means False
+    without triggering the lazy proxy."""
+    import sys
+
+    if "polars" not in sys.modules:
+        return False
+    import polars as _pl
+
+    return isinstance(obj, _pl.LazyFrame)
+
+
+def is_polars_dataframe(obj: Any) -> bool:
+    """Import-free type guard (see is_polars_lazyframe)."""
+    import sys
+
+    if "polars" not in sys.modules:
+        return False
+    import polars as _pl
+
+    return isinstance(obj, _pl.DataFrame)
+
+
 def to_frame(obj: Any) -> Frame:
     """Idempotent coercion: raw ``pl.DataFrame``/``pa.Table``, a
     ``dict[str, pa.Array]`` (the fused-FFI column shape), or a ``Frame``.
