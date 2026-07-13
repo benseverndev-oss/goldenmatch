@@ -146,14 +146,16 @@ def test_or_rule_dropped_with_warning():
     assert len(warnings) == 1
 
 
-def test_parenthesized_rule_dropped_with_warning():
+def test_parenthesized_rule_converts():
+    # Splink 4 serialization paren-wraps conjuncts; balanced outer parens
+    # are stripped rather than dropping the rule.
     rule = '(l."postcode" = r."postcode")'
     report = ConversionReport()
     config = convert_blocking([rule], report)
 
-    assert config is None
-    warnings = [f for f in report.findings if f.severity == "warning"]
-    assert len(warnings) == 1
+    assert config is not None
+    assert config.keys[0].fields == ["postcode"]
+    assert not report.has_warnings
 
 
 def test_all_rules_dropped_returns_none_and_errors():
@@ -242,3 +244,35 @@ def test_cross_column_equality_dropped_with_warning():
     warnings = [f for f in report.findings if f.severity == "warning"]
     assert len(warnings) == 1
     assert "first_name" in warnings[0].message or "surname" in warnings[0].message
+
+
+def test_splink4_serialized_parenthesized_conjuncts():
+    # Splink 4's SettingsCreator.create_settings_dict() serializes block_on()
+    # rules with EVERY conjunct paren-wrapped -- exactly this shape (observed
+    # from splink 4.0.16). The recognizer must strip balanced outer parens.
+    rule = (
+        '(l."surname" = r."surname") AND '
+        "(SUBSTRING(l.dob, 1, 4) = SUBSTRING(r.dob, 1, 4))"
+    )
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["surname", "dob"]
+    assert config.keys[0].transforms == ["substring:0:4"]
+
+
+def test_whole_rule_paren_wrapped():
+    report = ConversionReport()
+    config = convert_blocking(['((l."a" = r."a") AND (l."b" = r."b"))'], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["a", "b"]
+
+
+def test_unbalanced_parens_still_dropped():
+    report = ConversionReport()
+    config = convert_blocking(['(l."a" = r."a"'], report)
+
+    assert config is None
+    assert report.has_errors

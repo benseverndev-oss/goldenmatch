@@ -351,14 +351,43 @@ class _BlockConjunct:
     transform: str | None  # e.g. "substring:0:4", or None for plain equality
 
 
+def _strip_outer_parens(s: str) -> str:
+    """Strip balanced outer parentheses: '(l.a = r.a)' -> 'l.a = r.a'.
+
+    Splink 4's ``block_on(...)`` serialization wraps every AND-conjunct in
+    parentheses (e.g. ``(l."surname" = r."surname") AND (SUBSTRING(l.dob, 1,
+    4) = SUBSTRING(r.dob, 1, 4))``), so after splitting on AND each conjunct
+    arrives paren-wrapped. Only strips when the opening paren's match is the
+    final character (so ``SUBSTR(a) = SUBSTR(b)`` is untouched).
+    """
+    s = s.strip()
+    while s.startswith("(") and s.endswith(")"):
+        depth = 0
+        closes_at_end = False
+        for i, ch in enumerate(s):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    closes_at_end = i == len(s) - 1
+                    break
+        if not closes_at_end:
+            break
+        s = s[1:-1].strip()
+    return s
+
+
 def _recognize_blocking_conjunct(conjunct: str) -> _BlockConjunct | None:
     """Recognize one top-level AND-conjunct of a Splink blocking_rule.
 
     Returns None for anything not a same-column equality or a same-column/
-    same-offset SUBSTR(...) equality (OR, parens, cross-column, arithmetic,
-    ranges, etc. all fail to fullmatch and are rejected here).
+    same-offset SUBSTR(...) equality (OR, cross-column, arithmetic, ranges,
+    etc. all fail to fullmatch and are rejected here). Balanced outer
+    parentheses (Splink 4 ``block_on`` serialization style) are stripped
+    before matching.
     """
-    conjunct = conjunct.strip()
+    conjunct = _strip_outer_parens(conjunct)
 
     m = _BLOCK_SUBSTR_RE.fullmatch(conjunct)
     if m:
@@ -399,7 +428,7 @@ def _convert_one_blocking_rule(
         return None
     sql_norm = " ".join(sql.split())
 
-    conjuncts = re.split(r'\s+AND\s+', sql_norm, flags=re.IGNORECASE)
+    conjuncts = re.split(r'\s+AND\s+', _strip_outer_parens(sql_norm), flags=re.IGNORECASE)
     recognized: list[_BlockConjunct] = []
     for conjunct in conjuncts:
         r = _recognize_blocking_conjunct(conjunct)
