@@ -152,8 +152,8 @@ def test_level_thresholds_eligible_on_supporting_kernel_synthetic(monkeypatch):
 def test_level_thresholds_router_selects_native_when_supported(monkeypatch):
     """With a supporting kernel, probabilistic_block_scorer hands a
     level_thresholds matchkey to the native closure (``_native``)."""
-    from goldenmatch.core.probabilistic import _fallback_result
     from goldenmatch.core import probabilistic as p
+    from goldenmatch.core.probabilistic import _fallback_result
 
     monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
     monkeypatch.setattr(
