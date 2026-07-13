@@ -147,6 +147,10 @@ _COMPONENT_SYMBOLS: dict[str, tuple[str, ...]] = {
     "text": ("strip_arrow",),
     # phonetic: blocking/match-key encoders (soundex) -- floor symbol only.
     "phonetic": ("soundex_arrow",),
+    # profile: the zero-config auto-detect type-inference decision
+    # (infer_type). Floor symbol infer_type_list_arrow; Column.profile() is the
+    # columnar path. Locale-free, region-free.
+    "profile": ("infer_type_list_arrow",),
 }
 
 # Components whose only native path is intentionally non-authoritative (the

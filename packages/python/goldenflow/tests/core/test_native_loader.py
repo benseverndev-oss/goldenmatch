@@ -36,3 +36,8 @@ def test_force_off(monkeypatch):
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "0")
     monkeypatch.setattr(L, "_native", object())
     assert L.native_enabled("phone") is False
+
+
+def test_profile_component_symbol():
+    from goldenflow.core._native_loader import _COMPONENT_SYMBOLS
+    assert _COMPONENT_SYMBOLS["profile"] == ("infer_type_list_arrow",)
