@@ -353,10 +353,10 @@ def _resolve_identities(
     if not config.identity or not config.identity.enabled:
         return None
 
-    # W-4 widening (TRANSITIONAL): identity internals are polars-heavy
-    # (schema-aligned concat, incremental mini-frames) -- bridge the Frame
-    # lane's pa.Table at entry. The deep identity port is a D6 prerequisite.
-    df = _as_polars_df(df)
+    # A5: the batch dedupe path (resolve_clusters payload reads) is
+    # dual-rep; the incremental match_record mini-frame machinery stays
+    # polars (reached only via the identity APIs, which receive polars).
+    # The Ray-distributed branch bridges below (its own tier).
 
     # Phase 6: distributed dispatch when clusters is a Ray Dataset.
     try:
@@ -384,7 +384,7 @@ def _resolve_identities(
             )
             mk_name = matchkeys[0].name if matchkeys else None
             summary = resolve_identities_distributed(
-                clusters, df, scored_pairs, mk_name,
+                clusters, _as_polars_df(df), scored_pairs, mk_name,
                 dsn=config.identity.connection,
                 run_name=run_name,
                 dataset=config.identity.dataset,
