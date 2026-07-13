@@ -185,32 +185,72 @@ def profile_column(series: pl.Series) -> dict[str, Any]:
 # ── DataFrame profiling ───────────────────────────────────────────────────
 
 
-def profile_dataframe(df: pl.DataFrame) -> dict[str, Any]:
-    """Profile an entire DataFrame and return a comprehensive report dict."""
-    total_rows = df.height
-    total_columns = df.width
-    columns = [profile_column(df[col]) for col in df.columns]
+def _columns_as_polars_series(frame: Any) -> list[Any]:
+    """One polars Series per column, for the (still polars-bound) ``profile_column``.
+
+    Polars backend: hand back the native Series verbatim (byte-identical to the
+    pre-seam ``df[col]`` path -- same dtype spelling, no round-trip). Arrow
+    backend: materialize each column into a polars Series via its Arrow array,
+    so ``profile_column``'s per-column stats are computed identically regardless
+    of the input backend (``profile_column`` itself is ported in a later PR).
+    """
+    from goldenmatch.core.frame import PolarsFrame
+
+    if isinstance(frame, PolarsFrame):
+        native = frame.native
+        return [native[c] for c in frame.columns]
+    return [pl.Series(c, frame.column(c).to_arrow()) for c in frame.columns]
+
+
+def _count_all_empty_rows(frame: Any) -> int:
+    """Backend-agnostic all-empty-row count (cold-path Python fold).
+
+    A row is empty when EVERY cell is empty, where a cell is empty if it is
+    null OR (for string columns only) whitespace-only. Non-string cells are
+    empty only when null -- a ``0`` int is NOT empty. Mirrors the Polars
+    ``is_null() | (strip_chars() == "")`` (string) / ``is_null()`` (other)
+    conjunction the pre-seam path built. String-ness comes from the column's
+    semantic dtype (``"text"`` == Polars ``Utf8``/``String``).
+    """
+    cols = frame.columns
+    if not cols:
+        return 0
+    is_string = {c: frame.column(c).semantic_dtype() == "text" for c in cols}
+    count = 0
+    for row in frame.select_dicts(cols):
+        empty = True
+        for c in cols:
+            v = row[c]
+            if v is None:
+                continue
+            if is_string[c] and isinstance(v, str) and v.strip() == "":
+                continue
+            empty = False
+            break
+        if empty:
+            count += 1
+    return count
+
+
+def profile_dataframe(df: Any) -> dict[str, Any]:
+    """Profile an entire DataFrame and return a comprehensive report dict.
+
+    Accepts a ``pl.DataFrame``, a ``pa.Table``, or an already-wrapped ``Frame``
+    (``to_frame`` is idempotent). Byte-identical on the Polars path.
+    """
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+    total_rows = frame.height
+    total_columns = len(frame.columns)
+    columns = [profile_column(s) for s in _columns_as_polars_series(frame)]
 
     # Duplicate rows: count of rows that appear more than once
-    duplicate_row_count = total_rows - df.unique().height
+    # (== total_rows - distinct_row_count(), full-row identity over all columns).
+    duplicate_row_count = frame.count_duplicate_rows()
 
-    # Empty rows: all values are null or empty string
-    empty_conditions = []
-    for col in df.columns:
-        if df[col].dtype in (pl.Utf8, pl.String):
-            empty_conditions.append(
-                pl.col(col).is_null() | (pl.col(col).str.strip_chars() == "")
-            )
-        else:
-            empty_conditions.append(pl.col(col).is_null())
-
-    if empty_conditions:
-        all_empty_expr = empty_conditions[0]
-        for cond in empty_conditions[1:]:
-            all_empty_expr = all_empty_expr & cond
-        empty_row_count = df.filter(all_empty_expr).height
-    else:
-        empty_row_count = 0
+    # Empty rows: every cell null, or whitespace-only for string columns.
+    empty_row_count = _count_all_empty_rows(frame)
 
     # Issue detection
     issues: list[dict[str, Any]] = []
