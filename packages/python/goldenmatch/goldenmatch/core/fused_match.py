@@ -259,8 +259,10 @@ def match_fused_fs_ready(config: Any) -> bool:
     whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`) and no
     custom `level_thresholds` (the fused kernel, like `score_block_pairs_fs`,
     only receives a level count + `partial_threshold` and bands similarities
-    with its hard-coded 2-/3-level rule — N-level custom banding must stay on
-    the Python paths). Transforms covered (derived host-side).
+    with its hard-coded default banding (2/3-level partial_threshold rule +
+    even-spaced N-level); custom `level_thresholds` lists never cross the
+    FFI, so they must stay on the Python paths). Transforms covered (derived
+    host-side).
     `run_match_fused_fs_arrow` takes a PRE-TRAINED `EMResult` — training is the
     caller's O(n) model fit, unchanged.
     """

@@ -1902,12 +1902,13 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
     frequency tables — those fields stay on the numpy path). No field may set
     ``level_thresholds`` either: the Rust kernel (``score_block_pairs_fs``)
     only receives ``levels`` (a level *count*) and ``partial_threshold`` and
-    bands raw similarities into levels itself using its own hard-coded
-    2-/3-level rule (see ``score_probabilistic_native``, which never passes
-    ``level_thresholds`` across the FFI boundary). It has no notion of an
-    arbitrary N-level custom threshold list, so an N-level matchkey must fall
-    back to the numpy/scalar path where `_levels_from_similarity` does the
-    banding in Python.
+    bands raw similarities into levels itself using its own hard-coded default
+    banding (2/3-level partial_threshold rule + even-spaced N-level; see
+    ``score.rs fs_level_from_sim`` and ``score_probabilistic_native``, which
+    never passes ``level_thresholds`` across the FFI boundary). Custom
+    ``level_thresholds`` lists never cross the FFI, so an N-level matchkey
+    with a custom threshold list must fall back to the numpy/scalar path
+    where `_levels_from_similarity` does the banding in Python.
     """
     if not _fs_native_enabled():
         return False

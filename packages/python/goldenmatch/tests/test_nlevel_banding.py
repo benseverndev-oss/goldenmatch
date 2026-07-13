@@ -39,14 +39,20 @@ def test_levels_lower_bound():
 
 
 def test_custom_thresholds_scalar_midband():
-    # exact-boundary similarity in a middle band, scalar path
-    mk = _mk(field="name", scorer="exact", levels=3, level_thresholds=[1.0, 0.5])
-    # exact scorer: same value -> 1.0 -> level 2; different -> 0.0 -> level 0
-    assert comparison_vector({"name": "a"}, {"name": "a"}, mk) == [2]
-    assert comparison_vector({"name": "a"}, {"name": "b"}, mk) == [0]
+    # Real jaro_winkler similarity landing in a MIDDLE band, scalar path.
+    # score_field('martha', 'marhta', 'jaro_winkler') measures ~0.9611
+    # (see goldenmatch.core.scorer.score_field). With level_thresholds=
+    # [1.0, 0.9] on a 3-level field: 0.9611 >= 0.9 but < 1.0 -> 1 threshold
+    # satisfied -> level 1 (the middle band, not top/bottom).
+    mk = _mk(field="name", scorer="jaro_winkler", levels=3,
+             level_thresholds=[1.0, 0.9])
+    assert comparison_vector({"name": "martha"}, {"name": "marhta"}, mk) == [1]
+    # exact match still lands top level 2; totally different lands level 0.
+    assert comparison_vector({"name": "martha"}, {"name": "martha"}, mk) == [2]
+    assert comparison_vector({"name": "martha"}, {"name": "zzzzzz"}, mk) == [0]
 
 
-def test_fallback_and_neutral_u_nlevel():
+def test_fallback_nlevel():
     from goldenmatch.core.probabilistic import _fallback_result
     mk = _mk(field="name", scorer="jaro_winkler", levels=5,
              level_thresholds=[1.0, 0.95, 0.9, 0.85])
@@ -61,9 +67,11 @@ def test_fallback_2_and_3_level_literals_unchanged():
     from goldenmatch.core.probabilistic import _fallback_result
     r2 = _fallback_result(_mk(field="x", scorer="exact", levels=2))
     assert r2.m_probs["x"] == [0.1, 0.9]
-    r3 = _mk(field="x", scorer="jaro_winkler", levels=3)
-    r3 = _fallback_result(r3)
+    assert r2.u_probs["x"] == [0.9, 0.1]
+    mk3 = _mk(field="x", scorer="jaro_winkler", levels=3)
+    r3 = _fallback_result(mk3)
     assert r3.m_probs["x"] == [0.05, 0.15, 0.80]
+    assert r3.u_probs["x"] == [0.80, 0.15, 0.05]
 
 
 # --- Native FS kernel guard for level_thresholds -----------------------------
@@ -76,8 +84,10 @@ def test_fallback_2_and_3_level_literals_unchanged():
 # `native_module().score_block_pairs_fs(...)` -- `f.level_thresholds` is never
 # read or passed across the FFI boundary anywhere in that function. The kernel
 # therefore bands raw rapidfuzz-rs similarities into levels using its own
-# hard-coded 2-/3-level rule, with no notion of an arbitrary N-level custom
-# threshold list. This differs from the vectorized/scalar paths, where
+# hard-coded default banding (2/3-level partial_threshold rule + even-spaced
+# N-level; see score.rs fs_level_from_sim), with no notion of an arbitrary
+# N-level CUSTOM threshold list -- custom level_thresholds lists never cross
+# the FFI. This differs from the vectorized/scalar paths, where
 # `f.level_thresholds` is threaded straight into `_levels_from_similarity`
 # (probabilistic.py lines 1579, 1691) and `comparison_vector` (line 325-330).
 # Since the kernel can't reproduce N-level custom banding, `_fs_native_eligible`
@@ -110,8 +120,31 @@ def test_level_thresholds_not_native_eligible_synthetic(monkeypatch):
     assert p._fs_native_eligible(mk_plain) is True
 
     mk_custom = _mk(field="name", scorer="jaro_winkler", levels=4,
-                     level_thresholds=[1.0, 0.92, 0.88])
+                    level_thresholds=[1.0, 0.92, 0.88])
     assert p._fs_native_eligible(mk_custom) is False
+
+
+def test_level_thresholds_router_selects_non_native_scorer(monkeypatch):
+    """Router-level guard: probabilistic_block_scorer must not hand a
+    level_thresholds matchkey to the native closure, even with native mocked
+    "available". It should fall through to the vectorized numpy scorer
+    (jaro_winkler is vectorized_scorer_supported), named ``_scorer`` --
+    see probabilistic_block_scorer's ``_native`` / ``_scorer`` / ``_scalar``
+    closures.
+    """
+    from goldenmatch.core.probabilistic import _fallback_result
+    from goldenmatch.core import probabilistic as p
+
+    monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", _fake_native_module
+    )
+
+    mk_custom = _mk(field="name", scorer="jaro_winkler", levels=4,
+                    level_thresholds=[1.0, 0.92, 0.88])
+    em = _fallback_result(mk_custom)
+    scorer = p.probabilistic_block_scorer(mk_custom, em)
+    assert scorer.__name__ == "_scorer"
 
 
 def _native_fs_available():
@@ -136,5 +169,5 @@ def test_level_thresholds_not_native_eligible_real_kernel(monkeypatch):
     assert p._fs_native_eligible(mk_plain) is True
 
     mk_custom = _mk(field="name", scorer="jaro_winkler", levels=4,
-                     level_thresholds=[1.0, 0.92, 0.88])
+                    level_thresholds=[1.0, 0.92, 0.88])
     assert p._fs_native_eligible(mk_custom) is False
