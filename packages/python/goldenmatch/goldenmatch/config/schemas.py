@@ -92,7 +92,7 @@ class MatchkeyField(BaseModel):
     model: str | None = None  # for embedding scorer
     columns: list[str] | None = None  # for record_embedding scorer
     column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
-    levels: int = 2  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
+    levels: int = Field(default=2, ge=2)  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
     partial_threshold: float = 0.8  # score >= this = partial agree (when levels=3)
     # Probabilistic-only: term-frequency (Winkler) weight adjustment. When True,
     # an exact agreement on a *rare* value carries more match weight than on a
