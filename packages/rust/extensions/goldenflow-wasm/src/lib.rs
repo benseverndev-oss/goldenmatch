@@ -24,6 +24,7 @@ mod wasm {
     use goldenflow_core::numeric;
     use goldenflow_core::phone;
     use goldenflow_core::phonetic;
+    use goldenflow_core::profile;
     use goldenflow_core::text;
     use goldenflow_core::url;
     use wasm_bindgen::prelude::*;
@@ -596,5 +597,32 @@ mod wasm {
             .iter()
             .map(|s| s.to_string())
             .collect()
+    }
+
+    // -- Auto-detect profile kernel (zero-config type inference) ------------------
+
+    /// Owned auto-detect type-inference DECISION over a `(string | null)[]` sample
+    /// plus a caller-derived `hint` ("numeric"/"boolean"/"date"/anything-else->Utf8).
+    /// Byte-identical to the Python `_infer_type_list` / native `infer_type_list_arrow`
+    /// regex stage — the SAME `goldenflow_core::profile::infer_type` kernel. The
+    /// caller owns the numeric/bool JS-type detection (-> `hint`) and the column-NAME
+    /// override; this kernel is a pure function of the column VALUES + hint.
+    ///
+    /// `values` arrives as a JS `(string | null)[]`; each element is mapped to
+    /// `Option<String>` (null/undefined -> `None`, else `JsValue::as_string()`).
+    #[wasm_bindgen]
+    pub fn infer_type(values: Vec<JsValue>, hint: String) -> String {
+        let owned: Vec<Option<String>> = values
+            .into_iter()
+            .map(|v| {
+                if v.is_null() || v.is_undefined() {
+                    None
+                } else {
+                    v.as_string()
+                }
+            })
+            .collect();
+        let view: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
+        profile::infer_type(&view, profile::hint_from_str(&hint))
     }
 }
