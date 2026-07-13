@@ -341,7 +341,23 @@ def _gather_with_nulls(series: pl.Series, idx: list[int]) -> pl.Series:
     ).to_series()
 
 
-def _build_date_arrays(sdf: pl.DataFrame, date_col: str | None) -> tuple[Any, Any] | None:
+def _ARROW_MOST_RECENT_ORDER_SAFE(t: Any) -> bool:
+    """Arrow twin of _MOST_RECENT_ORDER_SAFE_DTYPES: types whose int64 physical
+    cast is order-preserving vs the reference's Python-object compare. uint64
+    excluded (wraps on cast, same as the polars gate)."""
+    import pyarrow as pa
+
+    return (
+        pa.types.is_date(t)
+        or pa.types.is_timestamp(t)
+        or pa.types.is_time(t)
+        or pa.types.is_duration(t)
+        or pa.types.is_signed_integer(t)
+        or (pa.types.is_unsigned_integer(t) and t.bit_width < 64)
+    )
+
+
+def _build_date_arrays(sdf: Any, date_col: str | None) -> tuple[Any, Any] | None:
     """Build the ``(date_i64, null_mask_i64)`` Arrow arrays for a ``most_recent``
     date column, or ``None`` to decline. Shared by the scalar and group
     ``most_recent`` paths. Declines when the column is absent (the reference's
@@ -352,10 +368,24 @@ def _build_date_arrays(sdf: pl.DataFrame, date_col: str | None) -> tuple[Any, An
 
     if not date_col or date_col not in sdf.columns:
         return None
-    date_series = sdf.get_column(date_col)
-    if not isinstance(date_series.dtype, _MOST_RECENT_ORDER_SAFE_DTYPES):
-        return None
-    phys_list = date_series.to_physical().cast(pl.Int64).to_list()
+    # Deep-D2: ``sdf`` is the seam Frame; dual-rep dtype gate + physical i64.
+    from goldenmatch.core.frame import PolarsFrame
+
+    if isinstance(sdf, PolarsFrame):
+        date_series = sdf.native.get_column(date_col)
+        if not isinstance(date_series.dtype, _MOST_RECENT_ORDER_SAFE_DTYPES):
+            return None
+        phys_list = date_series.to_physical().cast(pl.Int64).to_list()
+    else:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        t = sdf.native.schema.field(date_col).type
+        if not _ARROW_MOST_RECENT_ORDER_SAFE(t):
+            return None
+        phys_list = pc.cast(
+            sdf.native.column(date_col).combine_chunks(), pa.int64()
+        ).to_pylist()
     date_vals = [0 if x is None else int(x) for x in phys_list]
     mask_vals = [1 if x is None else 0 for x in phys_list]
     return pa.array(date_vals, type=pa.int64()), pa.array(mask_vals, type=pa.int64())
@@ -480,28 +510,60 @@ def run_golden_fused_arrow(
     if fn is None:
         return None
 
+    # Deep-D2: dual-rep entry -- a pa.Table / seam Frame flows through the
+    # seam with NO polars round-trip (return type matches the input lane).
+    # Provenance assembly stays polars-only for now: bridge that case up front.
+    from goldenmatch.core.frame import Frame, PolarsFrame, to_frame
+
     df = columns
-    if "__cluster_id__" not in df.columns:
+    if provenance and not isinstance(df, pl.DataFrame):
+        _native = df.native if isinstance(df, Frame) else df
+        df = pl.from_arrow(_native)  # type: ignore[assignment]
+    fr = to_frame(df)
+    if "__cluster_id__" not in fr.columns:
         return None
+    _is_pl = isinstance(fr, PolarsFrame)
 
     # Spec 4.3: within-cluster members must be __row_id__-ascending for the
     # kernel's first-occurrence tie-breaks to match the reference.
-    sort_cols = ["__cluster_id__", "__row_id__"] if "__row_id__" in df.columns else ["__cluster_id__"]
-    sdf = df.sort(sort_cols)
+    sort_cols = ["__cluster_id__", "__row_id__"] if "__row_id__" in fr.columns else ["__cluster_id__"]
+    if _is_pl:
+        _sdf_native = fr.native.sort(sort_cols)
+        # Drop singletons (size <= 1), mirroring _multi_df_from_frames'
+        # size > 1 filter. The window filter preserves the sort order.
+        _sdf_native = _sdf_native.filter(pl.len().over("__cluster_id__") > 1)
+        sdf = to_frame(_sdf_native)
+    else:
+        sdf = fr.sort(sort_cols)
+        # Sorted input -> run_lengths gives per-cluster sizes in order; the
+        # repeated size>1 mask is the window filter's arrow twin.
+        _sizes = sdf.run_lengths("__cluster_id__")
+        if any(sz <= 1 for sz in _sizes):
+            import pyarrow as pa
 
-    # Drop singletons (size <= 1), mirroring _multi_df_from_frames' size > 1
-    # filter. A plain cluster frame carries no oversized flag, so ~oversized is
-    # trivially satisfied here. The window filter preserves the sort order.
-    sdf = sdf.filter(pl.len().over("__cluster_id__") > 1)
+            _mask: list[bool] = []
+            for sz in _sizes:
+                _mask.extend([sz > 1] * sz)
+            sdf = to_frame(sdf.native.filter(pa.array(_mask)))
 
     user_cols = [c for c in sdf.columns if not _is_internal(c) and c != "__cluster_id__"]
 
     if sdf.height == 0 or not user_cols:
         # Nothing to build -- an empty golden frame with the expected columns.
-        empty = {c: pl.Series(c, [], dtype=sdf[c].dtype) for c in user_cols}
-        empty["__cluster_id__"] = pl.Series("__cluster_id__", [], dtype=pl.Int64)
-        empty["__golden_confidence__"] = pl.Series("__golden_confidence__", [], dtype=pl.Float64)
-        empty_df = pl.DataFrame(empty)
+        if _is_pl:
+            empty = {c: pl.Series(c, [], dtype=sdf.native[c].dtype) for c in user_cols}
+            empty["__cluster_id__"] = pl.Series("__cluster_id__", [], dtype=pl.Int64)
+            empty["__golden_confidence__"] = pl.Series("__golden_confidence__", [], dtype=pl.Float64)
+            empty_df: Any = pl.DataFrame(empty)
+        else:
+            import pyarrow as pa
+
+            _tbl = sdf.native
+            _arrays = [pa.array([], type=_tbl.schema.field(c).type) for c in user_cols]
+            _names = list(user_cols)
+            _arrays += [pa.array([], type=pa.int64()), pa.array([], type=pa.float64())]
+            _names += ["__cluster_id__", "__golden_confidence__"]
+            empty_df = pa.Table.from_arrays(_arrays, names=_names)
         return (empty_df, []) if provenance else empty_df
 
     # ── Stage 5: identify group-owned columns (resolved as a unit, NOT via the
@@ -607,12 +669,19 @@ def run_golden_fused_arrow(
 
     import pyarrow as pa
 
+    def _col_i64_arrow(name: str) -> Any:
+        if _is_pl:
+            return sdf.native.get_column(name).cast(pl.Int64).to_arrow()
+        import pyarrow.compute as pc
+
+        return pc.cast(sdf.native.column(name).combine_chunks(), pa.int64())
+
     n = sdf.height
     if "__row_id__" in sdf.columns:
-        row_ids_arr = sdf.get_column("__row_id__").cast(pl.Int64).to_arrow()
+        row_ids_arr = _col_i64_arrow("__row_id__")
     else:
         row_ids_arr = pa.array(range(n), type=pa.int64())
-    cluster_ids_arr = sdf.get_column("__cluster_id__").cast(pl.Int64).to_arrow()
+    cluster_ids_arr = _col_i64_arrow("__cluster_id__")
 
     # Build the comparable keys per column from the RAW Python values:
     #   text = Python `str(v)` (byte-identical to the reference's `str(v)`;
@@ -628,7 +697,7 @@ def run_golden_fused_arrow(
     # code space as the referenced column's factorized winner value.
     col_maps: dict[str, dict] = {}
     for c in user_cols:
-        values = sdf.get_column(c).to_list()
+        values = sdf.column(c).to_list()
         text = [None if v is None else str(v) for v in values]
         codes, vmap = _factorize_with_map(values)
         col_maps[c] = vmap
@@ -652,7 +721,7 @@ def run_golden_fused_arrow(
     if need_source:
         if "__source__" not in sdf.columns:
             return None
-        src_values = sdf.get_column("__source__").to_list()
+        src_values = sdf.column("__source__").to_list()
         src_codes, src_map = _factorize_with_map(src_values)
         source_code_arr = pa.array(src_codes, type=pa.int64())
         for ci, rlist in enumerate(candidate_rules):
@@ -699,7 +768,7 @@ def run_golden_fused_arrow(
     qweights: list[Any] = [empty_f64 for _ in user_cols]
     if quality_scores is not None:
         if "__row_id__" in sdf.columns:
-            row_ids_list = sdf.get_column("__row_id__").to_list()
+            row_ids_list = sdf.column("__row_id__").to_list()
         else:
             row_ids_list = list(range(n))
         for ci, c in enumerate(user_cols):
@@ -721,8 +790,8 @@ def run_golden_fused_arrow(
         and "__row_id__" in sdf.columns
         and any(r.strategy == "confidence_majority" for rlist in candidate_rules for r in rlist)
     ):
-        cid_list = sdf.get_column("__cluster_id__").to_list()
-        rid_list = sdf.get_column("__row_id__").to_list()
+        cid_list = sdf.column("__cluster_id__").to_list()
+        rid_list = sdf.column("__row_id__").to_list()
         pos = 0
         n_local = len(cid_list)
         while pos < n_local:
@@ -876,15 +945,6 @@ def run_golden_fused_arrow(
         side,
     )
 
-    out: dict[str, pl.Series] = {}
-    for ci, c in enumerate(user_cols):
-        out[c] = _gather_with_nulls(sdf.get_column(c), list(winner_idx[ci]))
-
-    result = pl.DataFrame(out)
-    result = result.with_columns(
-        pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
-    )
-
     # __golden_confidence__ = mean of per-UNIT confidences. A resolution unit is a
     # scalar column OR a whole group (resolve.py:100/149) -- so the denominator is
     # `n_scalar_cols + n_groups`, NOT n_output_cols: each group contributes exactly
@@ -904,7 +964,33 @@ def run_golden_fused_arrow(
         / denom
         for k in range(n_clusters)
     ]
-    result = result.with_columns(pl.Series("__golden_confidence__", gconf, dtype=pl.Float64))
+
+    if _is_pl:
+        out: dict[str, pl.Series] = {}
+        for ci, c in enumerate(user_cols):
+            out[c] = _gather_with_nulls(sdf.native.get_column(c), list(winner_idx[ci]))
+        result: Any = pl.DataFrame(out)
+        result = result.with_columns(
+            pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
+        )
+        result = result.with_columns(
+            pl.Series("__golden_confidence__", gconf, dtype=pl.Float64)
+        )
+    else:
+        # Arrow gather twin (probed): take() with null indices yields nulls --
+        # the -1 sentinel maps to None, preserving the source dtype exactly.
+        _tbl = sdf.native
+        _arrays = []
+        for ci, c in enumerate(user_cols):
+            _idx = pa.array(
+                [int(i) if i >= 0 else None for i in winner_idx[ci]], type=pa.int64()
+            )
+            _arrays.append(_tbl.column(c).combine_chunks().take(_idx))
+        _arrays.append(pa.array([int(x) for x in cluster_ids_out], type=pa.int64()))
+        _arrays.append(pa.array(gconf, type=pa.float64()))
+        result = pa.Table.from_arrays(
+            _arrays, names=[*user_cols, "__cluster_id__", "__golden_confidence__"]
+        )
 
     if not provenance:
         return result
@@ -912,7 +998,7 @@ def run_golden_fused_arrow(
     # ── Stage 8: per-field provenance (assembled from data the kernel already
     # returns -- no kernel change). See _build_provenance_records for the mapping.
     records = _build_provenance_records(
-        sdf=sdf,
+        sdf=sdf.native,
         n=n,
         user_cols=user_cols,
         out=out,
