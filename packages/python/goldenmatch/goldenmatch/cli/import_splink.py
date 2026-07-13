@@ -65,10 +65,27 @@ def import_splink_cmd(
     # persist the model -- a failed YAML write must not leave an orphaned
     # model.json behind.
     persist_model = conversion.em_model is not None and bool(model_out)
+
+    # Partial-model guard: mixed bare/trained Splink input yields a model
+    # that does not cover every converted field. Shipping that config+model
+    # pair would fail at runtime with a misleading FSModelMismatchError
+    # ("matchkey changed since training"), so refuse --model-out instead:
+    # the config is still written, WITHOUT model_path (re-trains via EM).
+    missing_fields: list[str] = []
+    if persist_model:
+        covered = set(conversion.em_model.match_weights)
+        missing_fields = [
+            f.field
+            for f in conversion.config.matchkeys[0].fields
+            if f.field and f.field not in covered
+        ]
+        if missing_fields:
+            persist_model = False
+
     if conversion.em_model is not None:
-        if model_out:
+        if persist_model:
             conversion.config.matchkeys[0].model_path = model_out
-        else:
+        elif not model_out:
             console.print(
                 "[yellow]Warning:[/yellow] the Splink input carried trained m/u "
                 "probabilities, but they were NOT persisted -- pass "
@@ -85,6 +102,17 @@ def import_splink_cmd(
             f"[red]Could not write config to[/red] [cyan]{output}[/cyan]: {exc}"
         )
         raise typer.Exit(code=1) from None
+
+    if missing_fields:
+        err_console.print(
+            "[red]--model-out refused:[/red] the imported Splink model does "
+            f"not cover field(s) [bold]{', '.join(missing_fields)}[/bold] of "
+            "matchkeys[0] (mixed bare/trained input). A partial model would "
+            "fail FS model validation at runtime. The config was written to "
+            f"[cyan]{output}[/cyan] WITHOUT model_path; it will re-train via "
+            "EM on first run. No model file was written."
+        )
+        raise typer.Exit(code=1)
 
     if persist_model:
         # save_json creates parent dirs itself (os.makedirs), but can still

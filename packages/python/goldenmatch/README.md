@@ -221,7 +221,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 ### Migrating from Splink
 - **One-command config conversion** — `goldenmatch import-splink settings.json -o goldenmatch.yaml [--model-out model.json]` converts a Splink settings (or trained-model) JSON into a GoldenMatch YAML config; `--model-out` persists trained m/u probabilities so GoldenMatch reuses them instead of re-training via EM. Same conversion from Python: `gm.from_splink("settings.json")`, or the `convert_splink_config` MCP tool.
 - **What converts cleanly vs what warns** — exact/Jaro-Winkler/Levenshtein-style comparison levels, `block_on` blocking rules (incl. SUBSTR), and trained m/u import all map directly; unrecognized SQL (OR rules, cross-column conditions, custom UDFs) is dropped with a warning in the returned `ConversionReport` (pass `strict=True` to make any lossy finding raise instead).
-- **Parity-gated** — a converted config lands within F1 0.02 of native Splink on the shared `bench_er_headtohead` synthetic-person benchmark (gate: 0.05).
+- **Parity-gated** — a converted config lands within the 0.05 F1 gate of native Splink on the shared `bench_er_headtohead` synthetic-person benchmark (measured delta 0.0203).
 
 ### Learning Memory (v1.6.0)
 - **Persistent corrections** — every steward decision, unmerge, boost-tab y/n, LLM vote, and agent approve/reject writes to a local SQLite (or Postgres) store

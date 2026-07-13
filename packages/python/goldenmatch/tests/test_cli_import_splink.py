@@ -172,6 +172,42 @@ def test_trained_model_without_model_out_warns(tmp_path):
     assert "not" in result.stdout.lower() and "persist" in result.stdout.lower()
 
 
+# ── 3b. Mixed bare/trained input + --model-out: partial-model refusal ─────
+
+
+def test_partial_model_refused_with_model_out(tmp_path):
+    """Mixed bare/trained input: the imported model covers first_name but not
+    surname. --model-out must be REFUSED (exit 1), no model file written, and
+    the config written WITHOUT model_path (pinned behavior: the YAML is still
+    useful -- it just re-trains via EM on first run)."""
+    settings = _full_settings(
+        comparisons=[_trained_jw_comparison(), _exact_only_comparison("surname")]
+    )
+    settings_path = _write_settings(tmp_path, settings)
+    out_path = tmp_path / "out.yaml"
+    model_path = tmp_path / "model.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "import-splink",
+            str(settings_path),
+            "-o", str(out_path),
+            "--model-out", str(model_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not model_path.exists()
+    assert "surname" in result.output
+
+    # Config IS written, without model_path -- and still loads.
+    assert out_path.exists()
+    loaded = yaml.safe_load(out_path.read_text(encoding="utf-8"))
+    assert "model_path" not in loaded["matchkeys"][0]
+    GoldenMatchConfig(**loaded)
+
+
 # ── 4. --strict on lossy input ────────────────────────────────────────────
 
 

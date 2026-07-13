@@ -693,7 +693,19 @@ def import_em(
 
         if not had_any_prob:
             # This comparison carried no trained data at all (mixed
-            # bare/trained input); nothing to import for this field.
+            # bare/trained input); nothing to import for this field. The
+            # resulting model is PARTIAL: it cannot be used via model_path
+            # (FS model validation requires coverage of every matchkey
+            # field), so surface it loudly rather than skipping silently.
+            report.warn(
+                comp_path,
+                f"comparison for field '{fld.field}' carries no trained m/u "
+                "while other comparisons do (mixed bare/trained input); the "
+                f"imported model will NOT cover field '{fld.field}', and "
+                "using it via model_path with this partial model will fail "
+                "validation at runtime",
+                mapped_to=None,
+            )
             continue
 
         if lost_m or lost_u:
@@ -725,6 +737,19 @@ def import_em(
 
     if not m_probs:
         return None
+
+    # Splink model exports carry no term-frequency tables, so an imported
+    # EMResult always has tf_freqs=None -- tf_adjustment on a converted field
+    # silently no-ops until the model is retrained. Say so.
+    tf_fields = [fld.field for _, _, fld in comparisons if fld.tf_adjustment]
+    if tf_fields:
+        report.info(
+            "comparisons",
+            "term-frequency tables are not part of a Splink model export; "
+            f"tf_adjustment on field(s) {', '.join(sorted(set(tf_fields)))} "
+            "will only take effect after retraining",
+            mapped_to="em.tf_freqs",
+        )
 
     match_weights = {
         f: [
@@ -847,8 +872,10 @@ class SplinkConversion:
     ``em_model`` (when present) is an in-memory :class:`EMResult` only -- this
     library call never touches disk. Callers who want EM-skip-on-reuse
     behavior must persist it themselves (``em_model.save_json(path)``) and
-    set the resulting path on ``config.matchkeys[0].model_path``. The CLI and
-    MCP surfaces (Tasks 12/13) do this automatically.
+    set the resulting path on ``config.matchkeys[0].model_path``. The CLI
+    does this via ``--model-out``; the MCP surface deliberately does NOT
+    persist -- it returns ``em_model`` inline instead (the remote surface is
+    filesystem-free), leaving persistence to the caller.
     """
 
     config: GoldenMatchConfig

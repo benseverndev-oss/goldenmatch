@@ -479,8 +479,10 @@ def test_out_of_range_band_with_m_u_drops_and_renormalizes():
 
 def test_mixed_bare_and_trained_comparisons_skips_bare_had_any_prob():
     """One trained comparison + one bare comparison in the same settings:
-    import_em must import the trained field and silently skip the bare one
-    (had_any_prob short-circuit) rather than filling it with epsilon noise.
+    import_em must import the trained field and skip the bare one
+    (had_any_prob short-circuit) rather than filling it with epsilon noise --
+    and it must WARN that the resulting partial model does not cover the
+    bare field (using it via model_path would fail validation at runtime).
     """
     trained_comp = _trained_jw_comparison()
     bare_comp = {
@@ -512,6 +514,40 @@ def test_mixed_bare_and_trained_comparisons_skips_bare_had_any_prob():
     assert "first_name" in em.m_probs
     assert "surname" not in em.m_probs
     assert "surname" not in em.u_probs
+    partial = [
+        f for f in report.findings
+        if f.severity == "warning" and "will NOT cover field 'surname'" in f.message
+    ]
+    assert len(partial) == 1
+    assert "model_path" in partial[0].message
+
+
+def test_imported_model_with_tf_adjustment_field_infos_no_tf_tables():
+    """A trained comparison whose levels carry tf_adjustment_column converts
+    to a field with tf_adjustment=True -- but Splink model exports carry no
+    term-frequency tables (imported EMResult has tf_freqs=None), so import_em
+    must emit an info finding saying TF only takes effect after retraining.
+    """
+    comp = _trained_jw_comparison()
+    comp["comparison_levels"][1]["tf_adjustment_column"] = "first_name"
+    settings = _trained_settings([comp])
+    report = ConversionReport()
+
+    field = convert_comparison(comp, 0, report)
+    assert field is not None
+    assert field.tf_adjustment is True
+
+    em = import_em([(comp, 0, field)], settings, report)
+
+    assert em is not None
+    assert em.tf_freqs is None
+    infos = [
+        f for f in report.findings
+        if f.severity == "info" and "term-frequency" in f.message
+    ]
+    assert len(infos) == 1
+    assert "first_name" in infos[0].message
+    assert "retraining" in infos[0].message
 
 
 # ── convert_scalars ──────────────────────────────────────────────────────────
