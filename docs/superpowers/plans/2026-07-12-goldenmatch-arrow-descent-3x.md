@@ -160,6 +160,42 @@ cannot move while downstream still takes pl.LazyFrame):**
 - D6 after the spine holds a full-suite arrow lane with zero polars imports
   (assert via an import-hook test, the goldencheck 2.0.0 precedent).
 
+## Frame-lane WIDENING roadmap (2026-07-13, post-deep-D2)
+
+Ben's observation: ~11 of 13 feature classes DECLINE the Frame lane, and the
+default config (quality/transform default-ON) never engages it. The decline
+lane falls back to polars -- which cannot survive D6 (no polars to fall back
+to). Every flag must resolve to PORT (consumer goes dual-rep) or EXTRA-GATE
+(polars becomes that feature's own declared dep, the quality/transform
+pattern) before D6. Criterion: default-config impact x port cost.
+
+| Flag | Decision | Batch |
+| --- | --- | --- |
+| quality prep (default-ON) | EXTRA-GATE (locked design) -- BRIDGE at run_quality_check entry (pa->pl->pa, zero-copy) | W-1 (this) |
+| transform prep (default-ON) | EXTRA-GATE (locked design) -- same bridge | W-1 (this) |
+| writes_outputs (write_output+lineage) | PORT (core, common) | W-2 |
+| validation rules/auto_fix | PORT (validate_dataframe/auto_fix seam twins exist: evaluate_validation_rule, auto_fix) | W-3 |
+| identity | PORT (core feature; reads row attrs off collected) | W-4 |
+| memory corrections | PORT (apply_corrections column reads) | W-4 |
+| auto-suggest / block analyzer | PORT (W3d reductions already seam) | W-5 |
+| postflight/preflight (auto_config) | PORT with the controller lane | W-5 |
+| probabilistic EM | PORT (probabilistic.py already part-seam via D5a/c) | W-6 |
+| NE-on-exact | PORT (small; _apply_negative_evidence_to_exact_pairs column reads) | W-6 |
+| throughput sketch tier | EXTRA-GATE candidate (rare, polars-heavy local block) or late port | W-7 |
+| rerank (cross-encoder) | LATE PORT (rare; reads text cols) | W-7 |
+| llm boost/scorer | LATE PORT (rare; reads row text) | W-7 |
+| semantic blocking | PORT (excluded by eager gate today; embedding reads) | W-7 |
+| domain extraction | PORT (eager gate exclusion) | W-7 |
+| adaptive golden rules | LATE PORT (refiner reads prepared_df) | W-7 |
+
+W-1 (quality/transform bridges) restructures the engine Frame branch to run
+the stages in CLASSIC PREP ORDER (quality -> transform -> standardize ->
+matchkeys -> precompute; the E.164 stage-order lesson) -- the eager
+standardize/matchkey shortcut only applies when prep is a no-op, exactly as
+today. Prep CACHE is skipped on the Frame lane (correctness first). GATE:
+the differential harness datasets run DEFAULT configs (quality ON), so
+post-W-1 they exercise the Frame lane cross-rep e2e for the first time.
+
 ## Risks
 
 | Risk | Mitigation |
