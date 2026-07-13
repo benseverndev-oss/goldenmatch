@@ -780,6 +780,19 @@ def _polars_native_eligible(
     return True
 
 
+def _polars_importable() -> bool:
+    """True when polars is actually installed (D6 fallback gate: the fast
+    columnar + vectorized survivorship routes are polars-present WALL
+    optimizations; without polars the seam-native oracle/default routes
+    carry the load -- the spec's correct-but-slower Arrow+Python lane)."""
+    try:
+        import polars  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def build_golden_records_batch(
     multi_df: Any,  # pl.DataFrame | ray.data.Dataset (Phase 4)
     rules: GoldenRulesConfig,
@@ -884,7 +897,11 @@ def build_golden_records_batch(
             else pl.from_arrow(multi_df)
         )
 
-    if _polars_native_eligible(rules, quality_scores):
+    if _polars_native_eligible(rules, quality_scores) and _polars_importable():
+        # Polars-present WALL optimization (approximates most_complete
+        # confidence -- the historical contract when polars is installed).
+        # Without polars, fall through to the seam-native routes below
+        # (the spec's correct-but-slower Arrow+Python fallback lane).
         user_cols = [
             c for c in _mf.columns
             if not _is_internal(c) and c != "__cluster_id__"
@@ -906,6 +923,7 @@ def build_golden_records_batch(
             provenance is False
             and quality_scores is None
             and survivorship_native_eligible(rules, provenance)
+            and _polars_importable()
         ):
             from goldenmatch.core.survivorship.native import (
                 _golden_df_to_rows,
@@ -916,17 +934,24 @@ def build_golden_records_batch(
 
         from goldenmatch.core.survivorship.conditions import build_resolution_order
         from goldenmatch.core.survivorship.resolve import resolve_cluster
-        _s_pl = _mdf_pl()
+        # A9: seam-native oracle -- seam sort (stable; the D5d-accepted
+        # delta) + run_lengths adjacent-run slices == the old
+        # partition_by(maintain_order=True) on key-sorted input.
         s_sorted = (
-            _s_pl.sort(["__cluster_id__", "__row_id__"])
-            if "__row_id__" in _s_pl.columns
-            else _s_pl.sort("__cluster_id__")
+            _mf.sort(["__cluster_id__", "__row_id__"])
+            if "__row_id__" in _mf.columns
+            else _mf.sort(["__cluster_id__"])
         )
         s_user_cols = [c for c in s_sorted.columns if not _is_internal(c) and c != "__cluster_id__"]
         order = build_resolution_order(rules.field_rules, rules.field_groups, s_user_cols)
         s_results = []
-        for cdf in s_sorted.partition_by("__cluster_id__", maintain_order=True):
-            cid = cdf["__cluster_id__"][0]
+        _s_sizes = s_sorted.run_lengths("__cluster_id__")
+        _s_cids = s_sorted.column("__cluster_id__").to_list()
+        _s_off = 0
+        for _s_sz in _s_sizes:
+            cdf = s_sorted.slice(_s_off, _s_sz)
+            cid = _s_cids[_s_off]
+            _s_off += _s_sz
             per_scores = (cluster_pair_scores or {}).get(int(cid))
             rec, prov = resolve_cluster(cdf, rules, order, quality_scores=quality_scores,
                                         pair_scores=per_scores, provenance=provenance,
