@@ -366,7 +366,9 @@ export function convertComparison(comp: RawObj, idx: number, report: ConversionR
         field: col,
         scorer,
         levels: 2,
-        partialThreshold: thresholds[0],
+        // levelsCount === 2 => thresholds.length === 1 (levelsCount =
+        // thresholds.length + 1), so index 0 is always present here.
+        partialThreshold: thresholds[0]!,
         tfAdjustment,
       });
     }

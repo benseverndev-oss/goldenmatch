@@ -241,6 +241,7 @@ install whichever you need directly: `pg` (Postgres), `@duckdb/node-api`
 ## Advanced Features
 
 - **Probabilistic matching** — Fellegi-Sunter with Splink-style EM
+- **Splink config converter** — `import-splink` CLI / `convert_splink_config` MCP tool / `fromSplink()` API converts a Splink settings (or trained-model) JSON into a GoldenMatch config, importing trained m/u probabilities directly
 - **PPRL** — Privacy-preserving record linkage with SHA-256 bloom filters (3 security levels: standard, high, paranoid)
 - **Graph ER** — Multi-table entity resolution with evidence propagation
 - **Streaming** — Incremental single-record matching
@@ -264,6 +265,7 @@ See [`packages/goldenmatch-js/examples/`](https://github.com/benseverndev-oss/go
 | Core matching | Polars + rapidfuzz | Pure TS |
 | Refdata name scorers | `given_name_aliased_jw` + `name_freq_weighted_jw` | Both (bundled tables, 4-decimal parity) |
 | Fellegi-Sunter | Yes | Yes |
+| Splink config converter (`import-splink` / `convert_splink_config`) | Yes | Yes |
 | PPRL | SHA-256 | SHA-256 (interop verified byte-for-byte) |
 | Graph ER | Yes | Yes |
 | LLM scorer | Yes | Yes (via fetch, edge-safe) |

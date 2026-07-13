@@ -39,7 +39,11 @@ export {
 } from "./agent/session-file.js";
 
 // YAML config file I/O
-export { loadConfigFile, writeConfigFile } from "./config-file.js";
+export { loadConfigFile, writeConfigFile, stringifyConfigYaml } from "./config-file.js";
+
+// Splink -> GoldenMatch config converter: CLI-side file I/O wrapper
+export { runImportSplinkCli } from "./cli-import-splink.js";
+export type { ImportSplinkCliOptions, ImportSplinkWriters } from "./cli-import-splink.js";
 
 // Cloud connectors (registers built-in connectors as a side-effect)
 export {

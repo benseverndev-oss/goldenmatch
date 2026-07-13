@@ -55,6 +55,7 @@ mcp_tools:
   - analyze_data
   - auto_configure
   - controller_telemetry
+  - convert_splink_config
   - dedupe
   - evaluate
   - explain_cluster
@@ -86,7 +87,6 @@ mcp_tools:
   - certify_recall
   - compare_clusters
   - config_weaknesses
-  - convert_splink_config
   - create_domain
   - documents_ingest
   - documents_suggest_schema
@@ -143,6 +143,7 @@ cli_commands:
   - demo
   - evaluate
   - identity
+  - import-splink
   - match
   - mcp-serve
   - memory
@@ -155,7 +156,6 @@ cli_commands:
   - compare-clusters
   - config
   - explain
-  - import-splink
   - incremental
   - ingest-docs
   - init

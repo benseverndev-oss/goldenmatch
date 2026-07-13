@@ -368,6 +368,7 @@ function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
       convergenceThreshold: optNum(obj.convergenceThreshold),
       linkThreshold: optNum(obj.linkThreshold),
       reviewThreshold: optNum(obj.reviewThreshold),
+      modelPath: optStr(obj.modelPath),
     }) as MatchkeyConfig;
   }
   // weighted

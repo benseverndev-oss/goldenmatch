@@ -51,6 +51,16 @@ export function loadConfigFile(path: string): GoldenMatchConfig {
 }
 
 /**
+ * Serialize a GoldenMatchConfig to a YAML string (no file I/O). Shared by
+ * `writeConfigFile` and any caller (e.g. the Splink-import CLI) that needs to
+ * control the write itself (ordering, error messages).
+ */
+export function stringifyConfigYaml(config: GoldenMatchConfig): string {
+  const yamlMod = loadYamlModule();
+  return configToYaml(config, yamlMod.stringify);
+}
+
+/**
  * Serialize a GoldenMatchConfig to YAML and write it to disk.
  * Creates parent directories as needed.
  */
@@ -60,7 +70,5 @@ export function writeConfigFile(path: string, config: GoldenMatchConfig): void {
   if (dir && dir !== "." && !existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  const yamlMod = loadYamlModule();
-  const yamlStr = configToYaml(config, yamlMod.stringify);
-  writeFileSync(resolved, yamlStr, "utf8");
+  writeFileSync(resolved, stringifyConfigYaml(config), "utf8");
 }

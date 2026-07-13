@@ -100,6 +100,16 @@ export interface ProbabilisticMatchkey {
   /** v1.11: negative evidence — unused at scoring time on probabilistic but
    *  preserved here for round-trip parity with Python's MatchkeyConfig. */
   readonly negativeEvidence?: readonly NegativeEvidenceField[];
+  /**
+   * Persisted EM model path (Splink-style train-once -> reuse). Mirrors
+   * Python `MatchkeyConfig.model_path`: when set and the file exists, the
+   * trained EMResult is loaded and EM training is skipped; when set and
+   * absent, EM runs and the result is saved there. TS scoring/EM does not
+   * currently consume this itself — it is a pass-through/round-trip field so
+   * a Splink-imported trained model's `model_path` survives the TS config
+   * layer for the Python runtime (or a future TS consumer) to honor.
+   */
+  readonly modelPath?: string;
 }
 
 export type MatchkeyConfig =
@@ -568,6 +578,8 @@ export interface MakeMatchkeyConfigInput {
   readonly reviewThreshold?: number;
   /** v1.11: negative evidence (round-trips through the factory). */
   readonly negativeEvidence?: readonly NegativeEvidenceField[];
+  /** Persisted EM model path (probabilistic-only; round-trips through the factory). */
+  readonly modelPath?: string;
 }
 
 /** Create a MatchkeyConfig with sensible defaults. Produces the correct variant. */
@@ -613,6 +625,7 @@ export function makeMatchkeyConfig(
       ...(partial.negativeEvidence !== undefined
         ? { negativeEvidence: partial.negativeEvidence }
         : {}),
+      ...(partial.modelPath !== undefined ? { modelPath: partial.modelPath } : {}),
     };
     return out;
   }
