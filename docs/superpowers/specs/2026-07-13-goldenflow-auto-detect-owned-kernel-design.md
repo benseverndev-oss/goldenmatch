@@ -18,8 +18,8 @@ in the zero-config path so the whole auto-detect flow is Rust-authored under the
 
 ## Motivation (driver, ranked)
 
-1. **Reference-mode / owned-kernel (primary).** Profiling + type inference is the
-   only stage of auto-detect still computed in Python (`_infer_type` /
+1. **Reference-mode / owned-kernel (primary).** Type inference is the only
+   auto-detect *decision* stage still computed in Python (`_infer_type` /
    `_infer_type_list` regex heuristics). Owning it in `goldenflow-core` with
    native/WASM/Python byte-parity makes the zero-config decision Rust-authored
    and cross-surface, matching the Wave 0-D program.
@@ -63,7 +63,7 @@ profiling/inference module. The native `Column` pyclass
   the Arrow buffer / raw Python value is the byte-exact source of truth.
 - Two native execution paths over one core: **columnar** (zero-copy Arrow
   `Column.profile()`, the scale path threaded through `engine/columnar.py`) and
-  **arrow-free** (`profile_column_list_arrow(list)` + goldenflow-wasm export → TS).
+  **arrow-free** (`infer_type_list_arrow(list)` + goldenflow-wasm export → TS).
 - Byte-identical `inferred_type` and decision-equivalent `unique_pct` vs both
   current reference functions, proven by a cross-surface parity corpus.
 - Pure-Python `_infer_type`/`_infer_type_list`/`_profile_column` retained as the
@@ -85,17 +85,18 @@ profiling/inference module. The native `Column` pyclass
 ## Architecture
 
 ```
-                    goldenflow_core::profile   (arrow-free, always compiled = ORACLE)
-                    profile_column(values: &[Option<&str>], hint: TypeHint)
-                        -> ColumnProfileOut { null_count, unique_count,
-                                              samples: Vec<String>, inferred_type }
-                             ▲                         ▲                    ▲
-             ┌───────────────┘                         │                    └───────────────┐
-   Path 1: COLUMNAR (zero-copy Arrow)        Path 2a: arrow-free list        Path 2b: WASM/TS
-   native-flow  Column.profile()            native-flow                      goldenflow-wasm
-   - StringArray -> &str view (no copy)      profile_column_list_arrow(list)   profile_column(values,hint)
-   - typed arrays: null/unique off buffers   (mirrors apply_chain_str_list)    -> TS profiler
-     + hint, no regex
+   goldenflow_core::profile   (arrow-free, always compiled = ORACLE)
+     infer_type(values: &[Option<&str>], hint) -> String        [the DECISION, every path]
+     profile_column(values, hint) -> ColumnProfileOut           [Path-1-only wrapper:
+                                                                  infer_type + null/unique/samples]
+                     ▲ profile_column          ▲ infer_type            ▲ infer_type
+         ┌───────────┘                         │                       └────────────┐
+   Path 1: COLUMNAR (zero-copy Arrow)   Path 2a: arrow-free list         Path 2b: WASM/TS
+   native-flow  Column.profile()        native-flow                      goldenflow-wasm
+   -> full ColumnProfileOut             infer_type_list_arrow(list)       infer_type(values,hint)
+   - StringArray -> &str view (no copy)   -> String (inferred_type)          -> String
+   - typed arrays: null/unique off        - null/unique/samples stay        - TS inferType;
+     buffers + hint, no regex               PY over raw values                stats = cheap TS
 ```
 
 ### `goldenflow_core::profile` (new module)
