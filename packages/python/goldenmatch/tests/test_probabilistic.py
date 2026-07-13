@@ -1188,6 +1188,10 @@ class TestNativeFSParity:
     def test_block_scorer_picks_native_when_opted_in(self, monkeypatch):
         from goldenmatch.core import probabilistic as p
         monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        # _fs_native_enabled also consults native_enabled("block_scoring"),
+        # which reads GOLDENMATCH_NATIVE; force it so an outer =0 run (the
+        # pure-Python lane) doesn't flip this native-routing assertion.
+        monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
         mk = _make_probabilistic_mk()
         em = p.train_em(_make_dedupe_df(), mk, n_sample_pairs=100, blocking_fields=["zip"])
         scorer = p.probabilistic_block_scorer(mk, em)

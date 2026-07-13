@@ -108,8 +108,10 @@ number of levels: pass descending similarity cutoffs (`len == levels - 1`), and
 a pair's comparison level is the count of thresholds its similarity satisfies
 (satisfying all of them = the top "agree" level, none = "disagree"). Omit it to
 keep the classic 2/3-level behavior (`partial_threshold` covers the 3-level
-case). The native FS kernel and the fused-match path decline
-`level_thresholds` matchkeys and fall back to the standard scoring path.
+case). The native FS kernel scores `level_thresholds` matchkeys natively from
+`goldenmatch-native` >= 0.1.14 (older wheels fall back to the pure-Python
+scoring path automatically); the fused-match path still declines them and
+falls back.
 
 ```python
 import goldenmatch as gm

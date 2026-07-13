@@ -12,8 +12,8 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
-use numpy::{IntoPyArray, PyArray1, PyArray2};
 use goldenmatch_score_core::score_one;
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -175,11 +175,6 @@ pub fn score_block_pairs(
     })
 }
 
-/// Map a per-field similarity to a comparison level, matching
-/// `core/probabilistic._levels_from_similarity`:
-///   2 levels: 1 if sim >= partial_threshold else 0
-///   3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
-///   N levels: count of k in 1..N with sim >= k/N (even spacing)
 /// Normalize a summed Fellegi-Sunter match weight to a [0,1] score. Shared by
 /// `score_block_pairs_fs` and the fused `match_fused_fs` so the two cannot drift.
 /// `calibrated` = posterior probability `1/(1+2^-(prior_w+w))`; else linear
@@ -201,8 +196,24 @@ pub(crate) fn fs_normalize(
     }
 }
 
+/// Map a per-field similarity to a comparison level, matching
+/// `core/probabilistic._levels_from_similarity`:
+///   custom `level_thresholds`: level = count of thresholds t with sim >= t
+///     (inclusive, order-independent — mirrors the Python custom branch
+///     byte-for-byte; len(thresholds)+1 levels total)
+///   2 levels: 1 if sim >= partial_threshold else 0
+///   3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
+///   N levels: count of k in 1..N with sim >= k/N (even spacing)
 #[inline]
-pub(crate) fn fs_level_from_sim(sim: f64, n_levels: u8, partial_threshold: f64) -> usize {
+pub(crate) fn fs_level_from_sim(
+    sim: f64,
+    n_levels: u8,
+    partial_threshold: f64,
+    level_thresholds: Option<&[f64]>,
+) -> usize {
+    if let Some(ts) = level_thresholds {
+        return ts.iter().filter(|&&t| sim >= t).count();
+    }
     match n_levels {
         2 => usize::from(sim >= partial_threshold),
         3 => {
@@ -241,11 +252,24 @@ pub(crate) fn fs_level_from_sim(sim: f64, n_levels: u8, partial_threshold: f64) 
 /// Scorers are score_one ids 0..=3 (jaro_winkler/levenshtein/token_sort/exact);
 /// soundex/embedding fields aren't native-eligible (caller falls back to numpy).
 ///
+/// `level_thresholds` (optional, one entry per field) carries a field's custom
+/// similarity->level banding (PR #1749's `level_thresholds`): when
+/// `Some(ts)` for field `f`, its level is the count of thresholds `t` with
+/// `sim >= t` (inclusive), and `match_weights[f]` must have `ts.len() + 1`
+/// entries. `None` (whole kwarg or per field) keeps the legacy 2/3/N-even
+/// banding. Old wheels never see this kwarg (Python gates on the
+/// `FS_SUPPORTS_LEVEL_THRESHOLDS` capability flag).
+///
 /// Parity with the numpy path is within rapidfuzz tolerance (same as the
 /// weighted kernel) — a pair could differ only if its normalized score sits
 /// within that tolerance of `threshold`. Asserted in tests/test_native_parity.py.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
+#[pyo3(signature = (
+    row_ids, block_sizes, field_values, scorer_ids, levels, partial_thresholds,
+    match_weights, calibrated, prior_w, min_weight, weight_range, threshold,
+    exclude, level_thresholds=None,
+))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
     row_ids: Vec<i64>,
@@ -261,9 +285,37 @@ pub fn score_block_pairs_fs(
     weight_range: f64,
     threshold: f64,
     exclude: Vec<(i64, i64)>,
-) -> Vec<(i64, i64, f64)> {
+    level_thresholds: Option<Vec<Option<Vec<f64>>>>,
+) -> PyResult<Vec<(i64, i64, f64)>> {
     let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
     let n_fields = scorer_ids.len();
+
+    if let Some(lt) = &level_thresholds {
+        if lt.len() != n_fields {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_fs: level_thresholds length {} != field count {n_fields}",
+                lt.len()
+            )));
+        }
+        for (f, ts) in lt.iter().enumerate() {
+            if let Some(ts) = ts {
+                if match_weights[f].len() != ts.len() + 1 {
+                    return Err(PyValueError::new_err(format!(
+                        "score_block_pairs_fs: field {f} has {} match_weights but \
+                         {} level_thresholds (need thresholds + 1 weights)",
+                        match_weights[f].len(),
+                        ts.len()
+                    )));
+                }
+            }
+        }
+    }
+    // Per-field threshold slices hoisted out of the per-pair-per-field hot loop
+    // (no Option chasing / re-borrowing inside the rayon closure).
+    let field_thresholds: Vec<Option<&[f64]>> = match &level_thresholds {
+        Some(lt) => lt.iter().map(|ts| ts.as_deref()).collect(),
+        None => vec![None; n_fields],
+    };
 
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
     let mut offset = 0usize;
@@ -272,7 +324,7 @@ pub fn score_block_pairs_fs(
         offset += size;
     }
 
-    py.detach(|| {
+    let result = py.detach(|| {
         spans
             .par_iter()
             .flat_map_iter(|&(offset, size)| {
@@ -292,7 +344,12 @@ pub fn score_block_pairs_fs(
                                 let level = match (&field_values[f][i], &field_values[f][j]) {
                                     (Some(a), Some(b)) => {
                                         let sim = score_one(scorer_ids[f], a, b);
-                                        fs_level_from_sim(sim, levels[f], partial_thresholds[f])
+                                        fs_level_from_sim(
+                                            sim,
+                                            levels[f],
+                                            partial_thresholds[f],
+                                            field_thresholds[f],
+                                        )
                                     }
                                     // Null on either side -> disagree (level 0).
                                     _ => 0,
@@ -315,7 +372,8 @@ pub fn score_block_pairs_fs(
                 local
             })
             .collect()
-    })
+    });
+    Ok(result)
 }
 
 /// A block-sorted Utf8 column read zero-copy from an Arrow buffer. Polars emits
@@ -657,9 +715,7 @@ pub fn score_field_matrix(
         // score_one returns [0,1] for ids 0-3 already (id=2 calls
         // fuzz::ratio which is [0,1] in rapidfuzz-rs, NOT the *100 scale
         // the PyO3-exposed token_sort_ratio uses).
-        0..=3 => compute_pairwise(&a, &b, symmetric, |x, y| {
-            score_one(scorer_id, x, y) as f32
-        }),
+        0..=3 => compute_pairwise(&a, &b, symmetric, |x, y| score_one(scorer_id, x, y) as f32),
         _ => {
             // 4 = soundex_match. Precompute soundex codes once per string
             // -- N*M comparisons would otherwise re-soundex every row pair.
@@ -824,6 +880,32 @@ mod tests {
         assert_eq!(soundex_code('M'), b'5'); // M N
         assert_eq!(soundex_code('R'), b'6'); // R
         assert_eq!(soundex_code('A'), b'0'); // vowels / other
+    }
+
+    #[test]
+    fn fs_level_from_sim_custom_thresholds_count_inclusive() {
+        // level = count of thresholds t with sim >= t (inclusive), matching
+        // Python _levels_from_similarity's custom branch byte-for-byte.
+        let ts = [1.0, 0.92, 0.88];
+        let sims = [1.0, 0.95, 0.90, 0.5, 0.88];
+        let expected = [3usize, 2, 1, 0, 1];
+        for (sim, want) in sims.iter().zip(expected.iter()) {
+            assert_eq!(fs_level_from_sim(*sim, 4, 0.8, Some(&ts)), *want);
+        }
+    }
+
+    #[test]
+    fn fs_level_from_sim_none_keeps_legacy_banding() {
+        // 2-level: 1 if sim >= partial_threshold else 0.
+        assert_eq!(fs_level_from_sim(0.9, 2, 0.8, None), 1);
+        assert_eq!(fs_level_from_sim(0.7, 2, 0.8, None), 0);
+        // 3-level: 0.95 exact band, partial band, else 0.
+        assert_eq!(fs_level_from_sim(1.0, 3, 0.8, None), 2);
+        assert_eq!(fs_level_from_sim(0.9, 3, 0.8, None), 1);
+        assert_eq!(fs_level_from_sim(0.5, 3, 0.8, None), 0);
+        // N-even (5 levels): count of k in 1..5 with sim >= k/5.
+        assert_eq!(fs_level_from_sim(0.85, 5, 0.8, None), 4);
+        assert_eq!(fs_level_from_sim(0.4, 5, 0.8, None), 2);
     }
 
     #[test]

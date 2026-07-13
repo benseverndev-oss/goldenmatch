@@ -263,7 +263,10 @@ pub fn match_fused_fs(
                         let level = match (vals[f][i], vals[f][j]) {
                             (Some(a), Some(b)) => {
                                 let sim = score_one(scorer_ids[f], a, b);
-                                fs_level_from_sim(sim, levels[f], partial_thresholds[f])
+                                // Fused stays declined for level_thresholds via
+                                // match_fused_fs_ready (Python side); port the
+                                // kwarg when the fused path goes live.
+                                fs_level_from_sim(sim, levels[f], partial_thresholds[f], None)
                             }
                             _ => 0, // null on either side -> disagree (level 0)
                         };

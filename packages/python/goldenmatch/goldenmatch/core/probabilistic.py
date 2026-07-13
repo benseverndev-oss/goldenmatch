@@ -1899,31 +1899,38 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
 
     Every field scorer must be one the kernel's score_one implements, and no
     field may opt into TF adjustment (the kernel doesn't carry the per-value
-    frequency tables — those fields stay on the numpy path). No field may set
-    ``level_thresholds`` either: the Rust kernel (``score_block_pairs_fs``)
-    only receives ``levels`` (a level *count*) and ``partial_threshold`` and
-    bands raw similarities into levels itself using its own hard-coded default
-    banding (2/3-level partial_threshold rule + even-spaced N-level; see
-    ``score.rs fs_level_from_sim`` and ``score_probabilistic_native``, which
-    never passes ``level_thresholds`` across the FFI boundary). Custom
-    ``level_thresholds`` lists never cross the FFI, so an N-level matchkey
-    with a custom threshold list must fall back to the numpy/scalar path
-    where `_levels_from_similarity` does the banding in Python.
+    frequency tables — those fields stay on the numpy path). Custom
+    ``level_thresholds`` banding is native from goldenmatch-native >= 0.1.14:
+    the kernel's ``score_block_pairs_fs`` takes an optional per-field
+    ``level_thresholds`` kwarg and ``score.rs fs_level_from_sim`` bands with
+    the exact ``_levels_from_similarity`` custom semantics (level = count of
+    satisfied thresholds, ``>=`` inclusive). Support is detected via the
+    kernel's ``FS_SUPPORTS_LEVEL_THRESHOLDS`` module const — an older wheel
+    without it declines here, so those environments keep the pure-Python
+    (numpy/scalar) fallback where `_levels_from_similarity` does the banding.
     """
     if not _fs_native_enabled():
         return False
     if not mk.fields:
         return False
+    needs_level_thresholds = False
     for f in mk.fields:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
             return False
         if getattr(f, "tf_adjustment", False):
             return False
         if getattr(f, "level_thresholds", None) is not None:
-            return False
+            needs_level_thresholds = True
     try:
         from goldenmatch.core._native_loader import native_module
-        return hasattr(native_module(), "score_block_pairs_fs")
+        mod = native_module()
+        if not hasattr(mod, "score_block_pairs_fs"):
+            return False
+        if needs_level_thresholds and not getattr(
+            mod, "FS_SUPPORTS_LEVEL_THRESHOLDS", False
+        ):
+            return False  # old wheel: level_thresholds never crosses its FFI
+        return True
     except Exception:
         return False
 
@@ -1972,10 +1979,24 @@ def score_probabilistic_native(
     # Kernel canonicalizes pair_key to (min,max); pass exclude pre-canonicalized.
     excl = [(a, b) if a < b else (b, a) for a, b in exclude_pairs]
 
-    pairs = native_module().score_block_pairs_fs(
-        row_ids, [n], field_values, scorer_ids, levels, partials, weights,
-        calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
-    )
+    # Custom banding (goldenmatch-native >= 0.1.14). Only send the kwarg when a
+    # field actually sets level_thresholds — an old wheel must NEVER see it,
+    # even if the eligibility gate ever drifted.
+    level_thresholds = [
+        list(f.level_thresholds) if f.level_thresholds is not None else None
+        for f in mk.fields
+    ]
+    if any(t is not None for t in level_thresholds):
+        pairs = native_module().score_block_pairs_fs(
+            row_ids, [n], field_values, scorer_ids, levels, partials, weights,
+            calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
+            level_thresholds=level_thresholds,
+        )
+    else:
+        pairs = native_module().score_block_pairs_fs(
+            row_ids, [n], field_values, scorer_ids, levels, partials, weights,
+            calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
+        )
     return [(a, b, round(float(s), 4)) for a, b, s in pairs]
 
 

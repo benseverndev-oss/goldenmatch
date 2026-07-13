@@ -11,8 +11,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   matchkey fields accept explicit per-level similarity cutoffs (descending,
   `len == levels - 1`; a pair's level = the count of thresholds its similarity
   satisfies), generalizing the fixed 2/3-level agree/partial/disagree banding.
-  Scalar and vectorized scoring paths both honor them; the native FS kernel and
-  the fused-match path decline `level_thresholds` matchkeys and fall back.
+  Scalar and vectorized scoring paths both honor them; the fused-match path
+  declines `level_thresholds` matchkeys and falls back.
+- **Native N-level scoring** (`goldenmatch-native` 0.1.14): the native Rust FS
+  kernel scores custom `level_thresholds` banding natively — byte-identical to
+  the pure-Python `_levels_from_similarity` semantics — via an optional
+  per-field `level_thresholds` kwarg on `score_block_pairs_fs`. Capability is
+  detected through the kernel's `FS_SUPPORTS_LEVEL_THRESHOLDS` const, so older
+  wheels keep the automatic pure-Python fallback (no behavior change).
 - **Splink config converter**: `from_splink()` (top-level export) converts a
   Splink settings or trained-model JSON (dict or path) into a validated
   GoldenMatch config plus a `ConversionReport` of lossy findings; trained m/u
