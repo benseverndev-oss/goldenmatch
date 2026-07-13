@@ -26,9 +26,9 @@ def test_total_tool_count_is_77():
     assert len(AGENT_TOOLS) == 19   # +1 retrieve_similar (#1089) +1 upload_dataset
     assert len(MEMORY_TOOLS) == 7
     assert len(IDENTITY_TOOLS) == 15  # +3 MDM ops (#1114) +5 agent-memory ops (#1075/#1078)
-    assert len(_BASE_TOOLS) == 31   # 26 + 5 cross-language naming aliases (#1451)
+    assert len(_BASE_TOOLS) == 32   # 26 + 5 cross-language naming aliases (#1451) + convert_splink_config
     assert len(ROUTING_TOOLS) == 3  # plan_routing / explain_routing / lint_routing
-    assert len(TOOLS) == 77   # 71 (69 + documents_ingest/documents_suggest_schema) + 5 aliases + upload_dataset
+    assert len(TOOLS) == 78   # 71 (69 + documents_ingest/documents_suggest_schema) + 5 aliases + upload_dataset + convert_splink_config
     # No duplicate tool names across the whole surface.
     names = [t.name for t in TOOLS]
     assert len(names) == len(set(names))
@@ -42,6 +42,7 @@ def test_new_tool_names_registered():
         "evaluate", "analyze_blocking", "compare_clusters", "schema_match",
         "lineage", "list_runs", "rollback", "sensitivity", "incremental",
         "identity_show", "memory_import", "config_weaknesses", "review_config",
+        "convert_splink_config",
     ):
         assert new in names, f"{new} missing from TOOLS"
 
