@@ -8,15 +8,19 @@ from goldenmatch._polars_lazy import pl
 
 
 def write_output(
-    df: pl.DataFrame,
+    df,
     directory: str | Path,
     run_name: str,
     output_type: str,
     fmt: str,
 ) -> Path:
-    """Write a DataFrame to the specified format.
+    """Write a frame to the specified format (csv, parquet, xlsx).
 
-    Supports csv, parquet, and xlsx formats.
+    W-2 widening: dual-rep. A ``pa.Table`` writes parquet NATIVELY
+    (pyarrow.parquet); csv/xlsx BRIDGE through polars because the polars
+    writers' formatting (csv quoting/null spelling, xlsx engine) is the
+    pinned output contract -- an arrow-native csv writer would change
+    bytes on disk. Revisit at D6 (format change allowed at a major).
     Returns the Path of the written file.
     """
     directory = Path(directory)
@@ -24,6 +28,15 @@ def write_output(
 
     filename = f"{run_name}_{output_type}.{fmt}"
     path = directory / filename
+
+    is_pl = isinstance(df, pl.DataFrame)
+    if fmt == "parquet" and not is_pl:
+        import pyarrow.parquet as pq
+
+        pq.write_table(df, path)
+        return path
+    if not is_pl:
+        df = pl.from_arrow(df)
 
     if fmt == "csv":
         df.write_csv(path)

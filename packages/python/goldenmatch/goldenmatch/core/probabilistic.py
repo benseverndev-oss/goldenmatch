@@ -392,7 +392,9 @@ def _sample_pairs(
     seed: int = 42,
 ) -> list[tuple[int, int]]:
     """Sample random pairs for EM training."""
-    row_ids = df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
+    row_ids = _tf_w6(df).column("__row_id__").to_list()
     rng = random.Random(seed)
 
     if len(row_ids) < 2:
@@ -469,8 +471,9 @@ def _sample_blocked_pairs(
 
     for bi in order:
         block = blocks[bi]
-        block_df = block.materialize().native
-        row_ids = sorted(block_df["__row_id__"].to_list())  # canonical order before the seeded sample
+        row_ids = sorted(
+            block.materialize().column("__row_id__").to_list()
+        )  # canonical order before the seeded sample
         if len(row_ids) < 2:
             continue
         # Limit per-block pairs for large blocks
@@ -529,9 +532,11 @@ def train_em(
     if blocking_fields is None:
         blocking_fields = []
 
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
     cols = [f.field for f in mk.fields if f.field != "__record__"]
     row_lookup: dict[int, dict] = {}
-    for row in df.select(["__row_id__"] + cols).to_dicts():
+    for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
 
     # ── Step 1: Estimate u from RANDOM pairs (Splink approach) ──
@@ -792,9 +797,11 @@ def estimate_m_from_labels(
     if blocking_fields is None:
         blocking_fields = []
 
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
     cols = [f.field for f in mk.fields if f.field != "__record__"]
     row_lookup: dict[int, dict] = {}
-    for row in df.select(["__row_id__"] + cols).to_dicts():
+    for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
 
     # Keep only labels whose ids are present and distinct; canonicalize + dedup.
@@ -985,9 +992,11 @@ def train_em_continuous(
     if blocking_fields is None:
         blocking_fields = []
 
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
     cols = [f.field for f in mk.fields if f.field != "__record__"]
     row_lookup: dict[int, dict] = {}
-    for row in df.select(["__row_id__"] + cols).to_dicts():
+    for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
 
     if blocks:
@@ -1121,7 +1130,9 @@ def score_probabilistic_continuous(
     if exclude_pairs is None:
         exclude_pairs = set()
 
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
+    row_ids = _tf_w6(block_df).column("__row_id__").to_list()
     n = len(row_ids)
     if n < 2:
         return []
@@ -1505,7 +1516,9 @@ def score_probabilistic_vectorized(
     if exclude_pairs is None:
         exclude_pairs = set()
 
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
+    row_ids = _tf_w6(block_df).column("__row_id__").to_list()
     n = len(row_ids)
     if n < 2:
         return []
@@ -1610,8 +1623,10 @@ def score_probabilistic_vectorized_batch(
     spans: list[tuple[int, int]] = []
     row_ids: list[int] = []
     start = 0
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
     for bdf in block_dfs:
-        rid = bdf["__row_id__"].to_list()
+        rid = _tf_w6(bdf).column("__row_id__").to_list()
         spans.append((start, start + len(rid)))
         row_ids.extend(rid)
         start += len(rid)
@@ -1727,7 +1742,7 @@ def score_probabilistic_blocks_batched(
         rows = 0
         for block in blocks:
             bdf = _bdf(block)
-            h = bdf.height
+            h = block.n_rows()
             if batch and rows + h > cap:
                 units.append(batch)
                 batch, rows = [], 0
@@ -1883,7 +1898,9 @@ def score_probabilistic_native(
 
     if exclude_pairs is None:
         exclude_pairs = set()
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
+    row_ids = _tf_w6(block_df).column("__row_id__").to_list()
     n = len(row_ids)
     if n < 2:
         return []
