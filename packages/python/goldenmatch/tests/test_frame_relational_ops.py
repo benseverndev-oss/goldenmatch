@@ -731,3 +731,78 @@ def test_w3_distinct_row_count() -> None:
     )
     for frame in (pf, af):
         assert frame.distinct_row_count() == 3
+
+
+# ---- autoconfig arrow-port PR-1 seam ops -----------------------------------
+
+
+def _pr1_pair() -> tuple[PolarsFrame, ArrowFrame]:
+    # Mixed dtypes (int/float/str/bool), a __-prefixed row-id column, duplicate
+    # rows, and nulls in every non-__ column.
+    tbl = pa.table(
+        {
+            "__row_id__": pa.array([0, 1, 2, 3], type=pa.int64()),
+            "i": pa.array([10, 10, None, 20], type=pa.int64()),
+            "f": pa.array([1.5, 1.5, 2.0, None], type=pa.float64()),
+            "s": pa.array(["x", "x", None, "y"], type=pa.string()),
+            "b": pa.array([True, True, None, False], type=pa.bool_()),
+        }
+    )
+    return PolarsFrame(pl.from_arrow(tbl)), ArrowFrame(tbl)
+
+
+def test_pr1_cast_all_str_casts_non_underscore_columns() -> None:
+    pf, af = _pr1_pair()
+    pf_out = pf.cast_all_str()
+    af_out = af.cast_all_str()
+    for frame in (pf_out, af_out):
+        # every non-__ column is now string/text ...
+        assert frame.column("i").semantic_dtype() == "text"
+        assert frame.column("f").semantic_dtype() == "text"
+        assert frame.column("s").semantic_dtype() == "text"
+        assert frame.column("b").semantic_dtype() == "text"
+        # ... while the __-prefixed row-id column is UNTOUCHED (still numeric).
+        assert frame.column("__row_id__").semantic_dtype() == "numeric"
+    # per-cell string values identical across backends; null cells stay null.
+    for col in ("i", "f", "s", "b"):
+        pf_vals = pf_out.column(col).to_list()
+        af_vals = af_out.column(col).to_list()
+        assert pf_vals == af_vals
+        assert None in pf_vals  # the null cell survived the cast
+    # untouched row-id column keeps its integer values on both backends.
+    assert pf_out.column("__row_id__").to_list() == [0, 1, 2, 3]
+    assert af_out.column("__row_id__").to_list() == [0, 1, 2, 3]
+
+
+def test_pr1_cast_all_str_matches_run_dedupe_df_polars_semantics() -> None:
+    # PolarsFrame must equal run_dedupe_df's raw cast (pipeline.py:439).
+    pf, _ = _pr1_pair()
+    want = pf.native.cast({c: pl.Utf8 for c in pf.native.columns if not c.startswith("__")})
+    got = pf.cast_all_str().native
+    assert got.schema == want.schema
+    assert got.to_dicts() == want.to_dicts()
+
+
+def test_pr1_count_duplicate_rows_parity() -> None:
+    # Two fully-identical rows (all cells incl. nulls) -> one duplicate row.
+    pf, af = _w3_pair(
+        {
+            "a": pa.array([1, 1, 2, None], type=pa.int64()),
+            "b": pa.array(["x", "x", "y", "z"], type=pa.string()),
+        }
+    )
+    for frame in (pf, af):
+        assert frame.count_duplicate_rows() == frame.height - frame.distinct_row_count()
+    # 4 rows, 3 distinct -> exactly one duplicate; both backends agree.
+    assert pf.count_duplicate_rows() == af.count_duplicate_rows() == 1
+
+
+def test_pr1_count_duplicate_rows_no_dupes() -> None:
+    pf, af = _w3_pair(
+        {
+            "a": pa.array([1, 2, 3], type=pa.int64()),
+            "b": pa.array(["x", "y", "z"], type=pa.string()),
+        }
+    )
+    for frame in (pf, af):
+        assert frame.count_duplicate_rows() == 0
