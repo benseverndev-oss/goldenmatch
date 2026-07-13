@@ -557,3 +557,58 @@ def test_frame_lane_validation_and_autofix(tmp_path, monkeypatch):
     assert q(frame_lane) == q(classic)
     assert q(frame_lane) is not None and len(q(frame_lane)) == 1  # bob quarantined
     assert _norm_result(frame_lane) == _norm_result(classic)
+
+
+def test_frame_lane_identity_and_memory_bridges(tmp_path, monkeypatch):
+    """W-4 (transitional bridges): identity resolution + memory corrections
+    run on the Frame lane via entry bridges; identity summary + results
+    match the classic lane."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        IdentityConfig,
+        MemoryConfig,
+        QualityConfig,
+        TransformConfig,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+
+    def run(lane):
+        cfg = GoldenMatchConfig(
+            matchkeys=[
+                MatchkeyConfig(
+                    name="exact_name",
+                    type="exact",
+                    fields=[MatchkeyField(field="first"), MatchkeyField(field="last")],
+                )
+            ],
+            quality=QualityConfig(mode="disabled"),
+            transform=TransformConfig(mode="disabled"),
+            identity=IdentityConfig(
+                enabled=True, backend="sqlite",
+                path=str(tmp_path / f"{lane}-identity.db"),
+            ),
+            memory=MemoryConfig(
+                enabled=True, backend="sqlite",
+                path=str(tmp_path / f"{lane}-memory.db"),
+            ),
+        )
+        return P.run_dedupe([(str(csv), "people")], cfg)
+
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    frame_lane = run("frame")
+    assert hits and hits[0] is True, f"lane not engaged: {hits}"
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic = run("classic")
+
+    assert _norm_result(frame_lane) == _norm_result(classic)
+    fi, ci = frame_lane.get("identity_summary"), classic.get("identity_summary")
+    assert (fi is None) == (ci is None)
+    if fi is not None:
+        assert fi.get("entities_created") == ci.get("entities_created")

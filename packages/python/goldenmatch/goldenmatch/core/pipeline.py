@@ -353,6 +353,11 @@ def _resolve_identities(
     if not config.identity or not config.identity.enabled:
         return None
 
+    # W-4 widening (TRANSITIONAL): identity internals are polars-heavy
+    # (schema-aligned concat, incremental mini-frames) -- bridge the Frame
+    # lane's pa.Table at entry. The deep identity port is a D6 prerequisite.
+    df = _as_polars_df(df)
+
     # Phase 6: distributed dispatch when clusters is a Ray Dataset.
     try:
         from goldenmatch.distributed._utils import is_ray_dataset
@@ -549,6 +554,9 @@ def _apply_memory_post(
     """Apply stored corrections to scored pairs. Returns (pairs, stats|None)."""
     if memory_store is None or config.memory is None:
         return all_pairs, None
+    # W-4 widening (TRANSITIONAL): apply_corrections' record-hash builder is
+    # a polars expr chain -- bridge at entry; deep port is a D6 prerequisite.
+    df = _as_polars_df(df)
     try:
         from goldenmatch.core.memory.corrections import apply_corrections
         # f.field is Optional[str] at schema level but is non-None for every
@@ -4109,10 +4117,8 @@ def _frame_lane_eligible(
         return False
     if getattr(config, "_preflight_report", None) is not None:
         return False
-    if config.memory and config.memory.enabled:
-        return False
-    if config.identity and config.identity.enabled:
-        return False
+    # W-4: memory + identity no longer decline -- both bridge (pa->pl) at
+    # their entries (TRANSITIONAL; deep ports are D6 prerequisites).
     if config.blocking and getattr(config.blocking, "auto_suggest", False):
         return False
     # W-3: validation rules/auto_fix no longer decline -- both entries are
