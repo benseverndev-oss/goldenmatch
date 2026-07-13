@@ -356,6 +356,164 @@ def test_detect_trained_true_when_any_level_has_m_probability():
     assert detect_trained(settings) is True
 
 
+# ── Carry-over edge cases (Task 10 quality review) ───────────────────────────
+
+
+def test_unassigned_level_filled_with_epsilon_and_warns():
+    """A recognized agree-band level with NO m/u at all leaves its
+    GoldenMatch index unassigned -- exercise the epsilon-fill path
+    (import_em lines ~660-669), distinct from the "partial data" (one side
+    present) and "dropped" (unrecognized SQL) paths already covered above.
+    """
+    comp = {
+        "output_column_name": "first_name",
+        "comparison_levels": [
+            {
+                "sql_condition": '"first_name_l" IS NULL OR "first_name_r" IS NULL',
+                "is_null_level": True,
+            },
+            {
+                "sql_condition": '"first_name_l" = "first_name_r"',
+                "m_probability": 0.5,
+                "u_probability": 0.02,
+            },
+            {
+                # Recognized (jw >= 0.92) but carries no m/u at all.
+                "sql_condition": (
+                    'jaro_winkler_similarity("first_name_l", "first_name_r") >= 0.92'
+                ),
+            },
+            {
+                "sql_condition": "ELSE",
+                "m_probability": 0.1,
+                "u_probability": 0.70,
+            },
+        ],
+    }
+    settings = _trained_settings([comp])
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+    assert field is not None
+    assert field.levels == 3  # exact + jw>=0.92 band + ELSE
+
+    em = import_em([(comp, 0, field)], settings, report)
+    assert em is not None
+
+    m = em.m_probs["first_name"]
+    u = em.u_probs["first_name"]
+    epsilon = 1e-6
+    total_m = 0.5 + epsilon + 0.1
+    total_u = 0.02 + epsilon + 0.70
+    # Index 1 is the unassigned jw>=0.92 band (levels: 0=ELSE, 1=jw band,
+    # 2=exact).
+    assert m[1] == pytest.approx(epsilon / total_m, rel=1e-6)
+    assert u[1] == pytest.approx(epsilon / total_u, rel=1e-6)
+
+    fill_warns = [
+        f
+        for f in report.findings
+        if f.severity == "warning" and "no m/u probability" in f.message
+    ]
+    assert len(fill_warns) == 1
+
+
+def test_out_of_range_band_with_m_u_drops_and_renormalizes():
+    """A band whose converted threshold falls outside (0, 1] is dropped by
+    convert_comparison during field construction; if that same (now-orphaned)
+    level still carries m/u, import_em can't match it to any surviving
+    threshold and must drop + renormalize (the `idx is None` branch), not
+    silently misattribute it.
+    """
+    comp = {
+        "output_column_name": "surname",
+        "comparison_levels": [
+            {
+                "sql_condition": '"surname_l" IS NULL OR "surname_r" IS NULL',
+                "is_null_level": True,
+            },
+            {
+                "sql_condition": '"surname_l" = "surname_r"',
+                "m_probability": 0.6,
+                "u_probability": 0.05,
+            },
+            {
+                # levenshtein <= 20 with the assumed length of 10 converts to
+                # sim = 1 - 20/10 = -1.0, out of (0, 1] range -> dropped by
+                # convert_comparison, but still carries m/u here.
+                "sql_condition": 'levenshtein("surname_l", "surname_r") <= 20',
+                "m_probability": 0.3,
+                "u_probability": 0.15,
+            },
+            {
+                "sql_condition": "ELSE",
+                "m_probability": 0.1,
+                "u_probability": 0.80,
+            },
+        ],
+    }
+    settings = _trained_settings([comp])
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+    assert field is not None
+    assert field.levels == 2  # exact + ELSE only; out-of-range band dropped
+
+    em = import_em([(comp, 0, field)], settings, report)
+    assert em is not None
+
+    m = em.m_probs["surname"]
+    u = em.u_probs["surname"]
+    assert sum(m) == pytest.approx(1.0, abs=1e-9)
+    assert sum(u) == pytest.approx(1.0, abs=1e-9)
+    # Surviving mass: m = 0.6 (exact) + 0.1 (ELSE) = 0.7; the 0.3/0.15 from
+    # the dropped out-of-range band must NOT appear anywhere.
+    assert m[1] == pytest.approx(0.6 / 0.7, abs=1e-9)
+    assert m[0] == pytest.approx(0.1 / 0.7, abs=1e-9)
+
+    lost_warns = [
+        f
+        for f in report.findings
+        if f.severity == "warning" and "does not match any" in f.message
+    ]
+    assert len(lost_warns) == 1
+
+
+def test_mixed_bare_and_trained_comparisons_skips_bare_had_any_prob():
+    """One trained comparison + one bare comparison in the same settings:
+    import_em must import the trained field and silently skip the bare one
+    (had_any_prob short-circuit) rather than filling it with epsilon noise.
+    """
+    trained_comp = _trained_jw_comparison()
+    bare_comp = {
+        "output_column_name": "surname",
+        "comparison_levels": [
+            {
+                "sql_condition": '"surname_l" IS NULL OR "surname_r" IS NULL',
+                "is_null_level": True,
+            },
+            {"sql_condition": '"surname_l" = "surname_r"'},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+    settings = _trained_settings([trained_comp, bare_comp])
+    report = ConversionReport()
+
+    trained_field = convert_comparison(trained_comp, 0, report)
+    bare_field = convert_comparison(bare_comp, 1, report)
+    assert trained_field is not None
+    assert bare_field is not None
+
+    em = import_em(
+        [(trained_comp, 0, trained_field), (bare_comp, 1, bare_field)],
+        settings,
+        report,
+    )
+
+    assert em is not None
+    assert "first_name" in em.m_probs
+    assert "surname" not in em.m_probs
+    assert "surname" not in em.u_probs
+
+
 # ── convert_scalars ──────────────────────────────────────────────────────────
 
 

@@ -7,12 +7,20 @@ the input carried trained m/u probabilities).
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field as dc_field
+from pathlib import Path
 from typing import Literal
 
-from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyField
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.core.probabilistic import EMResult
 
 Severity = Literal["info", "warning", "error"]
@@ -550,8 +558,8 @@ def import_em(
             else:
                 partial_threshold = fld.partial_threshold
 
-                def agree_index_for(r: RecognizedLevel, _pt: float = partial_threshold) -> int | None:
-                    if r.sim_threshold is None:
+                def agree_index_for(r: RecognizedLevel, _pt: float | None = partial_threshold) -> int | None:
+                    if r.sim_threshold is None or _pt is None:
                         return None
                     return 1 if abs(r.sim_threshold - _pt) < 1e-9 else None
         else:
@@ -578,12 +586,13 @@ def import_em(
             # skew log2(m/u) hard; floor it with epsilon and warn instead.
             if m_p is None or u_p is None:
                 missing_side = "m_probability" if m_p is None else "u_probability"
+                mapped_prefix = "em.m_probs" if missing_side == "m_probability" else "em.u_probs"
                 report.warn(
                     level_path,
                     f"level carries partial trained data ({missing_side} "
                     f"missing) for field '{fld.field}'; missing side filled "
                     f"with epsilon ({epsilon})",
-                    mapped_to=f"em.m_probs.{fld.field}",
+                    mapped_to=f"{mapped_prefix}.{fld.field}",
                 )
                 if m_p is None:
                     m_p = epsilon
@@ -687,13 +696,24 @@ def import_em(
         for f in m_probs
     }
 
+    if "probability_two_random_records_match" in settings:
+        proportion_matched = settings["probability_two_random_records_match"]
+    else:
+        proportion_matched = 0.05
+        report.info(
+            "probability_two_random_records_match",
+            "probability_two_random_records_match absent from trained settings; "
+            "assumed default 0.05",
+            mapped_to="em.proportion_matched",
+        )
+
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
         match_weights=match_weights,
         converged=True,
         iterations=0,
-        proportion_matched=settings.get("probability_two_random_records_match", 0.05),
+        proportion_matched=proportion_matched,
         tf_freqs=None,
         tf_collision=None,
     )
@@ -763,9 +783,166 @@ def convert_scalars(settings: dict, report: ConversionReport) -> dict:
             f"link_type='{link_type}' -> use GoldenMatch's {entry_point}",
             mapped_to=entry_point,
         )
+    elif link_type is not None:
+        report.info(
+            "link_type",
+            f"unrecognized link_type={link_type!r}, ignored",
+            mapped_to=None,
+        )
 
     for key in _INFRA_IGNORED_KEYS:
         if key in settings:
             report.info(key, f"'{key}' ignored (engine infra)", mapped_to=None)
 
     return kwargs
+
+
+# ── Public entry point ───────────────────────────────────────────────────────
+
+_MATCHKEY_NAME = "splink_import"
+_PLACEHOLDER_PREFIX = "matchkeys[?].fields[?]"
+
+
+@dataclass
+class SplinkConversion:
+    """Result of :func:`from_splink`.
+
+    ``em_model`` (when present) is an in-memory :class:`EMResult` only -- this
+    library call never touches disk. Callers who want EM-skip-on-reuse
+    behavior must persist it themselves (``em_model.save_json(path)``) and
+    set the resulting path on ``config.matchkeys[0].model_path``. The CLI and
+    MCP surfaces (Tasks 12/13) do this automatically.
+    """
+
+    config: GoldenMatchConfig
+    report: ConversionReport
+    em_model: EMResult | None
+
+
+def _load_settings(source: dict | str | Path) -> dict:
+    if isinstance(source, dict):
+        return dict(source)  # shallow copy: never mutate the caller's dict
+
+    if isinstance(source, (str, Path)):
+        path = Path(source)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SplinkConversionError(f"could not read Splink settings file {path}: {exc}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SplinkConversionError(f"malformed JSON in Splink settings file {path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise SplinkConversionError(
+                f"Splink settings file {path} must contain a JSON object at the top "
+                f"level, got {type(data).__name__}"
+            )
+        return data
+
+    raise SplinkConversionError(
+        f"from_splink() source must be a dict, str, or Path, got {type(source).__name__}"
+    )
+
+
+def _patch_field_placeholders(report: ConversionReport, comp_path: str, field_idx: int) -> None:
+    """Resolve the `matchkeys[?].fields[?]` placeholder `convert_comparison`
+    leaves on its own findings, now that the field's final position in the
+    assembled matchkey is known.
+    """
+    resolved = f"matchkeys[0].fields[{field_idx}]"
+    for f in report.findings:
+        if f.splink_path == comp_path and f.mapped_to and f.mapped_to.startswith(_PLACEHOLDER_PREFIX):
+            f.mapped_to = resolved + f.mapped_to[len(_PLACEHOLDER_PREFIX):]
+
+
+def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkConversion:
+    """Convert a Splink settings dict / JSON file into a GoldenMatch config.
+
+    Args:
+        source: A Splink settings dict, or a path (``str``/``Path``) to a
+            JSON file containing one. Bare (untrained) or trained (carrying
+            ``m_probability``/``u_probability``) settings are both accepted.
+        strict: When True, ANY warning or error finding raises
+            :class:`SplinkConversionError` (a fully lossless conversion is
+            required). When False (default), only error-severity findings
+            raise -- e.g. zero convertible comparisons or blocking rules.
+
+    Returns:
+        A :class:`SplinkConversion` with a validated ``GoldenMatchConfig``,
+        the full ``ConversionReport``, and an ``EMResult`` when the input
+        settings were trained (``None`` for bare settings). The library
+        never persists the ``EMResult`` to disk -- see
+        :class:`SplinkConversion`'s docstring.
+
+    Raises:
+        SplinkConversionError: on malformed input, zero convertible
+            comparisons, zero convertible blocking rules, or (in ``strict``
+            mode) any lossy finding.
+    """
+    settings = _load_settings(source)
+    report = ConversionReport()
+
+    survivors: list[tuple[dict, int, MatchkeyField]] = []
+    for idx, comp in enumerate(settings.get("comparisons", [])):
+        field = convert_comparison(comp, idx, report)
+        if field is not None:
+            survivors.append((comp, idx, field))
+
+    if not survivors:
+        report.error(
+            "comparisons",
+            "no comparison could be converted to a MatchkeyField",
+            mapped_to=None,
+        )
+        raise SplinkConversionError(
+            f"from_splink(): zero convertible comparisons -- {report.summary()}"
+        )
+
+    for field_idx, (comp, idx, _field) in enumerate(survivors):
+        _patch_field_placeholders(report, f"comparisons[{idx}]", field_idx)
+
+    blocking = convert_blocking(
+        settings.get("blocking_rules_to_generate_predictions", []), report
+    )
+    if blocking is None:
+        raise SplinkConversionError(
+            f"from_splink(): zero convertible blocking rules -- {report.summary()}"
+        )
+
+    scalar_kwargs = convert_scalars(settings, report)
+
+    mk = MatchkeyConfig(
+        name=_MATCHKEY_NAME,
+        type="probabilistic",
+        fields=[field for _comp, _idx, field in survivors],
+        **scalar_kwargs,
+    )
+
+    em_model = import_em(survivors, settings, report)
+
+    # A ValidationError here is a bug in this converter (the emitted config
+    # doesn't satisfy GoldenMatchConfig's own invariants) -- let it propagate
+    # loudly rather than wrapping it in SplinkConversionError.
+    config = GoldenMatchConfig(matchkeys=[mk], blocking=blocking)
+
+    if strict and (report.has_warnings or report.has_errors):
+        preview = "; ".join(
+            f"[{f.severity}] {f.splink_path}: {f.message}"
+            for f in report.findings
+            if f.severity in ("warning", "error")
+        )
+        raise SplinkConversionError(
+            f"from_splink(strict=True): lossy conversion -- {report.summary()}. {preview}"
+        )
+    if report.has_errors:
+        preview = "; ".join(
+            f"[{f.severity}] {f.splink_path}: {f.message}"
+            for f in report.findings
+            if f.severity == "error"
+        )
+        raise SplinkConversionError(
+            f"from_splink(): conversion error -- {report.summary()}. {preview}"
+        )
+
+    return SplinkConversion(config=config, report=report, em_model=em_model)

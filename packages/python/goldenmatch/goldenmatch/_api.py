@@ -29,6 +29,11 @@ except ImportError:  # pragma: no cover
 
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
+# Re-exported alongside from_splink() below; these are lightweight
+# dataclass/exception types (no heavy deps beyond config.schemas /
+# core.probabilistic, both already imported transitively).
+from goldenmatch.config.from_splink import SplinkConversion, SplinkConversionError
+
 if TYPE_CHECKING:
     from goldenmatch.core._native_loader import NativeDispatchSummary
     from goldenmatch.core.memory.corrections import CorrectionStats
@@ -373,6 +378,23 @@ def load_config(path: str) -> Any:
     """
     from goldenmatch.config.loader import load_config as _load
     return _load(path)
+
+
+def from_splink(source: Any, *, strict: bool = False) -> Any:
+    """Convert a Splink settings dict / JSON file into a GoldenMatch config.
+
+    Args:
+        source: A Splink settings dict, or a path (str/Path) to a JSON file
+            containing one. Bare or trained (m/u-carrying) settings accepted.
+        strict: When True, any lossy (warning-or-worse) finding raises
+            SplinkConversionError. When False (default), only error-severity
+            findings raise.
+
+    Returns:
+        A SplinkConversion(config, report, em_model).
+    """
+    from goldenmatch.config.from_splink import from_splink as _from_splink
+    return _from_splink(source, strict=strict)
 
 
 def dedupe(
