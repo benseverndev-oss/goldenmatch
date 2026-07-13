@@ -428,6 +428,9 @@ def _convert_one_blocking_rule(
         return None
     sql_norm = " ".join(sql.split())
 
+    # Whole-rule strip handles the double-wrapped case; each conjunct is
+    # deliberately stripped AGAIN inside _recognize_blocking_conjunct, so
+    # neither call can be "simplified" away.
     conjuncts = re.split(r'\s+AND\s+', _strip_outer_parens(sql_norm), flags=re.IGNORECASE)
     recognized: list[_BlockConjunct] = []
     for conjunct in conjuncts:

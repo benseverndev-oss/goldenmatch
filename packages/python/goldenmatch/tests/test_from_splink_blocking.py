@@ -276,3 +276,16 @@ def test_unbalanced_parens_still_dropped():
 
     assert config is None
     assert report.has_errors
+
+
+def test_paren_wrapped_unrecognizable_conjunct_dropped():
+    # A paren-wrapped OR rule: the whole-rule _strip_outer_parens peels the
+    # outer parens, no top-level AND exists, and the lone OR conjunct must
+    # land in the unrecognized-rule path with a warning (config dropped).
+    report = ConversionReport()
+    config = convert_blocking(['(l."a" = r."a" OR l."b" = r."b")'], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "unrecognized" in warnings[0].message

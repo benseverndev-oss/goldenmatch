@@ -1454,14 +1454,12 @@ def _tool_convert_splink_config(settings_json: str, strict: bool = False) -> dic
     persist it themselves. Errors use the server's clean-dict convention
     (`{"error": ...}`) rather than letting exceptions cross the MCP boundary.
     """
-    import json as _json
-
     import yaml
 
     from goldenmatch.config.from_splink import SplinkConversionError, from_splink
 
     try:
-        settings = _json.loads(settings_json)
+        settings = json.loads(settings_json)
     except (json.JSONDecodeError, TypeError) as exc:
         return {"error": f"settings_json is not valid JSON: {exc}"}
 

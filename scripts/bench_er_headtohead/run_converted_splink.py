@@ -83,6 +83,8 @@ def _import_run_splink():
     try:
         import resource  # noqa: F401
     except ImportError:
+        # Shim assumes `resource` is only referenced inside function bodies
+        # of run_splink (module top-level just imports it).
         shim = types.ModuleType("resource")
         shim.RUSAGE_SELF = 0
         shim.getrusage = lambda _who: types.SimpleNamespace(ru_maxrss=0)
