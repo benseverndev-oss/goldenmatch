@@ -25,6 +25,9 @@ mod suggest;
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    // Wheel-skew capability flag: Python's `_fs_native_eligible` gates
+    // level_thresholds matchkeys on this (old wheels never see the kwarg).
+    m.add("FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
