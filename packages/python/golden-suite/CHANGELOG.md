@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.4] - 2026-07-13
+
+### Changed
+- goldenmatch floor to `goldenmatch[polars]>=3.2` (3.2.0: Splink config
+  converter -- `from_splink()` + `import-splink` CLI + `convert_splink_config`
+  MCP tool -- and N-level `level_thresholds` probabilistic fields).
+- goldenmatch-native floor to `goldenmatch-native>=0.1.14` (native N-level
+  scoring; the kernel advertises `FS_SUPPORTS_LEVEL_THRESHOLDS` and the host
+  routes custom banding natively).
+
 ## [0.2.3] - 2026-07-13
 
 ### Changed

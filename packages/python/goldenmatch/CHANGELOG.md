@@ -4,7 +4,7 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
-## [Unreleased]
+## [3.2.0] - 2026-07-13
 
 ### Added
 - **N-level probabilistic comparison fields** (`level_thresholds`): probabilistic
