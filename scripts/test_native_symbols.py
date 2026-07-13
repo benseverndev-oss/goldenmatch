@@ -21,6 +21,19 @@ def test_parse_registrations_extracts_final_segment():
     assert mod.parse_registrations_text(src) == {"connected_components", "record_fingerprint"}
 
 
+def test_parse_registrations_extracts_madd_consts():
+    # m.add("NAME", ...) consts (capability flags) are exports and must
+    # reconcile against getattr(native_module(), "NAME", ...) host probes.
+    src = """
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;
+    m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
+    """
+    assert mod.parse_registrations_text(src) == {
+        "__version__", "FS_SUPPORTS_LEVEL_THRESHOLDS", "score_block_pairs_fs",
+    }
+
+
 def test_scan_refs_direct_form():
     src = 'from goldenmatch.core._native_loader import native_module\nx = native_module().quantile(a)\n'
     assert mod.scan_file_refs(src) == {"quantile"}
