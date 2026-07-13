@@ -1899,7 +1899,15 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
 
     Every field scorer must be one the kernel's score_one implements, and no
     field may opt into TF adjustment (the kernel doesn't carry the per-value
-    frequency tables — those fields stay on the numpy path).
+    frequency tables — those fields stay on the numpy path). No field may set
+    ``level_thresholds`` either: the Rust kernel (``score_block_pairs_fs``)
+    only receives ``levels`` (a level *count*) and ``partial_threshold`` and
+    bands raw similarities into levels itself using its own hard-coded
+    2-/3-level rule (see ``score_probabilistic_native``, which never passes
+    ``level_thresholds`` across the FFI boundary). It has no notion of an
+    arbitrary N-level custom threshold list, so an N-level matchkey must fall
+    back to the numpy/scalar path where `_levels_from_similarity` does the
+    banding in Python.
     """
     if not _fs_native_enabled():
         return False
@@ -1909,6 +1917,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
             return False
         if getattr(f, "tf_adjustment", False):
+            return False
+        if getattr(f, "level_thresholds", None) is not None:
             return False
     try:
         from goldenmatch.core._native_loader import native_module

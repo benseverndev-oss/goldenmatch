@@ -64,3 +64,77 @@ def test_fallback_2_and_3_level_literals_unchanged():
     r3 = _mk(field="x", scorer="jaro_winkler", levels=3)
     r3 = _fallback_result(r3)
     assert r3.m_probs["x"] == [0.05, 0.15, 0.80]
+
+
+# --- Native FS kernel guard for level_thresholds -----------------------------
+#
+# Investigation verdict (Task 4): the Rust kernel assigns comparison levels
+# itself, NOT Python. `score_probabilistic_native` (goldenmatch/core/
+# probabilistic.py ~1956-1968) builds `levels = [int(f.levels) for f in
+# mk.fields]` and `partials = [float(f.partial_threshold) for f in mk.fields]`
+# and passes only those two (a level *count* + a single partial threshold) to
+# `native_module().score_block_pairs_fs(...)` -- `f.level_thresholds` is never
+# read or passed across the FFI boundary anywhere in that function. The kernel
+# therefore bands raw rapidfuzz-rs similarities into levels using its own
+# hard-coded 2-/3-level rule, with no notion of an arbitrary N-level custom
+# threshold list. This differs from the vectorized/scalar paths, where
+# `f.level_thresholds` is threaded straight into `_levels_from_similarity`
+# (probabilistic.py lines 1579, 1691) and `comparison_vector` (line 325-330).
+# Since the kernel can't reproduce N-level custom banding, `_fs_native_eligible`
+# must decline (fall back to numpy/scalar) whenever any field sets
+# `level_thresholds`.
+
+
+def _fake_native_module():
+    class _Fake:
+        def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover - not invoked
+            raise NotImplementedError
+
+    return _Fake()
+
+
+def test_level_thresholds_not_native_eligible_synthetic(monkeypatch):
+    """Guard logic in isolation: force "native enabled" without a real build.
+
+    Runs in every environment (this worktree has no native module), unlike the
+    skipif-guarded real-kernel test below.
+    """
+    from goldenmatch.core import probabilistic as p
+
+    monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", _fake_native_module
+    )
+
+    mk_plain = _mk(field="name", scorer="jaro_winkler", levels=3, partial_threshold=0.8)
+    assert p._fs_native_eligible(mk_plain) is True
+
+    mk_custom = _mk(field="name", scorer="jaro_winkler", levels=4,
+                     level_thresholds=[1.0, 0.92, 0.88])
+    assert p._fs_native_eligible(mk_custom) is False
+
+
+def _native_fs_available():
+    try:
+        from goldenmatch.core import _native_loader
+        return _native_loader.native_available() and hasattr(
+            _native_loader.native_module(), "score_block_pairs_fs"
+        )
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _native_fs_available(), reason="native FS kernel not built")
+def test_level_thresholds_not_native_eligible_real_kernel(monkeypatch):
+    """Same assertion against the real native build, when one is present (CI)."""
+    from goldenmatch.core import probabilistic as p
+
+    monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
+
+    mk_plain = _mk(field="name", scorer="jaro_winkler", levels=3, partial_threshold=0.8)
+    assert p._fs_native_eligible(mk_plain) is True
+
+    mk_custom = _mk(field="name", scorer="jaro_winkler", levels=4,
+                     level_thresholds=[1.0, 0.92, 0.88])
+    assert p._fs_native_eligible(mk_custom) is False
