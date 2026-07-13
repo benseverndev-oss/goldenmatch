@@ -50,6 +50,43 @@ def test_surname_and_dob_substring_conjunction():
     # key's one transform. SUBSTR(x, 1, 4) -> substring:0:4 per the verified
     # convention above.
     assert key.transforms == ["substring:0:4"]
+    # This is LOSSY: surname was plain equality in Splink but gets the
+    # substring transform here (key-level chain). It must be a WARNING so
+    # strict=True gates on it, not a silent info.
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert report.has_warnings
+    msg = warnings[0].message
+    assert "widened" in msg or "approximate" in msg
+    assert "surname" in msg
+    assert "skip_oversized" in msg
+
+
+def test_pure_substr_rule_is_info_only():
+    rule = 'SUBSTR(l."dob", 1, 4) = SUBSTR(r."dob", 1, 4)'
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["dob"]
+    assert config.keys[0].transforms == ["substring:0:4"]
+    # No plain-equality field got a transform it didn't have: clean, not lossy.
+    assert not report.has_warnings
+    infos = [f for f in report.findings if f.severity == "info"]
+    assert len(infos) == 1
+
+
+def test_pure_equality_conjunction_is_info_only():
+    rule = 'l."surname" = r."surname" AND l."city" = r."city"'
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["surname", "city"]
+    assert config.keys[0].transforms == []
+    assert not report.has_warnings
+    infos = [f for f in report.findings if f.severity == "info"]
+    assert len(infos) == 1
 
 
 def test_two_rules_produce_multi_pass():

@@ -405,11 +405,28 @@ def _convert_one_blocking_rule(
     transforms = [next(iter(transform_values))] if transform_values else []
 
     key = BlockingKeyConfig(fields=fields, transforms=transforms)
-    report.info(
-        rule_path,
-        f"converted to blocking key fields={fields} transforms={transforms}",
-        mapped_to=None,
-    )
+    plain_fields = [r.field for r in recognized if r.transform is None]
+    if transforms and plain_fields:
+        # LOSSY: the key-level chain applies the substring transform to
+        # field(s) Splink compared with plain equality. Warn (not info) so
+        # strict=True gates on it, matching the approx-warn convention used
+        # for comparison levels above.
+        report.warn(
+            rule_path,
+            f"approximate mapping, blocking key widened: {transforms[0]} "
+            f"applied to all fields including plain-equality field(s) "
+            f"{plain_fields} (GoldenMatch transforms are key-level); "
+            "candidates are a superset of Splink's, precision may drop "
+            "(superset guarantee assumes skip_oversized stays False, the "
+            f"converter's emitted default) ({sql_norm})",
+            mapped_to=None,
+        )
+    else:
+        report.info(
+            rule_path,
+            f"converted to blocking key fields={fields} transforms={transforms}",
+            mapped_to=None,
+        )
     return key
 
 
