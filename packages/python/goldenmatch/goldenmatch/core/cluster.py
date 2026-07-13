@@ -1847,16 +1847,32 @@ def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     ):
         by_cid.setdefault(int(cid), []).append(int(mid))
 
+    # PERF (hotspot round 1): columnar reads + zip instead of per-row dict
+    # materialization -- 950K metadata rows allocated 950K dicts and was 35%
+    # of a 1M frame-lane wall (3.7s cum of 10.5s). Byte-identical output.
+    _c = {
+        name: metadata.column(name).to_list()
+        for name in (
+            "cluster_id", "size", "confidence", "quality", "oversized",
+            "bottleneck_pair_a", "bottleneck_pair_b",
+        )
+    }
     out: dict[int, dict] = {}
-    for row in metadata.select_dicts(list(metadata.columns)):
-        cid = int(row["cluster_id"])
-        bot = (row["bottleneck_pair_a"], row["bottleneck_pair_b"])
+    _get = by_cid.get
+    for cid, size_v, conf_v, qual_v, over_v, bot_a, bot_b in zip(
+        _c["cluster_id"], _c["size"], _c["confidence"], _c["quality"],
+        _c["oversized"], _c["bottleneck_pair_a"], _c["bottleneck_pair_b"],
+        strict=True,
+    ):
+        # values arrive python-typed from to_list on BOTH lanes (ints/floats/
+        # str/bool) -- the old per-field coercions were 7x950K no-ops.
+        bot = (bot_a, bot_b)
         out[cid] = {
-            "members": by_cid.get(cid, []),
-            "size": int(row["size"]),
-            "confidence": float(row["confidence"]),
-            "cluster_quality": str(row["quality"]),
-            "oversized": bool(row["oversized"]),
+            "members": _get(cid) or [],  # fresh [] only on miss (no shared default)
+            "size": size_v,
+            "confidence": conf_v,
+            "cluster_quality": qual_v,
+            "oversized": over_v,
             "bottleneck_pair": bot if bot != (0, 0) else None,
             # pair_scores omitted -- consumers that need it use the lazy
             # view against the Phase-1 pair stream (Phase 2b deliverable).

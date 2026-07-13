@@ -160,9 +160,35 @@ def transformed_column(arr: Any, transforms: Sequence[str]) -> Any:
     native = _native_chain(cast, list(transforms))
     if native is not None:
         return native
-    vals = [
-        apply_transforms(v, list(transforms)) if v is not None else None for v in cast.to_pylist()
-    ]
+    # PERF (hotspot round 2): a SINGLE python-fallback transform (soundex /
+    # metaphone are the common case) resolves its callable ONCE instead of
+    # re-dispatching apply_transform's name chain per value -- ~0.6s/1M.
+    # Byte-identical: apply_transform(v, t) == the resolved fn(v).
+    if len(transforms) == 1:
+        from functools import partial
+
+        from goldenmatch.utils.transforms import apply_transform
+
+        _t = transforms[0]
+        # Known phonetic transforms resolve to their (Rust) callables
+        # directly, skipping apply_transform's name-dispatch per value.
+        if _t == "soundex":
+            import jellyfish
+
+            _fn = jellyfish.soundex
+        elif _t == "metaphone":
+            import jellyfish
+
+            _fn = jellyfish.metaphone
+        else:
+            _fn = partial(apply_transform, transform=_t)
+        vals = [None if v is None else _fn(v) for v in cast.to_pylist()]
+    else:
+        chain = list(transforms)
+        vals = [
+            None if v is None else apply_transforms(v, chain)
+            for v in cast.to_pylist()
+        ]
     return pa.array(vals, type=pa.large_string())
 
 
