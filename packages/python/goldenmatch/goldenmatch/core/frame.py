@@ -38,6 +38,15 @@ def resolve_frame_backend() -> str:
             value and the valid options.
     """
     raw = os.environ.get("GOLDENMATCH_FRAME", "arrow").strip().lower()
+    if raw == "polars":
+        # D6: polars is optional -- the classic lane needs goldenmatch[polars].
+        try:
+            import polars  # noqa: F401
+        except ImportError as e:
+            raise ValueError(
+                "GOLDENMATCH_FRAME=polars requires the optional polars "
+                "dependency: pip install 'goldenmatch[polars]'"
+            ) from e
     if raw not in _VALID_FRAME_BACKENDS:
         raise ValueError(
             f"Invalid GOLDENMATCH_FRAME={raw!r}; valid options are "

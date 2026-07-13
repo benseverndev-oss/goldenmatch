@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "goldenmatch"
 
-version = "3.0.0"
+version = "3.1.0"
 description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,7 +26,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "polars>=1.0",
     "typer>=0.12",
     "rich>=13.0",
     "pyyaml>=6.0",
@@ -166,6 +165,15 @@ sail = [
 agent = [
     "aiohttp>=3.14.0",
 ]
+# D6: polars is OPTIONAL. The engine is arrow-native (pyarrow is the hard
+# dep); installing this extra lights up the polars-present WALL
+# optimizations (golden fast columnar, vectorized survivorship, the
+# 100M-pair join in ClusterPairScores) and the GOLDENMATCH_FRAME=polars
+# classic lane. The zero-polars gate (tests/test_zero_polars_gate.py)
+# proves the covered engine without it.
+polars = [
+    "polars>=1.0",
+]
 quality = [
     "goldencheck[polars]>=3.0.0",  # cell_quality / functional_dependencies / scan_dataframe take a pl.DataFrame -> goldencheck's [polars] path; NOT [baseline] (no scipy stat/drift features used)
 ]
@@ -206,7 +214,7 @@ bench = [
     "pyarrow>=15",  # splink 4.x requires pyarrow>=15 (stricter than core >=10)
 ]
 all = [
-    "goldenmatch[embeddings,llm,postgres,mcp,quality,transform,web,vision,audio]",
+    "goldenmatch[embeddings,llm,postgres,mcp,polars,quality,transform,web,vision,audio]",
 ]
 
 [tool.hatch.build.targets.wheel]

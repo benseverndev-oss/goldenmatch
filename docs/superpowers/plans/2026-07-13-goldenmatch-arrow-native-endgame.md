@@ -185,6 +185,20 @@ collapse single-backend. Docs sweep. Ships as a 3.x minor.
 - D6: requires the full W+A stack merged, the import-hook zero-polars
   test, floor bumps (goldencheck>=3.0), and a 3.x minor release.
 
+## D6 SHIPPED SCOPE (2026-07-13) -- deliberate deviation from the map's
+"delete PolarsFrame" phrasing
+
+The A-series taught us the polars-PRESENT-optimization architecture: with
+polars installed, the fast columnar golden, vectorized survivorship, and the
+100M-pair join stay byte-identical to 3.0.x; without it, seam-native routes
+carry the run (gate-proven). DELETING PolarsFrame/the classic lane would
+break exactly those optimizations and the GOLDENMATCH_FRAME=polars users.
+So D6 ships as: polars OUT of required deps + a [polars] extra + the
+zero-polars gate + the resolver guard + 3.1.0. Structural deletion of the
+classic lane (if ever) is a future major, not this program's goal --
+"Arrow-native, Rust, fused compute" is satisfied with polars as an optional
+accelerant, mirroring goldenmatch-native itself.
+
 ## Cross-cutting gates
 
 - **Frame-lane bench config** (FIRST, before A1): a bench-zero-config
