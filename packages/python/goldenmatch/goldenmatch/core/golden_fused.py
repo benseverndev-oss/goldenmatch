@@ -383,9 +383,12 @@ def _build_date_arrays(sdf: Any, date_col: str | None) -> tuple[Any, Any] | None
         t = sdf.native.schema.field(date_col).type
         if not _ARROW_MOST_RECENT_ORDER_SAFE(t):
             return None
-        phys_list = pc.cast(
-            sdf.native.column(date_col).combine_chunks(), pa.int64()
-        ).to_pylist()
+        _arr = sdf.native.column(date_col).combine_chunks()
+        # 32-bit temporal types have no direct int64 cast kernel -- hop
+        # through int32 (days / time32 units; order-preserving either way).
+        if pa.types.is_date32(t) or pa.types.is_time32(t):
+            _arr = pc.cast(_arr, pa.int32())
+        phys_list = pc.cast(_arr, pa.int64()).to_pylist()
     date_vals = [0 if x is None else int(x) for x in phys_list]
     mask_vals = [1 if x is None else 0 for x in phys_list]
     return pa.array(date_vals, type=pa.int64()), pa.array(mask_vals, type=pa.int64())
