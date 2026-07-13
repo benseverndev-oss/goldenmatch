@@ -865,11 +865,17 @@ def run_dedupe(
             or (config.transform is None or config.transform.mode != "disabled")
             or bool(config.validation and config.validation.auto_fix)
         )
-        _eager_ok = (
-            not _prep_will_run
-            and config.semantic_blocking is None
+        # W-1 widening: prep (quality/transform) no longer forces the classic
+        # lane -- the engine Frame branch bridges those integrations in prep
+        # order. auto_fix still declines (inside _frame_lane_eligible). The
+        # EAGER standardize/matchkeys shortcut below still requires prep-off
+        # (prep mutates data BEFORE standardize -- the E.164 lesson).
+        _lane_ok = (
+            config.semantic_blocking is None
             and not (config.domain and config.domain.enabled)
         )
+        _eager_ok = not _prep_will_run and _lane_ok
+        _eager_done: frozenset[str] = frozenset()
         if _eager_ok:
             done: set[str] = set()
             if config.standardization and config.standardization.rules:
@@ -895,29 +901,29 @@ def run_dedupe(
                     )
                 done.add("compute_matchkeys")
             _eager_done = frozenset(done)
-            # D2s-d2b Frame lane: when no C-class consumer is flagged, skip
-            # the polars shim entirely -- the engine receives the ArrowFrame
-            # and keeps the spine arrow through collect (predicate =
-            # _frame_lane_eligible; GOLDEN BRIDGE re-enters polars only at
-            # the golden builders until deep-D2). GOLDENMATCH_FRAME_LANE=0
-            # kill-switch restores the classic shim.
-            _writes_outputs = bool(
-                output_golden or output_clusters or output_dupes or output_unique
+        # D2s-d2b Frame lane (W-1: also engages when prep runs -- the engine
+        # bridges quality/transform): when no C-class consumer is flagged,
+        # skip the polars shim entirely -- the engine receives the ArrowFrame
+        # and keeps the spine arrow through collect. GOLDENMATCH_FRAME_LANE=0
+        # kill-switch restores the classic shim.
+        _writes_outputs = bool(
+            output_golden or output_clusters or output_dupes or output_unique
+        )
+        if (
+            _lane_ok
+            and os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
+            and os.environ.get("GOLDENMATCH_COLUMNAR_PIPELINE", "0") != "1"
+            and _frame_lane_eligible(
+                config, matchkeys, writes_outputs=_writes_outputs
             )
-            if (
-                os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
-                and os.environ.get("GOLDENMATCH_COLUMNAR_PIPELINE", "0") != "1"
-                and _frame_lane_eligible(
-                    config, matchkeys, writes_outputs=_writes_outputs
-                )
-            ):
-                return _run_dedupe_pipeline(
-                    _combined, config, matchkeys,
-                    output_golden, output_clusters,
-                    output_dupes, output_unique, output_report,
-                    across_files_only, llm_retrain, llm_provider, llm_max_labels,
-                    _eager_stages_done=_eager_done,
-                )
+        ):
+            return _run_dedupe_pipeline(
+                _combined, config, matchkeys,
+                output_golden, output_clusters,
+                output_dupes, output_unique, output_report,
+                across_files_only, llm_retrain, llm_provider, llm_max_labels,
+                _eager_stages_done=_eager_done,
+            )
         # W5b-1 shim (single, post-eager-stages): everything below is still
         # polars-lazy; removal point is W5b-3 (prep-block integrations).
         combined_df = cast("pl.DataFrame", pl.from_arrow(_combined.native))
@@ -1698,18 +1704,70 @@ def _run_dedupe_pipeline(
     # schema; height defends against same-schema-different-rows (e.g. an empty
     # input vs a populated one) — the `test_dedupe_df_empty` flake.
     if not isinstance(combined_lf, pl.LazyFrame):
-        # D2s-d2b Frame lane (arrow spine): entered only from run_dedupe's
-        # eligibility gate -- every prep stage below is a no-op by
-        # construction (_eager_ok + _frame_lane_eligible), so the prep block
-        # reduces to the matchkey precompute. combined_lf IS a seam Frame
-        # from here down; downstream consumers are dual-rep (D2s-a/d1).
+        # D2s-d2b Frame lane (arrow spine), WIDENED W-1: runs the prep stages
+        # in CLASSIC ORDER (quality -> transform -> standardize -> matchkeys
+        # -> precompute; the E.164 stage-order lesson). quality/transform are
+        # EXTRA-GATED integrations that keep polars as THEIR dep, so they run
+        # through a zero-copy pa->pl->pa BRIDGE at their entry (the golden-
+        # bridge pattern). Everything else on the decline list is still
+        # refused by run_dedupe's gate. Prep CACHE is skipped on this lane
+        # (correctness first). combined_lf IS a seam Frame from here down.
         from goldenmatch.core.frame import to_frame as _tf_lane
         from goldenmatch.core.matchkey import precompute_matchkey_transforms_frame
 
+        _frame = _tf_lane(combined_lf)
+
+        if config.quality is None or config.quality.mode != "disabled":
+            from goldenmatch.core.quality import run_quality_check
+            with stage("pipeline_prep_quality_scan"):
+                _pl_tmp, gc_fixes = run_quality_check(
+                    _as_polars_df(_frame.native), config.quality
+                )
+                if gc_fixes:
+                    logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
+                _frame = _tf_lane(_pl_tmp.to_arrow())
+
+        if config.transform is None or config.transform.mode != "disabled":
+            from goldenmatch.core.transform import run_transform
+            with stage("pipeline_prep_transform"):
+                _pl_tmp, tf_fixes = run_transform(
+                    _as_polars_df(_frame.native), config.transform
+                )
+                if tf_fixes:
+                    logger.info("GoldenFlow: %d transforms applied", len(tf_fixes))
+                _frame = _tf_lane(_pl_tmp.to_arrow())
+
+        if (
+            "standardize" not in _eager_stages_done
+            and config.standardization
+            and config.standardization.rules
+        ):
+            with stage("standardize"):
+                for _col, _std_names in config.standardization.rules.items():
+                    if _col not in _frame.columns:
+                        continue
+                    _frame = _frame.with_column(
+                        _col, _frame.derive_standardized_column(_col, _std_names)
+                    )
+
+        if "compute_matchkeys" not in _eager_stages_done:
+            with stage("compute_matchkeys"):
+                for _mk in matchkeys:
+                    if _mk.type != "exact":
+                        continue
+                    _frame = _frame.with_column(
+                        f"__mk_{_mk.name}__",
+                        _frame.derive_matchkey(
+                            [
+                                (f.field, list(f.transforms or []))
+                                for f in _mk.fields
+                                if f.field is not None
+                            ]
+                        ),
+                    )
+
         with stage("precompute_matchkey_transforms"):
-            collected_frame = precompute_matchkey_transforms_frame(
-                _tf_lane(combined_lf), matchkeys
-            )
+            collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
         collected_df = collected_frame.native
         combined_lf = collected_frame
         quarantine_df = None

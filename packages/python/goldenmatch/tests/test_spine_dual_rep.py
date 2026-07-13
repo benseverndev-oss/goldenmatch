@@ -326,8 +326,10 @@ def test_frame_lane_engages_and_matches_classic(tmp_path, monkeypatch, backend, 
     assert _norm_result(frame_lane) == _norm_result(classic)
 
 
-def test_frame_lane_declines_when_quality_enabled(tmp_path, monkeypatch):
-    """Default-on goldencheck quality keeps the classic lane (eager gate)."""
+def test_frame_lane_engages_when_quality_enabled(tmp_path, monkeypatch):
+    """W-1 widening: default-on goldencheck quality no longer keeps the
+    classic lane -- the predicate is consulted and the lane engages (the
+    integration runs through the prep bridge)."""
     import goldenmatch.core.pipeline as P
 
     monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
@@ -349,9 +351,7 @@ def test_frame_lane_declines_when_quality_enabled(tmp_path, monkeypatch):
         P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
     )
     res = P.run_dedupe([(str(csv), "people")], cfg)
-    # _eager_ok is False (quality default-on), so the predicate is never
-    # consulted and the classic lane ran; results still come back arrow.
-    assert hits == []
+    assert hits and hits[0] is True
     assert res["golden"] is None or hasattr(res["golden"], "num_rows")
 
 
@@ -386,7 +386,50 @@ def test_frames_path_fused_golden_gets_arrow_table(tmp_path, monkeypatch):
     if not calls or not calls[0][1]:
         pytest.skip("native golden_fused kernel unavailable")
     assert calls[0][0] == "Table", calls
-
     monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
     classic = P.run_dedupe([(str(csv), "people")], cfg)
     assert _norm_result(frame_lane) == _norm_result(classic)
+
+
+def test_frame_lane_engages_on_default_config_with_prep_bridges(tmp_path, monkeypatch):
+    """W-1 widening: a FULLY DEFAULT config (quality/transform default-ON)
+    engages the Frame lane; the integrations run through the pa->pl->pa
+    bridge in classic prep order and output matches the classic lane
+    (including goldenflow's E.164 phone transform surviving the bridge)."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = tmp_path / "people.csv"
+    csv.write_text(
+        "first,last,phone\n"
+        "ann,smith,(267) 555-1234\n"
+        "ann,smith,267-555-1234\n"
+        "bob,jones,555 0001\n"
+        "bob,jones,5550001\n"
+        "cara,lee,\n"
+        "dan,kim,9998887777\n",
+        encoding="utf-8",
+    )
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="exact_name",
+                type="exact",
+                fields=[MatchkeyField(field="first"), MatchkeyField(field="last")],
+            )
+        ]
+    )
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    frame_lane = P.run_dedupe([(str(csv), "people")], cfg)
+    assert hits and hits[0] is True, f"Frame lane did not engage on default config: {hits}"
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic = P.run_dedupe([(str(csv), "people")], cfg)
+    assert _norm_result(frame_lane) == _norm_result(classic)
+    # the transform bridge actually ran: phones are E.164 in golden
+    golden_rows = frame_lane["golden"].to_pylist()
+    assert any(str(r.get("phone", "")).startswith("+") for r in golden_rows)
