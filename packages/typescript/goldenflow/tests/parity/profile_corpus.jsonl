@@ -1,0 +1,24 @@
+{"values": [1, 2, 3], "hint": "numeric", "expected_type": "numeric"}
+{"values": [1.5, 2.5, 3.5], "hint": "numeric", "expected_type": "numeric"}
+{"values": [1, 2, null, 3], "hint": "numeric", "expected_type": "numeric"}
+{"values": [true, false, true], "hint": "boolean", "expected_type": "boolean"}
+{"values": [false, null, true], "hint": "boolean", "expected_type": "boolean"}
+{"values": ["a@b.co", "x@y.io", "p@q.net", "u@v.org", "m@n.com", "c@d.co", "e@f.io", "foo", "bar", "baz"], "hint": "string", "expected_type": "email"}
+{"values": ["a@b.co", "x@y.io", "p@q.net", "u@v.org", "m@n.com", "c@d.co", "foo", "bar", "baz", "qux"], "hint": "string", "expected_type": "string"}
+{"values": ["12345", "90210", "10001", "60601", "94105", "30301", "02139", "foo", "bar", "baz"], "hint": "string", "expected_type": "zip"}
+{"values": ["12345", "90210", "10001", "60601", "94105", "30301", "foo", "bar", "baz", "qux"], "hint": "string", "expected_type": "string"}
+{"values": ["2020-01-02", "1999/12/31", "1/2/99", "12-31-2020", "March 3, 2001", "foo", "bar", "baz", "qux", "quux"], "hint": "string", "expected_type": "date"}
+{"values": ["2020-01-02", "1999/12/31", "1/2/99", "12-31-2020", "foo", "bar", "baz", "qux", "quux", "corge"], "hint": "string", "expected_type": "string"}
+{"values": ["(212) 555-1234", "+1 415 555 9999", "212-555-0000", "(212) 555-1234", "+1 415 555 9999", "212-555-0000", "foo", "bar", "baz", "qux"], "hint": "string", "expected_type": "phone"}
+{"values": ["(212) 555-1234", "+1 415 555 9999", "212-555-0000", "(646) 555-7788", "800 555 1212", "foo", "bar", "baz", "qux", "quux"], "hint": "string", "expected_type": "string"}
+{"values": ["John Smith", "Jane Doe", "Bob Roe", "Amy Poe", "Sam Lee", "foo", "bar", "baz", "qux", "quux"], "hint": "string", "expected_type": "name"}
+{"values": ["John Smith", "Jane Doe", "Bob Roe", "Amy Poe", "foo", "bar", "baz", "qux", "quux", "corge"], "hint": "string", "expected_type": "string"}
+{"values": ["foo", "bar", "baz"], "hint": "string", "expected_type": "string"}
+{"values": [null, null], "hint": "string", "expected_type": "string"}
+{"values": ["   ", ""], "hint": "string", "expected_type": "string"}
+{"values": ["   ", null, "\t"], "hint": "string", "expected_type": "string"}
+{"values": ["12345", "12345", "12345"], "hint": "string", "expected_type": "zip"}
+{"values": ["a@b.co", "foo", "bar"], "hint": "string", "expected_type": "string"}
+{"values": ["12345", "2020-01-02", "foo"], "hint": "string", "expected_type": "string"}
+{"values": [1, "1"], "hint": "string", "expected_type": "string"}
+{"values": ["a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", "a@b.co", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email", null, "not-an-email"], "hint": "string", "expected_type": "email"}

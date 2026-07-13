@@ -6,6 +6,7 @@
 import type { ColumnValue, ColumnProfile, DatasetProfile, Row } from "../types.js";
 import { makeColumnProfile } from "../types.js";
 import { TabularData } from "../data.js";
+import { getFlowWasmBackend } from "../wasm/backend.js";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const PHONE_RE = /^[+(]?\d[\d()\-.\s]{6,18}\d$/;
@@ -34,8 +35,45 @@ function overrideTypeByColumnName(columnName: string, currentType: string): stri
   return currentType;
 }
 
+/** The pure-TS regex stage: the byte-matched fallback (regexes identical to
+ * Python/Rust). Returns the bare semantic type; the caller applies the override.
+ * The owned WASM kernel (`backend.inferType`) is byte-identical to this.
+ * Exported for the cross-surface parity test (`tests/parity/profile.parity`). */
+export function inferTypeByRegex(sample: readonly string[]): string {
+  const checks: [string, RegExp, number][] = [
+    ["email", EMAIL_RE, 0.7],
+    ["zip", ZIP_RE, 0.7],
+    ["date", DATE_RE, 0.5],
+    ["phone", PHONE_RE, 0.6],
+    ["name", NAME_RE, 0.5],
+  ];
+
+  for (const [typeName, pattern, threshold] of checks) {
+    let matches = 0;
+    for (const v of sample) {
+      if (pattern.test(v)) matches++;
+    }
+    if (matches / sample.length >= threshold) return typeName;
+  }
+
+  return "string";
+}
+
+/** Derive the kernel `hint` exactly as Python `_infer_type_list` decides:
+ * all-non-null boolean -> `"boolean"`, all-non-null number -> `"numeric"`, else
+ * `"string"` (Utf8, run the regexes). At the regex stage this is always
+ * `"string"` (the number/boolean early returns already fired), but deriving it
+ * explicitly keeps the kernel contract honest + matches the native hint. */
+function inferHint(nonNull: readonly Exclude<ColumnValue, null>[]): string {
+  if (nonNull.length > 0 && nonNull.every((v) => typeof v === "boolean")) return "boolean";
+  if (nonNull.length > 0 && nonNull.every((v) => typeof v === "number")) return "numeric";
+  return "string";
+}
+
 function inferType(values: readonly ColumnValue[], columnName: string): string {
-  // Check JS runtime types first
+  // Check JS runtime types first. The numeric/boolean JS-type detection + the
+  // column-NAME override stay in TS (not the kernel's job — the kernel takes the
+  // already-decided hint + sample and owns only the regex-stage decision).
   const nonNull = values.filter((v): v is Exclude<ColumnValue, null> => v !== null);
   if (nonNull.length === 0) return "string";
 
@@ -62,25 +100,14 @@ function inferType(values: readonly ColumnValue[], columnName: string): string {
 
   const sample = stringVals.slice(0, 100);
 
-  const checks: [string, RegExp, number][] = [
-    ["email", EMAIL_RE, 0.7],
-    ["zip", ZIP_RE, 0.7],
-    ["date", DATE_RE, 0.5],
-    ["phone", PHONE_RE, 0.6],
-    ["name", NAME_RE, 0.5],
-  ];
+  // Route the regex-stage decision through the owned WASM kernel when the flow
+  // wasm backend is present; else the byte-matched pure-TS regex fallback.
+  const backend = getFlowWasmBackend();
+  const typeName = backend
+    ? backend.inferType(sample, inferHint(nonNull))
+    : inferTypeByRegex(sample);
 
-  for (const [typeName, pattern, threshold] of checks) {
-    let matches = 0;
-    for (const v of sample) {
-      if (pattern.test(v)) matches++;
-    }
-    if (matches / sample.length >= threshold) {
-      return overrideTypeByColumnName(columnName, typeName);
-    }
-  }
-
-  return overrideTypeByColumnName(columnName, "string");
+  return overrideTypeByColumnName(columnName, typeName);
 }
 
 function profileColumn(data: TabularData, columnName: string): ColumnProfile {

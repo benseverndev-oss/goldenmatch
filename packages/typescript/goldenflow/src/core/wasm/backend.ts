@@ -147,6 +147,14 @@ export interface FlowWasmBackend {
   /** The fusable no-arg kernel names the WASM chain supports (mirror of the TS
    * `FUSABLE_KERNELS` set + the native `fusableKernelNames`). */
   fusableKernelNames(): string[];
+  /** Owned auto-detect type-inference DECISION — the regex stage of zero-config
+   * `inferType`. `values` is the already-trimmed non-empty string sample; `hint`
+   * is `"numeric"`/`"boolean"`/`"date"` (short-circuit) or anything else (`Utf8`,
+   * run the regexes). Returns the bare semantic type (`"email"`/`"zip"`/`"date"`/
+   * `"phone"`/`"name"`/`"string"`); the caller applies the column-NAME override.
+   * Byte-identical to the pure-TS regex fallback + the Python/native kernel.
+   * `null` sample cells (kernel drops them) mirror the Rust `Option<&str>` view. */
+  inferType(values: (string | null)[], hint: string): string;
 }
 
 import { createBackendRegistry } from "goldenmatch-wasm-runtime";

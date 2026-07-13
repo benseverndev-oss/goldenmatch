@@ -151,6 +151,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
       names: string[],
     ) => { values: string[]; changed: Uint32Array };
     fusable_kernel_names: () => string[];
+    // Auto-detect type inference: `(string | null)[]` sample + hint -> bare type.
+    // wasm-bindgen `Vec<JsValue>` maps to a JS array; the TS caller passes
+    // trimmed non-null strings.
+    infer_type: (values: (string | null)[], hint: string) => string;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -257,5 +261,6 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<FlowWasmBac
       return { values: out.values, changed: Array.from(out.changed) };
     },
     fusableKernelNames: () => glue.fusable_kernel_names(),
+    inferType: (values, hint) => glue.infer_type(values, hint),
   };
 }
