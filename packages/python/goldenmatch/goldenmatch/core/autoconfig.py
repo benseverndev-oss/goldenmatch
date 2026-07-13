@@ -275,6 +275,111 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
     return col_type, confidence
 
 
+# ── Arrow→polars dtype-spelling contract (autoconfig arrow-port PR-3) ──────────
+# The native ``autoconfig_classify_columns`` kernel is fed ``str(dtype)`` and its
+# golden vectors + the downstream string-column check
+# (``p.dtype.startswith("String"/"Utf8")`` further down) expect the POLARS dtype
+# spelling ("Float64"/"Int64"/"String"/"Boolean"). Polars renders those directly;
+# an ``ArrowFrame``'s ``str(dtype)`` spells the SAME types differently
+# ("double"/"int64"/"large_string"/"bool"). We keep the Rust kernel's vocabulary
+# and map arrow→polars-spelling at this ONE Python boundary so the kernel sees its
+# own vocabulary regardless of backend -- no Rust change, no golden-vector regen.
+# A polars spelling passed in is returned UNCHANGED (identity), so the polars path
+# is byte-for-byte what it was before the port.
+
+
+def _polars_scalar_spelling(build: Any, fallback: str) -> str:
+    """``str()`` of a polars dtype, matched exactly so the arrow path's classify
+    input equals the polars path's. Falls back when polars is unavailable
+    (pure-arrow install); the fallback is still accepted downstream."""
+    try:
+        from goldenmatch._polars_lazy import pl as _pl  # noqa: PLC0415
+
+        return str(build(_pl))
+    except Exception:  # noqa: BLE001 -- polars absent / API drift: use the fallback
+        return fallback
+
+
+# "String" on modern polars (``str(pl.Utf8)``), "Utf8" on older builds.
+_POLARS_STRING_SPELLING = _polars_scalar_spelling(lambda p: p.Utf8, "Utf8")
+# "Datetime(time_unit='us', time_zone=None)" on modern polars.
+_POLARS_DATETIME_SPELLING = _polars_scalar_spelling(lambda p: p.Datetime("us"), "Datetime")
+
+# Exact arrow-spelling → polars-spelling. Keys are arrow's ``str(type)`` (all
+# lowercase); polars spellings are TitleCase, so they are never keys and pass
+# through ``.get`` unchanged (the identity guarantee).
+_ARROW_TO_POLARS_DTYPE: dict[str, str] = {
+    # floats
+    "double": "Float64",
+    "float": "Float32",
+    "halffloat": "Float32",
+    # signed ints
+    "int64": "Int64",
+    "int32": "Int32",
+    "int16": "Int16",
+    "int8": "Int8",
+    # unsigned ints
+    "uint64": "UInt64",
+    "uint32": "UInt32",
+    "uint16": "UInt16",
+    "uint8": "UInt8",
+    # bool
+    "bool": "Boolean",
+    # date (day / ms variants both render as polars Date)
+    "date32[day]": "Date",
+    "date64[ms]": "Date",
+    # null
+    "null": "Null",
+}
+
+
+def _arrow_to_polars_dtype_spelling(raw: object) -> str:
+    """Turn a concrete column dtype string into the polars spelling the native
+    ``autoconfig_classify_columns`` kernel expects.
+
+    Identity for polars spellings (they are never arrow keys), translation for
+    arrow spellings, and ``str(raw)`` passthrough for any dtype not covered
+    (documented fallback -- keeps the pre-port ``str(dtype)`` behavior for exotic
+    types).
+    """
+    s = str(raw)
+    mapped = _ARROW_TO_POLARS_DTYPE.get(s)
+    if mapped is not None:
+        return mapped
+    # string family (arrow: string / large_string / utf8 / large_utf8)
+    if s in ("string", "large_string", "utf8", "large_utf8"):
+        return _POLARS_STRING_SPELLING
+    # timestamp[..] / date[..] families are unit-parametrized (not single keys)
+    if s.startswith("timestamp"):
+        return _POLARS_DATETIME_SPELLING
+    if s.startswith("date"):
+        return "Date"
+    # Unknown (incl. every polars spelling) -> unchanged.
+    return s
+
+
+def _concrete_dtype_spelling(frame: Any, col_name: str) -> str:
+    """Read ``frame``'s concrete column dtype (native spelling per backend) and
+    map it to the polars spelling for the classify kernel.
+
+    - ``PolarsFrame`` -> its own ``str(dtype)`` (the map is identity, so this is
+      byte-identical to the pre-port ``str(df[col].dtype)``).
+    - ``ArrowFrame`` -> the pyarrow field type, mapped arrow→polars.
+
+    NOTE: the seam ``Column`` Protocol exposes no concrete-dtype accessor (only the
+    coarse ``semantic_dtype()``), so this reaches ``frame.native``. A clean seam op
+    (e.g. ``Column.dtype_str()``) would drop the ``.native`` branch -- flagged for a
+    PR-1-style follow-up.
+    """
+    from goldenmatch.core.frame import ArrowFrame  # noqa: PLC0415
+
+    if isinstance(frame, ArrowFrame):
+        raw = str(frame.native.schema.field(col_name).type)
+    else:
+        raw = str(frame.native[col_name].dtype)
+    return _arrow_to_polars_dtype_spelling(raw)
+
+
 def profile_columns(
     df: pl.DataFrame, sample_size: int = 1000, max_columns: int = 40,
     llm_provider: str | None = None,
@@ -286,17 +391,21 @@ def profile_columns(
     (name, email, phone, zip, address) are prioritized, then remaining columns
     fill up to the cap.
     """
-    # Sample randomly (W3c: via the seam; polars rows unchanged -- exact
-    # delegation, shuffle=False default matches the old call)
+    # Route through the Frame seam so profile_columns runs on a polars frame
+    # (today) OR an ArrowFrame (post-PR-6) -- `to_frame` is idempotent and accepts
+    # pl.DataFrame / pa.Table / Frame. (W3c: polars rows unchanged; sample is exact
+    # delegation, shuffle=False default matches the old call.)
     from goldenmatch.core.frame import to_frame
 
-    if df.height > sample_size:
-        sample = to_frame(df).sample(sample_size, seed=42).native
+    frame = to_frame(df)
+
+    if frame.height > sample_size:
+        sample_frame = frame.sample(sample_size, seed=42)
     else:
-        sample = df
+        sample_frame = frame
 
     # For wide datasets, prioritize columns likely useful for matching
-    columns = [c for c in df.columns if not c.startswith("__")]
+    columns = [c for c in frame.columns if not c.startswith("__")]
     if len(columns) > max_columns:
         # Phase 1: keep columns matching known patterns
         priority = []
@@ -312,7 +421,7 @@ def profile_columns(
         logger.info(
             "Wide dataset (%d columns), auto-configure limited to %d columns "
             "(%d pattern-matched, %d additional)",
-            len(df.columns), len(columns), len(priority), remaining_slots,
+            len(frame.columns), len(columns), len(priority), remaining_slots,
         )
 
     # Collect per-column stats using Polars (shared by both the native and
@@ -322,10 +431,12 @@ def profile_columns(
         if col_name.startswith("__"):
             continue
 
-        dtype = str(df[col_name].dtype)  # raw polars spelling: feeds the
-        # native classify JSON byte-identically (W3c: pinned, not normalized)
+        # Concrete column dtype in the POLARS spelling the native classify kernel
+        # expects, regardless of backend: identity on a PolarsFrame (byte-identical
+        # to the old `str(df[col].dtype)`), arrow→polars-mapped on an ArrowFrame.
+        dtype = _concrete_dtype_spelling(frame, col_name)
 
-        col_series = to_frame(sample).column(col_name)
+        col_series = sample_frame.column(col_name)
         total_rows = len(col_series)
         null_count = col_series.null_count()
         null_rate = null_count / total_rows if total_rows > 0 else 0.0
