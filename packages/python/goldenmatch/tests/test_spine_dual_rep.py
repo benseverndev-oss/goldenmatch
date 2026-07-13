@@ -740,10 +740,11 @@ def test_frame_lane_adaptive_golden_parity(tmp_path, monkeypatch):
     assert _norm_result(frame_lane) == _norm_result(classic)
 
 
-def test_frame_lane_semantic_bridge_called_with_polars(tmp_path, monkeypatch):
-    """W-7: semantic blocking engages the Frame lane; the sources get a
-    POLARS frame via the bridge on both lanes (no model download -- the
-    internals are stubbed; this pins the handoff types + raw capture)."""
+def test_frame_lane_semantic_gets_lane_native_handles(tmp_path, monkeypatch):
+    """A6: semantic blocking engages the Frame lane; the sources receive the
+    LANE-NATIVE handles (seam Frame + pa.Table -- no bridge; build_blocks and
+    the column reads are dual-rep). No model download -- internals stubbed;
+    pins the handoff types + the __raw__ capture."""
     import goldenmatch.core.pipeline as P
     import polars as _pl
     from goldenmatch.config.schemas import (
@@ -775,8 +776,10 @@ def test_frame_lane_semantic_bridge_called_with_polars(tmp_path, monkeypatch):
     def fake_semantic(config, combined_lf, collected_df, *a, **k):
         seen["lf_type"] = type(combined_lf).__name__
         seen["df_type"] = type(collected_df).__name__
+        from goldenmatch.core.frame import to_frame as _tf_t
+
         seen["has_raw"] = any(
-            c.startswith("__raw__") for c in collected_df.columns
+            c.startswith("__raw__") for c in _tf_t(collected_df).columns
         )
         return []
 
@@ -788,7 +791,7 @@ def test_frame_lane_semantic_bridge_called_with_polars(tmp_path, monkeypatch):
     )
     P.run_dedupe([(str(csv), "people")], cfg)
     assert hits and hits[0] is True, f"lane not engaged: {hits}"
-    assert seen["lf_type"] == "LazyFrame"
-    assert seen["df_type"] == "DataFrame"
+    assert seen["lf_type"] == "ArrowFrame"
+    assert seen["df_type"] == "Table"
     assert isinstance(_pl.DataFrame(), _pl.DataFrame)
     assert seen["has_raw"] is True

@@ -82,8 +82,13 @@ def _is_unbatchable_dtype(dtype: pl.DataType) -> bool:
     return False
 
 
-def canonicalize_records_df(df: pl.DataFrame):
+def canonicalize_records_df(df):
     """Return ``(batch_df_or_None, fallback_mask)``.
+
+    A5 NOTE: accepts a pa.Table via an entry bridge -- the dtype-driven
+    canonicalization below implements the cross-surface :h1: fingerprint
+    contract; its arrow port is a dedicated batch (A5b in the endgame
+    plan) with the fingerprint parity corpus as the gate.
 
     ``batch_df`` is a canonicalized frame (clean Int64/finite-Float64/Bool/Utf8
     /typed-Null) restricted to the fully-batchable rows, in ORIGINAL row order,
@@ -94,6 +99,8 @@ def canonicalize_records_df(df: pl.DataFrame):
     un-batchable dtype is present -- that column is in every row's hash, so no
     row can be batched.
     """
+    if not isinstance(df, pl.DataFrame):  # A5b entry bridge (see docstring)
+        df = pl.from_arrow(df)
     height = df.height
     # Drop __-prefixed columns (both kernels + per-row payload exclude them).
     keep_cols = [c for c in df.columns if not c.startswith("__")]
@@ -160,7 +167,7 @@ def canonicalize_records_df(df: pl.DataFrame):
     return batch_df, mask_list
 
 
-def batch_fingerprints(df: pl.DataFrame) -> list[str | None]:
+def batch_fingerprints(df) -> list[str | None]:
     """One fingerprint per row of ``df``, in row order. ``None`` for a row the
     canonical spec can't fingerprint (caller falls back to the legacy id).
 
@@ -172,6 +179,8 @@ def batch_fingerprints(df: pl.DataFrame) -> list[str | None]:
         record_fingerprints_batch_arrow,
     )
 
+    if not isinstance(df, pl.DataFrame):  # A5b entry bridge (see canonicalize)
+        df = pl.from_arrow(df)
     out: list[str | None] = [None] * df.height
     batch_df, mask = canonicalize_records_df(df)
     if batch_df is not None and batch_df.height:

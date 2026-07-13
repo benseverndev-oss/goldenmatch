@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from goldenmatch._polars_lazy import pl
-from goldenmatch.utils.transforms import apply_transforms
 
 logger = logging.getLogger(__name__)
 
@@ -130,37 +129,40 @@ def generate_candidates(matchkey_columns: list[str]) -> list[dict]:
 # ── Scoring ──────────────────────────────────────────────────────────────────
 
 
-def _apply_candidate_transforms(df: pl.DataFrame, candidate: dict) -> pl.DataFrame:
-    """Apply a candidate's transforms and add __block_key__ column."""
+def _apply_candidate_transforms(df, candidate: dict):
+    """Apply a candidate's transforms and add __block_key__ column.
+
+    A3 (arrow-native endgame): seam-driven both lanes. Per-field derivation
+    is ``derive_transformed_column`` (cast-then-chain -- the D5c-probed twin
+    of the old ``cast(Utf8).map_elements(apply_transforms)`` expr). Compound
+    keys join "||" in Python with the old ``concat_str`` NULL PROPAGATION
+    (any null field -> null key); the analyzer runs on samples, so the list
+    round-trip is size-bounded. Returns a seam Frame.
+    """
+    from goldenmatch.core.frame import PolarsFrame, column_from_values, to_frame
+
+    f = to_frame(df)
     key_fields = candidate["key_fields"]
     transforms = candidate["transforms"]
 
     if len(key_fields) == 1:
         col = key_fields[0]
-        tfms = transforms  # flat list of transforms
-        if tfms:
-            expr = pl.col(col).cast(pl.Utf8).map_elements(
-                lambda val, t=tfms: apply_transforms(val, t),
-                return_dtype=pl.Utf8,
-            )
-        else:
-            expr = pl.col(col).cast(pl.Utf8)
-        return df.with_columns(expr.alias("__block_key__"))
-    else:
-        # Compound: transforms is a list of lists
-        field_exprs = []
-        for i, col in enumerate(key_fields):
-            tfms = transforms[i] if i < len(transforms) else []
-            if tfms:
-                expr = pl.col(col).cast(pl.Utf8).map_elements(
-                    lambda val, t=tfms: apply_transforms(val, t),
-                    return_dtype=pl.Utf8,
-                )
-            else:
-                expr = pl.col(col).cast(pl.Utf8)
-            field_exprs.append(expr)
-        concat_expr = pl.concat_str(field_exprs, separator="||")
-        return df.with_columns(concat_expr.alias("__block_key__"))
+        return f.with_column(
+            "__block_key__",
+            f.derive_transformed_column(col, list(transforms or [])),
+        )
+    parts = []
+    for i, col in enumerate(key_fields):
+        tfms = transforms[i] if i < len(transforms) else []
+        parts.append(f.derive_transformed_column(col, list(tfms)).to_list())
+    joined = [
+        "||".join(vals) if all(v is not None for v in vals) else None
+        for vals in zip(*parts)
+    ]
+    backend = "polars" if isinstance(f, PolarsFrame) else "arrow"
+    return f.with_column(
+        "__block_key__", column_from_values(joined, "utf8", backend=backend)
+    )
 
 
 def score_candidate(
@@ -173,9 +175,12 @@ def score_candidate(
     Returns a dict with group_count, max_group_size, mean_group_size,
     std_group_size, total_comparisons, and score.
     """
+    from goldenmatch.core.frame import to_frame as _tf_a3
+
     # Check columns exist
+    _cols_a3 = _tf_a3(df).columns
     for col in candidate["key_fields"]:
-        if col not in df.columns:
+        if col not in _cols_a3:
             return {
                 "group_count": 0,
                 "max_group_size": 0,
@@ -190,9 +195,15 @@ def score_candidate(
     # arrow backend until W5 lifts the ingest shim; the REDUCTIONS below run
     # through the seam (W3d).
 
-    from goldenmatch.core.frame import to_frame
 
-    df_valid = to_frame(df_with_key.filter(pl.col("__block_key__").is_not_null()))
+    _keys = df_with_key.column("__block_key__").to_list()
+    from goldenmatch.core.frame import PolarsFrame as _PF
+    from goldenmatch.core.frame import column_from_values as _cfv
+
+    _backend = "polars" if isinstance(df_with_key, _PF) else "arrow"
+    df_valid = df_with_key.filter_mask(
+        _cfv([k is not None for k in _keys], "bool", backend=_backend)
+    )
 
     if df_valid.height == 0:
         return {
@@ -374,7 +385,9 @@ def analyze_blocking(
     # At scale, per-candidate scoring runs a Python-UDF `map_elements` over the
     # full df. With ~260 candidates that's a multi-GB, multi-minute hang at 5M
     # rows. Block-size distribution is shape-only; sample is sufficient.
-    n_full = df.height
+    from goldenmatch.core.frame import to_frame as _tf_a3
+
+    n_full = _tf_a3(df).height
     if n_full > _SCORE_SAMPLE_THRESHOLD:
         from goldenmatch.core.frame import to_frame
 

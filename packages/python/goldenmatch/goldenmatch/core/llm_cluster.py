@@ -74,11 +74,14 @@ def llm_cluster_pairs(
 
     # Prepare row lookup
     row_lookup = {}
-    for row in df.to_dicts():
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    for row in _fa8.select_dicts(list(_fa8.columns)):
         row_lookup[row["__row_id__"]] = row
 
     # Determine display columns
-    display_cols = [c for c in df.columns if not c.startswith("__")][:6]
+    display_cols = [c for c in _fa8.columns if not c.startswith("__")][:6]
 
     # Process each component
     provider = config.provider

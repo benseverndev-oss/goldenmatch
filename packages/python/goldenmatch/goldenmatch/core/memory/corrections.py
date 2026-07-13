@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.core.memory.store import Correction, _canon_pair
 
 if TYPE_CHECKING:
@@ -51,16 +50,19 @@ class CorrectionStats:
         return True
 
 
-def build_row_lookup(df: pl.DataFrame, fields: list[str]) -> dict[int, tuple]:
+def build_row_lookup(df, fields: list[str]) -> dict[int, tuple]:
     """Build row ID to field values lookup once for all pairs."""
-    available = [f for f in fields if f in df.columns]
-    if "__row_id__" not in df.columns:
+    from goldenmatch.core.frame import to_frame
+
+    _f = to_frame(df)
+    available = [f for f in fields if f in _f.columns]
+    if "__row_id__" not in _f.columns:
         log.warning("DataFrame missing __row_id__ column, corrections cannot be applied")
         return {}
     if not available:
         log.warning("No matchkey fields found in DataFrame: %s", fields)
         return {}
-    rows = df.select(["__row_id__"] + available).to_dicts()
+    rows = _f.select_dicts(["__row_id__"] + available)
     return {r["__row_id__"]: tuple(r[f] for f in available) for r in rows}
 
 
@@ -70,48 +72,59 @@ def compute_field_hash(row_a_vals: tuple, row_b_vals: tuple) -> str:
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
-def compute_record_hash(df: pl.DataFrame, row_id: int) -> str:
+def compute_record_hash(df, row_id: int) -> str:
     """Hash content fields (sorted by name) for entity identity check.
 
     Excludes ``__row_id__`` so two runs over the same content produce the
-    same hash even if row order changes.
+    same hash even if row order changes. A4: dual-rep via the seam; the
+    ``str(v)``-over-raw-values format is the PERSISTED contract -- do not
+    change it (stored corrections re-anchor against it).
     """
-    filtered = df.filter(pl.col("__row_id__") == row_id)
-    if filtered.is_empty():
+    from goldenmatch.core.frame import to_frame
+
+    _f = to_frame(df)
+    filtered = _f.filter_in("__row_id__", [row_id])
+    if filtered.height == 0:
         log.warning("Row ID %d not found in DataFrame, returning empty hash", row_id)
         return ""
-    content_cols = sorted(c for c in df.columns if c != "__row_id__")
-    row = filtered.select(content_cols).row(0)
-    return hashlib.sha256("|".join(str(v) for v in row).encode()).hexdigest()[:16]
+    content_cols = sorted(c for c in _f.columns if c != "__row_id__")
+    row = filtered.select_dicts(content_cols)[0]
+    return hashlib.sha256(
+        "|".join(str(row[c]) for c in content_cols).encode()
+    ).hexdigest()[:16]
 
 
-def _build_hash_to_rids(df: pl.DataFrame) -> dict[str, list[int]]:
-    """Vectorized record_hash to [row_ids] map."""
-    sorted_cols = sorted(c for c in df.columns if c != "__row_id__")
-    hashed = df.select(
-        pl.col("__row_id__"),
-        pl.concat_str(
-            [pl.col(c).cast(pl.Utf8) for c in sorted_cols],
-            separator="|",
-        )
-        .map_elements(
-            lambda s: hashlib.sha256(s.encode()).hexdigest()[:16],
-            return_dtype=pl.Utf8,
-        )
-        .alias("__rec_hash__"),
-    )
+def _build_hash_to_rids(df) -> dict[str, list[int]]:
+    """record_hash to [row_ids] map (A4: dual-rep via the seam).
+
+    Format contract (PERSISTED in memory stores -- byte-stable): per-column
+    polars-Utf8-cast strings (the seam's ``cast_str`` pins those semantics
+    on both lanes, incl. the float formatter), "|"-joined, sha256[:16].
+    Rows with ANY null value hash to ``None`` (the old ``concat_str``
+    null-propagation + ``map_elements`` null skip) and land under the
+    ``None`` key exactly as before -- their rids still count as present.
+    """
+    from goldenmatch.core.frame import to_frame
+
+    _f = to_frame(df)
+    sorted_cols = sorted(c for c in _f.columns if c != "__row_id__")
+    rids = _f.column("__row_id__").to_list()
+    col_vals = [_f.column(c).cast_str().to_list() for c in sorted_cols]
     out: dict[str, list[int]] = {}
-    for rid, h in zip(
-        hashed["__row_id__"].to_list(), hashed["__rec_hash__"].to_list()
-    ):
-        out.setdefault(h, []).append(int(rid))
+    for i, rid in enumerate(rids):
+        parts = [cv[i] for cv in col_vals]
+        if any(p is None for p in parts):
+            h = None
+        else:
+            h = hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+        out.setdefault(h, []).append(int(rid))  # type: ignore[arg-type]
     return out
 
 
 def apply_corrections(
     scored_pairs: list[tuple[int, int, float]],
     store: MemoryStore,
-    df: pl.DataFrame,
+    df,  # pl.DataFrame | pa.Table (A4: dual-rep via the seam)
     matchkey_fields: list[str],
     dataset: str | None = None,
     reanchor: bool = True,
@@ -129,7 +142,9 @@ def apply_corrections(
     if not all_corrections:
         return scored_pairs, stats
 
-    if "__row_id__" not in df.columns:
+    from goldenmatch.core.frame import to_frame as _tf_a4
+
+    if "__row_id__" not in _tf_a4(df).columns:
         log.warning("DataFrame missing __row_id__ column, corrections cannot be applied")
         return scored_pairs, stats
 

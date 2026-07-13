@@ -10,13 +10,17 @@ from goldenmatch._polars_lazy import pl
 logger = logging.getLogger(__name__)
 
 
-def _scan_findings(df: pl.DataFrame, domain: str | None):
+def _scan_findings(df, domain: str | None):
     """Run the goldencheck scan and confidence-downgrade pass.
+
+    A1 (arrow-native endgame): ``df`` may be a ``pa.Table`` -- goldencheck
+    3.x's ``scan_dataframe`` accepts it NATIVELY (its own Arrow Flip), so
+    the Frame lane's scan runs polars-free end to end. The temp-CSV
+    fallback (older goldencheck) bridges to polars for write_csv only.
 
     Prefers the in-memory `scan_dataframe` entry point (added 2026-05-28
     to skip the write_csv/read_csv round-trip that was 121s of the 10M
-    pipeline_prep_quality_scan wall). Falls back to the temp-CSV path
-    when an older goldencheck is installed.
+    pipeline_prep_quality_scan wall).
     """
     from goldencheck.engine.confidence import apply_confidence_downgrade
 
@@ -26,10 +30,20 @@ def _scan_findings(df: pl.DataFrame, domain: str | None):
         scan_dataframe = None  # type: ignore[assignment]
 
     if scan_dataframe is not None:
-        findings, _ = scan_dataframe(df, domain=domain)
+        try:
+            findings, _ = scan_dataframe(df, domain=domain)
+        except Exception:
+            if isinstance(df, pl.DataFrame):
+                raise
+            # Installed goldencheck predates its Arrow Flip (scan_dataframe
+            # is polars-only there): bridge and retry. Floor bumps to
+            # goldencheck>=3.0 remove this at D6.
+            findings, _ = scan_dataframe(pl.from_arrow(df), domain=domain)
         return apply_confidence_downgrade(findings, llm_boost=False)
 
     from goldencheck.engine.scanner import scan_file
+    if not isinstance(df, pl.DataFrame):  # legacy goldencheck: polars csv path
+        df = pl.from_arrow(df)  # type: ignore[assignment]
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         df.write_csv(tmp.name)
         tmp_path = Path(tmp.name)
@@ -202,9 +216,9 @@ def row_quality_floor(
 
 
 def run_quality_check(
-    df: pl.DataFrame,
+    df,  # pl.DataFrame | pa.Table (A1: scan arrow-native; lane preserved)
     config=None,
-) -> tuple[pl.DataFrame, list[dict]]:
+) -> tuple:
     """Run GoldenCheck scan + fix if available.
 
     Returns (fixed_df, list_of_fixes) matching autofix format.
@@ -236,10 +250,10 @@ def run_quality_check(
 
 
 def _scan_only(
-    df: pl.DataFrame,
+    df,  # pl.DataFrame | pa.Table (scan is arrow-native; passthrough return)
     mode: str,
     domain: str | None,
-) -> tuple[pl.DataFrame, list[dict]]:
+) -> tuple:
     """Run GoldenCheck scan without fixes. Reports findings."""
     from goldencheck.models.finding import Severity
 
@@ -285,18 +299,31 @@ def _scan_only(
 
 
 def _scan_and_fix(
-    df: pl.DataFrame,
+    df,  # pl.DataFrame | pa.Table
     mode: str,
     fix_mode: str,
     domain: str | None,
-) -> tuple[pl.DataFrame, list[dict]]:
-    """Run GoldenCheck scan + apply fixes."""
+) -> tuple:
+    """Run GoldenCheck scan + apply fixes.
+
+    A1: the SCAN runs arrow-native on a pa.Table; ``apply_fixes`` is the
+    single remaining polars surface in goldencheck's fix engine, so the
+    bridge narrows to exactly that call -- and only when the scan found
+    anything (a clean frame stays polars-free). goldencheck-side arrow
+    port of apply_fixes is filed in the endgame plan.
+    """
     from goldencheck.engine.fixer import apply_fixes
 
     findings = _scan_findings(df, domain=domain)
 
-    # Apply fixes
-    fixed_df, report = apply_fixes(df, findings, mode=fix_mode)
+    if not findings and not isinstance(df, pl.DataFrame):
+        return df, []
+
+    # Apply fixes (polars surface; bridge the table here only)
+    _df_pl = df if isinstance(df, pl.DataFrame) else pl.from_arrow(df)
+    fixed_df, report = apply_fixes(_df_pl, findings, mode=fix_mode)
+    if not isinstance(df, pl.DataFrame):
+        fixed_df = fixed_df.to_arrow()  # stay on the caller's lane
 
     # Convert to autofix-compatible format
     fixes = []

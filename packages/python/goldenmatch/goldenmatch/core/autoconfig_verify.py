@@ -67,33 +67,34 @@ def _sample_block_sizes_per_key(
 
     Returns ``[]`` when df is empty.
     """
-    if df.height == 0:
+    # A3: seam-driven both lanes (derive_block_key is the twin of
+    # _build_block_key_expr; group_len is the sizes reduction).
+    from goldenmatch.core.frame import to_frame
+
+    f = to_frame(df)
+    if f.height == 0:
         return []
 
-    from goldenmatch.core.blocker import _build_block_key_expr
-
-    n = min(df.height, sample_cap)
-    sample = df.head(n) if df.height > n else df
+    n = min(f.height, sample_cap)
+    sample = f.head(n) if f.height > n else f
 
     keys = list(blocking.keys or [])
     keys.extend(blocking.passes or [])
 
     out: list[tuple[Any, list[int], Exception | None]] = []
     for key in keys:
-        if not all(f in df.columns for f in key.fields):
+        if not all(fld in f.columns for fld in key.fields):
             continue
         try:
-            expr = _build_block_key_expr(key)
-            sizes_series = (
-                sample.with_columns(expr)
-                .group_by("__block_key__")
-                .len()
-                .get_column("len")
+            keyed = sample.with_column(
+                "__block_key__",
+                sample.derive_block_key(key.fields, key.transforms or []),
             )
+            sizes = keyed.group_len(["__block_key__"]).column("len").to_list()
         except Exception as exc:
             out.append((key, [], exc))
             continue
-        out.append((key, [int(s) for s in sizes_series.to_list()], None))
+        out.append((key, [int(v) for v in sizes], None))
     return out
 
 
@@ -1036,7 +1037,9 @@ def _signal_blocking_recall(
     a uniform 1000-row sample when df.height >= 10_000. Reserved for the
     iterative autoconfig loop so postflight has a meaningful recall estimate.
     """
-    if df.height < 10_000:
+    from goldenmatch.core.frame import to_frame as _tf_a3
+
+    if _tf_a3(df).height < 10_000:
         return "deferred"
     _ = (config, pair_scores, current_threshold)  # silence unused
     return "deferred"
@@ -1147,7 +1150,9 @@ def _signal_block_size_percentiles(
     Preflight Check 4). Returns zeros on failure or when blocking is absent.
     """
     zero = {"p50": 0, "p95": 0, "p99": 0, "max": 0}
-    if config.blocking is None or df.height == 0:
+    from goldenmatch.core.frame import to_frame as _tf_a3
+
+    if config.blocking is None or _tf_a3(df).height == 0:
         return zero
 
     all_sizes = _sample_block_sizes(df, config.blocking, sample_cap=10_000)

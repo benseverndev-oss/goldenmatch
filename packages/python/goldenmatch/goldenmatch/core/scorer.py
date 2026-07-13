@@ -1586,7 +1586,7 @@ def score_blocks_parallel(
 
 def rerank_top_pairs(
     pairs: list[tuple[int, int, float]],
-    df: pl.DataFrame,
+    df: Any,  # pl.DataFrame | pa.Table (A8: seam reads)
     mk: MatchkeyConfig,
 ) -> list[tuple[int, int, float]]:
     """Re-score borderline pairs with a pre-trained cross-encoder.
@@ -1626,9 +1626,12 @@ def rerank_top_pairs(
         return pairs
 
     # Build row lookup for serialization
-    matchable_cols = [c for c in df.columns if not c.startswith("__")]
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    matchable_cols = [c for c in _fa8.columns if not c.startswith("__")]
     row_lookup: dict[int, dict] = {}
-    for row in df.select(["__row_id__"] + matchable_cols).to_dicts():
+    for row in _fa8.select_dicts(["__row_id__"] + matchable_cols):
         row_lookup[row["__row_id__"]] = row
 
     # Serialize borderline pairs

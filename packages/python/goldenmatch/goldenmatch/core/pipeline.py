@@ -353,10 +353,10 @@ def _resolve_identities(
     if not config.identity or not config.identity.enabled:
         return None
 
-    # W-4 widening (TRANSITIONAL): identity internals are polars-heavy
-    # (schema-aligned concat, incremental mini-frames) -- bridge the Frame
-    # lane's pa.Table at entry. The deep identity port is a D6 prerequisite.
-    df = _as_polars_df(df)
+    # A5: the batch dedupe path (resolve_clusters payload reads) is
+    # dual-rep; the incremental match_record mini-frame machinery stays
+    # polars (reached only via the identity APIs, which receive polars).
+    # The Ray-distributed branch bridges below (its own tier).
 
     # Phase 6: distributed dispatch when clusters is a Ray Dataset.
     try:
@@ -384,7 +384,7 @@ def _resolve_identities(
             )
             mk_name = matchkeys[0].name if matchkeys else None
             summary = resolve_identities_distributed(
-                clusters, df, scored_pairs, mk_name,
+                clusters, _as_polars_df(df), scored_pairs, mk_name,
                 dsn=config.identity.connection,
                 run_name=run_name,
                 dataset=config.identity.dataset,
@@ -440,9 +440,9 @@ def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _apply_domain_extraction(
-    combined_lf: pl.LazyFrame,
+    combined_lf: Any,  # pl.LazyFrame (classic) | native frame (Frame lane)
     config: GoldenMatchConfig,
-) -> pl.LazyFrame:
+) -> Any:
     """Run domain feature extraction if configured.
 
     Materializes derived columns (``__title_key__``, ``__brand__``,
@@ -456,9 +456,15 @@ def _apply_domain_extraction(
         return combined_lf
 
     from goldenmatch.core.domain import detect_domain, extract_features
+    from goldenmatch.core.frame import to_frame as _tf_dom_p
 
-    combined_df_tmp = combined_lf.collect()
-    user_cols = [c for c in combined_df_tmp.columns if not c.startswith("__")]
+    # A6: dual-rep -- accepts a LazyFrame (classic), eager native, or seam
+    # Frame; the extractors are seam-driven and preserve the caller's lane.
+    _was_lazy = isinstance(combined_lf, pl.LazyFrame)
+    combined_df_tmp = combined_lf.collect() if _was_lazy else _tf_dom_p(combined_lf).native
+    user_cols = [
+        c for c in _tf_dom_p(combined_df_tmp).columns if not c.startswith("__")
+    ]
 
     if domain_cfg.mode == "auto" or domain_cfg.mode is None:
         domain_profile = detect_domain(user_cols)
@@ -509,7 +515,7 @@ def _apply_domain_extraction(
             len(extractions), len(low_conf_ids),
         )
 
-    return combined_df_tmp.lazy()
+    return combined_df_tmp.lazy() if _was_lazy else combined_df_tmp
 
 
 def _apply_memory_pre(memory_store: Any, config: GoldenMatchConfig, matchkeys: list) -> None:
@@ -554,9 +560,8 @@ def _apply_memory_post(
     """Apply stored corrections to scored pairs. Returns (pairs, stats|None)."""
     if memory_store is None or config.memory is None:
         return all_pairs, None
-    # W-4 widening (TRANSITIONAL): apply_corrections' record-hash builder is
-    # a polars expr chain -- bridge at entry; deep port is a D6 prerequisite.
-    df = _as_polars_df(df)
+    # A4: apply_corrections is dual-rep (seam reads; hash format contract
+    # preserved byte-stable) -- no bridge.
     try:
         from goldenmatch.core.memory.corrections import apply_corrections
         # f.field is Optional[str] at schema level but is non-None for every
@@ -645,9 +650,8 @@ def _apply_postflight(
     no ``_preflight_report`` — i.e. the caller did not go through
     ``auto_configure_df``.
     """
-    # W-5 widening (TRANSITIONAL): postflight reads score histograms off a
-    # polars frame; bridge at entry (D6 prerequisite).
-    df = _as_polars_df(df)
+    # A3: postflight's inputs are the pair-score list + config (no frame
+    # reads survive in its body) -- no bridge.
     from goldenmatch.core.autoconfig_verify import (
         PreflightReport as _PfR,
     )
@@ -686,11 +690,7 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     if not config.blocking or not config.blocking.auto_suggest:
         return
 
-    # W-5 widening (TRANSITIONAL): the block analyzer takes polars; bridge
-    # the Frame lane's pa.Table at entry. W3d seamed its reductions -- the
-    # deep entry port rides the analyzer's own batch (D6 prerequisite).
-    df = _as_polars_df(df)
-
+    # A3: the analyzer is seam-driven dual-rep -- no bridge.
     matchkey_columns = _extract_matchkey_columns(config)
     if not matchkey_columns:
         return
@@ -1114,8 +1114,8 @@ def _semantic_name_column(
 
 def _semantic_blocking_pairs(
     config: GoldenMatchConfig,
-    combined_lf: pl.LazyFrame,
-    collected_df: pl.DataFrame,
+    combined_lf: Any,  # pl.LazyFrame | seam Frame (build_blocks is dual-rep)
+    collected_df: Any,  # pl.DataFrame | pa.Table
     matchkeys: list,
     matched_pairs: set[tuple[int, int]],
     across_files_only: bool,
@@ -1158,8 +1158,10 @@ def _semantic_blocking_pairs(
         MatchkeyField,
     )
     from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.core.frame import to_frame as _tf_sem
 
-    name_col = _semantic_name_column(config, matchkeys, list(collected_df.columns))
+    _sem_cols = list(_tf_sem(collected_df).columns)
+    name_col = _semantic_name_column(config, matchkeys, _sem_cols)
     if name_col is None:
         logger.warning("semantic_blocking: no usable name column found; skipping")
         return []
@@ -1195,7 +1197,7 @@ def _semantic_blocking_pairs(
     # (e.g. no standardization configured, or an upstream path that didn't
     # capture it) -- the fall back is the prior behavior, never worse.
     key_name_col = f"{_SEMANTIC_RAW_COL_PREFIX}{name_col}"
-    if key_name_col not in collected_df.columns:
+    if key_name_col not in _sem_cols:
         key_name_col = name_col
 
     out: list[tuple[int, int, float]] = []
@@ -1441,12 +1443,12 @@ def _golden_from_multi_df(
     if fused_golden_df is not None:
         return fused_golden_df, True
 
-    if not _is_pl:
-        multi_df = _as_polars_df(multi_df)
-        if not provenance_on and _polars_native_eligible(
-            golden_rules, quality_scores=quality_scores
-        ):
-            return build_golden_records_df(multi_df, golden_rules), False
+    if not _is_pl and not provenance_on and _polars_native_eligible(
+        golden_rules, quality_scores=quality_scores
+    ):
+        # Fast columnar stays polars (the W2e-3 Acero-port rejection);
+        # bridge for IT only. The batch builder below is dual-rep (A9).
+        return build_golden_records_df(_as_polars_df(multi_df), golden_rules), False
 
     golden_records = build_golden_records_batch(
         multi_df,
@@ -1743,22 +1745,23 @@ def _run_dedupe_pipeline(
         if config.quality is None or config.quality.mode != "disabled":
             from goldenmatch.core.quality import run_quality_check
             with stage("pipeline_prep_quality_scan"):
-                _pl_tmp, gc_fixes = run_quality_check(
-                    _as_polars_df(_frame.native), config.quality
-                )
+                # A1: goldencheck's scan is arrow-native (its 3.x Arrow
+                # Flip) -- hand the table straight through; the fix engine
+                # bridges internally ONLY when the scan found something.
+                _q_out, gc_fixes = run_quality_check(_frame.native, config.quality)
                 if gc_fixes:
                     logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-                _frame = _tf_lane(_pl_tmp.to_arrow())
+                _frame = _tf_lane(_q_out)
 
         if config.transform is None or config.transform.mode != "disabled":
             from goldenmatch.core.transform import run_transform
             with stage("pipeline_prep_transform"):
-                _pl_tmp, tf_fixes = run_transform(
-                    _as_polars_df(_frame.native), config.transform
-                )
+                # A2: the adapter is dual-rep (lane preserved; goldenflow's
+                # auto-detect engine bridges internally at one call).
+                _t_out, tf_fixes = run_transform(_frame.native, config.transform)
                 if tf_fixes:
                     logger.info("GoldenFlow: %d transforms applied", len(tf_fixes))
-                _frame = _tf_lane(_pl_tmp.to_arrow())
+                _frame = _tf_lane(_t_out)
 
         if config.validation and config.validation.auto_fix:
             with stage("auto_fix"):
@@ -1769,8 +1772,17 @@ def _run_dedupe_pipeline(
 
         if config.validation and config.validation.rules:
             with stage("validation"):
+                _v_rules = [
+                    ValidationRule(
+                        column=rc.column,
+                        rule_type=rc.rule_type,
+                        params=rc.params,
+                        action=rc.action,
+                    )
+                    for rc in config.validation.rules
+                ]
                 _valid_native, quarantine_df, _val_report = validate_dataframe(
-                    _frame.native, config.validation.rules
+                    _frame.native, _v_rules
                 )
                 logger.info(
                     "Validation: %d quarantined rows",
@@ -1822,15 +1834,9 @@ def _run_dedupe_pipeline(
                     )
 
         if config.domain and config.domain.enabled:
-            # W-7 (TRANSITIONAL): domain extraction is a polars-lazy stage;
-            # round-trip through the bridge in classic order (post-standardize,
-            # pre-matchkeys is satisfied: matchkeys derive below on _frame).
+            # A6: domain extraction is seam-driven dual-rep -- lane preserved.
             with stage("domain_extraction"):
-                _frame = _tf_lane(
-                    _apply_domain_extraction(
-                        _as_polars_df(_frame.native).lazy(), config
-                    ).collect().to_arrow()
-                )
+                _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
 
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
@@ -2567,15 +2573,10 @@ def _run_dedupe_pipeline(
                 "semantic_blocking is incompatible with COLUMNAR_PIPELINE"
             )
         with stage("semantic_blocking"):
-            # W-7 (TRANSITIONAL): semantic sources read polars; bridge both
-            # handles on the Frame lane (combined_lf is the Frame there).
-            _sem_lf = (
-                combined_lf
-                if isinstance(combined_lf, pl.LazyFrame)
-                else _as_polars_df(collected_df).lazy()
-            )
+            # A6: the semantic sources are dual-rep (build_blocks + seam
+            # column reads) -- both handles pass through on the caller's lane.
             _semantic_pairs = _semantic_blocking_pairs(
-                config, _sem_lf, _as_polars_df(collected_df), matchkeys,
+                config, combined_lf, collected_df, matchkeys,
                 matched_pairs, across_files_only,
                 source_lookup if across_files_only else None,
             )
@@ -2584,7 +2585,7 @@ def _run_dedupe_pipeline(
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:
         if mk.type == "weighted" and mk.rerank:
-            all_pairs = rerank_top_pairs(all_pairs, _as_polars_df(collected_df), mk)
+            all_pairs = rerank_top_pairs(all_pairs, collected_df, mk)
             break  # rerank once with the first rerank-enabled matchkey
 
     # ── Step 3.4: LLM SCORER (optional) ──
@@ -2598,7 +2599,7 @@ def _run_dedupe_pipeline(
             # purpose (cluster-mode cost stays None for this task).
             from goldenmatch.core.llm_cluster import llm_cluster_pairs
             all_pairs = _unwrap_llm_pairs(
-                llm_cluster_pairs(all_pairs, _as_polars_df(collected_df), config=config.llm_scorer)
+                llm_cluster_pairs(all_pairs, collected_df, config=config.llm_scorer)
             )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
@@ -2608,7 +2609,7 @@ def _run_dedupe_pipeline(
             _scored, llm_budget_summary = cast(
                 "tuple[list[tuple[int, int, float]], dict | None]",
                 llm_score_pairs(
-                    all_pairs, _as_polars_df(collected_df),
+                    all_pairs, collected_df,
                     config=config.llm_scorer, return_budget=True,
                 ),
             )
@@ -2624,7 +2625,7 @@ def _run_dedupe_pipeline(
                 c for c in _collected_frame.columns if not c.startswith("__")
             ]
             all_pairs = boost_accuracy(
-                all_pairs, _as_polars_df(collected_df), matchable_cols,
+                all_pairs, collected_df, matchable_cols,
                 provider=llm_provider,
                 api_key=None,  # auto-detect from env/settings
                 model_name=None,  # auto-detect
@@ -2660,16 +2661,15 @@ def _run_dedupe_pipeline(
     _tp_plan = getattr(config, "_throughput_plan", None)
     if _tp_plan is not None and getattr(_tp_plan, "verify_mode", "full") == "sketch_distance":
         import numpy as _np_tp
-        import polars as _pl_tp
 
         from goldenmatch.core import throughput_verify as _tv
 
         # all_ids is built in Step 4 below but we need it now for the remap.
         # Derive it early; Step 4 will re-derive from the same collected_df.
-        # W-7 (TRANSITIONAL): the sketch tier is a polars-local block
-        # (imports _pl_tp); bridge the Frame lane's table once here.
-        _tp_src = _as_polars_df(collected_df)
-        _tp_all_ids = _tp_src["__row_id__"].to_list()
+        # A7: the sketch tier reads via the seam (the minhash/simhash
+        # kernels are representation-free over text lists) -- no bridge.
+        _tp_src = _tf_d2s(collected_df)
+        _tp_all_ids = _tp_src.column("__row_id__").to_list()
 
         _tp_blocking = config.blocking
         _tp_strategy = getattr(_tp_blocking, "strategy", "lsh") if _tp_blocking else "lsh"
@@ -2695,7 +2695,7 @@ def _run_dedupe_pipeline(
             else:
                 _tp_col = _tp_sc.column or _tp_src.columns[0]
                 _tp_texts = (
-                    _tp_src[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+                    _tp_src.column(_tp_col).cast_str().fill_null("").to_list()
                 )
                 try:
                     from goldenmatch.core.embedder import get_embedder as _get_embedder
@@ -2756,8 +2756,10 @@ def _run_dedupe_pipeline(
             else:
                 # Fallback: pick first string-ish column
                 _tp_str_cols = [
-                    c for c, dt in _tp_src.schema.items()
-                    if dt in (_pl_tp.Utf8, _pl_tp.String) and not c.startswith("__")
+                    c
+                    for c in _tp_src.columns
+                    if not c.startswith("__")
+                    and _tp_src.column(c).semantic_dtype() == "text"
                 ]
                 _tp_col = _tp_str_cols[0] if _tp_str_cols else _tp_src.columns[0]
                 _tp_mode = "char"
@@ -2766,7 +2768,7 @@ def _run_dedupe_pipeline(
                 _tp_lsh_seed = 0
 
             _tp_texts = (
-                collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+                _tp_src.column(_tp_col).cast_str().fill_null("").to_list()
             )
             from goldenmatch.core.lsh_blocker import MinHashLSHBlocker as _MinHashLSHBlocker
             _tp_n_bands = _tp_plan.sketch_bands or 20
@@ -3313,10 +3315,9 @@ def _run_dedupe_pipeline(
                             golden_records = []
                             golden_fused_used = True
                         else:
-                            # Deep-D2 decline path: bridge, then replay the
-                            # polars demux (fast columnar when eligible) so
-                            # the Frame lane stays byte-identical to classic.
-                            multi_df = _as_polars_df(multi_df)
+                            # A9: the batch builder is dual-rep -- only the
+                            # fast columnar replay still bridges (W2e-3
+                            # Acero-port rejection).
                             if (
                                 not _provenance_on
                                 and _polars_native_eligible(
@@ -3325,7 +3326,7 @@ def _run_dedupe_pipeline(
                             ):
                                 with stage("golden_build_records_df_fast"):
                                     golden_df = build_golden_records_df(
-                                        multi_df, golden_rules
+                                        _as_polars_df(multi_df), golden_rules
                                     )
                                 golden_records = []
                             else:

@@ -864,21 +864,34 @@ def build_golden_records_batch(
                 multi_df, rules, user_columns=user_columns,
             )
 
-    if "__cluster_id__" not in multi_df.columns:
+    # A9: dual-rep entry. The default slow route below is seam-native; the
+    # specialized routes (polars-native columnar, survivorship native/oracle)
+    # bridge internally -- their compute ports are the remainder of A9.
+    from goldenmatch.core.frame import to_frame as _tf_a9
+
+    _mf = _tf_a9(multi_df)
+    if "__cluster_id__" not in _mf.columns:
         raise ValueError("multi_df must contain __cluster_id__ column")
-    if provenance and "__row_id__" not in multi_df.columns:
+    if provenance and "__row_id__" not in _mf.columns:
         raise ValueError("provenance=True requires a __row_id__ column")
-    if multi_df.height == 0:
+    if _mf.height == 0:
         return []
+
+    def _mdf_pl():
+        return (
+            multi_df
+            if isinstance(multi_df, pl.DataFrame)
+            else pl.from_arrow(multi_df)
+        )
 
     if _polars_native_eligible(rules, quality_scores):
         user_cols = [
-            c for c in multi_df.columns
+            c for c in _mf.columns
             if not _is_internal(c) and c != "__cluster_id__"
         ]
         if user_cols:
             return _build_golden_records_polars_native(
-                multi_df, rules, user_cols, provenance=provenance,
+                _mdf_pl(), rules, user_cols, provenance=provenance,
             )
 
     if _survivorship_active(rules):
@@ -898,15 +911,16 @@ def build_golden_records_batch(
                 _golden_df_to_rows,
                 build_survivorship_native,
             )
-            golden_df = build_survivorship_native(multi_df, rules)
+            golden_df = build_survivorship_native(_mdf_pl(), rules)
             return _golden_df_to_rows(golden_df)
 
         from goldenmatch.core.survivorship.conditions import build_resolution_order
         from goldenmatch.core.survivorship.resolve import resolve_cluster
+        _s_pl = _mdf_pl()
         s_sorted = (
-            multi_df.sort(["__cluster_id__", "__row_id__"])
-            if "__row_id__" in multi_df.columns
-            else multi_df.sort("__cluster_id__")
+            _s_pl.sort(["__cluster_id__", "__row_id__"])
+            if "__row_id__" in _s_pl.columns
+            else _s_pl.sort("__cluster_id__")
         )
         s_user_cols = [c for c in s_sorted.columns if not _is_internal(c) and c != "__cluster_id__"]
         order = build_resolution_order(rules.field_rules, rules.field_groups, s_user_cols)
@@ -923,22 +937,27 @@ def build_golden_records_batch(
             s_results.append(rec)
         return s_results
 
-    sorted_df = multi_df.sort("__cluster_id__")
-    sizes = (
-        sorted_df.lazy()
-        .group_by("__cluster_id__", maintain_order=True)
-        .agg(pl.len().alias("__size__"))
-        .collect()
-    )
-    cluster_ids = sizes["__cluster_id__"].to_list()
-    size_list = sizes["__size__"].to_list()
+    # A9: seam-native (the D5d shape). Seam sort is stable maintain_order
+    # (a deterministic refinement of the old plain sort -- the D5d-accepted
+    # delta); run_lengths on the key-sorted frame == the old maintain_order
+    # agg; per-run cluster ids come from the run offsets.
+    sorted_frame = _mf.sort(["__cluster_id__"])
+    size_list = sorted_frame.run_lengths("__cluster_id__")
+    _cid_all = sorted_frame.column("__cluster_id__").to_list()
+    cluster_ids = []
+    _off = 0
+    for _sz in size_list:
+        cluster_ids.append(_cid_all[_off])
+        _off += _sz
 
-    user_cols = [c for c in sorted_df.columns if not _is_internal(c) and c != "__cluster_id__"]
-    col_arrays: dict[str, list] = {col: sorted_df[col].to_list() for col in user_cols}
-    has_source = "__source__" in sorted_df.columns
-    source_array = sorted_df["__source__"].to_list() if has_source else None
-    has_row_id = "__row_id__" in sorted_df.columns
-    row_id_array = sorted_df["__row_id__"].to_list() if has_row_id else None
+    user_cols = [c for c in sorted_frame.columns if not _is_internal(c) and c != "__cluster_id__"]
+    col_arrays: dict[str, list] = {
+        col: sorted_frame.column(col).to_list() for col in user_cols
+    }
+    has_source = "__source__" in sorted_frame.columns
+    source_array = sorted_frame.column("__source__").to_list() if has_source else None
+    has_row_id = "__row_id__" in sorted_frame.columns
+    row_id_array = sorted_frame.column("__row_id__").to_list() if has_row_id else None
 
     # Lazy-load date columns when actually needed by a rule. Most workloads
     # use the default ``most_complete`` strategy and never reach this branch.
@@ -991,9 +1010,9 @@ def build_golden_records_batch(
                 sources = source_array[offset:offset + size]
             elif field_rule.strategy == "most_recent" and field_rule.date_column:
                 date_col = field_rule.date_column
-                if date_col in sorted_df.columns:
+                if date_col in sorted_frame.columns:
                     if date_col not in date_arrays:
-                        date_arrays[date_col] = sorted_df[date_col].to_list()
+                        date_arrays[date_col] = sorted_frame.column(date_col).to_list()
                     dates = date_arrays[date_col][offset:offset + size]
             if quality_scores is not None and row_id_array is not None:
                 weights = [

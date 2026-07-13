@@ -164,23 +164,26 @@ def derive_record_id(
 
 
 def _golden_record_from_members(
-    df: pl.DataFrame, row_ids: list[int]
+    df, row_ids: list[int]
 ) -> dict[str, Any]:
-    """Roll up cluster members into a single representative row (most-complete)."""
+    """Roll up cluster members into a single representative row (most-complete).
+
+    A5: seam-driven both lanes (column reads + Python folds).
+    """
     from goldenmatch.core.frame import to_frame
 
-    members = to_frame(df).filter_in("__row_id__", row_ids).native
-    if members.is_empty():
+    members = to_frame(df).filter_in("__row_id__", row_ids)
+    if members.height == 0:
         return {}
     out: dict[str, Any] = {}
     for col in members.columns:
         if col.startswith("__"):
             continue
-        non_null = members[col].drop_nulls()
-        if non_null.is_empty():
+        non_null = [v for v in members.column(col).to_list() if v is not None]
+        if not non_null:
             continue
         # Pick the longest non-null string representation (most-complete)
-        values = [(str(v), v) for v in non_null.to_list()]
+        values = [(str(v), v) for v in non_null]
         values.sort(key=lambda x: len(x[0]), reverse=True)
         out[col] = values[0][1]
     return out
@@ -248,7 +251,7 @@ def _frames_iter(
 
 def resolve_clusters(
     clusters: dict[int, dict] | None = None,
-    df: pl.DataFrame | None = None,
+    df: Any = None,  # pl.DataFrame | pa.Table (A5: dual-rep dedupe path)
     scored_pairs: list[tuple[int, int, float]] | None = None,
     matchkey_name: str | None = None,
     store: IdentityStore | None = None,
@@ -293,7 +296,9 @@ def resolve_clusters(
         scored_pairs = []
 
     summary = ResolveSummary()
-    if df.is_empty():
+    from goldenmatch.core.frame import to_frame as _tf_a5e
+
+    if _tf_a5e(df).height == 0:
         return summary
 
     # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
@@ -314,7 +319,10 @@ def resolve_clusters(
     # canonical spec can't fingerprint fall back to the legacy json.dumps id
     # ("{source}:hash:{12}"). Run `goldenmatch identity migrate-ids` to rewrite
     # any pre-v2 ":hash:" ids in the store to their ":h1:" equivalents.
-    rows = df.to_dicts()
+    from goldenmatch.core.frame import to_frame as _tf_a5
+
+    _fa5 = _tf_a5(df)
+    rows = _fa5.select_dicts(list(_fa5.columns))
     rowid_to_recid: dict[int, str] = {}
     rowid_to_payload: dict[int, dict[str, Any]] = {}
     rowid_to_source: dict[int, str] = {}
@@ -927,9 +935,9 @@ def match_record_to_entity(
         return {}
     from goldenmatch.core.frame import to_frame
 
-    matched_rows = to_frame(df).filter_in("__row_id__", list(matches.keys())).native
+    _mframe = to_frame(df).filter_in("__row_id__", list(matches.keys()))
     rowid_to_candidates: dict[int, list[str]] = {}
-    for row in matched_rows.to_dicts():
+    for row in _mframe.select_dicts(list(_mframe.columns)):
         rid = row.get("__row_id__")
         if rid is None:
             continue
