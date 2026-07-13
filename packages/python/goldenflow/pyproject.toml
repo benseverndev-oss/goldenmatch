@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenflow"
-version = "2.0.0"
+version = "2.1.0"
 description = "Data transformation toolkit — standardize, reshape, and normalize messy data before it hits your pipeline."
 readme = "README.md"
 license = "MIT"
@@ -28,7 +28,7 @@ classifiers = [
 # `goldenflow_nopolars` CI lane proves `import goldenflow` + transforms work with polars
 # uninstalled. See docs/design/2026-07-07-phase4-polars-optional-scoping.md.
 dependencies = [
-    "goldenflow-native>=0.26.0",
+    "goldenflow-native>=0.27.0",
     "pydantic>=2.7",
     "typer>=0.12",
     "rich>=13.0",
