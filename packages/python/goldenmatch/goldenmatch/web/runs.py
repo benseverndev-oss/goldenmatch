@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from goldenmatch._polars_lazy import pl
 from goldenmatch.core.frame import to_frame as _to_frame
 
 
@@ -40,8 +39,11 @@ def load_lineage(ref: RunRef) -> dict:
     return json.loads(ref.lineage_path.read_text(encoding="utf-8"))
 
 
-def load_clusters_df(ref: RunRef) -> pl.DataFrame:
-    return pl.read_csv(ref.clusters_path)
+def load_clusters_df(ref: RunRef):
+    # Arrow-native read (the W1 parity-pinned reader); returns pa.Table.
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    return read_table_arrow(ref.clusters_path)
 
 
 def load_run_manifest(ref: RunRef) -> RunManifest:
@@ -52,16 +54,19 @@ def load_run_manifest(ref: RunRef) -> RunManifest:
         generated_at=lineage.get("generated_at", ""),
         total_pairs=int(lineage.get("total_pairs", 0)),
         cluster_count=int(_to_frame(df).column("cluster_id").n_unique()),
-        row_count=int(df.height),
+        row_count=int(_to_frame(df).height),
     )
 
 
-def _load_source_df(ref: RunRef) -> pl.DataFrame:
-    """Locate and load the source CSV. v1 expects `data.csv` next to the run."""
+def _load_source_df(ref: RunRef):
+    """Locate and load the source CSV (arrow-native; returns pa.Table).
+    v1 expects `data.csv` next to the run."""
     src = ref.lineage_path.parent / "data.csv"
     if not src.exists():
         raise FileNotFoundError(f"source CSV not found at {src}")
-    return pl.read_csv(src)
+    from goldenmatch.core.io_arrow import read_table_arrow
+
+    return read_table_arrow(src)
 
 
 def cluster_summaries(ref: RunRef) -> list[dict]:
@@ -77,11 +82,11 @@ def cluster_summaries(ref: RunRef) -> list[dict]:
         pairs_by_cluster.setdefault(int(p["cluster_id"]), []).append(float(p["score"]))
 
     summaries = []
-    for cid, group in df.group_by("cluster_id"):
+    for cid, group in _to_frame(df).group_partitions("cluster_id"):
         cid_int = int(cid[0]) if isinstance(cid, tuple) else int(cid)
         scores = pairs_by_cluster.get(cid_int, [])
         # Deterministic representative: smallest row_id in the cluster.
-        rep_row_id = int(group["row_id"].min())
+        rep_row_id = int(min(group.column("row_id").to_list()))
         summaries.append({
             "cluster_id": cid_int,
             "size": int(group.height),
@@ -96,21 +101,23 @@ def cluster_summaries(ref: RunRef) -> list[dict]:
 def cluster_detail(ref: RunRef, cluster_id: int) -> dict:
     df = load_clusters_df(ref)
     lineage = load_lineage(ref)
-    members = _to_frame(df).filter_eq("cluster_id", cluster_id).native
+    members = _to_frame(df).filter_eq("cluster_id", cluster_id)
     if members.height == 0:
         raise KeyError(cluster_id)
-    row_ids = [int(r) for r in members["row_id"]]
-    src = _load_source_df(ref)
-    rows = [{"row_id": rid, "columns": src.row(rid, named=True)} for rid in row_ids]
+    row_ids = [int(r) for r in members.column("row_id").to_list()]
+    src = _to_frame(_load_source_df(ref))
+    _src_rows = src.select_dicts(list(src.columns))
+    rows = [{"row_id": rid, "columns": _src_rows[rid]} for rid in row_ids]
     pairs = [p for p in lineage.get("pairs", []) if int(p["cluster_id"]) == cluster_id]
     return {"cluster_id": cluster_id, "row_ids": row_ids, "rows": rows, "pairs": pairs}
 
 
 def source_row(ref: RunRef, row_id: int) -> dict:
-    src = _load_source_df(ref)
+    src = _to_frame(_load_source_df(ref))
     if row_id < 0 or row_id >= src.height:
         raise IndexError(row_id)
-    return {"row_id": row_id, "columns": src.row(row_id, named=True)}
+    row = src.slice(row_id, 1).select_dicts(list(src.columns))[0]
+    return {"row_id": row_id, "columns": row}
 
 
 def lineage_pair_keys(ref: RunRef) -> set[tuple[int, int]]:

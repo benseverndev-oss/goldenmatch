@@ -38,9 +38,11 @@ def _find_run(state, run_name: str):
 
 
 def _clusters_dict(ref) -> dict[int, dict]:
-    df = runs_mod.load_clusters_df(ref)
+    from goldenmatch.core.frame import to_frame as _tf_c
+
+    df = _tf_c(runs_mod.load_clusters_df(ref))
     out: dict[int, list[int]] = {}
-    for cid, rid in zip(df["cluster_id"].to_list(), df["row_id"].to_list()):
+    for cid, rid in zip(df.column("cluster_id").to_list(), df.column("row_id").to_list()):
         out.setdefault(int(cid), []).append(int(rid))
     return {cid: {"members": members} for cid, members in out.items()}
 

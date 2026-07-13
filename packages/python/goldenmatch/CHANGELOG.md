@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-07-13
+
+<!-- README-callout
+**3.1.0 — polars is optional.** The engine is Arrow-native end to end (a
+zero-polars CI gate proves a full dedupe with polars imports blocked);
+`pip install 'goldenmatch[polars]'` lights up the polars wall-optimizations
+and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical to 3.0.x.
+-->
+
+### Changed
+- **polars is now OPTIONAL** (`pip install 'goldenmatch[polars]'`). The engine
+  is Arrow-native end to end: ingest, prep (incl. the goldencheck quality scan
+  on its Arrow surface and the goldenflow transform adapter), matchkey
+  precompute, blocking, exact matching, scoring (classic + bucket backends
+  with the Rust kernels), clustering, golden survivorship (fused kernel +
+  seam-native oracle), memory corrections, identity resolution, lineage, and
+  file outputs (native parquet). A new zero-polars gate
+  (`tests/test_zero_polars_gate.py`) proves a full dedupe with polars imports
+  blocked.
+- With polars installed, the wall-optimization paths (golden fast columnar,
+  vectorized survivorship, the vectorized pair-score join) light up
+  automatically and behavior is byte-identical to 3.0.x.
+- `GOLDENMATCH_FRAME=polars` (the classic opt-out lane) now requires the
+  `[polars]` extra and raises a clear error without it.
+- The Frame lane now accepts EVERY feature class (validation, outputs,
+  lineage, identity, memory, auto-suggest, postflight, probabilistic EM,
+  NE-on-exact, throughput, rerank, LLM, semantic blocking, domain
+  extraction, adaptive golden) -- the eligibility predicate has no feature
+  declines left.
+
+### Fixed
+- `most_recent` golden rules on date32/time32 columns crashed on the arrow
+  lane (`pc.cast` has no direct 32-bit temporal -> int64 kernel).
+
 ## [3.0.0] - 2026-07-12
 
 <!-- README-callout

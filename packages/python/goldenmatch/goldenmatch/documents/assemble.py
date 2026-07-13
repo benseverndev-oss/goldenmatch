@@ -15,15 +15,27 @@ from goldenmatch.documents.types import (
 #     dedupe_df(df, exclude_columns=DOC_SIDECARS)
 DOC_SIDECARS = ["_source_file", "_source_page", "_extract_confidence", "_doc_id", "_doctype"]
 
-# Sidecar (name, dtype) specs in emit order for each frame.
-_HEADER_SIDECAR_SPECS = [
-    ("_source_file", pl.Utf8), ("_source_page", pl.Int64),
-    ("_extract_confidence", pl.Float64), ("_doc_id", pl.Utf8), ("_doctype", pl.Utf8),
-]
-_ITEM_SIDECAR_SPECS = [
-    ("_doc_id", pl.Utf8), ("_line_no", pl.Int64), ("_source_file", pl.Utf8),
-    ("_source_page", pl.Int64), ("_extract_confidence", pl.Float64),
-]
+# Sidecar (name, dtype) specs in emit order for each frame. Built lazily
+# (cached) so importing this module never touches the polars proxy -- the
+# W0 lazy-import-gate contract (documents is a polars-consuming feature;
+# it needs goldenmatch[polars] at USE time, not import time).
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _header_sidecar_specs() -> tuple:
+    return (
+        ("_source_file", pl.Utf8), ("_source_page", pl.Int64),
+        ("_extract_confidence", pl.Float64), ("_doc_id", pl.Utf8), ("_doctype", pl.Utf8),
+    )
+
+
+@lru_cache(maxsize=1)
+def _item_sidecar_specs() -> tuple:
+    return (
+        ("_doc_id", pl.Utf8), ("_line_no", pl.Int64), ("_source_file", pl.Utf8),
+        ("_source_page", pl.Int64), ("_extract_confidence", pl.Float64),
+    )
 
 
 class _ColUnion:
@@ -62,7 +74,7 @@ def _frame_from_records(records: list[dict], data_cols: list[str],
 
 def _empty_header_frame() -> pl.DataFrame:
     return pl.DataFrame(
-        {name: pl.Series(name, [], dtype=dtype) for name, dtype in _HEADER_SIDECAR_SPECS}
+        {name: pl.Series(name, [], dtype=dtype) for name, dtype in _header_sidecar_specs()}
     )
 
 
@@ -153,13 +165,13 @@ def assemble_structured(outcomes: list[_DocOutcome], *, drop_empty: bool = True
                 _register(o)
 
     if header_records:
-        df = _frame_from_records(header_records, header_union.cols, _HEADER_SIDECAR_SPECS)
+        df = _frame_from_records(header_records, header_union.cols, _header_sidecar_specs())
     else:
         df = _empty_header_frame()
     report.n_rows = df.height
 
     if item_records:
-        report.line_items = _frame_from_records(item_records, item_union.cols, _ITEM_SIDECAR_SPECS)
+        report.line_items = _frame_from_records(item_records, item_union.cols, _item_sidecar_specs())
     else:
         report.line_items = None
 
