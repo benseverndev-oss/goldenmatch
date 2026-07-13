@@ -2660,16 +2660,15 @@ def _run_dedupe_pipeline(
     _tp_plan = getattr(config, "_throughput_plan", None)
     if _tp_plan is not None and getattr(_tp_plan, "verify_mode", "full") == "sketch_distance":
         import numpy as _np_tp
-        import polars as _pl_tp
 
         from goldenmatch.core import throughput_verify as _tv
 
         # all_ids is built in Step 4 below but we need it now for the remap.
         # Derive it early; Step 4 will re-derive from the same collected_df.
-        # W-7 (TRANSITIONAL): the sketch tier is a polars-local block
-        # (imports _pl_tp); bridge the Frame lane's table once here.
-        _tp_src = _as_polars_df(collected_df)
-        _tp_all_ids = _tp_src["__row_id__"].to_list()
+        # A7: the sketch tier reads via the seam (the minhash/simhash
+        # kernels are representation-free over text lists) -- no bridge.
+        _tp_src = _tf_d2s(collected_df)
+        _tp_all_ids = _tp_src.column("__row_id__").to_list()
 
         _tp_blocking = config.blocking
         _tp_strategy = getattr(_tp_blocking, "strategy", "lsh") if _tp_blocking else "lsh"
@@ -2695,7 +2694,7 @@ def _run_dedupe_pipeline(
             else:
                 _tp_col = _tp_sc.column or _tp_src.columns[0]
                 _tp_texts = (
-                    _tp_src[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+                    _tp_src.column(_tp_col).cast_str().fill_null("").to_list()
                 )
                 try:
                     from goldenmatch.core.embedder import get_embedder as _get_embedder
@@ -2756,8 +2755,10 @@ def _run_dedupe_pipeline(
             else:
                 # Fallback: pick first string-ish column
                 _tp_str_cols = [
-                    c for c, dt in _tp_src.schema.items()
-                    if dt in (_pl_tp.Utf8, _pl_tp.String) and not c.startswith("__")
+                    c
+                    for c in _tp_src.columns
+                    if not c.startswith("__")
+                    and _tp_src.column(c).semantic_dtype() == "text"
                 ]
                 _tp_col = _tp_str_cols[0] if _tp_str_cols else _tp_src.columns[0]
                 _tp_mode = "char"
@@ -2766,7 +2767,7 @@ def _run_dedupe_pipeline(
                 _tp_lsh_seed = 0
 
             _tp_texts = (
-                collected_df[_tp_col].cast(_pl_tp.Utf8).fill_null("").to_list()
+                _tp_src.column(_tp_col).cast_str().fill_null("").to_list()
             )
             from goldenmatch.core.lsh_blocker import MinHashLSHBlocker as _MinHashLSHBlocker
             _tp_n_bands = _tp_plan.sketch_bands or 20
