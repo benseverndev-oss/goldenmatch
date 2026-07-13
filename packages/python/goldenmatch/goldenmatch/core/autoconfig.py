@@ -3700,13 +3700,20 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
-    # PR-6b boundary flip: accept pl.DataFrame | pl.LazyFrame | pa.Table |
-    # dict-of-arrays | Frame | ray.data.Dataset. A polars / ray / lazy input is
-    # left for the existing coercion block below (byte-identical); a Frame /
-    # pa.Table / dict is coerced to its ARROW native and flows through the
-    # controller + v0 heuristic polars-free (both are now Frame-seam ported).
-    # No more `pl.from_arrow` bridge -- the zero-config arrow path never imports
-    # polars.
+    # Boundary: accept pl.DataFrame | pl.LazyFrame | pa.Table | dict-of-arrays |
+    # Frame | ray.data.Dataset. PR-3..6b landed the autoconfig-LAYER arrow seam
+    # (arrow->polars dtype map, controller gates, sampling, blocking-size
+    # measurement, v0 heuristic). The zero-config SCORING lane is NOT fully
+    # arrow-ported yet, though: the eager indicators' empty/column guards
+    # (indicators.py), the GoldenCheck exclusion detectors, and the legacy
+    # `build_blocks(combined_lf)` scoring spine (pipeline.py:2284) still assume
+    # polars -- a bare pa.Table there raises (e.g. `pa.Table.is_empty`) and the
+    # controller degrades to a RED v0 fallback. So a non-polars input is coerced
+    # to polars HERE (byte-identical to the same data passed as a pl.DataFrame --
+    # no silent RED fallback / regression). Making this a true `.native` arrow
+    # pass-through (Polars-free zero-config, tripwire green, [polars] stopgap
+    # dropped) is the pipeline-spine follow-up; the seam routing above is its
+    # foundation. (ray / lazy / polars inputs are handled by the block below.)
     from goldenmatch.core.frame import (
         is_polars_dataframe,
         is_polars_lazyframe,
@@ -3719,10 +3726,13 @@ def auto_configure_df(
         or is_polars_lazyframe(df)
         or is_polars_dataframe(df)
     ):
-        # arrow / pa.Table / dict-of-arrays / Frame -> keep the native (arrow on
-        # the arrow backend, polars on the polars backend). to_frame is
-        # idempotent; .native is a pa.Table (no polars) on the arrow lane.
-        df = to_frame(df).native
+        _boundary_native = to_frame(df).native
+        if is_polars_dataframe(_boundary_native):
+            df = _boundary_native
+        else:
+            import polars as _pl_boundary
+
+            df = cast("pl.DataFrame", _pl_boundary.from_arrow(_boundary_native))
 
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.
@@ -3777,6 +3787,16 @@ def auto_configure_df(
     # partition kernel layer separately.
     _ms_partition: str | None = None  # #858 source partition (None => feature off)
     if not _is_ray_dataset(df) and is_polars_dataframe(df):
+        # df is always a pl.DataFrame here: the boundary above coerces every
+        # non-ray / non-lazy input (incl. pa.Table) to polars until the scoring
+        # lane is arrow-ported, and a LazyFrame was collected. So a pa.Table
+        # zero-config input runs the SAME exclusions / exclude_columns / #858
+        # guard as an equivalent pl.DataFrame -- the detectors below
+        # (detect_autoconfig_exclusions / _detect_source_partition /
+        # _source_correlated_exclusions) are not seam-ported, and don't need to
+        # be while the boundary coerces. Seam-porting them is part of the
+        # pipeline-spine follow-up that makes the boundary a true arrow
+        # pass-through.
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
         )

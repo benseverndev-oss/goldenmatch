@@ -111,6 +111,50 @@ def test_auto_configure_df_accepts_arrow_table():
     assert cfg.get_matchkeys()  # produced at least one matchkey
 
 
+def test_zero_config_arrow_with_exact_column_matches_polars():
+    """Regression: `auto_configure_df(pa.Table)` on data WITH an exact-eligible
+    identifier column must produce the SAME config as the equivalent
+    pl.DataFrame. The eager indicator `estimate_sparse_match_signal` runs only
+    when exact columns exist and used to crash on a bare pa.Table
+    (`'pyarrow.lib.Table' object has no attribute 'is_empty'`), degrading arrow
+    zero-config to a RED v0 fallback -- a divergence the all-fuzzy 48-row
+    fixtures above never exercised. The boundary now coerces non-polars input to
+    polars until the scoring lane is arrow-ported, so the two must agree."""
+    os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    import polars as pl
+
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    data = {
+        "cust_id": [f"C{i:05d}" for i in range(400)],  # unique -> exact-eligible
+        "first": (["ann", "bob", "cara", "dan", "eve", "fay"] * 67)[:400],
+        "last": (["smith", "jones", "lee", "poe", "ray", "kim"] * 67)[:400],
+        "zip": [str(10000 + (i % 50)) for i in range(400)],
+    }
+
+    def _summary(cfg):
+        mks = sorted(
+            (mk.type, tuple(sorted(f.field for f in (mk.fields or []) if f.field)))
+            for mk in cfg.get_matchkeys()
+        )
+        blk = None
+        if cfg.blocking:
+            blk = (
+                cfg.blocking.strategy,
+                tuple(
+                    sorted(
+                        k.fields[0] if k.fields else "?"
+                        for k in (cfg.blocking.keys or [])
+                    )
+                ),
+            )
+        return (getattr(cfg, "backend", None), mks, blk)
+
+    cfg_pl = auto_configure_df(pl.DataFrame(data), _skip_finalize=True)
+    cfg_pa = auto_configure_df(pa.table(data), _skip_finalize=True)
+    assert _summary(cfg_pl) == _summary(cfg_pa)
+
+
 # -- Tier 2: front-door polars-free (the concrete PR-6 win) -----------------
 
 
@@ -164,26 +208,26 @@ def test_explicit_config_arrow_dedupe_is_polars_free():
 
 @pytest.mark.xfail(
     reason=(
-        "The autoconfig stack is arrow-ported (PR-3..6b: unwrap removed, controller "
-        "gates / sampling / v0 heuristic route through the seam), so the COMMITTED "
-        "zero-config backend is 'bucket' (arrow-native, Polars-free). But the "
-        "controller's per-iteration SAMPLE dedupes evaluate non-bucket candidate "
-        "configs, which still hit the legacy scoring spine `build_blocks(combined_lf)` "
-        "at pipeline.py:2284 (a polars LazyFrame path). With polars ABSENT those "
-        "iterations error and the controller silently falls back to a RED v0 config. "
-        "Flips green when the legacy build_blocks/combined_lf scoring spine is "
-        "arrow-ported (the separately-tracked pipeline-spine follow-up), or the "
-        "arrow+native path forces the bucket scorer on every controller iteration."
+        "PR-3..6b landed the autoconfig-LAYER arrow seam (dtype map, controller "
+        "gates, sampling, blocking-size measurement, v0 heuristic), but the "
+        "zero-config SCORING lane is not fully arrow-ported: the eager indicators' "
+        "empty/column guards (indicators.py), the GoldenCheck exclusion detectors, "
+        "and the legacy `build_blocks(combined_lf)` scoring spine (pipeline.py:2284) "
+        "still assume polars. So `auto_configure_df` COERCES a non-polars input to "
+        "polars at its boundary for now (correct + no RED fallback), which imports "
+        "polars. Flips green when the scoring spine + indicators guards + exclusion "
+        "detectors are arrow-ported (the separately-tracked pipeline-spine follow-up) "
+        "and the boundary becomes a true `.native` arrow pass-through."
     ),
     strict=False,
 )
 def test_zero_config_dedupe_df_is_polars_free():
     """SUBPROCESS, polars import BLOCKED: assert the native path is present, then
     run ZERO-CONFIG `dedupe_df(pa.Table, config=None)` to completion WITHOUT
-    importing polars. The whole port's acceptance gate. Currently xfails at the
-    legacy `build_blocks(combined_lf)` scoring spine (pipeline.py:2284) reached by
-    the controller's per-iteration sample dedupes -- NOT the autoconfig boundary,
-    which PR-3..6b ported."""
+    importing polars. The whole port's acceptance gate. Currently xfails because
+    `auto_configure_df` coerces a non-polars input to polars at its boundary until
+    the scoring spine (indicators guards + exclusion detectors +
+    `build_blocks(combined_lf)`, pipeline.py:2284) is arrow-ported."""
     body = """
         import os
         import pyarrow as pa
