@@ -1980,7 +1980,7 @@ def build_clusters_arrow_native(
             ids_col = _cc([_pf.column("id_a"), _pf.column("id_b")]).unique()
             all_ids = [int(i) for i in ids_col.to_list()]
 
-    def _one_arr(col):
+    def _one_arr(col: Any):
         # kernel FFI takes pa.Array; the arrow lane's columns are chunked.
         a = col.to_arrow()
         if isinstance(a, _pa.ChunkedArray):
