@@ -24,5 +24,8 @@ pub mod names;
 pub mod numeric;
 pub mod phone;
 pub mod phonetic;
+/// Owned auto-detect profiling kernel — the type-inference decision behind
+/// GoldenFlow's zero-config path (`infer_type` + `profile_column`).
+pub mod profile;
 pub mod text;
 pub mod url;
