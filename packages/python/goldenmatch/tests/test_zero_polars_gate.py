@@ -25,3 +25,29 @@ def test_arrow_lane_exact_dedupe_imports_zero_polars():
     )
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr[-2000:]}"
     assert "ZERO-POLARS OK" in proc.stdout
+
+
+def test_cli_import_zero_polars():
+    """The CLI entry (what the web server boots through) imports with polars
+    absent -- module-level pl.* literals are the W0 lesson class (static grep
+    misses them; this gate is the authority)."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).parent.parent)
+    code = (
+        "import sys\n"
+        "class B:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'polars' or name.startswith('polars.'):\n"
+        "            raise ImportError('blocked')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, B())\n"
+        "import goldenmatch.cli.main\n"
+        "import goldenmatch.web.app\n"
+        "print('CLI IMPORT ZERO-POLARS OK')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, env=env, timeout=300,
+    )
+    assert proc.returncode == 0, f"stderr={proc.stderr[-2000:]}"
+    assert "CLI IMPORT ZERO-POLARS OK" in proc.stdout
