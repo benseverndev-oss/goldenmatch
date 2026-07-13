@@ -149,7 +149,14 @@ def _profile_column(series: pl.Series) -> ColumnProfile:
 # driven and lets a genuine kernel bug fail LOUD instead of degrading silently
 # to the pure path (the #688 silent-slow-fallback class). ``pl.Datetime`` matches
 # Date64/Timestamp, ``pl.Date`` matches Date32 -- compared by dtype class.
-_KERNEL_PROFILE_DTYPES = (pl.Int64, pl.Float64, pl.Boolean, pl.Utf8, pl.Date, pl.Datetime)
+# The Polars dtypes the owned ``Column.profile()`` kernel supports (mirrors the
+# Arrow dtypes column.rs handles: Utf8/LargeUtf8/Utf8View, Int64, Float64, Boolean,
+# Date, Timestamp). Built LAZILY inside ``_profile_column_native_or_pure`` -- a
+# module-level ``(pl.Int64, ...)`` tuple would resolve the lazy ``pl`` import at
+# import time and break the Polars-free guarantee (the columnar/list zero-config
+# path imports this module only for ``profile_columns``, which never touches Polars).
+def _kernel_profile_dtypes() -> tuple:
+    return (pl.Int64, pl.Float64, pl.Boolean, pl.Utf8, pl.Date, pl.Datetime)
 
 
 def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
@@ -166,10 +173,15 @@ def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
     surfaces instead of silently degrading."""
     from goldenflow.core._native_loader import native_enabled, native_module
 
-    if native_enabled("profile") and series.dtype in _KERNEL_PROFILE_DTYPES:
+    if native_enabled("profile") and series.dtype in _kernel_profile_dtypes():
         nm = native_module()
         column_cls = getattr(nm, "Column", None) if nm is not None else None
-        if column_cls is not None and hasattr(column_cls, "from_arrow"):
+        # Probe ``profile`` (the method we call), not ``from_arrow``: the floor
+        # symbol infer_type_list_arrow already guarantees a wheel new enough to
+        # carry Column.profile, and a quoted "from_arrow" literal would trip the
+        # native_symbols gate (it matches the *_arrow kernel-symbol pattern but is
+        # a pyclass METHOD, not a wrap_pyfunction export).
+        if column_cls is not None and hasattr(column_cls, "profile"):
             # GOTCHA (P1b): pass a 1-col DataFrame (series.to_frame()), never a
             # bare Series -- a bare Series is a non-struct Arrow stream arrow-rs
             # can't read.
