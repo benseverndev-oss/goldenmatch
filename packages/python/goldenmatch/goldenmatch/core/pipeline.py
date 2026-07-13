@@ -1743,12 +1743,13 @@ def _run_dedupe_pipeline(
         if config.quality is None or config.quality.mode != "disabled":
             from goldenmatch.core.quality import run_quality_check
             with stage("pipeline_prep_quality_scan"):
-                _pl_tmp, gc_fixes = run_quality_check(
-                    _as_polars_df(_frame.native), config.quality
-                )
+                # A1: goldencheck's scan is arrow-native (its 3.x Arrow
+                # Flip) -- hand the table straight through; the fix engine
+                # bridges internally ONLY when the scan found something.
+                _q_out, gc_fixes = run_quality_check(_frame.native, config.quality)
                 if gc_fixes:
                     logger.info("GoldenCheck: %d fixes applied", len(gc_fixes))
-                _frame = _tf_lane(_pl_tmp.to_arrow())
+                _frame = _tf_lane(_q_out)
 
         if config.transform is None or config.transform.mode != "disabled":
             from goldenmatch.core.transform import run_transform
