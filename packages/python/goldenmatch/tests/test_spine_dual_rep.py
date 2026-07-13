@@ -199,7 +199,7 @@ def test_frame_lane_declines_preflight():
     assert _eligible(cfg) is False
 
 
-def test_frame_lane_declines_probabilistic_mk():
+def test_frame_lane_allows_probabilistic_mk():
     from goldenmatch.config.schemas import GoldenMatchConfig
 
     cfg = GoldenMatchConfig(
@@ -213,10 +213,11 @@ def test_frame_lane_declines_probabilistic_mk():
         ],
         blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["name"])]),
     )
-    assert _eligible(cfg) is False
+    # W-6: probabilistic EM is seam-ported -- the lane now accepts it.
+    assert _eligible(cfg) is True
 
 
-def test_frame_lane_declines_ne_on_exact():
+def test_frame_lane_allows_ne_on_exact():
     from goldenmatch.config.schemas import NegativeEvidenceField
 
     cfg = _base_cfg()
@@ -225,7 +226,8 @@ def test_frame_lane_declines_ne_on_exact():
             field="name", scorer="jaro_winkler", threshold=0.9, penalty=0.5
         )
     ]
-    assert _eligible(cfg) is False
+    # W-6: NE-on-exact bridges at its call site -- the lane accepts it.
+    assert _eligible(cfg) is True
 
 
 # -- D2s-d2b: the Frame lane e2e ------------------------------------------------------
@@ -661,3 +663,41 @@ def test_frame_lane_auto_suggest_bridge(tmp_path, monkeypatch):
     f_keys = [k.fields for k in (frame_cfg.blocking.keys or [])]
     c_keys = [k.fields for k in (classic_cfg.blocking.keys or [])]
     assert f_keys == c_keys and f_keys
+
+
+def test_frame_lane_probabilistic_e2e_parity(tmp_path, monkeypatch):
+    """W-6: a probabilistic (Fellegi-Sunter EM) run engages the Frame lane
+    and reproduces the classic lane."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        QualityConfig,
+        TransformConfig,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+    cfg_kw = dict(
+        matchkeys=[
+            MatchkeyConfig(
+                name="prob_name", type="probabilistic", threshold=0.7,
+                fields=[
+                    MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0),
+                    MatchkeyField(field="last", scorer="jaro_winkler", weight=1.0),
+                ],
+            )
+        ],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["last"])]),
+        quality=QualityConfig(mode="disabled"),
+        transform=TransformConfig(mode="disabled"),
+    )
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    frame_lane = P.run_dedupe([(str(csv), "people")], GoldenMatchConfig(**cfg_kw))
+    assert hits and hits[0] is True, f"lane not engaged: {hits}"
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic = P.run_dedupe([(str(csv), "people")], GoldenMatchConfig(**cfg_kw))
+    assert _norm_result(frame_lane) == _norm_result(classic)

@@ -2163,7 +2163,7 @@ def _run_dedupe_pipeline(
                             _apply_negative_evidence_to_exact_pairs,
                         )
                         pairs = _apply_negative_evidence_to_exact_pairs(
-                            pairs, mk, collected_df
+                            pairs, mk, _as_polars_df(collected_df)
                         )
                     if across_files_only:
                         pairs = [
@@ -4146,11 +4146,10 @@ def _frame_lane_eligible(
     if gr is not None and getattr(gr, "adaptive", False):
         return False
     for mk in matchkeys:
-        if mk.type == "probabilistic":
-            return False
+        # W-6: probabilistic EM + NE-on-exact no longer decline (EM's df
+        # reads are seam-ported; the per-pair scorers read via row_lookup
+        # dicts; NE-on-exact bridges at its call site).
         if mk.type == "weighted" and getattr(mk, "rerank", None):
-            return False
-        if mk.type == "exact" and (getattr(mk, "negative_evidence", None) or []):
             return False
     # W-2: writes_outputs no longer declines -- write_output is dual-rep
     # (native parquet; csv/xlsx keep the polars formatting contract via the
