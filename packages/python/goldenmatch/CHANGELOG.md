@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [3.1.0] - 2026-07-13
 
+<!-- README-callout
+**3.1.0 — polars is optional.** The engine is Arrow-native end to end (a
+zero-polars CI gate proves a full dedupe with polars imports blocked);
+`pip install 'goldenmatch[polars]'` lights up the polars wall-optimizations
+and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical to 3.0.x.
+-->
+
 ### Changed
 - **polars is now OPTIONAL** (`pip install 'goldenmatch[polars]'`). The engine
   is Arrow-native end to end: ingest, prep (incl. the goldencheck quality scan

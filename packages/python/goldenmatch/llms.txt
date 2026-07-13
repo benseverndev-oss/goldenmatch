@@ -110,7 +110,7 @@ golden_rules:
 - `GoldenMatchConfig` — Pydantic model, loadable from YAML via `gm.load_config("config.yaml")`
 
 ## Performance & Scale
-- Backend tiers: Polars in-memory (<500K), DuckDB out-of-core (500K-50M), Ray distributed (>=50M)
+- Backend tiers: in-memory Arrow-native (<500K; the classic polars scorer needs the optional [polars] extra since v3.1.0), DuckDB out-of-core (500K-50M), Ray distributed (>=50M). The engine is Arrow-native end to end; polars is an optional wall-optimization extra.
 - Verified at 100M: full dedupe in 9.2 min on a 5-node Ray cluster (80 CPU), 20,000,000 clusters recovered exactly, driver peak 0.36 GB RSS — recall-complete (correct across any partitioning) and driver-collect-free end to end
 - 1M exact dedupe: ~7.8s. 100K fuzzy: ~12.8s
 - LLM scorer: ~$0.04 per dataset (budget-capped, opt-in)

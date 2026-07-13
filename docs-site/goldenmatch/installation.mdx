@@ -28,6 +28,7 @@ GOLDENMATCH_PLANNER_BUCKET=0    # force the polars-direct backend
 ### Optional extras
 
 ```bash
+pip install goldenmatch[polars]         # optional: polars wall-optimizations + the classic GOLDENMATCH_FRAME=polars lane (v3.1.0+: polars is no longer a required dependency)
 pip install goldenmatch[embeddings]     # sentence-transformers + FAISS
 pip install goldenmatch[llm]            # Claude/OpenAI for LLM scoring
 pip install goldenmatch[postgres]       # PostgreSQL database sync

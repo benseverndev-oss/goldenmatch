@@ -50,19 +50,23 @@ frozen fixtures.
 If you need the old lane while validating the upgrade:
 
 ```bash
-export GOLDENMATCH_FRAME=polars   # opt-out escape hatch
+pip install 'goldenmatch[polars]'   # v3.1.0+: polars is an optional extra
+export GOLDENMATCH_FRAME=polars     # opt-out escape hatch
 ```
 
-The `polars` backend (and the `polars` runtime dependency) will be removed in
-a 3.x minor once the remaining engine internals complete their Arrow descent —
-pin `GOLDENMATCH_FRAME=polars` only as a transition aid, not a long-term
-configuration.
+**v3.1.0 resolution**: the Arrow descent completed. `polars` moved out of the
+required dependencies — `pip install goldenmatch` runs the engine end to end
+on Arrow (a zero-polars CI gate proves a full dedupe with polars imports
+blocked). Installing the `[polars]` extra lights up the polars-present wall
+optimizations (golden fast-columnar, vectorized survivorship, the large-scale
+pair-score join) and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical
+to 3.0.x behavior.
 
 ## Notes for specific surfaces
 
 - **MCP / A2A**: tool responses were already JSON — no change.
-- **dbt (`dbt-goldensuite`)**: unaffected in 3.0.0 (it consumes the internal
-  pipeline result, still Polars-backed until the engine descent completes).
+- **dbt (`dbt-goldensuite`)**: unaffected — the internal pipeline result
+  frames are `pyarrow.Table` on both lanes since the engine descent completed.
 - **One behavioral nuance**: sampling-based auto-config decisions are
   deterministic per backend but may legitimately differ between the `arrow`
   and `polars` lanes (documented statistical contract of `Frame.sample`).

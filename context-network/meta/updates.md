@@ -2,6 +2,16 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-13 — GoldenMatch 3.1.0: Arrow-native engine, polars optional
+
+The full train merged (#1720-#1736): D5d bucket scaffolding, the D2s spine
+descent, the Frame-lane flip + widening (W-1..7: zero feature declines left),
+the endgame arrow ports (A1-A9; bridge ledger 21 -> 6), deep-D2 fused-golden
+dual-rep, the zero-polars gate, and D6 (polars -> optional [polars] extra,
+3.1.0 lockstep). K1/K2 kernel candidates: measured NO-GO (precompute 1.1s /
+13.9% of a 1M wall). Hotspot loop: 1M frame-lane wall 7.6s -> 5.5s, byte-
+identical. ADR 0036.
+
 ## 2026-07-08 -- GoldenCheck: denial-constraint discovery, Stage 1 (ADR 0035)
 - New opt-in discovered-rule family: mines denial constraints `¬(p1 ∧ … ∧ pm)` — if-then /
   cross-tuple invariants like `¬(status=shipped ∧ ship_date<order_date)` — from a single

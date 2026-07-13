@@ -57,14 +57,17 @@ npm install goldenmatch
 > core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
+> **v3.1.0** — **3.1.0 — polars is optional.** The engine is Arrow-native end to end (a
+zero-polars CI gate proves a full dedupe with polars imports blocked);
+`pip install 'goldenmatch[polars]'` lights up the polars wall-optimizations
+and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical to 3.0.x.
+>
 > **v3.0.0** — **v3.0.0 — Arrow-native results.** Result frames are now `pyarrow.Table`
 (migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
 Arrow frame backend is the default — measured ~36% faster end-to-end on the
 100K zero-config benchmark — with `GOLDENMATCH_FRAME=polars` as the opt-out.
 >
 > **v2.4.0 — The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
->
-> **v2.3.0 — Auto-enabled semantic blocking, now default-on** — text-heavy data automatically routes to SimHash-over-embeddings blocking when an embedder is reachable (a byte-identical no-op otherwise). Plus pluggable pgvector / DuckDB-HNSW vector-index backends and opt-in Fellegi-Sunter routing for no-strong-identifier datasets (`GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1`).
 <!-- README-callouts:end -->
 
 ---
@@ -212,7 +215,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 - **Chunked mode** — streaming `scan_csv().slice()` reader + vectorized cross-chunk join + block-keyed index. **Measured: 5M records in ~50 min on a 4c/16GB GitHub runner, 11.9 GB peak, no OOM** (PRs #233/#234/#235, 2026-05-14). Pass `backend="chunked"`. The bucket backend supersedes this for 16-core / 32+ GB Linux; chunked stays as the path for memory-constrained 4c/16GB shapes.
 - **DuckDB backend** — `config.backend="duckdb"` routes block scoring through a DuckDB-backed pair store that can spill to disk via `GOLDENMATCH_DUCKDB_SCORE_DB`. Doesn't replace in-memory scoring matrices yet; the value lands at 50M+ where pair counts hit 10⁸.
 - **Ray distributed backend** — `pip install goldenmatch[ray]` + pass `backend="ray"` explicitly OR set `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` to let the v3 planner pick it at 50M+ rows. As of v1.16.0 the planner no longer auto-picks ray after the Distributed Plan v1 stack failed the 5M kill criterion on the same workload where bucket succeeded at 6.4 GB peak RSS (PR #318).
-- **Native acceleration (default-installed on common platforms)** -- `pip install goldenmatch` now pulls the compiled Rust/PyO3 abi3 kernel (`goldenmatch-native`) automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). It strips Python-loop overhead from hot paths (block scoring, record fingerprints, connected-components / cluster build, dedup-pairs, the MST oversized-split). No `[native]` extra is needed (the `[native]` extra still works as a back-compat alias). **Rust is the reference implementation** (2026-07 reference-mode change); the pure-Python + Polars pipeline is the **lossy fallback** — byte-identical on the parity-gated hot paths — used automatically on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python. Opt out with `GOLDENMATCH_NATIVE=0` (disable the kernel) or `GOLDENMATCH_PLANNER_BUCKET=0` (force the polars-direct backend).
+- **Native acceleration (default-installed on common platforms)** -- `pip install goldenmatch` now pulls the compiled Rust/PyO3 abi3 kernel (`goldenmatch-native`) automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). It strips Python-loop overhead from hot paths (block scoring, record fingerprints, connected-components / cluster build, dedup-pairs, the MST oversized-split). No `[native]` extra is needed (the `[native]` extra still works as a back-compat alias). **Rust is the reference implementation** (2026-07 reference-mode change); the pure-Python + Arrow pipeline is the **lossy fallback** — byte-identical on the parity-gated hot paths — used automatically on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python. Opt out with `GOLDENMATCH_NATIVE=0` (disable the kernel) or `GOLDENMATCH_PLANNER_BUCKET=0` (force the polars-direct backend).
 - **dbt integration** — `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
 
 ### Learning Memory (v1.6.0)
