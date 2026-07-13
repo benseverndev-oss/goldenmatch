@@ -164,10 +164,16 @@ def test_explicit_config_arrow_dedupe_is_polars_free():
 
 @pytest.mark.xfail(
     reason=(
-        "auto_configure_df still bridges arrow->polars for the controller + "
-        "_legacy_auto_configure_v0 heuristic (neither arrow-ported: controller "
-        "run()'s all-null gate subscripts df[col]; v0 has ~15 df[col] sites). "
-        "Flips green when the controller/v0 arrow port lands."
+        "The autoconfig stack is arrow-ported (PR-3..6b: unwrap removed, controller "
+        "gates / sampling / v0 heuristic route through the seam), so the COMMITTED "
+        "zero-config backend is 'bucket' (arrow-native, Polars-free). But the "
+        "controller's per-iteration SAMPLE dedupes evaluate non-bucket candidate "
+        "configs, which still hit the legacy scoring spine `build_blocks(combined_lf)` "
+        "at pipeline.py:2284 (a polars LazyFrame path). With polars ABSENT those "
+        "iterations error and the controller silently falls back to a RED v0 config. "
+        "Flips green when the legacy build_blocks/combined_lf scoring spine is "
+        "arrow-ported (the separately-tracked pipeline-spine follow-up), or the "
+        "arrow+native path forces the bucket scorer on every controller iteration."
     ),
     strict=False,
 )
@@ -175,7 +181,9 @@ def test_zero_config_dedupe_df_is_polars_free():
     """SUBPROCESS, polars import BLOCKED: assert the native path is present, then
     run ZERO-CONFIG `dedupe_df(pa.Table, config=None)` to completion WITHOUT
     importing polars. The whole port's acceptance gate. Currently xfails at the
-    controller/v0 polars bridge (autoconfig.py boundary)."""
+    legacy `build_blocks(combined_lf)` scoring spine (pipeline.py:2284) reached by
+    the controller's per-iteration sample dedupes -- NOT the autoconfig boundary,
+    which PR-3..6b ported."""
     body = """
         import os
         import pyarrow as pa
