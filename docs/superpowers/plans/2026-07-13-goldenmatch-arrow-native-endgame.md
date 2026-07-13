@@ -123,7 +123,19 @@ per-cluster merge to seam reads — it is already to_list-shaped); or
 dies here. The order-sensitivity lesson (Acero vs polars join row order)
 pins the parity fixtures.
 
-### K1 — precompute/derive kernel (MEASURE FIRST)
+### K1/K2 — VERDICT: MEASURED NO-GO (2026-07-13)
+
+1M frame-lane measurement (weighted jaro config, soundex python-fallback
+chain in the mix, bucket backend): matchkey precompute = **1.1s absolute,
+13.9% of a 7.6s wall**. A native chain kernel's ceiling is ~1s at 1M --
+not kernel-worthy; the wall lives in scoring/clustering, which the fused
+match kernel already owns. K2 (fused prep) has nothing to fuse: the prep
+stages are sub-second at this scale. Per the measure-first rule (the
+goldenflow arrow-everywhere ~3% precedent), a measured no-go IS the
+completed outcome. Re-open only if a 10M+ profile on real shapes shows
+the precompute share inverting.
+
+### K1 — precompute/derive kernel (MEASURE FIRST) [superseded by the verdict above]
 At 10M the matchkey precompute was 90s polars-batched; the arrow lane loops
 per-signature. Profile at 1M/10M on the frame lane; if the python-fallback
 transform chains (soundex/metaphone) dominate, add a native chain kernel
