@@ -143,45 +143,66 @@ def _profile_column(series: pl.Series) -> ColumnProfile:
     )
 
 
+# Arrow dtypes ``Column.profile()`` (native-flow/src/column.rs) supports. Every
+# other Polars dtype (Int8/16/32, UInt*, Float32) raises PyTypeError inside the
+# kernel; gating on this allowlist keeps the expected fallback explicit + data-
+# driven and lets a genuine kernel bug fail LOUD instead of degrading silently
+# to the pure path (the #688 silent-slow-fallback class). ``pl.Datetime`` matches
+# Date64/Timestamp, ``pl.Date`` matches Date32 -- compared by dtype class.
+_KERNEL_PROFILE_DTYPES = (pl.Int64, pl.Float64, pl.Boolean, pl.Utf8, pl.Date, pl.Datetime)
+
+
 def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
     """Path 1 (columnar built-in) profiling: the owned native ``Column.profile()``
-    kernel when enabled + importable, else the pure-Python :func:`_profile_column`.
+    kernel when enabled + the dtype is in the kernel's supported set, else the
+    pure-Python :func:`_profile_column`.
 
     The kernel returns ``{null_count, unique_count, samples, inferred_type}`` in one
     pass (type decided by the Arrow dtype, matching :func:`_infer_type`'s dtype
     short-circuit); the Python caller derives the percentages, applies the
-    column-name override, and packs the dataclass. Any dtype the kernel does not
-    support (e.g. Int32/Float32/UInt*) raises inside ``.profile()`` -> fall back to
-    the pure path so parity holds for every dtype the Polars profiler accepts."""
+    column-name override, and packs the dataclass. Unsupported dtypes
+    (Int8/16/32, UInt*, Float32) fall back to the pure path via an explicit dtype
+    pre-check -- NO broad ``except`` around the native call, so a real kernel bug
+    surfaces instead of silently degrading."""
     from goldenflow.core._native_loader import native_enabled, native_module
 
-    if native_enabled("profile"):
+    if native_enabled("profile") and series.dtype in _KERNEL_PROFILE_DTYPES:
         nm = native_module()
         column_cls = getattr(nm, "Column", None) if nm is not None else None
         if column_cls is not None and hasattr(column_cls, "from_arrow"):
-            try:
-                # GOTCHA (P1b): pass a 1-col DataFrame (series.to_frame()), never a
-                # bare Series -- a bare Series is a non-struct Arrow stream arrow-rs
-                # can't read.
-                out = column_cls.from_arrow(series.to_frame()).profile()
-            except Exception:  # noqa: BLE001 - unsupported dtype -> pure fallback
-                out = None
-            if out is not None:
-                row_count = len(series)
-                null_count = int(out["null_count"])
-                unique_count = int(out["unique_count"])
-                inferred = _override_type_by_column_name(series.name, out["inferred_type"])
-                return ColumnProfile(
-                    name=series.name,
-                    inferred_type=inferred,
-                    row_count=row_count,
-                    null_count=null_count,
-                    null_pct=null_count / row_count if row_count > 0 else 0.0,
-                    unique_count=unique_count,
-                    unique_pct=unique_count / row_count if row_count > 0 else 0.0,
-                    sample_values=list(out["samples"]),
-                )
+            # GOTCHA (P1b): pass a 1-col DataFrame (series.to_frame()), never a
+            # bare Series -- a bare Series is a non-struct Arrow stream arrow-rs
+            # can't read.
+            out = column_cls.from_arrow(series.to_frame()).profile()
+            row_count = len(series)
+            null_count = int(out["null_count"])
+            unique_count = int(out["unique_count"])
+            inferred = _override_type_by_column_name(series.name, out["inferred_type"])
+            return ColumnProfile(
+                name=series.name,
+                inferred_type=inferred,
+                row_count=row_count,
+                null_count=null_count,
+                null_pct=null_count / row_count if row_count > 0 else 0.0,
+                unique_count=unique_count,
+                unique_pct=unique_count / row_count if row_count > 0 else 0.0,
+                sample_values=list(out["samples"]),
+            )
     return _profile_column(series)
+
+
+def _scalar_type_hint(values: list) -> str | None:
+    """'boolean'/'numeric' by Python scalar type, else None (-> Utf8/regex path).
+
+    The single source for the numeric/boolean decision shared by
+    :func:`_infer_type_list` (pure) and :func:`_infer_type_list_native_or_pure`
+    (the native hint) -- keep them from drifting."""
+    non_null = [v for v in values if v is not None]
+    if non_null and all(isinstance(v, bool) for v in non_null):
+        return "boolean"
+    if non_null and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
+        return "numeric"
+    return None
 
 
 def _infer_type_list(values: list) -> str:
@@ -190,12 +211,10 @@ def _infer_type_list(values: list) -> str:
     ``numeric``; all-``bool`` is ``boolean``; else the SAME regex heuristics on the first
     100 non-null stripped values. (No ``pl.Date`` case — a list column is never a
     Polars temporal dtype; date-looking STRINGS still match ``_DATE_RE``.)"""
-    non_null = [v for v in values if v is not None]
-    if non_null and all(isinstance(v, bool) for v in non_null):
-        return "boolean"
-    if non_null and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
-        return "numeric"
+    if (h := _scalar_type_hint(values)) is not None:
+        return h
 
+    non_null = [v for v in values if v is not None]
     sample = non_null[:100]
     sample_stripped = [str(s).strip() for s in sample if str(s) and str(s).strip()]
     if not sample_stripped:
@@ -228,15 +247,7 @@ def _infer_type_list_native_or_pure(values: list) -> str:
     if native_enabled("profile"):
         nm = native_module()
         if nm is not None and hasattr(nm, "infer_type_list_arrow"):
-            non_null = [v for v in values if v is not None]
-            if non_null and all(isinstance(v, bool) for v in non_null):
-                hint = "boolean"
-            elif non_null and all(
-                isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null
-            ):
-                hint = "numeric"
-            else:
-                hint = "string"  # Utf8
+            hint = _scalar_type_hint(values) or "string"  # None -> Utf8
             strs = [None if v is None else str(v) for v in values]
             return nm.infer_type_list_arrow(strs, hint)
     return _infer_type_list(values)

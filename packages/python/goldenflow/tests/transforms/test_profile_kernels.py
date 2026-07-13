@@ -15,6 +15,9 @@ import pytest
 from goldenflow.core._native_loader import native_available, native_module
 from goldenflow.engine.profiler_bridge import (
     _infer_type_list,
+    _infer_type_list_native_or_pure,
+    _profile_column,
+    _profile_column_native_or_pure,
     profile_columns,
     profile_dataframe,
 )
@@ -67,25 +70,14 @@ def _native_profile_or_skip():
     return nm
 
 
-def _hint_for(values: list) -> str:
-    """Derive the TypeHint string exactly as ``_infer_type_list`` decides."""
-    non_null = [v for v in values if v is not None]
-    if non_null and all(isinstance(v, bool) for v in non_null):
-        return "boolean"
-    if non_null and all(
-        isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null
-    ):
-        return "numeric"
-    return "string"
-
-
 def test_native_infer_type_list_equals_pure_native(monkeypatch):
-    nm = _native_profile_or_skip()
+    """Route through the PRODUCTION wiring (`_infer_type_list_native_or_pure`), not
+    a re-derived direct kernel call -- so hint derivation, str(v)/None mapping, and
+    dispatch are all exercised on the native path and asserted == the pure ref."""
+    _native_profile_or_skip()
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
     for name, values in _BATTERY.items():
-        hint = _hint_for(values)
-        strs = [None if v is None else str(v) for v in values]
-        native_out = nm.infer_type_list_arrow(strs, hint)
+        native_out = _infer_type_list_native_or_pure(values)
         pure_out = _infer_type_list(values)
         assert native_out == pure_out, f"{name}: native={native_out!r} pure={pure_out!r}"
 
@@ -114,7 +106,8 @@ def test_native_column_profile_typed_stats_native(monkeypatch):
     """Step 4b: pin typed-column null/unique/samples byte-format on Path 1.
 
     ``samples`` must byte-match Polars ``cast(Utf8)`` -- Float64 ``1.0``/``-0.0``
-    via float_to_polars_string, Boolean ``"true"``/``"false"``."""
+    via float_to_polars_string, Boolean ``"true"``/``"false"``, plus a Utf8 column
+    (cast(Utf8) is identity) so the string sample path is pinned too."""
     pl = pytest.importorskip("polars")
     nm = _native_profile_or_skip()
     column_cls = _column_cls_or_skip(nm)
@@ -123,6 +116,7 @@ def test_native_column_profile_typed_stats_native(monkeypatch):
         "ints": pl.Series("ints", [1, 2, 2, 3, None], dtype=pl.Int64),
         "floats": pl.Series("floats", [1.0, -0.0, 2.5, 2.5, None], dtype=pl.Float64),
         "bools": pl.Series("bools", [True, False, True, None], dtype=pl.Boolean),
+        "strs": pl.Series("strs", ["foo", "bar", "foo", None], dtype=pl.Utf8),
     }
     for name, series in cases.items():
         out = column_cls.from_arrow(series.to_frame()).profile()
@@ -130,3 +124,26 @@ def test_native_column_profile_typed_stats_native(monkeypatch):
         assert out["unique_count"] == series.drop_nulls().n_unique(), name
         expected_samples = series.drop_nulls().head(5).cast(pl.Utf8).to_list()
         assert list(out["samples"]) == expected_samples, name
+
+
+def test_native_profile_column_wiring_equals_pure_native(monkeypatch):
+    """Route Path 1 through the PRODUCTION wiring: assert the FULL ColumnProfile
+    from `_profile_column_native_or_pure` (native path) equals the pure
+    `_profile_column` -- covers the dict->ColumnProfile packing, list(samples),
+    percentages, and the column-name override on the native path."""
+    pl = pytest.importorskip("polars")
+    _native_profile_or_skip()
+    _column_cls_or_skip(native_module())
+    monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
+    series_cases = [
+        pl.Series("email", ["a@b.co", "x@y.io", "p@q.net"], dtype=pl.Utf8),
+        pl.Series("zip", ["12345", "90210", None], dtype=pl.Utf8),
+        pl.Series("n", [1, 2, 2, None], dtype=pl.Int64),
+        pl.Series("f", [1.0, -0.0, 2.5, None], dtype=pl.Float64),
+        pl.Series("flag", [True, False, True], dtype=pl.Boolean),
+        pl.Series("plain", ["foo", "bar", "baz"], dtype=pl.Utf8),
+    ]
+    for series in series_cases:
+        native_profile = _profile_column_native_or_pure(series)
+        pure_profile = _profile_column(series)
+        assert native_profile == pure_profile, series.name
