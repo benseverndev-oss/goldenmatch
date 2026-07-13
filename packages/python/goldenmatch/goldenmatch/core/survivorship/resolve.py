@@ -21,6 +21,8 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
                     quality_scores=None, pair_scores=None, provenance=False,
                     cluster_id=None):
     # Local import avoids any import cycle (golden imports resolve lazily).
+    # A9: seam reads -- cluster_df may be a pl.DataFrame or seam Frame slice.
+    from goldenmatch.core.frame import to_frame as _tf_a9
     from goldenmatch.core.golden import (
         ClusterProvenance,
         FieldProvenance,
@@ -29,11 +31,12 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
         merge_field,
     )
 
-    user_cols = [c for c in cluster_df.columns if not _is_internal(c) and c != "__cluster_id__"]
-    n = cluster_df.height
-    col_arrays = {c: cluster_df[c].to_list() for c in user_cols}
-    source_array = cluster_df["__source__"].to_list() if "__source__" in cluster_df.columns else None
-    row_id_array = cluster_df["__row_id__"].to_list() if "__row_id__" in cluster_df.columns else None
+    _cf = _tf_a9(cluster_df)
+    user_cols = [c for c in _cf.columns if not _is_internal(c) and c != "__cluster_id__"]
+    n = _cf.height
+    col_arrays = {c: _cf.column(c).to_list() for c in user_cols}
+    source_array = _cf.column("__source__").to_list() if "__source__" in _cf.columns else None
+    row_id_array = _cf.column("__row_id__").to_list() if "__row_id__" in _cf.columns else None
 
     # Remap pair_scores (row-id keyed) to positional indices, like build_golden_records_batch.
     positional_pair_scores = None
@@ -56,9 +59,9 @@ def resolve_cluster(cluster_df, rules, resolution_order, *,
     date_arrays: dict = {}
 
     def _dates_for(date_col):
-        if date_col and date_col in cluster_df.columns:
+        if date_col and date_col in _cf.columns:
             if date_col not in date_arrays:
-                date_arrays[date_col] = cluster_df[date_col].to_list()
+                date_arrays[date_col] = _cf.column(date_col).to_list()
             return date_arrays[date_col]
         return None
 
