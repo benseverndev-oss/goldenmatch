@@ -14,7 +14,6 @@ from datetime import date, datetime
 import polars as pl
 import pyarrow as pa
 import pytest
-
 from goldenmatch.config.schemas import (
     GoldenFieldRule,
     GoldenGroupRule,
