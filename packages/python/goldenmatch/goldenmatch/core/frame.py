@@ -187,6 +187,12 @@ class Frame(Protocol):
     def group_nunique(self, key: str, value: str) -> Frame: ...
     def coverage_ratio(self, pass_field_lists: Sequence[Sequence[str]]) -> float: ...
     def distinct_row_count(self) -> int: ...
+    # autoconfig arrow-port PR-1: cast every non-``__`` column to Utf8/string,
+    # leaving ``__``-prefixed internals (e.g. ``__row_id__``) untouched
+    # (run_dedupe_df front-door / autoconfig arrow-port); count of duplicate
+    # rows == ``height - distinct_row_count()`` (profiler.profile_dataframe).
+    def cast_all_str(self) -> Frame: ...
+    def count_duplicate_rows(self) -> int: ...
     # W2e-1: one field's standardizer chain (apply_standardization's
     # per-column derivation as a seam op; `address`/plugins fall back to the
     # pure-Python STANDARDIZERS oracle on the arrow backend).
@@ -632,6 +638,19 @@ class PolarsFrame:
 
     def distinct_row_count(self) -> int:
         return int(self._df.unique().height)
+
+    def cast_all_str(self) -> PolarsFrame:
+        # run_dedupe_df front-door / autoconfig arrow-port: byte-identical to
+        # run_dedupe_df's cast (pipeline.py:439) -- every non-__ column to Utf8,
+        # __-prefixed internals (e.g. __row_id__) untouched.
+        return self.__class__(
+            self._df.cast({c: pl.Utf8 for c in self._df.columns if not c.startswith("__")})
+        )
+
+    def count_duplicate_rows(self) -> int:
+        # profiler.profile_dataframe: rows that are duplicates ==
+        # height - unique().height (== distinct_row_count()).
+        return self.height - self.distinct_row_count()
 
     def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> PolarsColumn:
         # Byte-identical to apply_standardization's three per-column branches
@@ -1467,6 +1486,26 @@ class ArrowFrame:
         cols = self._tbl.column_names
         rows = zip(*(self._tbl.column(c).to_pylist() for c in cols))
         return len(set(rows))
+
+    def cast_all_str(self) -> ArrowFrame:
+        # run_dedupe_df front-door / autoconfig arrow-port: every non-__ column
+        # to LargeUtf8 via arrow_derive.cast_utf8 (the pl.cast(pl.Utf8) twin --
+        # Polars exports Utf8 as LargeUtf8, floats formatted to match), leaving
+        # __-prefixed internals (e.g. __row_id__) untouched.
+        from goldenmatch.core import arrow_derive
+
+        tbl = self._tbl
+        for name in tbl.column_names:
+            if name.startswith("__"):
+                continue
+            idx = tbl.column_names.index(name)
+            tbl = tbl.set_column(idx, name, arrow_derive.cast_utf8(tbl.column(name)))
+        return ArrowFrame(tbl)
+
+    def count_duplicate_rows(self) -> int:
+        # profiler.profile_dataframe: rows that are duplicates ==
+        # height - distinct_row_count().
+        return self.height - self.distinct_row_count()
 
     def derive_standardized_column(self, field: str, std_names: Sequence[str]) -> ArrowColumn:
         from goldenmatch.core import arrow_derive
