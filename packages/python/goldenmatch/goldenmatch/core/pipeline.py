@@ -1443,12 +1443,12 @@ def _golden_from_multi_df(
     if fused_golden_df is not None:
         return fused_golden_df, True
 
-    if not _is_pl:
-        multi_df = _as_polars_df(multi_df)
-        if not provenance_on and _polars_native_eligible(
-            golden_rules, quality_scores=quality_scores
-        ):
-            return build_golden_records_df(multi_df, golden_rules), False
+    if not _is_pl and not provenance_on and _polars_native_eligible(
+        golden_rules, quality_scores=quality_scores
+    ):
+        # Fast columnar stays polars (the W2e-3 Acero-port rejection);
+        # bridge for IT only. The batch builder below is dual-rep (A9).
+        return build_golden_records_df(_as_polars_df(multi_df), golden_rules), False
 
     golden_records = build_golden_records_batch(
         multi_df,
@@ -3306,10 +3306,9 @@ def _run_dedupe_pipeline(
                             golden_records = []
                             golden_fused_used = True
                         else:
-                            # Deep-D2 decline path: bridge, then replay the
-                            # polars demux (fast columnar when eligible) so
-                            # the Frame lane stays byte-identical to classic.
-                            multi_df = _as_polars_df(multi_df)
+                            # A9: the batch builder is dual-rep -- only the
+                            # fast columnar replay still bridges (W2e-3
+                            # Acero-port rejection).
                             if (
                                 not _provenance_on
                                 and _polars_native_eligible(
@@ -3318,7 +3317,7 @@ def _run_dedupe_pipeline(
                             ):
                                 with stage("golden_build_records_df_fast"):
                                     golden_df = build_golden_records_df(
-                                        multi_df, golden_rules
+                                        _as_polars_df(multi_df), golden_rules
                                     )
                                 golden_records = []
                             else:
