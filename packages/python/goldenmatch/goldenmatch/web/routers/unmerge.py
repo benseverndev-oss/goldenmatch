@@ -64,10 +64,16 @@ def _reconstruct_clusters(ref) -> dict[int, dict]:
     df = runs_mod.load_clusters_df(ref)
     lineage = runs_mod.load_lineage(ref)
 
+    from goldenmatch.core.frame import to_frame as _tf_w
+
+    _dfw = _tf_w(df)
     members_by_cid: dict[int, list[int]] = {}
-    for row in df.iter_rows(named=True):
-        cid = int(row["cluster_id"])
-        members_by_cid.setdefault(cid, []).append(int(row["row_id"]))
+    for cid, rid in zip(
+        _dfw.column("cluster_id").to_list(),
+        _dfw.column("row_id").to_list(),
+        strict=True,
+    ):
+        members_by_cid.setdefault(int(cid), []).append(int(rid))
 
     pairs_by_cid: dict[int, dict[tuple[int, int], float]] = {
         cid: {} for cid in members_by_cid
