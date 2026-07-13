@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-07-13
+
+### Performance
+- Frame-lane hotspot pass (profiler-driven, byte-identical outputs): cluster
+  dict assembly goes columnar (was 35% of a 1M wall), transform-chain
+  fallbacks resolve their callable once per column, and soundex/metaphone
+  dispatch straight to the Rust jellyfish functions. 1M-row wall
+  7.6s -> 5.5s. (These were mentioned in the 3.1.0 notes but merged just
+  after the 3.1.0 tag; this patch actually ships them.)
+
 ## [3.1.0] - 2026-07-13
 
 <!-- README-callout
