@@ -48,6 +48,16 @@ def test_jaro_winkler_similarity_level(sql):
     assert result == RecognizedLevel("jaro_winkler", "first_name", 0.92, approx=False)
 
 
+def test_leading_dot_float_threshold():
+    result = recognize_level('jaro_winkler_similarity("first_name_l", "first_name_r") >= .92')
+    assert result == RecognizedLevel("jaro_winkler", "first_name", 0.92, approx=False)
+
+
+def test_strict_greater_than_returns_none():
+    result = recognize_level('jaro_winkler_similarity("first_name_l", "first_name_r") > 0.92')
+    assert result is None
+
+
 @pytest.mark.parametrize(
     "sql",
     [

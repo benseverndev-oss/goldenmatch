@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field as dc_field
 from typing import Literal
 
+from goldenmatch.config.schemas import MatchkeyField
+
 Severity = Literal["info", "warning", "error"]
 
 # Splink's levenshtein/damerau_levenshtein comparison levels express a raw edit
@@ -48,7 +50,7 @@ _SIM_KIND = {
 
 @dataclass
 class RecognizedLevel:
-    kind: str                 # "null" | "exact" | "else" | scorer name ("jaro_winkler", "levenshtein", "jaccard")
+    kind: Literal["null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard"]
     column: str | None
     sim_threshold: float | None
     approx: bool = False      # True when the mapping is an approximation (jaro->jw, distance->similarity)
@@ -61,10 +63,18 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
     cross-column comparisons, mismatched columns, or arbitrary SQL) so the
     caller can report a warning and drop the level.
     """
-    if is_null_level:
-        return RecognizedLevel("null", None, None)
-
     sql_norm = " ".join(sql.split())
+
+    if is_null_level:
+        # Prefer extracting the column from the SQL shape even when the
+        # is_null_level flag is what really tells us this is a null level
+        # (some Splink serializations put non-null-shaped SQL on the null
+        # level, e.g. custom null handling) -- fall back to column=None.
+        m = re.fullmatch(_NULL_RE, sql_norm, re.IGNORECASE)
+        if m:
+            col_l, col_r = m.group(1), m.group(2)
+            return RecognizedLevel("null", col_l if col_l == col_r else None, None)
+        return RecognizedLevel("null", None, None)
 
     if re.fullmatch(_ELSE_RE, sql_norm, re.IGNORECASE):
         return RecognizedLevel("else", None, None)
@@ -137,3 +147,142 @@ class ConversionReport:
 
 class SplinkConversionError(ValueError):
     """Raised in strict mode on any lossy mapping, or always on error-severity."""
+
+
+def convert_comparison(
+    comp: dict, idx: int, report: ConversionReport
+) -> MatchkeyField | None:
+    """Convert one Splink `comparisons[idx]` dict into a MatchkeyField.
+
+    Returns None (with a warning finding) when the comparison can't be
+    represented as a single GoldenMatch scorer family -- e.g. mixed
+    comparator families, inconsistent columns, or no usable agree levels.
+    """
+    comp_path = f"comparisons[{idx}]"
+    output_column_name = comp.get("output_column_name") or comp.get("column_name")
+
+    raw_levels = comp.get("comparison_levels", [])
+
+    # (index, RecognizedLevel, raw level dict) for every recognized level.
+    recognized: list[tuple[int, RecognizedLevel, dict]] = []
+    for j, level in enumerate(raw_levels):
+        level_path = f"{comp_path}.comparison_levels[{j}]"
+        sql = level.get("sql_condition", "")
+        is_null = bool(level.get("is_null_level"))
+        r = recognize_level(sql, is_null_level=is_null)
+        if r is None:
+            report.warn(
+                level_path,
+                f"unrecognized sql_condition, level dropped: {sql}",
+                mapped_to=None,
+            )
+            continue
+        recognized.append((j, r, level))
+
+    null_seen = False
+    bands: list[tuple[RecognizedLevel, dict, int]] = []  # agree bands (exact + scorer families)
+    for j, r, level in recognized:
+        if r.kind == "null":
+            null_seen = True
+        elif r.kind == "else":
+            continue
+        else:
+            bands.append((r, level, j))
+
+    if null_seen:
+        report.info(
+            comp_path,
+            "Splink null level = no evidence; GoldenMatch scores nulls as "
+            "disagree -- behavior differs on sparse fields",
+            mapped_to=None,
+        )
+
+    families = {r.kind for r, _, _ in bands if r.kind != "exact"}
+    if len(families) > 1:
+        report.warn(
+            comp_path,
+            f"mixed comparator families {sorted(families)} in one comparison, "
+            "comparison dropped",
+            mapped_to=None,
+        )
+        return None
+
+    if not bands:
+        report.warn(comp_path, "no usable agree levels, comparison dropped", mapped_to=None)
+        return None
+
+    scorer = next(iter(families)) if families else "exact"
+
+    columns = {r.column for r, _, _ in bands if r.column is not None}
+    if len(columns) > 1:
+        report.warn(
+            comp_path,
+            f"inconsistent columns across levels {sorted(columns)}, comparison dropped",
+            mapped_to=None,
+        )
+        return None
+    col = next(iter(columns)) if columns else output_column_name
+    if col is None:
+        report.warn(comp_path, "no column could be determined, comparison dropped", mapped_to=None)
+        return None
+
+    for r, level, j in bands:
+        if r.approx:
+            level_path = f"{comp_path}.comparison_levels[{j}]"
+            report.warn(
+                level_path,
+                f"approximate mapping used for {r.kind} level (threshold={r.sim_threshold})",
+                mapped_to=None,
+            )
+
+    thresholds = sorted(
+        {r.sim_threshold for r, _, _ in bands if r.sim_threshold is not None}, reverse=True
+    )
+    levels_count = len(thresholds) + 1
+
+    tf_adjustment = False
+    for r, level, j in bands:
+        level_path = f"{comp_path}.comparison_levels[{j}]"
+        tf_col = level.get("tf_adjustment_column")
+        if tf_col:
+            if tf_col != col:
+                report.warn(
+                    level_path,
+                    f"tf_adjustment_column '{tf_col}' differs from field column '{col}', "
+                    "dropped (GoldenMatch TF adjustment is same-column only)",
+                    mapped_to=None,
+                )
+            else:
+                tf_adjustment = True
+        tf_weight = level.get("tf_adjustment_weight")
+        if tf_weight is not None and tf_weight != 1.0:
+            report.warn(
+                level_path,
+                f"tf_adjustment_weight={tf_weight} dropped (not supported)",
+                mapped_to=None,
+            )
+
+    mapped_to = f"matchkeys[?].fields[?] ({col})"
+
+    if levels_count == 2:
+        if scorer == "exact":
+            field = MatchkeyField(field=col, scorer="exact", levels=2, tf_adjustment=tf_adjustment)
+        else:
+            field = MatchkeyField(
+                field=col,
+                scorer=scorer,
+                levels=2,
+                partial_threshold=thresholds[0],
+                tf_adjustment=tf_adjustment,
+            )
+    else:
+        field = MatchkeyField(
+            field=col,
+            scorer=scorer,
+            levels=levels_count,
+            level_thresholds=thresholds,
+            tf_adjustment=tf_adjustment,
+        )
+
+    report.info(comp_path, f"converted to field '{col}' (scorer={scorer})", mapped_to=mapped_to)
+    return field
