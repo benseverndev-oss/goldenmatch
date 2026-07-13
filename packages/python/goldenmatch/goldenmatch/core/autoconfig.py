@@ -3740,13 +3740,20 @@ def auto_configure_df(
     )
     from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_boundary
 
+    # GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1 (default 0) skips the coercion and
+    # keeps a pa.Table native through the controller -- the in-progress scoring-
+    # lane port (indicators guards done; exclusion detectors + build_blocks spine
+    # pending). Default OFF: coerce, so production zero-config is unchanged.
+    _arrow_native_ac = os.environ.get(
+        "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", "0"
+    ).lower() in ("1", "true", "yes")
     if not (
         _is_ray_boundary(df)
         or is_polars_lazyframe(df)
         or is_polars_dataframe(df)
     ):
         _boundary_native = to_frame(df).native
-        if is_polars_dataframe(_boundary_native):
+        if is_polars_dataframe(_boundary_native) or _arrow_native_ac:
             df = _boundary_native
         else:
             import polars as _pl_boundary
