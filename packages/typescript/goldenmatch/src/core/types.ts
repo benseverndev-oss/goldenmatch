@@ -40,6 +40,14 @@ export interface MatchkeyField {
    * 2/3 levels, even k/N spacing for N>3). Mirrors Python MatchkeyField.level_thresholds.
    */
   readonly levelThresholds?: readonly number[];
+  /**
+   * Winkler term-frequency adjustment flag (Splink-converter). Mirrors the
+   * Python `MatchkeyField.tf_adjustment`. TS scoring/EM training does not
+   * currently consume this — it is a pass-through so a Splink-imported field
+   * with `tf_adjustment_column` set round-trips through the TS config layer
+   * without silently losing the flag.
+   */
+  readonly tfAdjustment?: boolean;
 }
 
 /**

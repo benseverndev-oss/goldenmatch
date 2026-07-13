@@ -335,6 +335,7 @@ function parseMatchkeyField(raw: unknown, ctx: string): MatchkeyField {
     levels,
     partialThreshold: optNum(obj.partialThreshold),
     levelThresholds,
+    tfAdjustment: optBool(obj.tfAdjustment),
   }) as MatchkeyField;
 }
 
