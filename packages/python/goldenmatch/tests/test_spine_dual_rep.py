@@ -494,3 +494,66 @@ def test_frame_lane_file_outputs_and_lineage(tmp_path, monkeypatch):
     assert set(outs["frame"]) == set(outs["classic"])
     for name in outs["classic"]:
         assert outs["frame"][name] == outs["classic"][name], name
+
+
+def test_frame_lane_validation_and_autofix(tmp_path, monkeypatch):
+    """W-3: validation rules (quarantine split) + auto_fix run ON the Frame
+    lane; quarantine/valid outputs match the classic lane."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        GoldenMatchConfig,
+        QualityConfig,
+        TransformConfig,
+        ValidationConfig,
+        ValidationRuleConfig,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = tmp_path / "people.csv"
+    csv.write_text(
+        "first,last,email\n"
+        "ann,smith,a@x.com\n"
+        "ann,smith,a@x.com\n"
+        "bob,jones,not-an-email\n"
+        "cara,lee,c@y.com\n",
+        encoding="utf-8",
+    )
+    cfg = GoldenMatchConfig(
+        matchkeys=[
+            MatchkeyConfig(
+                name="exact_name",
+                type="exact",
+                fields=[MatchkeyField(field="first"), MatchkeyField(field="last")],
+            )
+        ],
+        quality=QualityConfig(mode="disabled"),
+        transform=TransformConfig(mode="disabled"),
+        validation=ValidationConfig(
+            auto_fix=True,
+            rules=[
+                ValidationRuleConfig(
+                    column="email",
+                    rule_type="format",
+                    params={"type": "email"},
+                    action="quarantine",
+                )
+            ],
+        ),
+    )
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    frame_lane = P.run_dedupe([(str(csv), "people")], cfg)
+    assert hits and hits[0] is True, f"lane not engaged: {hits}"
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic = P.run_dedupe([(str(csv), "people")], cfg)
+
+    def q(r):
+        qd = r["quarantine"]
+        return sorted(map(str, qd.to_pylist())) if qd is not None else None
+
+    assert q(frame_lane) == q(classic)
+    assert q(frame_lane) is not None and len(q(frame_lane)) == 1  # bob quarantined
+    assert _norm_result(frame_lane) == _norm_result(classic)

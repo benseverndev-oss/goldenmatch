@@ -1737,6 +1737,26 @@ def _run_dedupe_pipeline(
                     logger.info("GoldenFlow: %d transforms applied", len(tf_fixes))
                 _frame = _tf_lane(_pl_tmp.to_arrow())
 
+        if config.validation and config.validation.auto_fix:
+            with stage("auto_fix"):
+                _fixed_native, _af_fixes = auto_fix_dataframe(_frame.native)
+                if _af_fixes:
+                    logger.info("Auto-fix: %d fixes applied", len(_af_fixes))
+                _frame = _tf_lane(_fixed_native)
+
+        if config.validation and config.validation.rules:
+            with stage("validation"):
+                _valid_native, quarantine_df, _val_report = validate_dataframe(
+                    _frame.native, config.validation.rules
+                )
+                logger.info(
+                    "Validation: %d quarantined rows",
+                    _tf_lane(quarantine_df).height,
+                )
+                _frame = _tf_lane(_valid_native)
+        else:
+            quarantine_df = None
+
         if (
             "standardize" not in _eager_stages_done
             and config.standardization
@@ -1770,7 +1790,6 @@ def _run_dedupe_pipeline(
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
         collected_df = collected_frame.native
         combined_lf = collected_frame
-        quarantine_df = None
     else:
         prep_cache_key = (
             _prep_cache_seed if _prep_cache_seed is not None else id(combined_lf),
@@ -4096,9 +4115,9 @@ def _frame_lane_eligible(
         return False
     if config.blocking and getattr(config.blocking, "auto_suggest", False):
         return False
-    if config.validation and (config.validation.rules or config.validation.auto_fix):
-        # validate_dataframe / auto_fix_dataframe are polars-bound prep.
-        return False
+    # W-3: validation rules/auto_fix no longer decline -- both entries are
+    # seam-driven dual-rep (auto_fix_dataframe delegates to Frame.auto_fix;
+    # validate_dataframe evaluates via the seam with per-lane frames).
     if config.llm_boost:
         return False
     if config.llm_scorer and config.llm_scorer.enabled:

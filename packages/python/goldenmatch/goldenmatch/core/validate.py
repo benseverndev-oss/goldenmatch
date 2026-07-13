@@ -62,9 +62,9 @@ _FORMAT_CHECKERS = {
 
 
 def validate_dataframe(
-    df: pl.DataFrame,
+    df,  # pl.DataFrame | pa.Table (Frame lane)
     rules: list[ValidationRule],
-) -> tuple[pl.DataFrame, pl.DataFrame, list[dict]]:
+) -> tuple:
     """Validate a DataFrame against a list of rules.
 
     Returns:
@@ -77,15 +77,19 @@ def validate_dataframe(
     # W5b-3: seam-driven. PolarsFrame.evaluate_validation_rule carries the
     # legacy _evaluate_rule branches VERBATIM (the delegation oracle moved
     # into the seam); mask bookkeeping runs in Python lists on both backends.
-    from goldenmatch.core.frame import column_from_values, to_frame
+    # W-3 widening: dual-rep entry -- df may be a pa.Table (Frame lane).
+    from goldenmatch.core.frame import PolarsFrame, column_from_values, to_frame
 
     validation_report: list[dict] = []
-    height = df.height
+    if isinstance(df, pl.DataFrame):
+        frame = to_frame(df.clone())
+        backend = "polars"
+    else:
+        frame = to_frame(df)  # pa.Table is immutable; no clone needed
+        backend = "polars" if isinstance(frame, PolarsFrame) else "arrow"
+    height = frame.height
     quarantine_flags: list[bool] = [False] * height
     quarantine_reasons: list[list[str]] = [[] for _ in range(height)]
-
-    frame = to_frame(df.clone())
-    backend = "polars"  # df arrives polars until the W5c/W5e flip
 
     for rule in rules:
         if rule.column not in frame.columns:
@@ -155,9 +159,15 @@ def validate_dataframe(
             "__quarantine_reason__",
             column_from_values(reason_series_data, "utf8", backend=backend),
         ).native
-    else:
+    elif backend == "polars":
         quarantine_df = quarantine_frame.native.with_columns(
             pl.Series("__quarantine_reason__", [], dtype=pl.Utf8)
+        )
+    else:
+        import pyarrow as pa
+
+        quarantine_df = quarantine_frame.native.append_column(
+            "__quarantine_reason__", pa.array([], type=pa.large_string())
         )
 
     return valid_df, quarantine_df, validation_report
