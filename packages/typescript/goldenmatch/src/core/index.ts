@@ -270,6 +270,11 @@ export {
   trainEMContinuous,
   scoreProbabilisticContinuous,
   continuousScores,
+  emResultToJson,
+  emResultFromJson,
+  validateEmResultFor,
+  FSModelMismatchError,
+  EM_RESULT_SCHEMA_VERSION,
 } from "./probabilistic.js";
 export type { EMResult, EMOptions, ContinuousEMResult } from "./probabilistic.js";
 
