@@ -348,6 +348,23 @@ package. Loader discover order in `goldenflow/core/_native_loader.py`:
   exact reference). Data-dependent -> pinned-vector `test_autocorrect_kernels.py`
   (NOT the shared corpus). `auto_apply=True` but suppressed for high-cardinality
   columns (>10% unique) by selector.py.
+- **Auto-detect profiling migrated to an owned kernel (2026-07-13, goldenflow
+  2.1.0) -- a SURFACE, not a registered transform.** The zero-config
+  type-inference *decision* (`infer_type`) is now owned by goldenflow-core and
+  runs native-first on EVERY surface: the Polars columnar path
+  (`profile_dataframe` -> `_profile_column`), the Polars-free list/dict path
+  (`profile_columns` -> `_infer_type_list`), the `goldenflow-native` wheel, and
+  `goldenflow-wasm` / TS `inferType`. The fused columnar `profile_column`
+  (Path 1) returns `inferred_type` + null/unique/samples in one FFI call,
+  Polars-free. Pure-Python `_infer_type`/`_infer_type_list` stay as byte-matched
+  fallbacks; opt out with `GOLDENFLOW_NATIVE=0`. Wired via the `profile`
+  `_native_loader` component (floor symbol `infer_type_list_arrow`). Because the
+  profiler is NOT a `@register_transform` entry, it is NOT in the
+  `test_owned_kernel_boundary.py` buckets (those enumerate `registry()`); it is
+  documented as a distinct owned surface in the boundary doc, with cross-surface
+  byte-parity proven by `tests/parity/profile_corpus.jsonl`. Accepted known edge:
+  the pure-TS profiler strips-then-slices its <=100 sample vs Python/Rust
+  slice-then-strip -- a corpus-unexercised follow-up (see the boundary doc).
 - **Byte-parity harness (cross-surface oracle = goldenflow-core).**
   `packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl` (mirrored
   byte-identical into `packages/typescript/goldenflow/tests/parity/`) is the

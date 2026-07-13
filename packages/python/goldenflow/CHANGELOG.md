@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.1.0 (2026-07-13)
+
+### Owned auto-detect profile kernel
+
+Zero-config's type-inference / profiling *decision* is now an owned
+`goldenflow-core::profile` kernel, cross-surface byte-identical like the
+identifier/name/text kernels before it.
+
+- **`inferred_type` is owned on every surface.** The Polars columnar path, the
+  Polars-free list/dict path, the `goldenflow-native` wheel, and
+  `goldenflow-wasm` / the TS `inferType` all route the "what type is this
+  column?" decision through the same `infer_type` kernel. The pure-Python
+  `_infer_type` / `_infer_type_list` stay as byte-matched fallbacks.
+- **Columnar `Column.profile()` is a Polars-free full profile.** One FFI call
+  (`profile_column`) returns `inferred_type` plus null/unique/samples, no Polars
+  import required.
+- **Byte-identical**, proven by `tests/parity/profile_corpus.jsonl` (oracle =
+  goldenflow-core), and **opt-out** via `GOLDENFLOW_NATIVE=0` (forces the
+  pure-Python fallback).
+- Bumps the base `goldenflow-native` floor to `>=0.27.0` so the profile kernel
+  reaches users out of the box.
+- Boundary rationale (including one accepted, corpus-unexercised TS
+  sampling-order edge) in
+  `docs/design/2026-07-06-goldenflow-owned-kernel-boundary.md`.
+
 ## 2.0.0 (2026-07-08)
 
 **BREAKING — Polars is no longer a base dependency.** `pip install goldenflow` no longer

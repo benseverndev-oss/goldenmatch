@@ -102,6 +102,43 @@ encoders, the whole-column fuzzy autocorrect, and the flag-wrapper
 They are listed in the `_OWNED_PINNED` bucket, not because they're second-class,
 but because the corpus harness is string-keyed.
 
+## The auto-detect profiling surface (owned, but NOT a registered transform)
+
+**Status:** added 2026-07-13 (goldenflow 2.1.0).
+
+Zero-config's **type-inference / profiling decision** is now an owned
+`goldenflow_core::profile` kernel, distinct from the transform registry above.
+It is *not* a registered transform, so it does **not** appear in the
+`test_owned_kernel_boundary.py` buckets — those enumerate `registry()`, which
+holds only `@register_transform` entries. The profiler is a separate owned
+**surface**: the decision "what type is this column?" that drives which
+transforms zero-config selects.
+
+- **`infer_type(values, hint) -> String`** is the owned decision on **every
+  surface** — the Polars columnar path (`profile_dataframe` →
+  `_profile_column`), the Polars-free list/dict path (`profile_columns` →
+  `_infer_type_list`), the `goldenflow-native` wheel, and `goldenflow-wasm` / the
+  TS `inferType`. The pure-Python `_infer_type`/`_infer_type_list` and pure-TS
+  ports are byte-matched fallbacks.
+- **`profile_column(values, hint) -> ColumnProfileOut`** is the fused columnar
+  wrapper (Path 1): one FFI call returns `inferred_type` + null/unique/samples,
+  Polars-free.
+- Cross-surface byte-parity is proven by
+  `tests/parity/profile_corpus.jsonl` (oracle = `goldenflow-core`), enforced the
+  same way as the identifier corpus.
+
+### Known edge (accepted, corpus-unexercised follow-up)
+
+The pure-TS profiler builds its `≤100`-value sample as **strip-then-slice**,
+while Python/Rust do **slice-then-strip** (take the first 100 non-null values,
+*then* strip and drop empties). So on a column with **>100 non-null values that
+contains empty strings among the first 100**, the surfaces can pick a different
+100-value window and, in principle, infer a different type. This is a
+pre-existing, corpus-unexercised edge — treated as a documented reference-mode
+lossy fallback (the pure-TS surface may diverge here), tracked as a follow-up to
+align the TS sampling order. It does not affect the native/Polars/list Python
+paths, which all slice-then-strip identically.
+
 ## Boundaries with sibling packages (not GoldenFlow's job)
 
 - **PII detection / redaction in free text** is **GoldenCheck's** job (scanning
