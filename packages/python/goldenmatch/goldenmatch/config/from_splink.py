@@ -349,8 +349,14 @@ def _recognize_blocking_conjunct(conjunct: str) -> _BlockConjunct | None:
         col_l, start_l, len_l, col_r, start_r, len_r = m.groups()
         if col_l != col_r or start_l != start_r or len_l != len_r:
             return None
-        py_start = int(start_l) - 1
-        py_end = py_start + int(len_l)
+        sql_start, sql_len = int(start_l), int(len_l)
+        # Degenerate args: SQL SUBSTR is 1-based, so start < 1 has no clean
+        # Python-slice equivalent (py_start=-1 would wrap); length 0 would
+        # produce an empty key (one mega-block). Reject as unrecognized.
+        if sql_start < 1 or sql_len < 1:
+            return None
+        py_start = sql_start - 1
+        py_end = py_start + sql_len
         return _BlockConjunct(col_l, f"substring:{py_start}:{py_end}")
 
     m = _BLOCK_EXACT_RE.fullmatch(conjunct)
@@ -368,6 +374,13 @@ def _convert_one_blocking_rule(
 ) -> BlockingKeyConfig | None:
     rule_path = f"blocking_rules[{idx}]"
     sql = rule.get("blocking_rule", rule) if isinstance(rule, dict) else rule
+    if not isinstance(sql, str):
+        report.warn(
+            rule_path,
+            f"blocking rule is not a SQL string, dropped: {rule!r}",
+            mapped_to=None,
+        )
+        return None
     sql_norm = " ".join(sql.split())
 
     conjuncts = re.split(r'\s+AND\s+', sql_norm, flags=re.IGNORECASE)
@@ -383,7 +396,9 @@ def _convert_one_blocking_rule(
             return None
         recognized.append(r)
 
-    fields = [r.field for r in recognized]
+    # Dedupe repeated fields (order-preserving): `l.a = r.a AND l.a = r.a`
+    # is one field, not two identical key components.
+    fields = list(dict.fromkeys(r.field for r in recognized))
     # BlockingKeyConfig.transforms is ONE chain applied uniformly to every
     # field in the key (core/blocker.py:_build_block_key_expr) -- there is no
     # per-field transform slot. A mixed rule (plain equality on one column +
@@ -405,7 +420,7 @@ def _convert_one_blocking_rule(
     transforms = [next(iter(transform_values))] if transform_values else []
 
     key = BlockingKeyConfig(fields=fields, transforms=transforms)
-    plain_fields = [r.field for r in recognized if r.transform is None]
+    plain_fields = list(dict.fromkeys(r.field for r in recognized if r.transform is None))
     if transforms and plain_fields:
         # LOSSY: the key-level chain applies the substring transform to
         # field(s) Splink compared with plain equality. Warn (not info) so
@@ -452,7 +467,7 @@ def convert_blocking(rules: list, report: ConversionReport) -> BlockingConfig | 
         report.error(
             "blocking_rules",
             "no blocking rule could be converted to a BlockingConfig key",
-            None,
+            mapped_to=None,
         )
         return None
 

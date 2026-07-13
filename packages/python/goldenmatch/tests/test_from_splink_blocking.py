@@ -168,6 +168,71 @@ def test_all_rules_dropped_returns_none_and_errors():
     assert errors[0].splink_path == "blocking_rules"
 
 
+def test_dict_rule_missing_blocking_rule_key_dropped():
+    rule = {"sql_dialect": "duckdb"}  # no "blocking_rule" key
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "not a SQL string" in warnings[0].message
+
+
+def test_none_rule_dropped():
+    report = ConversionReport()
+    config = convert_blocking([None], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "not a SQL string" in warnings[0].message
+
+
+def test_conflicting_substr_offsets_rule_dropped():
+    rule = "SUBSTR(l.a, 1, 4) = SUBSTR(r.a, 1, 4) AND SUBSTR(l.b, 1, 2) = SUBSTR(r.b, 1, 2)"
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "conflicting SUBSTR offsets" in warnings[0].message
+
+
+def test_substr_start_zero_dropped():
+    # SQL SUBSTR is 1-based; start=0 has no clean Python-slice equivalent
+    # (py_start=-1 would wrap). Treated as unrecognized -> rule dropped.
+    report = ConversionReport()
+    config = convert_blocking(["SUBSTR(l.x, 0, 3) = SUBSTR(r.x, 0, 3)"], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "unrecognized" in warnings[0].message
+
+
+def test_substr_zero_length_dropped():
+    # Length 0 would derive an empty key (one mega-block) -> rule dropped.
+    report = ConversionReport()
+    config = convert_blocking(["SUBSTR(l.x, 1, 0) = SUBSTR(r.x, 1, 0)"], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "unrecognized" in warnings[0].message
+
+
+def test_repeated_field_deduped_order_preserving():
+    rule = "l.a = r.a AND l.a = r.a"
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["a"]
+    assert not report.has_warnings
+
+
 def test_cross_column_equality_dropped_with_warning():
     rule = 'l."first_name" = r."surname"'
     report = ConversionReport()
