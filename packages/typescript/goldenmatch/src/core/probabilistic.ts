@@ -39,6 +39,157 @@ export interface EMResult {
   readonly proportionMatched: number;
   readonly iterations: number;
   readonly converged: boolean;
+  /** Term-frequency (Winkler) adjustment data, populated only for fields with
+   * tf_adjustment=True on the Python side. TS scoring does not consume these;
+   * they are PRESERVED through JSON round-trips (emResultToJson/emResultFromJson)
+   * so a Python-trained model file is never corrupted by a TS re-save.
+   * field -> {transformed_value -> relative frequency}. */
+  readonly tfFreqs?: Readonly<Record<string, Readonly<Record<string, number>>>> | null;
+  /** field -> sum(freq(v)^2) (expected exact-match collision rate baseline). */
+  readonly tfCollision?: Readonly<Record<string, number>> | null;
+}
+
+// ---------------------------------------------------------------------------
+// Public: EMResult JSON (de)serialization — byte-compatible with Python's
+// EMResult.to_dict()/from_dict() (goldenmatch/core/probabilistic.py, schema
+// v1). A trained-model JSON file must be loadable by either surface, so the
+// wire shape (snake_case keys, __type__/__version__ markers) is authoritative
+// on the Python side; this is a faithful mirror, not a TS-native shape.
+// ---------------------------------------------------------------------------
+
+/** Current EMResult JSON schema version. Bumped when the wire shape changes
+ *  incompatibly (mirrors Python `EMResult.SCHEMA_VERSION`). */
+export const EM_RESULT_SCHEMA_VERSION = 1;
+
+/**
+ * A persisted FS model is incompatible with the matchkey being scored, or
+ * with a JSON blob that fails to parse as an EMResult. Mirrors Python
+ * `FSModelMismatchError` / `EMResult.from_dict`'s `ValueError`s.
+ */
+export class FSModelMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FSModelMismatchError";
+  }
+}
+
+/**
+ * Serialize an EMResult to the exact JSON shape Python's `EMResult.to_dict()`
+ * produces: snake_case keys, `__type__`/`__version__` markers, `tf_freqs`/
+ * `tf_collision` as `null` when absent (not omitted — matches Python's
+ * dataclass default of `None` surviving `json.dump`).
+ */
+export function emResultToJson(em: EMResult): Record<string, unknown> {
+  return {
+    __type__: "goldenmatch.EMResult",
+    __version__: EM_RESULT_SCHEMA_VERSION,
+    m_probs: em.m,
+    u_probs: em.u,
+    match_weights: em.matchWeights,
+    converged: em.converged,
+    iterations: em.iterations,
+    proportion_matched: em.proportionMatched,
+    tf_freqs: em.tfFreqs ?? null,
+    tf_collision: em.tfCollision ?? null,
+  };
+}
+
+/**
+ * Reconstruct an EMResult from JSON previously produced by `emResultToJson`
+ * (TS) or `EMResult.to_dict()` (Python) — the two must be interchangeable.
+ * Mirrors Python `EMResult.from_dict`: rejects a schema version newer than
+ * this build supports, and raises a clear error naming the first missing
+ * required key.
+ *
+ * `tf_freqs`/`tf_collision` round-trip as `null` when the source set them to
+ * `null` (rather than being coerced to `undefined`), so
+ * `emResultToJson(emResultFromJson(x))` is byte-identical to `x` for both the
+ * tf-present and tf-absent cases.
+ */
+export function emResultFromJson(data: unknown): EMResult {
+  if (typeof data !== "object" || data === null) {
+    throw new FSModelMismatchError("FS model dict is missing required key: data must be an object");
+  }
+  const obj = data as Record<string, unknown>;
+
+  const version = typeof obj["__version__"] === "number" ? obj["__version__"] : 1;
+  if (version > EM_RESULT_SCHEMA_VERSION) {
+    throw new FSModelMismatchError(
+      `FS model schema version ${version} is newer than this goldenmatch ` +
+        `supports (${EM_RESULT_SCHEMA_VERSION}); upgrade goldenmatch.`,
+    );
+  }
+
+  const requiredKeys = [
+    "m_probs",
+    "u_probs",
+    "match_weights",
+    "converged",
+    "iterations",
+    "proportion_matched",
+  ] as const;
+  for (const key of requiredKeys) {
+    if (!(key in obj)) {
+      throw new FSModelMismatchError(`FS model dict is missing required key: '${key}'`);
+    }
+  }
+
+  const tfFreqsRaw = obj["tf_freqs"];
+  const tfCollisionRaw = obj["tf_collision"];
+
+  return {
+    m: obj["m_probs"] as Readonly<Record<string, readonly number[]>>,
+    u: obj["u_probs"] as Readonly<Record<string, readonly number[]>>,
+    matchWeights: obj["match_weights"] as Readonly<Record<string, readonly number[]>>,
+    converged: obj["converged"] as boolean,
+    iterations: obj["iterations"] as number,
+    proportionMatched: obj["proportion_matched"] as number,
+    tfFreqs:
+      tfFreqsRaw === null || tfFreqsRaw === undefined
+        ? (tfFreqsRaw as null | undefined) ?? null
+        : (tfFreqsRaw as Readonly<Record<string, Readonly<Record<string, number>>>>),
+    tfCollision:
+      tfCollisionRaw === null || tfCollisionRaw === undefined
+        ? (tfCollisionRaw as null | undefined) ?? null
+        : (tfCollisionRaw as Readonly<Record<string, number>>),
+  };
+}
+
+/**
+ * Field level count as EM/scoring sees it: `levelThresholds` (when present)
+ * always wins — its length + 1 is the authoritative level count, matching
+ * the loader's `levels === levelThresholds.length + 1` validation invariant.
+ */
+function matchkeyFieldLevelCount(f: MatchkeyField): number {
+  return f.levelThresholds !== undefined ? f.levelThresholds.length + 1 : (f.levels ?? 2);
+}
+
+/**
+ * Raise if `em` can't score `mk` (field / level mismatch). Ports Python
+ * `EMResult.validate_for`: a persisted model is only reusable against the
+ * same matchkey shape — every field must have a match-weight vector whose
+ * length equals the field's level count. Mismatch means the config changed
+ * since training, so fail loudly rather than silently scoring with a stale
+ * model.
+ */
+export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
+  for (const f of mk.fields) {
+    const weights = em.matchWeights[f.field];
+    if (weights === undefined) {
+      throw new FSModelMismatchError(
+        `Persisted FS model has no weights for field '${f.field}'. ` +
+          `The matchkey changed since training -- retrain or clear the model_path.`,
+      );
+    }
+    const expected = matchkeyFieldLevelCount(f);
+    if (weights.length !== expected) {
+      throw new FSModelMismatchError(
+        `Persisted FS model for field '${f.field}' has ${weights.length} ` +
+          `levels but the matchkey expects ${expected}. Retrain or clear ` +
+          `the model_path.`,
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +228,8 @@ function fieldPartialThreshold(f: MatchkeyField): number {
  *   levels=2: 0=disagree, 1=agree
  *   levels=3: 0=disagree, 1=partial, 2=agree (>= 0.95)
  *   levels=N: evenly spaced thresholds k/N for k in 1..N-1
+ *   levelThresholds set: custom descending cutoffs; level = count satisfied
+ *   (takes priority over the levels-based legacy banding above).
  */
 export function buildComparisonVector(
   rowA: Row,
@@ -100,7 +253,11 @@ export function buildComparisonVector(
       continue;
     }
 
-    if (n === 2) {
+    if (f.levelThresholds !== undefined) {
+      let level = 0;
+      for (const t of f.levelThresholds) if (s >= t) level += 1;
+      levels.push(level);
+    } else if (n === 2) {
       levels.push(s >= partial ? 1 : 0);
     } else if (n === 3) {
       if (s >= 0.95) levels.push(2);

@@ -4,8 +4,9 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 49 tools covering dedupe, match, scoring, explanation,
- * profiling, auto-config (shorthand), evaluation, listings, Learning
+ * Exposes 50 tools covering dedupe, match, scoring, explanation,
+ * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
+ * GoldenMatch config converter (convert_splink_config), Learning
  * Memory (5 memory tools via MEMORY_TOOLS), the Identity Graph
  * (6 identity tools via IDENTITY_TOOLS), and the AgentSession skills
  * (15 agent tools via AGENT_MCP_TOOLS, incl. the healer's review_config).
@@ -42,6 +43,9 @@ import { buildClusters } from "../../core/cluster.js";
 import { explainPair, explainCluster } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
 import { evaluatePairs, loadGroundTruthPairs } from "../../core/evaluate.js";
+import { fromSplink, SplinkConversionError } from "../../core/config/from-splink.js";
+import { emResultToJson } from "../../core/probabilistic.js";
+import { stringifyConfigYaml } from "../config-file.js";
 import {
   MEMORY_TOOLS,
   MEMORY_TOOL_NAMES,
@@ -362,6 +366,31 @@ const EXISTING_TOOLS: readonly Tool[] = [
         rows: { type: "array", items: { type: "object", additionalProperties: true } },
       },
       required: ["path", "rows"],
+    },
+  },
+  {
+    name: "convert_splink_config",
+    description:
+      "Convert a Splink settings JSON (bare or trained) into a GoldenMatch " +
+      "config. Pass the settings as an inline JSON string -- no filesystem " +
+      "access needed. Returns the config as YAML, a findings report " +
+      "(severity/splink_path/message/mapped_to per finding), a summary, and " +
+      "-- when the Splink input carried trained m/u probabilities -- the " +
+      "imported EM model as a dict you can persist yourself. strict=True " +
+      "fails on ANY lossy mapping (not just hard errors).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        settings_json: {
+          type: "string",
+          description: "Splink settings (bare or trained model) as a JSON string",
+        },
+        strict: {
+          type: "boolean",
+          description: "Fail on any lossy mapping (warnings), not just errors",
+        },
+      },
+      required: ["settings_json"],
     },
   },
 ];
@@ -889,6 +918,63 @@ export async function handleTool(
         }
         writeCsv(path, rowsArg as Row[]);
         return { written: rowsArg.length, path };
+      }
+
+      case "convert_splink_config": {
+        const settingsJson = args["settings_json"];
+        const strict = args["strict"] === true;
+
+        let settings: unknown;
+        try {
+          settings = JSON.parse(String(settingsJson));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { error: `settings_json is not valid JSON: ${msg}` };
+        }
+
+        if (typeof settings !== "object" || settings === null || Array.isArray(settings)) {
+          const got = settings === null ? "null" : Array.isArray(settings) ? "array" : typeof settings;
+          return {
+            error:
+              "settings_json must decode to a JSON object (Splink settings dict), " +
+              `got ${got}`,
+          };
+        }
+
+        let conversion;
+        try {
+          conversion = fromSplink(settings, { strict });
+        } catch (err) {
+          if (err instanceof SplinkConversionError) {
+            return { error: err.message };
+          }
+          throw err;
+        }
+
+        const configYaml = stringifyConfigYaml(conversion.config);
+        const findings = conversion.report.findings.map((f) => ({
+          severity: f.severity,
+          splink_path: f.splinkPath,
+          message: f.message,
+          mapped_to: f.mappedTo,
+        }));
+        const emModel = conversion.emModel !== null ? emResultToJson(conversion.emModel) : null;
+        const usageNote =
+          "Save config_yaml to a file and load it as the GoldenMatch config. " +
+          (emModel !== null
+            ? "This model carries trained m/u probabilities: save em_model as JSON " +
+              "and set matchkeys[0].model_path to that file's path so GoldenMatch " +
+              "reuses it instead of re-training via EM."
+            : "No trained model was carried by this input; GoldenMatch will train " +
+              "via EM on first run.");
+
+        return {
+          config_yaml: configYaml,
+          findings,
+          summary: conversion.report.summary(),
+          em_model: emModel,
+          usage_note: usageNote,
+        };
       }
 
       default:

@@ -922,6 +922,36 @@ identityCmd
     },
   );
 
+// ---------- import-splink ----------
+program
+  .command("import-splink")
+  .description("Convert a Splink settings (or trained-model) JSON file into a GoldenMatch YAML config")
+  .argument("<input>", "Splink settings or trained-model JSON file")
+  .option("-o, --output <path>", "Output YAML config path", "goldenmatch.yaml")
+  .option(
+    "--model-out <path>",
+    "Persist imported trained m/u as an FS model JSON; sets model_path in the config",
+  )
+  .option("--strict", "Fail on any lossy mapping (warnings), not just errors")
+  .action(
+    async (
+      input: string,
+      opts: { output: string; modelOut?: string; strict?: boolean },
+    ) => {
+      const { runImportSplinkCli } = await import("./node/cli-import-splink.js");
+      const splinkOpts: { output: string; modelOut?: string; strict?: boolean } = {
+        output: opts.output,
+      };
+      if (opts.modelOut !== undefined) splinkOpts.modelOut = opts.modelOut;
+      if (opts.strict !== undefined) splinkOpts.strict = opts.strict;
+      const code = runImportSplinkCli(input, splinkOpts, {
+        out: (s: string) => process.stdout.write(s),
+        err: (s: string) => process.stderr.write(s),
+      });
+      if (code !== 0) process.exit(code);
+    },
+  );
+
 // ---------- mcp-serve ----------
 program
   .command("mcp-serve")

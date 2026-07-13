@@ -33,6 +33,21 @@ export interface MatchkeyField {
   readonly columnWeights?: Readonly<Record<string, number>>;
   readonly levels?: number;
   readonly partialThreshold?: number;
+  /**
+   * N-level custom banding (Splink-converter). Descending similarity cutoffs;
+   * level = count of satisfied thresholds (0 = disagree, levels-1 = top agree).
+   * Length must equal levels-1. Absent => legacy banding (partialThreshold for
+   * 2/3 levels, even k/N spacing for N>3). Mirrors Python MatchkeyField.level_thresholds.
+   */
+  readonly levelThresholds?: readonly number[];
+  /**
+   * Winkler term-frequency adjustment flag (Splink-converter). Mirrors the
+   * Python `MatchkeyField.tf_adjustment`. TS scoring/EM training does not
+   * currently consume this — it is a pass-through so a Splink-imported field
+   * with `tf_adjustment_column` set round-trips through the TS config layer
+   * without silently losing the flag.
+   */
+  readonly tfAdjustment?: boolean;
 }
 
 /**
@@ -85,6 +100,16 @@ export interface ProbabilisticMatchkey {
   /** v1.11: negative evidence — unused at scoring time on probabilistic but
    *  preserved here for round-trip parity with Python's MatchkeyConfig. */
   readonly negativeEvidence?: readonly NegativeEvidenceField[];
+  /**
+   * Persisted EM model path (Splink-style train-once -> reuse). Mirrors
+   * Python `MatchkeyConfig.model_path`: when set and the file exists, the
+   * trained EMResult is loaded and EM training is skipped; when set and
+   * absent, EM runs and the result is saved there. TS scoring/EM does not
+   * currently consume this itself — it is a pass-through/round-trip field so
+   * a Splink-imported trained model's `model_path` survives the TS config
+   * layer for the Python runtime (or a future TS consumer) to honor.
+   */
+  readonly modelPath?: string;
 }
 
 export type MatchkeyConfig =
@@ -553,6 +578,8 @@ export interface MakeMatchkeyConfigInput {
   readonly reviewThreshold?: number;
   /** v1.11: negative evidence (round-trips through the factory). */
   readonly negativeEvidence?: readonly NegativeEvidenceField[];
+  /** Persisted EM model path (probabilistic-only; round-trips through the factory). */
+  readonly modelPath?: string;
 }
 
 /** Create a MatchkeyConfig with sensible defaults. Produces the correct variant. */
@@ -598,6 +625,7 @@ export function makeMatchkeyConfig(
       ...(partial.negativeEvidence !== undefined
         ? { negativeEvidence: partial.negativeEvidence }
         : {}),
+      ...(partial.modelPath !== undefined ? { modelPath: partial.modelPath } : {}),
     };
     return out;
   }

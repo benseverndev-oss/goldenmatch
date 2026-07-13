@@ -277,6 +277,48 @@ function parseMatchkeyField(raw: unknown, ctx: string): MatchkeyField {
     }
   }
 
+  const levels = optNum(obj.levels);
+  if (levels !== undefined && levels < 2) {
+    throw new Error(
+      `${ctx}.levels: must be >= 2 on field '${fieldName}', got ${levels}.`,
+    );
+  }
+
+  const levelThresholds: number[] | undefined = Array.isArray(
+    obj.levelThresholds,
+  )
+    ? (obj.levelThresholds as unknown[]).map((t, i) => {
+        if (typeof t !== "number") {
+          throw new Error(
+            `${ctx}.levelThresholds[${i}]: expected number, got ${typeof t}`,
+          );
+        }
+        return t;
+      })
+    : undefined;
+
+  if (levelThresholds !== undefined) {
+    const expectedLen = (levels ?? 2) - 1;
+    if (levelThresholds.length !== expectedLen) {
+      throw new Error(
+        `level_thresholds must have levels-1=${expectedLen} entries, ` +
+          `got ${levelThresholds.length}.`,
+      );
+    }
+    if (levelThresholds.some((t) => !(t > 0.0 && t <= 1.0))) {
+      throw new Error(
+        `level_thresholds values must be in (0, 1]. Got: [${levelThresholds.join(", ")}]`,
+      );
+    }
+    for (let i = 0; i < levelThresholds.length - 1; i++) {
+      if (levelThresholds[i]! <= levelThresholds[i + 1]!) {
+        throw new Error(
+          `level_thresholds must be strictly descending. Got: [${levelThresholds.join(", ")}]`,
+        );
+      }
+    }
+  }
+
   return stripUndefined({
     field: asStr(obj.field, `${ctx}.field`),
     transforms,
@@ -290,8 +332,10 @@ function parseMatchkeyField(raw: unknown, ctx: string): MatchkeyField {
       typeof obj.columnWeights === "object" && obj.columnWeights !== null
         ? (obj.columnWeights as Record<string, number>)
         : undefined,
-    levels: optNum(obj.levels),
+    levels,
     partialThreshold: optNum(obj.partialThreshold),
+    levelThresholds,
+    tfAdjustment: optBool(obj.tfAdjustment),
   }) as MatchkeyField;
 }
 
@@ -324,6 +368,7 @@ function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
       convergenceThreshold: optNum(obj.convergenceThreshold),
       linkThreshold: optNum(obj.linkThreshold),
       reviewThreshold: optNum(obj.reviewThreshold),
+      modelPath: optStr(obj.modelPath),
     }) as MatchkeyConfig;
   }
   // weighted

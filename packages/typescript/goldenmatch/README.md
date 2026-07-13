@@ -174,6 +174,7 @@ import { readFile, writeCsv } from "goldenmatch/node";              // Node-only
 - Full provenance tracking
 
 ### Pipeline features
+- Splink config converter (`import-splink` CLI, `convert_splink_config` MCP tool, `fromSplink()` API) — converts a Splink settings or trained-model JSON into a GoldenMatch config, importing trained m/u probabilities directly
 - PPRL (privacy-preserving record linkage, 3 security levels with HMAC-SHA256)
 - Graph ER (multi-table entity resolution with evidence propagation)
 - Sensitivity analysis (parameter sweep with CCMS/TWI)
@@ -244,6 +245,8 @@ goldenmatch-js mcp-serve            Start MCP server (stdio)
 goldenmatch-js serve                Start REST API
 goldenmatch-js agent-serve          Start A2A agent
 goldenmatch-js tui                  Interactive terminal UI
+goldenmatch-js import-splink <settings.json> [-o out.yaml] [--model-out model.json] [--strict]
+                                     Convert a Splink settings/trained-model JSON into a GoldenMatch config
 ```
 
 ## Examples

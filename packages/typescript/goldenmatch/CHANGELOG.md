@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- Splink -> GoldenMatch config converter, ported from Python: `fromSplink()` (edge-safe core, `src/core/config/from-splink.ts`), the `import-splink` CLI command, and the `convert_splink_config` MCP tool. Converts Splink comparison levels, blocking rules, and trained m/u probabilities (via a Python-schema-compatible `EMResult` JSON round-trip) into a GoldenMatch config, with a findings report for lossy mappings and an opt-in `--strict` mode. `mcp_tools`/`cli_commands` parity manifest entries moved from `python_only` to `shared`.
+- `levelThresholds` N-level custom banding on `MatchkeyField`, and `modelPath` on probabilistic matchkeys (persisted EM model path, Splink-style train-once -> reuse).
+
 ## [1.1.0] - 2026-06-27
 
 ### Added
