@@ -568,8 +568,10 @@ def train_em(
         if f.field in blocking_fields:
             if f.levels == 2:
                 u_probs[f.field] = [0.50, 0.50]  # neutral
-            else:
+            elif f.levels == 3:
                 u_probs[f.field] = [0.34, 0.33, 0.33]
+            else:
+                u_probs[f.field] = [1.0 / f.levels] * f.levels
 
     logger.info("u-probabilities estimated from %d random pairs", len(random_pairs))
 
@@ -842,7 +844,12 @@ def estimate_m_from_labels(
     # Blocking fields: neutral u (random pairs give a biased u for them).
     for f in mk.fields:
         if f.field in blocking_fields:
-            u_probs[f.field] = [0.50, 0.50] if f.levels == 2 else [0.34, 0.33, 0.33]
+            if f.levels == 2:
+                u_probs[f.field] = [0.50, 0.50]
+            elif f.levels == 3:
+                u_probs[f.field] = [0.34, 0.33, 0.33]
+            else:
+                u_probs[f.field] = [1.0 / f.levels] * f.levels
 
     # ── m from LABELED matches: observed level frequency (Laplace smoothed) ──
     label_matrix = _build_comparison_matrix(label_pairs, row_lookup, mk)
@@ -1193,7 +1200,7 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
             m_probs[f.field] = [0.1, 0.9]
             u_probs[f.field] = [0.9, 0.1]
             match_weights[f.field] = [math.log2(0.1 / 0.9), math.log2(0.9 / 0.1)]
-        else:
+        elif f.levels == 3:
             m_probs[f.field] = [0.05, 0.15, 0.80]
             u_probs[f.field] = [0.80, 0.15, 0.05]
             match_weights[f.field] = [
@@ -1201,6 +1208,14 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
                 math.log2(0.15 / 0.15),
                 math.log2(0.80 / 0.05),
             ]
+        else:
+            raw = [2.0 ** k for k in range(f.levels)]
+            total = sum(raw)
+            m = [r / total for r in raw]
+            u = list(reversed(m))
+            m_probs[f.field] = m
+            u_probs[f.field] = u
+            match_weights[f.field] = [math.log2(m_i / u_i) for m_i, u_i in zip(m, u)]
     return EMResult(
         m_probs=m_probs, u_probs=u_probs, match_weights=match_weights,
         converged=False, iterations=0, proportion_matched=0.05,
