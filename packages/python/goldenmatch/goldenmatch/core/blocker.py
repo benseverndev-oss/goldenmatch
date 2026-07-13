@@ -115,6 +115,19 @@ def _fast_static_block_sizes(
     if not keys:
         return None
 
+    # PR-5 (autoconfig arrow-port): the per-key block-SIZE reduction now runs on
+    # the proven seam ops -- ``derive_block_key`` (the parity-tested twin of
+    # ``_build_block_key_expr``), ``filter_valid_key`` (the null/sentinel guard
+    # VERBATIM), ``group_len`` (the ``group_by(key).agg(pl.len())`` sizes) --
+    # instead of a raw ``pl.Expr`` group_by. Same output on polars AND arrow
+    # (pinned by tests/test_blocker_arrow_size_parity.py). Sentinel drop moves
+    # AHEAD of the group_by, but that is output-identical here: every row in a
+    # block shares the key, so dropping the sentinel/null group == dropping its
+    # rows first.
+    from goldenmatch.core.frame import is_polars_lazyframe, to_frame
+
+    frame = to_frame(lf.collect()) if is_polars_lazyframe(lf) else to_frame(lf)
+
     max_block_size = config.max_block_size
     skip_oversized = config.skip_oversized
     all_sizes: list[int] = []
@@ -123,31 +136,13 @@ def _fast_static_block_sizes(
     f1 = 0
     f2 = 0
     for key_config in keys:
-        block_key_expr = _build_block_key_expr(key_config)
-        # Aggregate sizes per key in one lazy group_by, then drop null/sentinel
-        # keys EAGERLY on the collected per-key table. The drop must run after
-        # collect: applied as a lazy .filter() it references a group key, so
-        # Polars' predicate pushdown moves it AHEAD of the group_by and the
-        # strip/lowercase/is_in string ops run over all n_rows instead of the
-        # n_blocks keys (measured 74 ms vs 6 ms at 1M). Dropping a sentinel/null
-        # group is identical to dropping its rows — every row in the group shares
-        # the key. Singletons (size < 2) are dropped to mirror _build_static_blocks.
-        agg = (
-            lf
-            .group_by(block_key_expr)
-            .agg(pl.len().alias("__sz__"))
-            .collect()
+        keyed = frame.with_column(
+            "__block_key__",
+            frame.derive_block_key(key_config.fields, key_config.transforms or []),
         )
-        agg = agg.filter(
-            pl.col("__block_key__").is_not_null()
-            & ~pl.col("__block_key__")
-                .str.strip_chars()
-                .str.to_lowercase()
-                .is_in(["nan", "null", "none"])
-        )
-        # Count F1/F2 from the filtered (null/sentinel-dropped) per-key sizes,
-        # BEFORE the size>=2 drop, so null-key groups don't inflate F1.
-        all_key_sizes = agg.get_column("__sz__").to_list()
+        valid = keyed.filter_valid_key("__block_key__")
+        # Per-key sizes AFTER the null/sentinel drop, BEFORE the size<2 drop.
+        all_key_sizes = [int(v) for v in valid.group_len(["__block_key__"]).column("len").to_list()]
         f1 += sum(1 for s in all_key_sizes if s == 1)
         f2 += sum(1 for s in all_key_sizes if s == 2)
         sizes = [s for s in all_key_sizes if s >= 2]
@@ -182,8 +177,15 @@ def measure_blocking_profile(
         blocking_cfg = getattr(config, "blocking", None)
         if blocking_cfg is None:
             return None
-        lf = df.lazy() if isinstance(df, pl.DataFrame) else df
-        n_rows: int = lf.select(pl.len()).collect().item()
+        # PR-5 (autoconfig arrow-port): normalize the input through the seam so
+        # a polars frame/lazyframe OR an arrow Table/Frame all measure the same.
+        # n_rows comes from ``Frame.height`` (no ``pl.len()`` collect); the seam
+        # frame flows into ``_fast_static_block_sizes`` (dual-rep) and, on the
+        # exact fallback, into ``build_blocks`` (which ingests a Frame/arrow).
+        from goldenmatch.core.frame import is_polars_lazyframe, to_frame
+
+        frame = to_frame(df.collect()) if is_polars_lazyframe(df) else to_frame(df)
+        n_rows: int = frame.height
 
         if blocking_cfg.passes:
             keys_used = [list(k.fields) for k in blocking_cfg.passes]
@@ -192,13 +194,13 @@ def measure_blocking_profile(
         else:
             keys_used = []
 
-        fast = _fast_static_block_sizes(lf, blocking_cfg)
+        fast = _fast_static_block_sizes(frame, blocking_cfg)
         if fast is None:
             # Exact fallback: build every block and collect its length. This path
             # cannot recover the pre-drop singleton/doubleton counts, so the Chao1
             # inputs stay None and extrapolate_to uses the linear n_blocks fallback.
             sizes = []
-            for b in build_blocks(lf, blocking_cfg):
+            for b in build_blocks(frame, blocking_cfg):
                 try:
                     sizes.append(b.n_rows())
                 except Exception:
@@ -1182,14 +1184,31 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
 
     _lf_entry = lf
     if not is_polars_lazyframe(lf):
-        from goldenmatch.core.frame import Frame
+        from goldenmatch.core.frame import Frame, to_frame
 
         native = lf.native if isinstance(lf, Frame) else lf
-        lf = (
-            native.lazy()
-            if is_polars_dataframe(native)
-            else cast(pl.DataFrame, pl.from_arrow(native)).lazy()
-        )
+        if is_polars_dataframe(native):
+            lf = native.lazy()
+        else:
+            # PR-5 (autoconfig arrow-port): arrow ingest routes through the seam
+            # (no manual ``pl.from_arrow`` unwrap). The static/adaptive primary
+            # builder consumes ``_lf_entry`` directly via ``derive_block_key``
+            # (~line 406), so the polars round-trip is only needed by the
+            # non-static strategies, ``select_best_blocking_key`` auto-select,
+            # and an active profile emitter. When none of those apply, keep a
+            # seam Frame and skip the materialization entirely; otherwise fall
+            # back to the arrow->polars conversion (the seam has no arrow->polars
+            # op, so that conversion still uses pyarrow under the hood).
+            _needs_polars = (
+                config.strategy not in ("static", "adaptive")
+                or (config.auto_select and config.keys and len(config.keys) > 1)
+                or bool(_emitter_stack.get())
+            )
+            lf = (
+                cast(pl.DataFrame, pl.from_arrow(native)).lazy()
+                if _needs_polars
+                else to_frame(native)
+            )
 
     # Auto-select: pick best key based on histogram analysis
     if config.auto_select and config.keys and len(config.keys) > 1:
