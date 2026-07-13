@@ -1586,7 +1586,7 @@ def score_blocks_parallel(
 
 def rerank_top_pairs(
     pairs: list[tuple[int, int, float]],
-    df,  # pl.DataFrame | pa.Table (A8: seam reads)
+    df: Any,  # pl.DataFrame | pa.Table (A8: seam reads)
     mk: MatchkeyConfig,
 ) -> list[tuple[int, int, float]]:
     """Re-score borderline pairs with a pre-trained cross-encoder.

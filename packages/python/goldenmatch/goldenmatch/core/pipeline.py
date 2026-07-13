@@ -440,9 +440,9 @@ def _cast_user_cols_to_str(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _apply_domain_extraction(
-    combined_lf: pl.LazyFrame,
+    combined_lf: Any,  # pl.LazyFrame (classic) | native frame (Frame lane)
     config: GoldenMatchConfig,
-) -> pl.LazyFrame:
+) -> Any:
     """Run domain feature extraction if configured.
 
     Materializes derived columns (``__title_key__``, ``__brand__``,
@@ -1772,8 +1772,17 @@ def _run_dedupe_pipeline(
 
         if config.validation and config.validation.rules:
             with stage("validation"):
+                _v_rules = [
+                    ValidationRule(
+                        column=rc.column,
+                        rule_type=rc.rule_type,
+                        params=rc.params,
+                        action=rc.action,
+                    )
+                    for rc in config.validation.rules
+                ]
                 _valid_native, quarantine_df, _val_report = validate_dataframe(
-                    _frame.native, config.validation.rules
+                    _frame.native, _v_rules
                 )
                 logger.info(
                     "Validation: %d quarantined rows",
