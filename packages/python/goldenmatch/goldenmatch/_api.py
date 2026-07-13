@@ -380,18 +380,11 @@ def load_config(path: str) -> Any:
     return _load(path)
 
 
-def from_splink(source: Any, *, strict: bool = False) -> Any:
+def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkConversion:
     """Convert a Splink settings dict / JSON file into a GoldenMatch config.
 
-    Args:
-        source: A Splink settings dict, or a path (str/Path) to a JSON file
-            containing one. Bare or trained (m/u-carrying) settings accepted.
-        strict: When True, any lossy (warning-or-worse) finding raises
-            SplinkConversionError. When False (default), only error-severity
-            findings raise.
-
-    Returns:
-        A SplinkConversion(config, report, em_model).
+    See :func:`goldenmatch.config.from_splink.from_splink` for the canonical
+    docstring (input shapes, strict semantics, EMResult persistence contract).
     """
     from goldenmatch.config.from_splink import from_splink as _from_splink
     return _from_splink(source, strict=strict)

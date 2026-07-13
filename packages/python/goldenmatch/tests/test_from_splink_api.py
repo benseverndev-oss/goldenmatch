@@ -264,6 +264,45 @@ def test_top_level_splink_conversion_import():
     assert TopSplinkConversion is SplinkConversion
 
 
+# ── mapped_to placeholder resolution ─────────────────────────────────────────
+
+
+def test_placeholder_resolution_uses_survivor_position_not_splink_index():
+    """Comparison 0 is dropped (cross-column levels only), comparison 1
+    survives. The survivor's finding must point at its FINAL position in the
+    assembled matchkey (fields[0]), not its Splink index (comparisons[1]),
+    and no unresolved 'matchkeys[?]' placeholder may remain anywhere.
+    """
+    dropped_comp = {
+        "output_column_name": "first_name",
+        "comparison_levels": [
+            {
+                "sql_condition": (
+                    'jaro_winkler_similarity("first_name_l", "surname_r") >= 0.85'
+                )
+            },
+        ],
+    }
+    settings = _full_settings(
+        comparisons=[dropped_comp, _exact_only_comparison("surname")]
+    )
+
+    conversion = from_splink(settings)
+
+    survivor_findings = [
+        f
+        for f in conversion.report.findings
+        if f.splink_path == "comparisons[1]" and f.mapped_to
+    ]
+    assert survivor_findings
+    assert any(
+        f.mapped_to.startswith("matchkeys[0].fields[0]") for f in survivor_findings
+    )
+    assert not any(
+        "matchkeys[?]" in (f.mapped_to or "") for f in conversion.report.findings
+    )
+
+
 # ── 7. Scalars land on the matchkey ──────────────────────────────────────────
 
 

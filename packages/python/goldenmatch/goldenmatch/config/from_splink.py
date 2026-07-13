@@ -33,6 +33,12 @@ Severity = Literal["info", "warning", "error"]
 # RecognizedLevel.approx=True so callers can surface it as a lossy conversion.
 _LEV_ASSUMED_LEN = 10
 
+# convert_comparison emits its per-comparison success finding with this
+# mapped_to placeholder; from_splink()'s _patch_field_placeholders resolves it
+# to the field's final position once the matchkey is assembled. One shared
+# constant so producer and consumer can't drift.
+_PLACEHOLDER_PREFIX = "matchkeys[?].fields[?]"
+
 # Column atom: Splink serializes comparison-level columns as "col_l" / "col_r"
 # (the _l/_r suffix INSIDE the quotes) or bare col_l / col_r.
 _COL_L = r'"?([A-Za-z_]\w*)_l"?'
@@ -294,7 +300,7 @@ def convert_comparison(
                 mapped_to=None,
             )
 
-    mapped_to = f"matchkeys[?].fields[?] ({col})"
+    mapped_to = f"{_PLACEHOLDER_PREFIX} ({col})"
 
     if levels_count == 2:
         if scorer == "exact":
@@ -800,7 +806,6 @@ def convert_scalars(settings: dict, report: ConversionReport) -> dict:
 # ── Public entry point ───────────────────────────────────────────────────────
 
 _MATCHKEY_NAME = "splink_import"
-_PLACEHOLDER_PREFIX = "matchkeys[?].fields[?]"
 
 
 @dataclass
@@ -843,6 +848,25 @@ def _load_settings(source: dict | str | Path) -> dict:
     raise SplinkConversionError(
         f"from_splink() source must be a dict, str, or Path, got {type(source).__name__}"
     )
+
+
+_PREVIEW_MAX_FINDINGS = 10
+
+
+def _findings_preview(findings: list[ConversionFinding]) -> str:
+    """Render findings for an exception message, capped at the first
+    :data:`_PREVIEW_MAX_FINDINGS` so a pathological input can't produce a
+    multi-page exception. The full report is on SplinkConversion.report (or
+    re-runnable with strict=False).
+    """
+    shown = findings[:_PREVIEW_MAX_FINDINGS]
+    preview = "; ".join(f"[{f.severity}] {f.splink_path}: {f.message}" for f in shown)
+    remaining = len(findings) - len(shown)
+    if remaining > 0:
+        preview += (
+            f"; ... and {remaining} more; rerun with strict=False for the full report"
+        )
+    return preview
 
 
 def _patch_field_placeholders(report: ConversionReport, comp_path: str, field_idx: int) -> None:
@@ -927,19 +951,15 @@ def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkCon
     config = GoldenMatchConfig(matchkeys=[mk], blocking=blocking)
 
     if strict and (report.has_warnings or report.has_errors):
-        preview = "; ".join(
-            f"[{f.severity}] {f.splink_path}: {f.message}"
-            for f in report.findings
-            if f.severity in ("warning", "error")
+        preview = _findings_preview(
+            [f for f in report.findings if f.severity in ("warning", "error")]
         )
         raise SplinkConversionError(
             f"from_splink(strict=True): lossy conversion -- {report.summary()}. {preview}"
         )
     if report.has_errors:
-        preview = "; ".join(
-            f"[{f.severity}] {f.splink_path}: {f.message}"
-            for f in report.findings
-            if f.severity == "error"
+        preview = _findings_preview(
+            [f for f in report.findings if f.severity == "error"]
         )
         raise SplinkConversionError(
             f"from_splink(): conversion error -- {report.summary()}. {preview}"
