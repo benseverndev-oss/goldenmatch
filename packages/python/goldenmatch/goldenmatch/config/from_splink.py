@@ -573,6 +573,23 @@ def import_em(
                 continue
             had_any_prob = True
 
+            # Partial data: a level carrying only one side (m without u, or
+            # u without m). Silently treating the missing side as 0.0 would
+            # skew log2(m/u) hard; floor it with epsilon and warn instead.
+            if m_p is None or u_p is None:
+                missing_side = "m_probability" if m_p is None else "u_probability"
+                report.warn(
+                    level_path,
+                    f"level carries partial trained data ({missing_side} "
+                    f"missing) for field '{fld.field}'; missing side filled "
+                    f"with epsilon ({epsilon})",
+                    mapped_to=f"em.m_probs.{fld.field}",
+                )
+                if m_p is None:
+                    m_p = epsilon
+                else:
+                    u_p = epsilon
+
             is_null = bool(level.get("is_null_level"))
             sql = level.get("sql_condition", "")
             r = recognize_level(sql, is_null_level=is_null)
@@ -613,7 +630,16 @@ def import_em(
 
             # Two Splink levels can collapse onto the same GoldenMatch index
             # (Task 8's threshold dedupe) -- sum their m/u rather than
-            # overwrite.
+            # overwrite, and warn: the collapse is lossy (two Splink levels
+            # become one GoldenMatch level).
+            if assigned[idx]:
+                report.warn(
+                    level_path,
+                    f"level collapsed onto GoldenMatch level {idx} of field "
+                    f"'{fld.field}' (duplicate threshold after dedupe); m/u "
+                    "probabilities summed with the earlier level's",
+                    mapped_to=f"em.m_probs.{fld.field}",
+                )
             m_acc[idx] += m_p or 0.0
             u_acc[idx] += u_p or 0.0
             assigned[idx] = True

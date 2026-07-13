@@ -220,6 +220,116 @@ def test_null_levels_carry_no_m_u():
     assert u[0] == pytest.approx(0.9, abs=1e-9)
 
 
+def test_collapsed_duplicate_levels_sum_m_u_and_warn():
+    comp = {
+        "output_column_name": "first_name",
+        "comparison_levels": [
+            {
+                "sql_condition": '"first_name_l" IS NULL OR "first_name_r" IS NULL',
+                "is_null_level": True,
+            },
+            {
+                "sql_condition": (
+                    'jaro_winkler_similarity("first_name_l", "first_name_r") >= 0.9'
+                ),
+                "m_probability": 0.5,
+                "u_probability": 0.05,
+            },
+            # Same threshold via the spark-dialect alias: Task 8's threshold
+            # dedupe collapses this onto the same GoldenMatch level.
+            {
+                "sql_condition": (
+                    'jaro_winkler("first_name_l", "first_name_r") >= 0.9'
+                ),
+                "m_probability": 0.3,
+                "u_probability": 0.15,
+            },
+            {
+                "sql_condition": "ELSE",
+                "m_probability": 0.2,
+                "u_probability": 0.80,
+            },
+        ],
+    }
+    settings = _trained_settings([comp])
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+    assert field is not None
+    assert field.levels == 2  # duplicate threshold deduped
+
+    em = import_em([(comp, 0, field)], settings, report)
+    assert em is not None
+
+    m = em.m_probs["first_name"]
+    u = em.u_probs["first_name"]
+    # summed: agree level m = 0.5 + 0.3 = 0.8, u = 0.05 + 0.15 = 0.20
+    assert m[1] == pytest.approx(0.8, abs=1e-9)
+    assert m[0] == pytest.approx(0.2, abs=1e-9)
+    assert u[1] == pytest.approx(0.20, abs=1e-9)
+    assert u[0] == pytest.approx(0.80, abs=1e-9)
+
+    collapse_warns = [
+        f
+        for f in report.findings
+        if f.severity == "warning" and "collapsed" in f.message and "summed" in f.message
+    ]
+    assert len(collapse_warns) == 1
+
+
+@pytest.mark.parametrize("missing_side", ["m_probability", "u_probability"])
+def test_partial_probability_data_filled_with_epsilon_and_warned(missing_side):
+    exact_level = {
+        "sql_condition": '"first_name_l" = "first_name_r"',
+        "m_probability": 0.8,
+        "u_probability": 0.1,
+    }
+    del exact_level[missing_side]
+    comp = {
+        "output_column_name": "first_name",
+        "comparison_levels": [
+            {
+                "sql_condition": '"first_name_l" IS NULL OR "first_name_r" IS NULL',
+                "is_null_level": True,
+            },
+            exact_level,
+            {
+                "sql_condition": "ELSE",
+                "m_probability": 0.2,
+                "u_probability": 0.9,
+            },
+        ],
+    }
+    settings = _trained_settings([comp])
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+    assert field is not None
+
+    em = import_em([(comp, 0, field)], settings, report)
+    assert em is not None
+
+    # The missing side got the epsilon floor (1e-6), then re-normalized --
+    # so the exact level's value on that side is tiny but nonzero.
+    epsilon = 1e-6
+    if missing_side == "m_probability":
+        vals = em.m_probs["first_name"]
+        assert vals[1] == pytest.approx(epsilon / (epsilon + 0.2), rel=1e-6)
+        assert vals[1] > 0.0
+    else:
+        vals = em.u_probs["first_name"]
+        assert vals[1] == pytest.approx(epsilon / (epsilon + 0.9), rel=1e-6)
+        assert vals[1] > 0.0
+
+    partial_warns = [
+        f
+        for f in report.findings
+        if f.severity == "warning"
+        and "partial trained data" in f.message
+        and missing_side in f.message
+    ]
+    assert len(partial_warns) == 1
+    assert "comparison_levels[1]" in partial_warns[0].splink_path
+
+
 def test_bare_settings_no_m_probability_returns_none():
     comp = {
         "output_column_name": "surname",
