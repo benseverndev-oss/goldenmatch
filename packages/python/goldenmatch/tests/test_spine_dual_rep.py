@@ -612,3 +612,52 @@ def test_frame_lane_identity_and_memory_bridges(tmp_path, monkeypatch):
     assert (fi is None) == (ci is None)
     if fi is not None:
         assert fi.get("entities_created") == ci.get("entities_created")
+
+
+def test_frame_lane_auto_suggest_bridge(tmp_path, monkeypatch):
+    """W-5: blocking auto-suggest runs on the Frame lane (bridged) and
+    populates blocking keys identically to the classic lane."""
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        GoldenMatchConfig,
+        QualityConfig,
+        TransformConfig,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+
+    def run():
+        cfg = GoldenMatchConfig(
+            matchkeys=[
+                MatchkeyConfig(
+                    name="fuzzy_name", type="weighted", threshold=0.85,
+                    fields=[
+                        MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0),
+                        MatchkeyField(field="last", scorer="jaro_winkler", weight=1.0),
+                    ],
+                )
+            ],
+            blocking=BlockingConfig(keys=[], auto_suggest=True),
+            quality=QualityConfig(mode="disabled"),
+            transform=TransformConfig(mode="disabled"),
+        )
+        res = P.run_dedupe([(str(csv), "people")], cfg)
+        return res, cfg
+
+    hits = []
+    orig = P._frame_lane_eligible
+    monkeypatch.setattr(
+        P, "_frame_lane_eligible", lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1])
+    )
+    frame_res, frame_cfg = run()
+    assert hits and hits[0] is True, f"lane not engaged: {hits}"
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic_res, classic_cfg = run()
+
+    assert _norm_result(frame_res) == _norm_result(classic_res)
+    # auto-suggest populated the same blocking key on both lanes
+    f_keys = [k.fields for k in (frame_cfg.blocking.keys or [])]
+    c_keys = [k.fields for k in (classic_cfg.blocking.keys or [])]
+    assert f_keys == c_keys and f_keys

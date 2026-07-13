@@ -160,8 +160,8 @@ def _is_columnar_eligible(
     if getattr(config, "backend", None) in _COLUMNAR_NON_DEFAULT_BACKENDS:
         return False
     # Auto-config postflight consumes the pair LIST (signals + threshold filter).
-    if getattr(config, "_preflight_report", None) is not None:
-        return False
+    # W-5: preflight/postflight no longer declines -- _apply_postflight
+    # bridges (pa->pl) at entry (TRANSITIONAL; D6 prerequisite).
     if getattr(config, "llm_scorer", None) is not None:
         return False
     if getattr(config, "boost", None) is not None:
@@ -645,6 +645,9 @@ def _apply_postflight(
     no ``_preflight_report`` — i.e. the caller did not go through
     ``auto_configure_df``.
     """
+    # W-5 widening (TRANSITIONAL): postflight reads score histograms off a
+    # polars frame; bridge at entry (D6 prerequisite).
+    df = _as_polars_df(df)
     from goldenmatch.core.autoconfig_verify import (
         PreflightReport as _PfR,
     )
@@ -682,6 +685,11 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     """
     if not config.blocking or not config.blocking.auto_suggest:
         return
+
+    # W-5 widening (TRANSITIONAL): the block analyzer takes polars; bridge
+    # the Frame lane's pa.Table at entry. W3d seamed its reductions -- the
+    # deep entry port rides the analyzer's own batch (D6 prerequisite).
+    df = _as_polars_df(df)
 
     matchkey_columns = _extract_matchkey_columns(config)
     if not matchkey_columns:
@@ -1798,6 +1806,10 @@ def _run_dedupe_pipeline(
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
         collected_df = collected_frame.native
         combined_lf = collected_frame
+        # W-5: mirror the classic prep tail -- auto-suggest runs after the
+        # precompute on both lanes (bridged internally).
+        with stage("auto_suggest_blocking"):
+            _run_auto_suggest(collected_df, config)
     else:
         prep_cache_key = (
             _prep_cache_seed if _prep_cache_seed is not None else id(combined_lf),
@@ -4119,8 +4131,8 @@ def _frame_lane_eligible(
         return False
     # W-4: memory + identity no longer decline -- both bridge (pa->pl) at
     # their entries (TRANSITIONAL; deep ports are D6 prerequisites).
-    if config.blocking and getattr(config.blocking, "auto_suggest", False):
-        return False
+    # W-5: blocking auto-suggest no longer declines -- _run_auto_suggest
+    # bridges (pa->pl) at entry (TRANSITIONAL; D6 prerequisite).
     # W-3: validation rules/auto_fix no longer decline -- both entries are
     # seam-driven dual-rep (auto_fix_dataframe delegates to Frame.auto_fix;
     # validate_dataframe evaluates via the seam with per-lane frames).
