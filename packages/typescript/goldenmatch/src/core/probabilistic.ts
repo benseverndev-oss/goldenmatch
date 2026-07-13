@@ -77,6 +77,8 @@ function fieldPartialThreshold(f: MatchkeyField): number {
  *   levels=2: 0=disagree, 1=agree
  *   levels=3: 0=disagree, 1=partial, 2=agree (>= 0.95)
  *   levels=N: evenly spaced thresholds k/N for k in 1..N-1
+ *   levelThresholds set: custom descending cutoffs; level = count satisfied
+ *   (takes priority over the levels-based legacy banding above).
  */
 export function buildComparisonVector(
   rowA: Row,
@@ -100,7 +102,11 @@ export function buildComparisonVector(
       continue;
     }
 
-    if (n === 2) {
+    if (f.levelThresholds !== undefined) {
+      let level = 0;
+      for (const t of f.levelThresholds) if (s >= t) level += 1;
+      levels.push(level);
+    } else if (n === 2) {
       levels.push(s >= partial ? 1 : 0);
     } else if (n === 3) {
       if (s >= 0.95) levels.push(2);

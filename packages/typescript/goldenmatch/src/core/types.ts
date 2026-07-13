@@ -33,6 +33,13 @@ export interface MatchkeyField {
   readonly columnWeights?: Readonly<Record<string, number>>;
   readonly levels?: number;
   readonly partialThreshold?: number;
+  /**
+   * N-level custom banding (Splink-converter). Descending similarity cutoffs;
+   * level = count of satisfied thresholds (0 = disagree, levels-1 = top agree).
+   * Length must equal levels-1. Absent => legacy banding (partialThreshold for
+   * 2/3 levels, even k/N spacing for N>3). Mirrors Python MatchkeyField.level_thresholds.
+   */
+  readonly levelThresholds?: readonly number[];
 }
 
 /**
