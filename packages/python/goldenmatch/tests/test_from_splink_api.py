@@ -4,7 +4,6 @@ point: strict mode, error paths, and the top-level goldenmatch exports.
 import json
 
 import pytest
-
 from goldenmatch.config.from_splink import (
     SplinkConversion,
     SplinkConversionError,

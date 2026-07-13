@@ -1,5 +1,5 @@
 from goldenmatch.config.from_splink import (
-    ConversionFinding, ConversionReport, SplinkConversionError,
+    ConversionReport,
 )
 
 

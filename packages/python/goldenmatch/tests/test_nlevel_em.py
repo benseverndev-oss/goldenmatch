@@ -9,7 +9,6 @@ the full EM loop on a realistic ~200-row dataset with a 4-level field.
 from __future__ import annotations
 
 import polars as pl
-import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.probabilistic import EMResult, estimate_m_from_labels, train_em
 

@@ -3,7 +3,7 @@ import numpy as np
 import pydantic
 import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
-from goldenmatch.core.probabilistic import comparison_vector, _levels_from_similarity
+from goldenmatch.core.probabilistic import _levels_from_similarity, comparison_vector
 
 
 def _mk(**field_kw):
@@ -132,8 +132,8 @@ def test_level_thresholds_router_selects_non_native_scorer(monkeypatch):
     see probabilistic_block_scorer's ``_native`` / ``_scorer`` / ``_scalar``
     closures.
     """
-    from goldenmatch.core.probabilistic import _fallback_result
     from goldenmatch.core import probabilistic as p
+    from goldenmatch.core.probabilistic import _fallback_result
 
     monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
     monkeypatch.setattr(

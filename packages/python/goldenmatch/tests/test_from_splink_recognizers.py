@@ -1,5 +1,4 @@
 import pytest
-
 from goldenmatch.config.from_splink import RecognizedLevel, recognize_level
 
 

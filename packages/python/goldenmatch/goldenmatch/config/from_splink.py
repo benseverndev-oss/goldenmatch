@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +22,7 @@ from goldenmatch.config.schemas import (
     MatchkeyConfig,
     MatchkeyField,
 )
+from goldenmatch.core._paths import safe_path
 from goldenmatch.core.probabilistic import EMResult
 
 Severity = Literal["info", "warning", "error"]
@@ -56,7 +58,9 @@ _DIST_RE = (
     rf'\s*\(\s*{_COL_L}\s*,\s*{_COL_R}\s*\)\s*<=\s*([0-9]+)'
 )
 
-_SIM_KIND = {
+LevelKind = Literal["null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard"]
+
+_SIM_KIND: dict[str, tuple[LevelKind, bool]] = {
     "jaro_winkler_similarity": ("jaro_winkler", False),
     "jaro_winkler": ("jaro_winkler", False),
     "jaro_similarity": ("jaro_winkler", True),
@@ -66,7 +70,7 @@ _SIM_KIND = {
 
 @dataclass
 class RecognizedLevel:
-    kind: Literal["null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard"]
+    kind: LevelKind
     column: str | None
     sim_threshold: float | None
     approx: bool = False      # True when the mapping is an approximation (jaro->jw, distance->similarity)
@@ -431,7 +435,10 @@ def _convert_one_blocking_rule(
     # Whole-rule strip handles the double-wrapped case; each conjunct is
     # deliberately stripped AGAIN inside _recognize_blocking_conjunct, so
     # neither call can be "simplified" away.
-    conjuncts = re.split(r'\s+AND\s+', _strip_outer_parens(sql_norm), flags=re.IGNORECASE)
+    # sql_norm collapsed all whitespace runs to single spaces above, so a
+    # literal ' AND ' split is exact -- and unlike r'\s+AND\s+' it cannot
+    # backtrack polynomially on adversarial whitespace (py/polynomial-redos).
+    conjuncts = re.split(r' AND ', _strip_outer_parens(sql_norm), flags=re.IGNORECASE)
     recognized: list[_BlockConjunct] = []
     for conjunct in conjuncts:
         r = _recognize_blocking_conjunct(conjunct)
@@ -549,6 +556,28 @@ def detect_trained(settings: dict) -> bool:
     return False
 
 
+def _agree_index_for(r: RecognizedLevel, fld: MatchkeyField) -> int | None:
+    """Resolve a recognized agree-band level to its GoldenMatch level index.
+
+    Resolution is by position in the field's own (already-deduped, descending)
+    thresholds -- mirrors ``convert_comparison``'s threshold derivation.
+    Returns ``None`` when the level's threshold matches none of the field's
+    converted thresholds (its m/u mass is dropped by the caller).
+    """
+    if fld.levels == 2:
+        if fld.scorer == "exact":
+            return 1 if r.kind == "exact" else None
+        if r.sim_threshold is None or fld.partial_threshold is None:
+            return None
+        return 1 if abs(r.sim_threshold - fld.partial_threshold) < 1e-9 else None
+    if r.sim_threshold is None:
+        return None
+    for i, t in enumerate(fld.level_thresholds or []):
+        if abs(t - r.sim_threshold) < 1e-9:
+            return (fld.levels - 1) - i
+    return None
+
+
 def import_em(
     comparisons: list[tuple[dict, int, MatchkeyField]],
     settings: dict,
@@ -577,6 +606,11 @@ def import_em(
     epsilon = 1e-6
 
     for comp, comp_idx, fld in comparisons:
+        # convert_comparison always sets `field` on the MatchkeyFields it
+        # emits, so the Optional is impossible here; narrow it once for the
+        # dict keys below.
+        field_name = fld.field
+        assert field_name is not None
         n = fld.levels
         m_acc = [0.0] * n
         u_acc = [0.0] * n
@@ -585,31 +619,6 @@ def import_em(
         lost_u = 0.0
         had_any_prob = False
         comp_path = f"comparisons[{comp_idx}]"
-
-        # Resolve a recognized agree-band level to its GoldenMatch index,
-        # by position in the field's own (already-deduped, descending)
-        # thresholds -- mirrors convert_comparison's threshold derivation.
-        if fld.levels == 2:
-            if fld.scorer == "exact":
-                def agree_index_for(r: RecognizedLevel) -> int | None:
-                    return 1 if r.kind == "exact" else None
-            else:
-                partial_threshold = fld.partial_threshold
-
-                def agree_index_for(r: RecognizedLevel, _pt: float | None = partial_threshold) -> int | None:
-                    if r.sim_threshold is None or _pt is None:
-                        return None
-                    return 1 if abs(r.sim_threshold - _pt) < 1e-9 else None
-        else:
-            thresholds = fld.level_thresholds or []
-
-            def agree_index_for(r: RecognizedLevel, _thresholds: list[float] = thresholds, _n: int = n) -> int | None:
-                if r.sim_threshold is None:
-                    return None
-                for i, t in enumerate(_thresholds):
-                    if abs(t - r.sim_threshold) < 1e-9:
-                        return (_n - 1) - i
-                return None
 
         for j, level in enumerate(comp.get("comparison_levels", [])):
             level_path = f"{comp_path}.comparison_levels[{j}]"
@@ -662,7 +671,7 @@ def import_em(
             if r.kind == "else":
                 idx = 0
             else:
-                idx = agree_index_for(r)
+                idx = _agree_index_for(r, fld)
                 if idx is None:
                     lost_m += m_p or 0.0
                     lost_u += u_p or 0.0
@@ -732,8 +741,8 @@ def import_em(
         m_final = [v / sum_m for v in m_acc] if sum_m > 0 else [1.0 / n] * n
         u_final = [v / sum_u for v in u_acc] if sum_u > 0 else [1.0 / n] * n
 
-        m_probs[fld.field] = m_final
-        u_probs[fld.field] = u_final
+        m_probs[field_name] = m_final
+        u_probs[field_name] = u_final
 
     if not m_probs:
         return None
@@ -741,7 +750,10 @@ def import_em(
     # Splink model exports carry no term-frequency tables, so an imported
     # EMResult always has tf_freqs=None -- tf_adjustment on a converted field
     # silently no-ops until the model is retrained. Say so.
-    tf_fields = [fld.field for _, _, fld in comparisons if fld.tf_adjustment]
+    tf_fields = [
+        fld.field for _, _, fld in comparisons
+        if fld.tf_adjustment and fld.field is not None
+    ]
     if tf_fields:
         report.info(
             "comparisons",
@@ -888,7 +900,10 @@ def _load_settings(source: dict | str | Path) -> dict:
         return dict(source)  # shallow copy: never mutate the caller's dict
 
     if isinstance(source, (str, Path)):
-        path = Path(source)
+        # safe_path is the repo-wide user-path choke-point (py/path-injection
+        # mitigation): NUL-byte rejection always, containment under
+        # GOLDENMATCH_ALLOWED_ROOT when configured (network-exposed surfaces).
+        path = safe_path(source)
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:

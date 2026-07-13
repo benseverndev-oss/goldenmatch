@@ -27,12 +27,18 @@ try:
 except ImportError:  # pragma: no cover
     auto_configure_df = None  # type: ignore[assignment]
 
+# SplinkConversion/SplinkConversionError are re-exported alongside
+# from_splink() below; they are lightweight dataclass/exception types (no
+# heavy deps beyond config.schemas / core.probabilistic, both already
+# imported transitively). The redundant alias marks the exception as an
+# explicit re-export (it is not otherwise referenced in this module).
+from goldenmatch.config.from_splink import (
+    SplinkConversion,
+)
+from goldenmatch.config.from_splink import (
+    SplinkConversionError as SplinkConversionError,
+)
 from goldenmatch.core.autoconfig_verify import PostflightReport
-
-# Re-exported alongside from_splink() below; these are lightweight
-# dataclass/exception types (no heavy deps beyond config.schemas /
-# core.probabilistic, both already imported transitively).
-from goldenmatch.config.from_splink import SplinkConversion, SplinkConversionError
 
 if TYPE_CHECKING:
     from goldenmatch.core._native_loader import NativeDispatchSummary

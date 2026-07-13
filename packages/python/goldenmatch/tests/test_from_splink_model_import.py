@@ -1,7 +1,6 @@
 import math
 
 import pytest
-
 from goldenmatch.config.from_splink import (
     ConversionReport,
     convert_comparison,
