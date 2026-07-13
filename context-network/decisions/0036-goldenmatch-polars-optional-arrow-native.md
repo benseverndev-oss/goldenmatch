@@ -42,3 +42,11 @@ fallback that cannot exist once polars leaves the dependency set.
   silently.
 - The profiler-driven hotspot loop that followed took the 1M frame-lane wall
   7.6s → 5.5s in pure Python — validating the K-series no-go.
+
+- **Post-release correction (same day):** the "polars as wall optimization"
+  framing was falsified by a head-to-head — the polars-free lane measured
+  FASTER (7.11s vs 7.55s at 500K) once a module-level polars literal in
+  golden_fused.py stopped silently disabling the Rust golden kernel on
+  polars-free installs. The [polars] extra is a COMPATIBILITY surface
+  (classic lane, kernel-absent golden replay, cell-quality weighting), not
+  an accelerator. The zero-polars gate runs native-ON too now.

@@ -57,10 +57,13 @@ export GOLDENMATCH_FRAME=polars     # opt-out escape hatch
 **v3.1.0 resolution**: the Arrow descent completed. `polars` moved out of the
 required dependencies — `pip install goldenmatch` runs the engine end to end
 on Arrow (a zero-polars CI gate proves a full dedupe with polars imports
-blocked). Installing the `[polars]` extra lights up the polars-present wall
-optimizations (golden fast-columnar, vectorized survivorship, the large-scale
-pair-score join) and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical
-to 3.0.x behavior.
+blocked). The polars-free install is also the FAST configuration: measured
+head-to-head, the Arrow lane without polars beats the polars-present run
+(the Rust fused kernels own the hot paths). The `[polars]` extra is a
+COMPATIBILITY surface -- the classic `GOLDENMATCH_FRAME=polars` lane, the
+golden fast-columnar replay when the native kernel is absent, and
+goldencheck cell-quality weighting -- byte-identical to 3.0.x behavior, not
+an accelerator.
 
 ## Notes for specific surfaces
 

@@ -10,7 +10,7 @@ GoldenMatch runs the same pipeline across four backends. The default is in-memor
 
 | Backend | Range | How it works |
 |---------|-------|--------------|
-| `polars` (default) | < 500K rows | In-memory classic scorer. v3.1.0+: requires the `[polars]` extra; without it the planner routes to the Arrow-native paths. |
+| `polars` (default) | < 500K rows | In-memory classic scorer. v3.1.0+: requires the `[polars]` extra; without it the planner routes to the Arrow-native paths, which measure faster (the Rust kernels carry the hot paths). |
 | `chunked` | 5M+ rows, single machine | Streaming CSV reader plus a vectorized Polars cross-chunk join plus a block-keyed bucketed index. |
 | `duckdb` | 500K – 50M rows | Out-of-core pair store via DuckDB. Spills to disk, so RAM is not the ceiling. |
 | `ray` | ≥ 50M rows, distributed | Per-block remote tasks; matchkey config and exclude-pairs set shared zero-copy via the Ray object store. |
