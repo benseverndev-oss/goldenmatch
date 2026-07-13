@@ -143,6 +143,47 @@ def _profile_column(series: pl.Series) -> ColumnProfile:
     )
 
 
+def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
+    """Path 1 (columnar built-in) profiling: the owned native ``Column.profile()``
+    kernel when enabled + importable, else the pure-Python :func:`_profile_column`.
+
+    The kernel returns ``{null_count, unique_count, samples, inferred_type}`` in one
+    pass (type decided by the Arrow dtype, matching :func:`_infer_type`'s dtype
+    short-circuit); the Python caller derives the percentages, applies the
+    column-name override, and packs the dataclass. Any dtype the kernel does not
+    support (e.g. Int32/Float32/UInt*) raises inside ``.profile()`` -> fall back to
+    the pure path so parity holds for every dtype the Polars profiler accepts."""
+    from goldenflow.core._native_loader import native_enabled, native_module
+
+    if native_enabled("profile"):
+        nm = native_module()
+        column_cls = getattr(nm, "Column", None) if nm is not None else None
+        if column_cls is not None and hasattr(column_cls, "from_arrow"):
+            try:
+                # GOTCHA (P1b): pass a 1-col DataFrame (series.to_frame()), never a
+                # bare Series -- a bare Series is a non-struct Arrow stream arrow-rs
+                # can't read.
+                out = column_cls.from_arrow(series.to_frame()).profile()
+            except Exception:  # noqa: BLE001 - unsupported dtype -> pure fallback
+                out = None
+            if out is not None:
+                row_count = len(series)
+                null_count = int(out["null_count"])
+                unique_count = int(out["unique_count"])
+                inferred = _override_type_by_column_name(series.name, out["inferred_type"])
+                return ColumnProfile(
+                    name=series.name,
+                    inferred_type=inferred,
+                    row_count=row_count,
+                    null_count=null_count,
+                    null_pct=null_count / row_count if row_count > 0 else 0.0,
+                    unique_count=unique_count,
+                    unique_pct=unique_count / row_count if row_count > 0 else 0.0,
+                    sample_values=list(out["samples"]),
+                )
+    return _profile_column(series)
+
+
 def _infer_type_list(values: list) -> str:
     """Polars-free twin of :func:`_infer_type` over a plain list. A column of Python
     ``int``/``float`` (the dtype a ``pl.DataFrame`` would infer as numeric) is
@@ -311,7 +352,7 @@ def profile_dataframe(df: pl.DataFrame, file_path: str = "", use_llm: bool | Non
         pass  # Fall back to built-in profiler
 
     # Built-in fallback profiler
-    columns = [_profile_column(df[col]) for col in df.columns]
+    columns = [_profile_column_native_or_pure(df[col]) for col in df.columns]
     return DatasetProfile(
         file_path=file_path,
         row_count=df.shape[0],
