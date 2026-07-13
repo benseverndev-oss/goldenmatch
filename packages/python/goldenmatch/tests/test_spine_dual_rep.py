@@ -353,3 +353,40 @@ def test_frame_lane_declines_when_quality_enabled(tmp_path, monkeypatch):
     # consulted and the classic lane ran; results still come back arrow.
     assert hits == []
     assert res["golden"] is None or hasattr(res["golden"], "num_rows")
+
+
+def test_frames_path_fused_golden_gets_arrow_table(tmp_path, monkeypatch):
+    """Deep-D2b: on the Frame lane the frames-path golden hands the fused
+    kernel the lane-native pa.Table (no polars round-trip) and reproduces
+    the classic lane exactly."""
+    import goldenmatch.core.golden_fused as GF
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import GoldenFieldRule, GoldenRulesConfig
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+    cfg = _lane_cfg(mk_type="weighted")
+    # field_rules -> _polars_native_eligible False -> the frames path tries
+    # the fused kernel with the lane-native frame
+    cfg.golden_rules = GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"city": GoldenFieldRule(strategy="majority_vote")},
+    )
+
+    calls = []
+    orig = GF.run_golden_fused_arrow
+
+    def spy(columns, *a, **k):
+        r = orig(columns, *a, **k)
+        calls.append((type(columns).__name__, r is not None))
+        return r
+
+    monkeypatch.setattr(GF, "run_golden_fused_arrow", spy)
+    frame_lane = P.run_dedupe([(str(csv), "people")], cfg)
+    if not calls or not calls[0][1]:
+        pytest.skip("native golden_fused kernel unavailable")
+    assert calls[0][0] == "Table", calls
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+    classic = P.run_dedupe([(str(csv), "people")], cfg)
+    assert _norm_result(frame_lane) == _norm_result(classic)

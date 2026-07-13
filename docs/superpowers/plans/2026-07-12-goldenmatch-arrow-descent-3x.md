@@ -148,9 +148,15 @@ cannot move while downstream still takes pl.LazyFrame):**
   arrow. **PARTIAL 2026-07-13: run_golden_fused_arrow is dual-rep (pa in ->
   pa out, no round-trip; provenance bridges at entry); bridge removed on the
   FUSED-HELPER and DICT golden paths (decline replays the polars demux for
-  byte-parity). RESIDUAL: the FRAMES-path golden still bridges
-  (_golden_source -> _multi_df_from_frames polars join) -- deep-D2b ports
-  _multi_df_from_frames + the from-frames demux; required before D6.**
+  byte-parity). DEEP-D2b (2026-07-13): the FRAMES-path
+  bridge is gone too -- _multi_df_from_frames normalizes ClusterFrames to the
+  source lane (zero-copy to_arrow) and joins single-backend; the fused try
+  gets the lane-native frame. On kernel DECLINE,
+  build_golden_records_from_frames RECOMPUTES multi_df via the polars join
+  from a bridged source (Acero vs polars join ROW ORDER differs and the
+  batch builder's first-occurrence tie-breaks are order-sensitive --
+  recompute is byte-identical by construction). The GOLDEN BRIDGE is now
+  decline-fallback-only on all three paths.**
 - D6 after the spine holds a full-suite arrow lane with zero polars imports
   (assert via an import-hook test, the goldencheck 2.0.0 precedent).
 
