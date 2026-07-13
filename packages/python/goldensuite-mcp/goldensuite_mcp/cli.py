@@ -33,7 +33,18 @@ def _serve_http(host: str, port: int) -> None:
     from goldensuite_mcp.server import create_server
 
     server = create_server()
-    session_manager = StreamableHTTPSessionManager(app=server, stateless=True)
+    # Stateful sessions (NOT stateless): the 8 stateful goldenmatch tools
+    # (list_clusters/get_cluster/get_golden_record/explain_match/evaluate/
+    # export_results/match_record/find_duplicates) carry run state across calls
+    # via a session-keyed store (see goldenmatch.mcp._session_ctx / _session_store,
+    # PR #1713). That store is keyed on the per-connection ServerSession, so it
+    # only persists when the HTTP layer keeps one ServerSession alive across a
+    # client's requests -- i.e. stateful mode, which issues an Mcp-Session-Id the
+    # client echoes. Under stateless=True every POST built a fresh ServerSession,
+    # so `dedupe_file` then `list_clusters` in the same client session missed the
+    # store and returned "No run loaded". Bounded by the store's LRU(64)+TTL(1h);
+    # single Railway replica so no cross-instance session affinity concern.
+    session_manager = StreamableHTTPSessionManager(app=server, stateless=False)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
