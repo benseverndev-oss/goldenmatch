@@ -153,6 +153,12 @@ class TestNLevelEMEndToEnd:
                     f"match_weights[{field_name}] not non-decreasing: {weights}"
                 )
 
+        # Discriminative: matches concentrate mass at high levels, non-matches
+        # at low. Shape/monotone asserts alone wouldn't catch a level-collapse
+        # regression -- the fixture deliberately populates all 4 levels.
+        assert result.m_probs["first_name"][3] > result.m_probs["first_name"][0]
+        assert result.u_probs["first_name"][0] > result.u_probs["first_name"][3]
+
     def test_blocking_fields_neutral_u_4level(self):
         """N>3 neutral-u branch (Task 3) exercised directly via train_em."""
         df = _make_dedupe_df()
