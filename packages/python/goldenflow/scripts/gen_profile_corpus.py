@@ -99,6 +99,17 @@ _CASES: list[list] = [
 ]
 
 
+def _native_crosscheck_active() -> bool:
+    """True only when the native ``infer_type_list_arrow`` symbol is actually
+    importable -- i.e. when :func:`compute_row` really validates each row against
+    the kernel. A stale/absent wheel (native imports but lacks the symbol) is False,
+    so the log label can't overclaim a cross-check that didn't happen."""
+    if not native_available():
+        return False
+    nm = native_module()
+    return nm is not None and hasattr(nm, "infer_type_list_arrow")
+
+
 def _hint_for(values: list) -> str:
     return _scalar_type_hint(values) or "string"
 
@@ -109,16 +120,15 @@ def compute_row(values: list) -> dict[str, object]:
     mapped, same hint) so either source is a valid oracle."""
     hint = _hint_for(values)
     expected = _infer_type_list(values)
-    if native_available():
+    if _native_crosscheck_active():
         nm = native_module()
-        if nm is not None and hasattr(nm, "infer_type_list_arrow"):
-            strs = [None if v is None else str(v) for v in values]
-            nat = nm.infer_type_list_arrow(strs, hint)
-            if nat != expected:
-                raise AssertionError(
-                    f"native/pure disagree on {values!r} (hint={hint!r}): "
-                    f"native={nat!r} pure={expected!r}"
-                )
+        strs = [None if v is None else str(v) for v in values]
+        nat = nm.infer_type_list_arrow(strs, hint)
+        if nat != expected:
+            raise AssertionError(
+                f"native/pure disagree on {values!r} (hint={hint!r}): "
+                f"native={nat!r} pure={expected!r}"
+            )
     return {"values": values, "hint": hint, "expected_type": expected}
 
 
@@ -140,7 +150,7 @@ def main() -> int:
     lines = [json.dumps(row, ensure_ascii=False) for row in rows]
     new_content = "\n".join(lines) + "\n"
 
-    oracle = "native+pure (cross-checked)" if native_available() else "pure-Python reference"
+    oracle = "native+pure (cross-checked)" if _native_crosscheck_active() else "pure-Python reference"
 
     if args.check:
         if not CORPUS_PATH.exists():

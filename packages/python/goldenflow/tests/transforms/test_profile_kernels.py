@@ -192,10 +192,14 @@ def test_native_profile_corpus_matches_expected_native():
 
 def _float_edge_series(pl):
     """Float columns straddling ``unique_pct = 0.1`` and carrying the ``NaN``/
-    ``-0.0`` values whose raw ``unique_count`` can differ native-vs-Polars (the
+    ``-0.0`` values whose raw ``unique_count`` CAN differ native-vs-Polars (the
     native kernel folds ``-0.0``/``+0.0`` and all ``NaN``; Polars ``n_unique`` may
-    not). The SELECTION must be identical regardless -- a numeric column is never
-    eligible for ``category_auto_correct``, so the edge can't move the decision."""
+    not). These are Float64 -> ``inferred_type == "numeric"``, and the only
+    unique_pct-gated transform (``category_auto_correct``) requires a ``string``
+    input type, so the gate is moot BY TYPE here -- the selection can't move even if
+    the counts diverge. That is exactly the invariant these tests lock (a
+    forward-looking regression guard), NOT a demonstrated same-decision-on-
+    divergent-count case."""
     nan = float("nan")
     return [
         # 10 rows, high-cardinality (unique_pct > 0.1): distinct floats + the edge.
@@ -219,9 +223,12 @@ def test_unique_pct_gate_numeric_never_selects_autocorrect():
 
 def test_unique_pct_gate_selection_equivalent_across_paths(monkeypatch):
     """Decision-equivalence: the native profiling path and the pure Polars path pick
-    the SAME transforms on the float NaN/-0.0 edge, even where their raw
-    ``unique_count`` differs. Locally this is pure-vs-pure (contract guard); the
-    native ``Column.profile()`` path is exercised in CI's native lane."""
+    the SAME transforms on the float NaN/-0.0 edge. The type gate (numeric columns
+    are never eligible for ``category_auto_correct``) makes the raw ``unique_count``
+    edge UNABLE to move the selection -- so this is a forward-looking regression
+    guard, not a demonstrated divergent-count/same-decision case. Locally it is
+    pure-vs-pure (contract guard); the native ``Column.profile()`` path is exercised
+    in CI's native lane."""
     pl = pytest.importorskip("polars")
     monkeypatch.setenv("GOLDENFLOW_NATIVE", "auto")
     for series in _float_edge_series(pl):
@@ -277,10 +284,10 @@ def _run_both_surfaces(fixture: dict[str, list]):
 
 
 @pytest.mark.parametrize("native_env", ["0", "1"])
-def test_autodetect_on_off_byte_identity(monkeypatch, native_env):
+def test_autodetect_cross_surface_byte_identity(monkeypatch, native_env):
     """The zero-config auto-detect pipeline produces byte-identical Manifest records
     (hence identical selected transforms) on BOTH the Polars ``transform_df`` surface
-    and the Polars-free ``transform_columns_public`` surface, under
+    and the Polars-free ``transform_columns_public`` surface -- checked under
     ``GOLDENFLOW_NATIVE=0`` and ``=1``.
 
     Locally (native profile symbol absent) both env values run the pure path, so this
@@ -295,30 +302,21 @@ def test_autodetect_on_off_byte_identity(monkeypatch, native_env):
     assert df_records == col_records
 
 
-def test_autodetect_pure_matches_across_env():
+def test_autodetect_pure_matches_across_env(monkeypatch):
     """Cross-env byte-identity: the auto-detect manifest under ``=1`` (native where a
     kernel exists) equals the manifest under ``=0`` (pure). Skips the ``=1`` leg when
-    no native module is importable."""
+    no native module is importable. The env is flipped mid-test via
+    ``monkeypatch.setenv`` (exception-safe, auto-restored) -- the second call just
+    overrides the first."""
     import goldenflow
 
     pl = pytest.importorskip("polars")
     fixture = _mixed_fixture()
 
-    import os
-
-    prev = os.environ.get("GOLDENFLOW_NATIVE")
-    try:
-        os.environ["GOLDENFLOW_NATIVE"] = "0"
-        pure = _manifest_tuples(goldenflow.transform_df(pl.DataFrame(fixture), config=None).manifest)
-        if native_module() is None:
-            pytest.skip("GOLDENFLOW_NATIVE=1 requires an importable native module")
-        os.environ["GOLDENFLOW_NATIVE"] = "1"
-        native = _manifest_tuples(
-            goldenflow.transform_df(pl.DataFrame(fixture), config=None).manifest
-        )
-    finally:
-        if prev is None:
-            os.environ.pop("GOLDENFLOW_NATIVE", None)
-        else:
-            os.environ["GOLDENFLOW_NATIVE"] = prev
+    monkeypatch.setenv("GOLDENFLOW_NATIVE", "0")
+    pure = _manifest_tuples(goldenflow.transform_df(pl.DataFrame(fixture), config=None).manifest)
+    if native_module() is None:
+        pytest.skip("GOLDENFLOW_NATIVE=1 requires an importable native module")
+    monkeypatch.setenv("GOLDENFLOW_NATIVE", "1")
+    native = _manifest_tuples(goldenflow.transform_df(pl.DataFrame(fixture), config=None).manifest)
     assert native == pure
