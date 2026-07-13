@@ -944,12 +944,16 @@ def run_dedupe(
     )
 
 
-def _as_polars_df(obj):
+def _as_polars_df(obj: Any) -> pl.DataFrame:
     """GOLDEN BRIDGE (D2s-d2b): the golden builders are polars-bound; on the
     Frame lane the multi_df/_golden_source natives are pa.Table, so re-enter
-    polars HERE only. Removal point: deep-D2 (golden gather on arrow)."""
+    polars HERE only. Removal point: deep-D2 (golden gather on arrow).
+
+    Typed non-optional for the callers' sake; a None input passes through
+    (the golden branch guards emptiness before the builders run).
+    """
     if obj is None or isinstance(obj, pl.DataFrame):
-        return obj
+        return cast("pl.DataFrame", obj)
     return cast("pl.DataFrame", pl.from_arrow(obj))
 
 
@@ -1620,7 +1624,7 @@ def _run_fused_match_short_circuit(
 
 
 def _run_dedupe_pipeline(
-    combined_lf: pl.LazyFrame,
+    combined_lf: Any,  # pl.LazyFrame (classic) | seam Frame (D2s-d2b Frame lane)
     config: GoldenMatchConfig,
     matchkeys: list,
     output_golden: bool = False,
