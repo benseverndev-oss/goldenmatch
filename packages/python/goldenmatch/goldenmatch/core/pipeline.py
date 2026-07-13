@@ -2584,7 +2584,7 @@ def _run_dedupe_pipeline(
     # ── Step 3.3: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:
         if mk.type == "weighted" and mk.rerank:
-            all_pairs = rerank_top_pairs(all_pairs, _as_polars_df(collected_df), mk)
+            all_pairs = rerank_top_pairs(all_pairs, collected_df, mk)
             break  # rerank once with the first rerank-enabled matchkey
 
     # ── Step 3.4: LLM SCORER (optional) ──
@@ -2598,7 +2598,7 @@ def _run_dedupe_pipeline(
             # purpose (cluster-mode cost stays None for this task).
             from goldenmatch.core.llm_cluster import llm_cluster_pairs
             all_pairs = _unwrap_llm_pairs(
-                llm_cluster_pairs(all_pairs, _as_polars_df(collected_df), config=config.llm_scorer)
+                llm_cluster_pairs(all_pairs, collected_df, config=config.llm_scorer)
             )
         else:
             from goldenmatch.core.llm_scorer import llm_score_pairs
@@ -2608,7 +2608,7 @@ def _run_dedupe_pipeline(
             _scored, llm_budget_summary = cast(
                 "tuple[list[tuple[int, int, float]], dict | None]",
                 llm_score_pairs(
-                    all_pairs, _as_polars_df(collected_df),
+                    all_pairs, collected_df,
                     config=config.llm_scorer, return_budget=True,
                 ),
             )
@@ -2624,7 +2624,7 @@ def _run_dedupe_pipeline(
                 c for c in _collected_frame.columns if not c.startswith("__")
             ]
             all_pairs = boost_accuracy(
-                all_pairs, _as_polars_df(collected_df), matchable_cols,
+                all_pairs, collected_df, matchable_cols,
                 provider=llm_provider,
                 api_key=None,  # auto-detect from env/settings
                 model_name=None,  # auto-detect

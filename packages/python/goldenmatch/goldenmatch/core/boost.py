@@ -54,9 +54,12 @@ def extract_feature_matrix(
     If include_embeddings is True and sentence-transformers is available,
     adds cosine similarity features per column (6 features per column instead of 5).
     """
-    row_ids = df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    row_ids = _fa8.column("__row_id__").to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}
-    rows = df.to_dicts()
+    rows = _fa8.select_dicts(list(_fa8.columns))
 
     # Try to compute embeddings for each column
     embeddings_per_col: dict[str, np.ndarray | None] = {}
@@ -246,8 +249,11 @@ def finetune_and_rescore(
             "Install with: pip install goldenmatch[embeddings]"
         )
 
-    rows = df.to_dicts()
-    row_ids = df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    rows = _fa8.select_dicts(list(_fa8.columns))
+    row_ids = _fa8.column("__row_id__").to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}
     matchable = [c for c in columns if not c.startswith("__")]
 
@@ -343,8 +349,11 @@ def load_finetuned_and_rescore(
     logger.info("Loading fine-tuned model from %s", model_path)
     model = SentenceTransformer(str(model_path))
 
-    rows = df.to_dicts()
-    row_ids = df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    rows = _fa8.select_dicts(list(_fa8.columns))
+    row_ids = _fa8.column("__row_id__").to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}
     matchable = [c for c in columns if not c.startswith("__")]
 
@@ -441,8 +450,11 @@ def boost_accuracy(
     all_features = extract_feature_matrix(candidate_pairs, df, matchable_columns, include_embeddings=True)
 
     # Build row lookup
-    rows = df.to_dicts()
-    row_ids = df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    rows = _fa8.select_dicts(list(_fa8.columns))
+    row_ids = _fa8.column("__row_id__").to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}
 
     # Adaptive labeling loop

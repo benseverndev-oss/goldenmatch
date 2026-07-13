@@ -185,9 +185,12 @@ def llm_score_pairs(
         model = "gpt-4o-mini" if provider == "openai" else "claude-haiku-4-5-20251001"
 
     # Build row lookup
-    cols = display_columns or [c for c in df.columns if not c.startswith("__")]
+    from goldenmatch.core.frame import to_frame as _tf_a8
+
+    _fa8 = _tf_a8(df)
+    cols = display_columns or [c for c in _fa8.columns if not c.startswith("__")]
     row_lookup: dict[int, dict] = {}
-    for row in df.select(["__row_id__"] + cols).to_dicts():
+    for row in _fa8.select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
 
     # Classify pairs into tiers
