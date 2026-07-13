@@ -176,11 +176,12 @@ def _profile_column_native_or_pure(series: pl.Series) -> ColumnProfile:
     if native_enabled("profile") and series.dtype in _kernel_profile_dtypes():
         nm = native_module()
         column_cls = getattr(nm, "Column", None) if nm is not None else None
-        # Probe ``profile`` (the method we call), not ``from_arrow``: the floor
-        # symbol infer_type_list_arrow already guarantees a wheel new enough to
-        # carry Column.profile, and a quoted "from_arrow" literal would trip the
-        # native_symbols gate (it matches the *_arrow kernel-symbol pattern but is
-        # a pyclass METHOD, not a wrap_pyfunction export).
+        # Probe the profile method (the one we call), not the constructor: the
+        # floor symbol infer_type_list_arrow already guarantees a wheel new enough
+        # to carry Column.profile. Deliberately no quoted from-arrow string literal
+        # here -- the native_symbols gate scans file text for quoted *_arrow
+        # literals and would read one as a referenced kernel symbol, but the
+        # constructor is a pyclass METHOD, not a wrap_pyfunction export.
         if column_cls is not None and hasattr(column_cls, "profile"):
             # GOTCHA (P1b): pass a 1-col DataFrame (series.to_frame()), never a
             # bare Series -- a bare Series is a non-struct Arrow stream arrow-rs
