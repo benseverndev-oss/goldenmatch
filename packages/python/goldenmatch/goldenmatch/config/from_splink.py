@@ -187,6 +187,19 @@ def convert_comparison(
         elif r.kind == "else":
             continue
         else:
+            # MatchkeyField thresholds must be in (0, 1]; a converted value
+            # outside that range (degenerate levenshtein distance -> sim 0.0,
+            # or a nonsense >= 1.5 threshold) can't be represented -- drop the
+            # band with a warning rather than let pydantic raise downstream.
+            t = r.sim_threshold
+            if t is not None and not (0.0 < t <= 1.0):
+                report.warn(
+                    f"{comp_path}.comparison_levels[{j}]",
+                    f"converted threshold {t} out of range (0, 1], level dropped: "
+                    f"{level.get('sql_condition', '')}",
+                    mapped_to=None,
+                )
+                continue
             bands.append((r, level, j))
 
     if null_seen:
@@ -229,11 +242,20 @@ def convert_comparison(
     for r, level, j in bands:
         if r.approx:
             level_path = f"{comp_path}.comparison_levels[{j}]"
-            report.warn(
-                level_path,
-                f"approximate mapping used for {r.kind} level (threshold={r.sim_threshold})",
-                mapped_to=None,
-            )
+            sql = level.get("sql_condition", "")
+            if r.kind == "levenshtein":
+                # Reconstruct the original distance from the converted sim.
+                distance = round((1 - (r.sim_threshold or 0.0)) * _LEV_ASSUMED_LEN)
+                message = (
+                    f"approximate mapping: edit distance <= {distance} converted via "
+                    f"sim = 1 - distance/{_LEV_ASSUMED_LEN} -> {r.sim_threshold} ({sql})"
+                )
+            else:
+                message = (
+                    f"approximate mapping: jaro_similarity treated as jaro_winkler "
+                    f"(threshold={r.sim_threshold}) ({sql})"
+                )
+            report.warn(level_path, message, mapped_to=None)
 
     thresholds = sorted(
         {r.sim_threshold for r, _, _ in bands if r.sim_threshold is not None}, reverse=True

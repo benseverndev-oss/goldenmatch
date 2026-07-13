@@ -256,6 +256,112 @@ def test_duplicate_thresholds_deduped():
     assert field.level_thresholds is None
 
 
+def test_out_of_range_levenshtein_band_dropped_among_others():
+    # levenshtein <= 10 converts to sim 0.0, outside (0, 1] -- band dropped,
+    # conversion proceeds with the surviving band.
+    comp = {
+        "output_column_name": "address",
+        "comparison_levels": [
+            {
+                "sql_condition": '"address_l" IS NULL OR "address_r" IS NULL',
+                "is_null_level": True,
+            },
+            {"sql_condition": 'levenshtein("address_l", "address_r") <= 10'},
+            {"sql_condition": 'levenshtein("address_l", "address_r") <= 2'},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+
+    assert field is not None
+    assert field.scorer == "levenshtein"
+    assert field.levels == 2
+    assert field.partial_threshold == pytest.approx(0.8)
+    assert any(
+        "out of range" in f.message and "<= 10" in f.message for f in report.findings
+    )
+
+
+def test_out_of_range_levenshtein_as_only_band_returns_none():
+    comp = {
+        "output_column_name": "address",
+        "comparison_levels": [
+            {
+                "sql_condition": '"address_l" IS NULL OR "address_r" IS NULL',
+                "is_null_level": True,
+            },
+            {"sql_condition": 'levenshtein("address_l", "address_r") <= 10'},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+
+    assert field is None
+    assert any("out of range" in f.message for f in report.findings)
+    assert any("no usable agree levels" in f.message for f in report.findings)
+
+
+def test_out_of_range_jw_threshold_dropped():
+    comp = {
+        "output_column_name": "first_name",
+        "comparison_levels": [
+            {
+                "sql_condition": (
+                    'jaro_winkler_similarity("first_name_l", "first_name_r") >= 1.5'
+                )
+            },
+            {
+                "sql_condition": (
+                    'jaro_winkler_similarity("first_name_l", "first_name_r") >= 0.9'
+                )
+            },
+            {"sql_condition": "ELSE"},
+        ],
+    }
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+
+    assert field is not None
+    assert field.levels == 2
+    assert field.partial_threshold == 0.9
+    assert any(
+        "out of range" in f.message and "1.5" in f.message for f in report.findings
+    )
+
+
+def test_approx_warnings_include_formula_and_source():
+    comp = {
+        "output_column_name": "dob",
+        "comparison_levels": [
+            {"sql_condition": 'levenshtein("dob_l", "dob_r") <= 2'},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+    report = ConversionReport()
+    convert_comparison(comp, 0, report)
+    lev_warns = [f for f in report.findings if "approximate mapping" in f.message]
+    assert len(lev_warns) == 1
+    assert "distance <= 2" in lev_warns[0].message
+    assert "sim = 1 - distance/10" in lev_warns[0].message
+    assert 'levenshtein("dob_l", "dob_r") <= 2' in lev_warns[0].message
+
+    comp_jaro = {
+        "output_column_name": "x",
+        "comparison_levels": [
+            {"sql_condition": 'jaro_similarity("x_l", "x_r") >= 0.9'},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+    report2 = ConversionReport()
+    convert_comparison(comp_jaro, 0, report2)
+    jaro_warns = [f for f in report2.findings if "approximate mapping" in f.message]
+    assert len(jaro_warns) == 1
+    assert "jaro_similarity" in jaro_warns[0].message
+    assert "jaro_winkler" in jaro_warns[0].message
+
+
 def test_all_levels_unrecognized_returns_none():
     comp = {
         "output_column_name": "amount",
