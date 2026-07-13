@@ -61,7 +61,11 @@ function pureInferType(values: readonly (string | null)[], hint: string): string
   if (hint === "numeric") return "numeric";
   if (hint === "boolean") return "boolean";
   if (hint === "date") return "date";
-  // first 100 non-null, THEN strip + drop empties (kernel order)
+  // Sampling uses the reference slice-100-then-strip order (matches the
+  // kernel/Python oracle); production inferType strips-then-slices -- a known
+  // pre-existing >100-with-empties edge tracked as a follow-up. This twin tests
+  // the regex+hint decision via the production inferTypeByRegex, not the
+  // sampling wrapper.
   const first100 = values.filter((v): v is string => v !== null).slice(0, 100);
   const stripped = first100.map((s) => s.trim()).filter((s) => s.length > 0);
   if (stripped.length === 0) return "string";

@@ -1445,6 +1445,8 @@ jobs:
         run: |
           cmp packages/python/goldenflow/tests/parity/identifiers_corpus.jsonl \
               packages/typescript/goldenflow/tests/parity/identifiers_corpus.jsonl
+          cmp packages/python/goldenflow/tests/parity/profile_corpus.jsonl \
+              packages/typescript/goldenflow/tests/parity/profile_corpus.jsonl
       - name: Build goldenflow WASM artifact into the loader's artifacts/ dir
         # Mirrors score-wasm/build_wasm.sh: cargo build wasm32 + wasm-bindgen-cli
         # pinned from Cargo.lock, emitting goldenflow_wasm_bg.wasm + .js where the
@@ -2177,6 +2179,13 @@ jobs:
         # stale corpus. Runs after the ext is built above so --check uses the native
         # path as the source of truth.
         run: uv run python packages/python/goldenflow/scripts/gen_identifiers_corpus.py --check
+      - name: Profile corpus oracle-drift guard (pure-Python _infer_type_list is the oracle)
+        # Regenerate the checked-in profile parity corpus in-memory from the pure-
+        # Python _infer_type_list reference (which the Rust profile::infer_type unit
+        # tests pin) and diff vs the committed file. Fails the lane if the corpus
+        # drifts from what the reference now produces, so an inference change can't
+        # land with a stale corpus.
+        run: uv run python packages/python/goldenflow/scripts/gen_profile_corpus.py --check
       - name: Parity suite (ext present -> NANP-gated native path runs, not skips)
         run: |
           uv run pytest \
