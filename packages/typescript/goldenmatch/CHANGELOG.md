@@ -4,7 +4,7 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
-## [Unreleased]
+## [1.2.0] - 2026-07-13
 
 ### Added
 - Splink -> GoldenMatch config converter, ported from Python: `fromSplink()` (edge-safe core, `src/core/config/from-splink.ts`), the `import-splink` CLI command, and the `convert_splink_config` MCP tool. Converts Splink comparison levels, blocking rules, and trained m/u probabilities (via a Python-schema-compatible `EMResult` JSON round-trip) into a GoldenMatch config, with a findings report for lossy mappings and an opt-in `--strict` mode. `mcp_tools`/`cli_commands` parity manifest entries moved from `python_only` to `shared`.
