@@ -3357,6 +3357,8 @@ def _run_dedupe_pipeline(
                     "__oversized__": cinfo["oversized"],
                 })
         if cluster_rows:
+            # Built from Python rows -- lane-free; polars construction keeps
+            # the writer's csv/xlsx formatting contract identical either way.
             clusters_df = pl.DataFrame(cluster_rows)
             write_output(clusters_df, directory, run_name, "clusters", fmt)
 
@@ -4113,6 +4115,8 @@ def _frame_lane_eligible(
             return False
         if mk.type == "exact" and (getattr(mk, "negative_evidence", None) or []):
             return False
-    if writes_outputs:
-        return False
+    # W-2: writes_outputs no longer declines -- write_output is dual-rep
+    # (native parquet; csv/xlsx keep the polars formatting contract via the
+    # bridge) and build_lineage reads via the seam.
+    del writes_outputs
     return True

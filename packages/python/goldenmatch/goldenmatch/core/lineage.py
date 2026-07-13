@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def build_lineage(
     scored_pairs: list[tuple[int, int, float]],
-    df: pl.DataFrame,
+    df,  # pl.DataFrame | pa.Table (Frame lane)
     matchkeys: list[MatchkeyConfig],
     clusters: dict[int, dict],
     max_pairs: int = 10000,
@@ -48,9 +48,12 @@ def build_lineage(
         List of lineage dicts, one per scored pair.
     """
     from goldenmatch.core.explainer import explain_pair
+    from goldenmatch.core.frame import to_frame
 
-    rows = df.to_dicts()
-    row_ids = df["__row_id__"].to_list()
+    # W-2 widening: dual-rep reads (df may be a pa.Table on the Frame lane).
+    _f = to_frame(df)
+    rows = _f.select_dicts(list(_f.columns))
+    row_ids = _f.column("__row_id__").to_list()
     id_to_idx = {rid: i for i, rid in enumerate(row_ids)}
 
     # Map row_id to cluster_id

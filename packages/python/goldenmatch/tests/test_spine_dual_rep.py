@@ -182,8 +182,9 @@ def test_frame_lane_eligible_baseline():
     assert _eligible(_base_cfg()) is True
 
 
-def test_frame_lane_declines_writes_outputs():
-    assert _eligible(_base_cfg(), writes_outputs=True) is False
+def test_frame_lane_allows_writes_outputs():
+    # W-2: write_output is dual-rep + build_lineage reads via the seam.
+    assert _eligible(_base_cfg(), writes_outputs=True) is True
 
 
 def test_frame_lane_declines_throughput_plan():
@@ -433,3 +434,63 @@ def test_frame_lane_engages_on_default_config_with_prep_bridges(tmp_path, monkey
     # the transform bridge actually ran: phones are E.164 in golden
     golden_rows = frame_lane["golden"].to_pylist()
     assert any(str(r.get("phone", "")).startswith("+") for r in golden_rows)
+
+
+def test_frame_lane_file_outputs_and_lineage(tmp_path, monkeypatch):
+    """W-2: a Frame-lane run with file outputs enabled writes golden/dupes/
+    unique (+ lineage sidecar) identical in content to the classic lane."""
+    import json
+
+    import goldenmatch.core.pipeline as P
+    from goldenmatch.config.schemas import GoldenMatchConfig, OutputConfig
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    csv = _lane_csv(tmp_path)
+    cfg_kw = dict(
+        matchkeys=[
+            MatchkeyConfig(
+                name="exact_name",
+                type="exact",
+                fields=[MatchkeyField(field="first"), MatchkeyField(field="last")],
+            )
+        ],
+    )
+    from goldenmatch.config.schemas import QualityConfig, TransformConfig
+
+    cfg_kw["quality"] = QualityConfig(mode="disabled")
+    cfg_kw["transform"] = TransformConfig(mode="disabled")
+
+    outs = {}
+    for lane, envval in (("frame", None), ("classic", "0")):
+        d = tmp_path / lane
+        cfg = GoldenMatchConfig(
+            **cfg_kw, output=OutputConfig(directory=str(d), format="csv")
+        )
+        if envval is not None:
+            monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", envval)
+        hits = []
+        orig = P._frame_lane_eligible
+        monkeypatch.setattr(
+            P,
+            "_frame_lane_eligible",
+            lambda *a, **k: (hits.append(orig(*a, **k)) or hits[-1]),
+        )
+        P.run_dedupe(
+            [(str(csv), "people")], cfg,
+            output_golden=True, output_dupes=True, output_unique=True,
+        )
+        monkeypatch.setattr(P, "_frame_lane_eligible", orig)
+        if envval is not None:
+            monkeypatch.delenv("GOLDENMATCH_FRAME_LANE")
+        else:
+            assert hits and hits[0] is True, f"lane not engaged: {hits}"
+        outs[lane] = {
+            f.name: f.read_bytes() for f in sorted(d.glob("*")) if f.suffix != ".json"
+        }
+        lineage = list(d.glob("*lineage*.json"))
+        outs[lane]["__lineage_records__"] = (
+            len(json.loads(lineage[0].read_text())) if lineage else None
+        )
+    assert set(outs["frame"]) == set(outs["classic"])
+    for name in outs["classic"]:
+        assert outs["frame"][name] == outs["classic"][name], name
