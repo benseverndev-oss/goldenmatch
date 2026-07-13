@@ -1535,7 +1535,14 @@ class AutoConfigController:
         # placeholder that produces a workable starting config.
         if reference is not None:
             try:
-                merged = pl.concat([df, reference], how="vertical_relaxed")
+                from goldenmatch.core.frame import concat_frames, to_frame
+
+                # relaxed=True == polars vertical_relaxed == arrow permissive;
+                # .native keeps the current polars-in/polars-out contract while
+                # making the site backend-agnostic for the boundary flip.
+                merged = concat_frames(
+                    [to_frame(df), to_frame(reference)], relaxed=True
+                ).native
             except Exception:
                 merged = df
             return _legacy(merged, **kw)
@@ -1864,7 +1871,11 @@ class AutoConfigController:
 
         if reference is not None:
             try:
-                df = pl.concat([df, reference], how="vertical_relaxed")
+                from goldenmatch.core.frame import concat_frames, to_frame
+
+                df = concat_frames(
+                    [to_frame(df), to_frame(reference)], relaxed=True
+                ).native
             except Exception as exc:
                 logger.warning(
                     "match-mode n_rows fallback: concat target+reference failed (%s); "
