@@ -27,6 +27,12 @@ def test_level_thresholds_range():
                       levels=3, level_thresholds=[1.2, 0.9])
 
 
+def test_level_thresholds_validated_for_record_embedding():
+    with pytest.raises(ValueError, match="0, 1"):
+        MatchkeyField(scorer="record_embedding", columns=["a", "b"],
+                      levels=4, level_thresholds=[1.2, 0.9, 0.5])
+
+
 def test_default_none_backcompat():
     f = MatchkeyField(field="x", scorer="jaro_winkler", levels=3)
     assert f.level_thresholds is None

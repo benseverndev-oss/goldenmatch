@@ -127,6 +127,19 @@ class MatchkeyField(BaseModel):
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> MatchkeyField:
+        # level_thresholds validation runs FIRST (before the record_embedding
+        # early return below) so record_embedding fields don't silently accept
+        # garbage thresholds. Depends only on level_thresholds + levels.
+        if self.level_thresholds is not None:
+            if len(self.level_thresholds) != self.levels - 1:
+                raise ValueError(
+                    f"level_thresholds must have levels-1={self.levels - 1} entries, "
+                    f"got {len(self.level_thresholds)}."
+                )
+            if any(not (0.0 < t <= 1.0) for t in self.level_thresholds):
+                raise ValueError("level_thresholds values must be in (0, 1].")
+            if any(a <= b for a, b in zip(self.level_thresholds, self.level_thresholds[1:])):
+                raise ValueError("level_thresholds must be strictly descending.")
         # record_embedding uses columns (plural), not field
         if self.scorer == "record_embedding":
             if not self.columns:
@@ -151,16 +164,6 @@ class MatchkeyField(BaseModel):
                     f"Invalid scorer '{self.scorer}'. Must be one of {sorted(VALID_SCORERS)} "
                     f"or a registered plugin scorer."
                 )
-        if self.level_thresholds is not None:
-            if len(self.level_thresholds) != self.levels - 1:
-                raise ValueError(
-                    f"level_thresholds must have levels-1={self.levels - 1} entries, "
-                    f"got {len(self.level_thresholds)}."
-                )
-            if any(not (0.0 < t <= 1.0) for t in self.level_thresholds):
-                raise ValueError("level_thresholds values must be in (0, 1].")
-            if any(a <= b for a, b in zip(self.level_thresholds, self.level_thresholds[1:])):
-                raise ValueError("level_thresholds must be strictly descending.")
         return self
 
     # ── Typed accessors ──
