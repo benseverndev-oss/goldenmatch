@@ -119,6 +119,11 @@ class MatchkeyField(BaseModel):
     # leak the value into saved YAML for non-probabilistic matchkeys; the
     # workbench → engine translation in web/preview.py coerces None → 20.
     em_iterations: int | None = None
+    # N-level custom banding (Splink-converter Stage 1). Descending similarity
+    # cutoffs; level index = count of satisfied thresholds (0 = disagree,
+    # levels-1 = top agree). None => legacy banding (partial_threshold for
+    # 2/3 levels, even k/N spacing for N>3). Length must be levels-1.
+    level_thresholds: list[float] | None = None
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> MatchkeyField:
@@ -146,6 +151,16 @@ class MatchkeyField(BaseModel):
                     f"Invalid scorer '{self.scorer}'. Must be one of {sorted(VALID_SCORERS)} "
                     f"or a registered plugin scorer."
                 )
+        if self.level_thresholds is not None:
+            if len(self.level_thresholds) != self.levels - 1:
+                raise ValueError(
+                    f"level_thresholds must have levels-1={self.levels - 1} entries, "
+                    f"got {len(self.level_thresholds)}."
+                )
+            if any(not (0.0 < t <= 1.0) for t in self.level_thresholds):
+                raise ValueError("level_thresholds values must be in (0, 1].")
+            if any(a <= b for a, b in zip(self.level_thresholds, self.level_thresholds[1:])):
+                raise ValueError("level_thresholds must be strictly descending.")
         return self
 
     # ── Typed accessors ──
