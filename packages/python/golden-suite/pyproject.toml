@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.2.2"
+version = "0.2.3"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -39,7 +39,7 @@ dependencies = [
     "goldenpipe[golden-suite]>=1.3",    # orchestrator + check/flow/match/analysis
     "goldenmatch[polars]>=3.1",         # entity resolution: dedupe, match, golden records (>=3.1: Arrow-native engine, polars OPTIONAL upstream -- the suite keeps [polars] so the wall-optimization paths + the classic lane stay on for suite installs)
     "goldencheck[polars]>=3.0.0",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
-    "goldenflow>=2.0.0",                 # transform / standardize / normalize (>=2.0.0 = Polars eviction FLIPPED: Polars-free by default, moved to goldenflow[polars]; native is a base dep)
+    "goldenflow>=2.1.0",                 # transform / standardize / normalize (>=2.1.0 = owned auto-detect profile kernel; native floor >=0.27.0)
     "infermap>=0.5.1",                  # GoldenSchema: inference-driven schema mapping
     "goldenanalysis>=0.3",              # read-only cross-cutting metrics + reporting
     "goldencheck-types>=0.1",           # shared canonical field-type contracts

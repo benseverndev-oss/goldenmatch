@@ -4,6 +4,13 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.3] - 2026-07-13
+
+### Changed
+- goldenflow floor to `goldenflow>=2.1.0` (2.1.0: owned auto-detect profile
+  kernel -- zero-config type inference is now a cross-surface goldenflow-core
+  kernel; base `goldenflow-native` floor `>=0.27.0`).
+
 ## [0.2.2] - 2026-07-13
 
 ### Changed
