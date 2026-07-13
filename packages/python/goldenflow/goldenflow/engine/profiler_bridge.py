@@ -173,6 +173,34 @@ def _infer_type_list(values: list) -> str:
     return "string"
 
 
+def _infer_type_list_native_or_pure(values: list) -> str:
+    """Path 2a type-inference: the owned native kernel when enabled + present,
+    else the pure-Python :func:`_infer_type_list`. The kernel owns only the
+    type DECISION; null/unique/samples stay in Python over the raw values (see
+    :func:`profile_columns`), which dodges the ``[1, "1"]`` stringify collision.
+
+    The hint is derived EXACTLY as :func:`_infer_type_list` decides numeric/bool,
+    and each value is stringified via ``str(v)`` (None stays None) so the kernel's
+    Utf8 regex block sees the same text the pure path does."""
+    from goldenflow.core._native_loader import native_enabled, native_module
+
+    if native_enabled("profile"):
+        nm = native_module()
+        if nm is not None and hasattr(nm, "infer_type_list_arrow"):
+            non_null = [v for v in values if v is not None]
+            if non_null and all(isinstance(v, bool) for v in non_null):
+                hint = "boolean"
+            elif non_null and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null
+            ):
+                hint = "numeric"
+            else:
+                hint = "string"  # Utf8
+            strs = [None if v is None else str(v) for v in values]
+            return nm.infer_type_list_arrow(strs, hint)
+    return _infer_type_list(values)
+
+
 def profile_columns(cols: dict[str, list], file_path: str = "") -> DatasetProfile:
     """Profile a ``dict[str, list]`` **Polars-free** — the built-in profiler over plain
     lists (byte-identical selection to :func:`profile_dataframe`'s built-in fallback,
@@ -187,7 +215,7 @@ def profile_columns(cols: dict[str, list], file_path: str = "") -> DatasetProfil
         null_count = sum(1 for v in values if v is None)
         non_null = [v for v in values if v is not None]
         unique_count = len(set(non_null))
-        inferred = _override_type_by_column_name(name, _infer_type_list(values))
+        inferred = _override_type_by_column_name(name, _infer_type_list_native_or_pure(values))
         columns.append(ColumnProfile(
             name=name,
             inferred_type=inferred,
