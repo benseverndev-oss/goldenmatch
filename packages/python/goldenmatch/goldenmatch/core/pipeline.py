@@ -1389,11 +1389,29 @@ def _golden_records_to_df(golden_records: list[dict]) -> pl.DataFrame | None:
     all_keys: set[str] = set()
     for row in golden_rows:
         all_keys.update(row.keys())
-    schema_overrides = {
-        k: pl.Utf8 for k in all_keys
-        if k not in ("__cluster_id__", "__golden_confidence__")
-    }
-    return pl.DataFrame(golden_rows, schema_overrides=schema_overrides)
+    from goldenmatch.core.golden import _polars_importable as _pl_ok
+
+    if _pl_ok():
+        schema_overrides = {
+            k: pl.Utf8 for k in all_keys
+            if k not in ("__cluster_id__", "__golden_confidence__")
+        }
+        return pl.DataFrame(golden_rows, schema_overrides=schema_overrides)
+    # Zero-polars lane: pa.Table with python str() for the user columns
+    # (no polars formatter to match in this env; internals keep native types).
+    import pyarrow as _pa
+
+    cols: dict[str, Any] = {}
+    for k in sorted(all_keys):
+        vals = [row.get(k) for row in golden_rows]
+        if k in ("__cluster_id__", "__golden_confidence__"):
+            cols[k] = _pa.array(vals)
+        else:
+            cols[k] = _pa.array(
+                [None if v is None else str(v) for v in vals],
+                type=_pa.large_string(),
+            )
+    return _pa.table(cols)
 
 
 def _golden_from_multi_df(
@@ -1728,7 +1746,9 @@ def _run_dedupe_pipeline(
     # silently get the stale entry. Column names defend against a different
     # schema; height defends against same-schema-different-rows (e.g. an empty
     # input vs a populated one) — the `test_dedupe_df_empty` flake.
-    if not isinstance(combined_lf, pl.LazyFrame):
+    from goldenmatch.core.frame import is_polars_lazyframe as _is_pl_lf
+
+    if not _is_pl_lf(combined_lf):
         # D2s-d2b Frame lane (arrow spine), WIDENED W-1: runs the prep stages
         # in CLASSIC ORDER (quality -> transform -> standardize -> matchkeys
         # -> precompute; the E.164 stage-order lesson). quality/transform are
@@ -2888,11 +2908,14 @@ def _run_dedupe_pipeline(
                 split_edge_budget=split_edge_budget,
             )
         else:
+            from goldenmatch.core.frame import ArrowFrame as _AF_d6
+
             cluster_frames = build_cluster_frames(
                 all_pairs, all_ids,
                 max_cluster_size=max_cluster_size,
                 weak_cluster_threshold=weak_threshold,
                 auto_split=auto_split,
+                backend="arrow" if isinstance(_collected_frame, _AF_d6) else "polars",
                 split_edge_budget=split_edge_budget,
             )
             # Do NOT rebuild the dict eagerly. stats + dupes (always-run hot path)
@@ -3079,6 +3102,13 @@ def _run_dedupe_pipeline(
         # relevant universe; scoped so cell_quality is not paid over the whole
         # frame on every default dedupe.
         _member_ids = _golden_member_row_ids()
+        from goldenmatch.core.golden import _polars_importable as _pl_ok
+        if _member_ids and not _pl_ok():
+            # Zero-polars env: goldencheck's cell_quality is polars-backed;
+            # quality weighting fails OPEN (None = no weighting), the same
+            # contract as goldencheck-absent. Re-opens when goldencheck
+            # ships an arrow cell_quality.
+            _member_ids = []
         if _member_ids:
             from goldenmatch.core.quality import compute_quality_scores
             with stage("golden_quality_scores"):

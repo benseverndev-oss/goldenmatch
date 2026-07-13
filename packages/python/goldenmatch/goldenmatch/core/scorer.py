@@ -385,7 +385,9 @@ def _find_exact_match_ids(
     # D2s-a (spine descent): dual-rep entry. Legacy pl.LazyFrame callers keep
     # the lazy projection+collect verbatim; a seam Frame (or eager native)
     # projects via the seam so the arrow lane never round-trips polars.
-    if isinstance(lf, pl.LazyFrame):
+    from goldenmatch.core.frame import is_polars_lazyframe
+
+    if is_polars_lazyframe(lf):
         df = lf.select("__row_id__", mk_col).collect()
     else:
         df = to_frame(lf).select(["__row_id__", mk_col]).native

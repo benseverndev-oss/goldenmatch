@@ -525,6 +525,7 @@ def build_cluster_frames(
     weak_cluster_threshold: float,
     auto_split: bool,
     split_edge_budget: int | None = None,
+    backend: str = "polars",
 ) -> ClusterFrames:
     """SP-A frames-out entry point (the default cluster-stage path).
 
@@ -544,7 +545,6 @@ def build_cluster_frames(
     ``pair_scores`` stripped, everything else byte-identical.
     """
     import numpy as _np
-    import polars as _pl
 
 
     pairs_list = list(pairs)
@@ -566,7 +566,7 @@ def build_cluster_frames(
             "score": [p[2] for p in pairs_list],
         },
         _PAIR_SPEC,
-        backend="polars",
+        backend=backend,
     ).native
     # BULK pre-split frames. Two paths, IDENTICAL output schema/shape (the SP-A
     # parity test runs both native=1 and native=0):
@@ -626,18 +626,41 @@ def build_cluster_frames(
             m_bot_b[i] = bot[1]
             m_min[i] = md["min_edge"]   # coalesced 0.0, never None
             m_avg[i] = md["avg_edge"]
-        assignments = _pl.DataFrame({"cluster_id": a_cid, "member_id": a_mid})
-        metadata = _pl.DataFrame({
-            "cluster_id": m_cid,
-            "size": m_size,
-            "confidence": m_conf,
-            "quality": _pl.Series("quality", ["strong"] * n_clusters, dtype=_pl.Utf8),
-            "oversized": m_over,
-            "bottleneck_pair_a": m_bot_a,
-            "bottleneck_pair_b": m_bot_b,
-            "min_edge": m_min,
-            "avg_edge": m_avg,
-        })
+        # D6: lane-native construction (numpy -> arrow is zero-copy).
+        if backend == "polars":
+            import polars as _pl
+
+            assignments = _pl.DataFrame({"cluster_id": a_cid, "member_id": a_mid})
+            metadata = _pl.DataFrame({
+                "cluster_id": m_cid,
+                "size": m_size,
+                "confidence": m_conf,
+                "quality": _pl.Series("quality", ["strong"] * n_clusters, dtype=_pl.Utf8),
+                "oversized": m_over,
+                "bottleneck_pair_a": m_bot_a,
+                "bottleneck_pair_b": m_bot_b,
+                "min_edge": m_min,
+                "avg_edge": m_avg,
+            })
+        else:
+            import pyarrow as _pa
+
+            assignments = _pa.table(
+                {"cluster_id": _pa.array(a_cid), "member_id": _pa.array(a_mid)}
+            )
+            metadata = _pa.table({
+                "cluster_id": _pa.array(m_cid),
+                "size": _pa.array(m_size),
+                "confidence": _pa.array(m_conf),
+                "quality": _pa.array(
+                    ["strong"] * n_clusters, type=_pa.large_string()
+                ),
+                "oversized": _pa.array(m_over),
+                "bottleneck_pair_a": _pa.array(m_bot_a),
+                "bottleneck_pair_b": _pa.array(m_bot_b),
+                "min_edge": _pa.array(m_min),
+                "avg_edge": _pa.array(m_avg),
+            })
 
     if auto_split:
         # Frames-native auto-split: the per-cluster dict (the SP1 bench loss) is
@@ -1156,15 +1179,17 @@ def _columnar_presplit(
     else:
         transient: dict[int, dict[tuple[int, int], float]] = {}
         with stage("cluster_pair_scores_fill"):
-            if not pairs_df.is_empty():
+            from goldenmatch.core.frame import to_frame as _tf_d6
+
+            if _tf_d6(pairs_df).height > 0:
                 from goldenmatch.core.frame import to_frame as _tf4
 
-                tagged = _tf4(pairs_df).map_column("id_a", "__cid__", member_to_cid).native
+                tagged = _tf4(pairs_df).map_column("id_a", "__cid__", member_to_cid)
                 for id_a, id_b, score, cid in zip(
-                    tagged["id_a"].to_list(),
-                    tagged["id_b"].to_list(),
-                    tagged["score"].to_list(),
-                    tagged["__cid__"].to_list(),
+                    tagged.column("id_a").to_list(),
+                    tagged.column("id_b").to_list(),
+                    tagged.column("score").to_list(),
+                    tagged.column("__cid__").to_list(),
                     strict=True,
                 ):
                     transient.setdefault(int(cid), {})[(id_a, id_b)] = score
@@ -1806,20 +1831,24 @@ def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     """
     assignments = frames.assignments
     metadata = frames.metadata
-    if assignments.is_empty():
+    from goldenmatch.core.frame import to_frame as _tf_cd
+
+    assignments = _tf_cd(assignments)
+    metadata = _tf_cd(metadata)
+    if assignments.height == 0:
         return {}
 
     # Build member lists by cluster_id from the assignments frame.
     by_cid: dict[int, list[int]] = {}
     for cid, mid in zip(
-        assignments["cluster_id"].to_list(),
-        assignments["member_id"].to_list(),
+        assignments.column("cluster_id").to_list(),
+        assignments.column("member_id").to_list(),
         strict=True,
     ):
         by_cid.setdefault(int(cid), []).append(int(mid))
 
     out: dict[int, dict] = {}
-    for row in metadata.iter_rows(named=True):
+    for row in metadata.select_dicts(list(metadata.columns)):
         cid = int(row["cluster_id"])
         bot = (row["bottleneck_pair_a"], row["bottleneck_pair_b"])
         out[cid] = {
@@ -1936,33 +1965,50 @@ def build_clusters_arrow_native(
             pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
         )
 
-    import polars as _pl
+    import pyarrow as _pa
 
+    from goldenmatch.core.frame import to_frame as _tf5
+
+    _pf = _tf5(pairs_df)
     if all_ids is None:
-        # Vectorized derive: concat id_a/id_b and uniq. Polars handles
-        # this without materializing a Python list.
-        if pairs_df.is_empty():
+        # Vectorized derive: concat id_a/id_b and uniq (seam; both lanes).
+        if _pf.height == 0:
             all_ids = []
         else:
             from goldenmatch.core.frame import concat_columns as _cc
-            from goldenmatch.core.frame import to_frame as _tf5
 
-            _pf = _tf5(pairs_df)
             ids_col = _cc([_pf.column("id_a"), _pf.column("id_b")]).unique()
             all_ids = [int(i) for i in ids_col.to_list()]
 
-    a_arrow = pairs_df["id_a"].to_arrow() if not pairs_df.is_empty() \
-        else _pl.Series("id_a", [], dtype=_pl.Int64).to_arrow()
-    b_arrow = pairs_df["id_b"].to_arrow() if not pairs_df.is_empty() \
-        else _pl.Series("id_b", [], dtype=_pl.Int64).to_arrow()
-    s_arrow = pairs_df["score"].to_arrow() if not pairs_df.is_empty() \
-        else _pl.Series("score", [], dtype=_pl.Float64).to_arrow()
-    all_ids_arrow = _pl.Series("__ids__", all_ids, dtype=_pl.Int64).to_arrow()
+    def _one_arr(col: Any):
+        # kernel FFI takes pa.Array; the arrow lane's columns are chunked.
+        a = col.to_arrow()
+        if isinstance(a, _pa.ChunkedArray):
+            a = (
+                a.combine_chunks()
+                if a.num_chunks != 1
+                else a.chunk(0)
+            )
+            if isinstance(a, _pa.ChunkedArray):
+                a = a.chunk(0) if a.num_chunks else _pa.array([], type=a.type)
+        return a
+
+    if _pf.height > 0:
+        a_arrow = _one_arr(_pf.column("id_a"))
+        b_arrow = _one_arr(_pf.column("id_b"))
+        s_arrow = _one_arr(_pf.column("score"))
+    else:
+        a_arrow = _pa.array([], type=_pa.int64())
+        b_arrow = _pa.array([], type=_pa.int64())
+        s_arrow = _pa.array([], type=_pa.float64())
+    all_ids_arrow = _pa.array(all_ids, type=_pa.int64())
 
     (
         a_cid, a_mid,
         m_cid, m_size, m_conf, m_over, m_bot_a, m_bot_b, m_min, m_avg,
     ) = arrow_fn(a_arrow, b_arrow, s_arrow, all_ids_arrow, max_cluster_size)
+
+    import polars as _pl
 
     assignments = _pl.DataFrame({
         "cluster_id": _pl.from_arrow(a_cid),

@@ -1341,11 +1341,16 @@ def _multi_df_from_frames(
     src_frame = to_frame(source_df)
     meta = to_frame(frames.metadata)
     assign = to_frame(frames.assignments)
-    # Deep-D2b: joins are single-backend; normalize the (small) cluster
-    # frames to the SOURCE lane (zero-copy to_arrow on polars natives).
+    # Deep-D2b/D6: joins are single-backend; normalize the (small) cluster
+    # frames to the SOURCE lane in EITHER direction (zero-copy each way).
     if isinstance(src_frame, ArrowFrame) and not isinstance(meta, ArrowFrame):
         meta = ArrowFrame(frames.metadata.to_arrow())
         assign = ArrowFrame(frames.assignments.to_arrow())
+    elif not isinstance(src_frame, ArrowFrame) and isinstance(meta, ArrowFrame):
+        import polars as _pl_norm
+
+        meta = to_frame(_pl_norm.from_arrow(frames.metadata))
+        assign = to_frame(_pl_norm.from_arrow(frames.assignments))
 
     multi_cluster_ids = meta.select_eligible_clusters()
 
@@ -1424,7 +1429,7 @@ def build_golden_records_from_frames(
     from goldenmatch.core.frame import to_frame as _tf_frames
 
     _src = _tf_frames(source_df)
-    if _src.height == 0 or frames.assignments.is_empty():
+    if _src.height == 0 or _tf_frames(frames.assignments).height == 0:
         return None, []
 
     if "__row_id__" not in _src.columns:
@@ -1442,15 +1447,21 @@ def build_golden_records_from_frames(
     # batch builder's tie-breaks (first-occurrence) are order-sensitive.
     # Recomputing via the polars join is byte-identical to the classic lane
     # by construction.
-    if not isinstance(source_df, pl.DataFrame):
+    from goldenmatch.core.frame import is_polars_dataframe as _is_pl_df_g
+
+    if not _is_pl_df_g(source_df) and _polars_importable():
         from goldenmatch.core.frame import Frame
 
         _native = source_df.native if isinstance(source_df, Frame) else source_df
         source_df = pl.from_arrow(_native)  # type: ignore[assignment]
+    # Zero-polars env: proceed on the arrow join directly -- there is no
+    # polars parity target to match; the arrow join order is deterministic
+    # and the builders' winners remain valid (correct-but-different
+    # tie-breaks, the spec's fallback-lane contract).
 
     multi_df = _multi_df_from_frames(source_df, frames)
 
-    if multi_df.height == 0:
+    if _tf_frames(multi_df).height == 0:
         return None, []
 
     # Preserve the dict pipeline's fast/slow decision (pipeline.py
@@ -1459,6 +1470,7 @@ def build_golden_records_from_frames(
     fast_eligible = (
         not provenance
         and _polars_native_eligible(rules, quality_scores=quality_scores)
+        and _polars_importable()  # WALL optimization; seam batch otherwise
     )
     if fast_eligible:
         golden_df = build_golden_records_df(multi_df, rules)

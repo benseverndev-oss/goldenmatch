@@ -119,6 +119,28 @@ class ClusterPairScores:
         the accessors (built on demand, O(cluster size)). The global dict-of-dicts
         is NEVER resident.
         """
+        # D6: arrow-lane / polars-free path -- the assignments frame may be a
+        # pa.Table; delegate to the BYTE-IDENTICAL Python reference
+        # (from_pairs semantics: input order, LAST-WINS, both-endpoints-in-
+        # same-cid) via a seam-read member->cid map. The polars join below is
+        # the polars-present WALL optimization (10x at 100M pairs).
+        from goldenmatch.core.frame import is_polars_dataframe as _is_pl_df
+
+        if not _is_pl_df(assignments):
+            from goldenmatch.core.frame import to_frame as _tf
+
+            _af = _tf(assignments)
+            member_to_cid = dict(
+                zip(
+                    _af.column("member_id").to_list(),
+                    _af.column("cluster_id").to_list(),
+                )
+            )
+            fake_clusters = {}
+            for mid, cid in member_to_cid.items():
+                fake_clusters.setdefault(int(cid), {"members": []})["members"].append(mid)
+            return cls.from_pairs(all_pairs, fake_clusters)
+
         # all_pairs is the raw list[(a,b,s)] AS-GIVEN. NEVER canonicalize.
         a_col, b_col, s_col = [], [], []
         for a, b, s in all_pairs:
