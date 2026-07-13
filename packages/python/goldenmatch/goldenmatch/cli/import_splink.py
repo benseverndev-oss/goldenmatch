@@ -61,23 +61,13 @@ def import_splink_cmd(
         err_console.print(f"[red]Splink conversion failed:[/red] {exc}")
         raise typer.Exit(code=1) from None
 
+    # Ordering: set model_path in-memory first, write the YAML config, THEN
+    # persist the model -- a failed YAML write must not leave an orphaned
+    # model.json behind.
+    persist_model = conversion.em_model is not None and bool(model_out)
     if conversion.em_model is not None:
         if model_out:
-            # save_json creates parent dirs itself (os.makedirs), but can
-            # still hit permission errors or invalid path components.
-            try:
-                conversion.em_model.save_json(model_out)
-            except OSError as exc:
-                err_console.print(
-                    f"[red]Could not write trained model to[/red] "
-                    f"[cyan]{model_out}[/cyan]: {exc}"
-                )
-                raise typer.Exit(code=1) from None
             conversion.config.matchkeys[0].model_path = model_out
-            console.print(
-                f"[green]Trained model persisted to[/green] [cyan]{model_out}[/cyan] "
-                f"(set as matchkeys[0].model_path)."
-            )
         else:
             console.print(
                 "[yellow]Warning:[/yellow] the Splink input carried trained m/u "
@@ -95,6 +85,24 @@ def import_splink_cmd(
             f"[red]Could not write config to[/red] [cyan]{output}[/cyan]: {exc}"
         )
         raise typer.Exit(code=1) from None
+
+    if persist_model:
+        # save_json creates parent dirs itself (os.makedirs), but can still
+        # hit permission errors or invalid path components.
+        try:
+            conversion.em_model.save_json(model_out)
+        except OSError as exc:
+            err_console.print(
+                f"[red]Could not write trained model to[/red] "
+                f"[cyan]{model_out}[/cyan]: {exc}. Note: the config written to "
+                f"[cyan]{output}[/cyan] references this model via "
+                "matchkeys[0].model_path, but the model file failed to write."
+            )
+            raise typer.Exit(code=1) from None
+        console.print(
+            f"[green]Trained model persisted to[/green] [cyan]{model_out}[/cyan] "
+            f"(set as matchkeys[0].model_path)."
+        )
 
     table = _render_report_table(conversion.report.findings)
     if table is not None:

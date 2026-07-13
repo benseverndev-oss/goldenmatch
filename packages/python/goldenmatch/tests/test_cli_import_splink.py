@@ -240,6 +240,30 @@ def test_output_into_nonexistent_directory_fails_cleanly(tmp_path):
     assert "Could not write config" in combined
 
 
+def test_unwritable_config_path_leaves_no_orphaned_model(tmp_path):
+    settings = _full_settings(comparisons=[_trained_jw_comparison()])
+    settings_path = _write_settings(tmp_path, settings)
+    out_path = tmp_path / "no_such_dir" / "out.yaml"
+    model_path = tmp_path / "model.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "import-splink",
+            str(settings_path),
+            "-o", str(out_path),
+            "--model-out", str(model_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not out_path.exists()
+    # The YAML write failed, so the model must NOT have been persisted
+    # (config write happens BEFORE save_json -- no orphaned model.json).
+    assert not model_path.exists()
+    assert not isinstance(result.exception, OSError)
+
+
 # ── 7. Default output path ────────────────────────────────────────────────
 
 
