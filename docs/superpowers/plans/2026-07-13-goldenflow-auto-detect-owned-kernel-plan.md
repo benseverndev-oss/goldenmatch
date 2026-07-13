@@ -152,6 +152,17 @@ Expected: FAIL (module/functions not defined).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TypeHint { Utf8, Numeric, Boolean, Date }
 
+/// Map a caller-supplied hint string to `TypeHint` (shared by native-flow +
+/// goldenflow-wasm so all surfaces agree). Unknown → `Utf8` (run the regexes).
+pub fn hint_from_str(h: &str) -> TypeHint {
+    match h {
+        "numeric" => TypeHint::Numeric,
+        "boolean" => TypeHint::Boolean,
+        "date" => TypeHint::Date,
+        _ => TypeHint::Utf8,
+    }
+}
+
 pub struct ColumnProfileOut {
     pub null_count: u64,
     pub unique_count: u64,
@@ -253,33 +264,27 @@ New module + `lib.rs` edit forces a rebuild, but bump anyway for wheel/lock hygi
 
 ```rust
 // native-flow/src/profile.rs — delegation is trivial; the real assertion is the
-// Python parity test. A smoke test that the hint string maps correctly:
+// Python parity test. A smoke test that infer_type_list_arrow round-trips a hint:
 #[cfg(test)]
 mod tests {
-    use super::hint_from_str;
-    use goldenflow_core::profile::TypeHint;
-    #[test] fn hint_mapping() {
-        assert!(matches!(hint_from_str("numeric"), TypeHint::Numeric));
-        assert!(matches!(hint_from_str("boolean"), TypeHint::Boolean));
-        assert!(matches!(hint_from_str("date"), TypeHint::Date));
-        assert!(matches!(hint_from_str("string"), TypeHint::Utf8));
-        assert!(matches!(hint_from_str("anything-else"), TypeHint::Utf8));
+    use super::infer_type_list_arrow;
+    #[test] fn hint_and_infer() {
+        // Numeric hint short-circuits regardless of values
+        assert_eq!(infer_type_list_arrow(vec![Some("x".into())], "numeric"), "numeric");
+        // Utf8 hint runs the matchers
+        let emails = vec![Some("a@b.co".into()), Some("x@y.io".into()), Some("p@q.net".into())];
+        assert_eq!(infer_type_list_arrow(emails, "string"), "email");
     }
 }
 ```
 
 - [ ] **Step 2: Run** `cd packages/rust/extensions/native-flow && cargo test --lib profile` → FAIL.
 
-- [ ] **Step 3: Implement.** In `src/profile.rs`:
+- [ ] **Step 3: Implement.** In `src/profile.rs` (reuse the core `hint_from_str` — do NOT redefine it):
 
 ```rust
-use goldenflow_core::profile::{infer_type, TypeHint};
+use goldenflow_core::profile::{hint_from_str, infer_type};
 use pyo3::prelude::*;
-
-pub fn hint_from_str(h: &str) -> TypeHint {
-    match h { "numeric" => TypeHint::Numeric, "boolean" => TypeHint::Boolean,
-              "date" => TypeHint::Date, _ => TypeHint::Utf8 }
-}
 
 /// Path 2a: infer the type of a plain Python list of Option<str> (already
 /// stringified by the caller via str(v)). Returns just the type string — the
@@ -364,7 +369,7 @@ def test_profile_columns_inferred_type_matches_pure():
     assert mixed.unique_count == 2  # raw-value set, NOT stringified
 ```
 
-- [ ] **Step 2: Run** (native present in CI; locally native may be absent → still asserts the pure path): `.venv/Scripts/python.exe -m pytest packages/python/goldenflow/tests/transforms/test_profile_kernels.py::test_profile_columns_inferred_type_matches_pure -v` (set `POLARS_SKIP_CPU_CHECK=1`). Expected: PASS on pure today (this test guards the invariant); if you write the test before the native wiring it passes on pure — that's fine, it's the fallback contract. To make it a true RED-first, first stub `infer_type_list_arrow` calling into a wrong value and assert native==pure; simplest: assert native path equals pure path explicitly (below).
+- [ ] **Step 2: Run** `.venv/Scripts/python.exe -m pytest packages/python/goldenflow/tests/transforms/test_profile_kernels.py::test_profile_columns_inferred_type_matches_pure -v` (set `POLARS_SKIP_CPU_CHECK=1`). This is a **green-from-the-start contract guard**: it asserts the invariant (correct `inferred_type` + raw `unique_count`) holds on whichever path runs. It passes on the pure path today — that is intentional and correct; do NOT stub a fake failure. The genuine RED-first native assertion is `test_native_infer_type_list_equals_pure_native` in Step 4 (fails/ skips only in the native lane).
 
 - [ ] **Step 3: Implement** in `profile_columns`: for each column keep `null_count`/`unique_count`/`samples`/`unique_pct` computed in Python exactly as now; replace the `inferred_type` derivation with:
 ```python
@@ -421,6 +426,7 @@ def test_profile_dataframe_builtin_matches_native_column(monkeypatch):
 - [ ] **Step 2: Run** → PASS on pure (contract guard) / exercises native in CI native lane.
 - [ ] **Step 3: Implement** a `_profile_column_native_or_pure(series)` that, when `native_enabled("profile")` and a `Column` class is importable, does `Column.from_arrow(series.to_frame())` → `.profile()` (hint from `series.dtype`: numeric/bool/temporal/else-Utf8), maps the returned dict into `ColumnProfile`, then applies `_override_type_by_column_name`; else the existing `_profile_column`. **Gotcha (P1b): pass a 1-col DataFrame (`series.to_frame()`), never a bare Series, to `Column.from_arrow`.**
 - [ ] **Step 4: Run** the built-in + a native-lane equivalence test → PASS.
+- [ ] **Step 4b: Pin typed-column stats format (native lane).** Add a native-named test asserting `Column.profile()` on `Int64`/`Float64`/`Boolean` columns returns `null_count`/`unique_count` equal to Polars and `samples` byte-equal to `series.head(5).cast(pl.Utf8).to_list()` — including a `Float64` with `1.0`/`-0.0` (via `float_to_polars_string`) and a `Boolean` (`"true"`/`"false"`). This pins Contract 3's typed-sample formatting (display-only, but cheap to lock). Skips when native absent.
 - [ ] **Step 5: Commit** `git commit -am "feat(goldenflow): profile_dataframe built-in via Column.profile() (Path 1)"`
 
 ---
@@ -445,7 +451,7 @@ def test_profile_dataframe_builtin_matches_native_column(monkeypatch):
         profile::infer_type(&view, profile::hint_from_str(&hint))
     }
 ```
-(If `Vec<JsValue>` marshaling differs from the existing exports, follow whatever the identifier exports use for `(string|null)[]`. Expose `hint_from_str` as `pub` in core, or inline the 4-arm match.)
+(If `Vec<JsValue>` marshaling differs from the existing exports, follow whatever the identifier exports use for `(string|null)[]`. `profile::hint_from_str` is already `pub` in core from Task 1 — call it directly.)
 - [ ] **Step 2:** wasm-pack build locally if available (else CI): the `wasm_flow` lane builds into `src/core/wasm/artifacts/`.
 - [ ] **Step 3: Commit** `git commit -am "feat(goldenflow-wasm): infer_type export"`
 
