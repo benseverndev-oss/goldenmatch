@@ -2749,7 +2749,7 @@ jobs:
           cache: pip
       # dbt-adapters 1.24.0 raises KeyError: 'javascript' against dbt-core 1.11.x
       # during macro parsing — pin <1.24 until upstream ships a clean release.
-      - run: pip install 'dbt-core>=1.11,<1.12' 'dbt-adapters<1.24' 'dbt-duckdb>=1.10,<1.11' pytest -e 'packages/dbt/goldensuite[quality]'
+      - run: pip install 'dbt-core>=1.11,<1.12' 'dbt-adapters<1.24' 'dbt-duckdb>=1.10,<1.11' pytest polars -e 'packages/dbt/goldensuite[quality]'
       - name: dbt parse (macro compile smoke)
         run: cd packages/dbt/goldensuite && dbt parse --no-version-check --profiles-dir .
       - name: pytest (macro render + correction CRUD)
@@ -2822,7 +2822,7 @@ jobs:
         # (and goldenflow, for the goldenflow_* transform functions) at
         # runtime. The package install here is what `init()` in the
         # bridge will find when Postgres starts.
-        run: pip install --break-system-packages goldenmatch>=1.1.0 goldenflow pyarrow
+        run: pip install --break-system-packages 'goldenmatch[polars]>=1.1.0' goldenflow pyarrow
 
       - name: Install cargo-pgrx
         # 0.12.9 pin matches the pgrx version in
@@ -2867,7 +2867,7 @@ jobs:
         run: |
           PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
           sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
-          sudo pip install --break-system-packages goldenmatch>=1.1.0 goldenflow 2>/dev/null || true
+          sudo pip install --break-system-packages 'goldenmatch[polars]>=1.1.0' goldenflow 2>/dev/null || true
           echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
 
       - name: psql smoke (scalar scorer, dedupe, autoconfig)
@@ -3150,7 +3150,7 @@ jobs:
           # source change here would surface — but the duckdb lane filter only
           # fires on extensions/duckdb/** changes, so for cross-package
           # regressions, rely on the regular `python` lane to catch them.
-          pip install -e "../../../python/goldenmatch[web]"
+          pip install -e "../../../python/goldenmatch[web,polars]"
           # goldencheck supplies the deep-profiling kernels the goldencheck_* UDFs
           # delegate to (goldencheck.core.kernels). Editable, pure-Python path —
           # the native goldencheck-core wheel isn't built here, so the UDF tests
