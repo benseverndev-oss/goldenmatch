@@ -20,6 +20,12 @@ from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 logger = logging.getLogger(__name__)
 
 
+def _tf_dom(df):
+    from goldenmatch.core.frame import to_frame
+
+    return to_frame(df)
+
+
 # Columns that extract_features may add to a DataFrame, by domain:
 #   bibliographic → __title_key__
 #   electronics   → __brand__, __model__, __model_norm__, __color__, __specs__, __extract_confidence__
@@ -478,11 +484,14 @@ def _detect_product_subdomain(df: pl.DataFrame, domain: DomainProfile) -> str:
     if not text_col or text_col not in df.columns:
         return "electronics"
 
-    sample = df.head(min(200, df.height))
+    from goldenmatch.core.frame import to_frame as _tf_a6
+
+    _f = _tf_a6(df)
+    sample = _f.head(min(200, _f.height))
     sw_signals = 0
     hw_signals = 0
 
-    for row in sample.select([text_col]).to_dicts():
+    for row in sample.select_dicts([text_col]):
         text = str(row.get(text_col, "") or "").lower()
         # Software signals
         if any(w in text for w in ("software", "license", "edition", "upgrade", "upg",
@@ -517,7 +526,7 @@ def _extract_software_features_df(
     confidences = []
     low_confidence_ids = []
 
-    for row in df.select(["__row_id__", text_col]).to_dicts():
+    for row in _tf_dom(df).select_dicts(["__row_id__", text_col]):
         text = str(row.get(text_col, "") or "")
         rid = row["__row_id__"]
 
@@ -533,9 +542,10 @@ def _extract_software_features_df(
             low_confidence_ids.append(rid)
 
     # W5a: seam attach (backend-agnostic column constructors).
-    from goldenmatch.core.frame import column_from_values, to_frame
+    from goldenmatch.core.frame import PolarsFrame, column_from_values, to_frame
 
     frame = to_frame(df)
+    _bk = "polars" if isinstance(frame, PolarsFrame) else "arrow"
     for _n, _v, _d in (
         ("__sw_name__", names_norm, "utf8"),
         ("__sw_version__", versions, "utf8"),
@@ -544,14 +554,14 @@ def _extract_software_features_df(
         ("__sw_part_num__", part_numbers, "utf8"),
         ("__extract_confidence__", confidences, "float64"),
     ):
-        frame = frame.with_column(_n, column_from_values(_v, _d, backend="polars"))
+        frame = frame.with_column(_n, column_from_values(_v, _d, backend=_bk))
     enhanced = frame.native
 
     n_names = sum(1 for n in names_norm if n)
     n_versions = sum(1 for v in versions if v)
     logger.info(
         "Software extraction: %d/%d names, %d/%d versions, %d low-confidence",
-        n_names, df.height, n_versions, df.height, len(low_confidence_ids),
+        n_names, frame.height, n_versions, frame.height, len(low_confidence_ids),
     )
 
     return enhanced, low_confidence_ids
@@ -572,7 +582,7 @@ def _extract_product_features_df(
     confidences = []
     low_confidence_ids = []
 
-    for row in df.select(["__row_id__", text_col]).to_dicts():
+    for row in _tf_dom(df).select_dicts(["__row_id__", text_col]):
         text = str(row.get(text_col, "") or "")
         rid = row["__row_id__"]
 
@@ -596,9 +606,10 @@ def _extract_product_features_df(
     brands_norm = [b.upper().strip() if b else None for b in brands]
 
     # Add derived columns
-    from goldenmatch.core.frame import column_from_values, to_frame
+    from goldenmatch.core.frame import PolarsFrame, column_from_values, to_frame
 
     frame = to_frame(df)
+    _bk = "polars" if isinstance(frame, PolarsFrame) else "arrow"
     for _n, _v, _d in (
         ("__brand__", brands_norm, "utf8"),
         ("__model__", models, "utf8"),
@@ -607,14 +618,14 @@ def _extract_product_features_df(
         ("__specs__", specs_strs, "utf8"),
         ("__extract_confidence__", confidences, "float64"),
     ):
-        frame = frame.with_column(_n, column_from_values(_v, _d, backend="polars"))
+        frame = frame.with_column(_n, column_from_values(_v, _d, backend=_bk))
     enhanced = frame.native
 
     n_with_model = sum(1 for m in models if m)
     n_with_brand = sum(1 for b in brands if b)
     logger.info(
         "Product extraction: %d/%d models, %d/%d brands, %d low-confidence",
-        n_with_model, df.height, n_with_brand, df.height, len(low_confidence_ids),
+        n_with_model, frame.height, n_with_brand, frame.height, len(low_confidence_ids),
     )
 
     return enhanced, low_confidence_ids
@@ -631,17 +642,19 @@ def _extract_biblio_features_df(
         return df, []
 
     title_keys = []
-    for row in df.select([text_col]).to_dicts():
+    for row in _tf_dom(df).select_dicts([text_col]):
         text = str(row.get(text_col, "") or "")
         features = extract_biblio_features(text)
         title_keys.append(features.get("title_key"))
 
-    from goldenmatch.core.frame import column_from_values, to_frame
+    from goldenmatch.core.frame import PolarsFrame, column_from_values, to_frame
 
+    _fr = to_frame(df)
+    _bk = "polars" if isinstance(_fr, PolarsFrame) else "arrow"
     enhanced = (
-        to_frame(df)
+        _fr
         .with_column(
-            "__title_key__", column_from_values(title_keys, "utf8", backend="polars")
+            "__title_key__", column_from_values(title_keys, "utf8", backend=_bk)
         )
         .native
     )

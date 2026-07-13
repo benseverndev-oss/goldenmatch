@@ -456,9 +456,15 @@ def _apply_domain_extraction(
         return combined_lf
 
     from goldenmatch.core.domain import detect_domain, extract_features
+    from goldenmatch.core.frame import to_frame as _tf_dom_p
 
-    combined_df_tmp = combined_lf.collect()
-    user_cols = [c for c in combined_df_tmp.columns if not c.startswith("__")]
+    # A6: dual-rep -- accepts a LazyFrame (classic), eager native, or seam
+    # Frame; the extractors are seam-driven and preserve the caller's lane.
+    _was_lazy = isinstance(combined_lf, pl.LazyFrame)
+    combined_df_tmp = combined_lf.collect() if _was_lazy else _tf_dom_p(combined_lf).native
+    user_cols = [
+        c for c in _tf_dom_p(combined_df_tmp).columns if not c.startswith("__")
+    ]
 
     if domain_cfg.mode == "auto" or domain_cfg.mode is None:
         domain_profile = detect_domain(user_cols)
@@ -509,7 +515,7 @@ def _apply_domain_extraction(
             len(extractions), len(low_conf_ids),
         )
 
-    return combined_df_tmp.lazy()
+    return combined_df_tmp.lazy() if _was_lazy else combined_df_tmp
 
 
 def _apply_memory_pre(memory_store: Any, config: GoldenMatchConfig, matchkeys: list) -> None:
@@ -1108,8 +1114,8 @@ def _semantic_name_column(
 
 def _semantic_blocking_pairs(
     config: GoldenMatchConfig,
-    combined_lf: pl.LazyFrame,
-    collected_df: pl.DataFrame,
+    combined_lf: Any,  # pl.LazyFrame | seam Frame (build_blocks is dual-rep)
+    collected_df: Any,  # pl.DataFrame | pa.Table
     matchkeys: list,
     matched_pairs: set[tuple[int, int]],
     across_files_only: bool,
@@ -1152,8 +1158,10 @@ def _semantic_blocking_pairs(
         MatchkeyField,
     )
     from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.core.frame import to_frame as _tf_sem
 
-    name_col = _semantic_name_column(config, matchkeys, list(collected_df.columns))
+    _sem_cols = list(_tf_sem(collected_df).columns)
+    name_col = _semantic_name_column(config, matchkeys, _sem_cols)
     if name_col is None:
         logger.warning("semantic_blocking: no usable name column found; skipping")
         return []
@@ -1189,7 +1197,7 @@ def _semantic_blocking_pairs(
     # (e.g. no standardization configured, or an upstream path that didn't
     # capture it) -- the fall back is the prior behavior, never worse.
     key_name_col = f"{_SEMANTIC_RAW_COL_PREFIX}{name_col}"
-    if key_name_col not in collected_df.columns:
+    if key_name_col not in _sem_cols:
         key_name_col = name_col
 
     out: list[tuple[int, int, float]] = []
@@ -1817,15 +1825,9 @@ def _run_dedupe_pipeline(
                     )
 
         if config.domain and config.domain.enabled:
-            # W-7 (TRANSITIONAL): domain extraction is a polars-lazy stage;
-            # round-trip through the bridge in classic order (post-standardize,
-            # pre-matchkeys is satisfied: matchkeys derive below on _frame).
+            # A6: domain extraction is seam-driven dual-rep -- lane preserved.
             with stage("domain_extraction"):
-                _frame = _tf_lane(
-                    _apply_domain_extraction(
-                        _as_polars_df(_frame.native).lazy(), config
-                    ).collect().to_arrow()
-                )
+                _frame = _tf_lane(_apply_domain_extraction(_frame.native, config))
 
         with stage("precompute_matchkey_transforms"):
             collected_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
@@ -2562,15 +2564,10 @@ def _run_dedupe_pipeline(
                 "semantic_blocking is incompatible with COLUMNAR_PIPELINE"
             )
         with stage("semantic_blocking"):
-            # W-7 (TRANSITIONAL): semantic sources read polars; bridge both
-            # handles on the Frame lane (combined_lf is the Frame there).
-            _sem_lf = (
-                combined_lf
-                if isinstance(combined_lf, pl.LazyFrame)
-                else _as_polars_df(collected_df).lazy()
-            )
+            # A6: the semantic sources are dual-rep (build_blocks + seam
+            # column reads) -- both handles pass through on the caller's lane.
             _semantic_pairs = _semantic_blocking_pairs(
-                config, _sem_lf, _as_polars_df(collected_df), matchkeys,
+                config, combined_lf, collected_df, matchkeys,
                 matched_pairs, across_files_only,
                 source_lookup if across_files_only else None,
             )
