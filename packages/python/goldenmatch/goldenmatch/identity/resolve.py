@@ -212,36 +212,40 @@ def _frames_iter(
     to ``None`` EXACTLY as ``cluster_frames_to_dict`` does (``cluster.py``) --
     a raw ``(0, 0)`` 2-tuple would wrongly trip the weak-conflict guard.
     """
-    assignments = cluster_frames.assignments
-    metadata = cluster_frames.metadata
+    from goldenmatch.core.frame import to_frame as _tf_i
+
+    assignments = _tf_i(cluster_frames.assignments)
+    metadata = _tf_i(cluster_frames.metadata)
 
     # members per cid (assignments is one row per (cluster_id, member_id)).
+    # Member ORDER within a cid is intentionally unconstrained: the resolution
+    # body compares members as a set (PR #598). The ascending-cid ``rows.sort``
+    # below IS load-bearing (mint order) and must stay.
     members_by_cid: dict[int, list[int]] = {}
-    if not assignments.is_empty():
-        # group_by does NOT preserve member order, and that's intentional:
-        # the resolution body is member-order-independent (members compared
-        # as a set, per PR #598), so do NOT "fix" this into a sorted agg. The
-        # ascending-cid ``rows.sort`` below IS load-bearing (mint order) and
-        # must stay.
-        grouped = assignments.group_by("cluster_id").agg(
-            pl.col("member_id")
-        )
-        for cid, mids in zip(
-            grouped["cluster_id"].to_list(),
-            grouped["member_id"].to_list(),
+    if assignments.height > 0:
+        for cid, mid in zip(
+            assignments.column("cluster_id").to_list(),
+            assignments.column("member_id").to_list(),
             strict=True,
         ):
-            members_by_cid[int(cid)] = [int(m) for m in mids]
+            members_by_cid.setdefault(int(cid), []).append(int(mid))
 
     rows: list[tuple[int, dict[str, Any]]] = []
-    for row in metadata.iter_rows(named=True):
-        cid = int(row["cluster_id"])
-        bot = (int(row["bottleneck_pair_a"]), int(row["bottleneck_pair_b"]))
+    _m = {
+        name: metadata.column(name).to_list()
+        for name in ("cluster_id", "confidence", "bottleneck_pair_a", "bottleneck_pair_b")
+    }
+    for cid_v, conf_v, bot_a, bot_b in zip(
+        _m["cluster_id"], _m["confidence"],
+        _m["bottleneck_pair_a"], _m["bottleneck_pair_b"], strict=True,
+    ):
+        cid = int(cid_v)
+        bot = (int(bot_a), int(bot_b))
         rows.append((
             cid,
             {
                 "members": members_by_cid.get(cid, []),
-                "confidence": float(row["confidence"]),
+                "confidence": float(conf_v),
                 "bottleneck_pair": bot if bot != (0, 0) else None,
             },
         ))

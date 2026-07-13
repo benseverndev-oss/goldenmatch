@@ -891,9 +891,11 @@ def build_golden_records_batch(
         return []
 
     def _mdf_pl():
+        from goldenmatch.core.frame import is_polars_dataframe as _ipd_m
+
         return (
             multi_df
-            if isinstance(multi_df, pl.DataFrame)
+            if _ipd_m(multi_df)
             else pl.from_arrow(multi_df)
         )
 

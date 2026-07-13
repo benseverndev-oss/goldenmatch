@@ -66,22 +66,31 @@ _GROUP_STRATEGY_IDS = {
 # Temporal dtypes (Date days, Datetime us, ...) and integer dtypes map to a
 # monotonic i64 via `.to_physical()`; string/float date columns do NOT (lexical
 # vs numeric ordering diverges), so the fused path declines them.
-_MOST_RECENT_ORDER_SAFE_DTYPES = (
-    pl.Date,
-    pl.Datetime,
-    pl.Time,
-    pl.Duration,
-    pl.Int8,
-    pl.Int16,
-    pl.Int32,
-    pl.Int64,
-    pl.UInt8,
-    pl.UInt16,
-    pl.UInt32,
-    # NOTE: pl.UInt64 is intentionally excluded -- its cast to Int64 wraps for
-    # values >= 2**63, which would silently flip the date ordering vs the
-    # reference's Python-int compare. Such a column declines to the classic path.
-)
+# Built lazily (cached) so importing this module never touches the polars
+# proxy -- the W0 lazy-import contract; a module-level pl tuple made the
+# ENTIRE fused golden kernel silently unavailable on polars-free installs
+# (the import error was swallowed by _try_fused_golden's decline catch).
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _most_recent_order_safe_dtypes() -> tuple:
+    return (
+        pl.Date,
+        pl.Datetime,
+        pl.Time,
+        pl.Duration,
+        pl.Int8,
+        pl.Int16,
+        pl.Int32,
+        pl.Int64,
+        pl.UInt8,
+        pl.UInt16,
+        pl.UInt32,
+        # NOTE: pl.UInt64 is intentionally excluded -- its cast to Int64 wraps
+        # for values >= 2**63, which would silently flip the date ordering vs
+        # the reference's Python-int compare. Such a column declines.
+    )
 
 
 def _factorize_with_map(values: list) -> tuple[list[int], dict]:
@@ -373,7 +382,7 @@ def _build_date_arrays(sdf: Any, date_col: str | None) -> tuple[Any, Any] | None
 
     if isinstance(sdf, PolarsFrame):
         date_series = sdf.native.get_column(date_col)
-        if not isinstance(date_series.dtype, _MOST_RECENT_ORDER_SAFE_DTYPES):
+        if not isinstance(date_series.dtype, _most_recent_order_safe_dtypes()):
             return None
         phys_list = date_series.to_physical().cast(pl.Int64).to_list()
     else:

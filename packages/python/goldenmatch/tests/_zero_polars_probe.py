@@ -30,7 +30,7 @@ class _PolarsBlocker:
 sys.meta_path.insert(0, _PolarsBlocker())
 
 os.environ["GOLDENMATCH_FRAME"] = "arrow"
-os.environ["GOLDENMATCH_NATIVE"] = "0"
+os.environ["GOLDENMATCH_NATIVE"] = os.environ.get("GOLDENMATCH_NATIVE_GATE", "0")
 os.environ["POLARS_SKIP_CPU_CHECK"] = "1"
 
 d = pathlib.Path(tempfile.mkdtemp())
