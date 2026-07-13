@@ -1946,16 +1946,16 @@ def _check_source_overlap(
     ``__source__`` so existing callers are unchanged; #858 passes a detected
     user source column when there is no ``__source__``.
     """
-    if partition_col not in df.columns:
-        return 1.0
-
-    sources = df[partition_col].unique().to_list()
-    if len(sources) < 2:
-        return 1.0
-
     from goldenmatch.core.frame import to_frame
 
     frame = to_frame(df)
+    if partition_col not in frame.columns:
+        return 1.0
+
+    sources = frame.column(partition_col).unique().to_list()
+    if len(sources) < 2:
+        return 1.0
+
     value_sets = []
     for src in sources:
         vals = set(
@@ -2710,12 +2710,20 @@ def build_blocking(
             None, defaults to ``df.height`` (backward-compat for direct
             callers like tests that pass a full-table df).
     """
+    # Arrow-port: coerce to the Frame seam once (build_blocking never reassigns
+    # df) so column/height/group_by ops run polars-free on a pa.Table. Idempotent
+    # for the polars backend -> byte-identical.
+    from goldenmatch.core.frame import to_frame as _tf
+
+    _bf = _tf(df)
+    _bf_height = _bf.height
+
     # Filter out high-null columns (>20% null) — they create oversized null blocks
     # that cause O(N^2) comparison explosions
     max_null_rate = 0.20
 
     def _null_rate(col_name: str) -> float:
-        return df[col_name].null_count() / df.height if df.height > 0 else 0.0
+        return _bf.column(col_name).null_count() / _bf_height if _bf_height > 0 else 0.0
 
     # Tier 2 (autoconfig-tier1-tier2): null-aware v0 blocking selection.
     # Columns with null_rate > NULL_RATE_CEILING are skipped as blocking keys:
@@ -2739,8 +2747,8 @@ def build_blocking(
     # profiles run on a small sample; at sample N=1000, real
     # mid-cardinality columns (zip) look near-unique. Chao1 correction
     # uses the sample's distinct count + sample_n vs full_n to project.
-    effective_n_full = n_rows_full if n_rows_full is not None else df.height
-    sample_n = max(df.height, 1)
+    effective_n_full = n_rows_full if n_rows_full is not None else _bf_height
+    sample_n = max(_bf_height, 1)
 
     # #1082: ANN is no longer AUTO-selected for description columns. A free-
     # text corpus (description column, no blockable structured key) is routed
@@ -2803,7 +2811,7 @@ def build_blocking(
                 and _null_rate(p.name) <= max_null_rate
                 and _projected_ratio(p) <= blocking_max_ratio
                 and _check_source_overlap(df, p.name) == 0.0):
-            sources = df["__source__"].unique().to_list() if "__source__" in df.columns else []
+            sources = _bf.column("__source__").unique().to_list() if "__source__" in _bf.columns else []
             logger.warning(
                 "Blocking key '%s' has 0%% overlap between sources %s -- skipping",
                 p.name, ", ".join(str(s) for s in sources),
@@ -2835,7 +2843,7 @@ def build_blocking(
     # and headroom to 10K for 2M+. Cap at 10K because a 10K-row block
     # under float32 ensemble is ~400 MB per scorer call which is the
     # practical OOM ceiling on a 16 GB runner.
-    max_safe_block = max(1000, min(10_000, int(df.height) // 200))
+    max_safe_block = max(1000, min(10_000, int(_bf_height) // 200))
 
     # #715: gate every emitted blocking key/pass by its PROJECTED full-N max
     # block size. build_blocking runs on a sample (or, in the v0 path, the
@@ -2858,8 +2866,8 @@ def build_blocking(
         maximally oversized AND concentrated (dropped) — fail-safe.
         """
         try:
-            g = df.group_by(fields).len()
-            mb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+            g = _bf.group_len(fields)
+            mb = int(g.column("len").max() or 0)  # "len" is int64 at runtime
             return mb, int(g.height)
         except Exception:  # pragma: no cover -- defensive
             return effective_n_full, 1
@@ -2937,7 +2945,7 @@ def build_blocking(
     # Best case: block on highest-cardinality exact column (with low null rate + safe block size)
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
-        exact_cols_sorted = sorted(exact_cols, key=lambda p: df[p.name].n_unique(), reverse=True)
+        exact_cols_sorted = sorted(exact_cols, key=lambda p: _bf.column(p.name).n_unique(), reverse=True)
         # #876: drop a unique-per-row SURROGATE (id) before picking the best
         # exact key.  A surrogate creates singleton blocks (block size 1 → 0
         # candidate pairs → finds nothing) and was the degenerate fallback. Gate
@@ -2958,7 +2966,7 @@ def build_blocking(
         # kept.
         safe_exact = [p for p in candidates if _is_scale_safe([p.name])]
         if safe_exact:
-            best = max(safe_exact, key=lambda p: df[p.name].n_unique())
+            best = max(safe_exact, key=lambda p: _bf.column(p.name).n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]
             return BlockingConfig(
                 keys=[BlockingKeyConfig(fields=[best.name], transforms=transforms)],
@@ -3692,23 +3700,14 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
-    # W5/PR-6 boundary flip: accept pl.DataFrame | pl.LazyFrame | pa.Table |
+    # PR-6b boundary flip: accept pl.DataFrame | pl.LazyFrame | pa.Table |
     # dict-of-arrays | Frame | ray.data.Dataset. A polars / ray / lazy input is
     # left for the existing coercion block below (byte-identical); a Frame /
-    # pa.Table / dict is coerced to a polars DataFrame HERE.
-    #
-    # HONEST NOTE -- the remaining polars island: the profile/exclusion helpers
-    # below are already Frame-capable (each re-coerces via to_frame), but the
-    # CONTROLLER and the v0 heuristic are NOT arrow-ported yet --
-    # `AutoConfigController.run`'s all-null gate subscripts `df[col]`, and
-    # `_legacy_auto_configure_v0` has ~15 `df[col]` / `df.filter(pl.col(...))`
-    # sites. So an arrow input is bridged to polars HERE via `pl.from_arrow`.
-    # This bridge is the reason zero-config is not YET fully polars-free; lifting
-    # it needs the controller + v0-heuristic arrow port (tracked follow-up). The
-    # old W2d ArrowFrame-only shim (which also raised TypeError on a bare
-    # pa.Table public input) is subsumed by this general seam coercion.
+    # pa.Table / dict is coerced to its ARROW native and flows through the
+    # controller + v0 heuristic polars-free (both are now Frame-seam ported).
+    # No more `pl.from_arrow` bridge -- the zero-config arrow path never imports
+    # polars.
     from goldenmatch.core.frame import (
-        PolarsFrame,
         is_polars_dataframe,
         is_polars_lazyframe,
         to_frame,
@@ -3720,12 +3719,10 @@ def auto_configure_df(
         or is_polars_lazyframe(df)
         or is_polars_dataframe(df)
     ):
-        _boundary_frame = to_frame(df)
-        df = (
-            _boundary_frame.native
-            if isinstance(_boundary_frame, PolarsFrame)
-            else cast("pl.DataFrame", pl.from_arrow(_boundary_frame.native))
-        )
+        # arrow / pa.Table / dict-of-arrays / Frame -> keep the native (arrow on
+        # the arrow backend, polars on the polars backend). to_frame is
+        # idempotent; .native is a pa.Table (no polars) on the arrow lane.
+        df = to_frame(df).native
 
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.
@@ -3750,16 +3747,15 @@ def auto_configure_df(
     if _is_ray_dataset(df):
         # Dataset stays as-is; controller.run() handles it natively.
         _n_rows_for_budget: int = df.count()  # type: ignore[union-attr]
-    elif isinstance(df, pl.LazyFrame):
+    elif is_polars_lazyframe(df):
         df = df.collect()
         _n_rows_for_budget = df.height
-    elif isinstance(df, pl.DataFrame):
+    elif is_polars_dataframe(df):
         _n_rows_for_budget = df.height
     else:
-        raise TypeError(
-            f"auto_configure_df requires pl.DataFrame, pl.LazyFrame, or "
-            f"ray.data.Dataset, got {type(df).__name__}"
-        )
+        # Arrow-native boundary (pa.Table) -- the zero-config polars-free lane.
+        # .height via the Frame seam; the controller consumes the arrow native.
+        _n_rows_for_budget = to_frame(df).height
     if reference is not None:
         if isinstance(reference, pl.LazyFrame):
             reference = reference.collect()
@@ -3780,7 +3776,7 @@ def auto_configure_df(
     # their own column-selection story; exclusions land at the per-
     # partition kernel layer separately.
     _ms_partition: str | None = None  # #858 source partition (None => feature off)
-    if not _is_ray_dataset(df) and isinstance(df, pl.DataFrame):
+    if not _is_ray_dataset(df) and is_polars_dataframe(df):
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
         )
@@ -3937,8 +3933,8 @@ def auto_configure_df(
     # audio fingerprint) and append a phash/audio_fp matchkey (+ perceptual
     # blocking for an image column when nothing else blocks). Byte-identical when
     # the flag is off.
-    if os.environ.get("GOLDENMATCH_PERCEPTUAL_AUTOCONFIG", "0") == "1" and isinstance(
-        df, pl.DataFrame
+    if os.environ.get("GOLDENMATCH_PERCEPTUAL_AUTOCONFIG", "0") == "1" and is_polars_dataframe(
+        df
     ):
         try:
             from goldenmatch.core.perceptual_autoconfig import apply_perceptual_autoconfig
@@ -3985,6 +3981,11 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # safely test `if domain_profile is not None` even when the domain
     # branch below is skipped (e.g. user-provided domain_config).
     domain_profile = None
+    # Arrow-port: route the v0 heuristic's frame ops through the seam so a bare
+    # pa.Table (zero-config polars-free path) is never subscripted with df[col]
+    # / df.height / df.columns / df.with_row_index (all crash on pa.Table).
+    # to_frame is idempotent -> byte-identical for the polars backend.
+    from goldenmatch.core.frame import to_frame as _tf
     # Preserve the raw input df for preflight. The in-function `df` variable
     # gets enriched with __row_id__ / domain-extracted columns; preflight
     # needs to check against the shape the pipeline will see.
@@ -3994,9 +3995,9 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # but the gate needs 1.13M to scale via Chao1. Caller threads the
     # true count via n_rows_full; falls back to df.height for direct
     # callers (tests / non-controller paths) that pass full frames.
-    total_rows = n_rows_full if n_rows_full is not None else df.height
+    total_rows = n_rows_full if n_rows_full is not None else _tf(df).height
 
-    logger.info("Auto-configuring %d rows, %d columns", total_rows, len(df.columns))
+    logger.info("Auto-configuring %d rows, %d columns", total_rows, len(_tf(df).columns))
 
     _emit_data_profile(df)
 
@@ -4026,16 +4027,16 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     else:
         from goldenmatch.core.domain import detect_domain, extract_features
 
-        user_cols = [c for c in df.columns if not c.startswith("__")]
+        user_cols = [c for c in _tf(df).columns if not c.startswith("__")]
         domain_profile = detect_domain(user_cols)
 
         if domain_profile.confidence > 0.7:
-            original_cols = set(df.columns)
+            original_cols = set(_tf(df).columns)
             # extract_features requires __row_id__ column
-            if "__row_id__" not in df.columns:
-                df = df.with_row_index("__row_id__")
+            if "__row_id__" not in _tf(df).columns:
+                df = _tf(df).with_row_index("__row_id__").native
             df, _low_conf_ids = extract_features(df, domain_profile)
-            extracted_columns = [c for c in df.columns if c.startswith("__") and c not in original_cols]
+            extracted_columns = [c for c in _tf(df).columns if c.startswith("__") and c not in original_cols]
             logger.info(
                 "Domain '%s' detected (confidence=%.2f), extracted %d feature columns",
                 domain_profile.name, domain_profile.confidence, len(extracted_columns),
@@ -4071,8 +4072,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             if col not in _DOMAIN_SCORER_MAP:
                 continue
             scorer, weight, transforms = _DOMAIN_SCORER_MAP[col]
-            null_rate = df[col].null_count() / df.height if df.height > 0 else 0
-            cardinality_ratio = df[col].n_unique() / df.height if df.height > 0 else 0
+            _fcol = _tf(df)
+            _h = _fcol.height
+            null_rate = _fcol.column(col).null_count() / _h if _h > 0 else 0
+            cardinality_ratio = _fcol.column(col).n_unique() / _h if _h > 0 else 0
             if null_rate > 0.5:
                 continue
             if scorer == "exact" and cardinality_ratio < 0.01:
@@ -4127,8 +4130,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             scorer, _weight, _transforms = _DOMAIN_SCORER_MAP[col]
             if scorer != "exact":
                 continue
-            null_rate = df[col].null_count() / df.height if df.height > 0 else 0
-            cardinality_ratio = df[col].n_unique() / df.height if df.height > 0 else 0
+            _fcol2 = _tf(df)
+            _h2 = _fcol2.height
+            null_rate = _fcol2.column(col).null_count() / _h2 if _h2 > 0 else 0
+            cardinality_ratio = _fcol2.column(col).n_unique() / _h2 if _h2 > 0 else 0
             if null_rate > 0.5:
                 continue
             profiles.append(ColumnProfile(
@@ -4158,7 +4163,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # At 1M+ rows, swap static blocking for adaptive so blocker.py's
     # _sub_block / _auto_split_block paths bound oversized buckets at
     # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.
-    blocking = _maybe_promote_blocking_to_adaptive(blocking, df.height)
+    blocking = _maybe_promote_blocking_to_adaptive(blocking, _tf(df).height)
     # Opt-in (GOLDENMATCH_BLOCKING_PRUNE_PASSES=1): drop redundant/all-noise
     # multi-pass passes by likely-match yield.
     blocking = _maybe_prune_blocking_passes(blocking, df)

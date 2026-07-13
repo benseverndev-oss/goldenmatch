@@ -259,12 +259,12 @@ class BlockResult:
 
     def materialize(self):
         """The block's rows as a seam Frame (collects a legacy LazyFrame once)."""
-        from goldenmatch.core.frame import Frame, to_frame
+        from goldenmatch.core.frame import Frame, is_polars_lazyframe, to_frame
 
         d = self.df
         if isinstance(d, Frame):
             return d
-        if isinstance(d, pl.LazyFrame):
+        if is_polars_lazyframe(d):  # arrow-port: import-safe LazyFrame guard
             d = d.collect()
         return to_frame(d)
 
@@ -356,8 +356,6 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
     hot_blocks_skipped = 0
 
     for key_config in config.keys:
-        block_key_expr = _build_block_key_expr(key_config)
-
         # Add block key column AND filter null/sentinel keys in a single
         # lazy pipeline so Polars' optimizer fuses the filter with the
         # projection. The eager `df.filter(...)` after `.collect()` form
@@ -382,6 +380,9 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
         from goldenmatch.core.frame import is_polars_lazyframe
 
         if is_polars_lazyframe(lf):
+            # Polars-only: the native expr chain (pl.col) is built lazily here so
+            # the arrow branch below (derive_block_key) never imports polars.
+            block_key_expr = _build_block_key_expr(key_config)
             df_with_key = (
                 lf
                 .with_columns(block_key_expr)

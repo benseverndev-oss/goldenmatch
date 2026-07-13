@@ -585,6 +585,7 @@ class AutoConfigController:
         always consumes Polars samples.
         """
         # --- Phase 2: distributed branch detection --------------------------
+        from goldenmatch.core.frame import to_frame  # arrow-port: seam coercions
         from goldenmatch.distributed._utils import is_ray_dataset
         distributed = is_ray_dataset(df)
 
@@ -596,8 +597,13 @@ class AutoConfigController:
             n_rows: int = df.count()  # type: ignore[union-attr]
             _df_for_gates = init_sample
         else:
+            from goldenmatch.core.frame import to_frame as _to_frame_gate
+
             _df_for_gates = df  # type: ignore[assignment]
-            n_rows = df.height  # type: ignore[union-attr]
+            # Arrow-port: route the pathological gates through the Frame seam so a
+            # bare pa.Table (zero-config polars-free path) is not subscripted with
+            # df[col] (crashes) -- byte-identical for the polars backend.
+            n_rows = _to_frame_gate(df).height  # type: ignore[union-attr]
             init_sample = df  # type: ignore[assignment]  # alias; never collected twice
         # Stash the full dataset row count for _assemble_profile() so per-
         # iteration profiles carry data.n_full_rows. Chao1 extrapolation in
@@ -606,17 +612,24 @@ class AutoConfigController:
         self._current_run_full_n_rows = n_rows
 
         # Pathological gates ------------------------------------------------
-        if _df_for_gates.height == 0:
+        # Arrow-port: coerce to the Frame seam once so the gate ops (.height,
+        # .columns, per-column drop_nulls) run polars-free on a pa.Table. On the
+        # distributed path _df_for_gates is a polars sample; to_frame is
+        # idempotent so the polars backend is byte-identical.
+        from goldenmatch.core.frame import to_frame as _to_frame_gate2
+
+        _gate_frame = _to_frame_gate2(_df_for_gates)
+        if _gate_frame.height == 0:
             raise ConfigValidationError("no data to configure on")
 
-        user_cols = [c for c in _df_for_gates.columns if not c.startswith("__")]
+        user_cols = [c for c in _gate_frame.columns if not c.startswith("__")]
         if not user_cols:
             raise ConfigValidationError("no usable columns")
 
         # Check all-null defensively across user columns
         all_null = True
         for col in user_cols:
-            if _df_for_gates[col].drop_nulls().len() > 0:
+            if len(_gate_frame.column(col).drop_nulls()) > 0:
                 all_null = False
                 break
         if all_null:
@@ -677,7 +690,7 @@ class AutoConfigController:
             _diag("_initial_config done")
             with stage("controller_pre_take_sample"):
                 sample, sample_ref = self._take_sample(df, reference=reference)  # type: ignore[arg-type]
-            _diag(f"_take_sample done (sample.height={sample.height})")
+            _diag(f"_take_sample done (sample.height={to_frame(sample).height})")
         history = RunHistory()
         config_n = config_v0
         start = time.time()
@@ -896,10 +909,13 @@ class AutoConfigController:
                     if _last_decision is not None else None
                 )
                 if _expand_factor is not None and not distributed:
+                    from goldenmatch.core.frame import to_frame as _tf_exp
+
                     _factor = float(_expand_factor)
+                    _sample_height = _tf_exp(sample).height  # arrow-port
                     if not hasattr(self, "_initial_sample_cap"):
-                        self._initial_sample_cap = sample.height  # type: ignore[has-type]
-                    new_cap = int(sample.height * _factor)
+                        self._initial_sample_cap = _sample_height  # type: ignore[has-type]
+                    new_cap = int(_sample_height * _factor)
                     if new_cap <= 5 * self._initial_sample_cap:
                         # Bump budget + resample. Polars path only;
                         # distributed sample shape is fixed at take time.
@@ -1615,10 +1631,13 @@ class AutoConfigController:
         )
 
     def _sample_one(self, df: pl.DataFrame) -> pl.DataFrame:
-        if df.height < self.budget.sample_skip_below:
+        from goldenmatch.core.frame import to_frame as _tf
+
+        _height = _tf(df).height  # arrow-port: pa.Table has no .height
+        if _height < self.budget.sample_skip_below:
             return df
         seed = self._seed_for(df)
-        n = min(self.budget.sample_size_default, df.height)
+        n = min(self.budget.sample_size_default, _height)
 
         # #131: stratified sampling. When a mid-cardinality column is
         # available (typically zip, state, or similar blocking-shaped
@@ -1641,7 +1660,10 @@ class AutoConfigController:
 
     def _seed_for(self, df: pl.DataFrame) -> int:
         """Hash of data shape for reproducible sampling."""
-        key = f"{df.height}|{','.join(df.columns)}".encode()
+        from goldenmatch.core.frame import to_frame as _tf
+
+        _f = _tf(df)  # arrow-port: .height/.columns via the seam
+        key = f"{_f.height}|{','.join(_f.columns)}".encode()
         digest = hashlib.sha256(key).hexdigest()
         return int(digest[:8], 16)
 
@@ -1731,13 +1753,16 @@ class AutoConfigController:
         )
         if weighted_mk is None:
             return None
-        if sample.height < 4:
+        from goldenmatch.core.frame import to_frame as _tf
+
+        _sf = _tf(sample)  # arrow-port: seam .height + select_dicts (pa.Table has no .to_dicts)
+        if _sf.height < 4:
             return None
 
         threshold = weighted_mk.threshold or 0.7
         rng = random.Random(self._seed_for(sample))
-        n_rows = sample.height
-        rows = sample.to_dicts()
+        n_rows = _sf.height
+        rows = _sf.select_dicts(_sf.columns)
 
         above = 0
         total = 0
@@ -1809,6 +1834,9 @@ class AutoConfigController:
             ProfileMeta,
             ScoringProfile,
         )
+        from goldenmatch.core.frame import to_frame as _tf
+
+        _df_height = _tf(df).height  # arrow-port: pa.Table has no .height
 
         data = emitter.data or self._compute_data_profile(df, reference=reference)
         # Stamp the full dataset row count when the caller knows it. Prefer
@@ -1841,7 +1869,7 @@ class AutoConfigController:
             cluster=emitter.cluster or ClusterProfile(),
             meta=ProfileMeta(
                 iteration=iteration, is_sample=is_sample,
-                sample_size=df.height, n_rows_full=df.height,
+                sample_size=_df_height, n_rows_full=_df_height,
             ),
         )
         # Zero-label (ZeroER-inspired) confidence. Phase 1: observational only —
@@ -1883,8 +1911,11 @@ class AutoConfigController:
                     exc,
                 )
 
-        user_cols = [c for c in df.columns if not c.startswith("__")]
-        n_rows = df.height
+        from goldenmatch.core.frame import to_frame as _tf
+
+        _f = _tf(df)  # arrow-port: seam .columns/.height
+        user_cols = [c for c in _f.columns if not c.startswith("__")]
+        n_rows = _f.height
         # W3c: shared seam-routed body with autoconfig._emit_data_profile
         # (the twins were byte-identical; mirror retired).
         from goldenmatch.core._profile_helpers import data_profile_column_stats
