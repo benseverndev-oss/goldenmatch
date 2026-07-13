@@ -81,7 +81,7 @@ pub fn infer_type(values: &[Option<&str>], hint: TypeHint) -> String {
     "string".into()
 }
 
-/// Full column profile in one pass: null/unique/first-5-samples over the RAW
+/// Full column profile in one call: null/unique/first-5-samples over the RAW
 /// values plus `infer_type`. Used by the columnar (Arrow) path; the list path
 /// computes null/unique/samples in Python over raw values to dodge the
 /// `[1,"1"]` stringify-collision.
@@ -356,6 +356,41 @@ mod tests {
         let mut v: Vec<Option<&str>> = vec![Some("a@b.co"); 100];
         v.extend(vec![Some("not-an-email"); 100]); // ignored (beyond 100)
         assert_eq!(infer_type(&v, TypeHint::Utf8), "email");
+    }
+    #[test]
+    fn threshold_exactly_at_boundary_returns_type() {
+        // Pins the `>=` (not `>`) side of the hit-ratio gate. Both expected
+        // values verified against the Python reference (`_infer_type_list`).
+        // date 0.5: 1 date of 2 = exactly 0.5 -> "date" ("foo" matches nothing).
+        assert_eq!(t(&["2020-01-02", "foo"], TypeHint::Utf8), "date");
+        // email 0.7: 7 emails of 10 = exactly 0.7 -> "email".
+        let mut v: Vec<Option<&str>> = vec![Some("a@b.co"); 7];
+        v.extend(vec![Some("foo"); 3]);
+        assert_eq!(infer_type(&v, TypeHint::Utf8), "email");
+    }
+    #[test]
+    fn phone_middle_length_boundaries() {
+        // _PHONE_RE = ^[\+\(]?[\d][\d\(\)\-\.\s]{6,18}\d$ : leading digit +
+        // {6,18} middle + trailing digit. Total (no prefix) = middle + 2.
+        // All expectations verified against the Python reference.
+        assert_eq!(t(&["12345678"], TypeHint::Utf8), "phone"); // middle 6 (8 total) -> match
+        assert_eq!(t(&["10000000000000000001"], TypeHint::Utf8), "phone"); // middle 18 (20 total) -> match
+        assert_eq!(t(&["1234567"], TypeHint::Utf8), "string"); // middle 5 (7 total) -> fail
+        assert_eq!(t(&["100000000000000000001"], TypeHint::Utf8), "string"); // middle 19 (21 total) -> fail
+    }
+    #[test]
+    fn date_year_and_month_count_boundaries() {
+        // alt2 \d{1,2}[-/]\d{1,2}[-/]\d{2,4} — year count boundaries.
+        // (Slash isolates from _PHONE_RE, whose class excludes '/'.)
+        assert_eq!(t(&["1/2/3"], TypeHint::Utf8), "string"); // 1-digit year -> fail
+        assert_eq!(t(&["1/2/12345"], TypeHint::Utf8), "string"); // 5-digit year -> fail
+        assert_eq!(t(&["3/4/56"], TypeHint::Utf8), "date"); // 2-digit year -> match
+        assert_eq!(t(&["1/2/1234"], TypeHint::Utf8), "date"); // 4-digit year -> match
+        // alt3 [A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4} — month-token length boundaries.
+        assert_eq!(t(&["Ja 2, 2020"], TypeHint::Utf8), "string"); // 2-letter month -> fail
+        assert_eq!(t(&["Abcdefghij 2, 2020"], TypeHint::Utf8), "string"); // 10-letter month -> fail
+        assert_eq!(t(&["September 5, 2021"], TypeHint::Utf8), "date"); // 9-letter month -> match
+        assert_eq!(t(&["Feb 1 2000"], TypeHint::Utf8), "date"); // 3-letter month -> match
     }
     #[test]
     fn email_matcher_agrees_with_email_validate() {
