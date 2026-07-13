@@ -322,6 +322,12 @@ def comparison_vector(
 
         if s is None:
             levels.append(0)  # treat nulls as disagree
+        elif f.level_thresholds is not None:
+            level = 0
+            for t in f.level_thresholds:
+                if s >= t:
+                    level += 1
+            levels.append(level)
         elif f.levels == 2:
             levels.append(1 if s >= f.partial_threshold else 0)
         elif f.levels == 3:
@@ -562,8 +568,10 @@ def train_em(
         if f.field in blocking_fields:
             if f.levels == 2:
                 u_probs[f.field] = [0.50, 0.50]  # neutral
-            else:
+            elif f.levels == 3:
                 u_probs[f.field] = [0.34, 0.33, 0.33]
+            else:
+                u_probs[f.field] = [1.0 / f.levels] * f.levels
 
     logger.info("u-probabilities estimated from %d random pairs", len(random_pairs))
 
@@ -836,7 +844,12 @@ def estimate_m_from_labels(
     # Blocking fields: neutral u (random pairs give a biased u for them).
     for f in mk.fields:
         if f.field in blocking_fields:
-            u_probs[f.field] = [0.50, 0.50] if f.levels == 2 else [0.34, 0.33, 0.33]
+            if f.levels == 2:
+                u_probs[f.field] = [0.50, 0.50]
+            elif f.levels == 3:
+                u_probs[f.field] = [0.34, 0.33, 0.33]
+            else:
+                u_probs[f.field] = [1.0 / f.levels] * f.levels
 
     # ── m from LABELED matches: observed level frequency (Laplace smoothed) ──
     label_matrix = _build_comparison_matrix(label_pairs, row_lookup, mk)
@@ -1187,7 +1200,7 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
             m_probs[f.field] = [0.1, 0.9]
             u_probs[f.field] = [0.9, 0.1]
             match_weights[f.field] = [math.log2(0.1 / 0.9), math.log2(0.9 / 0.1)]
-        else:
+        elif f.levels == 3:
             m_probs[f.field] = [0.05, 0.15, 0.80]
             u_probs[f.field] = [0.80, 0.15, 0.05]
             match_weights[f.field] = [
@@ -1195,6 +1208,14 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
                 math.log2(0.15 / 0.15),
                 math.log2(0.80 / 0.05),
             ]
+        else:
+            raw = [2.0 ** k for k in range(f.levels)]
+            total = sum(raw)
+            m = [r / total for r in raw]
+            u = list(reversed(m))
+            m_probs[f.field] = m
+            u_probs[f.field] = u
+            match_weights[f.field] = [math.log2(m_i / u_i) for m_i, u_i in zip(m, u)]
     return EMResult(
         m_probs=m_probs, u_probs=u_probs, match_weights=match_weights,
         converged=False, iterations=0, proportion_matched=0.05,
@@ -1358,14 +1379,27 @@ def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | Non
     return _field_values_from_list(raw, f, n)
 
 
-def _levels_from_similarity(sim: np.ndarray, levels: int, partial_threshold: float) -> np.ndarray:
+def _levels_from_similarity(
+    sim: np.ndarray,
+    levels: int,
+    partial_threshold: float,
+    level_thresholds: list[float] | None = None,
+) -> np.ndarray:
     """Vectorized level assignment matching ``comparison_vector`` semantics.
 
+    - custom (``level_thresholds`` given): level = count of thresholds t in
+      ``level_thresholds`` with sim >= t (order-independent sum of satisfied
+      descending thresholds).
     - 2 levels: 1 if sim >= partial_threshold else 0
     - 3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
     - N>3 levels: largest k in 1..N-1 with sim >= k/N (even spacing), which
       equals the count of satisfied thresholds.
     """
+    if level_thresholds is not None:
+        lvl = np.zeros(sim.shape, dtype=np.intp)
+        for t in level_thresholds:
+            lvl += (sim >= t).astype(np.intp)
+        return lvl
     if levels == 2:
         return (sim >= partial_threshold).astype(np.intp)
     if levels == 3:
@@ -1541,7 +1575,9 @@ def score_probabilistic_vectorized(
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
         sim = _field_score_matrix_dedup(vals, f.scorer)
-        lvl = _levels_from_similarity(sim, int(f.levels), float(f.partial_threshold))
+        lvl = _levels_from_similarity(
+            sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
+        )
         # Null on either side -> level 0 (disagree), matching comparison_vector.
         null_mask = np.array([v is None for v in vals], dtype=bool)
         if null_mask.any():
@@ -1651,7 +1687,9 @@ def score_probabilistic_vectorized_batch(
             vals.extend(_field_values_for_block(bdf, f, e - s))
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
         sim = _field_score_matrix_dedup(vals, f.scorer)
-        lvl = _levels_from_similarity(sim, int(f.levels), float(f.partial_threshold))
+        lvl = _levels_from_similarity(
+            sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
+        )
         null_mask = np.array([v is None for v in vals], dtype=bool)
         if null_mask.any():
             either_null = null_mask[:, None] | null_mask[None, :]
@@ -1861,7 +1899,16 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
 
     Every field scorer must be one the kernel's score_one implements, and no
     field may opt into TF adjustment (the kernel doesn't carry the per-value
-    frequency tables — those fields stay on the numpy path).
+    frequency tables — those fields stay on the numpy path). No field may set
+    ``level_thresholds`` either: the Rust kernel (``score_block_pairs_fs``)
+    only receives ``levels`` (a level *count*) and ``partial_threshold`` and
+    bands raw similarities into levels itself using its own hard-coded default
+    banding (2/3-level partial_threshold rule + even-spaced N-level; see
+    ``score.rs fs_level_from_sim`` and ``score_probabilistic_native``, which
+    never passes ``level_thresholds`` across the FFI boundary). Custom
+    ``level_thresholds`` lists never cross the FFI, so an N-level matchkey
+    with a custom threshold list must fall back to the numpy/scalar path
+    where `_levels_from_similarity` does the banding in Python.
     """
     if not _fs_native_enabled():
         return False
@@ -1871,6 +1918,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
             return False
         if getattr(f, "tf_adjustment", False):
+            return False
+        if getattr(f, "level_thresholds", None) is not None:
             return False
     try:
         from goldenmatch.core._native_loader import native_module

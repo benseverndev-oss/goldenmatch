@@ -45,7 +45,10 @@ matchkeys:
         partial_threshold: 0.8
       - field: last_name
         scorer: jaro_winkler
-        levels: 2
+        levels: 4
+        # Explicit N-level banding: descending cutoffs, len == levels - 1.
+        # A pair's level = how many thresholds its similarity satisfies.
+        level_thresholds: [0.95, 0.88, 0.7]
       - field: zip
         scorer: exact
         levels: 2
@@ -210,7 +213,7 @@ Three matchkey types:
 |------|-------------|-----------------|
 | `exact` | Binary match on transformed values | `field`, optional `transforms` |
 | `weighted` | Weighted average of field scores | `field`, `scorer`, `weight`, `threshold` |
-| `probabilistic` | Fellegi-Sunter log-likelihood ratios | `field`, `scorer`, optional `levels` |
+| `probabilistic` | Fellegi-Sunter log-likelihood ratios | `field`, `scorer`, optional `levels`, optional `level_thresholds` |
 
 ### Transforms
 

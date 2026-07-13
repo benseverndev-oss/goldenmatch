@@ -96,11 +96,20 @@ matchkeys:
         partial_threshold: 0.8
       - field: last_name
         scorer: jaro_winkler
-        levels: 2              # agree / disagree
+        levels: 4              # N-level: explicit banding via level_thresholds
+        level_thresholds: [0.95, 0.88, 0.7]
       - field: zip
         scorer: exact
         levels: 2
 ```
+
+`level_thresholds` generalizes the fixed agree/partial/disagree banding to any
+number of levels: pass descending similarity cutoffs (`len == levels - 1`), and
+a pair's comparison level is the count of thresholds its similarity satisfies
+(satisfying all of them = the top "agree" level, none = "disagree"). Omit it to
+keep the classic 2/3-level behavior (`partial_threshold` covers the 3-level
+case). The native FS kernel and the fused-match path decline
+`level_thresholds` matchkeys and fall back to the standard scoring path.
 
 ```python
 import goldenmatch as gm
@@ -124,6 +133,7 @@ The Fellegi-Sunter matchkey is a full probabilistic-linkage engine, not just a s
 - **Match-weight waterfall.** `explain_pair_fs` decomposes a pair into per-comparison `log2(m/u)` bits + prior + posterior, surfaced in `goldenmatch explain --pair` and the lineage sidecar.
 - **Calibration.** `GOLDENMATCH_FS_CALIBRATED=posterior` turns the score into a true match probability `1/(1+2^-(log2(λ/(1-λ)) + ΣW))`; `linear` (default) is monotonic in the summed weight.
 - **Accuracy analysis from labels.** `goldenmatch evaluate --threshold-sweep` emits the precision/recall/F1 operating-point curve, a recommended cut, `probability_two_random_records_match`, and the per-comparison m/u match-weight report.
+- **Config migration from Splink.** `goldenmatch import-splink settings.json -o goldenmatch.yaml [--model-out model.json]` (or `gm.from_splink(...)` in Python, or the `convert_splink_config` MCP tool) converts a Splink settings or trained-model JSON into a GoldenMatch config; trained m/u probabilities import directly so no re-training is needed, and anything lossy is reported in a `ConversionReport`.
 
 ### Scale-out
 

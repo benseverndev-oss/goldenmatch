@@ -291,6 +291,33 @@ _BASE_TOOLS = [
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
+        name="convert_splink_config",
+        description=(
+            "Convert a Splink settings JSON (bare or trained) into a GoldenMatch "
+            "config. Pass the settings as an inline JSON string -- no filesystem "
+            "access needed. Returns the config as YAML, a findings report "
+            "(severity/splink_path/message/mapped_to per finding), a summary, "
+            "and -- when the Splink input carried trained m/u probabilities -- "
+            "the imported EM model as a dict you can persist yourself. "
+            "strict=True fails on ANY lossy mapping (not just hard errors)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "settings_json": {
+                    "type": "string",
+                    "description": "Splink settings (bare or trained model) as a JSON string",
+                },
+                "strict": {
+                    "type": "boolean",
+                    "description": "Fail on any lossy mapping (warnings), not just errors (default false)",
+                    "default": False,
+                },
+            },
+            "required": ["settings_json"],
+        },
+    ),
+    Tool(
         name="profile_data",
         description="Get data quality profile: column types, null rates, unique counts, sample values.",
         inputSchema={"type": "object", "properties": {}},
@@ -1031,6 +1058,8 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_suggest_config(args.get("bad_merges", []))
     elif name == "review_config":
         return _tool_review_config()
+    elif name == "convert_splink_config":
+        return _tool_convert_splink_config(args.get("settings_json", ""), args.get("strict", False))
     elif name == "profile_data":
         return _tool_profile_data()
     elif name == "export_results":
@@ -1412,6 +1441,74 @@ def _tool_suggest_config(bad_merges: list[dict]) -> dict:
         "suggestions": suggestions,
         "current_threshold": threshold,
         "bad_merges_analyzed": len(analyses),
+    }
+
+
+def _tool_convert_splink_config(settings_json: str, strict: bool = False) -> dict:
+    """Convert an inline Splink settings JSON string into a GoldenMatch config.
+
+    The remote MCP surface takes content inline (no filesystem assumptions for
+    the caller): settings arrive as a JSON string, results return inline --
+    the config as YAML text, the findings report, a summary, and (when the
+    Splink input was trained) the EMResult as a dict so remote callers can
+    persist it themselves. Errors use the server's clean-dict convention
+    (`{"error": ...}`) rather than letting exceptions cross the MCP boundary.
+    """
+    import yaml
+
+    from goldenmatch.config.from_splink import SplinkConversionError, from_splink
+
+    try:
+        settings = json.loads(settings_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return {"error": f"settings_json is not valid JSON: {exc}"}
+
+    if not isinstance(settings, dict):
+        return {
+            "error": (
+                "settings_json must decode to a JSON object (Splink settings "
+                f"dict), got {type(settings).__name__}"
+            )
+        }
+
+    try:
+        conversion = from_splink(settings, strict=strict)
+    except SplinkConversionError as exc:
+        return {"error": str(exc)}
+
+    dumped = conversion.config.model_dump(exclude_none=True, exclude_defaults=True)
+    config_yaml = yaml.safe_dump(dumped, sort_keys=False)
+
+    findings = [
+        {
+            "severity": f.severity,
+            "splink_path": f.splink_path,
+            "message": f.message,
+            "mapped_to": f.mapped_to,
+        }
+        for f in conversion.report.findings
+    ]
+
+    em_model = conversion.em_model.to_dict() if conversion.em_model is not None else None
+
+    usage_note = (
+        "Save config_yaml to a file and load it as the GoldenMatch config. "
+        + (
+            "This model carries trained m/u probabilities: save em_model as "
+            "JSON and set matchkeys[0].model_path to that file's path so "
+            "GoldenMatch reuses it instead of re-training via EM."
+            if em_model is not None
+            else "No trained model was carried by this input; GoldenMatch will "
+            "train via EM on first run."
+        )
+    )
+
+    return {
+        "config_yaml": config_yaml,
+        "findings": findings,
+        "summary": conversion.report.summary(),
+        "em_model": em_model,
+        "usage_note": usage_note,
     }
 
 

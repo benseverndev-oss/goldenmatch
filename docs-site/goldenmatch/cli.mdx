@@ -30,6 +30,7 @@ keywords: ["cli", "commands", "dedupe", "flags"]
 | `goldenmatch runs` | List previous runs for rollback. |
 | `goldenmatch memory stats\|learn\|export\|import\|show` | Manage the Learning Memory store. |
 | `goldenmatch config save\|load\|list\|show` | Manage config presets. |
+| `goldenmatch import-splink SETTINGS.json -o CONFIG.yaml [--model-out MODEL.json]` | Convert a Splink settings or trained-model JSON to a GoldenMatch config; `--model-out` persists trained m/u probabilities for reuse. |
 | `goldenmatch compare-clusters A B` | Cluster comparison (unchanged / merged / partitioned / overlapping). |
 | `goldenmatch sensitivity FILE` | Parameter sweep over threshold, blocking, and matchkey. |
 | `goldenmatch pprl link FILE_A FILE_B` | Privacy-preserving record linkage. |

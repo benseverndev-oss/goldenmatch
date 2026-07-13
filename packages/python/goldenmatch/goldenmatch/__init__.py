@@ -40,11 +40,14 @@ from goldenmatch import native
 from goldenmatch._api import (
     DedupeResult,
     MatchResult,
+    SplinkConversion,
+    SplinkConversionError,
     add_correction,
     dedupe,
     dedupe_df,
     evaluate,
     explain_pair_df,
+    from_splink,
     get_memory,
     learn,
     load_config,
@@ -339,6 +342,8 @@ __all__ = [
     "score_strings", "score_pair_df", "explain_pair_df",
     "pprl_link", "evaluate", "load_config",
     "DedupeResult", "MatchResult",
+    # Splink config converter
+    "from_splink", "SplinkConversion", "SplinkConversionError",
     # Canonical record fingerprint (stable record-id hash; same value as the
     # native C ABI + DuckDB/Postgres goldenmatch_record_fingerprint).
     "record_fingerprint",

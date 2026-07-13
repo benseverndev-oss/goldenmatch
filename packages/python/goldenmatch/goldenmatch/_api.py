@@ -27,6 +27,17 @@ try:
 except ImportError:  # pragma: no cover
     auto_configure_df = None  # type: ignore[assignment]
 
+# SplinkConversion/SplinkConversionError are re-exported alongside
+# from_splink() below; they are lightweight dataclass/exception types (no
+# heavy deps beyond config.schemas / core.probabilistic, both already
+# imported transitively). The redundant alias marks the exception as an
+# explicit re-export (it is not otherwise referenced in this module).
+from goldenmatch.config.from_splink import (
+    SplinkConversion,
+)
+from goldenmatch.config.from_splink import (
+    SplinkConversionError as SplinkConversionError,
+)
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
 if TYPE_CHECKING:
@@ -373,6 +384,16 @@ def load_config(path: str) -> Any:
     """
     from goldenmatch.config.loader import load_config as _load
     return _load(path)
+
+
+def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkConversion:
+    """Convert a Splink settings dict / JSON file into a GoldenMatch config.
+
+    See :func:`goldenmatch.config.from_splink.from_splink` for the canonical
+    docstring (input shapes, strict semantics, EMResult persistence contract).
+    """
+    from goldenmatch.config.from_splink import from_splink as _from_splink
+    return _from_splink(source, strict=strict)
 
 
 def dedupe(

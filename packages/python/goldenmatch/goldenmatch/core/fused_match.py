@@ -256,9 +256,15 @@ def match_fused_fs_ready(config: Any) -> bool:
     """Covered boundary for the fused Fellegi-Sunter (probabilistic) path.
 
     Covered: `static` single-key blocking + exactly one `probabilistic` matchkey
-    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`). Transforms
-    covered (derived host-side). `run_match_fused_fs_arrow` takes a PRE-TRAINED
-    `EMResult` — training is the caller's O(n) model fit, unchanged.
+    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`) and no
+    custom `level_thresholds` (the fused kernel, like `score_block_pairs_fs`,
+    only receives a level count + `partial_threshold` and bands similarities
+    with its hard-coded default banding (2/3-level partial_threshold rule +
+    even-spaced N-level); custom `level_thresholds` lists never cross the
+    FFI, so they must stay on the Python paths). Transforms covered (derived
+    host-side).
+    `run_match_fused_fs_arrow` takes a PRE-TRAINED `EMResult` — training is the
+    caller's O(n) model fit, unchanged.
     """
     b = getattr(config, "blocking", None)
     if b is None or getattr(b, "strategy", "static") != "static":
@@ -272,7 +278,12 @@ def match_fused_fs_ready(config: Any) -> bool:
         return False
     from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
 
-    return all(f.field and f.scorer in _NATIVE_FS_SCORER_IDS for f in mks[0].fields)
+    return all(
+        f.field
+        and f.scorer in _NATIVE_FS_SCORER_IDS
+        and getattr(f, "level_thresholds", None) is None
+        for f in mks[0].fields
+    )
 
 
 def _match_fused_fs_symbol() -> Any | None:

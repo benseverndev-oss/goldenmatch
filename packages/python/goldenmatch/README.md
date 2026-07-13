@@ -95,7 +95,7 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **68 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **78 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
 ### Run on unstructured input (document ingest)
@@ -206,7 +206,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 - **In-house embedding (cloud-free)** — back the `embedding` / `record_embedding` scorer with a small numpy + ONNX model trained in-process on your labeled pairs (`goldenmatch.embeddings.inhouse.train_embedder`); set the matchkey field's `model="inhouse:<path>"`. No cloud calls, no torch. **Within ~0.2pp of Vertex AI on structured ER** (Railway-validated 3-way comparison, #506 / PR #543) — febrl3 in-house 0.9488 vs Vertex 0.9512, DBLP-ACM 0.9709 vs 0.9708, synthetic-20k 0.9814 vs 0.9834. Use it when you want embedding-grade recall without a cloud dependency.
 
 ### Integration
-- **REST API + MCP Server** — 68 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
+- **REST API + MCP Server** — 78 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
 - **A2A Agent** — 40 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
 - **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
@@ -217,6 +217,11 @@ section documents the durable auto-config and scale-safety behaviour.)
 - **Ray distributed backend** — `pip install goldenmatch[ray]` + pass `backend="ray"` explicitly OR set `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY=1` to let the v3 planner pick it at 50M+ rows. As of v1.16.0 the planner no longer auto-picks ray after the Distributed Plan v1 stack failed the 5M kill criterion on the same workload where bucket succeeded at 6.4 GB peak RSS (PR #318).
 - **Native acceleration (default-installed on common platforms)** -- `pip install goldenmatch` now pulls the compiled Rust/PyO3 abi3 kernel (`goldenmatch-native`) automatically on macOS (x86_64 + arm64), Linux (x86_64 + aarch64), and Windows (amd64). It strips Python-loop overhead from hot paths (block scoring, record fingerprints, connected-components / cluster build, dedup-pairs, the MST oversized-split). No `[native]` extra is needed (the `[native]` extra still works as a back-compat alias). **Rust is the reference implementation** (2026-07 reference-mode change); the pure-Python + Arrow pipeline is the **lossy fallback** — byte-identical on the parity-gated hot paths — used automatically on any platform without a prebuilt wheel. Alpine/musl users may not get a prebuilt wheel yet (a `musllinux` wheel is a separate follow-up) and degrade gracefully to pure-Python. Opt out with `GOLDENMATCH_NATIVE=0` (disable the kernel) or `GOLDENMATCH_PLANNER_BUCKET=0` (force the polars-direct backend).
 - **dbt integration** — `dbt-goldenmatch` package for DuckDB-based ER in dbt pipelines
+
+### Migrating from Splink
+- **One-command config conversion** — `goldenmatch import-splink settings.json -o goldenmatch.yaml [--model-out model.json]` converts a Splink settings (or trained-model) JSON into a GoldenMatch YAML config; `--model-out` persists trained m/u probabilities so GoldenMatch reuses them instead of re-training via EM. Same conversion from Python: `gm.from_splink("settings.json")`, or the `convert_splink_config` MCP tool.
+- **What converts cleanly vs what warns** — exact/Jaro-Winkler/Levenshtein-style comparison levels, `block_on` blocking rules (incl. SUBSTR), and trained m/u import all map directly; unrecognized SQL (OR rules, cross-column conditions, custom UDFs) is dropped with a warning in the returned `ConversionReport` (pass `strict=True` to make any lossy finding raise instead).
+- **Parity-gated** — a converted config lands within the 0.05 F1 gate of native Splink on the shared `bench_er_headtohead` synthetic-person benchmark (measured delta 0.0203).
 
 ### Learning Memory (v1.6.0)
 - **Persistent corrections** — every steward decision, unmerge, boost-tab y/n, LLM vote, and agent approve/reject writes to a local SQLite (or Postgres) store
@@ -714,7 +719,7 @@ Guides you through GPU mode selection, Vertex AI / Colab / local GPU configurati
 | Privacy-preserving (PPRL) | Built-in (92.4% F1) | No | No | No | No |
 | Interactive TUI | Yes | No | No | No | No |
 | Golden record synthesis | 5 strategies | No | No | No | No |
-| MCP server (AI integration) | Yes (69 tools) | No | No | No | No |
+| MCP server (AI integration) | Yes (78 tools) | No | No | No | No |
 | Database sync | Postgres + DuckDB | No | No | No | Spark/DuckDB |
 | Single `pip install` | Yes | Yes | Yes | No (Java/Spark) | Yes |
 | Polars-native | Yes | No (pandas) | No (pandas) | No (Spark) | Yes (DuckDB) |
@@ -1277,7 +1282,7 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-75 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+78 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
 
 ### Local files with the remote server
 

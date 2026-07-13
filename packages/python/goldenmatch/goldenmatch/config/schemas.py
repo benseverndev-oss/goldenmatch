@@ -92,7 +92,7 @@ class MatchkeyField(BaseModel):
     model: str | None = None  # for embedding scorer
     columns: list[str] | None = None  # for record_embedding scorer
     column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
-    levels: int = 2  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
+    levels: int = Field(default=2, ge=2)  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
     partial_threshold: float = 0.8  # score >= this = partial agree (when levels=3)
     # Probabilistic-only: term-frequency (Winkler) weight adjustment. When True,
     # an exact agreement on a *rare* value carries more match weight than on a
@@ -119,9 +119,27 @@ class MatchkeyField(BaseModel):
     # leak the value into saved YAML for non-probabilistic matchkeys; the
     # workbench → engine translation in web/preview.py coerces None → 20.
     em_iterations: int | None = None
+    # N-level custom banding (Splink-converter Stage 1). Descending similarity
+    # cutoffs; level index = count of satisfied thresholds (0 = disagree,
+    # levels-1 = top agree). None => legacy banding (partial_threshold for
+    # 2/3 levels, even k/N spacing for N>3). Length must be levels-1.
+    level_thresholds: list[float] | None = None
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> MatchkeyField:
+        # level_thresholds validation runs FIRST (before the record_embedding
+        # early return below) so record_embedding fields don't silently accept
+        # garbage thresholds. Depends only on level_thresholds + levels.
+        if self.level_thresholds is not None:
+            if len(self.level_thresholds) != self.levels - 1:
+                raise ValueError(
+                    f"level_thresholds must have levels-1={self.levels - 1} entries, "
+                    f"got {len(self.level_thresholds)}."
+                )
+            if any(not (0.0 < t <= 1.0) for t in self.level_thresholds):
+                raise ValueError("level_thresholds values must be in (0, 1].")
+            if any(a <= b for a, b in zip(self.level_thresholds, self.level_thresholds[1:])):
+                raise ValueError("level_thresholds must be strictly descending.")
         # record_embedding uses columns (plural), not field
         if self.scorer == "record_embedding":
             if not self.columns:

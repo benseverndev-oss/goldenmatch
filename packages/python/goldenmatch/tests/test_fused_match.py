@@ -241,6 +241,19 @@ def test_fs_ready_true_on_probabilistic_false_on_weighted():
     assert fused_match.match_fused_fs_ready(_covered_config()) is False  # weighted
 
 
+def test_fs_ready_false_on_level_thresholds():
+    # The fused FS kernel only receives a level count + partial_threshold
+    # (see run_match_fused_fs_arrow) -- it can't band with a custom N-level
+    # threshold list, so level_thresholds matchkeys must stay on Python paths.
+    config = _probabilistic_config()
+    f = config.matchkeys[0].fields[0]
+    f.levels = 4
+    f.level_thresholds = [1.0, 0.92, 0.88]
+    assert fused_match.match_fused_fs_ready(config) is False
+    # A plain matchkey is unaffected.
+    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
+
+
 @pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused_fs not built")
 def test_match_fused_fs_matches_pipeline_fs_block_scorer():
     import polars as pl
