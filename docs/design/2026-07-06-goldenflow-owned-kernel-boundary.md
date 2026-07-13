@@ -139,6 +139,15 @@ lossy fallback (the pure-TS surface may diverge here), tracked as a follow-up to
 align the TS sampling order. It does not affect the native/Polars/list Python
 paths, which all slice-then-strip identically.
 
+A second pre-existing pure-TS divergence, same reference-mode status: on a
+**mixed number+string column** (e.g. `[1, "1"]`), the pure-TS `inferType`
+returns `"numeric"` via its `hasNumber && !hasBoolean` early-return, while
+Python/Rust/wasm return `"string"` (they only short-circuit to `numeric` when
+**all** non-null values are numeric; a mixed column falls through to the regex
+path — corpus row `[1,"1"]` pins `"string"`). Both TS edges are the pure-TS
+fallback's own quirks, not the owned kernel's, and are tracked together as the
+TS-profiler-alignment follow-up.
+
 ## Boundaries with sibling packages (not GoldenFlow's job)
 
 - **PII detection / redaction in free text** is **GoldenCheck's** job (scanning
