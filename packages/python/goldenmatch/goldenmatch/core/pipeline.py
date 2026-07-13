@@ -644,9 +644,8 @@ def _apply_postflight(
     no ``_preflight_report`` — i.e. the caller did not go through
     ``auto_configure_df``.
     """
-    # W-5 widening (TRANSITIONAL): postflight reads score histograms off a
-    # polars frame; bridge at entry (D6 prerequisite).
-    df = _as_polars_df(df)
+    # A3: postflight's inputs are the pair-score list + config (no frame
+    # reads survive in its body) -- no bridge.
     from goldenmatch.core.autoconfig_verify import (
         PreflightReport as _PfR,
     )
@@ -685,11 +684,7 @@ def _run_auto_suggest(df: pl.DataFrame, config: GoldenMatchConfig) -> None:
     if not config.blocking or not config.blocking.auto_suggest:
         return
 
-    # W-5 widening (TRANSITIONAL): the block analyzer takes polars; bridge
-    # the Frame lane's pa.Table at entry. W3d seamed its reductions -- the
-    # deep entry port rides the analyzer's own batch (D6 prerequisite).
-    df = _as_polars_df(df)
-
+    # A3: the analyzer is seam-driven dual-rep -- no bridge.
     matchkey_columns = _extract_matchkey_columns(config)
     if not matchkey_columns:
         return
