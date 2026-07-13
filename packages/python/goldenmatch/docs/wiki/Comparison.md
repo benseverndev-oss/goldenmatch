@@ -66,7 +66,7 @@ Gold-themed TUI with keyboard shortcuts, live threshold tuning, split-view resul
 Ditto achieves 89.3% on Abt-Buy vs GoldenMatch's 81.7%. The gap has narrowed significantly with the LLM scorer — GPT-4o-mini understands product semantics (model number abbreviations, naming conventions) that embeddings miss. Ditto still wins by ~8pts but requires 1000+ hand-labeled pairs and a GPU. GoldenMatch needs zero labels and no GPU, at ~$0.74 per run.
 
 ### Splink — Better at Scale
-Splink is built on Spark and handles billions of records across distributed clusters. GoldenMatch's current scale ceiling is ~10M records per Postgres table. For truly massive datasets, Splink is the right choice.
+Splink is built on Spark and handles billions of records across distributed clusters. GoldenMatch's current scale ceiling is ~10M records per Postgres table. For truly massive datasets, Splink is the right choice. Migrating an existing Splink setup the other way is one command: `goldenmatch import-splink settings.json -o goldenmatch.yaml` converts Splink settings (including trained m/u probabilities) into a GoldenMatch config.
 
 ### dedupe — Active Learning
 dedupe's active learning loop is sophisticated — it picks the most informative pairs for you to label, learning from each answer. GoldenMatch's LLM boost simulates this with an LLM instead of a human, but dedupe's approach is more mature.

@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+- **N-level probabilistic comparison fields** (`level_thresholds`): probabilistic
+  matchkey fields accept explicit per-level similarity cutoffs (descending,
+  `len == levels - 1`; a pair's level = the count of thresholds its similarity
+  satisfies), generalizing the fixed 2/3-level agree/partial/disagree banding.
+  Scalar and vectorized scoring paths both honor them; the native FS kernel and
+  the fused-match path decline `level_thresholds` matchkeys and fall back.
+- **Splink config converter**: `from_splink()` (top-level export) converts a
+  Splink settings or trained-model JSON (dict or path) into a validated
+  GoldenMatch config plus a `ConversionReport` of lossy findings; trained m/u
+  probabilities import as an `EMResult` so no re-training is needed.
+  `strict=True` raises on any lossy finding. Surfaced as the
+  `goldenmatch import-splink SETTINGS.json -o CONFIG.yaml [--model-out MODEL.json]`
+  CLI command and the `convert_splink_config` MCP tool (78 tools total).
+- **Splink-conversion parity gate** (`scripts/bench_er_headtohead/run_converted_splink.py`):
+  a converted config must land within F1 0.05 of native Splink on the shared
+  evaluator; measured splink_f1=0.9964 vs converted_gm_f1=0.9761
+  (delta 0.0203) on synthetic_person (5K).
+
 ## [3.1.1] - 2026-07-13
 
 ### Performance
