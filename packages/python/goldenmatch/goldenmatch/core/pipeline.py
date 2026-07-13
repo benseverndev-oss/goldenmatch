@@ -1754,12 +1754,12 @@ def _run_dedupe_pipeline(
         if config.transform is None or config.transform.mode != "disabled":
             from goldenmatch.core.transform import run_transform
             with stage("pipeline_prep_transform"):
-                _pl_tmp, tf_fixes = run_transform(
-                    _as_polars_df(_frame.native), config.transform
-                )
+                # A2: the adapter is dual-rep (lane preserved; goldenflow's
+                # auto-detect engine bridges internally at one call).
+                _t_out, tf_fixes = run_transform(_frame.native, config.transform)
                 if tf_fixes:
                     logger.info("GoldenFlow: %d transforms applied", len(tf_fixes))
-                _frame = _tf_lane(_pl_tmp.to_arrow())
+                _frame = _tf_lane(_t_out)
 
         if config.validation and config.validation.auto_fix:
             with stage("auto_fix"):
