@@ -4,6 +4,14 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.2] - 2026-07-13
+
+### Changed
+- goldenmatch floor to `goldenmatch[polars]>=3.1` (3.1.0: Arrow-native engine,
+  polars optional upstream; the suite pins the `[polars]` extra so the
+  wall-optimization paths and the classic `GOLDENMATCH_FRAME=polars` lane stay
+  available for suite installs).
+
 ## [0.2.1] - 2026-07-12
 
 ### Changed
