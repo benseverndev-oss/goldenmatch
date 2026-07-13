@@ -554,9 +554,8 @@ def _apply_memory_post(
     """Apply stored corrections to scored pairs. Returns (pairs, stats|None)."""
     if memory_store is None or config.memory is None:
         return all_pairs, None
-    # W-4 widening (TRANSITIONAL): apply_corrections' record-hash builder is
-    # a polars expr chain -- bridge at entry; deep port is a D6 prerequisite.
-    df = _as_polars_df(df)
+    # A4: apply_corrections is dual-rep (seam reads; hash format contract
+    # preserved byte-stable) -- no bridge.
     try:
         from goldenmatch.core.memory.corrections import apply_corrections
         # f.field is Optional[str] at schema level but is non-None for every
