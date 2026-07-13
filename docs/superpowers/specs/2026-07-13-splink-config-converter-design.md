@@ -55,7 +55,8 @@ class SplinkConversion:
 |---|---|
 | `"col_l" IS NULL OR "col_r" IS NULL` (`is_null_level`) | null level (GoldenMatch handles nulls natively; skipped, no warning) |
 | `"col_l" = "col_r"` | exact band (threshold 1.0) |
-| `jaro_winkler_similarity(...) >= t` / `jaro_similarity(...)` | `jaro_winkler` band at `t` |
+| `jaro_winkler_similarity(...) >= t` | `jaro_winkler` band at `t` |
+| `jaro_similarity(...) >= t` | `jaro_winkler` band at `t`, WARN (different metric, approximation) |
 | `levenshtein(...) <= n` / `damerau_levenshtein(...)` | `levenshtein` band, distance->similarity converted, WARN (lossy) |
 | `jaccard(...) >= t` | `jaccard` band at `t` |
 | `ELSE` | disagree level |
@@ -66,7 +67,7 @@ A comparison whose recognized bands share one scorer family (exact counts as any
 
 **Blocking -> BlockingConfig.** Recognize conjunctions of column-equality and `SUBSTR(col,a,b)`-equality (-> `substring` transform). One rule -> one `BlockingKeyConfig`; multiple rules -> `strategy: multi_pass` passes. Arithmetic/range/asymmetric rules: drop + warn. ALL rules dropped: ERROR (probabilistic matchkeys require blocking; config would be invalid).
 
-**Trained-model import.** Per-level `m_probability`/`u_probability` copy 1:1 into `EMResult` (exact under N-level); `probability_two_random_records_match` -> `proportion_matched`; match weights recomputed `log2(m/u)`. Converter writes the model JSON and sets `model_path` on the matchkey so GoldenMatch skips EM training. TF: per-level `tf_adjustment_column` -> field `tf_adjustment=True`; warn on weight != 1.0 or column override.
+**Trained-model import.** Per-level `m_probability`/`u_probability` copy 1:1 into `EMResult` (exact under N-level); `probability_two_random_records_match` -> `proportion_matched`; match weights recomputed `log2(m/u)`. The library API returns the `EMResult` in memory only (`SplinkConversion.em_model`); persisting is the caller's job (`em_model.save_json(path)`, then set `model_path` on the matchkey — documented in the docstring). The CLI (`--model-out model.json`) and MCP tool do both automatically so GoldenMatch skips EM training out of the box. TF: per-level `tf_adjustment_column` -> field `tf_adjustment=True`; warn on weight != 1.0 or column override.
 
 **Settings scalars.** `em_convergence` -> `convergence_threshold`; `max_iterations` -> `em_iterations`; `unique_id_column_name` -> `id_column`; `link_type` -> report note (dedupe vs match entry; `link_and_dedupe` = warning + recipe note); `sql_dialect`/`retain_*`/prefixes -> ignored, info-level note.
 
