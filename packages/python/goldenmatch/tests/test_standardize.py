@@ -382,7 +382,7 @@ class TestStandardizationInPipeline:
         # Verify standardized data
         golden = results["golden"]
         if golden is not None and len(golden) > 0:
-            row = golden.to_dicts()[0]
+            row = golden.to_pylist()[0]
             # Phone should be digits only
             if "phone" in row and row["phone"]:
                 assert row["phone"].isdigit()
@@ -420,5 +420,5 @@ def test_arrow_lane_standardize_runs_after_default_prep(tmp_path, monkeypatch):
     res = run_dedupe([(str(path), "src")], cfg)
     golden = res["golden"]
     assert golden is not None
-    for v in golden["phone"].to_list():
+    for v in golden["phone"].to_pylist():
         assert v.isdigit(), f"stage order inverted: phone={v!r}"

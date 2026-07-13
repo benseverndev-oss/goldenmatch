@@ -469,7 +469,7 @@ def _sample_blocked_pairs(
 
     for bi in order:
         block = blocks[bi]
-        block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
+        block_df = block.materialize().native
         row_ids = sorted(block_df["__row_id__"].to_list())  # canonical order before the seeded sample
         if len(row_ids) < 2:
             continue
@@ -1260,10 +1260,14 @@ def score_probabilistic(
     # Build row lookup
     cols = [f.field for f in mk.fields if f.field != "__record__"]
     row_lookup: dict[int, dict] = {}
-    for row in block_df.select(["__row_id__"] + cols).to_dicts():
+    from goldenmatch.core.frame import to_frame as _tf_d5c
+
+    for row in _tf_d5c(block_df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
 
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+    row_ids = _to_frame_d5(block_df).column("__row_id__").to_list()
 
     # Compute weight range for normalization
     max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
@@ -1336,7 +1340,10 @@ def _field_values_from_list(raw: list | None, f, n: int) -> list[str | None]:
 def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | None]:
     """Transformed per-field values for a block, matching comparison_vector.
     Missing column -> all-null (slow path: level 0)."""
-    raw = block_df[f.field].to_list() if f.field in block_df.columns else None
+    from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+    _bf = _to_frame_d5(block_df)
+    raw = _bf.column(f.field).to_list() if f.field in _bf.columns else None
     return _field_values_from_list(raw, f, n)
 
 
@@ -1689,7 +1696,6 @@ def score_probabilistic_blocks_batched(
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    import polars as pl
 
     if exclude_pairs is None:
         exclude_pairs = set()
@@ -1704,7 +1710,7 @@ def score_probabilistic_blocks_batched(
     base_excl = set(exclude_pairs)
 
     def _bdf(block):
-        return block.df.collect() if isinstance(block.df, pl.LazyFrame) else block.df
+        return block.materialize().native
 
     # Split the work into independent scoring units + a per-unit scorer. Native/
     # scalar path: one unit per block. Vectorized path: row-capped batches of

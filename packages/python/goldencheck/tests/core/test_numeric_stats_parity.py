@@ -46,13 +46,19 @@ def _float_eq(native: float, polars: object) -> bool:
 
 
 def _check_stats(s: pl.Series) -> None:
-    count, mn, mx, mean, std, _sum = native_module().column_numeric_stats(s.to_arrow())
+    count, mn, mx, mean, std, _sum, n_unique = native_module().column_numeric_stats(s.to_arrow())
     expected_count = s.len() - s.null_count()
     assert count == expected_count, f"count mismatch for {s.dtype}: {s.to_list()!r}"
     assert _float_eq(mn, s.min()), f"min mismatch for {s.dtype}: native={mn} polars={s.min()}"
     assert _float_eq(mx, s.max()), f"max mismatch for {s.dtype}: native={mx} polars={s.max()}"
     assert _float_eq(mean, s.mean()), f"mean mismatch for {s.dtype}: {native_module().column_numeric_stats(s.to_arrow())!r}"
     assert _float_eq(std, s.std()), f"std mismatch for {s.dtype}: native={std} polars={s.std()}"
+    # n_unique (fused into the same pass) matches pyarrow count_distinct(mode="all"),
+    # the current authority for ArrowColumn.n_unique.
+    import pyarrow.compute as _pc
+
+    expected_nu = int(_pc.count_distinct(s.to_arrow(), mode="all").as_py())
+    assert n_unique == expected_nu, f"n_unique mismatch for {s.dtype}: native={n_unique} pyarrow={expected_nu}"
 
 
 def _check_outside(s: pl.Series) -> None:

@@ -1,7 +1,7 @@
 """GoldenCheck — data validation that discovers rules from your data."""
 from __future__ import annotations
 
-__version__ = "3.0.3"
+__version__ = "3.1.3"
 
 # Core: scanner + models
 from goldencheck.cell_quality import cell_quality

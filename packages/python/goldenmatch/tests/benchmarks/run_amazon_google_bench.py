@@ -114,7 +114,7 @@ t0 = time.perf_counter()
 blocks = build_blocks(collected.lazy(), blocking)
 all_pairs = []
 for block in blocks:
-    bdf = block.df.collect()
+    bdf = block.materialize().native
     all_pairs.extend(find_fuzzy_matches(bdf, mk_emb, pre_scored_pairs=block.pre_scored_pairs))
 all_pairs = cross_filter(all_pairs)
 t_base = time.perf_counter() - t0

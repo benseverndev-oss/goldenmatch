@@ -97,7 +97,7 @@ def test_build_blocks_dispatch_lsh():
     assert blocks, "expected at least one LSH block"
     found_pair = False
     for b in blocks:
-        members = b.df.collect()["__row_id__"].to_list()
+        members = b.materialize().native["__row_id__"].to_list()
         assert len(members) >= 2  # non-singleton blocks only
         assert b.strategy == "minhash_lsh"
         if 0 in members and 1 in members:

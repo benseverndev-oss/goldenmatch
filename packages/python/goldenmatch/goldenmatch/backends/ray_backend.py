@@ -45,6 +45,20 @@ class _KeyModeBlock:
     df: pl.LazyFrame
     pre_scored_pairs: list | None = None
 
+    def materialize(self):
+        # D5b: mirror BlockResult's representation-agnostic read.
+        from goldenmatch.core.frame import Frame, to_frame
+
+        d = self.df
+        if isinstance(d, Frame):
+            return d
+        if isinstance(d, pl.LazyFrame):
+            d = d.collect()
+        return to_frame(d)
+
+    def n_rows(self) -> int:
+        return self.materialize().height
+
 
 def _ensure_ray():
     """Import and initialize Ray lazily."""
@@ -163,7 +177,7 @@ def score_blocks_ray(
             # block_key arrives as tuple under Polars >= 1.0 partition_by.
             if isinstance(block_key, tuple):
                 block_key = block_key[0]
-            shim = _KeyModeBlock(block_key=str(block_key), df=block_df.lazy())
+            shim = _KeyModeBlock(block_key=str(block_key), df=block_df)
             all_pairs.extend(
                 _score_one_block(
                     shim, mk_config, exclude,
@@ -197,7 +211,7 @@ def score_blocks_ray(
             if hasattr(block, 'df') and hasattr(block.df, 'collect'):
                 collected_block = type(block)(
                     block_key=block.block_key,
-                    df=block.df.collect().lazy(),
+                    df=block.materialize().native,
                     strategy=block.strategy,
                     depth=getattr(block, 'depth', 0),
                     parent_key=getattr(block, 'parent_key', None),

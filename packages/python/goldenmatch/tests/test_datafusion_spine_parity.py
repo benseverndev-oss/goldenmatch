@@ -163,7 +163,7 @@ def _inmemory_comparand(blocks, config):
     threshold = mk.threshold
     best: dict[tuple[int, int], float] = {}  # canonical (a<b) -> MAX score
     for b in blocks:
-        bdf = b.df.collect() if isinstance(b.df, pl.LazyFrame) else b.df
+        bdf = b.materialize().native if isinstance(b.df, pl.LazyFrame) else b.df
         ids = bdf["__row_id__"].cast(pl.Int64).to_list()
         vals = bdf[field].to_list()
         for i in range(len(ids)):

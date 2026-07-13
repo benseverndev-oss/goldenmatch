@@ -152,7 +152,7 @@ t0 = time.perf_counter()
 blocks = build_blocks(collected.lazy(), blocking_ann)
 emb_pairs = []
 for block in blocks:
-    bdf = block.df.collect()
+    bdf = block.materialize().native
     emb_pairs.extend(find_fuzzy_matches(bdf, mk_emb, pre_scored_pairs=block.pre_scored_pairs))
 emb_pairs = cross_source_filter(emb_pairs)
 t_emb = time.perf_counter() - t0

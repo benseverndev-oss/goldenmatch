@@ -52,6 +52,24 @@ and Excel all work out of the box with no Polars installed.
 > natively). `inferred_type` now reports a neutral dtype vocabulary (`str`, `int`,
 > `float`, `date`, ...) instead of raw Polars dtype names.
 
+### Performance
+
+The default scan is fast out of the box: it's Arrow-native, uses fused single-pass
+kernels (one pass over each column for null-count, distinct-count, and every
+format/encoding pattern), and runs a deterministic parallel scan across columns and
+relation profilers. Across the 3.0.x and 3.1.x releases the default scan got roughly
+**3.8x faster** (a 1M-row x 7-column mixed scan went from 3.74s to about 1.0s), each
+release byte-identical to the last.
+
+- **`GOLDENCHECK_SCAN_THREADS`** tunes the scan thread pool. Default is parallel
+  (`min(cpu, 8, ncols)` threads, when there are at least 2 columns and 50k rows);
+  set `GOLDENCHECK_SCAN_THREADS=1` to force sequential (e.g. for reproducible
+  profiling). Findings are identical either way.
+- **`pip install goldencheck[native]`** adds the compiled Rust kernels, which now
+  measurably accelerate the scan (roughly 1.9s vs 3.0s on the 1M x 7 shape). It's an
+  accelerator, not a requirement — the base install still scans polars-free through
+  `pyarrow.compute`.
+
 With LLM boost support:
 
 ```bash

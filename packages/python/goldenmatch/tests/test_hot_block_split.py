@@ -49,7 +49,7 @@ class TestHotBlockSplit:
         )
         # No sub-block should exceed max_block_size.
         for r in results:
-            size = r.df.collect().height
+            size = r.materialize().native.height
             assert size <= 3, f"Block {r.block_key} has {size} rows > max=3"
 
     def test_oversized_block_with_no_splittable_column_is_skipped(self):
@@ -92,7 +92,7 @@ class TestHotBlockSplit:
         # One single 8-row block, intact.
         assert len(results) == 1
         assert results[0].block_key == "19382"
-        assert results[0].df.collect().height == 8
+        assert results[0].materialize().native.height == 8
 
     def test_bench_records_split_count(self):
         """`hot_blocks_split_count` should land on the active recorder."""

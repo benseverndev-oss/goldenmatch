@@ -53,7 +53,7 @@ class TestBuildBlocks:
 
         # Each block should have 2 records
         for r in results:
-            block_df = r.df.collect()
+            block_df = r.materialize().native
             assert len(block_df) == 2
 
     def test_skips_blocks_with_fewer_than_2_records(self):
@@ -317,7 +317,7 @@ class TestSortedNeighborhood:
         assert len(results) == 3
         for r in results:
             assert r.strategy == "sorted_neighborhood"
-            collected = r.df.collect()
+            collected = r.materialize().native
             assert len(collected) == 3
 
     def test_small_dataset_single_block(self):
@@ -340,7 +340,7 @@ class TestSortedNeighborhood:
 
         assert len(results) == 1
         assert results[0].strategy == "sorted_neighborhood"
-        assert len(results[0].df.collect()) == 3
+        assert len(results[0].materialize().native) == 3
 
     def test_sorted_neighborhood_metadata(self):
         """Sorted neighborhood blocks have correct strategy metadata."""

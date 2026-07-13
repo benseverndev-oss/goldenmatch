@@ -38,7 +38,7 @@ def test_range_distribution_shadow_matches_polars() -> None:
     # A numeric column with clear outliers so the +/-3 sigma branch fires.
     s = pl.Series("v", [0.0] * 50 + [10_000.5, -9_999.25, 12_345.0], dtype=pl.Float64)
 
-    count, mn, mx, mean, std, _sum = native_module().column_numeric_stats(s.to_arrow())
+    count, mn, mx, mean, std, _sum, _nu = native_module().column_numeric_stats(s.to_arrow())
     assert count == s.len() - s.null_count()
     assert _float_close(mn, s.min())
     assert _float_close(mx, s.max())

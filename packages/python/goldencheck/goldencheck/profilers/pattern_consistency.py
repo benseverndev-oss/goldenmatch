@@ -112,7 +112,7 @@ class PatternConsistencyProfiler(BaseProfiler):
                 severity = Severity.INFO
                 confidence = 0.5
             # Find sample values that match this minority pattern
-            sample_vals = non_null.filter_by(patterns.eq(minority_pattern)).to_list()[:5]
+            sample_vals = non_null.filter_by(patterns.eq(minority_pattern)).slice(0, 5).to_list()
 
             # Detect structural pattern shift (e.g., letter-first vs digit-first = mixed standards)
             dom_starts_alpha = dominant_pattern and dominant_pattern[0] == "L"

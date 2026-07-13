@@ -40,7 +40,6 @@ from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyConfig
 from goldenmatch.core._native_loader import native_enabled, native_module
 from goldenmatch.core.bench import record_metrics, stage
-from goldenmatch.core.blocker import _build_block_key_expr
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +332,9 @@ def _resolve_ne_specs(
         if fn is None:
             continue
         xform_col = _xform_sig(ne)
-        if xform_col not in prepared_df.columns:
+        from goldenmatch.core.frame import to_frame as _tf_cols
+
+        if xform_col not in _tf_cols(prepared_df).columns:
             continue
         out.append((xform_col, fn, float(ne.threshold), float(ne.penalty)))
     return out
@@ -416,7 +417,9 @@ def _resolve_fast_path(
             _decline(f"_resolve_score_pair_callable({scorer!r}) is None")
             return None
         xform_col = _xform_sig(f)
-        if xform_col not in prepared_df.columns:
+        from goldenmatch.core.frame import to_frame as _tf_cols
+
+        if xform_col not in _tf_cols(prepared_df).columns:
             return None
         field_specs.append((xform_col, float(weight), fn, scorer))
         total_weight += float(weight)
@@ -484,7 +487,12 @@ def score_buckets(
     Returns:
         All fuzzy pairs as (id_a, id_b, score) tuples.
     """
-    if prepared_df.height == 0:
+    # D2s-d1: dual-rep entry (Frame at D2s-d2); scalar reads via the seam.
+    from goldenmatch.core.frame import to_frame as _tf_entry
+
+    _prep_frame = _tf_entry(prepared_df)
+    prepared_df = _prep_frame.native
+    if _prep_frame.height == 0:
         return []
     # Resolve the block-key list HONORING multi-pass blocking: a `multi_pass`
     # config carries its keys in `.passes` with `.keys` empty (the schema
@@ -526,7 +534,7 @@ def score_buckets(
     # Three 5M Linux runs hung mid-score_buckets with no substage closing;
     # these prints expose the actual hang line.
     _t0 = time.perf_counter()
-    print(f"[score_buckets] entry: prepared_df.height={prepared_df.height} n_buckets={n_buckets}", flush=True)
+    print(f"[score_buckets] entry: prepared_df.height={_prep_frame.height} n_buckets={n_buckets}", flush=True)
 
     # Verbose per-bucket timing breakdown (issue #688 diagnosis aid). OFF by
     # default; set GOLDENMATCH_BUCKET_DEBUG=1 to split every native bucket call
@@ -575,15 +583,15 @@ def score_buckets(
     if os.environ.get("GOLDENMATCH_BUCKET_SLIM_PROJECTION", "1") != "0":
         with stage("bucket_slim_projection"):
             keep: list[str] = ["__row_id__"]
-            if "__source__" in prepared_df.columns:
+            if "__source__" in _prep_frame.columns:
                 keep.append("__source__")
-            keep.extend(c for c in prepared_df.columns if c.startswith("__xform_"))
+            keep.extend(c for c in _prep_frame.columns if c.startswith("__xform_"))
             # Probabilistic scoring (score_probabilistic_vectorized) reads the
             # RAW field columns and applies transforms itself, so keep them
             # (the weighted fast path uses __xform_* and doesn't need these).
             if is_probabilistic:
                 for f in mk.fields:
-                    if f.field in prepared_df.columns and f.field not in keep:
+                    if f.field in _prep_frame.columns and f.field not in keep:
                         keep.append(f.field)
             # Source fields the block-key expression reads. Multi-key blocking
             # (rare today) accumulates fields across every key in the config.
@@ -591,15 +599,17 @@ def score_buckets(
             for key in pass_keys:
                 block_key_sources.update(key.fields)
             for col in block_key_sources:
-                if col in prepared_df.columns and col not in keep:
+                if col in _prep_frame.columns and col not in keep:
                     keep.append(col)
-            slim_df = prepared_df.select(keep)
+            slim_frame = _prep_frame.select(keep)
+            slim_df = slim_frame.native
             print(
                 f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: slim projection "
-                f"{len(prepared_df.columns)} -> {len(keep)} cols",
+                f"{len(_prep_frame.columns)} -> {len(keep)} cols",
                 flush=True,
             )
     else:
+        slim_frame = _prep_frame
         slim_df = prepared_df
 
     # Freeze the exclude set ONCE across ALL passes (parity with polars-direct,
@@ -715,16 +725,15 @@ def score_buckets(
         assert fast_path_specs is not None  # gated by dispatcher
         threshold, total_weight, field_specs, ne_specs = fast_path_specs
         _te = time.perf_counter() if _bucket_debug else 0.0
-        sorted_df = bucket_df.sort("__block_key__")
-        sizes = (
-            sorted_df.lazy()
-            .group_by("__block_key__", maintain_order=True)
-            .agg(pl.len().alias("__size__"))
-            .collect()
-        )
-        if sizes.height == 0:
+        # D5d: seam sort + run_lengths (== the old maintain_order agg on
+        # key-sorted input; arrow twin is vectorized run_end_encode).
+        from goldenmatch.core.frame import to_frame as _tf
+
+        sorted_frame = _tf(bucket_df).sort(["__block_key__"])
+        sorted_df = sorted_frame.native
+        size_list = sorted_frame.run_lengths("__block_key__")
+        if not size_list:
             return [], 0
-        size_list = sizes["__size__"].to_list()
         weights = [w for _col, w, _fn, _name in field_specs]
 
         # Native Arrow kernel: hand the block-sorted __row_id__ + field columns
@@ -755,15 +764,32 @@ def score_buckets(
                 import numpy as np
 
                 row_mask = np.repeat(np.array(keep, dtype=bool), size_list)
-                native_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                if isinstance(sorted_df, pl.DataFrame):
+                    native_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                else:  # pa.Table lane: Table.filter takes a boolean array
+                    import pyarrow as _pa
+
+                    native_sorted_df = sorted_df.filter(_pa.array(row_mask))
                 kept_size_list = [s for s, k in zip(size_list, keep) if k]
                 if not kept_size_list:
                     return [], 0
-            row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
-            field_arrays_arrow = [
-                native_sorted_df[col].to_arrow()
-                for col, _w, _fn, _name in field_specs
-            ]
+            if isinstance(native_sorted_df, pl.DataFrame):
+                row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
+                field_arrays_arrow = [
+                    native_sorted_df[col].to_arrow()
+                    for col, _w, _fn, _name in field_specs
+                ]
+            else:  # pa.Table lane: already arrow -- combine chunks for the FFI
+                import pyarrow as _pa
+                import pyarrow.compute as _pc
+
+                row_ids_arrow = _pc.cast(
+                    native_sorted_df.column("__row_id__").combine_chunks(), _pa.int64()
+                )
+                field_arrays_arrow = [
+                    native_sorted_df.column(col).combine_chunks()
+                    for col, _w, _fn, _name in field_specs
+                ]
             size_list = kept_size_list
             _tk0 = time.perf_counter() if _bucket_debug else 0.0
             # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
@@ -819,15 +845,18 @@ def score_buckets(
 
         # Python per-pair fallback: materialize the columns as lists.
         # field_specs: list of (xform_col, weight, score_fn, scorer_name).
-        row_ids = sorted_df["__row_id__"].to_list()
+        from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+        _sf = _to_frame_d5(sorted_df)
+        row_ids = _sf.column("__row_id__").to_list()
         field_arrays = [
-            sorted_df[col].to_list() for col, _w, _fn, _name in field_specs
+            _sf.column(col).to_list() for col, _w, _fn, _name in field_specs
         ]
         score_fns = [fn for _col, _w, fn, _name in field_specs]
         n_fields = len(field_specs)
         # NE per-pair specs (post-2026-05-29 widening). Pre-materialize the
         # NE xform columns; empty when NE missing / all-broken (no overhead).
-        ne_arrays = [sorted_df[col].to_list() for col, _fn, _t, _p in ne_specs]
+        ne_arrays = [_sf.column(col).to_list() for col, _fn, _t, _p in ne_specs]
         ne_fns = [fn for _col, fn, _t, _p in ne_specs]
         ne_thresholds = [t for _col, _fn, t, _p in ne_specs]
         ne_penalties = [p for _col, _fn, _t, p in ne_specs]
@@ -840,7 +869,7 @@ def score_buckets(
         # gain, so a column with nulls falls back to the per-pair loop wholesale.
         vec_scorer_names: list[str] | None = None
         if n_ne == 0 and all(name in _VEC_SUPPORTED for _c, _w, _fn, name in field_specs):
-            if all(sorted_df[col].null_count() == 0 for col, _w, _fn, _name in field_specs):
+            if all(_sf.column(col).null_count() == 0 for col, _w, _fn, _name in field_specs):
                 vec_scorer_names = [name for _c, _w, _fn, name in field_specs]
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
@@ -924,18 +953,16 @@ def score_buckets(
         # Sort once, slice per block (zero-copy view over the sorted parent).
         # Avoids partition_by's millions-of-tiny-eager-frames allocation that
         # fragments glibc's malloc arena on Linux (1.4 GB / 30s RSS climb).
-        sorted_df = bucket_df.sort("__block_key__")
-        sizes = (
-            sorted_df.lazy()
-            .group_by("__block_key__", maintain_order=True)
-            .agg(pl.len().alias("__size__"))
-            .collect()
-        )
-        if sizes.height == 0:
+        from goldenmatch.core.frame import to_frame as _tf
+
+        sorted_frame = _tf(bucket_df).sort(["__block_key__"])
+        sorted_df = sorted_frame.native
+        # Pre-materialized run sizes (seam run_lengths == the old
+        # maintain_order agg on key-sorted input; the inner loop stays
+        # Polars-scalar-indexing-free, the hottest line at 1.67M blocks).
+        size_list = sorted_frame.run_lengths("__block_key__")
+        if not size_list:
             return [], 0
-        # Pre-materialize as Python lists so the inner loop avoids per-iter
-        # Polars scalar indexing (the hottest line per block at 1.67M blocks).
-        size_list = sizes["__size__"].to_list()
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
@@ -990,11 +1017,17 @@ def score_buckets(
         RSS). Accumulates into a LOCAL pass_pairs -- it must NOT mutate
         matched_pairs (that happens once, after all passes, in the caller).
         """
-        key_expr = _build_block_key_expr(key)
-
         with stage("bucket_assign"):
             _ta = time.perf_counter()
-            keyed = slim_df.with_columns(key_expr)
+            # D5d: seam block-key derivation (derive_block_key is the W2a
+            # twin of _build_block_key_expr, both backends).
+            from goldenmatch.core.frame import to_frame as _tf
+
+            _slim_frame = _tf(slim_df)
+            keyed = _slim_frame.with_column(
+                "__block_key__",
+                _slim_frame.derive_block_key(key.fields, key.transforms or []),
+            ).native
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
 
         # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
@@ -1004,13 +1037,14 @@ def score_buckets(
         # straight to treating `keyed` as the single bucket and scoring.
         # On the streaming-block sync caller, this hits on every per-block
         # invocation (block size ~8, n_buckets default 32-128).
-        if prepared_df.height < n_buckets:
+        if _prep_frame.height < n_buckets:
             bucketed = keyed
-            # Wrap in a single-bucket dict to share the scoring path below.
-            buckets_dict: dict[Any, pl.DataFrame] = {0: bucketed}
+            # Wrap in a single-bucket dict to share the scoring path below
+            # (native frames: pl.DataFrame or pa.Table by lane).
+            buckets_dict: dict[Any, Any] = {0: bucketed}
             print(
                 f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
-                f"small-block fast path (height={prepared_df.height} < n_buckets={n_buckets}); "
+                f"small-block fast path (height={_prep_frame.height} < n_buckets={n_buckets}); "
                 f"skipping hash+partition_by. See #422.",
                 flush=True,
             )
@@ -1021,29 +1055,38 @@ def score_buckets(
             # bench can attribute it instead of pooling it into the unwrapped
             # gap between bucket_assign and bucket_partition.
             with stage("bucket_hash_modulo"):
-                bucketed = keyed.with_columns(
-                    (pl.col("__block_key__").hash(seed=BUCKET_HASH_SEED) % n_buckets)
-                    .alias("__bucket__")
+                # D2s-c: per-lane bucket assignment via the seam (polars impl
+                # is this stage's old hash(seed) % n expr verbatim; buckets
+                # are shard-internal, never output-visible).
+                bucketed = (
+                    _tf(keyed)
+                    .with_bucket_column(
+                        "__block_key__", "__bucket__", n_buckets, BUCKET_HASH_SEED
+                    )
+                    .native
                 )
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
 
             with stage("bucket_partition"):
                 _tp = time.perf_counter()
-                # First-level partition: N eager DataFrames keyed by bucket id.
-                # Polars >= 1.0 returns tuple-keyed dict when as_dict=True with a
-                # single partition column; unwrap below.
-                buckets_dict = bucketed.partition_by(
-                    "__bucket__", as_dict=True,
-                )
+                # First-level partition via the seam (group_partitions ==
+                # partition_by with unwrapped keys; N eager frames).
+                from goldenmatch.core.frame import to_frame as _tf
+
+                buckets_dict = {
+                    k: part.native
+                    for k, part in _tf(bucketed).group_partitions("__bucket__")
+                }
                 # Free the pre-partition `keyed` and `bucketed` parents.
-                # partition_by built N independent eager frames; the original
-                # contiguous parents are dead weight from this point forward.
+                # group_partitions built N independent eager frames; the
+                # original contiguous parents are dead weight now.
                 del keyed
                 del bucketed
                 print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
         with stage("bucket_post_partition_setup"):
-            non_empty_buckets = [b for b in buckets_dict.values() if b.height > 0]
+            # len() works on both native frames (pl rows / pa num_rows).
+            non_empty_buckets = [b for b in buckets_dict.values() if len(b) > 0]
             n_non_empty_buckets = len(non_empty_buckets)
         print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
@@ -1081,7 +1124,7 @@ def score_buckets(
     all_pairs: list[tuple[int, int, float]] = []
     total_blocks_scored = 0
     total_non_empty = 0
-    slim_cols = set(slim_df.columns)
+    slim_cols = set(slim_frame.columns)
     for key in pass_keys:
         if not set(key.fields) <= slim_cols:
             logger.warning(

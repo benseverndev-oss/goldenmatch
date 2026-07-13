@@ -222,7 +222,7 @@ class TestRunMatch:
         )
         # Each target should have at most one match in best mode
         if results["matched"] is not None and len(results["matched"]) > 0:
-            target_ids = results["matched"]["__target_row_id__"].to_list()
+            target_ids = results["matched"]["__target_row_id__"].to_pylist()
             assert len(target_ids) == len(set(target_ids))
 
 

@@ -46,7 +46,7 @@ def run_and_evaluate(name, df_a, df_b, gt, matchkeys, blocking=None, std=None):
         elif mk.type == "weighted" and blocking:
             blocks = build_blocks(combined.lazy(), blocking)
             for b in blocks:
-                bdf = b.df.collect()
+                bdf = b.materialize().native
                 all_pairs.extend(find_fuzzy_matches(bdf, mk, pre_scored_pairs=b.pre_scored_pairs))
 
     found = set()

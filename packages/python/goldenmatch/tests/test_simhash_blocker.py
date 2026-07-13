@@ -144,7 +144,7 @@ def test_blocks_emits_simhash_lsh_blockresults():
     assert blocks, "expected at least one SimHash block"
     found_pair = False
     for blk in blocks:
-        members = blk.df.collect()["__row_id__"].to_list()
+        members = blk.materialize().native["__row_id__"].to_list()
         assert len(members) >= 2  # non-singleton blocks only
         assert blk.strategy == "simhash_lsh"
         if 0 in members and 1 in members:
@@ -181,7 +181,7 @@ def test_build_blocks_dispatch_simhash(monkeypatch):
     assert blocks
     found_pair = False
     for blk in blocks:
-        members = blk.df.collect()["__row_id__"].to_list()
+        members = blk.materialize().native["__row_id__"].to_list()
         assert blk.strategy == "simhash_lsh"
         if 0 in members and 1 in members:
             found_pair = True

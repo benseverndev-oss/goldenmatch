@@ -2,6 +2,60 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.1.3] - 2026-07-12
+
+### Performance
+- **Parallel relation-profiler loop.** 3.0.3 parallelized the column loop; the relation
+  profilers (temporal / duplicate / functional-dependency / composite-key / age / ...)
+  still ran sequentially. Each is independent and only READS the (cache-populated) frame,
+  so they now fan across the same thread pool and merge in `RELATION_PROFILERS` order --
+  byte-identical to sequential (verified: `scan_file` 1-thread vs 8-thread findings
+  identical incl. order; differential Jaccard 1.000). Relation/date-heavy scans (many
+  temporal pairs): a 6-date-column scan went 0.856s -> 0.612s (~1.4x). No regression on
+  column-bound scans. Same `GOLDENCHECK_SCAN_THREADS` gate.
+
+## [3.1.2] - 2026-07-12
+
+### Performance
+- **Eliminated whole-column materialization in sample paths.** Several profilers
+  built findings' `sample_values` (or drift category sets) by materializing the
+  ENTIRE filtered column and then taking the first few -- e.g. `filter(...).to_list()[:5]`
+  on a column with hundreds of thousands of matching rows. Now they `.slice(0, N)`
+  BEFORE `to_list` (11 sites across temporal / numeric_cross / format_detection /
+  encoding_detection / pattern_consistency / range_distribution), and drift builds
+  category sets from `.unique()` (distinct-only) instead of every row. Semantically
+  identical (differential Jaccard 1.000; suite green native + fallback). Date-heavy
+  and dirty/high-finding scans benefit most: a 6-column date scan went 1.393s -> 0.392s
+  (~3.55x). Added `PyColumn.slice` for the polars-free covered-columns backend.
+
+## [3.1.1] - 2026-07-12
+
+### Performance
+- **Fused `n_unique` into the numeric-stats pass.** `column_numeric_stats` now builds
+  a distinct-value hashset alongside count/min/max/mean/std/sum, so a numeric column's
+  `n_unique` is a free byproduct of the ONE stats pass instead of a separate
+  `count_distinct` scan. Matches `pc.count_distinct(mode="all")` exactly on every edge
+  (all-NaN collapse to one; +0.0/-0.0 distinct; null counts as one) -- 52-assertion
+  parity test, differential Jaccard 1.000. Numeric-heavy scans (many int/float columns):
+  ~20-28% faster; mixed scans unchanged (no regression). pyarrow fallback returns the
+  matching value when the native kernel is absent.
+
+## [3.1.0] - 2026-07-12
+
+### Performance
+- **Fused single-pass string-column digest.** A new native kernel
+  (`string_column_digest`) computes a string column's `null_count`, `n_unique`, and
+  the match count for all 7 fixed scan patterns (email/phone/url + 4 encoding
+  patterns) in ONE pass over the data, instead of ~10 separate passes (each
+  `str_match_count` was its own scan; the 4 encoding patterns went through a
+  `to_pylist` + regex-kernel round-trip). `ArrowColumn` computes+caches the digest on
+  the first known-pattern `str_match_count` for a string column; subsequent
+  known-pattern counts and `n_unique`/`null_count` read the cache. Findings are
+  unchanged (differential Jaccard 1.000; all 7 patterns compile in the regex crate).
+  1M x 7 scan_file: 1.36s -> **0.98s** (with the 3.0.3 parallel scan); string-heavy
+  data benefits most. Cumulative 3.0.1 -> 3.1.0: 3.74s -> 0.98s (~3.8x). The pyarrow
+  fallback is unchanged when the native kernel is absent.
+
 ## [3.0.3] - 2026-07-12
 
 ### Performance

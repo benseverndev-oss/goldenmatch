@@ -109,9 +109,12 @@ def _multi_partition(clusters: dict) -> set[frozenset[int]]:
     }
 
 
-def _golden_content(g: pl.DataFrame) -> pl.DataFrame:
+def _golden_content(g) -> pl.DataFrame:
     """Golden user-value rows, modulo cluster id + confidence (the fused path
-    numbers clusters differently and sheds confidence in capacity mode)."""
+    numbers clusters differently and sheds confidence in capacity mode).
+    D3: the dict emits pa.Table; compare in polars (dev dep)."""
+    if not isinstance(g, pl.DataFrame):
+        g = pl.from_arrow(g)
     cols = [c for c in g.columns if c not in ("__cluster_id__", "__golden_confidence__")]
     return g.select(sorted(cols)).sort(sorted(cols))
 
@@ -169,11 +172,11 @@ def test_fused_match_short_circuit_byte_identical(monkeypatch):
     assert _multi_partition(fused["clusters"]) == _multi_partition(classic["clusters"])
 
     # dupes / unique row populations byte-identical.
-    assert set(fused["dupes"]["__row_id__"].to_list()) == set(
-        classic["dupes"]["__row_id__"].to_list()
+    assert set(fused["dupes"]["__row_id__"].to_pylist()) == set(
+        classic["dupes"]["__row_id__"].to_pylist()
     )
-    assert set(fused["unique"]["__row_id__"].to_list()) == set(
-        classic["unique"]["__row_id__"].to_list()
+    assert set(fused["unique"]["__row_id__"].to_pylist()) == set(
+        classic["unique"]["__row_id__"].to_pylist()
     )
 
     # Golden content byte-identical (modulo cluster id + confidence).
@@ -237,12 +240,12 @@ def test_oversized_cluster_excluded_from_golden_like_classic(monkeypatch):
     assert fused["match_fused_capacity_mode"] is True
 
     # No golden records for any cluster (all multi-member clusters are oversized).
-    assert classic["golden"] is None or classic["golden"].height == 0
-    assert fused["golden"] is None or fused["golden"].height == 0
+    assert classic["golden"] is None or classic["golden"].num_rows == 0
+    assert fused["golden"] is None or fused["golden"].num_rows == 0
 
     # Oversized members still land in dupes on BOTH paths.
-    assert set(fused["dupes"]["__row_id__"].to_list()) == set(
-        classic["dupes"]["__row_id__"].to_list()
+    assert set(fused["dupes"]["__row_id__"].to_pylist()) == set(
+        classic["dupes"]["__row_id__"].to_pylist()
     )
     assert _multi_partition(fused["clusters"]) == _multi_partition(classic["clusters"])
 

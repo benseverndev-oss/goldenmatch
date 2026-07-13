@@ -89,8 +89,8 @@ class NumericCrossColumnProfiler:
 
         if violation_count > 0:
             sample_vals = []
-            val_filtered = val_series.filter_by(violation_mask).to_list()[:3]
-            max_filtered = max_series.filter_by(violation_mask).to_list()[:3]
+            val_filtered = val_series.filter_by(violation_mask).slice(0, 3).to_list()
+            max_filtered = max_series.filter_by(violation_mask).slice(0, 3).to_list()
             sample_vals = [f"{v} exceeds {m}" for v, m in zip(val_filtered, max_filtered)]
 
             return Finding(

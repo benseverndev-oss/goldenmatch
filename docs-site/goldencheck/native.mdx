@@ -21,8 +21,17 @@ default: use native where available, fall back otherwise).
 
 goldencheck-native also accelerates the **format, encoding, pattern, and temporal
 profilers** that run on the Arrow-native scan path. Since the whole scan is
-Polars-free in 3.0.0, `pip install goldencheck[native]` runs those checks at native
-speed on any CSV/Parquet/Excel source with no Polars installed.
+Polars-free (as of 3.0.0), `pip install goldencheck[native]` runs those checks at
+native speed on any CSV/Parquet/Excel source with no Polars installed.
+
+As of the current 3.1.x line the `[native]` kernel is a **real, measurable
+accelerator** of the everyday scan, not just the deep-profiling checks. On the
+1M-row x 7-column mixed shape a native scan runs roughly **1.9s vs 3.0s** for the
+pure-pyarrow fallback. Before 3.0.x, string/cast overhead in the scan masked the
+kernel's benefit; now that the hot paths are fused (see below), installing
+`[native]` is a genuine speedup. It stays an accelerator, not a requirement: a
+base `pip install goldencheck` still scans polars-free through `pyarrow.compute`,
+just slower on the numeric- and regex-heavy checks.
 
 Extras at a glance: `[native]` adds the Rust kernels below (Polars not required);
 `[baseline]` adds scipy/numpy **and Polars** for the deep statistical profiling,
@@ -34,10 +43,15 @@ drift, and correlation subsystems; `[polars]` adds Polars only for the
 
 Every kernel had to clear two gates before being switched on by default: it must
 be **byte-identical / integer-exact** to the pure-Python reference, **and**
-measurably **faster than the Polars baseline** on a real workload. (One early
-kernel was actually *slower* than Polars and was rewritten before shipping — the
-rule is "beat Polars", not "it's Rust".) Checks where Polars already wins —
-duplicate-row detection, referential integrity, freshness — stay pure-Polars.
+measurably faster than the reference implementation on a real workload. When the
+kernels were first added, that reference was the old Polars scan path, so the
+original bar was "beat Polars" (one early kernel was actually *slower* than
+Polars and was rewritten before shipping — the rule was "beat Polars", not "it's
+Rust"). After the 3.0.0 Flip there is no Polars in the default scan at all: the
+whole scan is Arrow-native, so duplicate-row detection, referential integrity,
+and freshness now run on the Arrow seam (`pyarrow.compute` plus these kernels),
+Polars-free like everything else. The per-kernel speedups below are still the
+measured wins over that original baseline.
 
 | Check | Speedup | What it finds |
 |---|---|---|
@@ -47,6 +61,34 @@ duplicate-row detection, referential integrity, freshness — stay pure-Polars.
 | Approximate-FD violations | 15.5× | the few rows that break a near-perfect dependency (likely data-entry errors) |
 | Fuzzy value clustering | 76× | inconsistent categorical encodings (`California` / `Californa` / `CALIFORNIA`) |
 | Denial-constraint evidence | ~1.5–1.8× vs a Polars cross-join (~60–96× vs pure Python) | violating rows for if-then / cross-tuple invariants (`dc.rs`) |
+
+## How the default scan got ~3.8x faster (3.0.1 - 3.1.3)
+
+The Arrow-native scan that shipped in 3.0.0 was then tuned hard across the 3.0.x
+and 3.1.x releases. On a 1M-row x 7-column mixed table the default scan went from
+**3.74s to about 1.0s (~3.8x)**, and every release stayed byte-identical (same
+findings, same order). Numeric-wide and date/relation-heavy tables see additional
+wins. The levers:
+
+- **Vectorized pyarrow ops** over per-element Python loops on the hot paths.
+- **Fused single-pass kernels.** A string-column digest computes null-count,
+  distinct-count, and every format/encoding pattern match in ONE pass over the
+  column instead of a separate scan per check; `n_unique` is folded into the
+  numeric-stats pass so it's a free byproduct.
+- **A parallel scan.** Column profilers AND relation profilers fan out across a
+  thread pool. It's deterministic: results merge in profiler order, so findings
+  are byte-identical to the sequential path.
+- **No whole-column materialization in sample paths** — profilers slice to the few
+  sample values they need before converting to Python, instead of realizing the
+  entire filtered column.
+
+### `GOLDENCHECK_SCAN_THREADS`
+
+The scan thread pool is controlled by `GOLDENCHECK_SCAN_THREADS`. The default is
+parallel: `min(cpu, 8, ncols)` threads, engaged when there are at least 2 columns
+and at least 50k rows. Set `GOLDENCHECK_SCAN_THREADS=1` to force the sequential
+path (useful for debugging or reproducible profiling). Findings are deterministic
+either way.
 
 ## New deep-profiling checks
 

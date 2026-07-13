@@ -172,7 +172,7 @@ def test_perceptual_feature_blocks_and_scores_image_variants():
     cfg = BlockingConfig(strategy="perceptual", perceptual=PerceptualKeyConfig(column="ph"))
     blocks = build_blocks(df.lazy(), cfg)
 
-    member_sets = [set(b.df.collect()["__row_id__"].to_list()) for b in blocks]
+    member_sets = [set(b.materialize().native["__row_id__"].to_list()) for b in blocks]
     # the variant pair co-occurs in at least one block (candidate generation)
     assert any({0, 1} <= s for s in member_sets)
     # and the scorer ranks the variant above the distinct image (the evidence)
@@ -211,7 +211,7 @@ def test_perceptual_blocking_recall_gate():
         ]
     df = pl.DataFrame({"__row_id__": ids, "ph": hashes})
     cfg = BlockingConfig(strategy="perceptual", perceptual=PerceptualKeyConfig(column="ph"))
-    member_sets = [set(b.df.collect()["__row_id__"].to_list()) for b in build_blocks(df.lazy(), cfg)]
+    member_sets = [set(b.materialize().native["__row_id__"].to_list()) for b in build_blocks(df.lazy(), cfg)]
     for i in range(len(bases)):  # recall: each variant pair co-occurs in a block
         assert any({2 * i, 2 * i + 1} <= s for s in member_sets), f"variant {i} not blocked"
 

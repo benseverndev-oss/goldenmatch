@@ -392,3 +392,96 @@ def test_auto_fix_drops_empty_rows_and_null_cols_both_backends():
     pf, _ = PolarsFrame(df).auto_fix()
     af, _ = ArrowFrame(df.to_arrow()).auto_fix()
     assert pf.native.height == af.native.num_rows == 1
+
+
+# -- D5c pins ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_select_dicts(backend):
+    # probabilistic row_lookup shape: select(cols).to_dicts() / to_pylist().
+    f = _mk({"__row_id__": [1, 2], "name": ["a", None], "x": [9, 8]}, backend)
+    assert f.select_dicts(["__row_id__", "name"]) == [
+        {"__row_id__": 1, "name": "a"},
+        {"__row_id__": 2, "name": None},
+    ]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("chain", [["lowercase"], ["soundex"], ["lowercase", "soundex"]])
+def test_derive_transformed_column_matches_python_oracle(backend, chain):
+    # D5c pins the _get_transformed_values fallback collapse: derive ==
+    # [apply_transforms(v, chain) if v is not None else None] on both
+    # backends, native AND non-native chains.
+    from goldenmatch.utils.transforms import apply_transforms
+
+    vals = ["  José Müller ", "SMITH-jones", None, "o'brien", ""]
+    f = _mk({"name": vals}, backend)
+    legacy = [apply_transforms(v, chain) if v is not None else None for v in vals]
+    assert f.derive_transformed_column("name", chain).to_list() == legacy
+
+
+# -- D5d pins ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_run_lengths_on_sorted_input(backend):
+    # score_buckets' block sizes: adjacent-run sizes of a KEY-SORTED column.
+    # PRECONDITION is sorted input -- polars groups by VALUE (split runs
+    # merge) while arrow run_end_encode is adjacency-based; they agree only
+    # when the key is sorted (probed 2026-07-12), which is the sole call
+    # shape (workers sort by __block_key__ first).
+    f = _mk({"k": [None, None, "a", "a", "a", "b", "c", "c"], "v": list(range(8))}, backend)
+    assert f.run_lengths("k") == [2, 3, 1, 2]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_run_lengths_empty_and_single(backend):
+    assert _mk({"k": []}, backend).run_lengths("k") == []
+    assert _mk({"k": ["x"]}, backend).run_lengths("k") == [1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_run_lengths_matches_worker_sort_then_sizes(backend):
+    # End-to-end worker shape: seam sort then run_lengths == the legacy
+    # group_by(maintain_order=True).agg(len) on the sorted frame.
+    df = pl.DataFrame({"__block_key__": ["b", "a", None, "b", "a", "c"], "v": [1, 2, 3, 4, 5, 6]})
+    f = _mk({"__block_key__": df["__block_key__"].to_list(), "v": df["v"].to_list()}, backend)
+    sf = f.sort(["__block_key__"])
+    legacy = (
+        df.sort("__block_key__")
+        .lazy()
+        .group_by("__block_key__", maintain_order=True)
+        .agg(pl.len().alias("__size__"))
+        .collect()["__size__"]
+        .to_list()
+    )
+    assert sf.run_lengths("__block_key__") == legacy
+
+
+# -- D2s-c pins ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_with_bucket_column_shape_contract(backend):
+    # PER-LANE contract: values in [0, n), deterministic within a lane,
+    # equal keys -> equal bucket. Cross-lane assignments need NOT agree
+    # (buckets are shard-internal, never output-visible).
+    f = _mk({"k": ["a", "b", "a", None, "c", None]}, backend)
+    out = f.with_bucket_column("k", "__bucket__", 4, 12345)
+    vals = out.column("__bucket__").to_list()
+    assert all(v is not None and 0 <= v < 4 for v in vals)
+    assert vals[0] == vals[2]  # equal keys same bucket
+    assert vals[3] == vals[5]  # null keys share one bucket
+    again = f.with_bucket_column("k", "__bucket__", 4, 12345).column("__bucket__").to_list()
+    assert vals == again  # deterministic
+
+
+def test_with_bucket_column_polars_matches_legacy_expr():
+    df = pl.DataFrame({"k": ["a", "b", "c", "a", None]})
+    seed = 0xC2B5C0BBE7ED5E5D
+    legacy = df.with_columns((pl.col("k").hash(seed=seed) % 8).alias("__bucket__"))
+    from goldenmatch.core.frame import PolarsFrame
+
+    out = PolarsFrame(df).with_bucket_column("k", "__bucket__", 8, seed)
+    assert out.native["__bucket__"].to_list() == legacy["__bucket__"].to_list()

@@ -1306,9 +1306,9 @@ def _extract_stats(result: dict) -> dict:
     # duplicates were found.
     total_records = 0
     if dupes is not None:
-        total_records += dupes.height
+        total_records += _frame_height(dupes)
     if unique is not None:
-        total_records += unique.height
+        total_records += _frame_height(unique)
 
     # Defensive: if a pipeline path ever produces a golden-only result with
     # dupes/unique elided, total_records would silently be 0 and match_rate
@@ -1323,7 +1323,7 @@ def _extract_stats(result: dict) -> dict:
             "tables — total_records will be 0. This shape is not produced by "
             "the standard pipeline; if you hit this, the pipeline output "
             "contract has changed and _extract_stats needs updating.",
-            golden.height,
+            _frame_height(golden),
         )
 
     total_clusters = sum(1 for c in clusters.values() if c.get("size", 0) > 1)

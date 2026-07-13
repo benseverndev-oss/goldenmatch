@@ -71,9 +71,14 @@ class DriftDetectionProfiler(BaseProfiler):
                     confidence=0.6,
                 ))
         else:
-            # Categorical drift: look for new categories in second half
-            cats_first = set(first_half.cast("str", strict=True).to_list())
-            cats_second = set(second_half.cast("str", strict=True).to_list())
+            # Categorical drift: look for new categories in second half.
+            # Materialize only the DISTINCT values (`.unique()`) per half, not every
+            # row -- `set(X.to_list()) == set(X.unique().to_list())`, but for a
+            # low-cardinality column (dates, categoricals) this turns a whole-column
+            # to_list (~500k elements) into a distinct-only one. This was the dominant
+            # cost of scanning date/categorical-heavy tables.
+            cats_first = set(first_half.cast("str", strict=True).unique().to_list())
+            cats_second = set(second_half.cast("str", strict=True).unique().to_list())
             new_cats = cats_second - cats_first
 
             if new_cats:

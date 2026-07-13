@@ -348,7 +348,7 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
 
 
 def find_exact_matches(
-    lf: pl.LazyFrame, mk: MatchkeyConfig
+    lf: Any, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:
     """Find exact matches by grouping on the matchkey column.
 
@@ -363,7 +363,7 @@ def find_exact_matches(
 
 
 def _find_exact_match_ids(
-    lf: pl.LazyFrame, mk: MatchkeyConfig,
+    lf: Any, mk: MatchkeyConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Same Polars self-join as ``find_exact_matches`` but returns the two
     row-id columns as zero-copy int64 numpy arrays -- skipping the
@@ -382,7 +382,13 @@ def _find_exact_match_ids(
     from goldenmatch.core.frame import to_frame
 
     mk_col = f"__mk_{mk.name}__"
-    df = lf.select("__row_id__", mk_col).collect()
+    # D2s-a (spine descent): dual-rep entry. Legacy pl.LazyFrame callers keep
+    # the lazy projection+collect verbatim; a seam Frame (or eager native)
+    # projects via the seam so the arrow lane never round-trips polars.
+    if isinstance(lf, pl.LazyFrame):
+        df = lf.select("__row_id__", mk_col).collect()
+    else:
+        df = to_frame(lf).select(["__row_id__", mk_col]).native
     # Exclude null AND empty/blank matchkey values (filter_nonblank_key). Two
     # records both missing a field (e.g. a blanked phone -> "") must NOT be an
     # exact match: otherwise every blank-valued record joins on "" and
@@ -416,20 +422,23 @@ def _get_transformed_values(block_df: pl.DataFrame, field: MatchkeyField) -> lis
     callers that bypass the pipeline (DataFrame entry points, tests calling
     find_fuzzy_matches directly).
     """
-    from goldenmatch.core.matchkey import _try_native_chain, _xform_sig
+    from goldenmatch.core.frame import to_frame
+    from goldenmatch.core.matchkey import _xform_sig
 
+    frame = to_frame(block_df)
     sig = _xform_sig(field)
-    if sig in block_df.columns:
-        return block_df[sig].to_list()
+    if sig in frame.columns:
+        return frame.column(sig).to_list()
 
     col = field.field
     assert col is not None, "field.field must be set; upstream validation enforces"
-    native_expr = _try_native_chain(col, field.transforms)
-    if native_expr is not None:
-        result_df = block_df.select(native_expr.alias("__tmp__"))
-        return result_df["__tmp__"].to_list()
+    # D5c: derive_transformed_column IS the seam twin of the old
+    # _try_native_chain select (native chain when portable, RAW-value python
+    # fallback otherwise -- same branches, both backends).
+    if field.transforms:
+        return frame.derive_transformed_column(col, list(field.transforms)).to_list()
 
-    values = block_df[col].to_list()
+    values = frame.column(col).to_list()
     return [apply_transforms(v, field.transforms) if v is not None else None for v in values]
 
 
@@ -636,7 +645,9 @@ def _record_embedding_score_matrix(
                     parts.append(f"{col}: {val}")
         concat_values.append(" | ".join(parts) if parts else "")
 
-    row_ids = block_df["__row_id__"].to_list()
+    from goldenmatch.core.frame import to_frame as _tf_emb
+
+    row_ids = _tf_emb(block_df).column("__row_id__").to_list()
     cache_key = f"_rec_emb_{hash(tuple(columns))}_{hash(tuple(row_ids))}"
 
     embedder = get_embedder(model_name)
@@ -1089,11 +1100,13 @@ def find_fuzzy_matches(
                 results.append((pair_key[0], pair_key[1], score))
         return _emit_results(results)
 
-    n = block_df.height
+    from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+    n = _to_frame_d5(block_df).height
     if n < 2:
         return _emit_empty()
 
-    row_ids = block_df["__row_id__"].to_list()
+    row_ids = _to_frame_d5(block_df).column("__row_id__").to_list()
 
     # Separate exact (cheap), record_embedding, and fuzzy (expensive) fields.
     # initialism_match / alias_match are equality-style (1.0/0.0) scorers with
@@ -1347,10 +1360,14 @@ def _score_one_block(
     ``_score_one_block_columnar`` via ``_cross_source_filter_df`` -- the old
     "mirror any change" rule is retired.
     """
-    block_df = block.df.collect()
+    block_df = block.materialize().native
 
     if across_files_only and source_lookup:
-        sources_in_block = block_df["__source__"].unique().to_list()
+        from goldenmatch.core.frame import to_frame as _to_frame_d5
+
+        sources_in_block = (
+            _to_frame_d5(block_df).column("__source__").unique().to_list()
+        )
         if len(sources_in_block) < 2:
             return _empty_pair_stream_df() if _emit_dataframe else []
 
@@ -1458,8 +1475,7 @@ def score_blocks_parallel(
         all_pairs = []
         total_candidates = 0
         for block in blocks:
-            block_df = block.df.collect()
-            n = block_df.height
+            n = block.n_rows()
             total_candidates += n * (n - 1) // 2
             pairs = _score_one_block(
                 block, mk, matched_pairs,
@@ -1509,7 +1525,7 @@ def score_blocks_parallel(
         total_candidates = 0
         for block in blocks:
             try:
-                n = int(block.df.select(pl.len()).collect().item())
+                n = block.n_rows()
             except Exception:
                 n = 0
             total_candidates += n * (n - 1) // 2
@@ -1825,10 +1841,12 @@ def _score_one_block_columnar(
     ``_score_one_block(..., _emit_dataframe=True)`` via
     ``_cross_source_filter_df`` -- the old mirror rule is retired.
     """
-    block_df = block.df.collect()
+    block_df = block.materialize().native
 
     if across_files_only and source_lookup:
-        sources_in_block = block_df["__source__"].unique().to_list()
+        from goldenmatch.core.frame import to_frame as _tf_ps
+
+        sources_in_block = _tf_ps(block_df).column("__source__").unique().to_list()
         if len(sources_in_block) < 2:
             return _empty_pair_stream_df()
 

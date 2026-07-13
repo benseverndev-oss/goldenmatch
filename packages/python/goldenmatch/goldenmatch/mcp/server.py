@@ -1196,11 +1196,32 @@ def _tool_get_cluster(cluster_id: int) -> dict:
     return {"cluster_id": cluster_id, "size": info["size"], "members": members}
 
 
+def _golden_as_table(golden):
+    """Normalize a golden frame to a ``pyarrow.Table``.
+
+    Session runs (``dedupe_df`` -> ``DedupeResult.golden``) already produce a
+    ``pa.Table``, but the standalone ``MatchEngine.run_full`` path still yields a
+    polars ``DataFrame`` (``EngineResult.golden: pl.DataFrame``). The
+    golden-reading MCP tools are written against the ``pa.Table`` API
+    (``to_pylist``/``column_names``/``select``/``num_rows``/``filter``), so a
+    polars golden would ``AttributeError``. Convert here so both paths work. The
+    lasting fix is making ``EngineResult.golden`` a ``pa.Table`` in the
+    polars-eviction program; this keeps the MCP surface working meanwhile.
+    """
+    if golden is None:
+        return None
+    import pyarrow as pa
+    if isinstance(golden, pa.Table):
+        return golden
+    to_arrow = getattr(golden, "to_arrow", None)  # polars.DataFrame -> pa.Table
+    return to_arrow() if callable(to_arrow) else golden
+
+
 def _tool_get_golden_record(cluster_id: int) -> dict:
     rs = _resolve_run_state()
     if rs.result is None:
         return {"error": "No run loaded. Run agent_deduplicate (or dedupe_file) in this session first."}
-    golden = getattr(rs.result, "golden", None)
+    golden = _golden_as_table(getattr(rs.result, "golden", None))
     if golden is None:
         return {"error": "No golden records available"}
 
@@ -1451,7 +1472,7 @@ def _tool_export_results(output_path: str, fmt: str) -> dict:
     path = _safe_path_or_error(output_path)
     if isinstance(path, dict):
         return path
-    golden = getattr(rs.result, "golden", None)
+    golden = _golden_as_table(getattr(rs.result, "golden", None))
     if fmt == "json":
         if golden is not None:
             golden_dicts = golden.to_pylist()
