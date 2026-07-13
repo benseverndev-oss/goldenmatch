@@ -144,8 +144,13 @@ cannot move while downstream still takes pl.LazyFrame):**
     A/B + RSS hold; the decline list must be asserted by a fixture per
     flag (Frame lane refuses, classic lane output identical).
 - Deep-D2 proper (golden_fused dual-rep: seam sort/filter/gather;
-  `gather_with_nulls` becomes a seam op; arrow twin = `take` with null
-  indices) once multi_df is arrow.
+  arrow gather twin = `take` with null indices, PROBED) once multi_df is
+  arrow. **PARTIAL 2026-07-13: run_golden_fused_arrow is dual-rep (pa in ->
+  pa out, no round-trip; provenance bridges at entry); bridge removed on the
+  FUSED-HELPER and DICT golden paths (decline replays the polars demux for
+  byte-parity). RESIDUAL: the FRAMES-path golden still bridges
+  (_golden_source -> _multi_df_from_frames polars join) -- deep-D2b ports
+  _multi_df_from_frames + the from-frames demux; required before D6.**
 - D6 after the spine holds a full-suite arrow lane with zero polars imports
   (assert via an import-hook test, the goldencheck 2.0.0 precedent).
 

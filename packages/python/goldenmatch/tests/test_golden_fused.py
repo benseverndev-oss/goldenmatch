@@ -2150,3 +2150,65 @@ def test_fused_takes_simple_configs_on_arrow_backend(monkeypatch):
         grow = got_rows[cid]
         for col in ("name", "zip"):
             assert grow[col] == wrow[col], (cid, col)
+
+
+# -- deep-D2: arrow-input dual-rep ----------------------------------------------------
+
+
+def _deep_d2_frame():
+    return pl.DataFrame(
+        {
+            "__row_id__": [0, 1, 2, 10, 11, 20],
+            "__cluster_id__": [1, 1, 1, 2, 2, 3],
+            "name": ["Bob", "Robert", None, "Sue", "Suzanne", "Solo"],
+            "email": [None, "b@x.com", "b@x.com", "s@y.com", None, "z@z.com"],
+            "age": [30, None, 31, 44, 44, 9],
+        }
+    )
+
+
+def _deep_d2_rules():
+    return GoldenRulesConfig(
+        default_strategy="most_complete",
+        field_rules={"email": GoldenFieldRule(strategy="majority_vote")},
+    )
+
+
+def test_run_arrow_input_matches_polars_input(monkeypatch):
+    """Deep-D2: a pa.Table input runs the kernel with NO polars round-trip and
+    reproduces the polars-input output value-for-value (return type follows
+    the input lane: pa.Table in -> pa.Table out)."""
+    import pyarrow as pa
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    df = _deep_d2_frame()
+    rules = _deep_d2_rules()
+    got_pl = run_golden_fused_arrow(df, rules)
+    got_pa = run_golden_fused_arrow(df.to_arrow(), rules)
+    if got_pl is None:
+        pytest.skip("native golden_fused kernel unavailable")
+    assert isinstance(got_pa, pa.Table)
+    assert list(got_pa.column_names) == list(got_pl.columns)
+    for c in got_pl.columns:
+        assert got_pa.column(c).to_pylist() == got_pl[c].to_list(), c
+
+
+def test_run_arrow_input_singleton_filter_and_empty(monkeypatch):
+    import pyarrow as pa
+
+    monkeypatch.setenv("GOLDENMATCH_FRAME", "arrow")
+    rules = _deep_d2_rules()
+    # all singletons -> empty output with expected columns, arrow-typed
+    df = pl.DataFrame(
+        {
+            "__row_id__": [0, 1],
+            "__cluster_id__": [1, 2],
+            "name": ["A", "B"],
+        }
+    )
+    got = run_golden_fused_arrow(df.to_arrow(), rules)
+    if got is None:
+        pytest.skip("native golden_fused kernel unavailable")
+    assert isinstance(got, pa.Table)
+    assert got.num_rows == 0
+    assert list(got.column_names) == ["name", "__cluster_id__", "__golden_confidence__"]

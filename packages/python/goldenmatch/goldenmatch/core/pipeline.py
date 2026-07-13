@@ -1318,9 +1318,19 @@ def _try_fused_golden(
     # (__cluster_id__ Int64 / __golden_confidence__ Float64 already agree). We
     # deliberately do NOT keep native dtypes -- that would change the slow
     # path's own behavior, out of scope for a transparent routing flag.
-    return result.with_columns(
-        [pl.col(c).cast(pl.Utf8) for c in result.columns if not c.startswith("__")]
-    )
+    if isinstance(result, pl.DataFrame):
+        return result.with_columns(
+            [pl.col(c).cast(pl.Utf8) for c in result.columns if not c.startswith("__")]
+        )
+    # Deep-D2 arrow lane: same cast via the seam (Column.cast_str pins the
+    # polars Utf8-cast semantics, incl. the float formatter).
+    from goldenmatch.core.frame import to_frame as _tf_cast
+
+    _rf = _tf_cast(result)
+    for c in _rf.columns:
+        if not c.startswith("__"):
+            _rf = _rf.with_column(c, _rf.column(c).cast_str())
+    return _rf.native
 
 
 def _golden_records_to_df(golden_records: list[dict]) -> pl.DataFrame | None:
@@ -1377,8 +1387,16 @@ def _golden_from_multi_df(
     ``confidence_majority`` is the only strategy that consumes them and is excluded
     upstream by ``config_needs_artifacts``, so ``None`` is byte-identical here.
     """
-    fast_eligible = not provenance_on and _polars_native_eligible(
-        golden_rules, quality_scores=quality_scores
+    # Deep-D2: multi_df may be a pa.Table (Frame lane). The polars fast
+    # columnar path only applies to polars input; the fused kernel takes the
+    # native directly (no round-trip). On kernel decline/absence, BRIDGE and
+    # replay the exact polars demux so output stays byte-identical to the
+    # classic lane.
+    _is_pl = isinstance(multi_df, pl.DataFrame)
+    fast_eligible = (
+        _is_pl
+        and not provenance_on
+        and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
     )
     if fast_eligible:
         return build_golden_records_df(multi_df, golden_rules), False
@@ -1393,6 +1411,13 @@ def _golden_from_multi_df(
     )
     if fused_golden_df is not None:
         return fused_golden_df, True
+
+    if not _is_pl:
+        multi_df = _as_polars_df(multi_df)
+        if not provenance_on and _polars_native_eligible(
+            golden_rules, quality_scores=quality_scores
+        ):
+            return build_golden_records_df(multi_df, golden_rules), False
 
     golden_records = build_golden_records_batch(
         multi_df,
@@ -1586,7 +1611,7 @@ def _run_fused_match_short_circuit(
         # (unique rid keys; downstream golden groups by cluster, order-free)
         # and keeps the arrow table un-round-tripped.
         _rid_to_cid = dict(zip(_rid_list, _cid_list))
-        multi_df = _as_polars_df(
+        multi_df = (
             to_frame(multi_df)
             .map_column("__row_id__", "__cluster_id__", _rid_to_cid)
             .native
@@ -3045,10 +3070,8 @@ def _run_dedupe_pipeline(
                     member_ids_all = list(row_to_cluster.keys())
 
                 with stage("golden_multi_df_filter"):
-                    multi_df = _as_polars_df(
-                        _collected_frame.filter_in(
-                            "__row_id__", member_ids_all
-                        ).native
+                    _multi_frame = _collected_frame.filter_in(
+                        "__row_id__", member_ids_all
                     )
 
                 # Slim projection (PR #595). v32 attribution localized the
@@ -3068,22 +3091,18 @@ def _run_dedupe_pipeline(
                         _internal_prefixes = (
                             "__xform_", "__mk_", "__block_key__", "__bucket__",
                         )
-                        multi_df = multi_df.select([
-                            c for c in multi_df.columns
+                        _multi_frame = _multi_frame.select([
+                            c for c in _multi_frame.columns
                             if not any(c.startswith(p) for p in _internal_prefixes)
                         ])
 
                 with stage("golden_attach_cluster_id"):
-                    # Attach __cluster_id__ via replace_strict. The old keys/new
-                    # vals lists are tiny (1 entry per member); the join itself
-                    # is linear in `multi_df.height`.
-                    multi_df = multi_df.with_columns(
-                        pl.col("__row_id__").replace_strict(
-                            list(row_to_cluster.keys()),
-                            list(row_to_cluster.values()),
-                            return_dtype=pl.Int64,
-                        ).alias("__cluster_id__")
-                    )
+                    # Attach __cluster_id__ via the seam map_column -- its
+                    # polars impl IS the replace_strict expr this stage used
+                    # (byte-identical); the arrow lane stays un-round-tripped.
+                    multi_df = _multi_frame.map_column(
+                        "__row_id__", "__cluster_id__", row_to_cluster
+                    ).native
                 # Batch builder: sorts by __cluster_id__ once and pre-extracts
                 # each user column to a Python list ONCE. At 5M / 1.67M
                 # multi-member clusters the previous partition_by(as_dict=True)
@@ -3106,7 +3125,8 @@ def _run_dedupe_pipeline(
                 # (per-field source_row_id, custom merge_field rules) stay intact.
                 _provenance_on = config.output.lineage_provenance
                 _fast_eligible = (
-                    not _provenance_on
+                    isinstance(multi_df, pl.DataFrame)
+                    and not _provenance_on
                     and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
                 )
                 if _fast_eligible:
@@ -3153,12 +3173,28 @@ def _run_dedupe_pipeline(
                             golden_records = []
                             golden_fused_used = True
                         else:
-                            golden_records = build_golden_records_batch(
-                                multi_df, golden_rules,
-                                quality_scores=quality_scores,
-                                provenance=_provenance_on,
-                                cluster_pair_scores=cluster_pair_scores,
-                            )
+                            # Deep-D2 decline path: bridge, then replay the
+                            # polars demux (fast columnar when eligible) so
+                            # the Frame lane stays byte-identical to classic.
+                            multi_df = _as_polars_df(multi_df)
+                            if (
+                                not _provenance_on
+                                and _polars_native_eligible(
+                                    golden_rules, quality_scores=quality_scores
+                                )
+                            ):
+                                with stage("golden_build_records_df_fast"):
+                                    golden_df = build_golden_records_df(
+                                        multi_df, golden_rules
+                                    )
+                                golden_records = []
+                            else:
+                                golden_records = build_golden_records_batch(
+                                    multi_df, golden_rules,
+                                    quality_scores=quality_scores,
+                                    provenance=_provenance_on,
+                                    cluster_pair_scores=cluster_pair_scores,
+                                )
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated
