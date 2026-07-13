@@ -240,6 +240,31 @@ export { dedupe, match, scoreStrings, scorePairRecord } from "./api.js";
 export { parseConfig, parseConfigYaml, configToYaml } from "./config/loader.js";
 
 // ---------------------------------------------------------------------------
+// Config: Splink -> GoldenMatch converter
+// ---------------------------------------------------------------------------
+
+export {
+  recognizeLevel,
+  ConversionReport,
+  SplinkConversionError,
+  convertComparison,
+  convertBlocking,
+  detectTrained,
+  importEm,
+  convertScalars,
+  fromSplink,
+} from "./config/from-splink.js";
+export type {
+  Severity as SplinkFindingSeverity,
+  LevelKind as SplinkLevelKind,
+  RecognizedLevel,
+  ConversionFinding,
+  ImportEmComparison,
+  ScalarKwargs,
+  SplinkConversion,
+} from "./config/from-splink.js";
+
+// ---------------------------------------------------------------------------
 // LLM
 // ---------------------------------------------------------------------------
 
