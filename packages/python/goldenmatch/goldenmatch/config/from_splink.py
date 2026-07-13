@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field as dc_field
 from typing import Literal
 
-from goldenmatch.config.schemas import MatchkeyField
+from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, MatchkeyField
 
 Severity = Literal["info", "warning", "error"]
 
@@ -308,3 +308,137 @@ def convert_comparison(
 
     report.info(comp_path, f"converted to field '{col}' (scorer={scorer})", mapped_to=mapped_to)
     return field
+
+
+# ── Blocking rules -> BlockingConfig ─────────────────────────────────────────
+#
+# Splink blocking rules use the l."col" / r."col" PREFIX style (unlike
+# comparison levels, which use the col_l / col_r SUFFIX style handled above).
+_BLOCK_COL_L = r'l\."?(\w+)"?'
+_BLOCK_COL_R = r'r\."?(\w+)"?'
+_BLOCK_EXACT_RE = re.compile(rf'{_BLOCK_COL_L}\s*=\s*{_BLOCK_COL_R}', re.IGNORECASE)
+# SUBSTR(col, start, len) is SQL's 1-based, inclusive-length form. The repo's
+# `substring:<start>:<end>` transform (goldenmatch/utils/transforms.py:35-39)
+# is a Python slice: `value[start:end]`. So SUBSTR(x, 1, 4) (chars 1-4) maps
+# to substring:0:4 (python_start = sql_start - 1, python_end = python_start +
+# sql_len). Verified by reading transforms.py directly, not assumed.
+_BLOCK_SUBSTR_RE = re.compile(
+    rf'SUBSTR(?:ING)?\s*\(\s*{_BLOCK_COL_L}\s*,\s*(\d+)\s*,\s*(\d+)\s*\)'
+    rf'\s*=\s*SUBSTR(?:ING)?\s*\(\s*{_BLOCK_COL_R}\s*,\s*(\d+)\s*,\s*(\d+)\s*\)',
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class _BlockConjunct:
+    field: str
+    transform: str | None  # e.g. "substring:0:4", or None for plain equality
+
+
+def _recognize_blocking_conjunct(conjunct: str) -> _BlockConjunct | None:
+    """Recognize one top-level AND-conjunct of a Splink blocking_rule.
+
+    Returns None for anything not a same-column equality or a same-column/
+    same-offset SUBSTR(...) equality (OR, parens, cross-column, arithmetic,
+    ranges, etc. all fail to fullmatch and are rejected here).
+    """
+    conjunct = conjunct.strip()
+
+    m = _BLOCK_SUBSTR_RE.fullmatch(conjunct)
+    if m:
+        col_l, start_l, len_l, col_r, start_r, len_r = m.groups()
+        if col_l != col_r or start_l != start_r or len_l != len_r:
+            return None
+        py_start = int(start_l) - 1
+        py_end = py_start + int(len_l)
+        return _BlockConjunct(col_l, f"substring:{py_start}:{py_end}")
+
+    m = _BLOCK_EXACT_RE.fullmatch(conjunct)
+    if m:
+        col_l, col_r = m.groups()
+        if col_l != col_r:
+            return None
+        return _BlockConjunct(col_l, None)
+
+    return None
+
+
+def _convert_one_blocking_rule(
+    rule: dict | str, idx: int, report: ConversionReport
+) -> BlockingKeyConfig | None:
+    rule_path = f"blocking_rules[{idx}]"
+    sql = rule.get("blocking_rule", rule) if isinstance(rule, dict) else rule
+    sql_norm = " ".join(sql.split())
+
+    conjuncts = re.split(r'\s+AND\s+', sql_norm, flags=re.IGNORECASE)
+    recognized: list[_BlockConjunct] = []
+    for conjunct in conjuncts:
+        r = _recognize_blocking_conjunct(conjunct)
+        if r is None:
+            report.warn(
+                rule_path,
+                f"unrecognized blocking rule, dropped: {sql_norm}",
+                mapped_to=None,
+            )
+            return None
+        recognized.append(r)
+
+    fields = [r.field for r in recognized]
+    # BlockingKeyConfig.transforms is ONE chain applied uniformly to every
+    # field in the key (core/blocker.py:_build_block_key_expr) -- there is no
+    # per-field transform slot. A mixed rule (plain equality on one column +
+    # SUBSTR on another) is therefore approximated as a single key carrying
+    # the substring transform for ALL fields. This is safe for blocking
+    # (candidate generation only needs to be a superset of true matches;
+    # applying substring to the plain-equality field just widens that block
+    # slightly -- no recall loss, just looser precision at the blocking
+    # stage). If two conjuncts specify SUBSTR at different offsets, there is
+    # no single chain that represents both, so the rule is dropped.
+    transform_values = {r.transform for r in recognized if r.transform is not None}
+    if len(transform_values) > 1:
+        report.warn(
+            rule_path,
+            f"conflicting SUBSTR offsets across fields, rule dropped: {sql_norm}",
+            mapped_to=None,
+        )
+        return None
+    transforms = [next(iter(transform_values))] if transform_values else []
+
+    key = BlockingKeyConfig(fields=fields, transforms=transforms)
+    report.info(
+        rule_path,
+        f"converted to blocking key fields={fields} transforms={transforms}",
+        mapped_to=None,
+    )
+    return key
+
+
+def convert_blocking(rules: list, report: ConversionReport) -> BlockingConfig | None:
+    """Convert Splink `blocking_rules_to_generate_predictions` into a
+    GoldenMatch `BlockingConfig`.
+
+    Each rule is a string (or a Splink 4 dict `{"blocking_rule": ..., ...}`).
+    One surviving rule -> `strategy="static"`; two or more -> `strategy=
+    "multi_pass"` with both `keys` and `passes` set to the same list (the
+    convention `core/autoconfig_rules.py:_with_multi_pass` uses). If every
+    rule is dropped, this is fatal: GoldenMatch probabilistic matchkeys
+    require a blocking config, so an error finding is recorded and None is
+    returned rather than an invalid config.
+    """
+    keys: list[BlockingKeyConfig] = []
+    for idx, rule in enumerate(rules):
+        key = _convert_one_blocking_rule(rule, idx, report)
+        if key is not None:
+            keys.append(key)
+
+    if not keys:
+        report.error(
+            "blocking_rules",
+            "no blocking rule could be converted to a BlockingConfig key",
+            None,
+        )
+        return None
+
+    if len(keys) == 1:
+        return BlockingConfig(strategy="static", keys=keys)
+    return BlockingConfig(strategy="multi_pass", keys=keys, passes=keys)
