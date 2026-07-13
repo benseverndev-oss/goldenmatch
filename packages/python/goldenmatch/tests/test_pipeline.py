@@ -144,6 +144,10 @@ class TestRunDedupe:
         """
         import goldenmatch.core.pipeline as pipeline_mod
 
+        # W-1 widening: the Frame lane skips the prep cache entirely; this
+        # test pins the CLASSIC lane's cache-seed mechanics.
+        monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", "0")
+
         captured = {}
         real = pipeline_mod._run_dedupe_pipeline
 
