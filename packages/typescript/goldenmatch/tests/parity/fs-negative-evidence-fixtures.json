@@ -1,5 +1,5 @@
 {
-  "generator": "scratchpad gen_fs_ne_parity_fixtures.py (not committed): Python train_em (random-pair path, defaults, seed=42) + score_pair_probabilistic scalar path, GOLDENMATCH_FS_CALIBRATED/GOLDENMATCH_FS_MONOTONIC unset, goldenmatch @ ts-fs-ne branch 2026-07-14",
+  "generator": "scratchpad gen_fs_ne_parity_fixtures.py (not committed): Python train_em (random-pair path, defaults, seed=42) + score_pair_probabilistic scalar path, GOLDENMATCH_FS_CALIBRATED/GOLDENMATCH_FS_MONOTONIC unset, goldenmatch Python source @ commit 4dd2eb047303ae34c7425fcede0c1e6daaae3ac0",
   "rows": [
     {
       "city": "Boston",
@@ -622,41 +622,49 @@
         {
           "a_idx": 0,
           "b_idx": 1,
+          "kind": "dup",
           "score": 1.0
         },
         {
           "a_idx": 6,
           "b_idx": 7,
+          "kind": "trap",
           "score": 0.9674097434112726
         },
         {
           "a_idx": 2,
           "b_idx": 3,
+          "kind": "null_phone",
           "score": 1.0
         },
         {
           "a_idx": 4,
           "b_idx": 5,
+          "kind": "empty_after_transform",
           "score": 1.0
         },
         {
           "a_idx": 0,
           "b_idx": 6,
+          "kind": "cross",
           "score": 0.0
         },
         {
           "a_idx": 0,
           "b_idx": 2,
+          "kind": "cross_null_phone",
           "score": 0.03259025658872727
         },
         {
           "a_idx": 8,
           "b_idx": 15,
+          "kind": "cross",
           "score": 0.0
         },
         {
           "a_idx": 10,
           "b_idx": 11,
+          "kind": "dup",
           "score": 1.0
         }
       ]
@@ -789,41 +797,49 @@
         {
           "a_idx": 0,
           "b_idx": 1,
+          "kind": "dup",
           "score": 1.0
         },
         {
           "a_idx": 6,
           "b_idx": 7,
+          "kind": "trap",
           "score": 0.8938752824998863
         },
         {
           "a_idx": 2,
           "b_idx": 3,
+          "kind": "null_phone",
           "score": 1.0
         },
         {
           "a_idx": 4,
           "b_idx": 5,
+          "kind": "empty_after_transform",
           "score": 1.0
         },
         {
           "a_idx": 0,
           "b_idx": 6,
+          "kind": "cross",
           "score": 0.0
         },
         {
           "a_idx": 0,
           "b_idx": 2,
+          "kind": "cross_null_phone",
           "score": 0.10612471750011361
         },
         {
           "a_idx": 8,
           "b_idx": 15,
+          "kind": "cross",
           "score": 0.0
         },
         {
           "a_idx": 10,
           "b_idx": 11,
+          "kind": "dup",
           "score": 1.0
         }
       ]

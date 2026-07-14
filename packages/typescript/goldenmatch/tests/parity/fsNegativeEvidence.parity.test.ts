@@ -44,6 +44,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 interface PairScore {
   a_idx: number;
   b_idx: number;
+  /** dup | trap | null_phone | empty_after_transform | cross | cross_null_phone.
+   *  Load-bearing: pairs are selected BY KIND, never by fixture position. */
+  kind: string;
   score: number;
 }
 interface Variant {
@@ -94,17 +97,30 @@ describe("FS negative-evidence scoring parity vs Python", () => {
         expect(() => validateEmResultFor(em, mk!)).not.toThrow();
       });
 
+      it("fixture carries the expected pair-kind mix", () => {
+        const kinds = new Set(variant.expected_pair_scores.map((p) => p.kind));
+        for (const required of ["dup", "trap", "null_phone", "empty_after_transform", "cross"]) {
+          expect(kinds, `missing pair kind '${required}'`).toContain(required);
+        }
+      });
+
       it("scoreProbabilisticPair equals Python to FULL float precision", () => {
         for (const p of variant.expected_pair_scores) {
           const got = scoreProbabilisticPair(rows[p.a_idx]!, rows[p.b_idx]!, mk!, em);
           // toBe, not toBeCloseTo: same doubles, same accumulation order.
-          expect(got, `pair (${p.a_idx}, ${p.b_idx})`).toBe(p.score);
+          expect(got, `${p.kind} pair (${p.a_idx}, ${p.b_idx})`).toBe(p.score);
         }
       });
 
       it("the veto is visible: trap pair scores strictly below the dup pair", () => {
-        const [dup, trap] = variant.expected_pair_scores;
-        expect(trap!.score).toBeLessThan(dup!.score);
+        // Selected by kind, not fixture position — a regenerated pair order
+        // must not silently repoint this comparison.
+        const dup = variant.expected_pair_scores.find((p) => p.kind === "dup")!;
+        const trap = variant.expected_pair_scores.find((p) => p.kind === "trap")!;
+        expect(
+          trap.score,
+          `trap pair (${trap.a_idx}, ${trap.b_idx}) not below dup pair (${dup.a_idx}, ${dup.b_idx})`,
+        ).toBeLessThan(dup.score);
       });
     });
   }
