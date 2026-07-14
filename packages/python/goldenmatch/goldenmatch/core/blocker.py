@@ -1204,8 +1204,14 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
             # seam Frame and skip the materialization entirely; otherwise fall
             # back to the arrow->polars conversion (the seam has no arrow->polars
             # op, so that conversion still uses pyarrow under the hood).
+            # multi_pass is dual-rep too: it delegates each pass to
+            # _build_static_blocks (seam-native via derive_block_key), so it stays
+            # arrow when no polars-only feature (multi-key auto-select or an active
+            # profile emitter) is in play. This is the common zero-config shape
+            # (the #1207 per-identifier union), so keeping it off the polars round
+            # trip is the load-bearing blocking-spine eviction for zero-config.
             _needs_polars = (
-                config.strategy not in ("static", "adaptive")
+                config.strategy not in ("static", "adaptive", "multi_pass")
                 or (config.auto_select and config.keys and len(config.keys) > 1)
                 or bool(_emitter_stack.get())
             )
@@ -1246,7 +1252,11 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
         return blocks
 
     if config.strategy == "multi_pass":
-        blocks = _build_multi_pass_blocks(lf, config)
+        # Mirror static/adaptive: consume the ORIGINAL seam entry so the arrow
+        # lane skips the polars round-trip (each pass runs _build_static_blocks,
+        # which is dual-rep). `lf` (polars, when an emitter forced the round-trip)
+        # is still what _emit_blocking_profile consumes.
+        blocks = _build_multi_pass_blocks(_lf_entry, config)
         _emit_blocking_profile(blocks, config, lf)
         return blocks
 
