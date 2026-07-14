@@ -58,6 +58,36 @@ feature (recall-correctness sensitive, out of this plan's clean scope). The
 convert.rs→arrow + ci.yml drop are held for the follow-up that lands #1 + the
 match arrow-port together, verified in CI.
 
+### CORRECTED SCOPE (feasibility proven 2026-07-14) — the match port is FEASIBLE, not multi-week
+
+The needed arrow primitives ALREADY EXIST (verified by probe on this box, native=0):
+- `Frame.derive_matchkey([(field, transforms)…])` — arrow-native matchkey derivation
+  (the dedupe eager path uses it; `compute_matchkeys` is the OLD polars-only twin).
+- `Frame.derive_standardized_column(col, names)` — arrow standardize.
+- `find_exact_matches(frame, mk)` — DUAL-REP (accepts a seam Frame OR a `pa.Table`).
+- `build_blocks(pa.Table, blocking)` — arrow ✓; `score_buckets` — arrow ✓.
+- `_apply_domain_extraction` — already dual-rep.
+- Combined-frame build: `pyarrow.concat_tables` (the seam has no vstack).
+
+So the drop is NOT "replicate the multi-week dedupe eviction." It is a **focused
+arrow port of `run_match_df` + `_run_match_pipeline`** (~275 lines, pipeline.py
+3816-4092): build the combined frame as a `pa.Table`; thread it through the stages
+above (swap `compute_matchkeys`→`derive_matchkey`, `apply_standardization`→
+`derive_standardized_column`, and the output stage's `combined_df.filter(pl.col)`
+/`.to_dicts()`/`pl.DataFrame(rows)` → pyarrow-compute filters / `.to_pylist()` /
+`pa.Table.from_pylist`). Best done as a NEW frame-lane-gated arrow path (mirroring
+`_run_dedupe_pipeline`'s `_frame_lane_eligible` gate at pipeline.py:1000) so the
+existing polars path stays byte-identical, with the arrow path proven by a
+**linkage-parity harness** (arrow-input `match_df` must produce byte-identical
+matched pairs to polars-input — the eviction's own standard). Then #1 (bridge
+glue) + convert.rs→arrow + ci.yml drop land alongside. A partial exact-only port
+that only greens the two bridge match tests is NOT acceptable — it would leave
+fuzzy/weighted `match_df` broken polars-absent in production.
+
+Est: one focused session (design + parity harness + staged port + CI). Not this
+session's scope, but a well-defined next step — not the open-ended blocker the
+earlier notes implied.
+
 ## The central fact
 
 The `rust` / `rust_pgrx` / coverage lanes carry a `[polars]` extra (the #1747
