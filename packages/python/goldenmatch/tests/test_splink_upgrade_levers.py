@@ -281,17 +281,138 @@ def test_bare_settings_distance_thresholds_lever_reaches_stub():
         )
 
 
-# ── Trained settings: tf_tables/calibration lever bodies not yet implemented ──
+# ── Trained settings: calibration lever body not yet implemented ─────────────
 
 
-def test_trained_settings_tf_tables_lever_reaches_stub():
+def test_trained_settings_calibration_lever_reaches_stub():
     conversion = from_splink(_trained_settings())
     assert conversion.em_model is not None
 
     with pytest.raises(NotImplementedError):
         upgrade_splink_conversion(
-            conversion, _sample_df(), levers={"tf_tables"}, measure=False
+            conversion, _sample_df(), levers={"calibration"}, measure=False
         )
+
+
+# ── Lever 1: TF tables ────────────────────────────────────────────────────────
+
+
+def _trained_settings_with_tf_adjustment():
+    """Trained settings whose first_name comparison's exact-match level
+    carries ``tf_adjustment_column`` -- converts to a field with
+    ``tf_adjustment=True`` (surname stays plain, no tf_adjustment)."""
+    comp = _trained_jw_comparison()
+    comp["comparison_levels"][1]["tf_adjustment_column"] = "first_name"
+    return {
+        "comparisons": [comp, _exact_only_comparison("surname")],
+        "blocking_rules_to_generate_predictions": [
+            'l."first_name" = r."first_name"',
+            'l."surname" = r."surname"',
+        ],
+        "probability_two_random_records_match": 0.0002,
+    }
+
+
+def _skewed_tf_df(n=40):
+    """40 rows with a skewed first_name distribution (alice dominates) and a
+    surname column that never gets a TF table (no tf_adjustment on it)."""
+    first_names = ["alice"] * 20 + ["bob"] * 10 + ["carol"] * 6 + ["dave"] * 4
+    surnames = ["smith", "jones", "brown", "davis"] * (n // 4)
+    return pl.DataFrame({"first_name": first_names[:n], "surname": surnames[:n]})
+
+
+def test_tf_tables_lever_builds_table_for_tf_adjustment_field():
+    conversion = from_splink(_trained_settings_with_tf_adjustment())
+    assert conversion.em_model is not None
+    assert conversion.em_model.tf_freqs is None
+
+    result = upgrade_splink_conversion(
+        conversion, _skewed_tf_df(), levers={"tf_tables"}, measure=False
+    )
+
+    assert result.em_model is not None
+    freqs = result.em_model.tf_freqs["first_name"]
+    assert freqs.keys() == {"alice", "bob", "carol", "dave"}
+    assert freqs["alice"] == pytest.approx(20 / 40)
+    assert sum(freqs.values()) == pytest.approx(1.0)
+    assert result.em_model.tf_collision["first_name"] == pytest.approx(
+        sum(f**2 for f in freqs.values())
+    )
+
+    # Baseline untouched (copy-on-write).
+    assert conversion.em_model.tf_freqs is None
+
+
+def test_tf_tables_lever_skips_field_without_tf_adjustment():
+    conversion = from_splink(_trained_settings_with_tf_adjustment())
+
+    result = upgrade_splink_conversion(
+        conversion, _skewed_tf_df(), levers={"tf_tables"}, measure=False
+    )
+
+    assert result.em_model.tf_freqs is not None
+    assert "surname" not in result.em_model.tf_freqs
+    per_field_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:tf_tables" and "surname" in f.message
+    ]
+    assert per_field_findings == []
+
+
+def test_tf_tables_lever_finding_has_field_name_and_distinct_count():
+    conversion = from_splink(_trained_settings_with_tf_adjustment())
+
+    result = upgrade_splink_conversion(
+        conversion, _skewed_tf_df(), levers={"tf_tables"}, measure=False
+    )
+
+    tf_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:tf_tables" and f.severity == "info"
+        and "first_name" in f.message
+    ]
+    assert len(tf_findings) == 1
+    assert "4" in tf_findings[0].message  # distinct-value count
+
+
+def test_tf_tables_lever_skips_field_already_present():
+    conversion = from_splink(_trained_settings_with_tf_adjustment())
+    # Pre-populate the copy scenario: mutate a from_dict-built EMResult fixture
+    # so the imported model already carries a TF table for first_name.
+    conversion.em_model.tf_freqs = {"first_name": {"alice": 1.0}}
+    conversion.em_model.tf_collision = {"first_name": 1.0}
+
+    result = upgrade_splink_conversion(
+        conversion, _skewed_tf_df(), levers={"tf_tables"}, measure=False
+    )
+
+    # Untouched -- the pre-existing table wins, no rebuild.
+    assert result.em_model.tf_freqs["first_name"] == {"alice": 1.0}
+    skip_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:tf_tables" and "already" in f.message.lower()
+    ]
+    assert len(skip_findings) == 1
+    assert "first_name" in skip_findings[0].message
+
+
+def test_tf_tables_lever_null_column_warns_and_skips():
+    conversion = from_splink(_trained_settings_with_tf_adjustment())
+    df = pl.DataFrame(
+        {"first_name": [None] * 10, "surname": ["smith"] * 10}
+    )
+
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"tf_tables"}, measure=False
+    )
+
+    assert result.em_model.tf_freqs is None
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:tf_tables" and f.severity == "warning"
+    ]
+    assert len(warn_findings) == 1
+    assert "first_name" in warn_findings[0].message
 
 
 # ── Unknown lever name ────────────────────────────────────────────────────────

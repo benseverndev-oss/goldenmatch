@@ -184,8 +184,76 @@ def _lever_tf_tables(ctx: _LeverContext) -> None:
     if ctx.conversion.em_model is None:
         ctx.report.info("upgrade:tf_tables", _BARE_SETTINGS_SKIP_MSG, mapped_to="em.tf_freqs")
         return
-    # U2 replaces this stub with the real _build_tf_tables-backed lever.
-    raise NotImplementedError("tf_tables lever body lands in Task U2")
+
+    from goldenmatch.core.probabilistic import _build_tf_tables
+
+    assert ctx.em_model is not None  # guaranteed by the branch above (copy of conversion.em_model)
+
+    mk = ctx.upgraded_config.get_matchkeys()[0]
+    existing_tf_freqs = ctx.em_model.tf_freqs or {}
+    needed_fields = [
+        f for f in mk.fields
+        if getattr(f, "tf_adjustment", False) and f.field is not None
+        and f.field not in existing_tf_freqs
+    ]
+    already_present = [
+        f.field for f in mk.fields
+        if getattr(f, "tf_adjustment", False) and f.field is not None
+        and f.field in existing_tf_freqs
+    ]
+    for field_name in already_present:
+        ctx.report.info(
+            "upgrade:tf_tables",
+            f"field '{field_name}' already has a TF table, skipped",
+            mapped_to="em.tf_freqs",
+        )
+
+    if not needed_fields:
+        if not already_present:
+            ctx.report.info(
+                "upgrade:tf_tables", "no fields need TF tables", mapped_to="em.tf_freqs"
+            )
+        return
+
+    # _build_tf_tables computes tables for ALL tf_adjustment fields on mk in
+    # one call; we only merge the ones that are actually needed below. Fields
+    # with an entirely-null/empty data column come back empty from
+    # value_frequencies and are warned+skipped individually.
+    tf_freqs, tf_collision = _build_tf_tables(ctx.df, mk)
+    tf_freqs = tf_freqs or {}
+    tf_collision = tf_collision or {}
+
+    new_tf_freqs = dict(existing_tf_freqs)
+    new_tf_collision = dict(ctx.em_model.tf_collision or {})
+    for f in needed_fields:
+        field_name = f.field
+        assert field_name is not None
+        freqs = tf_freqs.get(field_name)
+        if not freqs:
+            # Either the column is entirely null/empty, or the field's column
+            # isn't present in ctx.df at all (already guarded by upfront
+            # validation for matchkey fields, so this is the null-column case).
+            ctx.report.warn(
+                "upgrade:tf_tables",
+                f"field '{field_name}' has no non-null values to build a TF "
+                "table from, skipped",
+                mapped_to="em.tf_freqs",
+            )
+            continue
+        new_tf_freqs[field_name] = freqs
+        new_tf_collision[field_name] = tf_collision.get(
+            field_name, sum(p * p for p in freqs.values())
+        )
+        ctx.report.info(
+            "upgrade:tf_tables",
+            f"field '{field_name}': TF table built ({len(freqs)} distinct "
+            f"values, collision rate {new_tf_collision[field_name]:.4f})",
+            mapped_to="em.tf_freqs",
+        )
+
+    if new_tf_freqs:
+        ctx.em_model.tf_freqs = new_tf_freqs
+        ctx.em_model.tf_collision = new_tf_collision
 
 
 def _lever_distance_thresholds(ctx: _LeverContext) -> None:
