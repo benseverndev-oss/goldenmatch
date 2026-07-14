@@ -1193,6 +1193,13 @@ def train_em_continuous(
     P(score|non-match) as Gaussians per field. This preserves the full
     continuous signal and produces better likelihood ratios.
     """
+    if mk.negative_evidence:
+        raise ValueError(
+            "negative_evidence is not supported on the continuous/Winkler FS "
+            "path (train_em_continuous / score_probabilistic_continuous). Use "
+            "the discrete probabilistic path (train_em / load_or_train_em) "
+            "for a matchkey with negative_evidence."
+        )
     if blocking_fields is None:
         blocking_fields = []
 
@@ -1331,6 +1338,13 @@ def score_probabilistic_continuous(
     Computes log-likelihood ratios from Gaussian models of match/non-match
     score distributions. Returns pairs above threshold as normalized 0-1 scores.
     """
+    if mk.negative_evidence:
+        raise ValueError(
+            "negative_evidence is not supported on the continuous/Winkler FS "
+            "path (train_em_continuous / score_probabilistic_continuous). Use "
+            "the discrete probabilistic path (train_em / load_or_train_em) "
+            "for a matchkey with negative_evidence."
+        )
     if exclude_pairs is None:
         exclude_pairs = set()
 
@@ -1431,6 +1445,92 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
     )
 
 
+def fs_weight_range(em: EMResult, mk: MatchkeyConfig) -> tuple[float, float]:
+    """Achievable Fellegi-Sunter total-weight range ``(min_weight, max_weight)``.
+
+    Centralizes the min/max weight-sum computation used for linear-score
+    normalization and threshold calibration -- previously hand-rolled at every
+    scoring/prep site, which meant a missed site silently produced
+    out-of-[0,1] normalized scores as soon as an NE field fired.
+
+    Regular fields: ``sum(min(weights))`` / ``sum(max(weights))`` over
+    ``em.match_weights[f.field]`` for each ``f in mk.fields`` -- unchanged
+    from the pre-NE behavior.
+
+    NE fields (``mk.negative_evidence``):
+      - ``penalty_bits`` set: contributes ``(-abs(penalty_bits), 0.0)`` to
+        (min, max) directly -- no EM entry needed (the fixed-override case).
+      - else: uses the EM-learned ``em.match_weights["__ne__<field>"]``
+        entry, which is stored as ``[w_fired, 0.0]``. ``min``/``max`` over
+        that 2-entry list reproduces ``(min(w_fired, 0), max(w_fired, 0))``
+        for free regardless of ``w_fired``'s sign (it's normally negative).
+      - An NE field with NEITHER (shouldn't happen once ``validate_for``
+        enforces model/matchkey shape parity) is defensively skipped --
+        contributes ``(0.0, 0.0)`` rather than raising.
+    """
+    min_weight = 0.0
+    max_weight = 0.0
+    for f in mk.fields:
+        weights = em.match_weights[f.field]
+        min_weight += min(weights)
+        max_weight += max(weights)
+    for ne in (mk.negative_evidence or []):
+        if ne.penalty_bits is not None:
+            min_weight += -abs(ne.penalty_bits)
+            continue
+        entry = em.match_weights.get(f"__ne__{ne.field}")
+        if entry is None:
+            continue
+        min_weight += min(entry)
+        max_weight += max(entry)
+    return min_weight, max_weight
+
+
+def _ne_scalar_contribution(
+    row_a: dict, row_b: dict, ne: NegativeEvidenceField, em_result: EMResult,
+) -> float:
+    """One NE field's scalar weight contribution for a single pair.
+
+    0.0 unless the field FIRES (:func:`_ne_fired`); when fired, ``-abs(bits)``
+    for the ``penalty_bits`` fixed override, else the EM-learned
+    ``__ne__<field>`` fired-weight (``match_weights[...][0]``).
+    """
+    if not _ne_fired(row_a, row_b, ne):
+        return 0.0
+    if ne.penalty_bits is not None:
+        return -abs(ne.penalty_bits)
+    return em_result.match_weights[f"__ne__{ne.field}"][0]
+
+
+def _add_ne_matrix_contribution(
+    total_weight: np.ndarray,
+    vals: list[str | None],
+    ne: NegativeEvidenceField,
+    em_result: EMResult,
+) -> None:
+    """Add one NE field's fired-weight contribution to an NxN/SxS weight matrix.
+
+    ``vals`` is the NE field's per-row values, already transformed the same
+    way :func:`_ne_fired` transforms them (callers pass the output of
+    :func:`_field_values_for_block` / the batched equivalent, which apply
+    ``ne.transforms`` -- ``NegativeEvidenceField`` has the same ``.field`` /
+    ``.transforms`` shape as ``MatchkeyField``). Fired iff BOTH sides are
+    present + non-empty AND similarity is STRICTLY below ``ne.threshold`` --
+    the same rule as :func:`_ne_fired`, vectorized.
+    """
+    sim = _field_score_matrix_dedup(vals, ne.scorer)
+    inconclusive = np.array([v is None or v == "" for v in vals], dtype=bool)
+    fired = sim < ne.threshold
+    if inconclusive.any():
+        either = inconclusive[:, None] | inconclusive[None, :]
+        fired = fired & ~either
+    if ne.penalty_bits is not None:
+        w_fired = -abs(ne.penalty_bits)
+    else:
+        w_fired = em_result.match_weights[f"__ne__{ne.field}"][0]
+    total_weight += np.where(fired, w_fired, 0.0)
+
+
 def compute_thresholds(
     em_result: EMResult,
     scored_weights: list[float] | None = None,
@@ -1498,8 +1598,15 @@ def score_probabilistic(
     if exclude_pairs is None:
         exclude_pairs = set()
 
-    # Build row lookup
+    # Build row lookup. Extend with NE field names (incl. derive_from
+    # synthesized columns, materialized under the NE field's own name by
+    # precompute_matchkey_transforms) so an NE-only field (the canonical
+    # phone example -- not in mk.fields) is present for _ne_fired to read,
+    # mirroring train_em's row_lookup projection.
     cols = [f.field for f in mk.fields if f.field != "__record__"]
+    for ne in (mk.negative_evidence or []):
+        if ne.field not in cols:
+            cols.append(ne.field)
     row_lookup: dict[int, dict] = {}
     from goldenmatch.core.frame import to_frame as _tf_d5c
 
@@ -1511,8 +1618,7 @@ def score_probabilistic(
     row_ids = _to_frame_d5(block_df).column("__row_id__").to_list()
 
     # Compute weight range for normalization
-    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
-    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
 
     calibrated = _fs_calibration_mode() == "posterior"
@@ -1524,6 +1630,7 @@ def score_probabilistic(
     else:
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
+    ne_fields = mk.negative_evidence or []
     results = []
     for i in range(len(row_ids)):
         for j in range(i + 1, len(row_ids)):
@@ -1540,6 +1647,8 @@ def score_probabilistic(
             total_weight = 0.0
             for k, f in enumerate(mk.fields):
                 total_weight += em_result.match_weights[f.field][vec[k]]
+            for ne in ne_fields:
+                total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
 
             if calibrated:
                 normalized = posterior_from_weight(total_weight, prior_w)
@@ -1769,8 +1878,7 @@ def score_probabilistic_vectorized(
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
 
-    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
-    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
 
     if mk.link_threshold is not None:
@@ -1794,6 +1902,10 @@ def score_probabilistic_vectorized(
             lvl = np.where(either_null, 0, lvl)
         total_weight += weights[lvl]
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n)
+
+    for ne in (mk.negative_evidence or []):
+        ne_vals = _field_values_for_block(block_df, ne, n)
+        _add_ne_matrix_contribution(total_weight, ne_vals, ne, em_result)
 
     if calibrated:
         logodds = prior_w + total_weight
@@ -1881,8 +1993,7 @@ def score_probabilistic_vectorized_batch(
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
-    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
-    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
     if mk.link_threshold is not None:
         link_threshold = mk.link_threshold
@@ -1905,6 +2016,12 @@ def score_probabilistic_vectorized_batch(
             lvl = np.where(either_null, 0, lvl)
         total_weight += weights[lvl]
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, S)
+
+    for ne in (mk.negative_evidence or []):
+        ne_vals: list[str | None] = []
+        for bdf, (s, e) in zip(block_dfs, spans):
+            ne_vals.extend(_field_values_for_block(bdf, ne, e - s))
+        _add_ne_matrix_contribution(total_weight, ne_vals, ne, em_result)
 
     if calibrated:
         logodds = prior_w + total_weight
@@ -2172,8 +2289,12 @@ def score_probabilistic_native(
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
-    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
-    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    # NE never crosses the FFI (the kernel's score_one doesn't implement it) --
+    # a future kernel port adds FS_SUPPORTS_NE. `_fs_native_eligible` declines
+    # NE-bearing matchkeys, so `fs_weight_range` sees no NE fields here in
+    # practice; centralized anyway so this site can't drift from the other
+    # scoring paths for non-NE configs.
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
     if mk.link_threshold is not None:
         link_threshold = float(mk.link_threshold)
@@ -2246,13 +2367,14 @@ def score_pair_probabilistic(
     """Score a single pair using Fellegi-Sunter weights. For match_one."""
     vec = comparison_vector(row_a, row_b, mk)
 
-    max_weight = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
-    min_weight = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
 
     total_weight = 0.0
     for k, f in enumerate(mk.fields):
         total_weight += em_result.match_weights[f.field][vec[k]]
+    for ne in (mk.negative_evidence or []):
+        total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
 
     if _fs_calibration_mode() == "posterior":
         return posterior_from_weight(total_weight, prior_weight(em_result.proportion_matched))

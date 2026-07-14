@@ -68,7 +68,7 @@ def _resolve_probabilistic_fast_path(
       - em_result has match_weights for every field.
     """
     from goldenmatch.core.matchkey import _xform_sig
-    from goldenmatch.core.probabilistic import compute_thresholds
+    from goldenmatch.core.probabilistic import compute_thresholds, fs_weight_range
 
     if mk.type != "probabilistic":
         return None
@@ -76,8 +76,6 @@ def _resolve_probabilistic_fast_path(
         return None
 
     field_specs: list[ProbFieldSpec] = []
-    max_weight = 0.0
-    min_weight = 0.0
     for f in mk.fields:
         # Per-pair callable. None when scorer is model-backed or unknown.
         fn = _resolve_score_pair_callable(f.scorer)
@@ -103,8 +101,6 @@ def _resolve_probabilistic_fast_path(
             float(f.partial_threshold),
             [float(w) for w in weights],
         ))
-        max_weight += max(weights)
-        min_weight += min(weights)
 
     # Resolve threshold the same way the slow path does.
     if mk.link_threshold is not None:
@@ -113,6 +109,11 @@ def _resolve_probabilistic_fast_path(
         link_threshold, _ = compute_thresholds(em_result)
         link_threshold = float(link_threshold)
 
+    # Centralized range (fs_weight_range) rather than a hand-rolled sum --
+    # this fast path's per-pair loop doesn't score NE fields (N4 adds the
+    # negative_evidence decline to this gate), so this only changes behavior
+    # once an NE-bearing matchkey reaches here, which N4 closes.
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
     return field_specs, link_threshold, max_weight, min_weight, weight_range
 
