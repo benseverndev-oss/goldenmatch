@@ -22,6 +22,7 @@ import copy
 import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from pathlib import Path
 
 import polars as pl
@@ -456,6 +457,7 @@ def _lever_calibration(ctx: _LeverContext) -> None:
         _sample_blocked_pairs,
         comparison_vector,
         compute_thresholds,
+        posterior_from_weight,
     )
 
     mapped_to = "matchkeys[0].link_threshold/review_threshold"
@@ -558,7 +560,32 @@ def _lever_calibration(ctx: _LeverContext) -> None:
         return
     normalized = [(w - min_weight) / weight_range for w in total_weights]
 
-    link, review = compute_thresholds(em, scored_weights=normalized)
+    # em.proportion_matched has TWO different semantics depending on origin:
+    # GM's own train_em estimates it ON BLOCKED PAIRS (the within-block match
+    # rate compute_thresholds' percentile math expects), while an imported
+    # Splink model carries probability_two_random_records_match -- a RANDOM-
+    # PAIR prior, orders of magnitude below the post-blocking rate. Feeding
+    # the raw prior into the percentile cut pushes link into the extreme top
+    # of the blocked-pair distribution and collapses recall (dogfood bench,
+    # real_time_settings/fake_1000: F1 0.482 -> 0.157). Re-estimate the
+    # within-block rate from the model's own likelihood ratios under an
+    # equal-odds prior (prior weight 0): the mean pair posterior
+    # 2^w / (1 + 2^w) over the scored candidates. The mis-scaled imported
+    # prior is deliberately discarded rather than trusted; when it errs, this
+    # estimator errs HIGH (uninformative pairs pull toward 0.5), which only
+    # loosens the percentile cut toward compute_thresholds' 0.40 link floor
+    # -- the safe direction (erring low reproduces the recall collapse).
+    # Bench validation vs truth: 0.539 est / 0.547 true and 0.485 / 0.484 on
+    # the two well-separated pairs; 0.708 / 0.307 (high, floor-safe) on the
+    # borderline-heavy one. The scratch copy keeps the SHIPPED model's
+    # proportion_matched untouched: the re-estimated rate only parameterizes
+    # this threshold computation.
+    within_block_rate = sum(
+        posterior_from_weight(w, 0.0) for w in total_weights
+    ) / len(total_weights)
+    em_scratch = _dc_replace(em, proportion_matched=within_block_rate)
+
+    link, review = compute_thresholds(em_scratch, scored_weights=normalized)
     mk.link_threshold = link
     mk.review_threshold = review
 
@@ -569,7 +596,10 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     ctx.report.info(
         "upgrade:calibration",
         f"link_threshold={link}, review_threshold={review} calibrated from "
-        f"{n} blocked candidate pairs (normalized weight p50={p50:.4f}, "
+        f"{n} blocked candidate pairs (within-block match rate estimated "
+        f"{within_block_rate:.4f} from model likelihood ratios; imported "
+        f"random-pair prior {em.proportion_matched:.4f} discarded as "
+        f"mis-scaled post-blocking; normalized weight p50={p50:.4f}, "
         f"p95={p95:.4f})",
         mapped_to=mapped_to,
     )

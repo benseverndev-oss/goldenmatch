@@ -848,6 +848,64 @@ def test_calibration_lever_posterior_mode_skips(monkeypatch):
     assert "posterior" in info_findings[0].message.lower()
 
 
+def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
+    """An imported Splink model carries probability_two_random_records_match
+    -- a RANDOM-PAIR prior -- in proportion_matched, not the within-block
+    match rate compute_thresholds' percentile math expects (GM's own
+    train_em estimates lambda ON blocked pairs). Trusting the raw prior on
+    match-dense blocks cuts at the extreme top of the blocked-pair
+    distribution (link -> the 0.95 clamp) and collapses recall. The lever
+    must re-estimate the within-block rate from the model's own likelihood
+    ratios (mean pair posterior under an equal-odds prior) before computing
+    thresholds -- and must NOT mutate the shipped model's
+    proportion_matched while doing so."""
+    settings = {
+        "comparisons": [_trained_jw_comparison(), _trained_exact_comparison("surname")],
+        "blocking_rules_to_generate_predictions": ['l."surname" = r."surname"'],
+        "probability_two_random_records_match": 0.001,
+    }
+    conversion = from_splink(settings)
+
+    # 6 surname blocks of 5 IDENTICAL first_names (6 * C(5,2) = 60 exact-dupe
+    # pairs) + one block of 11 unrelated names (C(11,2) = 55 non-match pairs)
+    # = 115 blocked pairs, true within-block match rate ~0.52.
+    fn: list[str] = []
+    sn: list[str] = []
+    for i, s in enumerate(["smith", "jones", "brown", "davis", "clark", "lewis"]):
+        fn.extend([f"dupe{i}"] * 5)
+        sn.extend([s] * 5)
+    unrelated = [
+        "carol", "dave", "erin", "frank", "grace", "henry",
+        "irene", "jack", "karen", "louis", "xavier",
+    ]
+    fn.extend(unrelated)
+    sn.extend(["walker"] * len(unrelated))
+    df = pl.DataFrame({"first_name": fn, "surname": sn})
+
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"calibration"}, measure=False
+    )
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold is not None
+    # Raw 0.001 prior -> link_idx at the 99.8th percentile of 115 pairs, deep
+    # in the saturated exact-dupe top (normalized 1.0, clamped to 0.95). The
+    # E-step estimate (~0.5) pulls the cut down into the distribution body.
+    assert upgraded_mk.link_threshold <= 0.5
+    # Copy-on-write: the shipped upgraded model keeps the imported prior.
+    assert result.em_model is not None
+    assert result.em_model.proportion_matched == pytest.approx(0.001)
+    assert conversion.em_model is not None
+    assert conversion.em_model.proportion_matched == pytest.approx(0.001)
+
+    findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "info"
+    ]
+    assert len(findings) == 1
+    assert "within-block" in findings[0].message
+
+
 def test_lever_order_tf_tables_then_distance_then_calibration():
     """All three levers emit at least one finding on any trained run; their
     first occurrences must appear in canonical registry order."""
