@@ -138,11 +138,15 @@ def _fuzzy_frame(n: int = 400) -> pl.DataFrame:
 def test_dedupe_df_attaches_native_summary():
     res = gm.dedupe_df(_fuzzy_frame(), fuzzy={"name": 0.85}, blocking=["zip"])
     assert res.native is not None
-    # A fuzzy matchkey over a blocked frame exercises the scoring hot path; the
-    # cdist field-score matrix records `field_scoring` whether it dispatched to
-    # the kernel (native build present) or fell back to rapidfuzz.
+    # A fuzzy matchkey over a blocked frame exercises the scoring hot path. The
+    # legacy per-block path records `field_scoring` (the cdist field-score matrix);
+    # the DEFAULT bucket scorer records `block_scoring`. Either means the native
+    # scoring hot path was exercised.
     assert res.native.hot_path_exercised is True
-    assert "field_scoring" in res.native.components
+    assert (
+        "field_scoring" in res.native.components
+        or "block_scoring" in res.native.components
+    )
 
 
 def test_match_df_attaches_native_summary():

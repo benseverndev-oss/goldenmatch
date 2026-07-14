@@ -43,6 +43,17 @@ from goldenmatch.core.bench import record_metrics, stage
 
 logger = logging.getLogger(__name__)
 
+
+def _bkt_debug_on() -> bool:
+    """Whether the verbose `[score_buckets]` diagnostics print. OFF by default:
+    now that bucket is the DEFAULT scorer, unconditional prints to stdout would
+    corrupt any tool that parses a dedupe's stdout (e.g. the frame-diff harness's
+    JSON subprocess). Set GOLDENMATCH_BUCKET_DEBUG=1 to re-enable."""
+    return os.environ.get("GOLDENMATCH_BUCKET_DEBUG", "0") not in (
+        "0", "", "false", "False", "no", "off",
+    )
+
+
 # One-time guard so the stale-native-wheel warning (issue #688) fires at most
 # once per process instead of once per score_buckets call.
 _WARNED_STALE_NATIVE_WHEEL = False
@@ -378,7 +389,8 @@ def _resolve_fast_path(
     # the slow find_fuzzy_matches path can be debugged without rebuilding.
     # Print once per call (i.e. per matchkey resolution), not per pair.
     def _decline(reason: str) -> None:
-        print(f"[score_buckets._resolve_fast_path] declined: {reason}", flush=True)
+        if _bkt_debug_on():
+            print(f"[score_buckets._resolve_fast_path] declined: {reason}", flush=True)
 
     if mk.type != "weighted":
         _decline(f"mk.type={mk.type!r} (need 'weighted')")
@@ -430,15 +442,16 @@ def _resolve_fast_path(
     # Diagnostic on the success path: log matchkey shape so we can compare
     # what the controller commits at different row counts (rerank thresholds
     # and NE promotion are scale-dependent).
-    scorer_names = [s for _, _, _, s in field_specs]
-    ne_scorers = [getattr(e, "scorer", "?") for e in (mk.negative_evidence or [])]
-    print(
-        f"[score_buckets._resolve_fast_path] ENGAGED: "
-        f"n_fields={len(mk.fields)} scorers={scorer_names} "
-        f"threshold={mk.threshold} rerank={getattr(mk, 'rerank', False)} "
-        f"ne_scorers={ne_scorers} ne_resolved={len(ne_specs)}",
-        flush=True,
-    )
+    if _bkt_debug_on():
+        scorer_names = [s for _, _, _, s in field_specs]
+        ne_scorers = [getattr(e, "scorer", "?") for e in (mk.negative_evidence or [])]
+        print(
+            f"[score_buckets._resolve_fast_path] ENGAGED: "
+            f"n_fields={len(mk.fields)} scorers={scorer_names} "
+            f"threshold={mk.threshold} rerank={getattr(mk, 'rerank', False)} "
+            f"ne_scorers={ne_scorers} ne_resolved={len(ne_specs)}",
+            flush=True,
+        )
     return (float(mk.threshold), total_weight, field_specs, ne_specs)
 
 
@@ -534,7 +547,8 @@ def score_buckets(
     # Three 5M Linux runs hung mid-score_buckets with no substage closing;
     # these prints expose the actual hang line.
     _t0 = time.perf_counter()
-    print(f"[score_buckets] entry: prepared_df.height={_prep_frame.height} n_buckets={n_buckets}", flush=True)
+    if _bkt_debug_on():
+        print(f"[score_buckets] entry: prepared_df.height={_prep_frame.height} n_buckets={n_buckets}", flush=True)
 
     # Verbose per-bucket timing breakdown (issue #688 diagnosis aid). OFF by
     # default; set GOLDENMATCH_BUCKET_DEBUG=1 to split every native bucket call
@@ -601,13 +615,27 @@ def score_buckets(
             for col in block_key_sources:
                 if col in _prep_frame.columns and col not in keep:
                     keep.append(col)
+            # The find_fuzzy_matches fallback (used when the fast path can't
+            # resolve a scorer -- ensemble / embedding / etc.) reads the RAW
+            # matchkey + negative-evidence field columns and applies the
+            # transforms itself. Keep them, else those fields silently vanish and
+            # bucket diverges from the legacy per-block path (e.g. NE penalty
+            # dropped -> a pair legacy separates gets merged).
+            for _f in (mk.fields or []):
+                if _f.field in _prep_frame.columns and _f.field not in keep:
+                    keep.append(_f.field)
+            for _ne in (getattr(mk, "negative_evidence", None) or []):
+                _nf = getattr(_ne, "field", None)
+                if _nf and _nf in _prep_frame.columns and _nf not in keep:
+                    keep.append(_nf)
             slim_frame = _prep_frame.select(keep)
             slim_df = slim_frame.native
-            print(
-                f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: slim projection "
-                f"{len(_prep_frame.columns)} -> {len(keep)} cols",
-                flush=True,
-            )
+            if _bkt_debug_on():
+                print(
+                    f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: slim projection "
+                    f"{len(_prep_frame.columns)} -> {len(keep)} cols",
+                    flush=True,
+                )
     else:
         slim_frame = _prep_frame
         slim_df = prepared_df
@@ -683,12 +711,13 @@ def score_buckets(
         if _build is not None and frozen_exclude:
             _t_eb = time.perf_counter()
             native_exclude_handle = _build(list(frozen_exclude))
-            print(
-                f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
-                f"build_exclude_set({len(frozen_exclude)} pairs) in "
-                f"{time.perf_counter()-_t_eb:.2f}s",
-                flush=True,
-            )
+            if _bkt_debug_on():
+                print(
+                    f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
+                    f"build_exclude_set({len(frozen_exclude)} pairs) in "
+                    f"{time.perf_counter()-_t_eb:.2f}s",
+                    flush=True,
+                )
         elif _build is None and frozen_exclude:
             # Stale/old native wheel: no Arc-handle path available. The worker
             # falls back to empty-exclude + Python post-filter (see below).
@@ -990,8 +1019,19 @@ def score_buckets(
                 if prob_scorer is not None:
                     pairs = prob_scorer(block_df, frozen_exclude)
                 else:
+                    # find_fuzzy_matches (the fallback the slow path uses for
+                    # scorers the fast path can't resolve -- ensemble / embedding /
+                    # etc.) is polars-only; on the arrow lane give it a polars
+                    # block so it does not AttributeError on `.to_dicts()`. Then
+                    # every scorer + the NE penalty math run exactly as in the
+                    # legacy per-block path (bucket-vs-legacy parity).
+                    _fm_block = (
+                        block_df
+                        if isinstance(block_df, pl.DataFrame)
+                        else pl.from_arrow(block_df)
+                    )
                     pairs = find_fuzzy_matches(
-                        block_df, mk,
+                        _fm_block, mk,
                         exclude_pairs=frozen_exclude,
                         pre_scored_pairs=None,
                     )
@@ -1032,7 +1072,8 @@ def score_buckets(
                 "__block_key__",
                 _slim_frame.derive_block_key(key.fields, key.transforms or []),
             ).native
-            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
+            if _bkt_debug_on():
+                print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
 
         # #422 fix 1: small-block fast path. When prepared_df.height < n_buckets,
         # the hash + partition_by step always collapses to 1 non-empty bucket
@@ -1046,12 +1087,13 @@ def score_buckets(
             # Wrap in a single-bucket dict to share the scoring path below
             # (native frames: pl.DataFrame or pa.Table by lane).
             buckets_dict: dict[Any, Any] = {0: bucketed}
-            print(
-                f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
-                f"small-block fast path (height={_prep_frame.height} < n_buckets={n_buckets}); "
-                f"skipping hash+partition_by. See #422.",
-                flush=True,
-            )
+            if _bkt_debug_on():
+                print(
+                    f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
+                    f"small-block fast path (height={_prep_frame.height} < n_buckets={n_buckets}); "
+                    f"skipping hash+partition_by. See #422.",
+                    flush=True,
+                )
         else:
             _tb = time.perf_counter()
             # Adds an i64 __bucket__ column at 10M rows -- ~80 MB of int64 plus
@@ -1069,7 +1111,8 @@ def score_buckets(
                     )
                     .native
                 )
-            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
+            if _bkt_debug_on():
+                print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucketed (hash %% N) in {time.perf_counter()-_tb:.2f}s", flush=True)
 
             with stage("bucket_partition"):
                 _tp = time.perf_counter()
@@ -1086,13 +1129,15 @@ def score_buckets(
                 # original contiguous parents are dead weight now.
                 del keyed
                 del bucketed
-                print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
+                if _bkt_debug_on():
+                    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
         with stage("bucket_post_partition_setup"):
             # len() works on both native frames (pl rows / pa num_rows).
             non_empty_buckets = [b for b in buckets_dict.values() if len(b) > 0]
             n_non_empty_buckets = len(non_empty_buckets)
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
+        if _bkt_debug_on():
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
         pass_pairs: list[tuple[int, int, float]] = []
         pass_blocks_scored = 0
@@ -1111,7 +1156,8 @@ def score_buckets(
                 path_label = "probabilistic_vectorized"
             else:
                 path_label = "find_fuzzy_matches"
-            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
+            if _bkt_debug_on():
+                print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
             if max_workers <= 1 or n_non_empty_buckets <= 2:
                 for bucket_df in non_empty_buckets:
                     pairs, n = worker(bucket_df)
@@ -1122,7 +1168,8 @@ def score_buckets(
                     for pairs, n in pool.map(worker, non_empty_buckets):
                         pass_pairs.extend(pairs)
                         pass_blocks_scored += n
-        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {len(pass_pairs)} pairs", flush=True)
+        if _bkt_debug_on():
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {len(pass_pairs)} pairs", flush=True)
         return pass_pairs, pass_blocks_scored, n_non_empty_buckets
 
     all_pairs: list[tuple[int, int, float]] = []
@@ -1165,14 +1212,15 @@ def score_buckets(
         def _pct(x: float) -> float:
             return (100.0 * x / tot_s) if tot_s > 0 else 0.0
 
-        print(
-            "[score_buckets][DEBUG] native bucket-call breakdown over "
-            f"{n_calls} calls / {n_blocks} blocks / {n_pairs} pairs "
-            f"(set GOLDENMATCH_BUCKET_DEBUG=0 to silence):\n"
-            f"  prep   (sort+group_by+to_arrow): {prep_s:7.3f}s ({_pct(prep_s):5.1f}%)\n"
-            f"  kernel (score_block_pairs_arrow): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
-            f"  post   (match-mode filter):       {post_s:7.3f}s ({_pct(post_s):5.1f}%)\n"
-            f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
-            flush=True,
-        )
+        if _bkt_debug_on():
+            print(
+                "[score_buckets][DEBUG] native bucket-call breakdown over "
+                f"{n_calls} calls / {n_blocks} blocks / {n_pairs} pairs "
+                f"(set GOLDENMATCH_BUCKET_DEBUG=0 to silence):\n"
+                f"  prep   (sort+group_by+to_arrow): {prep_s:7.3f}s ({_pct(prep_s):5.1f}%)\n"
+                f"  kernel (score_block_pairs_arrow): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
+                f"  post   (match-mode filter):       {post_s:7.3f}s ({_pct(post_s):5.1f}%)\n"
+                f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
+                flush=True,
+            )
     return all_pairs

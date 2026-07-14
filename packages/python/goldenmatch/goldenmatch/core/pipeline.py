@@ -107,6 +107,23 @@ def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
         return False  # ray / duckdb / datafusion / chunked keep explicit routing
     if _columnar_pipeline_enabled():
         return False  # explicit GOLDENMATCH_COLUMNAR_PIPELINE opt-in wins
+    # The prepared-record / partitioned-block store path is a build_blocks feature
+    # bucket skips entirely (it materializes bucketed blocks itself) -- keep legacy.
+    # An explicit backend='bucket' still opts in.
+    if getattr(config, "prepared_record_store", False) or getattr(
+        config, "partitioned_block_scoring", False
+    ):
+        return False
+    # Bucket derives FIELD-based block keys (blocking.passes/keys). lsh / ann /
+    # learned / canopy / sorted_neighborhood generate candidates from signatures /
+    # embeddings / learned predicates that bucket does not replicate -> it would
+    # split near-dups the legacy path merges. Keep those on legacy (tracked gap:
+    # test_bucket_legacy_parity_matrix). static / multi_pass are validated identical.
+    _blk = getattr(config, "blocking", None)
+    if _blk is not None and getattr(_blk, "strategy", None) not in (
+        None, "static", "multi_pass",
+    ):
+        return False
     # Controller profiling: keep the legacy per-block path so auto-config reads the
     # SAME block-size distribution signals it always has (bucket emits different
     # profile stages -> would shift the controller's refit decisions / oscillate).
