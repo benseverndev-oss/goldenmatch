@@ -6,6 +6,8 @@ Follows the CliRunner harness from tests/test_cli_import_splink.py. No
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import polars as pl
 import yaml
@@ -374,6 +376,55 @@ def test_sample_cap_and_id_column_threaded(tmp_path, monkeypatch):
     assert captured["id_column"] == "unique_id"
 
 
-# ── 7. Regression: unrelated non-upgrade behavior stays untouched ───────────
-# (Covered by the full, unmodified tests/test_cli_import_splink.py file --
+# ── 7. Regression: non-upgrade stdout stays byte-identical to pre-refactor ──
+# (Complements the full, unmodified tests/test_cli_import_splink.py file --
 # run alongside this file in CI/pre-push.)
+
+
+def test_non_upgrade_combined_line_after_table(tmp_path):
+    """The pre---upgrade CLI printed ONE combined line, AFTER the findings
+    table: 'Wrote config to <path>. <summary>'. Pin that exact content and
+    position (the --upgrade refactor must not perturb the legacy path).
+
+    Uses a short relative output path inside isolated_filesystem: rich
+    word-wraps at 80 cols and splits long tmp paths mid-word, which would
+    make exact-content matching depend on the wrap point.
+    """
+    settings = _bare_settings()
+    # Cross-column condition -> recognize_level() rejects it -> warning
+    # finding -> a findings table is guaranteed rendered.
+    settings["comparisons"][0]["comparison_levels"].insert(
+        3,
+        {
+            "sql_condition": (
+                'jaro_winkler_similarity("first_name_l", "surname_r") >= 0.85'
+            )
+        },
+    )
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_settings(Path("."), settings)
+
+        result = runner.invoke(
+            app, ["import-splink", "settings.json", "-o", "out.yaml"]
+        )
+
+        assert result.exit_code == 0, result.stdout
+
+        # Normalize rich's soft wrapping before matching content.
+        normalized = " ".join(result.stdout.split())
+        table_idx = normalized.find("Splink Conversion Findings")
+        assert table_idx != -1
+
+        # Exact combined-line content: path + summary in ONE line...
+        m = re.search(
+            r"Wrote config to out\.yaml\. "
+            r"\d+ error\(s\), \d+ warning\(s\), \d+ info note\(s\)",
+            normalized,
+        )
+        assert m is not None, normalized
+        # ... appearing AFTER the findings-table marker.
+        assert m.start() > table_idx
+        # And the summary is not printed anywhere on its own BEFORE the
+        # combined line (pre-refactor printed it exactly once, combined).
+        assert normalized.count("error(s)") == 1

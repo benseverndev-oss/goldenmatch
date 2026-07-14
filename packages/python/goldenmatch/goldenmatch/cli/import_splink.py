@@ -77,8 +77,9 @@ def _render_delta_table(measurement) -> Table:
     return table
 
 
-def _write_pair(config, yaml_path: str, em_model, model_out: str | None) -> None:
-    """Write one (config, trained-model) pair to disk.
+def _write_pair(config, yaml_path: str, em_model, model_out: str | None) -> bool:
+    """Write one (config, trained-model) pair to disk. Returns True when the
+    model was persisted (so the caller can report it).
 
     Mirrors the single-pair ordering/guard semantics used pre-`--upgrade`:
     set model_path in-memory first, write the YAML config, THEN persist the
@@ -87,12 +88,15 @@ def _write_pair(config, yaml_path: str, em_model, model_out: str | None) -> None
     input covering only some matchkey fields) rather than shipping a
     config+model pair that would fail FS model validation at runtime.
 
+    Silent on stdout (error messages still go to stderr before exiting) --
+    the CALLERS own all success/warning output, so the non-`--upgrade` path
+    can reproduce the pre-refactor stdout byte-for-byte.
+
     Raises `typer.Exit(1)` on any write/refusal failure -- callers that
     write multiple pairs (the `--upgrade` baseline-then-upgraded sequence)
-    rely on this to guarantee a failure on pair N never runs pair N+1, so a
-    written baseline is never left without... itself: the baseline is
-    always written FIRST, so an upgraded-pair failure still leaves a
-    complete, usable baseline pair on disk.
+    rely on this to guarantee a failure on pair N never runs pair N+1: the
+    baseline is always written FIRST, so an upgraded-pair failure still
+    leaves a complete, usable baseline pair on disk.
     """
     persist_model = em_model is not None and bool(model_out)
 
@@ -107,17 +111,8 @@ def _write_pair(config, yaml_path: str, em_model, model_out: str | None) -> None
         if missing_fields:
             persist_model = False
 
-    if em_model is not None:
-        if persist_model:
-            config.matchkeys[0].model_path = model_out
-        elif not model_out:
-            console.print(
-                "[yellow]Warning:[/yellow] the Splink input carried trained m/u "
-                "probabilities, but they were NOT persisted -- pass "
-                "[bold]--model-out[/bold] <path> to keep them. The output "
-                f"config [cyan]{yaml_path}[/cyan] will re-train via EM on "
-                "first run instead."
-            )
+    if persist_model:
+        config.matchkeys[0].model_path = model_out
 
     dumped = config.model_dump(exclude_none=True, exclude_defaults=True)
     try:
@@ -153,12 +148,8 @@ def _write_pair(config, yaml_path: str, em_model, model_out: str | None) -> None
                 "matchkeys[0].model_path, but the model file failed to write."
             )
             raise typer.Exit(code=1) from None
-        console.print(
-            f"[green]Trained model persisted to[/green] [cyan]{model_out}[/cyan] "
-            f"(set as matchkeys[0].model_path)."
-        )
 
-    console.print(f"Wrote config to [cyan]{yaml_path}[/cyan].")
+    return persist_model
 
 
 def _baseline_path(path: str) -> str:
@@ -234,13 +225,28 @@ def import_splink_cmd(
         raise typer.Exit(code=1) from None
 
     if upgrade is None:
-        # Existing behavior, byte-unchanged.
-        _write_pair(conversion.config, output, conversion.em_model, model_out)
+        # Existing behavior: stdout is byte-identical to the pre---upgrade
+        # implementation (warning, persisted message, findings table, then
+        # ONE combined "Wrote config to <path>. <summary>" line).
+        if conversion.em_model is not None and not model_out:
+            console.print(
+                "[yellow]Warning:[/yellow] the Splink input carried trained m/u "
+                "probabilities, but they were NOT persisted -- pass "
+                "[bold]--model-out[/bold] <path> to keep them. The output "
+                "config will re-train via EM on first run instead."
+            )
+
+        persisted = _write_pair(conversion.config, output, conversion.em_model, model_out)
+        if persisted:
+            console.print(
+                f"[green]Trained model persisted to[/green] [cyan]{model_out}[/cyan] "
+                f"(set as matchkeys[0].model_path)."
+            )
 
         table = _render_report_table(conversion.report.findings)
         if table is not None:
             console.print(table)
-        console.print(conversion.report.summary())
+        console.print(f"Wrote config to [cyan]{output}[/cyan]. {conversion.report.summary()}")
         return
 
     # --upgrade: a trained-model input needs --model-out to persist the
@@ -276,13 +282,25 @@ def import_splink_cmd(
     # Baseline pair FIRST -- the trust anchor is always on disk before the
     # upgraded pair is attempted, so a failure writing the upgraded pair
     # never leaves an upgraded config without its baseline.
-    _write_pair(result.baseline_config, baseline_yaml, conversion.em_model, baseline_model)
-    _write_pair(result.upgraded_config, output, result.em_model, model_out)
+    baseline_persisted = _write_pair(
+        result.baseline_config, baseline_yaml, conversion.em_model, baseline_model
+    )
+    upgraded_persisted = _write_pair(result.upgraded_config, output, result.em_model, model_out)
 
     table = _render_report_table(result.report.findings)
     if table is not None:
         console.print(table)
     console.print(result.report.summary())
+    console.print(
+        f"Wrote baseline config to [cyan]{baseline_yaml}[/cyan]"
+        + (f" (model: [cyan]{baseline_model}[/cyan])" if baseline_persisted else "")
+        + "."
+    )
+    console.print(
+        f"Wrote upgraded config to [cyan]{output}[/cyan]"
+        + (f" (model: [cyan]{model_out}[/cyan])" if upgraded_persisted else "")
+        + "."
+    )
 
     if result.measurement is not None:
         console.print(_render_delta_table(result.measurement))
