@@ -341,27 +341,100 @@ function parseMatchkeyField(raw: unknown, ctx: string): MatchkeyField {
 }
 
 /**
- * Parse a single negative-evidence entry. Pass-through parsing only: the
- * per-matchkey-type validation matrix (penalty vs penaltyBits) lives in a
- * separate validation seam, not here. `penaltyBits` (probabilistic-only,
- * already camelized from `penalty_bits`) is carried through so loaded
- * configs don't silently lose it.
+ * Parse a single negative-evidence entry. Field-level validation (ranges,
+ * derive_from rejection) lives here; the per-matchkey-TYPE matrix
+ * (penalty vs penaltyBits) lives in `validateNegativeEvidenceMatrix`,
+ * which needs the enclosing matchkey's type/name.
  */
 function parseNegativeEvidenceField(
   raw: unknown,
   ctx: string,
 ): NegativeEvidenceField {
   const obj = asObj(raw, ctx);
-  return stripUndefined({
+
+  // derive_from (camelized to deriveFrom) must be rejected HERE, off the raw
+  // object: the constructed NegativeEvidenceField deliberately has no
+  // deriveFrom property, so unknown keys are dropped before any later check
+  // could see them. goldenmatch-js has no derived-column materialization —
+  // a loaded derive_from NE would silently never fire, the exact silent
+  // failure mode this port exists to kill.
+  if (obj.deriveFrom !== undefined && obj.deriveFrom !== null) {
+    throw new Error(
+      `${ctx}.derive_from: derive_from negative evidence is not supported in ` +
+        `goldenmatch-js (no derived-column materialization). Materialize the ` +
+        `combined column in your data, or use the Python runtime.`,
+    );
+  }
+
+  // Negated-conjunction form (like the levelThresholds check above) so NaN
+  // is rejected too, mirroring Python's ge=0/le=1 bounds (schemas.py).
+  const threshold = asNum(obj.threshold, `${ctx}.threshold`);
+  if (!(threshold >= 0 && threshold <= 1)) {
+    throw new Error(
+      `${ctx}.threshold: must be in [0, 1], got ${threshold}.`,
+    );
+  }
+
+  const penalty = optNum(obj.penalty);
+  if (penalty !== undefined && !(penalty >= 0 && penalty <= 1)) {
+    throw new Error(`${ctx}.penalty: must be in [0, 1], got ${penalty}.`);
+  }
+
+  // penaltyBits (camelized from penalty_bits) is deliberately unconstrained,
+  // matching Python's `penalty_bits: float | None = None` (no ge/le bounds).
+  const penaltyBits = optNum(obj.penaltyBits);
+
+  return {
     field: asStr(obj.field, `${ctx}.field`),
     transforms: Array.isArray(obj.transforms)
       ? (obj.transforms as string[])
       : [],
     scorer: asStr(obj.scorer, `${ctx}.scorer`),
-    threshold: asNum(obj.threshold, `${ctx}.threshold`),
-    penalty: optNum(obj.penalty),
-    penaltyBits: optNum(obj.penaltyBits),
-  }) as unknown as NegativeEvidenceField;
+    threshold,
+    ...(penalty !== undefined ? { penalty } : {}),
+    ...(penaltyBits !== undefined ? { penaltyBits } : {}),
+  };
+}
+
+/**
+ * Per-matchkey-type NE validation matrix. Mirrors Python
+ * `MatchkeyConfig._validate_weighted` (config/schemas.py): weighted/exact
+ * REQUIRE `penalty` and REJECT `penalty_bits`; probabilistic REJECTS
+ * `penalty` and accepts `penalty_bits` or neither (the EM-learned shape).
+ * Every error names the offending knob AND the correct one.
+ */
+function validateNegativeEvidenceMatrix(
+  name: string,
+  type: "exact" | "weighted" | "probabilistic",
+  negativeEvidence: readonly NegativeEvidenceField[] | undefined,
+): void {
+  if (!negativeEvidence) return;
+  for (const ne of negativeEvidence) {
+    if (type === "weighted" || type === "exact") {
+      if (ne.penalty === undefined) {
+        throw new Error(
+          `Matchkey '${name}' (type=${type}): negative_evidence field ` +
+            `'${ne.field}' requires 'penalty' for weighted/exact matchkeys.`,
+        );
+      }
+      if (ne.penaltyBits !== undefined) {
+        throw new Error(
+          `Matchkey '${name}' (type=${type}): negative_evidence field ` +
+            `'${ne.field}' sets 'penalty_bits', which is only valid on ` +
+            `probabilistic matchkeys. Use 'penalty' instead.`,
+        );
+      }
+    } else {
+      // probabilistic
+      if (ne.penalty !== undefined) {
+        throw new Error(
+          `Matchkey '${name}' (type=${type}): negative_evidence field ` +
+            `'${ne.field}' sets 'penalty', but probabilistic matchkeys use ` +
+            `EM-learned NE weights; set 'penalty_bits' to override.`,
+        );
+      }
+    }
+  }
 }
 
 function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
@@ -386,12 +459,16 @@ function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
         parseNegativeEvidenceField(n, `${ctx}.negativeEvidence[${i}]`),
       )
     : undefined;
+  validateNegativeEvidenceMatrix(name, type, negativeEvidence);
 
   if (type === "exact") {
     return stripUndefined({
       name,
       type: "exact" as const,
       fields,
+      // Carried through (previously silently dropped): with NE set, the
+      // exact score-and-threshold path consumes it.
+      threshold: optNum(obj.threshold),
       negativeEvidence,
     }) as MatchkeyConfig;
   }
