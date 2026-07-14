@@ -9,6 +9,27 @@ use pyo3::types::{PyAnyMethods, PyDict};
 use crate::convert;
 use crate::error::BridgeError;
 
+/// Row count of a returned frame, dual-rep: a pyarrow Table exposes `num_rows`,
+/// a polars DataFrame exposes `height`. The core-API functions return arrow
+/// tables (their `.native`) on the arrow lane, so `num_rows` is the default.
+fn frame_row_count<'py>(df: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    if df.hasattr("num_rows")? {
+        df.getattr("num_rows")
+    } else {
+        df.getattr("height")
+    }
+}
+
+/// Records of a returned frame as a Python list[dict], dual-rep: pyarrow
+/// `to_pylist` vs polars `to_dicts`.
+fn frame_to_records<'py>(df: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    if df.hasattr("to_pylist")? {
+        df.call_method0("to_pylist")
+    } else {
+        df.call_method0("to_dicts")
+    }
+}
+
 /// Best-effort serialisation of an AutoConfigController `(profile, history,
 /// committed_config)` triple into the JSON shape consumed by the SQL layer.
 ///
@@ -169,7 +190,7 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
         let json_mod = py.import("json")?;
 
         // Build DataFrame from JSON
-        let df = convert::json_to_polars_df(py, rows_json)?;
+        let df = convert::json_to_arrow_df(py, rows_json)?;
 
         // Parse config JSON to kwargs
         let config_dict = json_mod.call_method1("loads", (config_json,))?;
@@ -203,7 +224,7 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
         // Extract golden DataFrame as JSON
         let golden_json = if let Ok(golden) = result.getattr("golden") {
             if !golden.is_none() {
-                Some(convert::polars_df_to_json(
+                Some(convert::arrow_df_to_json(
                     py,
                     &golden.into_pyobject(py).unwrap().unbind(),
                 )?)
@@ -257,7 +278,7 @@ pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, B
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let df = convert::json_to_polars_df(py, rows_json)?;
+        let df = convert::json_to_arrow_df(py, rows_json)?;
         let cfg = build_full_config(py, config_json)?;
 
         let kwargs = PyDict::new(py);
@@ -266,7 +287,7 @@ pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, B
 
         let golden_json = if let Ok(golden) = result.getattr("golden") {
             if !golden.is_none() {
-                Some(convert::polars_df_to_json(
+                Some(convert::arrow_df_to_json(
                     py,
                     &golden.into_pyobject(py).unwrap().unbind(),
                 )?)
@@ -332,7 +353,7 @@ pub fn autoconfig(rows_json: &str, mode: &str) -> Result<AutoConfigResult, Bridg
     };
 
     Python::with_gil(|py| {
-        let df = convert::json_to_polars_df(py, rows_json)?;
+        let df = convert::json_to_arrow_df(py, rows_json)?;
         let autoconfig_mod = py.import("goldenmatch.core.autoconfig")?;
         let cfg = autoconfig_mod.call_method1(fn_name, (df,))?;
 
@@ -378,8 +399,8 @@ pub fn match_tables(
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let target_df = convert::json_to_polars_df(py, target_json)?;
-        let ref_df = convert::json_to_polars_df(py, reference_json)?;
+        let target_df = convert::json_to_arrow_df(py, target_json)?;
+        let ref_df = convert::json_to_arrow_df(py, reference_json)?;
 
         let config_dict = json_mod.call_method1("loads", (config_json,))?;
 
@@ -404,7 +425,7 @@ pub fn match_tables(
 
         let matched_json = if let Ok(matched) = result.getattr("matched") {
             if !matched.is_none() {
-                Some(convert::polars_df_to_json(
+                Some(convert::arrow_df_to_json(
                     py,
                     &matched.into_pyobject(py).unwrap().unbind(),
                 )?)
@@ -417,7 +438,7 @@ pub fn match_tables(
 
         let unmatched_json = if let Ok(unmatched) = result.getattr("unmatched") {
             if !unmatched.is_none() {
-                Some(convert::polars_df_to_json(
+                Some(convert::arrow_df_to_json(
                     py,
                     &unmatched.into_pyobject(py).unwrap().unbind(),
                 )?)
@@ -468,12 +489,12 @@ pub fn match_pairs(
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let target_df = convert::json_to_polars_df(py, target_json)?;
-        let ref_df = convert::json_to_polars_df(py, reference_json)?;
+        let target_df = convert::json_to_arrow_df(py, target_json)?;
+        let ref_df = convert::json_to_arrow_df(py, reference_json)?;
 
         // target rows occupy combined __row_id__ space 0..target_len-1; the
         // reference's __ref_row_id__ is offset by target_len.
-        let target_len: i64 = target_df.getattr(py, "height")?.extract(py)?;
+        let target_len: i64 = frame_row_count(target_df.bind(py))?.extract()?;
 
         let config_dict = json_mod.call_method1("loads", (config_json,))?;
 
@@ -493,30 +514,21 @@ pub fn match_pairs(
         if matched.is_none() {
             return Ok(vec![]);
         }
-        // v3.0.0: `MatchResult.matched` is a pyarrow Table (indexing yields a
-        // ChunkedArray, which has no `to_list`). Convert to polars at the seam so
-        // the column-extract below (`[col].to_list()`) keeps working unchanged.
-        let matched = {
-            let pl = matched.py().import("polars")?;
-            pl.call_method1("from_arrow", (&matched,))?
-        };
-
-        // Pull the three linkage columns off the matched Polars DataFrame as
-        // Python lists (matched[col].to_list()). The id columns are Int64; the
-        // score column is float. This mirrors the existing pyo3 column-extract
-        // style used elsewhere in the bridge and avoids a serde dependency in
-        // the runtime crate.
+        // v3.0.0: `MatchResult.matched` is a pyarrow Table. Pull the three
+        // linkage columns off it directly, polars-free (arrow-native bridge):
+        // `table.column(name)` -> ChunkedArray -> `to_pylist()` -> Python list.
+        // The id columns are Int64; the score column is float.
         let t_ids: Vec<i64> = matched
-            .get_item("__target_row_id__")?
-            .call_method0("to_list")?
+            .call_method1("column", ("__target_row_id__",))?
+            .call_method0("to_pylist")?
             .extract()?;
         let r_ids: Vec<i64> = matched
-            .get_item("__ref_row_id__")?
-            .call_method0("to_list")?
+            .call_method1("column", ("__ref_row_id__",))?
+            .call_method0("to_pylist")?
             .extract()?;
         let scores: Vec<f64> = matched
-            .get_item("__match_score__")?
-            .call_method0("to_list")?
+            .call_method1("column", ("__match_score__",))?
+            .call_method0("to_pylist")?
             .extract()?;
 
         let mut out = Vec::with_capacity(t_ids.len());
@@ -627,7 +639,7 @@ pub fn dedupe_pairs(rows_json: &str, config_json: &str) -> Result<Vec<ScoredPair
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let df = convert::json_to_polars_df(py, rows_json)?;
+        let df = convert::json_to_arrow_df(py, rows_json)?;
         let config_dict = json_mod.call_method1("loads", (config_json,))?;
 
         let kwargs = PyDict::new(py);
@@ -678,7 +690,7 @@ pub fn dedupe_clusters(
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let df = convert::json_to_polars_df(py, rows_json)?;
+        let df = convert::json_to_arrow_df(py, rows_json)?;
         let config_dict = json_mod.call_method1("loads", (config_json,))?;
 
         let kwargs = PyDict::new(py);
@@ -1228,20 +1240,24 @@ fn build_probabilistic_frame<'py>(
     py: Python<'py>,
     rows_json: &str,
 ) -> Result<Bound<'py, PyAny>, BridgeError> {
-    let pl = py.import("polars")?;
-    let io = py.import("io")?;
-    let string_io = io.call_method1("StringIO", (rows_json,))?;
-    let df = pl.call_method1("read_json", (string_io,))?;
-    let columns: Vec<String> = df.getattr("columns")?.extract()?;
-    if columns.iter().any(|c| c == "__row_id__") {
-        return Ok(df);
+    // Arrow-native (no polars): build a pa.Table and append an Int64
+    // `__row_id__` position column when absent. The FS `train_em` /
+    // `score_probabilistic` core functions accept a pa.Table directly.
+    let pa = py.import("pyarrow")?;
+    let table = convert::json_to_arrow_df(py, rows_json)?.into_bound(py);
+    let names: Vec<String> = table.getattr("column_names")?.extract()?;
+    if names.iter().any(|c| c == "__row_id__") {
+        return Ok(table);
     }
-    let df = df.call_method1("with_row_index", ("__row_id__",))?;
-    let int64 = pl.getattr("Int64")?;
-    let col = pl.call_method1("col", ("__row_id__",))?;
-    let cast = col.call_method1("cast", (int64,))?;
-    let df = df.call_method1("with_columns", (cast,))?;
-    Ok(df)
+    let n_rows: usize = table.getattr("num_rows")?.extract()?;
+    let builtins = py.import("builtins")?;
+    let rng = builtins.call_method1("range", (n_rows,))?;
+    let int64 = pa.getattr("int64")?.call0()?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("type", int64)?;
+    let row_ids = pa.call_method("array", (rng,), Some(&kwargs))?;
+    let table = table.call_method1("append_column", ("__row_id__", row_ids))?;
+    Ok(table)
 }
 
 /// Wrap `goldenmatch.profile_dataframe` -- comprehensive table profile.
@@ -1253,7 +1269,7 @@ pub fn profile_table(rows_json: &str) -> Result<String, BridgeError> {
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
-            let df = convert::json_to_polars_df(py, rows_json)?;
+            let df = convert::json_to_arrow_df(py, rows_json)?;
             let report = gm.call_method1("profile_dataframe", (df,))?;
             py_json_dumps(py, report)
         })();
@@ -1477,7 +1493,7 @@ pub fn validate_table(rows_json: &str, rules_json: &str) -> Result<String, Bridg
             let json_mod = py.import("json")?;
             let builtins = py.import("builtins")?;
 
-            let df = convert::json_to_polars_df(py, rows_json)?;
+            let df = convert::json_to_arrow_df(py, rows_json)?;
             let rules_spec = if rules_json.is_empty() {
                 builtins.call_method0("list")?
             } else {
@@ -1510,9 +1526,9 @@ pub fn validate_table(rows_json: &str, rules_json: &str) -> Result<String, Bridg
 
             let result = PyDict::new(py);
             result.set_item("report", report)?;
-            result.set_item("valid_rows", valid_df.getattr("height")?)?;
-            result.set_item("quarantine_rows", quarantine_df.getattr("height")?)?;
-            result.set_item("quarantine", quarantine_df.call_method0("to_dicts")?)?;
+            result.set_item("valid_rows", frame_row_count(&valid_df)?)?;
+            result.set_item("quarantine_rows", frame_row_count(&quarantine_df)?)?;
+            result.set_item("quarantine", frame_to_records(&quarantine_df)?)?;
             py_json_dumps(py, result.into_any())
         })();
         Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
@@ -1527,14 +1543,14 @@ pub fn autofix_table(rows_json: &str) -> Result<String, BridgeError> {
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
-            let df = convert::json_to_polars_df(py, rows_json)?;
+            let df = convert::json_to_arrow_df(py, rows_json)?;
             let out = gm.call_method1("auto_fix_dataframe", (df,))?;
             let fixed_df = out.get_item(0)?;
             let fixes = out.get_item(1)?;
             let result = PyDict::new(py);
             result.set_item("fixes", fixes)?;
-            result.set_item("fixed_rows", fixed_df.getattr("height")?)?;
-            result.set_item("rows", fixed_df.call_method0("to_dicts")?)?;
+            result.set_item("fixed_rows", frame_row_count(&fixed_df)?)?;
+            result.set_item("rows", frame_to_records(&fixed_df)?)?;
             py_json_dumps(py, result.into_any())
         })();
         Ok(result.unwrap_or_else(|e| error_json(&e.to_string())))
@@ -1549,7 +1565,7 @@ pub fn detect_anomalies(rows_json: &str, sensitivity: &str) -> Result<String, Br
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
-            let df = convert::json_to_polars_df(py, rows_json)?;
+            let df = convert::json_to_arrow_df(py, rows_json)?;
             let sens = if sensitivity.is_empty() {
                 "medium"
             } else {
@@ -1574,7 +1590,7 @@ pub fn preflight(rows_json: &str, config_json: &str) -> Result<String, BridgeErr
         let result: Result<String, BridgeError> = (|| {
             let verify = py.import("goldenmatch.core.autoconfig_verify")?;
             let dataclasses = py.import("dataclasses")?;
-            let df = convert::json_to_polars_df(py, rows_json)?;
+            let df = convert::json_to_arrow_df(py, rows_json)?;
             let config = build_full_config(py, config_json)?;
             let report = verify.call_method1("preflight", (df, config))?;
 
@@ -1608,7 +1624,7 @@ pub fn postflight(rows_json: &str, config_json: &str) -> Result<String, BridgeEr
             let gm = py.import("goldenmatch")?;
             let verify = py.import("goldenmatch.core.autoconfig_verify")?;
             let dataclasses = py.import("dataclasses")?;
-            let df = convert::json_to_polars_df(py, rows_json)?;
+            let df = convert::json_to_arrow_df(py, rows_json)?;
             let config = build_full_config(py, config_json)?;
 
             let dedupe_kwargs = PyDict::new(py);

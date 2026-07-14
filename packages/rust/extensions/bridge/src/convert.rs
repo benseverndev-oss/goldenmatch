@@ -7,63 +7,48 @@
 use crate::error::BridgeError;
 use pyo3::prelude::*;
 
-/// Convert a JSON string of records into a Python Polars DataFrame.
+/// Convert a JSON string of records into a Python **pyarrow Table**.
 ///
-/// Uses Polars' native JSON reader. For table data from Postgres SPI
-/// (which comes as JSON via row_to_json), this is the natural path.
-pub fn json_to_polars_df(py: Python<'_>, json_records: &str) -> Result<PyObject, BridgeError> {
-    let pl = py.import("polars")?;
-    let io = py.import("io")?;
+/// Arrow-native (no polars): `json.loads` -> `pyarrow.Table.from_pylist`. The
+/// goldenmatch core-API surface (dedupe / auto_configure / match + the aux
+/// validate/autofix/anomaly/profile/preflight/postflight functions) is
+/// arrow-native, so a `pa.Table` feeds every call site directly. This is what
+/// lets the bridge lanes run without the `[polars]` extra (D6 zero-polars).
+///
+/// For table data from Postgres SPI (JSON via `row_to_json`), `from_pylist`
+/// infers the schema the same way `pl.read_json` did.
+pub fn json_to_arrow_df(py: Python<'_>, json_records: &str) -> Result<PyObject, BridgeError> {
+    let json_mod = py.import("json")?;
+    let pa = py.import("pyarrow")?;
 
-    let string_io = io.call_method1("StringIO", (json_records,))?;
-    let df = pl.call_method1("read_json", (string_io,))?;
+    let records = json_mod.call_method1("loads", (json_records,))?;
+    let table = pa
+        .getattr("Table")?
+        .call_method1("from_pylist", (records,))?;
 
-    Ok(df.into_pyobject(py).unwrap().unbind())
+    Ok(table.into_pyobject(py).unwrap().unbind())
 }
 
-/// Convert a Python Polars DataFrame (or a pyarrow Table) to a JSON string of records.
+/// Convert a pyarrow Table (or a genuine Polars DataFrame) to a JSON string of records.
 ///
-/// v3.0.0: `DedupeResult.golden` / `MatchResult.matched` are now pyarrow Tables
-/// (no `write_json`). Convert arrow -> polars at this seam; a genuine polars frame
-/// (which has `write_json`) passes through unchanged.
-pub fn polars_df_to_json(py: Python<'_>, df: &PyObject) -> Result<String, BridgeError> {
+/// Arrow-native (no polars): a `pa.Table` goes `to_pylist` -> `json.dumps`. A
+/// genuine polars frame (which still has `write_json`, e.g. when a caller passes
+/// one on the polars lane) passes through `write_json` unchanged for
+/// byte-identical output. `DedupeResult.golden` / `MatchResult.matched` are
+/// pyarrow Tables since v3.0.0, so the arrow branch is the default.
+pub fn arrow_df_to_json(py: Python<'_>, df: &PyObject) -> Result<String, BridgeError> {
     let bound = df.bind(py);
-    let frame = if bound.hasattr("write_json")? {
-        bound.clone()
-    } else {
-        let pl = py.import("polars")?;
-        pl.call_method1("from_arrow", (bound,))?
-    };
-    let json_bytes = frame.call_method0("write_json")?;
-    let json_str: String = json_bytes.extract()?;
+    if bound.hasattr("write_json")? {
+        // Genuine polars frame -> byte-identical legacy path (polars present).
+        let json_bytes = bound.call_method0("write_json")?;
+        let json_str: String = json_bytes.extract()?;
+        return Ok(json_str);
+    }
+    // pa.Table -> list[dict] -> JSON array of record objects.
+    let json_mod = py.import("json")?;
+    let records = bound.call_method0("to_pylist")?;
+    let json_str: String = json_mod.call_method1("dumps", (records,))?.extract()?;
     Ok(json_str)
-}
-
-/// Convert a Python Polars DataFrame to Arrow IPC bytes.
-///
-/// Uses Polars' native `write_ipc` to serialize as Arrow IPC format.
-/// This is much faster than JSON for large DataFrames (avoids string
-/// conversion for every cell).
-pub fn polars_df_to_arrow_ipc(py: Python<'_>, df: &PyObject) -> Result<Vec<u8>, BridgeError> {
-    let io = py.import("io")?;
-    let buf = io.call_method0("BytesIO")?;
-    df.call_method1(py, "write_ipc", (&buf,))?;
-    buf.call_method1("seek", (0,))?;
-    let bytes: Vec<u8> = buf.call_method0("read")?.extract()?;
-    Ok(bytes)
-}
-
-/// Convert Arrow IPC bytes to a Python Polars DataFrame.
-///
-/// Uses Polars' native `read_ipc` to deserialize Arrow IPC format.
-pub fn arrow_ipc_to_polars_df(py: Python<'_>, ipc_bytes: &[u8]) -> Result<PyObject, BridgeError> {
-    let pl = py.import("polars")?;
-    let io = py.import("io")?;
-
-    let buf = io.call_method1("BytesIO", (ipc_bytes,))?;
-    let df = pl.call_method1("read_ipc", (buf,))?;
-
-    Ok(df.into_pyobject(py).unwrap().unbind())
 }
 
 #[cfg(test)]
@@ -75,44 +60,21 @@ mod tests {
         pyo3::prepare_freethreaded_python();
 
         Python::with_gil(|py| {
-            if py.import("polars").is_err() {
-                eprintln!("Skipping test (polars not installed)");
+            // Arrow-native path: needs pyarrow (a hard goldenmatch dep), NOT polars.
+            if py.import("pyarrow").is_err() {
+                eprintln!("Skipping test (pyarrow not installed)");
                 return;
             }
 
             let json = r#"[{"name": "John", "email": "j@x.com"}, {"name": "Jane", "email": "jane@y.com"}]"#;
-            let df = json_to_polars_df(py, json).unwrap();
-            let back = polars_df_to_json(py, &df).unwrap();
+            let df = json_to_arrow_df(py, json).unwrap();
+            // Proof the frame is arrow, not polars.
+            let ty: String = df.bind(py).get_type().name().unwrap().extract().unwrap();
+            assert_eq!(ty, "Table", "json_to_arrow_df must return a pyarrow Table");
 
+            let back = arrow_df_to_json(py, &df).unwrap();
             assert!(back.contains("John"));
             assert!(back.contains("Jane"));
-        });
-    }
-
-    #[test]
-    fn test_arrow_ipc_roundtrip() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            if py.import("polars").is_err() {
-                eprintln!("Skipping test (polars not installed)");
-                return;
-            }
-
-            // Create a DataFrame via JSON
-            let json = r#"[{"name": "John", "score": 0.95}, {"name": "Jane", "score": 0.87}]"#;
-            let df = json_to_polars_df(py, json).unwrap();
-
-            // Roundtrip through Arrow IPC
-            let ipc_bytes = polars_df_to_arrow_ipc(py, &df).unwrap();
-            assert!(!ipc_bytes.is_empty());
-
-            let df2 = arrow_ipc_to_polars_df(py, &ipc_bytes).unwrap();
-            let json2 = polars_df_to_json(py, &df2).unwrap();
-
-            assert!(json2.contains("John"));
-            assert!(json2.contains("Jane"));
-            assert!(json2.contains("0.95"));
         });
     }
 }
