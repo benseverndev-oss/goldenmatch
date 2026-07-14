@@ -977,7 +977,7 @@ def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
     assert "within-block" in findings[0].message
 
 
-def test_lever_order_tf_tables_then_distance_then_calibration():
+def test_lever_order_canonical():
     """The finding-emitting levers' first occurrences must appear in canonical
     registry order. (fan_out sits between distance_thresholds and calibration
     but its stub bodies emit no finding on trained input, so it is asserted

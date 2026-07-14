@@ -10,12 +10,19 @@ from __future__ import annotations
 import polars as pl
 import pytest
 from goldenmatch.config.from_splink import from_splink
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
 from goldenmatch.config.splink_upgrade import (
     SplinkUpgradeError,
     _estimate_within_block_prior,
     _resolve_levers,
     upgrade_splink_conversion,
 )
+from goldenmatch.config.splink_upgrade_fanout import _ne_candidates
 
 # ── Fixtures (mirror tests/test_splink_upgrade_levers.py bare-settings) ──────
 
@@ -164,3 +171,88 @@ def test_lever_context_carries_reference_inputs(monkeypatch):
     assert seen["splink_clusters"] is clusters_df
     assert seen["labels"] is labels_df
     assert seen["id_column"] == "rec_id"
+
+
+# ── NE candidate eligibility (Task F2) ───────────────────────────────────────
+
+
+def _prob_matchkey(field_names=("given_name", "surname", "city")):
+    return MatchkeyConfig(
+        name="prob",
+        type="probabilistic",
+        fields=[MatchkeyField(field=f, scorer="jaro_winkler") for f in field_names],
+    )
+
+
+def _blocking(*key_fields):
+    return BlockingConfig(keys=[BlockingKeyConfig(fields=[f]) for f in key_fields])
+
+
+def _candidate_df(n=20, extra=None):
+    """Sampled-frame stand-in exercising every eligibility gate.
+
+    - ``phone``: identity-named, fully populated, 19/20 distinct -> ELIGIBLE.
+    - ``email_null_heavy``: identity-named but 75% null -> excluded (non-null floor).
+    - ``phone_low_card``: identity-named but 3 distinct values -> excluded
+      (min-cardinality floor).
+    - ``ssn``: identity-named but all-unique (ratio 1.0) -> excluded by the
+      max-cardinality gate (a plain ``rec_id`` surrogate would be excluded by
+      the name filter first and never exercise it).
+    - ``notes``: non-identity name -> excluded.
+    - ``given_name``/``surname``/``city``: comparison/blocking fields on the
+      default matchkey/blocking used by the tests.
+    """
+    data = {
+        "given_name": [f"name{i}" for i in range(n)],
+        "surname": [f"sur{i % 6}" for i in range(n)],
+        "city": [f"city{i % 4}" for i in range(n)],
+        # One duplicate value -> 19/20 = 0.95, inside [0.5, 0.999].
+        "phone": [f"555-01{max(i, 1):02d}" for i in range(n)],
+        "email_null_heavy": [f"a{i}@x.com" if i < 5 else None for i in range(n)],
+        "phone_low_card": [f"555-000{i % 3}" for i in range(n)],
+        "ssn": [f"{i:09d}" for i in range(n)],
+        "notes": [f"note {i}" for i in range(n)],
+    }
+    if extra:
+        data.update(extra)
+    return pl.DataFrame(data)
+
+
+def test_ne_candidates_returns_only_eligible_phone():
+    cands = _ne_candidates(_candidate_df(), _prob_matchkey(), _blocking("surname"))
+
+    assert [c.column for c in cands] == ["phone"]
+    # Transforms/scorer come from _pick_scorer_for_column.
+    assert cands[0].transforms == ["digits_only"]
+    assert cands[0].scorer == "exact"
+
+
+def test_ne_candidates_excludes_matchkey_comparison_field():
+    n = 20
+    df = _candidate_df(extra={"phone2": [f"555-02{max(i, 1):02d}" for i in range(n)]})
+    mk = _prob_matchkey(("given_name", "surname", "city", "phone2"))
+
+    cands = _ne_candidates(df, mk, _blocking("surname"))
+
+    assert [c.column for c in cands] == ["phone"]
+
+
+def test_ne_candidates_excludes_blocking_key_field():
+    n = 20
+    df = _candidate_df(extra={"phone3": [f"555-03{max(i, 1):02d}" for i in range(n)]})
+
+    cands = _ne_candidates(df, _prob_matchkey(), _blocking("surname", "phone3"))
+
+    assert [c.column for c in cands] == ["phone"]
+
+
+def test_ne_candidates_name_match_is_case_insensitive():
+    n = 20
+    df = _candidate_df(
+        extra={"Phone_Number": [f"555-04{max(i, 1):02d}" for i in range(n)]}
+    )
+
+    cands = _ne_candidates(df, _prob_matchkey(), _blocking("surname"))
+
+    # Deterministic df-column order: phone before Phone_Number.
+    assert [c.column for c in cands] == ["phone", "Phone_Number"]
