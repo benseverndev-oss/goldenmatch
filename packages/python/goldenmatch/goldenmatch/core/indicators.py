@@ -70,14 +70,14 @@ def compute_column_priors(df: pl.DataFrame) -> dict[str, ColumnPrior]:
     priors: dict[str, ColumnPrior] = {}
     sample = frame.head(1000).native if frame.height > 1000 else df
 
-    for col in df.columns:
+    for col in frame.columns:  # arrow-port: pa.Table.columns is arrays, not names
         if (time.time() - start) > BUDGET_COLUMN_PRIORS:
             logger.info(
                 "compute_column_priors: budget %ss exceeded; "
                 "remaining %d columns get default priors",
-                BUDGET_COLUMN_PRIORS, len(df.columns) - len(priors),
+                BUDGET_COLUMN_PRIORS, len(frame.columns) - len(priors),
             )
-            for remaining in df.columns:
+            for remaining in frame.columns:
                 if remaining not in priors:
                     priors[remaining] = ColumnPrior(0.0, 0.0)
             break

@@ -125,7 +125,11 @@ def promote_negative_evidence(
     Returns a new GoldenMatchConfig (via model_copy); does not mutate input.
     Empty df or empty column_priors → returns config unchanged.
     """
-    if df.is_empty() or not column_priors:
+    from goldenmatch.core.frame import to_frame
+
+    _f = to_frame(df)  # arrow-port: seam is_empty/columns/column
+    _f_height = _f.height
+    if _f_height == 0 or not column_priors:
         return config
 
     all_matchkeys = list(config.matchkeys or [])
@@ -177,11 +181,11 @@ def promote_negative_evidence(
             if _is_in_blocking(col, config.blocking):
                 continue
             # Column must exist in df for cardinality check
-            if col not in df.columns:
+            if col not in _f.columns:
                 continue
             # Cardinality gate
             try:
-                cardinality_ratio = df[col].n_unique() / max(1, df.height)
+                cardinality_ratio = _f.column(col).n_unique() / max(1, _f_height)
             except Exception:
                 continue
             if cardinality_ratio < _CARDINALITY_THRESHOLD:

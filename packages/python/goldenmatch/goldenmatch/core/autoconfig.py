@@ -275,6 +275,130 @@ def _classify_by_data(values: list[str]) -> tuple[str, float]:
     return col_type, confidence
 
 
+# ── Arrow→polars dtype-spelling contract (autoconfig arrow-port PR-3) ──────────
+# The native ``autoconfig_classify_columns`` kernel is fed ``str(dtype)`` and its
+# golden vectors + the downstream string-column check
+# (``p.dtype.startswith("String"/"Utf8")`` further down) expect the POLARS dtype
+# spelling ("Float64"/"Int64"/"String"/"Boolean"). Polars renders those directly;
+# an ``ArrowFrame``'s ``str(dtype)`` spells the SAME types differently
+# ("double"/"int64"/"large_string"/"bool"). We keep the Rust kernel's vocabulary
+# and map arrow→polars-spelling at this ONE Python boundary so the kernel sees its
+# own vocabulary regardless of backend -- no Rust change, no golden-vector regen.
+# A polars spelling passed in is returned UNCHANGED (identity), so the polars path
+# is byte-for-byte what it was before the port.
+
+
+def _polars_scalar_spelling(build: Any, fallback: str) -> str:
+    """``str()`` of a polars dtype, matched exactly so the arrow path's classify
+    input equals the polars path's. Falls back when polars is unavailable
+    (pure-arrow install); the fallback is still accepted downstream."""
+    try:
+        from goldenmatch._polars_lazy import pl as _pl  # noqa: PLC0415
+
+        return str(build(_pl))
+    except Exception:  # noqa: BLE001 -- polars absent / API drift: use the fallback
+        return fallback
+
+
+# LAZY: computing these at MODULE level touches ``pl.Utf8`` / ``pl.Datetime`` on
+# the _polars_lazy proxy, which eagerly imports polars at ``import goldenmatch``
+# time -- a zero-polars-eviction gate violation (test_lazy_import_gate). Compute
+# + cache on first USE instead (the arrow classify path, never at import).
+_POLARS_SCALAR_SPELLING_CACHE: dict[str, str] = {}
+
+
+def _polars_string_spelling() -> str:
+    """``str(pl.Utf8)`` ("String" on modern polars, "Utf8" older), cached."""
+    cached = _POLARS_SCALAR_SPELLING_CACHE.get("string")
+    if cached is None:
+        cached = _polars_scalar_spelling(lambda p: p.Utf8, "Utf8")
+        _POLARS_SCALAR_SPELLING_CACHE["string"] = cached
+    return cached
+
+
+def _polars_datetime_spelling() -> str:
+    """``str(pl.Datetime("us"))`` ("Datetime(time_unit='us', ...)"), cached."""
+    cached = _POLARS_SCALAR_SPELLING_CACHE.get("datetime")
+    if cached is None:
+        cached = _polars_scalar_spelling(lambda p: p.Datetime("us"), "Datetime")
+        _POLARS_SCALAR_SPELLING_CACHE["datetime"] = cached
+    return cached
+
+# Exact arrow-spelling → polars-spelling. Keys are arrow's ``str(type)`` (all
+# lowercase); polars spellings are TitleCase, so they are never keys and pass
+# through ``.get`` unchanged (the identity guarantee).
+_ARROW_TO_POLARS_DTYPE: dict[str, str] = {
+    # floats
+    "double": "Float64",
+    "float": "Float32",
+    "halffloat": "Float32",
+    # signed ints
+    "int64": "Int64",
+    "int32": "Int32",
+    "int16": "Int16",
+    "int8": "Int8",
+    # unsigned ints
+    "uint64": "UInt64",
+    "uint32": "UInt32",
+    "uint16": "UInt16",
+    "uint8": "UInt8",
+    # bool
+    "bool": "Boolean",
+    # date (day / ms variants both render as polars Date)
+    "date32[day]": "Date",
+    "date64[ms]": "Date",
+    # null
+    "null": "Null",
+}
+
+
+def _arrow_to_polars_dtype_spelling(raw: object) -> str:
+    """Turn a concrete column dtype string into the polars spelling the native
+    ``autoconfig_classify_columns`` kernel expects.
+
+    Identity for polars spellings (they are never arrow keys), translation for
+    arrow spellings, and ``str(raw)`` passthrough for any dtype not covered
+    (documented fallback -- keeps the pre-port ``str(dtype)`` behavior for exotic
+    types).
+    """
+    s = str(raw)
+    mapped = _ARROW_TO_POLARS_DTYPE.get(s)
+    if mapped is not None:
+        return mapped
+    # string family (arrow: string / large_string / utf8 / large_utf8)
+    if s in ("string", "large_string", "utf8", "large_utf8"):
+        return _polars_string_spelling()
+    # timestamp[..] / date[..] families are unit-parametrized (not single keys)
+    if s.startswith("timestamp"):
+        return _polars_datetime_spelling()
+    if s.startswith("date"):
+        return "Date"
+    # Unknown (incl. every polars spelling) -> unchanged.
+    return s
+
+
+def _concrete_dtype_spelling(frame: Any, col_name: str) -> str:
+    """Read ``frame``'s concrete column dtype (native spelling per backend) and
+    map it to the polars spelling for the classify kernel.
+
+    - ``PolarsFrame`` -> its own ``str(dtype)`` (the map is identity, so this is
+      byte-identical to the pre-port ``str(df[col].dtype)``).
+    - ``ArrowFrame`` -> the pyarrow field type, mapped arrow→polars.
+
+    NOTE: the seam ``Column`` Protocol exposes no concrete-dtype accessor (only the
+    coarse ``semantic_dtype()``), so this reaches ``frame.native``. A clean seam op
+    (e.g. ``Column.dtype_str()``) would drop the ``.native`` branch -- flagged for a
+    PR-1-style follow-up.
+    """
+    from goldenmatch.core.frame import ArrowFrame  # noqa: PLC0415
+
+    if isinstance(frame, ArrowFrame):
+        raw = str(frame.native.schema.field(col_name).type)
+    else:
+        raw = str(frame.native[col_name].dtype)
+    return _arrow_to_polars_dtype_spelling(raw)
+
+
 def profile_columns(
     df: pl.DataFrame, sample_size: int = 1000, max_columns: int = 40,
     llm_provider: str | None = None,
@@ -286,17 +410,21 @@ def profile_columns(
     (name, email, phone, zip, address) are prioritized, then remaining columns
     fill up to the cap.
     """
-    # Sample randomly (W3c: via the seam; polars rows unchanged -- exact
-    # delegation, shuffle=False default matches the old call)
+    # Route through the Frame seam so profile_columns runs on a polars frame
+    # (today) OR an ArrowFrame (post-PR-6) -- `to_frame` is idempotent and accepts
+    # pl.DataFrame / pa.Table / Frame. (W3c: polars rows unchanged; sample is exact
+    # delegation, shuffle=False default matches the old call.)
     from goldenmatch.core.frame import to_frame
 
-    if df.height > sample_size:
-        sample = to_frame(df).sample(sample_size, seed=42).native
+    frame = to_frame(df)
+
+    if frame.height > sample_size:
+        sample_frame = frame.sample(sample_size, seed=42)
     else:
-        sample = df
+        sample_frame = frame
 
     # For wide datasets, prioritize columns likely useful for matching
-    columns = [c for c in df.columns if not c.startswith("__")]
+    columns = [c for c in frame.columns if not c.startswith("__")]
     if len(columns) > max_columns:
         # Phase 1: keep columns matching known patterns
         priority = []
@@ -312,7 +440,7 @@ def profile_columns(
         logger.info(
             "Wide dataset (%d columns), auto-configure limited to %d columns "
             "(%d pattern-matched, %d additional)",
-            len(df.columns), len(columns), len(priority), remaining_slots,
+            len(frame.columns), len(columns), len(priority), remaining_slots,
         )
 
     # Collect per-column stats using Polars (shared by both the native and
@@ -322,10 +450,12 @@ def profile_columns(
         if col_name.startswith("__"):
             continue
 
-        dtype = str(df[col_name].dtype)  # raw polars spelling: feeds the
-        # native classify JSON byte-identically (W3c: pinned, not normalized)
+        # Concrete column dtype in the POLARS spelling the native classify kernel
+        # expects, regardless of backend: identity on a PolarsFrame (byte-identical
+        # to the old `str(df[col].dtype)`), arrow→polars-mapped on an ArrowFrame.
+        dtype = _concrete_dtype_spelling(frame, col_name)
 
-        col_series = to_frame(sample).column(col_name)
+        col_series = sample_frame.column(col_name)
         total_rows = len(col_series)
         null_count = col_series.null_count()
         null_rate = null_count / total_rows if total_rows > 0 else 0.0
@@ -1835,16 +1965,16 @@ def _check_source_overlap(
     ``__source__`` so existing callers are unchanged; #858 passes a detected
     user source column when there is no ``__source__``.
     """
-    if partition_col not in df.columns:
-        return 1.0
-
-    sources = df[partition_col].unique().to_list()
-    if len(sources) < 2:
-        return 1.0
-
     from goldenmatch.core.frame import to_frame
 
     frame = to_frame(df)
+    if partition_col not in frame.columns:
+        return 1.0
+
+    sources = frame.column(partition_col).unique().to_list()
+    if len(sources) < 2:
+        return 1.0
+
     value_sets = []
     for src in sources:
         vals = set(
@@ -2599,12 +2729,20 @@ def build_blocking(
             None, defaults to ``df.height`` (backward-compat for direct
             callers like tests that pass a full-table df).
     """
+    # Arrow-port: coerce to the Frame seam once (build_blocking never reassigns
+    # df) so column/height/group_by ops run polars-free on a pa.Table. Idempotent
+    # for the polars backend -> byte-identical.
+    from goldenmatch.core.frame import to_frame as _tf
+
+    _bf = _tf(df)
+    _bf_height = _bf.height
+
     # Filter out high-null columns (>20% null) — they create oversized null blocks
     # that cause O(N^2) comparison explosions
     max_null_rate = 0.20
 
     def _null_rate(col_name: str) -> float:
-        return df[col_name].null_count() / df.height if df.height > 0 else 0.0
+        return _bf.column(col_name).null_count() / _bf_height if _bf_height > 0 else 0.0
 
     # Tier 2 (autoconfig-tier1-tier2): null-aware v0 blocking selection.
     # Columns with null_rate > NULL_RATE_CEILING are skipped as blocking keys:
@@ -2628,8 +2766,8 @@ def build_blocking(
     # profiles run on a small sample; at sample N=1000, real
     # mid-cardinality columns (zip) look near-unique. Chao1 correction
     # uses the sample's distinct count + sample_n vs full_n to project.
-    effective_n_full = n_rows_full if n_rows_full is not None else df.height
-    sample_n = max(df.height, 1)
+    effective_n_full = n_rows_full if n_rows_full is not None else _bf_height
+    sample_n = max(_bf_height, 1)
 
     # #1082: ANN is no longer AUTO-selected for description columns. A free-
     # text corpus (description column, no blockable structured key) is routed
@@ -2692,7 +2830,7 @@ def build_blocking(
                 and _null_rate(p.name) <= max_null_rate
                 and _projected_ratio(p) <= blocking_max_ratio
                 and _check_source_overlap(df, p.name) == 0.0):
-            sources = df["__source__"].unique().to_list() if "__source__" in df.columns else []
+            sources = _bf.column("__source__").unique().to_list() if "__source__" in _bf.columns else []
             logger.warning(
                 "Blocking key '%s' has 0%% overlap between sources %s -- skipping",
                 p.name, ", ".join(str(s) for s in sources),
@@ -2724,7 +2862,7 @@ def build_blocking(
     # and headroom to 10K for 2M+. Cap at 10K because a 10K-row block
     # under float32 ensemble is ~400 MB per scorer call which is the
     # practical OOM ceiling on a 16 GB runner.
-    max_safe_block = max(1000, min(10_000, int(df.height) // 200))
+    max_safe_block = max(1000, min(10_000, int(_bf_height) // 200))
 
     # #715: gate every emitted blocking key/pass by its PROJECTED full-N max
     # block size. build_blocking runs on a sample (or, in the v0 path, the
@@ -2747,8 +2885,8 @@ def build_blocking(
         maximally oversized AND concentrated (dropped) — fail-safe.
         """
         try:
-            g = df.group_by(fields).len()
-            mb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" is int64 at runtime
+            g = _bf.group_len(fields)
+            mb = int(g.column("len").max() or 0)  # "len" is int64 at runtime
             return mb, int(g.height)
         except Exception:  # pragma: no cover -- defensive
             return effective_n_full, 1
@@ -2826,7 +2964,7 @@ def build_blocking(
     # Best case: block on highest-cardinality exact column (with low null rate + safe block size)
     if exact_cols:
         # Pre-filter: only evaluate top 5 by cardinality to avoid expensive group_by on all columns
-        exact_cols_sorted = sorted(exact_cols, key=lambda p: df[p.name].n_unique(), reverse=True)
+        exact_cols_sorted = sorted(exact_cols, key=lambda p: _bf.column(p.name).n_unique(), reverse=True)
         # #876: drop a unique-per-row SURROGATE (id) before picking the best
         # exact key.  A surrogate creates singleton blocks (block size 1 → 0
         # candidate pairs → finds nothing) and was the degenerate fallback. Gate
@@ -2847,7 +2985,7 @@ def build_blocking(
         # kept.
         safe_exact = [p for p in candidates if _is_scale_safe([p.name])]
         if safe_exact:
-            best = max(safe_exact, key=lambda p: df[p.name].n_unique())
+            best = max(safe_exact, key=lambda p: _bf.column(p.name).n_unique())
             transforms = ["lowercase", "strip"] if best.col_type == "email" else ["strip"]
             return BlockingConfig(
                 keys=[BlockingKeyConfig(fields=[best.name], transforms=transforms)],
@@ -3536,14 +3674,14 @@ def _maybe_detect_field_groups(df: Any, config: Any) -> None:
 
 
 def auto_configure_df(
-    df: pl.DataFrame | pl.LazyFrame,
+    df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table | Frame | ray.data.Dataset
     llm_provider: str | None = None,
     domain_config: Any = None,
     llm_auto: bool = False,
     strict: bool = False,
     allow_remote_assets: bool = False,
     *,
-    reference: pl.DataFrame | pl.LazyFrame | None = None,
+    reference: Any = None,  # pl.DataFrame | pl.LazyFrame | pa.Table | Frame | None
     _skip_finalize: bool = False,
     confidence_required: bool = True,
     allow_red_config: bool = False,
@@ -3581,24 +3719,39 @@ def auto_configure_df(
         ConfigValidationError: from the controller, when input is unworkable
             (empty, all-null, etc.).
     """
-    # W3e entry boundary: accept a Frame, unwrapped AT THE TOP -- the
-    # throughput early-check and the exclusions gate below are both
-    # isinstance-DataFrame-guarded; a still-wrapped Frame would silently
-    # skip them. PolarsFrame unwraps to today's path; ArrowFrame goes
-    # through the pl.from_arrow shim (W2d explicit-boundary pattern --
-    # REMOVE in W5 when arrow flows past ingest). `reference` stays
-    # Polars-only deliberately: match-mode arrow can't flow until W5.
-    from goldenmatch.core.frame import ArrowFrame, Frame, PolarsFrame
+    # Boundary: accept pl.DataFrame | pl.LazyFrame | pa.Table | dict-of-arrays |
+    # Frame | ray.data.Dataset. PR-3..6b landed the autoconfig-LAYER arrow seam
+    # (arrow->polars dtype map, controller gates, sampling, blocking-size
+    # measurement, v0 heuristic). The zero-config SCORING lane is NOT fully
+    # arrow-ported yet, though: the eager indicators' empty/column guards
+    # (indicators.py), the GoldenCheck exclusion detectors, and the legacy
+    # `build_blocks(combined_lf)` scoring spine (pipeline.py:2284) still assume
+    # polars -- a bare pa.Table there raises (e.g. `pa.Table.is_empty`) and the
+    # controller degrades to a RED v0 fallback. So a non-polars input is coerced
+    # to polars HERE (byte-identical to the same data passed as a pl.DataFrame --
+    # no silent RED fallback / regression). Making this a true `.native` arrow
+    # pass-through (Polars-free zero-config, tripwire green, [polars] stopgap
+    # dropped) is the pipeline-spine follow-up; the seam routing above is its
+    # foundation. (ray / lazy / polars inputs are handled by the block below.)
+    from goldenmatch.core.frame import (
+        is_polars_dataframe,
+        is_polars_lazyframe,
+        to_frame,
+    )
+    from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_boundary
 
-    if isinstance(df, Frame):
-        if isinstance(df, ArrowFrame):
-            df = cast("pl.DataFrame", pl.from_arrow(df.native))
-        elif isinstance(df, PolarsFrame):
-            df = df.native
-        else:  # pragma: no cover -- future backend without a shim
-            raise TypeError(
-                f"auto_configure_df cannot unwrap Frame backend {type(df).__name__}"
-            )
+    if not (
+        _is_ray_boundary(df)
+        or is_polars_lazyframe(df)
+        or is_polars_dataframe(df)
+    ):
+        _boundary_native = to_frame(df).native
+        if is_polars_dataframe(_boundary_native):
+            df = _boundary_native
+        else:
+            import polars as _pl_boundary
+
+            df = cast("pl.DataFrame", _pl_boundary.from_arrow(_boundary_native))
 
     # Throughput tier (#1083): early validation -- check text column exists BEFORE
     # the expensive controller run to give a clean ThroughputNotApplicableError.
@@ -3623,16 +3776,15 @@ def auto_configure_df(
     if _is_ray_dataset(df):
         # Dataset stays as-is; controller.run() handles it natively.
         _n_rows_for_budget: int = df.count()  # type: ignore[union-attr]
-    elif isinstance(df, pl.LazyFrame):
-        df = df.collect()
+    elif is_polars_lazyframe(df):
+        df = cast("pl.LazyFrame", df).collect()
         _n_rows_for_budget = df.height
-    elif isinstance(df, pl.DataFrame):
+    elif is_polars_dataframe(df):
         _n_rows_for_budget = df.height
     else:
-        raise TypeError(
-            f"auto_configure_df requires pl.DataFrame, pl.LazyFrame, or "
-            f"ray.data.Dataset, got {type(df).__name__}"
-        )
+        # Arrow-native boundary (pa.Table) -- the zero-config polars-free lane.
+        # .height via the Frame seam; the controller consumes the arrow native.
+        _n_rows_for_budget = to_frame(df).height
     if reference is not None:
         if isinstance(reference, pl.LazyFrame):
             reference = reference.collect()
@@ -3653,7 +3805,17 @@ def auto_configure_df(
     # their own column-selection story; exclusions land at the per-
     # partition kernel layer separately.
     _ms_partition: str | None = None  # #858 source partition (None => feature off)
-    if not _is_ray_dataset(df) and isinstance(df, pl.DataFrame):
+    if not _is_ray_dataset(df) and is_polars_dataframe(df):
+        # df is always a pl.DataFrame here: the boundary above coerces every
+        # non-ray / non-lazy input (incl. pa.Table) to polars until the scoring
+        # lane is arrow-ported, and a LazyFrame was collected. So a pa.Table
+        # zero-config input runs the SAME exclusions / exclude_columns / #858
+        # guard as an equivalent pl.DataFrame -- the detectors below
+        # (detect_autoconfig_exclusions / _detect_source_partition /
+        # _source_correlated_exclusions) are not seam-ported, and don't need to
+        # be while the boundary coerces. Seam-porting them is part of the
+        # pipeline-spine follow-up that makes the boundary a true arrow
+        # pass-through.
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
         )
@@ -3810,8 +3972,8 @@ def auto_configure_df(
     # audio fingerprint) and append a phash/audio_fp matchkey (+ perceptual
     # blocking for an image column when nothing else blocks). Byte-identical when
     # the flag is off.
-    if os.environ.get("GOLDENMATCH_PERCEPTUAL_AUTOCONFIG", "0") == "1" and isinstance(
-        df, pl.DataFrame
+    if os.environ.get("GOLDENMATCH_PERCEPTUAL_AUTOCONFIG", "0") == "1" and is_polars_dataframe(
+        df
     ):
         try:
             from goldenmatch.core.perceptual_autoconfig import apply_perceptual_autoconfig
@@ -3858,6 +4020,11 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # safely test `if domain_profile is not None` even when the domain
     # branch below is skipped (e.g. user-provided domain_config).
     domain_profile = None
+    # Arrow-port: route the v0 heuristic's frame ops through the seam so a bare
+    # pa.Table (zero-config polars-free path) is never subscripted with df[col]
+    # / df.height / df.columns / df.with_row_index (all crash on pa.Table).
+    # to_frame is idempotent -> byte-identical for the polars backend.
+    from goldenmatch.core.frame import to_frame as _tf
     # Preserve the raw input df for preflight. The in-function `df` variable
     # gets enriched with __row_id__ / domain-extracted columns; preflight
     # needs to check against the shape the pipeline will see.
@@ -3867,9 +4034,9 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # but the gate needs 1.13M to scale via Chao1. Caller threads the
     # true count via n_rows_full; falls back to df.height for direct
     # callers (tests / non-controller paths) that pass full frames.
-    total_rows = n_rows_full if n_rows_full is not None else df.height
+    total_rows = n_rows_full if n_rows_full is not None else _tf(df).height
 
-    logger.info("Auto-configuring %d rows, %d columns", total_rows, len(df.columns))
+    logger.info("Auto-configuring %d rows, %d columns", total_rows, len(_tf(df).columns))
 
     _emit_data_profile(df)
 
@@ -3899,16 +4066,16 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     else:
         from goldenmatch.core.domain import detect_domain, extract_features
 
-        user_cols = [c for c in df.columns if not c.startswith("__")]
+        user_cols = [c for c in _tf(df).columns if not c.startswith("__")]
         domain_profile = detect_domain(user_cols)
 
         if domain_profile.confidence > 0.7:
-            original_cols = set(df.columns)
+            original_cols = set(_tf(df).columns)
             # extract_features requires __row_id__ column
-            if "__row_id__" not in df.columns:
-                df = df.with_row_index("__row_id__")
+            if "__row_id__" not in _tf(df).columns:
+                df = _tf(df).with_row_index("__row_id__").native
             df, _low_conf_ids = extract_features(df, domain_profile)
-            extracted_columns = [c for c in df.columns if c.startswith("__") and c not in original_cols]
+            extracted_columns = [c for c in _tf(df).columns if c.startswith("__") and c not in original_cols]
             logger.info(
                 "Domain '%s' detected (confidence=%.2f), extracted %d feature columns",
                 domain_profile.name, domain_profile.confidence, len(extracted_columns),
@@ -3944,8 +4111,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             if col not in _DOMAIN_SCORER_MAP:
                 continue
             scorer, weight, transforms = _DOMAIN_SCORER_MAP[col]
-            null_rate = df[col].null_count() / df.height if df.height > 0 else 0
-            cardinality_ratio = df[col].n_unique() / df.height if df.height > 0 else 0
+            _fcol = _tf(df)
+            _h = _fcol.height
+            null_rate = _fcol.column(col).null_count() / _h if _h > 0 else 0
+            cardinality_ratio = _fcol.column(col).n_unique() / _h if _h > 0 else 0
             if null_rate > 0.5:
                 continue
             if scorer == "exact" and cardinality_ratio < 0.01:
@@ -4000,8 +4169,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             scorer, _weight, _transforms = _DOMAIN_SCORER_MAP[col]
             if scorer != "exact":
                 continue
-            null_rate = df[col].null_count() / df.height if df.height > 0 else 0
-            cardinality_ratio = df[col].n_unique() / df.height if df.height > 0 else 0
+            _fcol2 = _tf(df)
+            _h2 = _fcol2.height
+            null_rate = _fcol2.column(col).null_count() / _h2 if _h2 > 0 else 0
+            cardinality_ratio = _fcol2.column(col).n_unique() / _h2 if _h2 > 0 else 0
             if null_rate > 0.5:
                 continue
             profiles.append(ColumnProfile(
@@ -4031,7 +4202,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # At 1M+ rows, swap static blocking for adaptive so blocker.py's
     # _sub_block / _auto_split_block paths bound oversized buckets at
     # runtime. No-op for multi_pass / canopy / ann / learned / sorted_neighborhood.
-    blocking = _maybe_promote_blocking_to_adaptive(blocking, df.height)
+    blocking = _maybe_promote_blocking_to_adaptive(blocking, _tf(df).height)
     # Opt-in (GOLDENMATCH_BLOCKING_PRUNE_PASSES=1): drop redundant/all-noise
     # multi-pass passes by likely-match yield.
     blocking = _maybe_prune_blocking_passes(blocking, df)

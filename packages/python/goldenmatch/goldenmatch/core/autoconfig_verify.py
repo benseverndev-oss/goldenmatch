@@ -468,8 +468,9 @@ def _check_columns(
     or is a domain-extracted column recoverable via domain repair.
     """
     from goldenmatch.core.domain import _DOMAIN_EXTRACTED_COLS
+    from goldenmatch.core.frame import to_frame
 
-    df_cols = set(df.columns)
+    df_cols = set(to_frame(df).columns)  # arrow-port: pa.Table.columns != names
     referenced = _collect_referenced_columns(config)
     domain_profile = getattr(config, "_domain_profile", None)
 
@@ -548,12 +549,16 @@ def _check_cardinality(
     - ratio >= 0.99 → near-unique, no pair ever agrees (warning + drop).
     - ratio <  0.01 → always-same, every pair agrees trivially (warning + drop).
     """
-    if df.height == 0:
+    from goldenmatch.core.frame import to_frame
+
+    _f = to_frame(df)  # arrow-port: seam .height/.columns/.column
+    _f_height = _f.height
+    if _f_height == 0:
         return
 
     mks = config.get_matchkeys()
     kept: list = []
-    df_cols = set(df.columns)
+    df_cols = set(_f.columns)
 
     for mk in mks:
         if mk.type != "exact":
@@ -571,8 +576,8 @@ def _check_cardinality(
             if not col or col not in df_cols:
                 continue
             checked += 1
-            n_unique = df[col].n_unique()
-            ratio = n_unique / df.height
+            n_unique = _f.column(col).n_unique()
+            ratio = n_unique / _f_height
             if ratio >= 0.99:
                 high_hits.append(col)
             elif ratio <= 0.01:
@@ -643,10 +648,13 @@ def _check_block_sizes(
     Warns — does not auto-repair. Blocking strategy choice is usually
     intentional; preflight's job is to surface the trade-off, not override it.
     """
-    if config.blocking is None or df.height == 0:
+    from goldenmatch.core.frame import to_frame
+
+    _f_height = to_frame(df).height  # arrow-port
+    if config.blocking is None or _f_height == 0:
         return
 
-    n = min(df.height, 10_000)
+    n = min(_f_height, 10_000)
     per_key = _sample_block_sizes_per_key(df, config.blocking, sample_cap=10_000)
 
     for key, sizes_list, exc in per_key:
