@@ -593,6 +593,21 @@ def score_buckets(
                 for f in mk.fields:
                     if f.field in _prep_frame.columns and f.field not in keep:
                         keep.append(f.field)
+                # FS negative-evidence fields: the probabilistic scorer path
+                # reads these the same raw-column way (_ne_fired /
+                # _field_values_for_block), and an NE-only field (the
+                # canonical phone example -- not in mk.fields) would
+                # otherwise be projected away here and never fire on the
+                # default bucket backend. Also keep derive_from source
+                # columns for completeness, though precompute_matchkey_
+                # transforms already materializes the synthesized ne.field
+                # column upstream of this projection.
+                for ne in (mk.negative_evidence or []):
+                    if ne.field in _prep_frame.columns and ne.field not in keep:
+                        keep.append(ne.field)
+                    for src in (ne.derive_from or []):
+                        if src in _prep_frame.columns and src not in keep:
+                            keep.append(src)
             # Source fields the block-key expression reads. Multi-key blocking
             # (rare today) accumulates fields across every key in the config.
             block_key_sources: set[str] = set()

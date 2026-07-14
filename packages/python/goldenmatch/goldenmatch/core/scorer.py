@@ -290,7 +290,7 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
             # One or both values are None — can't score, skip
             continue
         if sim < ne.threshold:
-            total_penalty += ne.penalty
+            total_penalty += ne.flat_penalty
     return total_penalty
 
 

@@ -52,6 +52,15 @@ matchkeys:
       - field: zip
         scorer: exact
         levels: 2
+    negative_evidence:
+      # Fires (and subtracts weight) when both values are present AND
+      # scorer(a, b) < threshold; agreement/missing never adds weight.
+      # Omit penalty_bits for EM-learned; probabilistic matchkeys reject
+      # `penalty` (that knob is weighted/exact-only) -- see Scoring.
+      - field: phone
+        scorer: exact
+        threshold: 1.0
+        # penalty_bits: 6.0   # optional: fixed log2 LLR override, skips EM
 
   - name: semantic
     type: weighted

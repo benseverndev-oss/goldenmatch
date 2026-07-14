@@ -214,7 +214,18 @@ class NegativeEvidenceField(BaseModel):
     transforms: list[str] = Field(default_factory=list)
     scorer: str
     threshold: float = Field(ge=0.0, le=1.0)
-    penalty: float = Field(ge=0.0, le=1.0)
+    # Weighted/exact only: flat 0-1 penalty subtracted from the score when
+    # this field disagrees. REQUIRED for weighted/exact (enforced by
+    # ``MatchkeyConfig._validate_weighted``, not here); REJECTED for
+    # probabilistic matchkeys, which use EM-learned weights instead (or the
+    # ``penalty_bits`` override below).
+    penalty: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Probabilistic-only: fixed LLR override in log2 units. When set, the NE
+    # dimension skips EM and contributes -abs(penalty_bits) when FIRED (both
+    # values present and scorer similarity STRICTLY below threshold), else 0.
+    # Absent => the weight is EM-learned (see core/probabilistic.py).
+    # Rejected on weighted/exact matchkeys (they use `penalty`).
+    penalty_bits: float | None = None
     # When set, ``field`` is a SYNTHESIZED column the pipeline materializes
     # before scoring by space-joining ``derive_from`` (e.g. a person full name
     # from ['first_name', 'last_name']). Lets an NE score a composite the raw
@@ -241,6 +252,22 @@ class NegativeEvidenceField(BaseModel):
                 f"{sorted(VALID_SCORERS)}"
             )
         return self
+
+    @property
+    def flat_penalty(self) -> float:
+        """``penalty`` narrowed to ``float`` for weighted/exact matchkeys.
+
+        Raises ``ValueError`` if unset — ``MatchkeyConfig._validate_weighted``
+        guarantees this never fires on a Pydantic-validated weighted/exact
+        matchkey's NE entries.
+        """
+        if self.penalty is None:
+            raise ValueError(
+                f"NegativeEvidenceField (field={self.field!r}): flat_penalty accessed "
+                "but penalty is None. Only weighted/exact matchkeys are guaranteed to "
+                "have a penalty."
+            )
+        return self.penalty
 
 
 class RulesPayload(BaseModel):
@@ -314,17 +341,11 @@ class MatchkeyConfig(BaseModel):
     rerank_band: float = 0.1
     # v1.11: negative evidence fields — default-None for v1.10 cache compat.
     #
-    # #126 / Wave D: NE applies to ``weighted`` + ``exact`` matchkey types
-    # only. ``probabilistic`` (Fellegi-Sunter) matchkeys are intentionally
-    # NOT extended with NE under v1.13 — the LLR-additivity of FS doesn't
-    # cleanly compose with a flat penalty on the [0,1] score. See
-    # ``docs/superpowers/specs/2026-05-21-ne-fs-investigation.md`` for the
-    # formulation comparison; the Bayesian-factor (Formulation B) approach
-    # becomes viable once #129's labeled-correction substrate is available.
-    # Users who explicitly need NE-on-FS in v1.13 can opt into the
-    # calibration-losing post-FS floor via
-    # ``GOLDENMATCH_NE_FS_ESCAPE_MODE=floor`` (escape hatch; not the
-    # default; semantics not preserved across versions).
+    # Valid on all three matchkey types. ``weighted``/``exact`` use a flat
+    # ``penalty`` (0-1, unchanged since v1.11). ``probabilistic`` (Fellegi-
+    # Sunter) uses EM-learned NE weights (Formulation B), with an optional
+    # ``penalty_bits`` fixed override. See
+    # ``docs/superpowers/specs/2026-07-14-fs-negative-evidence-design.md``.
     negative_evidence: list[NegativeEvidenceField] | None = None
     # Fellegi-Sunter EM parameters
     em_iterations: int = 20
@@ -365,6 +386,27 @@ class MatchkeyConfig(BaseModel):
                     raise ValueError(
                         f"All fields in a probabilistic matchkey must have 'scorer'. "
                         f"Field '{f.field}' is missing it."
+                    )
+        if self.type in ("weighted", "exact"):
+            for ne in self.negative_evidence or []:
+                if ne.penalty is None:
+                    raise ValueError(
+                        f"Matchkey '{self.name}' (type={self.type!r}): negative_evidence "
+                        f"field '{ne.field}' requires 'penalty' for weighted/exact matchkeys."
+                    )
+                if ne.penalty_bits is not None:
+                    raise ValueError(
+                        f"Matchkey '{self.name}' (type={self.type!r}): negative_evidence "
+                        f"field '{ne.field}' sets 'penalty_bits', which is only valid on "
+                        "probabilistic matchkeys. Use 'penalty' instead."
+                    )
+        elif self.type == "probabilistic":
+            for ne in self.negative_evidence or []:
+                if ne.penalty is not None:
+                    raise ValueError(
+                        f"Matchkey '{self.name}' (type={self.type!r}): negative_evidence "
+                        f"field '{ne.field}' sets 'penalty', but probabilistic matchkeys use "
+                        "EM-learned NE weights; set penalty_bits to override."
                     )
         return self
 

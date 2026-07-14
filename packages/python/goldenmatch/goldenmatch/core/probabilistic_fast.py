@@ -20,6 +20,8 @@ Gate eligibility (`_resolve_probabilistic_fast_path`):
       - field.levels in {2, 3} (N>3 unsupported in fast path v1; falls back
         to the slow `score_probabilistic` path)
   - em_result has match_weights for every field
+  - mk.negative_evidence is empty (NE never crosses into this fast path;
+    a future kernel port adds FS_SUPPORTS_NE)
 
 When the gate fails, callers fall back to `score_probabilistic`. The fast
 path produces bit-equivalent output within rapidfuzz tolerance (parity
@@ -66,18 +68,22 @@ def _resolve_probabilistic_fast_path(
         (rules out embedding/record_embedding/unknown plugins) AND its
         precomputed xform column is in prepared_df AND levels in {2, 3}.
       - em_result has match_weights for every field.
+      - mk.negative_evidence is empty.
     """
     from goldenmatch.core.matchkey import _xform_sig
-    from goldenmatch.core.probabilistic import compute_thresholds
+    from goldenmatch.core.probabilistic import compute_thresholds, fs_weight_range
 
     if mk.type != "probabilistic":
         return None
     if not mk.fields:
         return None
+    if mk.negative_evidence:
+        # NE never crosses into this fast path (the per-pair loop doesn't
+        # score NE fields); decline so the slow path -- which does -- stays
+        # the source of truth. Mirrors `_fs_native_eligible`.
+        return None
 
     field_specs: list[ProbFieldSpec] = []
-    max_weight = 0.0
-    min_weight = 0.0
     for f in mk.fields:
         # Per-pair callable. None when scorer is model-backed or unknown.
         fn = _resolve_score_pair_callable(f.scorer)
@@ -103,8 +109,6 @@ def _resolve_probabilistic_fast_path(
             float(f.partial_threshold),
             [float(w) for w in weights],
         ))
-        max_weight += max(weights)
-        min_weight += min(weights)
 
     # Resolve threshold the same way the slow path does.
     if mk.link_threshold is not None:
@@ -113,6 +117,11 @@ def _resolve_probabilistic_fast_path(
         link_threshold, _ = compute_thresholds(em_result)
         link_threshold = float(link_threshold)
 
+    # Centralized range (fs_weight_range) rather than a hand-rolled sum --
+    # this fast path's per-pair loop doesn't score NE fields, but the
+    # negative_evidence decline above means no NE-bearing matchkey ever
+    # reaches this point in practice; kept centralized so it can't drift.
+    min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
     return field_specs, link_threshold, max_weight, min_weight, weight_range
 

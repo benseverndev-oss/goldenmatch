@@ -1,6 +1,15 @@
 # Wave D investigation: Negative Evidence on Fellegi-Sunter matchkeys
 
-**Status:** investigation outcome (Wave D)
+> **SUPERSEDED (2026-07-14):** Formulation B (the Bayesian-factor approach this
+> doc judged mathematically correct) was implemented with EM-learned
+> parameters — see
+> `docs/superpowers/specs/2026-07-14-fs-negative-evidence-design.md`. The
+> labeled-data deferral rationale below is stale: EM estimates
+> match-conditional probabilities (`P(disagree_NE | match)`) for every regular
+> FS field without labels, and the same machinery estimates them for NE
+> dimensions. This doc is retained for historical context only.
+
+**Status:** investigation outcome (Wave D) — superseded, see above
 **Issue:** https://github.com/benseverndev-oss/goldenmatch/issues/126
 **Date:** 2026-05-21
 **Spec:** `docs/superpowers/specs/2026-05-21-ne-fellegi-sunter-design.md`

@@ -204,13 +204,28 @@ def _negative_evidence(config: Any) -> list[dict[str, Any]]:
         if not ne:
             continue
         for field in ne:
+            # weighted/exact NE carries a flat penalty; probabilistic NE
+            # carries penalty_bits (fixed LLR override) or neither (the
+            # weight is EM-learned). Keep "penalty" nullable rather than
+            # crashing on float(None); "weight_source" tells the panel
+            # which form to render.
+            penalty = getattr(field, "penalty", None)
+            penalty_bits = getattr(field, "penalty_bits", None)
+            if penalty is not None:
+                weight_source = "penalty"
+            elif penalty_bits is not None:
+                weight_source = "penalty_bits"
+            else:
+                weight_source = "em_learned"
             out.append({
                 "matchkey_name": mk.name,
                 "matchkey_type": mk.type,
                 "field": field.field,
                 "scorer": field.scorer,
                 "threshold": float(field.threshold),
-                "penalty": float(field.penalty),
+                "penalty": float(penalty) if penalty is not None else None,
+                "penalty_bits": float(penalty_bits) if penalty_bits is not None else None,
+                "weight_source": weight_source,
                 "transforms": list(field.transforms or []),
             })
     return out

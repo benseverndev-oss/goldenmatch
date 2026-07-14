@@ -265,6 +265,10 @@ def match_fused_fs_ready(config: Any) -> bool:
     host-side).
     `run_match_fused_fs_arrow` takes a PRE-TRAINED `EMResult` — training is the
     caller's O(n) model fit, unchanged.
+
+    NE never crosses the FFI; a future kernel port adds `FS_SUPPORTS_NE`. Any
+    `mk.negative_evidence` declines here unconditionally, same playbook as
+    `_fs_native_eligible`.
     """
     b = getattr(config, "blocking", None)
     if b is None or getattr(b, "strategy", "static") != "static":
@@ -275,6 +279,8 @@ def match_fused_fs_ready(config: Any) -> bool:
     get_mks = getattr(config, "get_matchkeys", None)
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
+        return False
+    if getattr(mks[0], "negative_evidence", None):
         return False
     from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
 

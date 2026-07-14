@@ -390,7 +390,13 @@ export type ControllerNegativeEvidence = {
   field: string;
   scorer: string;
   threshold: number;
-  penalty: number;
+  // weighted/exact NE: flat penalty (weight_source "penalty").
+  // probabilistic NE: penalty is null; either penalty_bits is set
+  // (weight_source "penalty_bits") or the weight is EM-learned
+  // (weight_source "em_learned").
+  penalty: number | null;
+  penalty_bits: number | null;
+  weight_source: "penalty" | "penalty_bits" | "em_learned";
   transforms: string[];
 };
 

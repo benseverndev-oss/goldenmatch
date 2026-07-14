@@ -591,8 +591,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_FS_VECTORIZED` | on | Vectorized FS block scoring (~9x). `0` = scalar. |
 | `GOLDENMATCH_FS_CALIBRATED` | `linear` | `posterior` = true-probability calibration (frontier-neutral). |
 | `GOLDENMATCH_FS_MONOTONIC` | on | Enforce monotonic EM weights. |
-| `GOLDENMATCH_FS_NATIVE` | on | Native FS kernel when available. |
-| `GOLDENMATCH_NE_FS_ESCAPE_MODE` | — | Negative-evidence FS escape mode. |
+| `GOLDENMATCH_FS_NATIVE` | on | Native FS kernel when available (declines NE-bearing matchkeys; pure-Python fallback). |
 | `GOLDENMATCH_NOISE_AWARE_SCORERS` | `1` (on) | Auto-upgrade `token_sort`→`jaro_winkler` on noisy text. `0` = legacy. |
 | `GOLDENMATCH_NOISE_AWARE_TARGET` | `jaro_winkler` | Override the noise-aware target scorer. |
 | `GOLDENMATCH_GOLDEN_STRATEGY_STRICT` | `0` | Strict golden survivorship. |
