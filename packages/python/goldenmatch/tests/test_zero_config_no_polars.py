@@ -122,7 +122,6 @@ def test_zero_config_arrow_with_exact_column_matches_polars():
     polars until the scoring lane is arrow-ported, so the two must agree."""
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     import polars as pl
-
     from goldenmatch.core.autoconfig import auto_configure_df
 
     data = {
