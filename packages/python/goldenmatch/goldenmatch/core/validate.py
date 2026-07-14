@@ -81,11 +81,17 @@ def validate_dataframe(
     from goldenmatch.core.frame import PolarsFrame, column_from_values, to_frame
 
     validation_report: list[dict] = []
-    if isinstance(df, pl.DataFrame):
-        frame = to_frame(df.clone())
-        backend = "polars"
+    # Discriminate on pa.Table FIRST (never `isinstance(df, pl.DataFrame)` --
+    # that dereferences the lazy `pl` proxy and raises ImportError when polars
+    # is uninstalled, the D6 zero-polars end-state). Arrow tables are immutable
+    # (no clone needed); anything else is treated as the mutable polars lane.
+    import pyarrow as _pa
+
+    if isinstance(df, _pa.Table):
+        frame = to_frame(df)
+        backend = "arrow"
     else:
-        frame = to_frame(df)  # pa.Table is immutable; no clone needed
+        frame = to_frame(df.clone())
         backend = "polars" if isinstance(frame, PolarsFrame) else "arrow"
     height = frame.height
     quarantine_flags: list[bool] = [False] * height
