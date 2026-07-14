@@ -4,6 +4,37 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Added
+- **Splink migration upgrade pass** (`goldenmatch import-splink SETTINGS.json
+  --upgrade DATA.parquet --model-out MODEL.json`, or
+  `gm.upgrade_splink_conversion(conversion, data)` from Python): a data-aware
+  pass over a converted Splink config that applies three independent levers —
+  term-frequency tables computed from the data (Splink model exports don't
+  carry them, so converted tf fields were inert), distance thresholds
+  re-derived from measured string lengths (the converter assumes length 10),
+  and link/review thresholds calibrated from the blocked-pair score
+  distribution. Writes the upgraded config/model to `--output`/`--model-out`
+  with the faithful baseline alongside as `*.baseline.*`, plus a
+  baseline-vs-upgraded delta table; `--splink-clusters` / `--labels` take
+  reference cluster mappings (first column id, second cluster_id) for
+  agreement / truth F1 measurement. Measured on the wild-config dogfood bench
+  (defaults-vs-defaults, pairwise F1 vs truth): real_time_settings/fake_1000
+  **0.482 → 0.633** (native Splink: 0.601), saved_model_from_demo/fake_1000
+  **0.677 → 0.766** (Splink: 0.699), model_h50k/historical_50k
+  **0.707 → 0.740** (Splink: 0.686) — the upgraded conversion beats native
+  Splink on all three pairs.
+
+### Fixed
+- **Threshold calibration on imported Splink models**: the calibration lever
+  now re-estimates the within-block match rate from the model's likelihood
+  ratios instead of trusting `proportion_matched`, which on imported models
+  holds Splink's `probability_two_random_records_match` — a random-pair prior
+  orders of magnitude below the post-blocking rate the percentile math
+  expects. Trusting it cut at the extreme top of the score distribution and
+  collapsed recall (F1 0.482 → 0.157 on the bench pair above).
+
 ## [3.2.0] - 2026-07-13
 
 ### Added
