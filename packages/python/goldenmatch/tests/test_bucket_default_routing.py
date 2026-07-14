@@ -1,0 +1,118 @@
+"""Bucket is the DEFAULT fuzzy scorer (perf/gm-bucket-default).
+
+`_use_bucket_scorer` routes an UNSET / planner-`polars-direct` backend to the
+bucket scorer within a memory-safe row band (5-7x faster than the legacy
+per-block path, byte-identical clusters), while:
+  - honoring an explicit backend (bucket always; ray/duckdb/datafusion/chunked
+    keep their own routing);
+  - deferring to the explicit `GOLDENMATCH_COLUMNAR_PIPELINE` opt-in;
+  - keeping the LEGACY path during controller profiling (so auto-config's
+    block-size signals are unchanged);
+  - a `GOLDENMATCH_BUCKET_DEFAULT=0` kill-switch;
+  - staying legacy above the row cap.
+"""
+from __future__ import annotations
+
+import pyarrow as pa
+import pytest
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    BlockingKeyConfig,
+    GoldenMatchConfig,
+    MatchkeyConfig,
+    MatchkeyField,
+)
+from goldenmatch.core.pipeline import _BUCKET_DEFAULT_MAX_ROWS, _use_bucket_scorer
+
+
+def _tbl(n: int) -> pa.Table:
+    return pa.table({"a": [str(i % 7) for i in range(n)]})
+
+
+def _cfg(backend=None) -> GoldenMatchConfig:
+    c = GoldenMatchConfig()
+    c.backend = backend
+    return c
+
+
+def test_unset_backend_routes_to_bucket_in_band():
+    assert _use_bucket_scorer(_cfg(None), _tbl(1000)) is True
+    assert _use_bucket_scorer(_cfg("polars-direct"), _tbl(1000)) is True
+
+
+def test_explicit_bucket_always():
+    # honored even above the row cap
+    assert _use_bucket_scorer(_cfg("bucket"), _tbl(10)) is True
+
+
+@pytest.mark.parametrize("backend", ["ray", "duckdb", "datafusion", "chunked"])
+def test_explicit_scale_backends_never_bucket(backend):
+    assert _use_bucket_scorer(_cfg(backend), _tbl(1000)) is False
+
+
+def test_kill_switch(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_BUCKET_DEFAULT", "0")
+    assert _use_bucket_scorer(_cfg(None), _tbl(1000)) is False
+
+
+def test_columnar_opt_in_wins(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "1")
+    assert _use_bucket_scorer(_cfg(None), _tbl(1000)) is False
+
+
+def test_controller_profiling_stays_legacy():
+    # while a profile capture is active (the auto-config sample path), the unset
+    # backend must NOT switch to bucket -- keeps the controller's decisions stable.
+    from goldenmatch.core.profile_emitter import profile_capture
+
+    with profile_capture():
+        assert _use_bucket_scorer(_cfg(None), _tbl(1000)) is False
+    # outside the capture, back to bucket
+    assert _use_bucket_scorer(_cfg(None), _tbl(1000)) is True
+
+
+def test_above_row_cap_stays_legacy():
+    assert _use_bucket_scorer(_cfg(None), _tbl(_BUCKET_DEFAULT_MAX_ROWS + 1)) is False
+    assert _use_bucket_scorer(_cfg(None), _tbl(_BUCKET_DEFAULT_MAX_ROWS)) is True
+
+
+def _explicit_fuzzy_cfg() -> GoldenMatchConfig:
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="name", type="weighted", threshold=0.85,
+            fields=[
+                MatchkeyField(field="first", scorer="jaro_winkler", weight=0.5),
+                MatchkeyField(field="last", scorer="jaro_winkler", weight=0.5),
+            ],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["zip"], transforms=["strip"])],
+        ),
+    )
+
+
+def test_bucket_default_output_identical_to_legacy(monkeypatch):
+    """End-to-end: the bucket-default path (unset backend) finds the SAME
+    duplicates as the legacy per-block path (kill-switch on)."""
+    from goldenmatch import dedupe_df
+
+    firsts = ["ann", "ann", "bob", "bobby", "cara", "dan", "dan", "eve"]
+    lasts = ["smith", "smith", "jones", "jones", "lee", "poe", "poe", "ray"]
+    n = 240
+    tbl = pa.table({
+        "first": (firsts * (n // 8)),
+        "last": (lasts * (n // 8)),
+        "zip": [str(10000 + (i % 30)) for i in range(n)],
+    })
+    cfg = _explicit_fuzzy_cfg()
+
+    monkeypatch.setenv("GOLDENMATCH_BUCKET_DEFAULT", "0")  # legacy per-block
+    res_legacy = dedupe_df(tbl, config=cfg)
+    legacy_dupes = res_legacy.dupes.num_rows if res_legacy.dupes is not None else 0
+
+    monkeypatch.delenv("GOLDENMATCH_BUCKET_DEFAULT", raising=False)  # bucket default
+    res_bucket = dedupe_df(tbl, config=cfg)
+    bucket_dupes = res_bucket.dupes.num_rows if res_bucket.dupes is not None else 0
+
+    assert bucket_dupes == legacy_dupes

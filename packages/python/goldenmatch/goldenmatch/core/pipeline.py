@@ -83,6 +83,65 @@ def _unwrap_llm_pairs(
     return result
 
 
+# Bucket is the DEFAULT fuzzy scorer within a memory-safe row band. It scores all
+# blocks in one batched pass (block-key + bucket assignment off the collected frame,
+# no per-block LazyFrame), where the legacy per-block ``score_blocks_parallel`` spins
+# up work per tiny block -- MEASURED 5-7x faster (100K 15.3s->2.1s, 500K 54s->9.7s)
+# with BYTE-IDENTICAL clusters (parity: test_bucket_febrl3_parity +
+# test_score_buckets_vectorized_fallback). Bucket materializes pairs + double-
+# partitions the frame, so an UNSET / planner-'polars-direct' backend uses it only
+# within a RAM-safe band (matches the planner's rule_bucket_suggested cap); above it,
+# the legacy streaming path stays the default. Explicit backend='bucket' is honored at
+# any size. Kill-switch: GOLDENMATCH_BUCKET_DEFAULT=0 forces the legacy per-block path.
+_BUCKET_DEFAULT_MAX_ROWS = 750_000  # == autoconfig_planner_rules.BUCKET_SUGGESTED_MAX_ROWS
+_BUCKET_DEFAULT_OPT_OUT = frozenset({"0", "off", "false", "no"})
+
+
+def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
+    """Whether the fuzzy scoring stage should use the bucket scorer (default) vs
+    the legacy per-block path. See the module note above the constants."""
+    backend = getattr(config, "backend", None)
+    if backend == "bucket":
+        return True  # explicit choice -- honored at any size
+    if backend not in (None, "polars-direct"):
+        return False  # ray / duckdb / datafusion / chunked keep explicit routing
+    if _columnar_pipeline_enabled():
+        return False  # explicit GOLDENMATCH_COLUMNAR_PIPELINE opt-in wins
+    # The prepared-record / partitioned-block store path is a build_blocks feature
+    # bucket skips entirely (it materializes bucketed blocks itself) -- keep legacy.
+    # An explicit backend='bucket' still opts in.
+    if getattr(config, "prepared_record_store", False) or getattr(
+        config, "partitioned_block_scoring", False
+    ):
+        return False
+    # Bucket derives FIELD-based block keys (blocking.passes/keys). lsh / ann /
+    # learned / canopy / sorted_neighborhood generate candidates from signatures /
+    # embeddings / learned predicates that bucket does not replicate -> it would
+    # split near-dups the legacy path merges. Keep those on legacy (tracked gap:
+    # test_bucket_legacy_parity_matrix). static / multi_pass are validated identical.
+    _blk = getattr(config, "blocking", None)
+    if _blk is not None and getattr(_blk, "strategy", None) not in (
+        None, "static", "multi_pass",
+    ):
+        return False
+    # Controller profiling: keep the legacy per-block path so auto-config reads the
+    # SAME block-size distribution signals it always has (bucket emits different
+    # profile stages -> would shift the controller's refit decisions / oscillate).
+    # The FINAL, committed dedupe runs with no capture active and still gets bucket.
+    from goldenmatch.core.profile_emitter import has_active_emitter
+
+    if has_active_emitter():
+        return False
+    if (
+        os.environ.get("GOLDENMATCH_BUCKET_DEFAULT", "1").strip().lower()
+        in _BUCKET_DEFAULT_OPT_OUT
+    ):
+        return False  # kill-switch -> legacy per-block path
+    from goldenmatch.core.frame import to_frame
+
+    return to_frame(collected_df).height <= _BUCKET_DEFAULT_MAX_ROWS
+
+
 def _get_block_scorer(config: GoldenMatchConfig):
     """Return the block scoring function based on configured backend."""
     backend = getattr(config, "backend", None)
@@ -2274,7 +2333,7 @@ def _run_dedupe_pipeline(
                 # memory on Linux runners (7 consecutive 5M bench runs
                 # hung at 62.99 GB RSS plateau before reaching real
                 # scoring).
-                if config.backend == "bucket":
+                if _use_bucket_scorer(config, collected_df):
                     from goldenmatch.backends.score_buckets import score_buckets
                     pairs = score_buckets(
                         collected_df,
@@ -2503,7 +2562,7 @@ def _run_dedupe_pipeline(
             # (parity asserted in scripts/bench_fs_and_stages.py). EM still
             # samples within-block pairs above; at true scale pair train-once via
             # mk.model_path so EM is skipped on reuse.
-            if config.backend == "bucket":
+            if _use_bucket_scorer(config, collected_df):
                 from goldenmatch.backends.score_buckets import score_buckets
                 pairs = score_buckets(
                     collected_df,
