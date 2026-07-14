@@ -43,10 +43,10 @@ def _no_autoconfig_memory():
 
 
 def _arrow_native(on: bool):
-    if on:
-        os.environ["GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE"] = "1"
-    else:
-        os.environ.pop("GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", None)
+    # Set BOTH values explicitly. Since the flag now defaults ON (2026-07-14),
+    # the polars baseline (`on=False`) must set "0" -- popping would inherit the
+    # new default and stop being a real polars-vs-arrow comparison.
+    os.environ["GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE"] = "1" if on else "0"
 
 
 def _dupe_count(res) -> int:
@@ -83,6 +83,27 @@ _SHAPES = {
         "first": (["ann", "bob", "cy"] * 100),
         "last": (["smith", "jones", "lee"] * 100),
     },
+    "dob-person": {
+        # a date/dob column -- the FS-v2 date-admission + date-year blocking
+        # detectors must decide identically arrow-vs-polars.
+        "first": (["ann", "bob", "cara", "dan"] * 75),
+        "last": (["smith", "jones", "lee", "poe"] * 75),
+        "dob": [f"19{60 + (i % 40):02d}-0{1 + (i % 9)}-1{i % 10}" for i in range(300)],
+    },
+    "high-null-aux": {
+        # a mostly-null auxiliary column -- the blocking null-rate guard (>20%
+        # skip) must fire identically on both backends.
+        "first": (["ann", "bob", "cara"] * 100),
+        "last": (["smith", "jones", "lee"] * 100),
+        "aux": [(f"x{i}" if i % 10 == 0 else None) for i in range(300)],
+    },
+    "typo-names": {
+        # systematic near-dups (typo'd first name, same last) -> the fuzzy
+        # name-scorer path drives the dup count; must match cross-backend.
+        "first": (["michael", "micheal", "sara", "sarah"] * 75),
+        "last": (["brown", "brown", "davis", "davis"] * 75),
+        "zip": [str(20000 + (i % 40)) for i in range(300)],
+    },
 }
 
 
@@ -110,6 +131,29 @@ def test_arrow_native_cluster_equivalence(shape):
     assert _dupe_count(res_pl) == _dupe_count(res_pa), (
         f"{shape}: polars dupes={_dupe_count(res_pl)} != arrow dupes={_dupe_count(res_pa)}"
     )
+
+
+def test_arrow_native_is_the_default():
+    """With GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE UNSET, a pa.Table zero-config run
+    engages the arrow-native path by default (2026-07-14 flip) -- i.e. its config
+    equals an explicitly-flag-on run and its dupes equal the polars baseline."""
+    from goldenmatch import dedupe_df
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    data = _SHAPES["exact-id-plus-names"]
+    os.environ.pop("GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", None)  # rely on the default
+    cfg_default = auto_configure_df(pa.table(data), _skip_finalize=True)
+    res_default = dedupe_df(pa.table(data), config=None)
+
+    _arrow_native(True)  # explicit on
+    try:
+        cfg_explicit = auto_configure_df(pa.table(data), _skip_finalize=True)
+    finally:
+        _arrow_native(False)
+    res_pl = dedupe_df(pl.DataFrame(data), config=None)
+
+    assert _config_matchkeys(cfg_default) == _config_matchkeys(cfg_explicit)
+    assert _dupe_count(res_default) == _dupe_count(res_pl)
 
 
 @pytest.mark.parametrize("shape", ["exact-id-plus-names", "shared-email-switchboard"])

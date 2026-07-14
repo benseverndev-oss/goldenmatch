@@ -147,7 +147,12 @@ def test_zero_config_arrow_with_exact_column_matches_polars():
                     )
                 ),
             )
-        return (getattr(cfg, "backend", None), mks, blk)
+        # `backend` EXCLUDED: with GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default-on
+        # the arrow sample routes to the bucket scorer, so `backend` reads
+        # "bucket" on arrow vs None on polars -- a benign difference (identical
+        # clusters, #526). Everything that decides the output (mks + blocking)
+        # must still agree.
+        return (mks, blk)
 
     cfg_pl = auto_configure_df(pl.DataFrame(data), _skip_finalize=True)
     cfg_pa = auto_configure_df(pa.table(data), _skip_finalize=True)
@@ -207,18 +212,21 @@ def test_explicit_config_arrow_dedupe_is_polars_free():
 
 @pytest.mark.xfail(
     reason=(
-        "`auto_configure_df` config-GENERATION is now Polars-free on the arrow-native "
-        "path (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1: indicators guards + exclusion "
-        "detectors + discriminative-veto + source-partition seam-ported, sample "
-        "scoring routed to the arrow-native bucket scorer -- config- and cluster-"
-        "equivalent to polars, see test_autoconfig_arrow_native_parity.py). Two things "
-        "keep this DEFAULT tripwire xfail: (1) the flag defaults OFF, so "
-        "`auto_configure_df` coerces a non-polars input to polars at its boundary "
-        "(imports polars) -- safe production default until (2) lands; (2) even with the "
-        "flag on, the FINAL dedupe's clustering `build_clusters_arrow_native` "
-        "(cluster.py:2027) wraps the arrow Rust-kernel output into polars ClusterFrames "
-        "-> imports polars. Flips green when ClusterFrames is Arrow-native (the 3.x "
-        "engine-descent eviction, NOT the autoconfig port) and the flag defaults on."
+        "`auto_configure_df` config-GENERATION is Polars-free on the arrow-native "
+        "path, now DEFAULT-ON (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default=1, "
+        "2026-07-14 -- indicators guards + exclusion / discriminative-veto / "
+        "source-partition detectors seam-ported, sample scoring on the arrow-native "
+        "bucket scorer; parity-gated in test_autoconfig_arrow_native_parity.py). The "
+        "ClusterFrames stage is arrow-native too (build_cluster_frames threads "
+        "backend='arrow'; the emitter is seam-routed -- see "
+        "test_cluster_frames_no_polars.py). Remaining zero-config polars leaks that "
+        "keep this endgame tripwire xfail (per the 2026-07-14 leak catalog): (1) the "
+        "GOLDEN fallback builder (golden.py build_golden_records_df / "
+        "_stable_value_expr) when native golden_fused declines -- Wave 2 Stage 6; and "
+        "(2) the quality / transform prep bridges (quality._scan_and_fix, "
+        "transform.run_transform pa->pl->pa) -- Wave 1 Stages 3-4. Flips green when "
+        "those land (plan: docs/superpowers/plans/"
+        "2026-07-14-goldenmatch-zero-config-arrow-polars-free.md)."
     ),
     strict=False,
 )
