@@ -84,31 +84,69 @@ empty sample) emits a WARNING finding and is skipped -- levers never fail the pa
 
 For every field with `tf_adjustment=True` whose imported `EMResult` lacks `tf_freqs` for it:
 compute value -> relative-frequency tables and the collision rate from the transform-applied data
-column, attach to the upgraded `EMResult` copy. Implementation REUSES `train_em`'s existing
-TF-building code, extracted into a shared helper (no duplication). Finding per field: distinct
-values, collision rate.
+column, attach to the upgraded `EMResult` copy. Implementation REUSES the existing module-level
+helper `_build_tf_tables(df, mk)` in `core/probabilistic.py` (~line 944, built on
+`tf_tables.value_frequencies`) -- the plan task is making it importable/callable for this use, not
+an extraction. Finding per field: distinct values, collision rate.
+
+**Bare-settings inputs (`conversion.em_model is None`):** levers 1 and 3 SKIP with an info note --
+when no trained model was imported, GoldenMatch trains EM on the user's data at run time, which
+already computes TF tables (for tf_adjustment fields) and calibrated thresholds natively. Lever 2
+still applies (band thresholds are config-level, fixed before training). The migration report says
+exactly this.
 
 ### 2. Measured distance thresholds (`distance_thresholds`)
 
-For every band the converter flagged `approx` with the distance formula (levenshtein
-`sim = 1 - d/10`): recover the original distance from the recorded formula, measure the field's
-mean string length L on the sample, recompute `sim = max(0, 1 - d/L)`, replace the threshold in
-`level_thresholds` (or `partial_threshold` for 2-level fields). Re-validate ordering (dedupe /
-strictly-descending; if two bands collapse, merge their imported m/u like the converter does and
-warn). Finding per band: old -> new threshold, measured L, distance. Skipped (warning) when the
-original distance is unrecoverable or the recomputed thresholds would leave no valid band.
+Mechanism (NO finding-message parsing): every `scorer="levenshtein"` field in a converted config
+can only have come from the converter's `_DIST_RE` path with the constant `_LEV_ASSUMED_LEN = 10`,
+so the original Splink distance inverts exactly: `d = round((1 - t) * 10)` per threshold (the
+converter itself performs this same reconstruction for its warning text). For each such field:
+measure the mean POST-TRANSFORM string length L of the data column on the sample, recompute
+`sim = max(0, 1 - d/L)` per band, replace `level_thresholds` (or `partial_threshold` for 2-level
+fields). `jaro_similarity`-approx fields are NOT touched (different approximation, no distance to
+recover). Re-validate ordering (dedupe / strictly-descending; if two bands collapse, merge their
+imported m/u the way the converter's import_em does and warn). Finding per band: old -> new
+threshold, d, measured L. Skipped (warning) when L cannot be measured (empty column) or the
+recomputed thresholds would leave no valid band.
 
 ### 3. Threshold calibration (`calibration`)
 
-Score the sample with the UPGRADED model (post levers 1-2), collect the pair-score distribution,
-feed it to the existing `compute_thresholds` machinery, and set explicit
-`link_threshold`/`review_threshold` on the upgraded matchkey. Finding: chosen thresholds + the
-percentile/distribution evidence. Runs after levers 1-2 by design (calibrates the model users
-will actually run).
+Compute raw Fellegi-Sunter weights for BLOCKED candidate pairs on the sample using the upgraded
+model (post levers 1-2) -- NOT via `score_probabilistic` (which filters at the link threshold and
+returns only survivors) but via the underlying weight computation over candidate pairs with no
+cut, normalized the same way scoring does. Feed that full distribution to
+`compute_thresholds(em_result, scored_weights=...)` -- note this lever is the FIRST real consumer
+of the `scored_weights` branch (nothing in the codebase passes it today; the branch also requires
+len > 50, below which the lever skips with a warning). Set explicit
+`link_threshold`/`review_threshold` on the upgraded matchkey. **Posterior calibration mode**
+(`GOLDENMATCH_FS_CALIBRATION=posterior`): `compute_thresholds` deliberately returns fixed
+absolute cuts (0.99/0.50) and ignores the distribution -- the lever detects this mode and skips
+with an info note. Finding: chosen thresholds + distribution evidence (percentiles, n pairs).
+Runs after levers 1-2 by design (calibrates the model users will actually run).
 
 ## Measurement
 
-Runs `dedupe_df` twice on the same sample: baseline config, then upgraded config. Reports:
+Runs `dedupe_df` twice on the same sample: baseline config, then upgraded config.
+
+**Model injection:** `dedupe_df` consumes trained models via FILE (`model_path` on the matchkey /
+`fs_model_path`); `SplinkConversion.em_model` is in-memory. The measurement stage therefore writes
+BOTH EMResults (baseline as-imported; upgraded with TF tables) to temp files (`save_json`) and
+runs each config copy with its `model_path` pointed at its own temp file -- otherwise `dedupe_df`
+would silently retrain EM on the sample and measure the wrong models. Temp files are cleaned up
+after measurement; the CLI's persistent model files are separate (see CLI section).
+
+```python
+@dataclass
+class MeasurementResult:
+    sample_rows: int
+    sampled: bool                       # True when data exceeded sample_cap
+    baseline: RunStats                  # cluster shape + wall per run
+    upgraded: RunStats
+    vs_splink: PairwiseAgreement | None # both runs vs splink_clusters, when provided
+    vs_labels: TruthMetrics | None      # pairwise + b-cubed, when labels provided
+```
+
+Reports:
 
 - Per run: cluster count, multi-record clusters, max cluster size, singleton count, wall time,
   and a snowball flag (max cluster size > 10x the reference max, where reference = splink_clusters
@@ -131,7 +169,11 @@ goldenmatch import-splink settings.json -o out.yaml --model-out model.json \
 
 - With `--upgrade`: the written `out.yaml` / `model.json` are the UPGRADED artifacts; the faithful
   baseline is written alongside as `out.baseline.yaml` / `model.baseline.json` (the trust anchor
-  stays on disk). Existing write-ordering/partial-model semantics unchanged.
+  stays on disk). `model_path` wiring is per-pair: `out.yaml` points at `model.json`,
+  `out.baseline.yaml` at `model.baseline.json`. The existing config-before-model write ordering
+  and partial-model refusal apply to EACH pair (the current CLI logic handles one pair; the plan
+  extends it to two -- baseline pair first, upgraded pair second, so a failure mid-way never
+  leaves an upgraded config without its baseline).
 - `--upgrade` with a trained-model input REQUIRES `--model-out` (TF tables need a model file).
 - Output: the existing findings table (now including upgrade findings) + a compact
   baseline -> upgraded delta table from the measurement.
