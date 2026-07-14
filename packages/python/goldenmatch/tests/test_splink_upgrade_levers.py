@@ -978,11 +978,18 @@ def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
 
 
 def test_lever_order_tf_tables_then_distance_then_calibration():
-    """All three levers emit at least one finding on any trained run; their
-    first occurrences must appear in canonical registry order."""
+    """The finding-emitting levers' first occurrences must appear in canonical
+    registry order. (fan_out sits between distance_thresholds and calibration
+    but its stub bodies emit no finding on trained input, so it is asserted
+    via _LEVER_ORDER only.)"""
     from goldenmatch.config.splink_upgrade import _LEVER_ORDER
 
-    assert _LEVER_ORDER == ("tf_tables", "distance_thresholds", "calibration")
+    assert _LEVER_ORDER == (
+        "tf_tables",
+        "distance_thresholds",
+        "fan_out",
+        "calibration",
+    )
 
     conversion = from_splink(_trained_settings_with_levenshtein())
     # 15 identical emails -> one block of 15 -> 105 blocked pairs (> 50), so
