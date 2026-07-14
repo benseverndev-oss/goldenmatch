@@ -11,6 +11,8 @@ cluster-guard tuning body in Task F4.
 """
 from __future__ import annotations
 
+from goldenmatch.config.splink_upgrade import _LeverContext
+
 # ── Tuning constants ─────────────────────────────────────────────────────────
 
 _FANOUT_POSTERIOR_CONFIDENT = 0.9   # "confident merge" posterior floor for the risk gate
@@ -36,7 +38,7 @@ _BARE_SETTINGS_SKIP_MSG_FANOUT = (
 )
 
 
-def run_fan_out_lever(ctx) -> None:
+def run_fan_out_lever(ctx: _LeverContext) -> None:
     if ctx.conversion.em_model is None:
         ctx.report.info("upgrade:fan_out", _BARE_SETTINGS_SKIP_MSG_FANOUT, mapped_to=None)
         return
@@ -44,9 +46,9 @@ def run_fan_out_lever(ctx) -> None:
     _tune_cluster_guard(ctx)          # Task F4
 
 
-def _suggest_negative_evidence(ctx) -> None:
+def _suggest_negative_evidence(ctx: _LeverContext) -> None:
     pass  # Task F3
 
 
-def _tune_cluster_guard(ctx) -> None:
+def _tune_cluster_guard(ctx: _LeverContext) -> None:
     pass  # Task F4
