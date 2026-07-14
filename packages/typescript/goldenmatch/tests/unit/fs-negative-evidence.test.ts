@@ -1,12 +1,15 @@
 /**
- * FS negative-evidence loud decline (TS port phase 3, first commit).
+ * FS negative evidence (TS port phase 3).
  *
- * Every FS entry point must THROW `NegativeEvidenceUnsupportedError` on a
- * probabilistic matchkey carrying non-empty `negativeEvidence` — killing the
- * silent-wrong-scores state where a Python-authored NE config scored in TS
- * without the veto. The discrete-path throws are lifted later in this branch
- * as the port lands; the continuous (Winkler) path throws PERMANENTLY,
+ * T1: loud decline — entry points that cannot honor NE throw
+ * `NegativeEvidenceUnsupportedError` on a probabilistic matchkey carrying
+ * non-empty `negativeEvidence`, killing the silent-wrong-scores state where
+ * a Python-authored NE config scored in TS without the veto. After T4 the
+ * discrete scoring/validation/fallback paths honor NE; `trainEM` still
+ * throws until T5; the continuous (Winkler) path throws PERMANENTLY,
  * matching Python.
+ *
+ * T3: `neFired` + `fsWeightRange`. T4: scoring + validation + fallback.
  *
  * Weighted/exact NE behavior is untouched (guard test at the bottom).
  */
@@ -20,6 +23,10 @@ import {
   scoreProbabilisticContinuous,
   neFired,
   fsWeightRange,
+  fallbackResult,
+  emResultToJson,
+  emResultFromJson,
+  FSModelMismatchError,
 } from "../../src/core/probabilistic.js";
 import type { EMResult, ContinuousEMResult } from "../../src/core/probabilistic.js";
 import { parseConfig } from "../../src/core/config/loader.js";
@@ -55,8 +62,7 @@ function neProbMatchkey() {
   });
 }
 
-// The guards must fire BEFORE the model is touched, so dummies suffice.
-const dummyEm = {} as EMResult;
+// The guards must fire BEFORE the model is touched, so a dummy suffices.
 const dummyCem = {} as ContinuousEMResult;
 
 function expectNeDecline(fn: () => unknown): void {
@@ -73,26 +79,14 @@ function expectNeDecline(fn: () => unknown): void {
 }
 
 // ---------------------------------------------------------------------------
-// The six entry points
+// Remaining declines: trainEM (until T5) + the continuous path (permanent).
+// scoreProbabilistic / scoreProbabilisticPair / validateEmResultFor no longer
+// throw — their NE behavior is pinned in the T4 suites below.
 // ---------------------------------------------------------------------------
 
 describe("FS negative-evidence loud decline (probabilistic matchkeys)", () => {
-  it("trainEM throws", () => {
+  it("trainEM throws (lifted in T5)", () => {
     expectNeDecline(() => trainEM(rows, neProbMatchkey()));
-  });
-
-  it("scoreProbabilistic throws", () => {
-    expectNeDecline(() => scoreProbabilistic(rows, neProbMatchkey(), dummyEm));
-  });
-
-  it("scoreProbabilisticPair throws", () => {
-    expectNeDecline(() =>
-      scoreProbabilisticPair(rows[0]!, rows[1]!, neProbMatchkey(), dummyEm),
-    );
-  });
-
-  it("validateEmResultFor throws", () => {
-    expectNeDecline(() => validateEmResultFor(dummyEm, neProbMatchkey()));
   });
 
   it("trainEMContinuous throws (permanent)", () => {
@@ -123,7 +117,7 @@ describe("FS negative-evidence loud decline (probabilistic matchkeys)", () => {
 // ---------------------------------------------------------------------------
 
 describe("loader-parsed NE config hits the decline", () => {
-  it("parseConfig -> scoreProbabilistic throws", () => {
+  it("parseConfig -> trainEM throws", () => {
     const raw = {
       matchkeys: [
         {
@@ -147,7 +141,7 @@ describe("loader-parsed NE config hits the decline", () => {
     const config = parseConfig(raw);
     const mk = config.matchkeys?.[0];
     expect(mk?.type).toBe("probabilistic");
-    expectNeDecline(() => scoreProbabilistic(rows, mk!, dummyEm));
+    expectNeDecline(() => trainEM(rows, mk!));
   });
 });
 
@@ -398,6 +392,249 @@ describe("scoring regression pin (no-NE configs unchanged by fsWeightRange swap)
     expect(scoreProbabilisticPair(pinRows[0]!, pinRows[1]!, mk, em)).toBe(0.625);
     expect(scoreProbabilisticPair(pinRows[0]!, pinRows[2]!, mk, em)).toBe(0.375);
     expect(scoreProbabilisticPair(pinRows[1]!, pinRows[2]!, mk, em)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4: FS scoring with negative evidence (mirrors Python
+// `_ne_scalar_contribution` inside `score_probabilistic`).
+// ---------------------------------------------------------------------------
+
+describe("FS scoring with negative evidence", () => {
+  // name exact [-1, 2]; NE phone exact, threshold 1.0, EM-learned [-3, 0].
+  // Envelope: min = -1 + -3 = -4, max = 2 + 0 = 2, range 6.
+  const mkNE = makeMatchkeyConfig({
+    name: "p",
+    type: "probabilistic",
+    fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    negativeEvidence: [
+      makeNegativeEvidenceField({ field: "phone", scorer: "exact", threshold: 1.0 }),
+    ],
+  });
+  const mkNoNE = makeMatchkeyConfig({
+    name: "p",
+    type: "probabilistic",
+    fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+  });
+  const em = makeEm({ name: [-1, 2], __ne__phone: [-3, 0] });
+  const emNoNE = makeEm({ name: [-1, 2] });
+
+  const sRows: Row[] = [
+    { __row_id__: 1, name: "a", phone: "111" } as Row,
+    { __row_id__: 2, name: "a", phone: "222" } as Row, // NE fires vs row 1
+    { __row_id__: 3, name: "b", phone: "333" } as Row,
+    { __row_id__: 4, name: "b", phone: "333" } as Row, // NE unfired (agree)
+    { __row_id__: 5, name: "c", phone: "444" } as Row,
+    { __row_id__: 6, name: "c", phone: null } as Row, // NE inconclusive (null)
+  ];
+
+  function scoreMap(
+    rws: readonly Row[],
+    mk: ReturnType<typeof makeMatchkeyConfig>,
+    emr: EMResult,
+  ): Map<string, number> {
+    const out = scoreProbabilistic(rws, mk, emr, { threshold: 0 });
+    return new Map(out.map((p) => [`${p.idA}:${p.idB}`, p.score]));
+  }
+
+  it("fired pair drops by exactly wFired pre-normalization (hand-computed normalized)", () => {
+    const scores = scoreMap(sRows, mkNE, em);
+    // (1,2): name agrees (+2), NE fires (-3) -> total -1 -> (-1 + 4)/6 = 0.5.
+    expect(scores.get("1:2")).toBe(0.5);
+    // Same regular total with NE unfired: (2 + 4)/6 = 1.0. The gap is
+    // exactly wFired/range = 3/6.
+    expect(scores.get("3:4")).toBe(1);
+  });
+
+  it("unfired pair scores identically to the same config without NE (both run)", () => {
+    const withNe = scoreProbabilisticPair(sRows[2]!, sRows[3]!, mkNE, em);
+    const withoutNe = scoreProbabilisticPair(sRows[2]!, sRows[3]!, mkNoNE, emNoNE);
+    expect(withNe).toBe(withoutNe);
+    expect(withNe).toBe(1);
+  });
+
+  it("null on one side is inconclusive: NE does not fire", () => {
+    expect(scoreProbabilisticPair(sRows[4]!, sRows[5]!, mkNE, em)).toBe(1);
+  });
+
+  it("penaltyBits override is honored as -abs (no __ne__ entry needed)", () => {
+    const mkBits = (bits: number) =>
+      makeMatchkeyConfig({
+        name: "p",
+        type: "probabilistic",
+        fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+        negativeEvidence: [
+          makeNegativeEvidenceField({
+            field: "phone",
+            scorer: "exact",
+            threshold: 1.0,
+            penaltyBits: bits,
+          }),
+        ],
+      });
+    // Envelope: min = -1 - 5 = -6, max = 2, range 8. Fired: 2 - 5 = -3 -> 3/8.
+    expect(scoreProbabilisticPair(sRows[0]!, sRows[1]!, mkBits(5), emNoNE)).toBe(3 / 8);
+    // Negative bits take abs -- same score.
+    expect(scoreProbabilisticPair(sRows[0]!, sRows[1]!, mkBits(-5), emNoNE)).toBe(3 / 8);
+  });
+
+  it("normalized stays in [0,1] when NE fires (fsWeightRange envelope)", () => {
+    // All-min pair: name disagrees (-1) + NE fires (-3) = -4 = envelope min.
+    const worst = scoreProbabilisticPair(
+      { name: "x", phone: "1" } as Row,
+      { name: "y", phone: "2" } as Row,
+      mkNE,
+      em,
+    );
+    expect(worst).toBe(0);
+    for (const s of scoreMap(sRows, mkNE, em).values()) {
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("round-4 applies to scoreProbabilistic ONLY; Pair returns raw floats", () => {
+    // __ne__phone [-4, 0]: fired total = 2 - 4 = -2; envelope [-5, 2],
+    // range 7 -> (-2 + 5)/7 = 3/7 = 0.42857142857...
+    const em47 = makeEm({ name: [-1, 2], __ne__phone: [-4, 0] });
+    expect(scoreProbabilisticPair(sRows[0]!, sRows[1]!, mkNE, em47)).toBe(3 / 7);
+    expect(scoreMap(sRows, mkNE, em47).get("1:2")).toBe(0.4286);
+  });
+
+  it("fired NE with a missing __ne__ entry throws loudly (post-validate programming error)", () => {
+    // Mirrors Python's KeyError contract in `_ne_scalar_contribution`:
+    // never silently contribute 0 once the field fires.
+    const badEm = makeEm({ name: [-1, 2] }); // no __ne__phone, no penaltyBits
+    expect(() =>
+      scoreProbabilisticPair(sRows[0]!, sRows[1]!, mkNE, badEm),
+    ).toThrow(FSModelMismatchError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4: validateEmResultFor NE entry checks (mirrors Python `validate_for`).
+// ---------------------------------------------------------------------------
+
+describe("validateEmResultFor with negative evidence", () => {
+  function neMk(extra?: { penaltyBits?: number }) {
+    return makeMatchkeyConfig({
+      name: "p",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+      negativeEvidence: [
+        makeNegativeEvidenceField({
+          field: "phone",
+          scorer: "exact",
+          threshold: 0.5,
+          ...(extra?.penaltyBits !== undefined
+            ? { penaltyBits: extra.penaltyBits }
+            : {}),
+        }),
+      ],
+    });
+  }
+
+  it("missing __ne__<field> entry: error names the field AND both remedies", () => {
+    const em = makeEm({ name: [-1, 2] });
+    let thrown: unknown;
+    try {
+      validateEmResultFor(em, neMk());
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(FSModelMismatchError);
+    const msg = (thrown as Error).message;
+    expect(msg).toContain("phone");
+    expect(msg).toContain("__ne__phone");
+    expect(msg).toContain("retrain");
+    expect(msg).toContain("penaltyBits");
+  });
+
+  it("penaltyBits NE field requires NO __ne__ entry", () => {
+    const em = makeEm({ name: [-1, 2] });
+    expect(() => validateEmResultFor(em, neMk({ penaltyBits: 3 }))).not.toThrow();
+  });
+
+  it("1-entry __ne__ list rejected (2-element [fired, not_fired] required)", () => {
+    const em = makeEm({ name: [-1, 2], __ne__phone: [-3] });
+    expect(() => validateEmResultFor(em, neMk())).toThrow(/2-element/);
+  });
+
+  it("valid NE model passes", () => {
+    const em = makeEm({ name: [-1, 2], __ne__phone: [-3, 0] });
+    expect(() => validateEmResultFor(em, neMk())).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4: fallbackResult NE entries (mirrors Python `_fallback_result`).
+// ---------------------------------------------------------------------------
+
+describe("fallbackResult with negative evidence", () => {
+  it("penaltyBits-free NE fields get the Python fallback entries; penaltyBits fields get none", () => {
+    const mk = makeMatchkeyConfig({
+      name: "p",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+      negativeEvidence: [
+        makeNegativeEvidenceField({ field: "phone", scorer: "exact", threshold: 0.5 }),
+        makeNegativeEvidenceField({
+          field: "fax",
+          scorer: "exact",
+          threshold: 0.5,
+          penaltyBits: 2,
+        }),
+      ],
+    });
+    const fb = fallbackResult(mk);
+    // m=0.0625, u=0.5 -> log2(0.0625/0.5) == -3.0 exactly.
+    expect(fb.matchWeights["__ne__phone"]).toEqual([-3.0, 0.0]);
+    expect(fb.m["__ne__phone"]).toEqual([0.0625, 0.9375]);
+    expect(fb.u["__ne__phone"]).toEqual([0.5, 0.5]);
+    // penaltyBits NE fields: NO entries (fixed override).
+    expect(fb.matchWeights["__ne__fax"]).toBeUndefined();
+    expect(fb.m["__ne__fax"]).toBeUndefined();
+    expect(fb.u["__ne__fax"]).toBeUndefined();
+    // Self-consistency: the fallback validates against its own matchkey.
+    expect(() => validateEmResultFor(fb, mk)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4 serde pin: __ne__ keys ride the generic dict passthrough untouched.
+// ---------------------------------------------------------------------------
+
+describe("EMResult serde round-trips __ne__ keys", () => {
+  it("emResultToJson -> emResultFromJson preserves __ne__ entries exactly", () => {
+    const em: EMResult = {
+      m: { name: [0.1, 0.9], __ne__phone: [0.0625, 0.9375] },
+      u: { name: [0.9, 0.1], __ne__phone: [0.5, 0.5] },
+      matchWeights: {
+        name: [-3.169925001442312, 3.169925001442312],
+        __ne__phone: [-3.0, 0.0],
+      },
+      proportionMatched: 0.05,
+      iterations: 3,
+      converged: true,
+      tfFreqs: null,
+      tfCollision: null,
+    };
+    const json = emResultToJson(em);
+    // The snake_case top-level keys (m_probs/u_probs/match_weights) carry
+    // the __ne__ inner keys untouched on the JSON intermediate.
+    expect((json["m_probs"] as Record<string, unknown>)["__ne__phone"]).toEqual([
+      0.0625, 0.9375,
+    ]);
+    expect((json["u_probs"] as Record<string, unknown>)["__ne__phone"]).toEqual([
+      0.5, 0.5,
+    ]);
+    expect(
+      (json["match_weights"] as Record<string, unknown>)["__ne__phone"],
+    ).toEqual([-3.0, 0.0]);
+    const back = emResultFromJson(json);
+    expect(back).toEqual(em);
+    // Byte-identical re-serialization.
+    expect(emResultToJson(back)).toEqual(json);
   });
 });
 

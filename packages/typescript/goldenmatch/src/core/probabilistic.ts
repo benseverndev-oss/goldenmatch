@@ -80,12 +80,12 @@ export class FSModelMismatchError extends Error {
 }
 
 /**
- * FS negative evidence is not scored on this path (yet). Thrown loudly by
- * every FS entry point when a probabilistic matchkey carries non-empty
- * `negativeEvidence`, so a Python-authored NE config can never silently
- * mis-score in TS. The discrete-path throws are lifted as the port lands
- * later in this branch; the continuous (Winkler) path never supports NE,
- * matching Python.
+ * FS negative evidence is not scored on this path. Thrown loudly when a
+ * probabilistic matchkey carries non-empty `negativeEvidence` on an entry
+ * point that cannot honor it, so a Python-authored NE config can never
+ * silently mis-score in TS. Discrete scoring/validation/fallback now cover
+ * NE; `trainEM` still throws until the EM port lands (same branch); the
+ * continuous (Winkler) path never supports NE, matching Python.
  */
 export class NegativeEvidenceUnsupportedError extends Error {
   constructor(message: string) {
@@ -94,16 +94,27 @@ export class NegativeEvidenceUnsupportedError extends Error {
   }
 }
 
-/** Throw loudly when a probabilistic matchkey carries negative evidence. */
-function assertNoNegativeEvidence(mk: MatchkeyConfig, path: string): void {
+/**
+ * Throw loudly when a probabilistic matchkey carries negative evidence.
+ * `permanent=true` for the continuous (Winkler) entry points, which never
+ * support NE (mirrors Python); the default wording is for `trainEM`, whose
+ * throw is lifted later in this branch when the EM port lands.
+ */
+function assertNoNegativeEvidence(
+  mk: MatchkeyConfig,
+  path: string,
+  permanent = false,
+): void {
   if (mk.type !== "probabilistic") return;
   const ne = mk.negativeEvidence;
   if (ne && ne.length > 0) {
     const names = ne.map((n) => n.field).join(", ");
-    throw new NegativeEvidenceUnsupportedError(
-      `${path}: negative evidence (${names}) is not scored on this path yet -- ` +
-        `FS negative evidence lands later in this branch; the continuous path never supports it`,
-    );
+    const message = permanent
+      ? `${path}: the continuous (Winkler) path does not support negative ` +
+        `evidence (${names}), matching Python -- use the discrete FS path`
+      : `${path}: negative evidence (${names}) is not trained on this path yet -- ` +
+        `FS EM training for negative evidence lands later in this branch`;
+    throw new NegativeEvidenceUnsupportedError(message);
   }
 }
 
@@ -207,7 +218,6 @@ function matchkeyFieldLevelCount(f: MatchkeyField): number {
  * model.
  */
 export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
-  assertNoNegativeEvidence(mk, "validateEmResultFor");
   for (const f of mk.fields) {
     const weights = em.matchWeights[f.field];
     if (weights === undefined) {
@@ -222,6 +232,30 @@ export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
         `Persisted FS model for field '${f.field}' has ${weights.length} ` +
           `levels but the matchkey expects ${expected}. Retrain or clear ` +
           `the model_path.`,
+      );
+    }
+  }
+  // NE fields without penaltyBits require an EM-learned 2-element
+  // [fired, not_fired] entry under `__ne__<field>` (Python validate_for).
+  for (const ne of mk.negativeEvidence ?? []) {
+    if (ne.penaltyBits !== undefined) continue; // fixed override -- no EM entry needed
+    const key = `__ne__${ne.field}`;
+    const weights = em.matchWeights[key];
+    if (weights === undefined) {
+      throw new FSModelMismatchError(
+        `Persisted FS model has no weights for negative_evidence field ` +
+          `'${ne.field}' (expected key '${key}'). The matchkey added this ` +
+          `NE field since training -- retrain the model, or set ` +
+          `\`penaltyBits\` on the negative_evidence entry to skip EM for ` +
+          `this field.`,
+      );
+    }
+    if (weights.length !== 2) {
+      throw new FSModelMismatchError(
+        `Persisted FS model for negative_evidence field '${ne.field}' ` +
+          `(key '${key}') has ${weights.length} entries but NE weights must ` +
+          `be a 2-element [fired, not_fired] list. Retrain or clear the ` +
+          `model_path.`,
       );
     }
   }
@@ -328,6 +362,11 @@ export function buildComparisonVector(
  * (`applyNegativeEvidence` in autoconfigNegativeEvidence.ts):
  * asString -> applyTransforms -> scoreField, with unknown scorers skipped
  * defensively (not fired).
+ *
+ * Deliberate divergence from `applyNegativeEvidence`: the weighted-NE path
+ * scores post-transform EMPTY strings, while FS NE treats them as
+ * inconclusive (not fired) -- which is why the two firing checks must NOT
+ * be DRY'd into one shared helper.
  */
 export function neFired(
   rowA: Row,
@@ -346,11 +385,50 @@ export function neFired(
   try {
     sim = scoreField(valA, valB, ne.scorer);
   } catch {
-    // Unknown scorer -> not fired (defensive; Python `score_field` parity).
+    // Unknown scorer -> not fired. This mirrors the weighted-NE idiom
+    // (`applyNegativeEvidence` skips unknown scorers), NOT Python's FS path,
+    // which has no guard here and would raise.
     return false;
   }
   if (sim === null) return false;
   return sim < ne.threshold;
+}
+
+/**
+ * One NE field's scalar weight contribution for a single pair. Mirrors
+ * Python `_ne_scalar_contribution`: 0 unless the field FIRES (`neFired`);
+ * when fired, `-abs(penaltyBits)` for the fixed override, else the
+ * EM-learned `__ne__<field>` fired weight (`matchWeights[...][0]`).
+ *
+ * A missing `__ne__<field>` entry at scoring time is a programming error --
+ * `validateEmResultFor` enforces its presence before scoring. Python's
+ * direct index raises KeyError there; the TS contract is the same "fail
+ * loudly, never silently contribute 0", surfaced as FSModelMismatchError
+ * (with the retrain / penaltyBits remedies) since TS index access would
+ * otherwise yield undefined.
+ *
+ * `key` is the precomputed `__ne__<field>` lookup key -- callers scoring
+ * many pairs hoist it outside the pair loop; omitted, it is derived here.
+ */
+function neContribution(
+  rowA: Row,
+  rowB: Row,
+  ne: NegativeEvidenceField,
+  em: EMResult,
+  key?: string,
+): number {
+  if (!neFired(rowA, rowB, ne)) return 0;
+  if (ne.penaltyBits !== undefined) return -Math.abs(ne.penaltyBits);
+  const entry = em.matchWeights[key ?? `__ne__${ne.field}`];
+  if (entry === undefined || entry.length === 0) {
+    throw new FSModelMismatchError(
+      `Persisted FS model has no weights for negative_evidence field ` +
+        `'${ne.field}' (expected key '__ne__${ne.field}') -- ` +
+        `validateEmResultFor should have rejected this model. Retrain the ` +
+        `model, or set \`penaltyBits\` on the negative_evidence entry.`,
+    );
+  }
+  return entry[0]!;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,7 +583,7 @@ export function trainEMContinuous(
   mk: MatchkeyConfig,
   options?: EMOptions,
 ): ContinuousEMResult {
-  assertNoNegativeEvidence(mk, "trainEMContinuous");
+  assertNoNegativeEvidence(mk, "trainEMContinuous", true);
   const emIterations =
     mk.type === "probabilistic" ? mk.emIterations : undefined;
   const convergenceThreshold =
@@ -675,7 +753,7 @@ export function scoreProbabilisticContinuous(
   em: ContinuousEMResult,
   options?: ProbScoreOptions,
 ): ScoredPair[] {
-  assertNoNegativeEvidence(mk, "scoreProbabilisticContinuous");
+  assertNoNegativeEvidence(mk, "scoreProbabilisticContinuous", true);
   const fields = mk.fields;
   if (fields.length === 0) return [];
 
@@ -968,7 +1046,6 @@ export function scoreProbabilistic(
   em: EMResult,
   options?: ProbScoreOptions,
 ): ScoredPair[] {
-  assertNoNegativeEvidence(mk, "scoreProbabilistic");
   const fields = mk.fields;
   if (fields.length === 0) return [];
 
@@ -980,6 +1057,11 @@ export function scoreProbabilistic(
   // Min/max possible weight totals for normalization (NE-aware envelope).
   const { minWeight, maxWeight } = fsWeightRange(em, mk);
   const weightRange = maxWeight - minWeight;
+
+  // NE fields + their `__ne__` lookup keys, hoisted outside the pair loop.
+  const neFields =
+    mk.type === "probabilistic" ? (mk.negativeEvidence ?? []) : [];
+  const neKeys = neFields.map((ne) => `__ne__${ne.field}`);
 
   const rowIds: number[] = [];
   const rowLookup: Row[] = [];
@@ -1009,6 +1091,15 @@ export function scoreProbabilistic(
         if (!w) continue;
         total += w[level] ?? 0;
       }
+      for (let k = 0; k < neFields.length; k++) {
+        total += neContribution(
+          rowLookup[i]!,
+          rowLookup[j]!,
+          neFields[k]!,
+          em,
+          neKeys[k]!,
+        );
+      }
 
       const normalized =
         weightRange > 0 ? (total - minWeight) / weightRange : 0.5;
@@ -1033,7 +1124,6 @@ export function scoreProbabilisticPair(
   mk: MatchkeyConfig,
   em: EMResult,
 ): number {
-  assertNoNegativeEvidence(mk, "scoreProbabilisticPair");
   const fields = mk.fields;
   if (fields.length === 0) return 0.5;
 
@@ -1050,6 +1140,13 @@ export function scoreProbabilisticPair(
     if (!w) continue;
     total += w[level] ?? 0;
   }
+  const neFields =
+    mk.type === "probabilistic" ? (mk.negativeEvidence ?? []) : [];
+  for (const ne of neFields) {
+    total += neContribution(rowA, rowB, ne, em);
+  }
+  // NOTE: raw float on purpose -- the round-4 output convention applies to
+  // scoreProbabilistic only, on both surfaces (Python parity).
   return (total - minWeight) / weightRange;
 }
 
@@ -1057,7 +1154,17 @@ export function scoreProbabilisticPair(
 // Fallback result for tiny datasets
 // ---------------------------------------------------------------------------
 
-function fallbackResult(mk: MatchkeyConfig): EMResult {
+/**
+ * Conservative EMResult defaults when EM can't run (too few pairs / no
+ * fields). Mirrors Python `_fallback_result`, including its NE posture:
+ * each penaltyBits-free negative-evidence field gets a fixed
+ * `matchWeights["__ne__<field>"] = [-3.0, 0.0]` (m=0.0625, u=0.5 ->
+ * log2(0.0625/0.5) == -3.0 exactly -- consistent with a symmetric
+ * u=[0.5, 0.5] non-match prior). penaltyBits NE fields need no EM entry
+ * (fixed override). Exported for tests/T5; production callers reach it
+ * through `trainEM`.
+ */
+export function fallbackResult(mk: MatchkeyConfig): EMResult {
   const m: Record<string, number[]> = {};
   const u: Record<string, number[]> = {};
   const w: Record<string, number[]> = {};
@@ -1083,6 +1190,13 @@ function fallbackResult(mk: MatchkeyConfig): EMResult {
       u[f.field] = uv;
       w[f.field] = new Array<number>(n).fill(0);
     }
+  }
+  for (const ne of mk.negativeEvidence ?? []) {
+    if (ne.penaltyBits !== undefined) continue; // fixed override -- no EM entry
+    const key = `__ne__${ne.field}`;
+    m[key] = [0.0625, 0.9375];
+    u[key] = [0.5, 0.5];
+    w[key] = [-3.0, 0.0];
   }
   return {
     m,
