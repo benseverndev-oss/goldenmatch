@@ -25,8 +25,7 @@ from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 from pathlib import Path
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.from_splink import ConversionReport, SplinkConversion
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core._paths import safe_path

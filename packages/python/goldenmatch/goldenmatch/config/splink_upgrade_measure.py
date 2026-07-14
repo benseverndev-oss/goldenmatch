@@ -38,8 +38,7 @@ from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
 
-import polars as pl
-
+from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.config.splink_upgrade import (
     MeasurementResult,
