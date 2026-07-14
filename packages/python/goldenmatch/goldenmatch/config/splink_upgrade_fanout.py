@@ -6,18 +6,33 @@ Spec: docs/superpowers/specs/2026-07-14-fanout-ne-upgrade-lever-design.md
 Runs between ``distance_thresholds`` and ``calibration`` in the upgrade pass
 (see ``goldenmatch/config/splink_upgrade.py``'s lever registry, which lazily
 imports this module). Task F1 landed the scaffold (bare-settings skip, no-op
-stub bodies); Task F2 the NE candidate eligibility (``_ne_candidates``). The
-NE-suggestion body arrives in Task F3 and the cluster-guard tuning body in
+stub bodies); Task F2 the NE candidate eligibility (``_ne_candidates``);
+Task F3 the risk gate + posterior-weighted NE estimation
+(``_suggest_negative_evidence``). The cluster-guard tuning body arrives in
 Task F4.
 """
 from __future__ import annotations
 
+import math
+import random
 from dataclasses import dataclass
 
 from goldenmatch._polars_lazy import pl
-from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
-from goldenmatch.config.splink_upgrade import _LeverContext
-from goldenmatch.core.autoconfig_negative_evidence import _pick_scorer_for_column
+from goldenmatch.config.schemas import (
+    BlockingConfig,
+    MatchkeyConfig,
+    NegativeEvidenceField,
+)
+from goldenmatch.config.splink_upgrade import (
+    _CALIBRATION_MAX_PAIRS,
+    _CALIBRATION_MIN_PAIRS,
+    _estimate_within_block_prior,
+    _LeverContext,
+)
+from goldenmatch.core.autoconfig_negative_evidence import (
+    _DEFAULT_NE_THRESHOLD,
+    _pick_scorer_for_column,
+)
 from goldenmatch.core.blocker import collect_blocking_fields
 
 # ── Tuning constants ─────────────────────────────────────────────────────────
@@ -107,13 +122,254 @@ def _ne_candidates(
         cardinality = series.n_unique() / n_rows
         if not (_FANOUT_MIN_CARDINALITY <= cardinality <= _FANOUT_MAX_CARDINALITY):
             continue
+        # col_type "" on purpose -- see NOTE in autoconfig_negative_evidence.py
+        # (the dtype-vocabulary mismatch).
         transforms, scorer = _pick_scorer_for_column(col, "")
         candidates.append(_NECandidate(column=col, transforms=transforms, scorer=scorer))
     return candidates
 
 
+_NE_MAPPED_TO = "matchkeys[0].negative_evidence"
+
+
 def _suggest_negative_evidence(ctx: _LeverContext) -> None:
-    pass  # Task F3
+    """Risk-gated, posterior-weighted NE suggestion (spec: "The shared risk
+    diagnosis" + "NE weight estimation (posterior-weighted)").
+
+    Mirrors ``_lever_calibration``'s pair machinery (blocked-pair sampling,
+    row lookup, regular-field FS weight sums), then per candidate measures
+    the NE firing rate among CONFIDENT-merge pairs (posterior >=
+    ``_FANOUT_POSTERIOR_CONFIDENT`` under the shared within-block prior
+    re-estimate -- NOT the equal-odds posterior the re-estimation uses
+    internally). Gated candidates get real ``__ne__<field>`` entries written
+    into the upgraded model copy (FS-NE storage schema) and an EM-learned
+    shape ``NegativeEvidenceField`` on the matchkey. Every skip is a finding;
+    the lever never fails the pass. Guard tuning (Task F4) runs after us
+    regardless of any skip here.
+    """
+    # Heavy module: import function-locally, matching _lever_calibration.
+    from goldenmatch.core.probabilistic import (
+        _ne_fired,
+        _sample_blocked_pairs,
+        comparison_vector,
+        posterior_from_weight,
+        prior_weight,
+    )
+
+    mk = ctx.upgraded_config.get_matchkeys()[0]
+    em = ctx.em_model
+    assert em is not None  # run_fan_out_lever gates on conversion.em_model
+
+    blocking = ctx.upgraded_config.blocking
+    if blocking is None:
+        ctx.report.warn(
+            "upgrade:fan_out",
+            "skipped: config has no blocking configuration, cannot enumerate "
+            "blocked candidate pairs -- no negative evidence suggested",
+            mapped_to=_NE_MAPPED_TO,
+        )
+        return
+
+    # Partial imported model (mixed bare/trained input): posteriors need
+    # every comparison field covered by imported m/u -- mirrors
+    # _lever_calibration's uncovered-fields guard. Guard tuning is
+    # unaffected and still runs after us.
+    uncovered = [
+        f.field
+        for f in mk.fields
+        if f.field and f.field != "__record__" and f.field not in em.match_weights
+    ]
+    if uncovered:
+        ctx.report.warn(
+            "upgrade:fan_out",
+            "skipped: the imported Splink model is partial (mixed bare/"
+            "trained input) -- matchkey field(s) "
+            f"{', '.join(uncovered)} carry no imported m/u, so blocked "
+            "candidate pairs cannot be scored -- no negative evidence "
+            "suggested",
+            mapped_to=_NE_MAPPED_TO,
+        )
+        return
+
+    candidates = _ne_candidates(ctx.df, mk, blocking)
+    if not candidates:
+        ctx.report.info(
+            "upgrade:fan_out",
+            "no eligible NE candidate columns on the sample (identity-grade "
+            "name, non-null-rate and cardinality gates); no negative "
+            "evidence suggested",
+            mapped_to=_NE_MAPPED_TO,
+        )
+        return
+
+    # Candidate pairs: the exact route _lever_calibration uses (build_blocks
+    # on a __row_id__ LazyFrame + _sample_blocked_pairs), same cap and seed.
+    from goldenmatch.core.blocker import build_blocks
+
+    lf = ctx.df.lazy()
+    if "__row_id__" not in ctx.df.columns:
+        lf = lf.with_row_index("__row_id__")
+    lf = lf.with_columns(pl.col("__row_id__").cast(pl.Int64))
+    blocks = build_blocks(lf, blocking)
+
+    # Block-size distribution is FINDINGS ONLY -- blocking.max_block_size
+    # stays untouched in v1 (oversized blocks are processed, not dropped, so
+    # tuning it has murky semantics; spec).
+    sizes = sorted(b.materialize().height for b in blocks)
+    if sizes:
+        n_blocks = len(sizes)
+        b50 = sizes[n_blocks // 2]
+        b95 = sizes[min(n_blocks - 1, int(round(0.95 * (n_blocks - 1))))]
+        ctx.report.info(
+            "upgrade:fan_out",
+            f"block size distribution on the sample: p50={b50}, p95={b95}, "
+            f"max={sizes[-1]} over {n_blocks} block(s) "
+            "(blocking.max_block_size untouched)",
+            mapped_to=None,
+        )
+
+    pairs = _sample_blocked_pairs(blocks, n_pairs=_CALIBRATION_MAX_PAIRS, seed=ctx.seed)
+    if len(pairs) <= _CALIBRATION_MIN_PAIRS:
+        ctx.report.warn(
+            "upgrade:fan_out",
+            f"skipped: only {len(pairs)} blocked candidate pair(s) on the "
+            f"sample; the fan-out risk gate needs more than "
+            f"{_CALIBRATION_MIN_PAIRS} scored pairs -- no negative evidence "
+            "suggested",
+            mapped_to=_NE_MAPPED_TO,
+        )
+        return
+
+    # Row lookup over matchkey fields + candidate columns (mirrors
+    # _lever_calibration / train_em).
+    from goldenmatch.core.frame import to_frame
+
+    cols = [f.field for f in mk.fields if f.field is not None and f.field != "__record__"]
+    lookup_cols = ["__row_id__"] + cols + [
+        c.column for c in candidates if c.column not in cols
+    ]
+    row_lookup: dict[int, dict] = {}
+    for row in to_frame(lf.collect()).select_dicts(lookup_cols):
+        row_lookup[row["__row_id__"]] = row
+
+    indexed_fields = [
+        (k, f.field)
+        for k, f in enumerate(mk.fields)
+        if f.field is not None and f.field != "__record__"
+    ]
+
+    # Regular-field FS weight sums -- NE candidates contribute nothing here
+    # (they are not comparison fields by construction).
+    total_weights: list[float] = []
+    for a, b in pairs:
+        vec = comparison_vector(row_lookup.get(a, {}), row_lookup.get(b, {}), mk)
+        total_weights.append(
+            sum(em.match_weights[name][vec[k]] for k, name in indexed_fields)
+        )
+
+    # Per-pair posterior under the shared within-block prior re-estimate.
+    prior = _estimate_within_block_prior(total_weights)
+    prior_w = prior_weight(prior)
+    posteriors = [posterior_from_weight(w, prior_w) for w in total_weights]
+    confident = [p >= _FANOUT_POSTERIOR_CONFIDENT for p in posteriors]
+    n_conf = sum(confident)
+    posterior_sum = sum(posteriors)
+
+    for cand in candidates:
+        # The gate measures the EXACT predicate that will fire at runtime:
+        # the NegativeEvidenceField carries the same threshold/scorer/
+        # transforms tuple it is emitted with.
+        ne = NegativeEvidenceField(
+            field=cand.column,
+            transforms=cand.transforms,
+            scorer=cand.scorer,
+            threshold=_DEFAULT_NE_THRESHOLD,
+        )
+        fired = [
+            _ne_fired(row_lookup.get(a, {}), row_lookup.get(b, {}), ne)
+            for a, b in pairs
+        ]
+        n_fired_conf = sum(1 for f, c in zip(fired, confident) if f and c)
+        rate = n_fired_conf / n_conf if n_conf else 0.0
+        # The measured contradiction rate is ALWAYS reported, gated or not
+        # -- it is the fan-out diagnosis evidence.
+        ctx.report.info(
+            "upgrade:fan_out",
+            f"candidate '{cand.column}': contradiction rate {rate:.4f} "
+            f"among {n_conf} confident-merge pair(s) (posterior >= "
+            f"{_FANOUT_POSTERIOR_CONFIDENT}); {n_fired_conf} firing (gate: "
+            f"rate >= {_FANOUT_MIN_FIRE_RATE} and >= "
+            f"{_FANOUT_MIN_FIRING_PAIRS} firing pairs)",
+            mapped_to=_NE_MAPPED_TO,
+        )
+        if (
+            n_conf == 0
+            or rate < _FANOUT_MIN_FIRE_RATE
+            or n_fired_conf < _FANOUT_MIN_FIRING_PAIRS
+        ):
+            continue  # the info finding above already reports why
+
+        # Posterior-weighted m estimate + random-pair u estimate (train_em's
+        # u route), both epsilon-clamped away from 0/1 before log2.
+        m_fire = sum(p for p, f in zip(posteriors, fired) if f) / posterior_sum
+        m_fire = min(max(m_fire, _PROB_CLAMP), 1.0 - _PROB_CLAMP)
+        u_fire = _random_pair_firing_rate(row_lookup, ne, ctx.seed)
+        u_fire = min(max(u_fire, _PROB_CLAMP), 1.0 - _PROB_CLAMP)
+        w_fired = math.log2(m_fire / u_fire)
+        if w_fired >= 0:
+            ctx.report.warn(
+                "upgrade:fan_out",
+                f"candidate '{cand.column}': column does not discriminate "
+                f"on this data (w_fired={w_fired:.4f} >= 0: firing is not "
+                "rarer among likely matches than among random pairs) -- "
+                "dropped",
+                mapped_to=_NE_MAPPED_TO,
+            )
+            continue
+
+        mk.negative_evidence = (mk.negative_evidence or []) + [ne]
+        key = f"__ne__{cand.column}"
+        em.m_probs[key] = [m_fire, 1.0 - m_fire]
+        em.u_probs[key] = [u_fire, 1.0 - u_fire]
+        em.match_weights[key] = [w_fired, 0.0]
+        ctx.report.info(
+            "upgrade:fan_out",
+            f"negative-evidence field '{cand.column}' added "
+            f"(scorer={cand.scorer}, threshold={_DEFAULT_NE_THRESHOLD}): "
+            f"m_fire={m_fire:.4f}, u_fire={u_fire:.4f}, "
+            f"w_fired={w_fired:.4f} bits (contradiction rate {rate:.4f})",
+            mapped_to=_NE_MAPPED_TO,
+        )
+
+
+def _random_pair_firing_rate(
+    row_lookup: dict[int, dict], ne: NegativeEvidenceField, seed: int
+) -> float:
+    """NE firing rate over random pairs of DISTINCT rows -- the u estimate
+    (the same random-pair route ``train_em`` uses for u, scaled to
+    ``_FANOUT_RANDOM_PAIRS`` draws; same-row draws are skipped, so "up to").
+
+    Deterministic: the row ids are sorted before the seeded RNG samples
+    (dict order follows insertion which follows a stable collect, but sort
+    anyway for safety).
+    """
+    from goldenmatch.core.probabilistic import _ne_fired
+
+    ids = sorted(row_lookup)
+    if len(ids) < 2:
+        return 0.0
+    rng = random.Random(seed)
+    drawn = 0
+    n_fired = 0
+    for _ in range(_FANOUT_RANDOM_PAIRS):
+        a = rng.choice(ids)
+        b = rng.choice(ids)
+        if a == b:
+            continue
+        drawn += 1
+        if _ne_fired(row_lookup[a], row_lookup[b], ne):
+            n_fired += 1
+    return n_fired / drawn if drawn else 0.0
 
 
 def _tune_cluster_guard(ctx: _LeverContext) -> None:
