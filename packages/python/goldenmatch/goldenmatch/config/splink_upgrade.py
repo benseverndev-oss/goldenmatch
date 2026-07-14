@@ -19,6 +19,7 @@ measurement is wired in Task U5.
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,11 +257,181 @@ def _lever_tf_tables(ctx: _LeverContext) -> None:
         ctx.em_model.tf_collision = new_tf_collision
 
 
+def _measure_mean_length(df: pl.DataFrame, field: str, transforms: list[str]) -> float | None:
+    """Mean post-transform length of ``field``'s non-null, non-empty sample
+    values.
+
+    Mirrors the per-value transform loop in
+    ``goldenmatch.core.tf_tables.value_frequencies`` (the same route the
+    tf_tables lever, U2, reuses via ``_build_tf_tables``) -- same
+    ``apply_transforms`` semantics, same null/empty-string filtering -- just
+    collecting lengths instead of frequencies. Returns ``None`` when the
+    column is absent or every value is null/empty after transforms.
+    """
+    from goldenmatch.utils.transforms import apply_transforms
+
+    if field not in df.columns:
+        return None
+    total_len = 0
+    count = 0
+    for v in df[field].to_list():
+        if v is None:
+            continue
+        s = str(v)
+        if transforms:
+            s = apply_transforms(s, transforms)
+        if not s:
+            continue
+        total_len += len(s)
+        count += 1
+    if count == 0:
+        return None
+    return total_len / count
+
+
 def _lever_distance_thresholds(ctx: _LeverContext) -> None:
     # Applies regardless of em_model presence (band thresholds are
     # config-level, fixed before training) -- see spec "Bare-settings inputs".
-    # U3 replaces this stub with the real lever.
-    raise NotImplementedError("distance_thresholds lever body lands in Task U3")
+    #
+    # Mechanism (pinned, no finding-message parsing): every scorer="levenshtein"
+    # field in a converted config can only have come from the converter's
+    # _DIST_RE path with the constant _LEV_ASSUMED_LEN=10, so the original
+    # Splink edit distance inverts exactly: d = round((1 - t) * 10) per
+    # threshold. We measure the mean post-transform string length L of the
+    # field's data column and recompute sim = max(0, 1 - d/L).
+    from goldenmatch.config.from_splink import _LEV_ASSUMED_LEN
+
+    mk = ctx.upgraded_config.get_matchkeys()[0]
+    lev_fields = [f for f in mk.fields if f.scorer == "levenshtein" and f.field is not None]
+
+    if not lev_fields:
+        ctx.report.info(
+            "upgrade:distance_thresholds", "no levenshtein-scorer fields in config",
+            mapped_to=None,
+        )
+        return
+
+    for f in lev_fields:
+        field_name = f.field
+        assert field_name is not None
+        mapped_to = f"matchkeys[0].fields[{field_name}]"
+
+        L = _measure_mean_length(ctx.df, field_name, f.transforms)
+        if L is None or L <= 0:
+            ctx.report.warn(
+                "upgrade:distance_thresholds",
+                f"field '{field_name}' has no non-null/non-empty sample values "
+                "to measure post-transform length from, skipped (thresholds "
+                "unchanged)",
+                mapped_to=mapped_to,
+            )
+            continue
+
+        # is_two_level fields (from_splink's `levels_count == 2` path) carry
+        # their single threshold on partial_threshold, never level_thresholds.
+        is_two_level = f.level_thresholds is None
+        old_thresholds = [f.partial_threshold] if is_two_level else list(f.level_thresholds or [])
+        n_old = len(old_thresholds)
+        # old_thresholds[i] (descending) maps to GM level (levels-1-i) --
+        # mirrors from_splink._agree_index_for's positional resolution.
+        old_levels = [f.levels - 1 - i for i in range(n_old)]
+
+        # Recompute per band, grouping adjacent bands whose new similarity
+        # collides (equal, or both clamped invalid) onto one GoldenMatch
+        # level -- mirrors import_em's collapse handling (sum m/u, warn).
+        # `new_t` is monotonically non-increasing as we walk the list (old_t
+        # descending -> d ascending -> new_t descending), so collisions are
+        # always between adjacent entries and this single forward pass
+        # dedupes/sorts correctly without a separate sort step.
+        groups: list[dict] = []
+        pending: list[int] = []  # old levels whose recompute was out of range,
+        # awaiting attachment to the next (lower) surviving group.
+
+        for old_level, old_t in zip(old_levels, old_thresholds):
+            d = round((1 - old_t) * _LEV_ASSUMED_LEN)
+            new_t = max(0.0, 1 - d / L)
+            if not (0.0 < new_t <= 1.0):
+                ctx.report.warn(
+                    "upgrade:distance_thresholds",
+                    f"field '{field_name}': band (old threshold {old_t}, d={d}, "
+                    f"measured L={L:.2f}) recomputed to {new_t:.4f}, out of "
+                    "(0, 1] -- band dropped and its m/u mass merged into the "
+                    "adjacent level",
+                    mapped_to=mapped_to,
+                )
+                pending.append(old_level)
+                continue
+            if groups and math.isclose(groups[-1]["new_t"], new_t, abs_tol=1e-9):
+                groups[-1]["members"].append(old_level)
+                ctx.report.warn(
+                    "upgrade:distance_thresholds",
+                    f"field '{field_name}': recomputed threshold for old band "
+                    f"(threshold {old_t}, d={d}) collapsed onto an adjacent "
+                    f"GoldenMatch level ({new_t:.4f}); m/u probabilities summed "
+                    "with the earlier level's",
+                    mapped_to=mapped_to,
+                )
+            else:
+                groups.append({"new_t": new_t, "members": [old_level]})
+                ctx.report.info(
+                    "upgrade:distance_thresholds",
+                    f"field '{field_name}': threshold {old_t} -> {new_t:.4f} "
+                    f"(d={d}, measured L={L:.2f})",
+                    mapped_to=mapped_to,
+                )
+            if pending:
+                groups[-1]["members"].extend(pending)
+                pending = []
+
+        # Any bands still pending after the loop are the LOWEST bands and all
+        # were out of range -- their mass has nowhere lower to merge into
+        # except the disagree level (0).
+        merge_into_level0 = pending
+
+        if not groups:
+            ctx.report.warn(
+                "upgrade:distance_thresholds",
+                f"field '{field_name}': recomputed thresholds leave no valid "
+                "band, skipped (thresholds unchanged)",
+                mapped_to=mapped_to,
+            )
+            continue
+
+        new_levels = len(groups) + 1
+        new_thresholds = [g["new_t"] for g in groups]
+
+        if is_two_level:
+            f.partial_threshold = new_thresholds[0]
+        else:
+            f.level_thresholds = new_thresholds
+            f.levels = new_levels
+
+        if ctx.em_model is not None and field_name in ctx.em_model.m_probs:
+            old_m = ctx.em_model.m_probs[field_name]
+            old_u = ctx.em_model.u_probs[field_name]
+            # groups is ordered highest-new_t-first (top level first); array
+            # storage is ascending-index (level0 first), so level0 + reversed
+            # group order gives the correct final layout.
+            merged_m = [old_m[0] + sum(old_m[j] for j in merge_into_level0)]
+            merged_u = [old_u[0] + sum(old_u[j] for j in merge_into_level0)]
+            for g in groups:
+                merged_m.append(sum(old_m[j] for j in g["members"]))
+                merged_u.append(sum(old_u[j] for j in g["members"]))
+            new_m = [merged_m[0]] + list(reversed(merged_m[1:]))
+            new_u = [merged_u[0]] + list(reversed(merged_u[1:]))
+
+            sum_m = sum(new_m)
+            sum_u = sum(new_u)
+            if sum_m > 0:
+                new_m = [v / sum_m for v in new_m]
+            if sum_u > 0:
+                new_u = [v / sum_u for v in new_u]
+
+            ctx.em_model.m_probs[field_name] = new_m
+            ctx.em_model.u_probs[field_name] = new_u
+            ctx.em_model.match_weights[field_name] = [
+                math.log2(max(m, 1e-10) / max(u, 1e-10)) for m, u in zip(new_m, new_u)
+            ]
 
 
 def _lever_calibration(ctx: _LeverContext) -> None:

@@ -268,17 +268,22 @@ def test_bare_settings_skips_tf_tables_and_calibration():
     assert "skipped" in calib_findings[0].message.lower()
 
 
-def test_bare_settings_distance_thresholds_lever_reaches_stub():
-    conversion = from_splink(_bare_settings())
+def test_bare_settings_distance_thresholds_lever_still_applies():
+    """Bare-settings inputs skip levers 1/3 but lever 2 still applies --
+    band thresholds are config-level, fixed before training (spec)."""
+    conversion = from_splink(_bare_settings_with_levenshtein())
     assert conversion.em_model is None
 
-    with pytest.raises(NotImplementedError):
-        upgrade_splink_conversion(
-            conversion,
-            _sample_df(),
-            levers={"distance_thresholds"},
-            measure=False,
-        )
+    result = upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=20),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    field = _field(result.upgraded_config, "email")
+    assert field.level_thresholds == pytest.approx([0.95, 0.85])
+    assert result.em_model is None
 
 
 # ── Trained settings: calibration lever body not yet implemented ─────────────
@@ -413,6 +418,285 @@ def test_tf_tables_lever_null_column_warns_and_skips():
     ]
     assert len(warn_findings) == 1
     assert "first_name" in warn_findings[0].message
+
+
+# ── Lever 2: measured distance thresholds ────────────────────────────────────
+
+
+def _field(config, name):
+    mk = config.get_matchkeys()[0]
+    for f in mk.fields:
+        if f.field == name:
+            return f
+    raise AssertionError(f"field '{name}' not found in matchkey")
+
+
+def _levenshtein_comparison(column, distances, *, trained=False, bands=None, else_probs=None):
+    """A comparison with one levenshtein band per entry in ``distances``
+    (ascending order in the input; from_splink sorts the resulting
+    thresholds descending). ``trained``/``bands``/``else_probs`` add
+    m_probability/u_probability so ``detect_trained`` picks it up --
+    ``bands`` is a list of (m, u) parallel to ``distances``."""
+    levels = [
+        {
+            "sql_condition": f'"{column}_l" IS NULL OR "{column}_r" IS NULL',
+            "is_null_level": True,
+        },
+    ]
+    for i, d in enumerate(distances):
+        level = {"sql_condition": f'levenshtein("{column}_l", "{column}_r") <= {d}'}
+        if trained:
+            m, u = bands[i]
+            level["m_probability"] = m
+            level["u_probability"] = u
+        levels.append(level)
+    else_level = {"sql_condition": "ELSE"}
+    if trained:
+        m_else, u_else = else_probs
+        else_level["m_probability"] = m_else
+        else_level["u_probability"] = u_else
+    levels.append(else_level)
+    return {"output_column_name": column, "comparison_levels": levels}
+
+
+def _trained_exact_comparison(column):
+    return {
+        "output_column_name": column,
+        "comparison_levels": [
+            {
+                "sql_condition": f'"{column}_l" IS NULL OR "{column}_r" IS NULL',
+                "is_null_level": True,
+            },
+            {
+                "sql_condition": f'"{column}_l" = "{column}_r"',
+                "m_probability": 0.9,
+                "u_probability": 0.05,
+            },
+            {"sql_condition": "ELSE", "m_probability": 0.1, "u_probability": 0.95},
+        ],
+    }
+
+
+def _bare_settings_with_levenshtein(distances=(1, 3), column="email"):
+    return {
+        "comparisons": [
+            _levenshtein_comparison(column, distances),
+            _exact_only_comparison("surname"),
+        ],
+        "blocking_rules_to_generate_predictions": [f'l."{column}" = r."{column}"'],
+    }
+
+
+def _trained_settings_with_levenshtein(
+    distances=(1, 3),
+    bands=((0.5, 0.1), (0.3, 0.2)),
+    else_probs=(0.2, 0.7),
+    column="email",
+    extra_comparison=None,
+):
+    comparisons = [
+        _levenshtein_comparison(
+            column, distances, trained=True, bands=bands, else_probs=else_probs
+        ),
+        _trained_exact_comparison("surname"),
+    ]
+    if extra_comparison is not None:
+        comparisons.append(extra_comparison)
+    return {
+        "comparisons": comparisons,
+        "blocking_rules_to_generate_predictions": [f'l."{column}" = r."{column}"'],
+        "probability_two_random_records_match": 0.001,
+    }
+
+
+def _levenshtein_df(mean_len, n=30, column="email", value=None):
+    val = value if value is not None else "a" * mean_len
+    return pl.DataFrame({column: [val] * n, "surname": ["smith"] * n})
+
+
+def test_distance_thresholds_lever_recomputes_from_measured_length():
+    conversion = from_splink(_trained_settings_with_levenshtein())
+    assert conversion.em_model is not None
+    field = _field(conversion.config, "email")
+    assert field.level_thresholds == pytest.approx([0.9, 0.7])
+    assert field.levels == 3
+
+    result = upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=20),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    upgraded_field = _field(result.upgraded_config, "email")
+    assert upgraded_field.level_thresholds == pytest.approx([0.95, 0.85])
+    assert upgraded_field.levels == 3  # unchanged: no collapse
+
+    findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:distance_thresholds" and "email" in f.message
+    ]
+    assert any("0.9" in f.message and "0.95" in f.message and "d=1" in f.message for f in findings)
+    assert any("0.7" in f.message and "0.85" in f.message and "d=3" in f.message for f in findings)
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    result.em_model.validate_for(upgraded_mk)  # must not raise
+
+    # Baseline copy-on-write: original conversion is untouched.
+    assert _field(conversion.config, "email").level_thresholds == pytest.approx([0.9, 0.7])
+
+
+def test_distance_thresholds_lever_two_level_legacy_shape():
+    conversion = from_splink(
+        _trained_settings_with_levenshtein(distances=(1,), bands=((0.6, 0.1),), else_probs=(0.4, 0.9))
+    )
+    field = _field(conversion.config, "email")
+    assert field.level_thresholds is None
+    assert field.partial_threshold == pytest.approx(0.9)
+    assert field.levels == 2
+
+    result = upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=20),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    upgraded_field = _field(result.upgraded_config, "email")
+    assert upgraded_field.level_thresholds is None
+    assert upgraded_field.partial_threshold == pytest.approx(1 - 1 / 20)
+    assert upgraded_field.levels == 2
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    result.em_model.validate_for(upgraded_mk)
+
+
+def test_distance_thresholds_lever_leaves_jaro_winkler_field_untouched():
+    conversion = from_splink(
+        _trained_settings_with_levenshtein(extra_comparison=_trained_jw_comparison())
+    )
+
+    result = upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=20).with_columns(pl.lit("alice").alias("first_name")),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    jw_field_before = _field(conversion.config, "first_name")
+    jw_field_after = _field(result.upgraded_config, "first_name")
+    assert jw_field_after.level_thresholds == jw_field_before.level_thresholds
+    assert jw_field_after.partial_threshold == jw_field_before.partial_threshold
+
+    findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:distance_thresholds" and "first_name" in f.message
+    ]
+    assert findings == []
+
+
+def test_distance_thresholds_lever_collapses_bands_and_sums_em_mass():
+    conversion = from_splink(
+        _trained_settings_with_levenshtein(
+            distances=(1, 3), bands=((0.5, 0.1), (0.3, 0.2)), else_probs=(0.2, 0.7)
+        )
+    )
+    old_m = list(conversion.em_model.m_probs["email"])
+    old_u = list(conversion.em_model.u_probs["email"])
+    assert len(old_m) == 3  # [else, d=3 band, d=1 band]
+
+    # L=2: d=1 -> max(0, 1-1/2)=0.5 (valid); d=3 -> max(0, 1-3/2)=0.0 (invalid,
+    # dropped and merged into the disagree level).
+    result = upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=2),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    upgraded_field = _field(result.upgraded_config, "email")
+    assert upgraded_field.levels == 2
+    assert upgraded_field.level_thresholds == pytest.approx([0.5])
+
+    new_m = result.em_model.m_probs["email"]
+    new_u = result.em_model.u_probs["email"]
+    assert len(new_m) == 2
+    # level0 (disagree) absorbed the dropped d=3 band's mass; level1 keeps
+    # the surviving d=1 band's mass. Values are renormalized (sum to 1) but
+    # proportional to old_else+old_d3 : old_d1.
+    expected_m0 = old_m[0] + old_m[1]
+    expected_m1 = old_m[2]
+    total_m = expected_m0 + expected_m1
+    assert new_m[0] == pytest.approx(expected_m0 / total_m)
+    assert new_m[1] == pytest.approx(expected_m1 / total_m)
+    total_u = (old_u[0] + old_u[1]) + old_u[2]
+    assert new_u[0] == pytest.approx((old_u[0] + old_u[1]) / total_u)
+    assert new_u[1] == pytest.approx(old_u[2] / total_u)
+
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:distance_thresholds" and f.severity == "warning"
+        and "email" in f.message
+    ]
+    assert warn_findings
+    assert any("merged" in f.message.lower() or "summed" in f.message.lower() for f in warn_findings)
+
+    # Config round-trips (schema still valid after the level-count change).
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    GoldenMatchConfig(**result.upgraded_config.model_dump())
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    result.em_model.validate_for(upgraded_mk)  # must not raise (2 weights for 2 levels)
+
+
+def test_distance_thresholds_lever_empty_column_warns_and_skips():
+    conversion = from_splink(_trained_settings_with_levenshtein())
+    df = pl.DataFrame({"email": [None] * 10, "surname": ["smith"] * 10})
+
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"distance_thresholds"}, measure=False
+    )
+
+    upgraded_field = _field(result.upgraded_config, "email")
+    assert upgraded_field.level_thresholds == pytest.approx([0.9, 0.7])  # unchanged
+
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:distance_thresholds" and f.severity == "warning"
+        and "email" in f.message
+    ]
+    assert len(warn_findings) == 1
+
+
+def test_distance_thresholds_lever_bare_settings_no_em_handling():
+    conversion = from_splink(_bare_settings_with_levenshtein())
+    assert conversion.em_model is None
+
+    result = upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=20),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    upgraded_field = _field(result.upgraded_config, "email")
+    assert upgraded_field.level_thresholds == pytest.approx([0.95, 0.85])
+    assert result.em_model is None
+
+
+def test_distance_thresholds_lever_baseline_thresholds_unchanged():
+    conversion = from_splink(_trained_settings_with_levenshtein())
+    baseline_dump_before = conversion.config.model_dump()
+
+    upgrade_splink_conversion(
+        conversion,
+        _levenshtein_df(mean_len=20),
+        levers={"distance_thresholds"},
+        measure=False,
+    )
+
+    assert conversion.config.model_dump() == baseline_dump_before
+    assert _field(conversion.config, "email").level_thresholds == pytest.approx([0.9, 0.7])
 
 
 # ── Unknown lever name ────────────────────────────────────────────────────────
