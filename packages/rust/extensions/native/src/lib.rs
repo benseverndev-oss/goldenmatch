@@ -28,6 +28,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Wheel-skew capability flag: Python's `_fs_native_eligible` gates
     // level_thresholds matchkeys on this (old wheels never see the kwarg).
     m.add("FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;
+    // Wheel-skew capability flag: Python's `_fs_native_eligible` (block scorer)
+    // AND `match_fused_fs_ready` (core/fused_match.py) both gate negative-evidence
+    // matchkeys on this (old wheels never see the ne_* kwargs). One const is
+    // accurate: both kernels' NE landed in the same 0.1.15 wheel.
+    m.add("FS_SUPPORTS_NE", true)?;
+    // Wheel-skew capability flag: Python's `match_fused_fs_ready` gates custom
+    // level_thresholds on this (old wheels never see the kwarg).
+    m.add("FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;

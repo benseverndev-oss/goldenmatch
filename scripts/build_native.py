@@ -3,8 +3,8 @@
 
 Compiles the PyO3 crate at `packages/rust/extensions/native` (abi3) against the
 *current* interpreter and drops the artifact at
-`packages/python/goldenmatch/goldenmatch/_native.abi3.so` so `import
-goldenmatch._native` resolves.
+`packages/python/goldenmatch/goldenmatch/_native.abi3.so` (`_native.pyd` on
+Windows) so `import goldenmatch._native` resolves.
 
 Run via the project interpreter, e.g.:
     uv run python scripts/build_native.py
@@ -25,7 +25,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CRATE = REPO / "packages" / "rust" / "extensions" / "native"
 PKG = REPO / "packages" / "python" / "goldenmatch" / "goldenmatch"
-DEST = PKG / "_native.abi3.so"
+# CPython loads `.pyd` on Windows, `.so` elsewhere (macOS included).
+DEST = PKG / ("_native.pyd" if sys.platform == "win32" else "_native.abi3.so")
 
 
 def main() -> int:
@@ -52,17 +53,24 @@ def main() -> int:
         print("ERROR: cargo build failed.", file=sys.stderr)
         return proc.returncode
 
-    built = CRATE / "target" / "release" / "lib_native.so"
-    if not built.exists():
-        # macOS produces .dylib; normalize to the .so name CPython loads.
-        dylib = CRATE / "target" / "release" / "lib_native.dylib"
-        if dylib.exists():
-            built = dylib
-        else:
+    if sys.platform == "win32":
+        # Windows produces `_native.dll` (no `lib` prefix); CPython imports `.pyd`.
+        built = CRATE / "target" / "release" / "_native.dll"
+        if not built.exists():
             print(f"ERROR: build artifact not found at {built}", file=sys.stderr)
             return 1
+    else:
+        built = CRATE / "target" / "release" / "lib_native.so"
+        if not built.exists():
+            # macOS produces .dylib; normalize to the .so name CPython loads.
+            dylib = CRATE / "target" / "release" / "lib_native.dylib"
+            if dylib.exists():
+                built = dylib
+            else:
+                print(f"ERROR: build artifact not found at {built}", file=sys.stderr)
+                return 1
 
-    tmp = DEST.with_suffix(".so.tmp")
+    tmp = DEST.with_suffix(DEST.suffix + ".tmp")
     shutil.copy2(built, tmp)
     os.replace(tmp, DEST)  # atomic; never a half-written .so
     suffix = sysconfig.get_config_var("EXT_SUFFIX")

@@ -20,8 +20,8 @@ Gate eligibility (`_resolve_probabilistic_fast_path`):
       - field.levels in {2, 3} (N>3 unsupported in fast path v1; falls back
         to the slow `score_probabilistic` path)
   - em_result has match_weights for every field
-  - mk.negative_evidence is empty (NE never crosses into this fast path;
-    a future kernel port adds FS_SUPPORTS_NE)
+  - mk.negative_evidence is empty (this pure-Python per-pair loop has no
+    NE support of its own, independent of the native kernel's capability)
 
 When the gate fails, callers fall back to `score_probabilistic`. The fast
 path produces bit-equivalent output within rapidfuzz tolerance (parity
@@ -78,9 +78,11 @@ def _resolve_probabilistic_fast_path(
     if not mk.fields:
         return None
     if mk.negative_evidence:
-        # NE never crosses into this fast path (the per-pair loop doesn't
-        # score NE fields); decline so the slow path -- which does -- stays
-        # the source of truth. Mirrors `_fs_native_eligible`.
+        # This fast path's own per-pair loop doesn't score NE fields, so
+        # decline and let the slow path -- which does -- stay the source of
+        # truth. Independent of the native kernel's FS_SUPPORTS_NE capability
+        # (`_fs_native_eligible` now accepts NE; this pure-Python path is a
+        # separate surface that simply hasn't implemented it).
         return None
 
     field_specs: list[ProbFieldSpec] = []
