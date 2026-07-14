@@ -4669,8 +4669,10 @@ def auto_configure_probabilistic_df(
     optimizer (spec ``2026-05-25-agentic-config-optimizer-design``) is the
     intended place to *search* weighted-vs-probabilistic empirically.
     """
-    if isinstance(df, pl.LazyFrame):
-        df = df.collect()
+    from goldenmatch.core.frame import is_polars_lazyframe as _is_pl_lf_prob
+
+    if _is_pl_lf_prob(df):
+        df = cast("pl.LazyFrame", df).collect()
 
     profiles = profile_columns(df, llm_provider=llm_provider)
     matchkeys = build_probabilistic_matchkeys(profiles)

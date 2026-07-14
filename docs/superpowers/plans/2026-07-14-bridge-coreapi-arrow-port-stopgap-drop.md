@@ -6,7 +6,31 @@
 > `convert.rs::json_to_polars_df` + the bridge's whole Python core-API surface.
 > Scope only; do NOT implement without approval.
 
-## STATUS 2026-07-14 — aux fixes LANDED (PR #1770); DROP blocked on cross-source match arrow-port
+## STATUS 2026-07-14 (FINAL) — DROP IMPLEMENTED + armed in PR #1772
+
+The match-pipeline arrow-flip turned out **tractable, not multi-week** (the seam
+primitives already existed) and is DONE. PR #1772 (supersedes #1770) is the
+complete `[polars]` drop:
+- **Match pipeline arrow-flip** (`pipeline.py`): `run_match_df` builds the
+  combined frame with pyarrow for `pa.Table` inputs; `_run_match_pipeline` gets an
+  arrow prep branch + a new arrow-native `_run_match_scoring_and_output`. Polars
+  path byte-identical.
+- **Autoconfig cross-source**: reference no longer force-coerced to polars; accepts
+  `pa.Table`; downstream `.columns`/`.height` leaks fixed (autoconfig_rules /
+  autoconfig_controller); scorer NE `to_dicts`→dual-rep.
+- **Aux fixes** (from #1770) + **bridge** convert.rs→arrow + api.rs glue
+  (`frame_row_count`/`frame_to_records`) + `build_probabilistic_frame`→arrow +
+  MatchResult extract→`to_pylist`.
+- **CI**: rust + rust_coverage install the LOCAL base goldenmatch (no `[polars]`).
+
+**Verified locally** (native=0): linkage-parity harness — arrow-input `match_df`
+== polars-input (exact + fuzzy), byte-identical; polars-free tripwires (match +
+aux) green; zero-config endgame tripwire xpasses; 39 match + 148 dedupe/autoconfig/
+scorer tests green; bridge 4 previously-failing tests pass, clippy/fmt clean. The
+full native-present + polars-absent run is what #1772's CI `rust` lane proves.
+The earlier "blocked on multi-week feature" reads below are SUPERSEDED.
+
+## (superseded) STATUS — aux fixes; DROP blocked on cross-source match arrow-port
 
 **Merged/merging (PR #1770):** the aux SOURCE fixes — validate / anomaly /
 autoconfig_memory / profiler discriminators + seam routing. Byte-identical on
