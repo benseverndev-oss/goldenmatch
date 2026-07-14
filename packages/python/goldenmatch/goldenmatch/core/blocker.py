@@ -85,7 +85,7 @@ def _emit_blocking_profile(
 
 
 def _fast_static_block_sizes(
-    lf: pl.LazyFrame, config: Any
+    lf: Any, config: Any  # Frame (seam) or pl.LazyFrame -- PR-6b dual-rep
 ) -> tuple[list[int], int, int] | None:
     """Vectorized block-size distribution for the ``static`` strategy.
 
@@ -184,7 +184,11 @@ def measure_blocking_profile(
         # exact fallback, into ``build_blocks`` (which ingests a Frame/arrow).
         from goldenmatch.core.frame import is_polars_lazyframe, to_frame
 
-        frame = to_frame(df.collect()) if is_polars_lazyframe(df) else to_frame(df)
+        frame = (
+            to_frame(cast("pl.LazyFrame", df).collect())
+            if is_polars_lazyframe(df)
+            else to_frame(df)
+        )
         n_rows: int = frame.height
 
         if blocking_cfg.passes:

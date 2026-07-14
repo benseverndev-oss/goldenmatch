@@ -300,10 +300,29 @@ def _polars_scalar_spelling(build: Any, fallback: str) -> str:
         return fallback
 
 
-# "String" on modern polars (``str(pl.Utf8)``), "Utf8" on older builds.
-_POLARS_STRING_SPELLING = _polars_scalar_spelling(lambda p: p.Utf8, "Utf8")
-# "Datetime(time_unit='us', time_zone=None)" on modern polars.
-_POLARS_DATETIME_SPELLING = _polars_scalar_spelling(lambda p: p.Datetime("us"), "Datetime")
+# LAZY: computing these at MODULE level touches ``pl.Utf8`` / ``pl.Datetime`` on
+# the _polars_lazy proxy, which eagerly imports polars at ``import goldenmatch``
+# time -- a zero-polars-eviction gate violation (test_lazy_import_gate). Compute
+# + cache on first USE instead (the arrow classify path, never at import).
+_POLARS_SCALAR_SPELLING_CACHE: dict[str, str] = {}
+
+
+def _polars_string_spelling() -> str:
+    """``str(pl.Utf8)`` ("String" on modern polars, "Utf8" older), cached."""
+    cached = _POLARS_SCALAR_SPELLING_CACHE.get("string")
+    if cached is None:
+        cached = _polars_scalar_spelling(lambda p: p.Utf8, "Utf8")
+        _POLARS_SCALAR_SPELLING_CACHE["string"] = cached
+    return cached
+
+
+def _polars_datetime_spelling() -> str:
+    """``str(pl.Datetime("us"))`` ("Datetime(time_unit='us', ...)"), cached."""
+    cached = _POLARS_SCALAR_SPELLING_CACHE.get("datetime")
+    if cached is None:
+        cached = _polars_scalar_spelling(lambda p: p.Datetime("us"), "Datetime")
+        _POLARS_SCALAR_SPELLING_CACHE["datetime"] = cached
+    return cached
 
 # Exact arrow-spelling → polars-spelling. Keys are arrow's ``str(type)`` (all
 # lowercase); polars spellings are TitleCase, so they are never keys and pass
@@ -348,10 +367,10 @@ def _arrow_to_polars_dtype_spelling(raw: object) -> str:
         return mapped
     # string family (arrow: string / large_string / utf8 / large_utf8)
     if s in ("string", "large_string", "utf8", "large_utf8"):
-        return _POLARS_STRING_SPELLING
+        return _polars_string_spelling()
     # timestamp[..] / date[..] families are unit-parametrized (not single keys)
     if s.startswith("timestamp"):
-        return _POLARS_DATETIME_SPELLING
+        return _polars_datetime_spelling()
     if s.startswith("date"):
         return "Date"
     # Unknown (incl. every polars spelling) -> unchanged.
@@ -3758,7 +3777,7 @@ def auto_configure_df(
         # Dataset stays as-is; controller.run() handles it natively.
         _n_rows_for_budget: int = df.count()  # type: ignore[union-attr]
     elif is_polars_lazyframe(df):
-        df = df.collect()
+        df = cast("pl.LazyFrame", df).collect()
         _n_rows_for_budget = df.height
     elif is_polars_dataframe(df):
         _n_rows_for_budget = df.height
