@@ -113,12 +113,11 @@ export interface ProbabilisticMatchkey {
   readonly convergenceThreshold?: number;
   readonly linkThreshold?: number;
   readonly reviewThreshold?: number;
-  /** FS negative evidence — scored on the FS discrete path (ported from
-   *  Python #1764): EM-learned NE weights per field, or a fixed
-   *  `penaltyBits` override. Scoring/validation/fallback honor NE;
-   *  `trainEM` still throws `NegativeEvidenceUnsupportedError` until the EM
-   *  port lands (same branch, merged atomically); the continuous (Winkler)
-   *  path never supports NE, matching Python. */
+  /** FS negative evidence — trained and scored on the FS discrete path
+   *  (ported from Python #1764): EM-learned NE weights per field, or a
+   *  fixed `penaltyBits` override. Training/scoring/validation/fallback all
+   *  honor NE; only the continuous (Winkler) path throws
+   *  `NegativeEvidenceUnsupportedError`, permanently, matching Python. */
   readonly negativeEvidence?: readonly NegativeEvidenceField[];
   /**
    * Persisted EM model path (Splink-style train-once -> reuse). Mirrors

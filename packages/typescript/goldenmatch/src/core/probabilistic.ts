@@ -83,9 +83,9 @@ export class FSModelMismatchError extends Error {
  * FS negative evidence is not scored on this path. Thrown loudly when a
  * probabilistic matchkey carries non-empty `negativeEvidence` on an entry
  * point that cannot honor it, so a Python-authored NE config can never
- * silently mis-score in TS. Discrete scoring/validation/fallback now cover
- * NE; `trainEM` still throws until the EM port lands (same branch); the
- * continuous (Winkler) path never supports NE, matching Python.
+ * silently mis-score in TS. The whole discrete path (training, scoring,
+ * validation, fallback) now covers NE; only the continuous (Winkler) path
+ * throws, PERMANENTLY, matching Python.
  */
 export class NegativeEvidenceUnsupportedError extends Error {
   constructor(message: string) {
@@ -96,25 +96,19 @@ export class NegativeEvidenceUnsupportedError extends Error {
 
 /**
  * Throw loudly when a probabilistic matchkey carries negative evidence.
- * `permanent=true` for the continuous (Winkler) entry points, which never
- * support NE (mirrors Python); the default wording is for `trainEM`, whose
- * throw is lifted later in this branch when the EM port lands.
+ * Only the two continuous (Winkler) entry points call this — they never
+ * support NE (mirrors Python's continuous path rejecting NE); the discrete
+ * path trains and scores NE natively.
  */
-function assertNoNegativeEvidence(
-  mk: MatchkeyConfig,
-  path: string,
-  permanent = false,
-): void {
+function assertNoNegativeEvidence(mk: MatchkeyConfig, path: string): void {
   if (mk.type !== "probabilistic") return;
   const ne = mk.negativeEvidence;
   if (ne && ne.length > 0) {
     const names = ne.map((n) => n.field).join(", ");
-    const message = permanent
-      ? `${path}: the continuous (Winkler) path does not support negative ` +
-        `evidence (${names}), matching Python -- use the discrete FS path`
-      : `${path}: negative evidence (${names}) is not trained on this path yet -- ` +
-        `FS EM training for negative evidence lands later in this branch`;
-    throw new NegativeEvidenceUnsupportedError(message);
+    throw new NegativeEvidenceUnsupportedError(
+      `${path}: the continuous (Winkler) path does not support negative ` +
+        `evidence (${names}), matching Python -- use the discrete FS path`,
+    );
   }
 }
 
@@ -420,7 +414,7 @@ function neContribution(
   if (!neFired(rowA, rowB, ne)) return 0;
   if (ne.penaltyBits !== undefined) return -Math.abs(ne.penaltyBits);
   const entry = em.matchWeights[key ?? `__ne__${ne.field}`];
-  if (entry === undefined || entry.length === 0) {
+  if (entry === undefined || entry.length !== 2) {
     throw new FSModelMismatchError(
       `Persisted FS model has no weights for negative_evidence field ` +
         `'${ne.field}' (expected key '__ne__${ne.field}') -- ` +
@@ -583,7 +577,7 @@ export function trainEMContinuous(
   mk: MatchkeyConfig,
   options?: EMOptions,
 ): ContinuousEMResult {
-  assertNoNegativeEvidence(mk, "trainEMContinuous", true);
+  assertNoNegativeEvidence(mk, "trainEMContinuous");
   const emIterations =
     mk.type === "probabilistic" ? mk.emIterations : undefined;
   const convergenceThreshold =
@@ -753,7 +747,7 @@ export function scoreProbabilisticContinuous(
   em: ContinuousEMResult,
   options?: ProbScoreOptions,
 ): ScoredPair[] {
-  assertNoNegativeEvidence(mk, "scoreProbabilisticContinuous", true);
+  assertNoNegativeEvidence(mk, "scoreProbabilisticContinuous");
   const fields = mk.fields;
   if (fields.length === 0) return [];
 
@@ -811,13 +805,16 @@ export function scoreProbabilisticContinuous(
  *   1. Estimate u from random pairs (fixed throughout).
  *   2. Train m via EM starting from exponential priors.
  *   3. Blocking fields bypass EM and receive fixed neutral u + linear weights.
+ *   4. penaltyBits-free NE fields join as constrained 2-state dims carried in
+ *      a SEPARATE NE matrix (0 = fired, 1 = not-fired incl. nulls/empties);
+ *      full likelihood inside the loop, [wFired, 0.0] clamp at storage only,
+ *      stored under `__ne__<field>` (mirrors Python train_em, #1764).
  */
 export function trainEM(
   rows: readonly Row[],
   mk: MatchkeyConfig,
   options?: EMOptions,
 ): EMResult {
-  assertNoNegativeEvidence(mk, "trainEM");
   // Probabilistic-only parameters; fall through to defaults for other variants.
   const emIterations =
     mk.type === "probabilistic" ? mk.emIterations : undefined;
@@ -832,6 +829,14 @@ export function trainEM(
   const fields = mk.fields;
   if (fields.length === 0) return fallbackResult(mk);
 
+  // NE fields that participate in EM (mirrors Python `_em_ne_fields`):
+  // penaltyBits overrides skip EM entirely and contribute a fixed weight at
+  // scoring time.
+  const emNeFields =
+    mk.type === "probabilistic"
+      ? (mk.negativeEvidence ?? []).filter((ne) => ne.penaltyBits === undefined)
+      : [];
+
   const rand = makeRng(seed);
   const rowById = new Map<number, Row>();
   for (const r of rows) {
@@ -843,6 +848,16 @@ export function trainEM(
   const sampleForU = samplePairs(rows, Math.min(nSamplePairs, 5000), rand);
   if (sampleForU.length < 10) return fallbackResult(mk);
   const uMatrix = buildComparisonMatrix(sampleForU, rowById, fields);
+
+  // SEPARATE NE matrix over the SAME pairs (Python `_build_ne_matrix`):
+  // 0 = fired, 1 = not-fired INCLUDING nulls/empties (`neFired` returns
+  // false there). NE columns must NOT be appended to the comparison matrix —
+  // its consumers assume `row.length === fields.length`.
+  const neMatrix: number[][] = sampleForU.map(([a, b]) => {
+    const rowA = rowById.get(a) ?? {};
+    const rowB = rowById.get(b) ?? {};
+    return emNeFields.map((ne) => (neFired(rowA, rowB, ne) ? 0 : 1));
+  });
 
   const u: Record<string, number[]> = {};
   fields.forEach((f, j) => {
@@ -865,6 +880,22 @@ export function trainEM(
     }
   }
 
+  // NE u: [fired, not_fired] rates from the NE matrix with the same +1e-6
+  // smoothing idiom as regular u (Python `_ne_u_probs_from_matrix`). NO
+  // blocking-field neutralization — an NE dimension is never a blocking key
+  // by construction.
+  const uNe: Record<string, number[]> = {};
+  emNeFields.forEach((ne, j) => {
+    let fired = 0;
+    let notFired = 0;
+    for (const row of neMatrix) {
+      if (row[j] === 0) fired += 1;
+      else notFired += 1;
+    }
+    const total = fired + notFired + 2 * 1e-6;
+    uNe[ne.field] = [(fired + 1e-6) / total, (notFired + 1e-6) / total];
+  });
+
   // Step 2: m priors (exponential: highest level gets most mass).
   const m: Record<string, number[]> = {};
   for (const f of fields) {
@@ -874,6 +905,11 @@ export function trainEM(
     const sum = raw.reduce((a, b) => a + b, 0);
     m[f.field] = raw.map((r) => r / sum);
   }
+
+  // NE m init: fired is rare in true matches (a match usually agrees on the
+  // NE field), so seed with a low fired-probability prior (Python: [0.05, 0.95]).
+  const mNe: Record<string, number[]> = {};
+  for (const ne of emNeFields) mNe[ne.field] = [0.05, 0.95];
 
   // Use the same random-pair matrix for EM. In Python, blocked pairs are
   // preferred when available; we don't have blocks in this entry point, so
@@ -889,8 +925,13 @@ export function trainEM(
     iterations = iter + 1;
     const oldM: Record<string, number[]> = {};
     for (const k of Object.keys(m)) oldM[k] = [...m[k]!];
+    const oldMNe: Record<string, number[]> = {};
+    for (const k of Object.keys(mNe)) oldMNe[k] = [...mNe[k]!];
 
-    // E-step.
+    // E-step. NE dims contribute their FULL 2-state likelihood — for a
+    // not-fired event the model term is log(m1)/log(u1), never a zeroed
+    // weight. The [wFired, 0] clamp is STORAGE-ONLY (applied after the
+    // loop); clamping here would bias m.
     const posteriors = new Float64Array(nPairs);
     for (let i = 0; i < nPairs; i++) {
       let logM = Math.log(Math.max(pMatch, 1e-10));
@@ -902,6 +943,12 @@ export function trainEM(
         const uProb = Math.max(u[f.field]![level] ?? 1e-10, 1e-10);
         logM += Math.log(mProb);
         logU += Math.log(uProb);
+      }
+      for (let j = 0; j < emNeFields.length; j++) {
+        const ne = emNeFields[j]!;
+        const ev = neMatrix[i]![j]!; // 0 = fired, 1 = not-fired
+        logM += Math.log(Math.max(mNe[ne.field]![ev]!, 1e-10));
+        logU += Math.log(Math.max(uNe[ne.field]![ev]!, 1e-10));
       }
       const maxLog = Math.max(logM, logU);
       const em = Math.exp(logM - maxLog);
@@ -930,13 +977,29 @@ export function trainEM(
       m[f.field] = newM;
     }
 
-    // Convergence.
+    // NE dims: same M-step update. Blocking-field neutralization does NOT
+    // apply — an NE dimension is never a blocking key.
+    for (let j = 0; j < emNeFields.length; j++) {
+      const ne = emNeFields[j]!;
+      const counts = [0, 0];
+      for (let i = 0; i < nPairs; i++) counts[neMatrix[i]![j]!]! += posteriors[i]!;
+      const denom = totalMatch + 2 * 1e-6;
+      mNe[ne.field] = [(counts[0]! + 1e-6) / denom, (counts[1]! + 1e-6) / denom];
+    }
+
+    // Convergence: max m delta INCLUDING NE dims (mirrors Python train_em).
     let maxDelta = 0;
     for (const f of fields) {
       if (blockingFields.has(f.field)) continue;
       const n = fieldLevels(f);
       for (let k = 0; k < n; k++) {
         const d = Math.abs(m[f.field]![k]! - oldM[f.field]![k]!);
+        if (d > maxDelta) maxDelta = d;
+      }
+    }
+    for (const ne of emNeFields) {
+      for (let k = 0; k < 2; k++) {
+        const d = Math.abs(mNe[ne.field]![k]! - oldMNe[ne.field]![k]!);
         if (d > maxDelta) maxDelta = d;
       }
     }
@@ -965,6 +1028,20 @@ export function trainEM(
       w.push(Math.log2(mVal / uVal));
     }
     matchWeights[f.field] = w;
+  }
+
+  // NE dims: store under __ne__<field> — [wFired, 0.0]. The 0.0 for
+  // not-fired is the NEGATIVE-EVIDENCE CLAMP (not log2(m1/u1)): agreement
+  // or an inconclusive comparison never boosts the score, only a confident
+  // disagreement subtracts from it. Applied at STORAGE ONLY — the EM loop
+  // above always saw the full 2-state likelihood.
+  for (const ne of emNeFields) {
+    const key = `__ne__${ne.field}`;
+    m[key] = [...mNe[ne.field]!];
+    u[key] = [...uNe[ne.field]!];
+    const m0 = Math.max(mNe[ne.field]![0]!, 1e-10);
+    const u0 = Math.max(uNe[ne.field]![0]!, 1e-10);
+    matchWeights[key] = [Math.log2(m0 / u0), 0.0];
   }
 
   return {
