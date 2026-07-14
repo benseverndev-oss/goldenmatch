@@ -25,7 +25,7 @@ serde_json = "1"
 arrow = ["dep:arrow", "dep:rand", "dep:rand_chacha"]
 
 [dependencies.arrow]
-version = "55"
+version = "59"
 default-features = false
 optional = true
 
