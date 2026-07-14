@@ -7,6 +7,24 @@ from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 
+# One-time guard for the arrow-lane transform polars-absent warning.
+_TRANSFORM_POLARS_WARNED = False
+
+
+def _warn_transform_needs_polars_once() -> None:
+    """Warn (once) that GoldenFlow transforms are skipped on the arrow lane
+    because polars is absent. GoldenFlow's transform engine is polars-native;
+    install ``goldenmatch[polars]`` (or ``[transform]``) to re-enable them."""
+    global _TRANSFORM_POLARS_WARNED
+    if _TRANSFORM_POLARS_WARNED:
+        return
+    _TRANSFORM_POLARS_WARNED = True
+    logger.warning(
+        "GoldenFlow transforms skipped: the transform engine is polars-native "
+        "and polars is not installed. Standardization is not applied on the "
+        "arrow lane; install goldenmatch[polars] to re-enable transforms."
+    )
+
 
 def _goldenflow_available() -> bool:
     """Check if goldenflow is installed."""
@@ -74,10 +92,16 @@ def run_transform(
     # (transform_df), bridged around _do_transform only. goldenflow's
     # polars-free columnar `transform` needs an explicit covered config +
     # arrow auto-detect -- filed in the endgame plan.
+    import pyarrow as _pa  # noqa: PLC0415
+
     from goldenmatch.core.frame import to_frame as _tf_a2
 
     _in_frame = _tf_a2(df)
-    _is_pl_in = isinstance(df, pl.DataFrame)
+    # Arrow-lane discriminator via `isinstance(df, pa.Table)` (pyarrow is always
+    # present) -- NEVER `isinstance(df, pl.DataFrame)`, which imports polars just
+    # to type-check on the arrow lane. A non-arrow frame is the polars lane.
+    _is_arrow_in = isinstance(df, _pa.Table)
+    _is_pl_in = not _is_arrow_in
 
     excluded_set: set[str] = set()
     try:
@@ -113,6 +137,16 @@ def run_transform(
             _in_frame.native if _is_pl_in else pl.from_arrow(_in_frame.native)
         )
         result = _do_transform(_bridge_df)
+    except ImportError:
+        # GoldenFlow's transform engine (_do_transform) is polars-native; on the
+        # arrow lane with polars absent, the `pl.from_arrow` bridge raises
+        # ImportError. Degrade to no-transform (skip standardization) rather than
+        # crashing -- the arrow-eviction "lossy fallback". Byte-identical when
+        # polars is present.
+        _warn_transform_needs_polars_once()
+        if strict:
+            raise
+        return _restore(_in_frame).native, []
     except Exception:
         logger.warning("GoldenFlow: transform failed, skipping", exc_info=True)
         if strict:
