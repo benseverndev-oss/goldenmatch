@@ -421,10 +421,11 @@ def run_match_fused_fs_arrow(
 
     # Negative evidence (FS_SUPPORTS_NE). Prep mirrors the score_arrs loop:
     # seam extraction + the same pure-Python transform pass. An NE field
-    # absent from `columns` is unreachable given the gate (non-derive_from NE
-    # fields are data columns), but degrades to all-null — NE never fires —
-    # rather than raising, matching the classic path's missing-column
-    # behavior. w_fired mirrors _ne_scalar_contribution: -abs(penalty_bits)
+    # absent from `columns` IS reachable here — the readiness gate is
+    # pure-config and never validates the caller-supplied columns mapping —
+    # so the all-null fallback below is deliberate: NE never fires rather
+    # than raising, matching the classic path's missing-column behavior.
+    # w_fired mirrors _ne_scalar_contribution: -abs(penalty_bits)
     # when set, else the EM-learned __ne__<field> fired weight (a missing
     # entry raising KeyError matches the scalar path's contract; validate_for
     # guarantees it exists).

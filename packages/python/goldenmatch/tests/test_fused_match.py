@@ -266,8 +266,6 @@ def test_fs_ready_level_thresholds_tracks_kernel_capability(monkeypatch):
 @pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused_fs not built")
 def test_match_fused_fs_matches_pipeline_fs_block_scorer():
     import polars as pl
-    from goldenmatch.core.blocker import build_blocks
-    from goldenmatch.core.probabilistic import probabilistic_block_scorer
 
     config = _probabilistic_config()
     em = _em()
@@ -286,28 +284,7 @@ def test_match_fused_fs_matches_pipeline_fs_block_scorer():
     got = _table_to_clusters(tbl)
 
     # reference: the pipeline FS block path (same em -> same kernel FS math)
-    scorer = probabilistic_block_scorer(config.get_matchkeys()[0], em)
-    pairs = []
-    for br in build_blocks(df.lazy(), config.blocking):
-        g = br.materialize().native if hasattr(br.df, "collect") else br.df
-        pairs += scorer(g)
-    parent = list(range(df.height))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for a, b, _s in pairs:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-    comps = defaultdict(list)
-    for i in range(df.height):
-        comps[find(i)].append(i)
-    want = {frozenset(v) for v in comps.values() if len(v) >= 2}
-    assert got == want
+    assert got == _classic_fs_clusters(df, config, em)
 
 
 # ---- Fellegi-Sunter fused path: NE + level_thresholds capability (R4) ----
@@ -482,7 +459,7 @@ def test_fused_weight_range_uses_fs_weight_range(monkeypatch):
 def _classic_fs_clusters(df, config, em):
     """Reference clusters via the classic pipeline: build_blocks + the routed
     probabilistic block scorer + the same union-find the fused kernel applies
-    (mirrors test_match_fused_fs_matches_pipeline_fs_block_scorer)."""
+    (shared by all three fused-FS parity tests)."""
     from goldenmatch.core.blocker import build_blocks
     from goldenmatch.core.probabilistic import probabilistic_block_scorer
 
