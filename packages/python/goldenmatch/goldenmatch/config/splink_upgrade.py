@@ -282,14 +282,16 @@ def upgrade_splink_conversion(
 
     lever_names = _resolve_levers(levers)
 
-    # Copy-on-write: never mutate the input conversion.
+    # Copy-on-write: never mutate the input conversion. NOTE: EMResult's
+    # to_dict()/from_dict() round-trip is a plain projection -- the nested
+    # m/u/weight dicts and lists pass through BY REFERENCE -- so it is NOT a
+    # safe copy mechanism (levers mutating tf_freqs/match_weights in place
+    # would corrupt the baseline model). deepcopy is the dataclass-safe copy.
     upgraded_config = GoldenMatchConfig(**conversion.config.model_dump())
-    em_model = (
-        EMResult.from_dict(conversion.em_model.to_dict())
-        if conversion.em_model is not None
-        else None
-    )
-    report = ConversionReport(findings=[copy.deepcopy(f) for f in conversion.report.findings])
+    em_model = copy.deepcopy(conversion.em_model)
+    # Findings are flat dataclasses (str/None fields only), so a per-finding
+    # shallow copy fully isolates them from later mutation.
+    report = ConversionReport(findings=[copy.copy(f) for f in conversion.report.findings])
 
     sampled_df, sampled = _sample(df, sample_cap, seed)
     if sampled:

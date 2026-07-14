@@ -160,6 +160,37 @@ def test_upgraded_config_is_distinct_object():
     )
 
 
+def test_em_model_copy_is_deep():
+    """EMResult.to_dict()/from_dict() passes nested dicts/lists by reference,
+    so the orchestrator must deepcopy -- an in-place mutation of the returned
+    model's nested containers must never leak into the input conversion's."""
+    conversion = from_splink(_trained_settings())
+    assert conversion.em_model is not None
+    original_m_probs = [*conversion.em_model.m_probs["first_name"]]
+
+    result = upgrade_splink_conversion(
+        conversion, _sample_df(), levers=set(), measure=False
+    )
+
+    assert result.em_model is not None
+    assert result.em_model is not conversion.em_model
+    # Nested containers must be distinct objects, not shared references.
+    assert result.em_model.m_probs is not conversion.em_model.m_probs
+    assert (
+        result.em_model.m_probs["first_name"]
+        is not conversion.em_model.m_probs["first_name"]
+    )
+    assert (
+        result.em_model.match_weights["first_name"]
+        is not conversion.em_model.match_weights["first_name"]
+    )
+    # In-place mutation of the copy must not alter the original.
+    result.em_model.m_probs["first_name"][0] = 0.999
+    result.em_model.match_weights["injected"] = [1.0]
+    assert conversion.em_model.m_probs["first_name"] == original_m_probs
+    assert "injected" not in conversion.em_model.match_weights
+
+
 # ── Column validation ─────────────────────────────────────────────────────────
 
 
