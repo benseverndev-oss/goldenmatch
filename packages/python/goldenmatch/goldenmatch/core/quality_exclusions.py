@@ -448,6 +448,58 @@ def _sample_non_null_values(
     return non_null.head(sample_size).to_list()
 
 
+# semantic_dtype() returns normalized categories; map them to a polars-style
+# dtype repr so the ONE dtype-reading detector (the temporal check keys on
+# date/datetime/time substrings) fires identically on the arrow path. date and
+# datetime both normalize to "date" -> "Date" (carries the "date" substring);
+# numeric/bool/text carry no temporal substring, matching the polars str(dtype)
+# behavior. profile.dtype otherwise appears only as cosmetic evidence.
+_SEMANTIC_TO_PL_DTYPE = {
+    "text": "String",
+    "numeric": "Float64",
+    "bool": "Boolean",
+    "date": "Date",
+}
+
+
+def _build_column_profile_seam(column: Any, total_rows: int) -> ColumnProfile:
+    """Arrow-safe twin of ``_build_column_profile`` over a seam ``Column``.
+
+    Decisions are byte-identical to the ``pl.Series`` path: the only detector
+    that reads ``profile.dtype`` (the temporal check) keys on date/datetime/time
+    substrings, and ``mean_string_length`` is set for text columns exactly as the
+    polars path. Used only on the arrow lane (``detect_autoconfig_exclusions``
+    keeps the polars branch unchanged = byte-parity).
+    """
+    null_count = int(column.null_count())
+    non_null = total_rows - null_count
+    distinct_count = int(column.n_unique())
+    cardinality_ratio = (distinct_count / non_null) if non_null > 0 else 0.0
+    null_rate = (null_count / total_rows) if total_rows > 0 else 0.0
+    semantic = column.semantic_dtype()
+    dtype_str = _SEMANTIC_TO_PL_DTYPE.get(semantic, semantic)
+    mean_string_length: float | None = None
+    if semantic == "text":
+        try:
+            mean = column.drop_nulls().str_len_chars().mean()
+            mean_string_length = float(mean) if mean is not None else None
+        except Exception:  # pragma: no cover - defensive
+            mean_string_length = None
+    return ColumnProfile(
+        cardinality_ratio=cardinality_ratio,
+        null_rate=null_rate,
+        distinct_count=distinct_count,
+        dtype=dtype_str,
+        mean_string_length=mean_string_length,
+    )
+
+
+def _sample_non_null_seam(column: Any, sample_size: int = 1000) -> list:
+    """Arrow-safe twin of ``_sample_non_null_values``. Drop-nulls THEN take the
+    first ``sample_size`` (order matters for detector reproducibility)."""
+    return column.drop_nulls().to_list()[:sample_size]
+
+
 def detect_autoconfig_exclusions(
     df: pl.DataFrame,
     *,
@@ -482,9 +534,22 @@ def detect_autoconfig_exclusions(
     force_include_set = set(force_include or [])
     skip_set = set(skip_columns or [])
 
-    total_rows = df.height
+    # Arrow-port: the polars branch is UNCHANGED (byte-parity, unedited test);
+    # a pa.Table is scanned through the Frame seam (Column stats via the arrow-
+    # safe profile/sample twins) so the exclusion DECISIONS match.
+    from goldenmatch.core.frame import is_polars_dataframe, to_frame
+
+    _is_polars = is_polars_dataframe(df)
+    if _is_polars:
+        columns = df.columns
+        total_rows = df.height
+    else:
+        _frame = to_frame(df)
+        columns = _frame.columns
+        total_rows = _frame.height
+
     excluded: list[ExcludedColumn] = []
-    for col in df.columns:
+    for col in columns:
         if col in skip_set:
             continue
         if col in force_include_set:
@@ -499,9 +564,14 @@ def detect_autoconfig_exclusions(
             ))
             continue
 
-        series = df[col]
-        profile = _build_column_profile(series, total_rows)
-        sampled = _sample_non_null_values(series, sample_size=sample_size)
+        if _is_polars:
+            series = df[col]
+            profile = _build_column_profile(series, total_rows)
+            sampled = _sample_non_null_values(series, sample_size=sample_size)
+        else:
+            column = _frame.column(col)
+            profile = _build_column_profile_seam(column, total_rows)
+            sampled = _sample_non_null_seam(column, sample_size=sample_size)
 
         for detector in _DETECTORS:
             result = detector(col, sampled, profile)

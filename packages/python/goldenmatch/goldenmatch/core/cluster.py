@@ -684,7 +684,7 @@ def build_cluster_frames(
                 int(cid): _af.filter_eq("cluster_id", cid).column("member_id").to_list()
                 for cid in oversized
             }
-            live_cids = set(range(1, metadata.height + 1))
+            live_cids = set(range(1, _mf.height + 1))  # arrow-port: seam .height (pa.Table has none)
             split_result: dict[int, dict] = {}
             drop_cids = set()                      # ORIGINAL cids that split
             edge_work, edge_budget, budget_tripped = 0, _split_edge_work_budget(len(all_ids), split_edge_budget), False
@@ -747,13 +747,16 @@ def build_cluster_frames(
                 from goldenmatch.core.frame import concat_frames as _cf
                 from goldenmatch.core.frame import frame_from_rows as _ffr
 
+                # arrow-port: split rows must match the frame backend (concat_frames
+                # refuses mixed arrow/polars) -- `backend` is the same one the
+                # assignments/metadata frames were built with above.
                 assignments = _cf([
                     _tf2(assignments),
-                    _ffr(split_assign_rows, {"cluster_id": "int64", "member_id": "int64"}, backend="polars"),
+                    _ffr(split_assign_rows, {"cluster_id": "int64", "member_id": "int64"}, backend=backend),
                 ]).native
                 metadata = _cf([
                     _tf2(metadata),
-                    _ffr(split_meta_rows, _META_SPEC, backend="polars"),
+                    _ffr(split_meta_rows, _META_SPEC, backend=backend),
                 ]).native
 
     # Step 3: vectorized weak/quality (excludes "split" rows -- none in Task 1).

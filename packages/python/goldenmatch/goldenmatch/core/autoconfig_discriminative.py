@@ -101,15 +101,18 @@ def discriminative_power(
     skipped. Returns (mean over measured pairs, count of measured pairs);
     (0.0, 0) when basket empty, candidate absent, or no measurable pair exists.
     """
-    if not basket or candidate_col not in df.columns:
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)  # arrow-port: seam columns + select_dicts (row order preserved)
+    if not basket or candidate_col not in frame.columns:
         return 0.0, 0
-    basket_cols = [(c, fuzzy) for (c, fuzzy) in basket if c in df.columns]
+    basket_cols = [(c, fuzzy) for (c, fuzzy) in basket if c in frame.columns]
     if not basket_cols:
         return 0.0, 0
-    sub = df.select([candidate_col, *[c for (c, _f) in basket_cols]])
+    sub_cols = [candidate_col, *[c for (c, _f) in basket_cols]]
 
     groups: dict[str, list[dict[str, Any]]] = {}
-    for row in sub.iter_rows(named=True):
+    for row in frame.select_dicts(sub_cols):
         cv = _norm(row[candidate_col])
         if cv is None:
             continue
@@ -260,7 +263,10 @@ def should_demote_attribute_field(
     )
     if not is_eligible:
         return False
-    basket = [(c, f) for (c, f) in name_basket if c != candidate_col and c in df.columns]
+    from goldenmatch.core.frame import to_frame
+
+    _dcols = to_frame(df).columns  # arrow-port: pa.Table.columns != names
+    basket = [(c, f) for (c, f) in name_basket if c != candidate_col and c in _dcols]
     if not basket:
         return False
     power, support = discriminative_power(

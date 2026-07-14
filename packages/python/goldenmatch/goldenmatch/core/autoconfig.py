@@ -2010,13 +2010,14 @@ def _source_disjoint(df: pl.DataFrame, col: str, partition_col: str) -> bool:
     max-pairwise test: a genuine shared identifier (the same person appearing in
     two sources with the same value) is NOT disjoint, so it is kept.
     """
-    if partition_col not in df.columns:
+    from goldenmatch.core.frame import to_frame
+
+    _sd_frame = to_frame(df)  # arrow-port: seam columns (pa.Table.columns != names)
+    if partition_col not in _sd_frame.columns:
         return False
     # W3d: group_nunique pins the either-col-null row drop this site's
     # frame-level drop_nulls performed.
-    from goldenmatch.core.frame import to_frame
-
-    per_value = to_frame(df).group_nunique(col, partition_col)
+    per_value = _sd_frame.group_nunique(col, partition_col)
     if per_value.height == 0:
         return False
     max_parts = cast("int | None", per_value.column("n_unique").max())
@@ -2046,8 +2047,14 @@ def _detect_source_partition(
         return None
     if _AUTOCONFIG_MATCH_MODE.get():
         return None
+    from goldenmatch.core.frame import to_frame
+
+    _sp_frame = to_frame(df)  # arrow-port: seam columns/height/n_unique
     # 1) internal __source__ with >= 2 distinct values (multi-file dedupe).
-    if "__source__" in df.columns and df["__source__"].n_unique() >= 2:
+    if (
+        "__source__" in _sp_frame.columns
+        and _sp_frame.column("__source__").n_unique() >= 2
+    ):
         return "__source__"
     # 2) a name-pattern user column: low cardinality + >= 2 distinct + a
     #    disjoint-id co-signature (>= 1 other column 0-overlap vs it). The
@@ -2055,11 +2062,11 @@ def _detect_source_partition(
     #    floor of 20, else 10% of rows) excludes free-text "source"-ish fields
     #    while staying robust on small frames.
     other_cols = [p.name for p in profiles if not p.name.startswith("__")]
-    card_cap = max(20, int(0.1 * df.height))
+    card_cap = max(20, int(0.1 * _sp_frame.height))
     for p in profiles:
         if p.name.startswith("__") or not _SOURCE_NAME_RE.search(p.name):
             continue
-        n_unique = df[p.name].n_unique()
+        n_unique = _sp_frame.column(p.name).n_unique()
         if n_unique < 2 or n_unique > card_cap:
             continue
         has_cosig = any(
@@ -3740,13 +3747,20 @@ def auto_configure_df(
     )
     from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_boundary
 
+    # GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1 (default 0) skips the coercion and
+    # keeps a pa.Table native through the controller -- the in-progress scoring-
+    # lane port (indicators guards done; exclusion detectors + build_blocks spine
+    # pending). Default OFF: coerce, so production zero-config is unchanged.
+    _arrow_native_ac = os.environ.get(
+        "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", "0"
+    ).lower() in ("1", "true", "yes")
     if not (
         _is_ray_boundary(df)
         or is_polars_lazyframe(df)
         or is_polars_dataframe(df)
     ):
         _boundary_native = to_frame(df).native
-        if is_polars_dataframe(_boundary_native):
+        if is_polars_dataframe(_boundary_native) or _arrow_native_ac:
             df = _boundary_native
         else:
             import polars as _pl_boundary
@@ -3805,20 +3819,23 @@ def auto_configure_df(
     # their own column-selection story; exclusions land at the per-
     # partition kernel layer separately.
     _ms_partition: str | None = None  # #858 source partition (None => feature off)
-    if not _is_ray_dataset(df) and is_polars_dataframe(df):
-        # df is always a pl.DataFrame here: the boundary above coerces every
-        # non-ray / non-lazy input (incl. pa.Table) to polars until the scoring
-        # lane is arrow-ported, and a LazyFrame was collected. So a pa.Table
-        # zero-config input runs the SAME exclusions / exclude_columns / #858
-        # guard as an equivalent pl.DataFrame -- the detectors below
-        # (detect_autoconfig_exclusions / _detect_source_partition /
-        # _source_correlated_exclusions) are not seam-ported, and don't need to
-        # be while the boundary coerces. Seam-porting them is part of the
-        # pipeline-spine follow-up that makes the boundary a true arrow
-        # pass-through.
+    if not _is_ray_dataset(df):
+        # Arrow-port: the exclusion + source-partition detectors are now seam-
+        # ported (detect_autoconfig_exclusions / _detect_source_partition /
+        # _source_correlated_exclusions all route Column stats through the seam),
+        # so this block runs identically for a pl.DataFrame AND a bare pa.Table
+        # (the arrow-native path). A pa.Table zero-config input therefore gets
+        # the SAME exclusions / exclude_columns / #858 guard as an equivalent
+        # pl.DataFrame -- config-equivalence, not the silent skip Finding 1
+        # flagged. `df` may be arrow (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE) or
+        # polars (default coercion); `_excl_frame` gives backend-agnostic
+        # columns/drop.
+        from goldenmatch.core.frame import to_frame as _to_frame_excl
         from goldenmatch.core.quality_exclusions import (
             detect_autoconfig_exclusions,
         )
+
+        _excl_frame = _to_frame_excl(df)
         # Combine every exclusion source: top-level config.exclude_columns
         # (this PR), dedupe_df / match_df kwarg via _RUNTIME_EXCLUDE_COLUMNS
         # ContextVar, QualityConfig.autoconfig_force_{exclude,include}
@@ -3842,7 +3859,7 @@ def auto_configure_df(
             ]
         # Internal bookkeeping columns are invisible to detectors.
         skip = {"__row_id__", "__source__"}
-        for col in df.columns:
+        for col in _excl_frame.columns:
             if col.startswith("__") and col.endswith("__"):
                 skip.add(col)
         exclusions = detect_autoconfig_exclusions(
@@ -3852,8 +3869,9 @@ def auto_configure_df(
             skip_columns=skip,
         )
         if exclusions:
+            _existing_cols = set(_excl_frame.columns)
             cols_to_drop = [
-                ec.column for ec in exclusions if ec.column in df.columns
+                ec.column for ec in exclusions if ec.column in _existing_cols
             ]
             for ec in exclusions:
                 logger.info(
@@ -3861,7 +3879,7 @@ def auto_configure_df(
                     ec.column, ec.detector, ec.reason,
                 )
             if cols_to_drop:
-                df = df.drop(cols_to_drop)
+                df = _excl_frame.drop(cols_to_drop).native
             _LAST_AUTOCONFIG_EXCLUSIONS.set(list(exclusions))
         else:
             _LAST_AUTOCONFIG_EXCLUSIONS.set([])

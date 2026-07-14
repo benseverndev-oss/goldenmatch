@@ -1686,10 +1686,43 @@ class AutoConfigController:
         owns the store lifecycle.
         """
         from goldenmatch.core.pipeline import run_dedupe_df, run_match_df
+
+        # Arrow-native zero-config: route an ARROW sample's dedupe to the bucket
+        # scorer (arrow-native, Polars-free) rather than the legacy fuzzy scorer
+        # (`find_fuzzy_matches`/`_score_one_block`, which does `.to_dicts()` and is
+        # not arrow-ported). bucket produces identical clusters at 1k-60k (#526)
+        # and the controller sample is <=20K, so this is cluster-equivalent for
+        # the sample profile. A polars / ray sample is untouched (byte-identical).
+        config = self._maybe_bucket_route_arrow(sample, config)
         if reference is None:
             run_dedupe_df(sample, config=config, _prep_store=_prep_store)
         else:
             run_match_df(sample, reference, config=config)
+
+    @staticmethod
+    def _maybe_bucket_route_arrow(
+        sample: Any, config: GoldenMatchConfig
+    ) -> GoldenMatchConfig:
+        """Force ``backend='bucket'`` when ``sample`` is a bare Arrow table.
+
+        The bucket scorer is the arrow-native, Polars-free scoring path; the
+        legacy fuzzy scorer is not arrow-ported. No-op for polars / ray samples
+        and when the config already targets bucket.
+        """
+        from goldenmatch.core.frame import (
+            is_polars_dataframe,
+            is_polars_lazyframe,
+        )
+        from goldenmatch.distributed._utils import is_ray_dataset
+
+        if (
+            config.backend == "bucket"
+            or is_polars_dataframe(sample)
+            or is_polars_lazyframe(sample)
+            or is_ray_dataset(sample)
+        ):
+            return config
+        return config.model_copy(update={"backend": "bucket"})
 
     def _perturbation_stability(
         self,

@@ -200,16 +200,16 @@ def estimate_sparse_match_signal(
     sparse-match expansion is not over-triggered. When None, the fixed
     `sparse_threshold` is used (backward-compatible default).
     """
-    if not exact_columns or df.is_empty():
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)  # arrow-port: seam guards -- pa.Table has no is_empty
+    if not exact_columns or frame.height == 0:
         return SparsityVerdict(is_sparse=True, estimated_n_true_pairs=0)
     threshold = (
         sparse_match_floor(estimated_pairs)
         if estimated_pairs is not None
         else sparse_threshold
     )
-    from goldenmatch.core.frame import to_frame
-
-    frame = to_frame(df)
     sample_frame = frame.head(sample_size) if frame.height > sample_size else frame
     n_pairs = 0
     for col in exact_columns:
@@ -233,9 +233,12 @@ def compute_corruption_score(df: pl.DataFrame, col: str) -> float:
 
     See _compute_corruption_score_inline for the heuristic.
     """
-    if col not in df.columns or df.is_empty():
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)  # arrow-port: seam guards
+    if col not in frame.columns or frame.height == 0:
         return 0.0
-    sample = df.head(1000) if df.height > 1000 else df
+    sample = (frame.head(1000) if frame.height > 1000 else frame).native
     return _compute_corruption_score_inline(sample, col)
 
 
@@ -251,7 +254,10 @@ def estimate_full_pop_hits(df: pl.DataFrame, blocking_col: str) -> int | None:
         logger.info("estimate_full_pop_hits: budget is zero; returning None")
         return None
     start = time.time()
-    if blocking_col not in df.columns or df.is_empty():
+    from goldenmatch.core.frame import to_frame
+
+    _guard_frame = to_frame(df)  # arrow-port: seam guards
+    if blocking_col not in _guard_frame.columns or _guard_frame.height == 0:
         return 0
     if (time.time() - start) > BUDGET_FULL_POP_HITS:
         return None
@@ -288,7 +294,14 @@ def compute_cross_blocking_overlap(
         logger.info("compute_cross_blocking_overlap: budget is zero; returning None")
         return None
     start = time.time()
-    if key_a not in df.columns or key_b not in df.columns or df.is_empty():
+    from goldenmatch.core.frame import to_frame
+
+    _guard_frame = to_frame(df)  # arrow-port: seam guards
+    if (
+        key_a not in _guard_frame.columns
+        or key_b not in _guard_frame.columns
+        or _guard_frame.height == 0
+    ):
         return None
     if (time.time() - start) > BUDGET_CROSS_BLOCKING:
         return None

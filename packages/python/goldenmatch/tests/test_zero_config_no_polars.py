@@ -207,16 +207,18 @@ def test_explicit_config_arrow_dedupe_is_polars_free():
 
 @pytest.mark.xfail(
     reason=(
-        "PR-3..6b landed the autoconfig-LAYER arrow seam (dtype map, controller "
-        "gates, sampling, blocking-size measurement, v0 heuristic), but the "
-        "zero-config SCORING lane is not fully arrow-ported: the eager indicators' "
-        "empty/column guards (indicators.py), the GoldenCheck exclusion detectors, "
-        "and the legacy `build_blocks(combined_lf)` scoring spine (pipeline.py:2284) "
-        "still assume polars. So `auto_configure_df` COERCES a non-polars input to "
-        "polars at its boundary for now (correct + no RED fallback), which imports "
-        "polars. Flips green when the scoring spine + indicators guards + exclusion "
-        "detectors are arrow-ported (the separately-tracked pipeline-spine follow-up) "
-        "and the boundary becomes a true `.native` arrow pass-through."
+        "`auto_configure_df` config-GENERATION is now Polars-free on the arrow-native "
+        "path (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1: indicators guards + exclusion "
+        "detectors + discriminative-veto + source-partition seam-ported, sample "
+        "scoring routed to the arrow-native bucket scorer -- config- and cluster-"
+        "equivalent to polars, see test_autoconfig_arrow_native_parity.py). Two things "
+        "keep this DEFAULT tripwire xfail: (1) the flag defaults OFF, so "
+        "`auto_configure_df` coerces a non-polars input to polars at its boundary "
+        "(imports polars) -- safe production default until (2) lands; (2) even with the "
+        "flag on, the FINAL dedupe's clustering `build_clusters_arrow_native` "
+        "(cluster.py:2027) wraps the arrow Rust-kernel output into polars ClusterFrames "
+        "-> imports polars. Flips green when ClusterFrames is Arrow-native (the 3.x "
+        "engine-descent eviction, NOT the autoconfig port) and the flag defaults on."
     ),
     strict=False,
 )
