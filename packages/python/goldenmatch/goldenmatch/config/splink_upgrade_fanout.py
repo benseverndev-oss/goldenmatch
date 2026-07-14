@@ -375,6 +375,8 @@ def _random_pair_firing_rate(
     return n_fired / drawn if drawn else 0.0
 
 
+# ── Cluster-guard tuning (Task F4) ───────────────────────────────────────────
+
 _GUARD_MAPPED_TO = "golden_rules.max_cluster_size"
 
 
@@ -448,7 +450,9 @@ def _tune_cluster_guard(ctx: _LeverContext) -> None:
     if not mapping:
         # Zero id overlap (or an empty reference) is an id-join failure, not
         # a clustering signal -- same posture as measurement's
-        # _checked_reference.
+        # _checked_reference. The info-vs-warn severity downgrade vs that
+        # helper is INTENTIONAL: a skipped tune is lower-stakes than absent
+        # metrics, and measurement's own later call still warns.
         ctx.report.info(
             "upgrade:fan_out",
             f"guard tuning skipped: the {ref_name} reference "
@@ -475,11 +479,16 @@ def _tune_cluster_guard(ctx: _LeverContext) -> None:
     rules = ctx.upgraded_config.golden_rules
     old_cap = rules.max_cluster_size
     rules.max_cluster_size = new_cap
+    caveat = (
+        " (data was subsampled; reference max may be understated)"
+        if ctx.sampled
+        else ""
+    )
     ctx.report.info(
         "upgrade:fan_out",
         f"golden_rules.max_cluster_size tuned {old_cap} -> {new_cap} = "
         f"max({_GUARD_MIN_CAP}, 2 * {ref_max}) from the {ref_name} "
         f"reference (max cluster size {ref_max}, p99 {ref_p99}, over "
-        f"{len(mapping)} joined sample id(s))",
+        f"{len(mapping)} joined sample id(s))" + caveat,
         mapped_to=_GUARD_MAPPED_TO,
     )

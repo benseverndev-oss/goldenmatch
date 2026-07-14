@@ -182,6 +182,10 @@ class _LeverContext:
     splink_clusters: object | None = None
     labels: object | None = None
     id_column: str | None = None
+    # True when ``df`` is a subsample of the full input (sample_cap hit) --
+    # lets sample-sensitive levers (fan_out's guard tuning) caveat findings
+    # whose reference statistics may be fragmented by the subsampling.
+    sampled: bool = False
 
 
 _BARE_SETTINGS_SKIP_MSG = (
@@ -496,9 +500,11 @@ def _lever_calibration(ctx: _LeverContext) -> None:
 
     from goldenmatch.core.probabilistic import (
         _fs_calibration_mode,
+        _ne_scalar_contribution,
         _sample_blocked_pairs,
         comparison_vector,
         compute_thresholds,
+        fs_weight_range,
     )
 
     mapped_to = "matchkeys[0].link_threshold/review_threshold"
@@ -521,24 +527,6 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     assert ctx.em_model is not None  # copy of conversion.em_model (checked above)
     em = ctx.em_model
     mk = ctx.upgraded_config.get_matchkeys()[0]
-
-    # Tripwire for the planned fan-out upgrade lever: this lever's per-pair
-    # weight sum and hand-rolled model min/max range below cover REGULAR
-    # fields only -- they do not include negative-evidence contributions
-    # (`__ne__<field>` entries / penalty_bits). Unreachable today
-    # (from_splink never emits negative_evidence), but the fan-out lever
-    # will emit exactly that shape; calibrating while ignoring NE weights
-    # would put the thresholds on the wrong scale. Warn + skip until this
-    # lever is taught fs_weight_range (core/probabilistic.py).
-    if mk.negative_evidence:
-        ctx.report.warn(
-            "upgrade:calibration",
-            "skipped: calibration does not yet account for negative_evidence "
-            "weights (the pair-weight sum and model range cover regular "
-            "fields only; see fs_weight_range) -- thresholds left unset",
-            mapped_to=mapped_to,
-        )
-        return
 
     # Mixed bare/trained input produces a PARTIAL imported model (import_em
     # skips bare comparisons with a warning), so em.match_weights does not
@@ -609,6 +597,9 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     from goldenmatch.core.frame import to_frame
 
     cols = [f.field for f in mk.fields if f.field is not None and f.field != "__record__"]
+    # NE fields (the fan_out lever's output shape) join the projection so
+    # _ne_fired can see the values when summing per-pair NE contributions.
+    cols += [ne.field for ne in (mk.negative_evidence or []) if ne.field not in cols]
     row_lookup: dict[int, dict] = {}
     for row in to_frame(lf.collect()).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
@@ -626,17 +617,29 @@ def _lever_calibration(ctx: _LeverContext) -> None:
 
     total_weights: list[float] = []
     for a, b in pairs:
-        vec = comparison_vector(row_lookup.get(a, {}), row_lookup.get(b, {}), mk)
+        row_a = row_lookup.get(a, {})
+        row_b = row_lookup.get(b, {})
+        vec = comparison_vector(row_a, row_b, mk)
         total_weights.append(
             sum(em.match_weights[name][vec[k]] for k, name in indexed_fields)
+            # NE contributions: 0.0 unless the field FIRES (core scalar
+            # helper -- penalty_bits override or the EM-learned `__ne__`
+            # fired-weight), matching runtime FS scoring.
+            + sum(
+                _ne_scalar_contribution(row_a, row_b, ne, em)
+                for ne in (mk.negative_evidence or [])
+            )
         )
 
     # Normalize the SAME way runtime scoring does (score_probabilistic):
     # against the MODEL-derived min/max total weight, not the observed
     # min/max -- at run time mk.link_threshold is compared to model-range
     # normalized scores, so the calibrated cuts must live on that scale.
-    max_weight = sum(max(em.match_weights[name]) for _, name in indexed_fields)
-    min_weight = sum(min(em.match_weights[name]) for _, name in indexed_fields)
+    # fs_weight_range covers regular fields AND negative_evidence
+    # (`__ne__` entries / penalty_bits). It iterates ALL mk.fields (no
+    # __record__ exclusion), but converted configs never emit __record__
+    # pseudo-fields and the uncovered-fields guard above already ran.
+    min_weight, max_weight = fs_weight_range(em, mk)
     weight_range = max_weight - min_weight
     if weight_range <= 0:
         ctx.report.warn(
@@ -807,6 +810,7 @@ def upgrade_splink_conversion(
         splink_clusters=splink_clusters,
         labels=labels,
         id_column=id_column,
+        sampled=sampled,
     )
 
     for name in lever_names:

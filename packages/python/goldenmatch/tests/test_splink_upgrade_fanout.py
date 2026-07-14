@@ -933,3 +933,30 @@ def test_guard_bad_id_column_warns():
     warns = [f for f in _guard_findings(res, "warning") if "nope" in f.message]
     assert len(warns) == 1
     assert "skipped" in warns[0].message.lower()
+
+
+def test_guard_tuning_caveats_sampled_data():
+    """Sample fragmentation: when the data was subsampled (sample_cap hit),
+    the reference's max cluster size restricted to the sampled ids can
+    understate the true max -- the tuned finding carries an explicit caveat.
+    Below the cap (no subsampling) the caveat is absent."""
+    common = dict(
+        labels=_labels_df(200, 30),
+        id_column="rec_id",
+        levers={"fan_out"},
+        measure=False,
+    )
+
+    over_cap = upgrade_splink_conversion(
+        _fanout_conversion(), _guard_df(), sample_cap=100, **common
+    )
+    tuned = [f for f in _guard_findings(over_cap, "info") if "->" in f.message]
+    assert len(tuned) == 1
+    assert "subsampled" in tuned[0].message
+
+    under_cap = upgrade_splink_conversion(
+        _fanout_conversion(), _guard_df(), **common
+    )
+    tuned = [f for f in _guard_findings(under_cap, "info") if "->" in f.message]
+    assert len(tuned) == 1
+    assert "subsampled" not in tuned[0].message
