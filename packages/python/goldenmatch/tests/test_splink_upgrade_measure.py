@@ -315,6 +315,33 @@ def test_zero_overlap_labels_yields_none_and_warning():
     assert "id_column" in warn_findings[0].message
 
 
+def test_empty_reference_yields_none_and_warning():
+    """A ZERO-ROW reference must get the same treatment as a zero-overlap
+    one (warning + absent metrics block) -- it previously slipped past the
+    zero-overlap refusal's ``n_rows > 0`` guard and produced all-0.0
+    metrics."""
+    conversion = from_splink(_trained_settings())
+    df = _measure_data_df()
+    empty_ref = pl.DataFrame(
+        schema={"unique_id": pl.Utf8, "cluster_id": pl.Utf8}
+    )
+
+    result = upgrade_splink_conversion(
+        conversion, df, splink_clusters=empty_ref, measure=True
+    )
+
+    m = result.measurement
+    assert m is not None
+    assert m.vs_splink is None
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:measure" and f.severity == "warning"
+        and "splink_clusters" in f.message
+    ]
+    assert len(warn_findings) == 1
+    assert "empty" in warn_findings[0].message
+
+
 def test_partial_overlap_reference_still_computes():
     conversion = from_splink(_trained_settings())
     df = _measure_df()

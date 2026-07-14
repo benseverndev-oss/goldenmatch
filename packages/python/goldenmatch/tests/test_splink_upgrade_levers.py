@@ -848,6 +848,40 @@ def test_calibration_lever_posterior_mode_skips(monkeypatch):
     assert "posterior" in info_findings[0].message.lower()
 
 
+def test_calibration_lever_partial_model_skips():
+    """Mixed bare/trained settings import a PARTIAL model (import_em skips
+    the bare comparison with a warning), so em.match_weights does not cover
+    every matchkey field. The calibration lever must warn + skip -- levers
+    never fail the pass -- not crash with a raw KeyError scoring candidate
+    pairs."""
+    settings = {
+        "comparisons": [_trained_jw_comparison(), _exact_only_comparison("surname")],
+        "blocking_rules_to_generate_predictions": ['l."surname" = r."surname"'],
+        "probability_two_random_records_match": 0.05,
+    }
+    conversion = from_splink(settings)
+    assert conversion.em_model is not None
+    assert "surname" not in conversion.em_model.match_weights
+
+    # _calibration_df yields 570 blocked pairs -- calibration WOULD run if
+    # the partial-coverage guard didn't skip first.
+    result = upgrade_splink_conversion(
+        conversion, _calibration_df(), levers={"calibration"}, measure=False
+    )
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold is None
+    assert upgraded_mk.review_threshold is None
+
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "warning"
+    ]
+    assert len(warn_findings) == 1
+    assert "partial" in warn_findings[0].message
+    assert "surname" in warn_findings[0].message
+
+
 def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
     """An imported Splink model carries probability_two_random_records_match
     -- a RANDOM-PAIR prior -- in proportion_matched, not the within-block

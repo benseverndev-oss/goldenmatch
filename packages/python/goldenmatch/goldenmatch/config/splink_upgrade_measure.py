@@ -224,7 +224,18 @@ def _checked_reference(
     ``None`` so the metrics block is absent instead of garbage.
     """
     mapping, n_rows = _load_reference(ref, sample_ids)
-    if not mapping and n_rows > 0:
+    if n_rows == 0:
+        # An EMPTY reference is as unusable as a zero-overlap one: metrics
+        # against it would come out all-0.0 and read as a catastrophic
+        # regression. Same treatment -- warn + absent metrics block.
+        ctx.report.warn(
+            "upgrade:measure",
+            f"{name} reference is empty (0 rows) -- metrics vs {name} are "
+            "skipped rather than reported as 0.0; check the reference file",
+            mapped_to=None,
+        )
+        return None
+    if not mapping:
         source_desc = (
             "positional row indices"
             if id_source == _POSITIONAL_ID_SOURCE

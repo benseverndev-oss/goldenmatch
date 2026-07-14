@@ -119,7 +119,7 @@ cut, normalized the same way scoring does. Feed that full distribution to
 of the `scored_weights` branch (nothing in the codebase passes it today; the branch also requires
 len > 50, below which the lever skips with a warning). Set explicit
 `link_threshold`/`review_threshold` on the upgraded matchkey. **Posterior calibration mode**
-(`GOLDENMATCH_FS_CALIBRATION=posterior`): `compute_thresholds` deliberately returns fixed
+(`GOLDENMATCH_FS_CALIBRATED=posterior`): `compute_thresholds` deliberately returns fixed
 absolute cuts (0.99/0.50) and ignores the distribution -- the lever detects this mode and skips
 with an info note. Finding: chosen thresholds + distribution evidence (percentiles, n pairs).
 Runs after levers 1-2 by design (calibrates the model users will actually run).

@@ -345,8 +345,11 @@ def _lever_distance_thresholds(ctx: _LeverContext) -> None:
         # always between adjacent entries and this single forward pass
         # dedupes/sorts correctly without a separate sort step.
         groups: list[dict] = []
-        pending: list[int] = []  # old levels whose recompute was out of range,
-        # awaiting attachment to the next (lower) surviving group.
+        pending: list[int] = []  # old levels whose recompute was out of range.
+        # Because new_t is monotonically non-increasing, once a band clamps
+        # out of range every LATER band does too -- so pending mass can only
+        # ever merge into the disagree level (0) after the loop; the
+        # groups[-1] drain below is defensive and unreachable in practice.
 
         for old_level, old_t in zip(old_levels, old_thresholds):
             d = round((1 - old_t) * _LEV_ASSUMED_LEN)
@@ -481,6 +484,28 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     em = ctx.em_model
     mk = ctx.upgraded_config.get_matchkeys()[0]
 
+    # Mixed bare/trained input produces a PARTIAL imported model (import_em
+    # skips bare comparisons with a warning), so em.match_weights does not
+    # cover every matchkey field -- candidate pairs cannot be scored with
+    # the imported m/u. Warn + skip (levers never fail the pass), consistent
+    # with the converter's partial-model warning and the CLI's --model-out
+    # refusal for the same shape.
+    uncovered = [
+        f.field
+        for f in mk.fields
+        if f.field and f.field != "__record__" and f.field not in em.match_weights
+    ]
+    if uncovered:
+        ctx.report.warn(
+            "upgrade:calibration",
+            "skipped: the imported Splink model is partial (mixed bare/"
+            "trained input) -- matchkey field(s) "
+            f"{', '.join(uncovered)} carry no imported m/u, so blocked "
+            "candidate pairs cannot be scored -- thresholds left unset",
+            mapped_to=mapped_to,
+        )
+        return
+
     blocking = ctx.upgraded_config.blocking
     if blocking is None:
         ctx.report.warn(
@@ -534,7 +559,14 @@ def _lever_calibration(ctx: _LeverContext) -> None:
 
     # (index-into-comparison-vector, model-weight-key) pairs; converted
     # configs always carry a field name, the filter narrows the Optional.
-    indexed_fields = [(k, f.field) for k, f in enumerate(mk.fields) if f.field is not None]
+    # __record__ pseudo-fields are excluded to match `cols` above (they have
+    # no model weights; the partial-coverage guard earlier already skipped
+    # any other field missing from em.match_weights).
+    indexed_fields = [
+        (k, f.field)
+        for k, f in enumerate(mk.fields)
+        if f.field is not None and f.field != "__record__"
+    ]
 
     total_weights: list[float] = []
     for a, b in pairs:
