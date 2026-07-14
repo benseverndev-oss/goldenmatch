@@ -1,9 +1,26 @@
 # Zero-config dedupe: finish the arrow-lane polars eviction
 
-> **Status:** planned 2026-07-14. Continues the 3.x engine-descent eviction
-> (`project_goldenmatch_polars_eviction`). Two waves, staged. Wave 1 unblocks the
-> `#1747 [polars]` bridge stopgap; Wave 2 flips the D6 "polars not installed"
-> gate green.
+> **Status:** MILESTONE ACHIEVED 2026-07-14. Continues the 3.x engine-descent
+> eviction (`project_goldenmatch_polars_eviction`).
+>
+> **DONE + MERGED:** zero-config `dedupe_df(pa.Table, config=None)` runs
+> polars-free. W1S1 flag default-on (#1765), W1S3 quality scan-only degrade
+> (#1766), W1S4 multi_pass blocking on the seam (#1767), bucket default (#1761).
+> The endgame gate `test_zero_config_dedupe_df_is_polars_free` is now a REAL
+> native-gated PASS (was xfail). Leak-catalog finding: the transform-prep + golden
+> fallback the `pl.*` catalog flagged have WORKING arrow fallbacks (they don't fire
+> when polars is blocked) -- so Wave 2 Stage 6 (golden fallback port) is NOT needed.
+>
+> **REMAINING (scope-corrected):**
+> 1. **Drop the `#1747 [polars]` stopgap** -- NOT a ci.yml edit. The rust `bridge`
+>    (`packages/rust/extensions/bridge/src/convert.rs`) builds a POLARS DataFrame
+>    from JSON (`json_to_polars_df`) + imports polars for the result seam, so those
+>    lanes genuinely need polars until the bridge convert is arrow-ported
+>    (json->arrow). Same for the duckdb/dbt call sites if they build polars.
+>    Separate Rust effort; can't build/verify the bridge locally.
+> 2. **D6 deletion** -- move polars to a `goldenmatch[polars]` optional extra + drop
+>    from core deps (a 3.x minor, coordinated with goldencheck/goldenflow floors).
+> 3. **Release** goldenmatch + golden-suite lockstep + docs.
 
 ## Corrected premise (from the leak catalog, 2026-07-14)
 

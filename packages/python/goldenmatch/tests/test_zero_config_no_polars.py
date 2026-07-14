@@ -38,6 +38,16 @@ import pytest
 _PKG_ROOT = Path(__file__).parent.parent
 
 
+def _native_available() -> bool:
+    """Whether the native kernel is built in this environment (the endgame
+    tripwire runs GOLDENMATCH_NATIVE=1, so it needs native present)."""
+    try:
+        from goldenmatch.core._native_loader import native_available
+        return bool(native_available())
+    except Exception:  # noqa: BLE001 - absent loader => treat as no native
+        return False
+
+
 def _person_table(n: int = 48) -> pa.Table:
     firsts = ["ann", "ann", "bob", "bobby", "cara", "dan", "dan", "eve"]
     lasts = ["smith", "smith", "jones", "jones", "lee", "poe", "poe", "ray"]
@@ -210,33 +220,27 @@ def test_explicit_config_arrow_dedupe_is_polars_free():
 # -- Tier 3: zero-config polars-free (the TRUE endgame gate) ----------------
 
 
-@pytest.mark.xfail(
+@pytest.mark.skipif(
+    not _native_available(),
     reason=(
-        "`auto_configure_df` config-GENERATION is Polars-free on the arrow-native "
-        "path, now DEFAULT-ON (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default=1, "
-        "2026-07-14 -- indicators guards + exclusion / discriminative-veto / "
-        "source-partition detectors seam-ported, sample scoring on the arrow-native "
-        "bucket scorer; parity-gated in test_autoconfig_arrow_native_parity.py). The "
-        "ClusterFrames stage is arrow-native too (build_cluster_frames threads "
-        "backend='arrow'; the emitter is seam-routed -- see "
-        "test_cluster_frames_no_polars.py). Remaining zero-config polars leaks that "
-        "keep this endgame tripwire xfail (per the 2026-07-14 leak catalog): (1) the "
-        "GOLDEN fallback builder (golden.py build_golden_records_df / "
-        "_stable_value_expr) when native golden_fused declines -- Wave 2 Stage 6; and "
-        "(2) the quality / transform prep bridges (quality._scan_and_fix, "
-        "transform.run_transform pa->pl->pa) -- Wave 1 Stages 3-4. Flips green when "
-        "those land (plan: docs/superpowers/plans/"
-        "2026-07-14-goldenmatch-zero-config-arrow-polars-free.md)."
+        "the true zero-config polars-free tripwire needs the native kernel "
+        "(the subprocess runs GOLDENMATCH_NATIVE=1); skipped where native isn't "
+        "built (e.g. the main python matrix)."
     ),
-    strict=False,
 )
 def test_zero_config_dedupe_df_is_polars_free():
-    """SUBPROCESS, polars import BLOCKED: assert the native path is present, then
-    run ZERO-CONFIG `dedupe_df(pa.Table, config=None)` to completion WITHOUT
-    importing polars. The whole port's acceptance gate. Currently xfails because
-    `auto_configure_df` coerces a non-polars input to polars at its boundary until
-    the scoring spine (indicators guards + exclusion detectors +
-    `build_blocks(combined_lf)`, pipeline.py:2284) is arrow-ported."""
+    """SUBPROCESS, polars import BLOCKED: run ZERO-CONFIG `dedupe_df(pa.Table,
+    config=None)` to completion WITHOUT importing polars. The whole port's
+    acceptance gate -- now a REAL gate (was xfail before the arrow-native default
+    landed, 2026-07-14).
+
+    Flipped green by the W1 fixes (all merged): `auto_configure_df` stays
+    arrow-native by default (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1); the quality
+    fixer degrades to scan-only without polars (#1766); multi_pass blocking stays
+    on the seam (#1767); ClusterFrames + scoring (bucket) are arrow-native. The
+    transform prep + golden fallback the leak-catalog flagged have working arrow
+    fallbacks, so a polars-BLOCKED zero-config dedupe runs to completion. Plan:
+    docs/superpowers/plans/2026-07-14-goldenmatch-zero-config-arrow-polars-free.md."""
     body = """
         import os
         import pyarrow as pa
