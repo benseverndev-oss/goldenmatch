@@ -260,6 +260,19 @@ pub(crate) fn fs_level_from_sim(
 /// banding. Old wheels never see this kwarg (Python gates on the
 /// `FS_SUPPORTS_LEVEL_THRESHOLDS` capability flag).
 ///
+/// The `ne_*` kwargs (optional, all-or-none) carry Fellegi-Sunter negative
+/// evidence: `ne_values[k][r]` is NE field `k`'s POST-transform value for row
+/// `r`, `ne_scorer_ids`/`ne_thresholds`/`ne_weights` its scorer, firing
+/// threshold, and resolved fired-weight (normally negative). Firing follows
+/// `_ne_fired` (core/probabilistic.py:466) byte-for-byte: fires iff BOTH
+/// values are present AND non-empty (empty string = inconclusive — the
+/// deliberate NE null-handling that differs from regular fields'
+/// null -> level-0) AND similarity is STRICTLY below the threshold; a fired
+/// field adds `ne_weights[k]` to the pair's summed weight, otherwise it
+/// contributes exactly 0. `fs_normalize` is unchanged — the caller passes
+/// NE-aware `min_weight`/`weight_range`. Old wheels never see these kwargs
+/// (Python gates on the `FS_SUPPORTS_NE` capability flag).
+///
 /// Parity with the numpy path is within rapidfuzz tolerance (same as the
 /// weighted kernel) — a pair could differ only if its normalized score sits
 /// within that tolerance of `threshold`. Asserted in tests/test_native_parity.py.
@@ -269,6 +282,7 @@ pub(crate) fn fs_level_from_sim(
     row_ids, block_sizes, field_values, scorer_ids, levels, partial_thresholds,
     match_weights, calibrated, prior_w, min_weight, weight_range, threshold,
     exclude, level_thresholds=None,
+    ne_values=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
 ))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
@@ -286,6 +300,10 @@ pub fn score_block_pairs_fs(
     threshold: f64,
     exclude: Vec<(i64, i64)>,
     level_thresholds: Option<Vec<Option<Vec<f64>>>>,
+    ne_values: Option<Vec<Vec<Option<String>>>>,
+    ne_scorer_ids: Option<Vec<u8>>,
+    ne_thresholds: Option<Vec<f64>>,
+    ne_weights: Option<Vec<f64>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
     let n_fields = scorer_ids.len();
@@ -316,6 +334,54 @@ pub fn score_block_pairs_fs(
         Some(lt) => lt.iter().map(|ts| ts.as_deref()).collect(),
         None => vec![None; n_fields],
     };
+
+    // Negative-evidence kwargs: all four present or all four absent.
+    let n_present = [
+        ne_values.is_some(),
+        ne_scorer_ids.is_some(),
+        ne_thresholds.is_some(),
+        ne_weights.is_some(),
+    ]
+    .iter()
+    .filter(|&&p| p)
+    .count();
+    if n_present != 0 && n_present != 4 {
+        return Err(PyValueError::new_err(
+            "score_block_pairs_fs: ne_values, ne_scorer_ids, ne_thresholds and \
+             ne_weights must be passed together (all four or none)",
+        ));
+    }
+    let n_rows = row_ids.len();
+    if let (Some(nv), Some(ns), Some(nt), Some(nw)) =
+        (&ne_values, &ne_scorer_ids, &ne_thresholds, &ne_weights)
+    {
+        let n_ne = nv.len();
+        if ns.len() != n_ne || nt.len() != n_ne || nw.len() != n_ne {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_fs: ne_* lengths differ (ne_values {}, \
+                 ne_scorer_ids {}, ne_thresholds {}, ne_weights {})",
+                n_ne,
+                ns.len(),
+                nt.len(),
+                nw.len()
+            )));
+        }
+        for (k, vals) in nv.iter().enumerate() {
+            if vals.len() != n_rows {
+                return Err(PyValueError::new_err(format!(
+                    "score_block_pairs_fs: ne_values[{k}] length {} != row count {n_rows}",
+                    vals.len()
+                )));
+            }
+        }
+    }
+    // NE slices hoisted out of the rayon hot loop (same rationale as
+    // `field_thresholds` above); empty slices when NE is absent.
+    let ne_vals: &[Vec<Option<String>>] = ne_values.as_deref().unwrap_or(&[]);
+    let ne_scorer_ids_v: &[u8] = ne_scorer_ids.as_deref().unwrap_or(&[]);
+    let ne_thresholds_v: &[f64] = ne_thresholds.as_deref().unwrap_or(&[]);
+    let ne_weights_v: &[f64] = ne_weights.as_deref().unwrap_or(&[]);
+    let n_ne = ne_vals.len();
 
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
     let mut offset = 0usize;
@@ -355,6 +421,21 @@ pub fn score_block_pairs_fs(
                                     _ => 0,
                                 };
                                 total_weight += match_weights[f][level];
+                            }
+                            // Negative evidence: exact `_ne_fired` semantics
+                            // (core/probabilistic.py:466) — fires iff both
+                            // values present AND non-empty AND similarity
+                            // STRICTLY below the threshold; contributes
+                            // exactly 0 otherwise.
+                            for k in 0..n_ne {
+                                if let (Some(a), Some(b)) = (&ne_vals[k][i], &ne_vals[k][j]) {
+                                    if !a.is_empty()
+                                        && !b.is_empty()
+                                        && score_one(ne_scorer_ids_v[k], a, b) < ne_thresholds_v[k]
+                                    {
+                                        total_weight += ne_weights_v[k];
+                                    }
+                                }
                             }
                             let normalized = fs_normalize(
                                 total_weight,

@@ -28,6 +28,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Wheel-skew capability flag: Python's `_fs_native_eligible` gates
     // level_thresholds matchkeys on this (old wheels never see the kwarg).
     m.add("FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;
+    // Wheel-skew capability flag: Python's `_fs_native_eligible` gates
+    // negative-evidence matchkeys on this (old wheels never see the ne_* kwargs).
+    m.add("FS_SUPPORTS_NE", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
