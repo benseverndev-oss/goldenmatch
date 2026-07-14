@@ -19,6 +19,7 @@ from goldenmatch.core.probabilistic import (
     _fallback_result,
     _ne_fired,
     enforce_weight_monotonicity,
+    estimate_m_from_labels,
     train_em,
 )
 
@@ -342,7 +343,65 @@ class TestFallbackResultNe:
         assert result.match_weights["__ne__phone"] == [-3.0, 0.0]
 
 
-# ── 7. Without-NE behavior is unchanged ──────────────────────────────────────
+# ── 7. estimate_m_from_labels (the supervised twin) NE handling ──────────────
+
+
+class TestEstimateMFromLabelsNe:
+    def test_ne_m_from_labeled_fired_count_is_exact(self):
+        """20 labeled pairs, exactly 5 firing on phone -> m0 is the Laplace-
+        smoothed fired rate: (5 + smoothing) / (20 + 2*smoothing) with the
+        function's default smoothing=1.0, i.e. 6/22. The weight entry is
+        [log2(m0/u0), 0.0] with u0 the trained random-pair fired rate."""
+        import math
+
+        rows: list[dict] = []
+        labels: list[tuple[int, int]] = []
+        row_id = 1
+        # 20 labeled pairs: the first 5 differ on phone (NE fires), the
+        # remaining 15 share it (not fired). Names/zips vary per pair so the
+        # random-pair u sample sees a diverse background.
+        for i in range(20):
+            fn = _FIRST_NAMES[i % len(_FIRST_NAMES)]
+            ln = _SURNAMES[i % len(_SURNAMES)]
+            zip_ = _ZIPS[i % len(_ZIPS)]
+            if i < 5:
+                phones = [_phone(4_000_000 + i * 10), _phone(4_000_000 + i * 10 + 1)]
+            else:
+                phones = [_phone(5_000_000 + i)] * 2
+            pair_ids = []
+            for k in range(2):
+                rows.append({
+                    "__row_id__": row_id, "first_name": fn, "last_name": ln,
+                    "zip": zip_, "phone": phones[k],
+                })
+                pair_ids.append(row_id)
+                row_id += 1
+            labels.append((pair_ids[0], pair_ids[1]))
+        df = pl.DataFrame(rows)
+        mk = _make_ne_mk()
+
+        smoothing = 1.0  # the function's default; pinned here so the exact
+        result = estimate_m_from_labels(df, mk, labels, smoothing=smoothing)
+
+        expected_m0 = (5 + smoothing) / (20 + 2 * smoothing)  # 6/22
+        assert result.m_probs["__ne__phone"][0] == expected_m0
+        assert result.m_probs["__ne__phone"][1] == (15 + smoothing) / (20 + 2 * smoothing)
+
+        u0 = result.u_probs["__ne__phone"][0]
+        weights = result.match_weights["__ne__phone"]
+        assert weights[0] == math.log2(max(expected_m0, 1e-10) / max(u0, 1e-10))
+        assert weights[1] == 0.0  # the clamp, exactly
+
+    def test_penalty_bits_field_absent_from_supervised_result(self):
+        df, _blocks = _make_homonym_fixture()
+        labels = [(1, 2), (3, 4), (5, 6)]
+        mk = _make_ne_mk(penalty_bits=3.0)
+        result = estimate_m_from_labels(df, mk, labels)
+        assert "__ne__phone" not in result.m_probs
+        assert "__ne__phone" not in result.match_weights
+
+
+# ── 8. Without-NE behavior is unchanged ──────────────────────────────────────
 # Regular-field EM posteriors legitimately SHIFT when NE evidence enters the
 # E-step (the NE dimension contributes real log-likelihood mass), so this is
 # NOT pinned by a byte-identical with/without-NE comparison here. Instead,
