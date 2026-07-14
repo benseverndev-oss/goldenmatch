@@ -483,6 +483,24 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     em = ctx.em_model
     mk = ctx.upgraded_config.get_matchkeys()[0]
 
+    # Tripwire for the planned fan-out upgrade lever: this lever's per-pair
+    # weight sum and hand-rolled model min/max range below cover REGULAR
+    # fields only -- they do not include negative-evidence contributions
+    # (`__ne__<field>` entries / penalty_bits). Unreachable today
+    # (from_splink never emits negative_evidence), but the fan-out lever
+    # will emit exactly that shape; calibrating while ignoring NE weights
+    # would put the thresholds on the wrong scale. Warn + skip until this
+    # lever is taught fs_weight_range (core/probabilistic.py).
+    if mk.negative_evidence:
+        ctx.report.warn(
+            "upgrade:calibration",
+            "skipped: calibration does not yet account for negative_evidence "
+            "weights (the pair-weight sum and model range cover regular "
+            "fields only; see fs_weight_range) -- thresholds left unset",
+            mapped_to=mapped_to,
+        )
+        return
+
     # Mixed bare/trained input produces a PARTIAL imported model (import_em
     # skips bare comparisons with a warning), so em.match_weights does not
     # cover every matchkey field -- candidate pairs cannot be scored with

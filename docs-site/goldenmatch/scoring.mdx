@@ -155,7 +155,7 @@ Two ways to set the fired weight:
 
 `penalty` (the weighted/exact knob) and `penalty_bits` are mutually exclusive by matchkey type: weighted/exact matchkeys still require `penalty` and reject `penalty_bits`; probabilistic matchkeys reject `penalty` and accept `penalty_bits` (or neither, for EM-learned).
 
-An unregistered/unknown NE scorer on a probabilistic matchkey **fails loudly** at validation time — unlike the weighted path, which silently swallows a broken NE scorer and warns. This is intentional: FS negative evidence is new enough that a silent no-op would be worse than a hard error.
+An unregistered/unknown NE scorer on a probabilistic matchkey **fails loudly** at train/score time (`score_field` raises on unknown scorers; there is no `_NE_BROKEN` swallow on FS) — unlike the weighted path, which silently swallows a broken NE scorer and warns. This is intentional: FS negative evidence is new enough that a silent no-op would be worse than a hard error.
 
 Guards: the native kernel, the fused-match path, and the fast-path scorer all decline NE-bearing FS matchkeys (pure-Python fallback only; a kernel port is a future phase). Persisted/imported EM models trained before this feature (including imported Splink models) fail loudly on load if the matchkey has NE fields without `penalty_bits` and the model lacks the corresponding trained weights, rather than silently scoring NE at weight 0 — retrain, or set `penalty_bits` to bypass EM entirely. NE is not supported on the continuous/Winkler EM path (`train_em_continuous`), which rejects it with a clear error.
 

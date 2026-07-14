@@ -28,8 +28,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `match_weights["__ne__<field>"]` for every NE field without `penalty_bits`,
   so a model trained (or a Splink model imported) before this feature fails
   loudly instead of silently scoring NE at weight 0. An unregistered/unknown
-  NE scorer on FS fails loud at validation time — unlike weighted's swallow-
-  and-warn `_NE_BROKEN` fallback, this is intentional. Continuous/Winkler-path
+  NE scorer on FS fails loud at train/score time (`score_field` raises on
+  unknown scorers; no `_NE_BROKEN` swallow on FS) — unlike weighted's
+  swallow-and-warn fallback, this is intentional. Continuous/Winkler-path
   (`train_em_continuous`) NE is out of scope and rejected with a clear error.
   Supersedes the deferral in `docs/superpowers/specs/2026-05-21-ne-fs-investigation.md`
   (Wave D): that investigation judged the Bayesian-factor formulation correct

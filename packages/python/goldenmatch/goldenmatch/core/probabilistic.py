@@ -1864,7 +1864,9 @@ def vectorized_scorer_supported(scorer: str) -> bool:
 
 
 def _fs_vectorized_supported(mk: MatchkeyConfig) -> bool:
-    """Whether every scorer (mk) needs is expressible on the NxN matrix path.
+    """Whether every scorer the matchkey needs (regular fields +
+    negative-evidence fields) is expressible on the vectorized NxN matrix
+    path.
 
     Covers BOTH regular fields and NE fields: NE routes through the same
     matrix machinery (``_add_ne_matrix_contribution`` ->
