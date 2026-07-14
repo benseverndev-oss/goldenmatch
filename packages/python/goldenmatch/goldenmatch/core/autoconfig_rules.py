@@ -427,7 +427,8 @@ def rule_no_matches(
             # Identity column — try gentler alternatives before swap
             candidates.append(_with_lower_threshold(current, 0.05))
             candidates.append(_with_normalize_standardization(current, blocking_col))
-            df_cols = list(ctx._df.columns)
+            from goldenmatch.core.frame import to_frame as _tf_ac
+            df_cols = list(_tf_ac(ctx._df).columns)
             ortho = _orthogonal_key(current, df_cols)
             if ortho is not None:
                 candidates.append(_with_multi_pass(current, ortho))
@@ -1044,7 +1045,8 @@ def rule_cross_blocking_disagreement(
     if current.blocking is None or not current.blocking.keys:
         return None
     blocking_col = current.blocking.keys[0].fields[0]
-    df_cols = list(ctx._df.columns) if ctx._df is not None else []
+    from goldenmatch.core.frame import to_frame as _tf_ac2
+    df_cols = list(_tf_ac2(ctx._df).columns) if ctx._df is not None else []
     ortho = _orthogonal_key(current, df_cols)
     if ortho is None:
         return None

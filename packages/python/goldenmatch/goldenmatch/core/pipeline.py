@@ -3832,7 +3832,74 @@ def _run_match_pipeline(
     output. Both run_match() and run_match_df() delegate to this function.
     """
     memory_store = _open_memory_store(config)
-    # ── Step 2.5a: AUTO-FIX + VALIDATION ──
+    # Frame lane (arrow spine): when the caller handed us a seam Frame / pa.Table
+    # instead of a pl.LazyFrame, run the prep stages through the seam so the match
+    # pipeline stays polars-free -- mirrors _run_dedupe_pipeline's arrow prep
+    # (auto_fix -> validate -> standardize -> matchkeys -> domain -> precompute).
+    # quarantine_df_match is set on both lanes. The polars branch below is
+    # byte-identical to the classic path.
+    from goldenmatch.core.frame import is_polars_lazyframe as _is_pl_lf
+    from goldenmatch.core.frame import to_frame as _tf_match
+    from goldenmatch.core.matchkey import precompute_matchkey_transforms_frame
+
+    _match_arrow_lane = not _is_pl_lf(combined_lf) and not auto_config
+    if _match_arrow_lane:
+        _frame = _tf_match(combined_lf)
+        if config.validation and config.validation.auto_fix:
+            _fixed_native, _af_fixes = auto_fix_dataframe(_frame.native)
+            if _af_fixes:
+                logger.info("Auto-fix applied: %d fix type(s)", len(_af_fixes))
+            _frame = _tf_match(_fixed_native)
+        if config.validation and config.validation.rules:
+            _v_rules = [
+                ValidationRule(
+                    column=rc.column, rule_type=rc.rule_type,
+                    params=rc.params, action=rc.action,
+                )
+                for rc in config.validation.rules
+            ]
+            _valid_native, quarantine_df_match, _val_report = validate_dataframe(
+                _frame.native, _v_rules
+            )
+            logger.info(
+                "Validation: %d quarantined rows", _tf_match(quarantine_df_match).height
+            )
+            _frame = _tf_match(_valid_native)
+        else:
+            quarantine_df_match = None
+        if config.standardization and config.standardization.rules:
+            for _col, _std_names in config.standardization.rules.items():
+                if _col not in _frame.columns:
+                    continue
+                _frame = _frame.with_column(
+                    _col, _frame.derive_standardized_column(_col, _std_names)
+                )
+        _frame = _tf_match(_apply_domain_extraction(_frame.native, config))
+        _apply_memory_pre(memory_store, config, matchkeys)
+        for _mk in matchkeys:
+            if _mk.type != "exact":
+                continue
+            _frame = _frame.with_column(
+                f"__mk_{_mk.name}__",
+                _frame.derive_matchkey(
+                    [
+                        (f.field, list(f.transforms or []))
+                        for f in _mk.fields
+                        if f.field is not None
+                    ]
+                ),
+            )
+        combined_frame = precompute_matchkey_transforms_frame(_frame, matchkeys)
+        _run_auto_suggest(combined_frame.native, config)
+        return _run_match_scoring_and_output(
+            combined_frame, config, matchkeys, target_ids, memory_store,
+            quarantine_df_match,
+            output_matched=output_matched, output_unmatched=output_unmatched,
+            output_scores=output_scores, output_report=output_report,
+            match_mode=match_mode,
+        )
+
+    # ── Step 2.5a: AUTO-FIX + VALIDATION ── (classic polars lane)
     if config.validation and config.validation.auto_fix:
         combined_df_tmp = combined_lf.collect()
         combined_df_tmp, fix_log = auto_fix_dataframe(combined_df_tmp)
@@ -4099,6 +4166,201 @@ def _run_match_pipeline(
     }
 
 
+def _run_match_scoring_and_output(
+    combined_frame,
+    config: GoldenMatchConfig,
+    matchkeys: list,
+    target_ids: set,
+    memory_store,
+    quarantine_df_match,
+    *,
+    output_matched: bool = False,
+    output_unmatched: bool = False,
+    output_scores: bool = False,
+    output_report: bool = False,
+    match_mode: str = "best",
+) -> dict:
+    """Arrow-native match scoring + output (Frame lane).
+
+    Mirrors the polars scoring/output tail of ``_run_match_pipeline`` but threads
+    a seam ``Frame`` (``combined_frame``) so the path stays polars-free. Scoring
+    kernels (``find_exact_matches`` / ``build_blocks`` / block scorers) are
+    dual-rep and accept the seam frame; row/output bookkeeping runs on the arrow
+    native via ``to_pylist`` / pyarrow-compute. The classic polars tail is left
+    byte-identical.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    combined_native = combined_frame.native  # pa.Table
+
+    all_pairs: list[tuple[int, int, float]] = []
+    matched_pairs: set[tuple[int, int]] = set()
+
+    # Phase 1: exact matchkeys
+    for mk in matchkeys:
+        if mk.type == "exact":
+            pairs = find_exact_matches(combined_frame, mk)
+            if mk.negative_evidence:
+                from goldenmatch.core.scorer import (
+                    _apply_negative_evidence_to_exact_pairs,
+                )
+                pairs = _apply_negative_evidence_to_exact_pairs(
+                    pairs, mk, combined_native
+                )
+            pairs = [
+                (a, b, s) for a, b, s in pairs
+                if (a in target_ids) != (b in target_ids)
+            ]
+            all_pairs.extend(pairs)
+            for a, b, _s in pairs:
+                matched_pairs.add((min(a, b), max(a, b)))
+
+    # Phase 2: fuzzy (weighted) matchkeys
+    for mk in matchkeys:
+        if mk.type == "weighted":
+            if config.blocking is None:
+                continue
+            blocks = build_blocks(combined_frame, config.blocking)
+            block_scorer = _get_block_scorer(config)
+            pairs = block_scorer(blocks, mk, matched_pairs, target_ids=target_ids)
+            all_pairs.extend(pairs)
+
+    # Phase 2b: probabilistic (Fellegi-Sunter) matchkeys
+    for mk in matchkeys:
+        if mk.type == "probabilistic":
+            if config.blocking is None:
+                continue
+            from goldenmatch.core.blocker import collect_blocking_fields
+            from goldenmatch.core.probabilistic import (
+                load_or_train_em,
+                score_probabilistic_blocks_batched,
+            )
+            blocks = build_blocks(combined_frame, config.blocking)
+            blocking_fields = (
+                collect_blocking_fields(config.blocking) if config.blocking else []
+            )
+            em_result = load_or_train_em(
+                combined_native, mk, blocks=blocks, blocking_fields=blocking_fields
+            )
+            pairs = score_probabilistic_blocks_batched(
+                blocks, mk, em_result, matched_pairs
+            )
+            all_pairs.extend(pairs)
+            for a, b, _s in pairs:
+                matched_pairs.add((min(a, b), max(a, b)))
+
+    # Step 4.5: cross-encoder reranking (optional)
+    for mk in matchkeys:
+        if mk.type == "weighted" and mk.rerank:
+            all_pairs = rerank_top_pairs(all_pairs, combined_native, mk)
+            break
+
+    # Step 4.6: LLM scorer (optional)
+    if config.llm_scorer and config.llm_scorer.enabled and all_pairs:
+        if config.llm_scorer.mode == "cluster":
+            from goldenmatch.core.llm_cluster import llm_cluster_pairs
+            all_pairs = _unwrap_llm_pairs(
+                llm_cluster_pairs(all_pairs, combined_native, config=config.llm_scorer)
+            )
+        else:
+            from goldenmatch.core.llm_scorer import llm_score_pairs
+            all_pairs = _unwrap_llm_pairs(
+                llm_score_pairs(all_pairs, combined_native, config=config.llm_scorer)
+            )
+        all_pairs = [(a, b, s) for a, b, s in all_pairs if s > 0.5]
+
+    # Learning Memory: post-scoring corrections overlay
+    all_pairs, memory_stats = _apply_memory_post(
+        memory_store, config, combined_native, all_pairs
+    )
+
+    # Step 4.7: postflight (auto-config only; no-op otherwise)
+    all_pairs, postflight_report = _apply_postflight(
+        combined_native, config, all_pairs
+    )
+
+    # Step 5: normalize so the target id is always first
+    normalized: list[tuple[int, int, float]] = []
+    for a, b, score in all_pairs:
+        normalized.append((a, b, score) if a in target_ids else (b, a, score))
+
+    # Step 6: group by target, apply match_mode
+    target_matches: dict[int, list[tuple[int, float]]] = defaultdict(list)
+    for target_id, ref_id, score in normalized:
+        target_matches[target_id].append((ref_id, score))
+    if match_mode == "best":
+        for tid in target_matches:
+            target_matches[tid] = [max(target_matches[tid], key=lambda x: x[1])]
+
+    # Step 7: build output (row lookup via a {row_id: row} map from arrow)
+    _rows_by_id = {r["__row_id__"]: r for r in combined_native.to_pylist()}
+    matched_rows: list[dict] = []
+    all_scores: list[float] = []
+    for target_id, matches in target_matches.items():
+        target_row = _rows_by_id[target_id]
+        for ref_id, score in matches:
+            ref_row = _rows_by_id[ref_id]
+            row = {
+                "__target_row_id__": target_id,
+                "__ref_row_id__": ref_id,
+                "__match_score__": score,
+            }
+            for col, val in target_row.items():
+                if not col.startswith("__"):
+                    row[f"target_{col}"] = val
+            for col, val in ref_row.items():
+                if not col.startswith("__"):
+                    row[f"ref_{col}"] = val
+            matched_rows.append(row)
+            all_scores.append(score)
+
+    matched_tbl = pa.Table.from_pylist(matched_rows) if matched_rows else None
+
+    matched_target_ids = set(target_matches.keys())
+    unmatched_ids = target_ids - matched_target_ids
+    _unmatched_mask = pc.is_in(
+        combined_native.column("__row_id__"),
+        value_set=pa.array(sorted(unmatched_ids)),
+    )
+    unmatched_tbl = combined_native.filter(_unmatched_mask)
+
+    report = None
+    if output_report:
+        report = generate_match_report(
+            total_targets=len(target_ids),
+            matched=len(matched_target_ids),
+            unmatched=len(unmatched_ids),
+            scores=all_scores,
+        )
+
+    if output_matched or output_unmatched or output_scores:
+        run_name = config.output.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
+        fmt = config.output.format or "csv"
+        directory = config.output.directory or config.output.path or "."
+        if output_matched and matched_tbl is not None:
+            write_output(matched_tbl, directory, run_name, "matched", fmt)
+        if output_unmatched and unmatched_tbl.num_rows > 0:
+            write_output(unmatched_tbl, directory, run_name, "unmatched", fmt)
+        if output_scores and matched_tbl is not None:
+            write_output(matched_tbl, directory, run_name, "scores", fmt)
+
+    try:
+        _enqueue_stale_pairs(memory_stats, all_pairs, config)
+    finally:
+        if memory_store is not None:
+            memory_store.close()
+
+    return {
+        "matched": _dict_frame_to_arrow(matched_tbl),
+        "unmatched": _dict_frame_to_arrow(unmatched_tbl),
+        "report": report,
+        "quarantine": quarantine_df_match,
+        "postflight_report": postflight_report,
+        "memory_stats": memory_stats,
+    }
+
+
 def run_match_df(
     target_df: pl.DataFrame,
     reference_df: pl.DataFrame,
@@ -4109,6 +4371,47 @@ def run_match_df(
     auto_config_llm_provider: str | None = None,
 ) -> dict:
     """Run match pipeline on DataFrames directly (no file I/O)."""
+    # Frame lane (arrow): when both inputs are pa.Tables, build the combined
+    # frame with pyarrow (cast user columns to string, tag __source__, assign
+    # __row_id__ per source, concat) and thread a seam Frame through the
+    # arrow-native match pipeline -- polars-free. Byte-identical linkage to the
+    # polars path (parity-gated in tests/test_match_arrow_parity.py).
+    import pyarrow as _pa_m
+
+    if isinstance(target_df, _pa_m.Table) and isinstance(reference_df, _pa_m.Table):
+        import pyarrow.compute as _pc_m
+
+        from goldenmatch.core.frame import to_frame as _tf_rmd
+
+        def _prep_arrow(tbl, source, offset):
+            n = tbl.num_rows
+            arrs, names = [], []
+            for name in tbl.column_names:
+                if name.startswith("__"):
+                    continue
+                arrs.append(_pc_m.cast(tbl.column(name), _pa_m.string()))
+                names.append(name)
+            arrs.append(_pa_m.array([source] * n, type=_pa_m.string()))
+            names.append("__source__")
+            arrs.append(
+                _pa_m.array(list(range(offset, offset + n)), type=_pa_m.int64())
+            )
+            names.append("__row_id__")
+            return _pa_m.table(arrs, names=names), n
+
+        _t_tbl, _t_n = _prep_arrow(target_df, target_name, 0)
+        _r_tbl, _ = _prep_arrow(reference_df, reference_name, _t_n)
+        combined_tbl = _pa_m.concat_tables(
+            [_t_tbl, _r_tbl], promote_options="permissive"
+        )
+        target_ids_a = set(range(_t_n))
+        matchkeys_a = [] if auto_config else config.get_matchkeys()
+        return _run_match_pipeline(
+            _tf_rmd(combined_tbl), config, matchkeys_a, target_ids_a,
+            auto_config=auto_config,
+            auto_config_llm_provider=auto_config_llm_provider,
+        )
+
     # Cast all columns to string to keep schema consistent with dedupe_df's
     # pre-pipeline behaviour — prevents mixed-type errors in zero-config paths.
     target_df = target_df.cast(

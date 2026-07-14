@@ -925,7 +925,7 @@ class AutoConfigController:
                         )
                         _diag(
                             f"ExpandSample({_factor}x): resampled to "
-                            f"height={sample.height}",
+                            f"height={_tf_exp(sample).height}",  # arrow-port
                         )
                     else:
                         _diag(
