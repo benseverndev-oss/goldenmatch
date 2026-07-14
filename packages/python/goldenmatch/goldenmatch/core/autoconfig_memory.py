@@ -14,11 +14,9 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import polars as pl
-
     from goldenmatch.config.schemas import GoldenMatchConfig
 
 logger = logging.getLogger(__name__)
@@ -37,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_autoconfig_sig ON autoconfig_runs (profile_signat
 """
 
 
-def profile_signature(df: pl.DataFrame, *, mode: str = "dedupe") -> str:
+def profile_signature(df: Any, *, mode: str = "dedupe") -> str:
     """Compute a per-column-name signature for a DataFrame.
 
     Two frames hash to the same signature only when they have the same
@@ -56,11 +54,25 @@ def profile_signature(df: pl.DataFrame, *, mode: str = "dedupe") -> str:
     """
     # Sort by name so column ORDER doesn't change the signature; it's the
     # set of (name, dtype) pairs that matters.
-    pairs = sorted(
-        (c, str(df.schema[c]))
-        for c in df.columns
-        if not c.startswith("__")
-    )
+    # Dual-rep (Frame lane): df may be a pl.DataFrame or a pa.Table. Read the
+    # schema via the Arrow seam on the arrow lane so the path stays polars-free
+    # (D6), and keep the polars branch byte-identical (the cache key is
+    # dtype-string-sensitive, so the two lanes hash to distinct keys -- a benign
+    # cache miss for a local cross-run cache, never a correctness issue).
+    import pyarrow as _pa
+
+    if isinstance(df, _pa.Table):
+        pairs = sorted(
+            (f.name, str(f.type))
+            for f in df.schema
+            if not f.name.startswith("__")
+        )
+    else:
+        pairs = sorted(
+            (c, str(df.schema[c]))
+            for c in df.columns
+            if not c.startswith("__")
+        )
     key = (mode, tuple(pairs))
     return hashlib.sha256(repr(key).encode()).hexdigest()[:16]
 

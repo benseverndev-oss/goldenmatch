@@ -3784,11 +3784,8 @@ def auto_configure_df(
     _arrow_native_ac = os.environ.get(
         "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", "1"
     ).lower() in ("1", "true", "yes")
-    if _arrow_native_ac and (reference is not None or throughput is not None):
-        _warn_arrow_native_coerced_once(
-            "cross-source match (reference)" if reference is not None
-            else "throughput tier"
-        )
+    if _arrow_native_ac and throughput is not None:
+        _warn_arrow_native_coerced_once("throughput tier")
         _arrow_native_ac = False
     if not (
         _is_ray_boundary(df)
@@ -3836,11 +3833,15 @@ def auto_configure_df(
         # .height via the Frame seam; the controller consumes the arrow native.
         _n_rows_for_budget = to_frame(df).height
     if reference is not None:
-        if isinstance(reference, pl.LazyFrame):
-            reference = reference.collect()
-        elif not isinstance(reference, pl.DataFrame):
+        import pyarrow as _pa_ref
+
+        if isinstance(reference, _pa_ref.Table):
+            pass  # arrow reference flows natively (cross-source arrow lane)
+        elif is_polars_lazyframe(reference):
+            reference = cast("pl.LazyFrame", reference).collect()
+        elif not is_polars_dataframe(reference):
             raise TypeError(
-                f"reference requires pl.DataFrame or pl.LazyFrame, "
+                f"reference requires pl.DataFrame, pl.LazyFrame, or pa.Table, "
                 f"got {type(reference).__name__}"
             )
 
@@ -4648,7 +4649,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
 
 
 def auto_configure_probabilistic_df(
-    df: pl.DataFrame | pl.LazyFrame,
+    df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (arrow lane)
     llm_provider: str | None = None,
 ) -> GoldenMatchConfig:
     """Build a Fellegi-Sunter *probabilistic* config straight from a DataFrame.
@@ -4668,8 +4669,10 @@ def auto_configure_probabilistic_df(
     optimizer (spec ``2026-05-25-agentic-config-optimizer-design``) is the
     intended place to *search* weighted-vs-probabilistic empirically.
     """
-    if isinstance(df, pl.LazyFrame):
-        df = df.collect()
+    from goldenmatch.core.frame import is_polars_lazyframe as _is_pl_lf_prob
+
+    if _is_pl_lf_prob(df):
+        df = cast("pl.LazyFrame", df).collect()
 
     profiles = profile_columns(df, llm_provider=llm_provider)
     matchkeys = build_probabilistic_matchkeys(profiles)

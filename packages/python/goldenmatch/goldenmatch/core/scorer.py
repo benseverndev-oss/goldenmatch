@@ -1286,7 +1286,12 @@ def find_fuzzy_matches(
     # v1.11: Apply negative-evidence penalty for weighted matchkeys.
     # NE is per-pair (not vectorized), applied only when mk.negative_evidence is set.
     if mk.negative_evidence:
-        block_rows = block_df.to_dicts()
+        # Dual-rep: block_df may be a pl.DataFrame (to_dicts) or a pa.Table
+        # (to_pylist) on the arrow lane -- both yield a list[dict] of rows.
+        block_rows = (
+            block_df.to_dicts() if hasattr(block_df, "to_dicts")
+            else block_df.to_pylist()  # pyright: ignore[reportAttributeAccessIssue]
+        )
         ne_scores = []
         for i, j, s in zip(rows_idx, cols_idx, scores):
             row_a = block_rows[int(i)]
