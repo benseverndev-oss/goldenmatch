@@ -29,16 +29,23 @@ revision (convert.rs→arrow + local polars-free install) failed the `rust` lane
    to_pylist/to_dicts) at those 4 sites. (My local aux probe called the Python
    fns directly, bypassing the glue — that's why it missed these.)
 
-2. **Cross-source match is DELIBERATELY not arrow-native — REAL FEATURE WORK.**
-   `autoconfig.py:3787-3792` force-disables `_arrow_native_ac` whenever
-   `reference is not None` (the warn message: "cross-source match (reference) is
-   not arrow-native yet"), so the target coerces to polars at `autoconfig.py:3802`
-   (`import polars; pl.from_arrow`), AND the reference itself is REQUIRED to be a
-   `pl.DataFrame` (`autoconfig.py:3841` raises `TypeError` otherwise). So
-   `match_df` cannot run with polars absent until the cross-source/reference
-   controller path is arrow-ported. This is recall-correctness-sensitive feature
-   work in the match controller, part of the broader arrow-native wave — NOT a
-   bridge-stopgap fix. It is the true blocker for dropping `[polars]`.
+2. **The WHOLE MATCH PIPELINE is polars — a large parallel feature port.**
+   Traced from the CI failure through the layers: `autoconfig.py:3787-3792`
+   force-coerces the target to polars when a reference is present + `:3841`
+   requires a `pl.DataFrame` reference (both easy to relax). But that only exposes
+   the real wall: `pipeline.py::run_match_df` (line ~4114) casts via `pl.Utf8`,
+   `.lazy()`, `pl.lit`, `_add_row_ids`, `pl.concat` into a **combined
+   `pl.LazyFrame`**, and `pipeline.py::_run_match_pipeline` (line 3816) takes that
+   `combined_lf: pl.LazyFrame` and runs the entire match on it (`.collect()`/
+   `.lazy()`). **The match pipeline is a SEPARATE pipeline from the arrow-ported
+   `_run_dedupe_pipeline` and was never included in the dedupe arrow eviction
+   (W1–W5 + the D-descent, dozens of PRs).** Verified locally: relaxing the
+   autoconfig coerce just moves the crash into `run_match_df`'s `pl.Utf8` cast on
+   a `pa.Table`. Arrow-porting match = replicating the dedupe-pipeline arrow
+   effort for `run_match_df` + `_run_match_pipeline` — a large, recall-correctness-
+   sensitive feature with its own design + linkage-parity harness, NOT a
+   bridge-stopgap change. **This is the true, non-negotiable blocker: `[polars]`
+   cannot drop while the bridge exposes `match` and the match pipeline is polars.**
 
 3. **Probabilistic autoconfig v0 history** — `autoconfig_controller.py:390`
    `_run_pipeline_sample` on a probabilistic config imports polars building the
