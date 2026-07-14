@@ -289,6 +289,8 @@ export type { PairExplanation, ClusterExplanation } from "./explain.js";
 
 export {
   buildComparisonVector,
+  neFired,
+  fsWeightRange,
   trainEM,
   scoreProbabilistic,
   scoreProbabilisticPair,

@@ -11,7 +11,13 @@
  * Edge-safe: no `node:` imports, no numpy. Uses typed arrays where helpful.
  */
 
-import type { Row, MatchkeyConfig, MatchkeyField, ScoredPair } from "./types.js";
+import type {
+  Row,
+  MatchkeyConfig,
+  MatchkeyField,
+  NegativeEvidenceField,
+  ScoredPair,
+} from "./types.js";
 import { makeScoredPair } from "./types.js";
 import { scoreField, asString } from "./scorer.js";
 import { applyTransforms } from "./transforms.js";
@@ -301,6 +307,50 @@ export function buildComparisonVector(
     }
   }
   return levels;
+}
+
+// ---------------------------------------------------------------------------
+// Public: neFired
+// ---------------------------------------------------------------------------
+
+/**
+ * Return true iff a Fellegi-Sunter negative-evidence field FIRES for a pair.
+ *
+ * Mirrors Python `_ne_fired` (core/probabilistic.py): fires when BOTH values
+ * are present (post-transform, non-empty) AND the scorer similarity is
+ * STRICTLY below `ne.threshold`. Any missing/empty value on either side
+ * (including nulls — the deliberate NE null-handling that differs from
+ * regular FS fields, where null -> disagree/level-0) means the dimension does
+ * NOT fire: negative evidence never boosts a pair, so an inconclusive
+ * comparison must not count against a match either.
+ *
+ * Uses the same transform/scorer machinery as the weighted-NE path
+ * (`applyNegativeEvidence` in autoconfigNegativeEvidence.ts):
+ * asString -> applyTransforms -> scoreField, with unknown scorers skipped
+ * defensively (not fired).
+ */
+export function neFired(
+  rowA: Row,
+  rowB: Row,
+  ne: NegativeEvidenceField,
+): boolean {
+  let valA = asString(rowA[ne.field]);
+  let valB = asString(rowB[ne.field]);
+  if (valA === null || valB === null) return false;
+  if (ne.transforms.length > 0) {
+    valA = applyTransforms(valA, ne.transforms);
+    valB = applyTransforms(valB, ne.transforms);
+  }
+  if (!valA || !valB) return false;
+  let sim: number | null;
+  try {
+    sim = scoreField(valA, valB, ne.scorer);
+  } catch {
+    // Unknown scorer -> not fired (defensive; Python `score_field` parity).
+    return false;
+  }
+  if (sim === null) return false;
+  return sim < ne.threshold;
 }
 
 // ---------------------------------------------------------------------------
@@ -850,6 +900,55 @@ export function trainEM(
 }
 
 // ---------------------------------------------------------------------------
+// Public: fsWeightRange
+// ---------------------------------------------------------------------------
+
+/**
+ * Achievable Fellegi-Sunter total-weight range for normalization.
+ *
+ * Mirrors Python `fs_weight_range` (core/probabilistic.py): centralizes the
+ * min/max weight-sum computation previously hand-rolled at every scoring
+ * site — a missed site silently produced out-of-[0,1] normalized scores as
+ * soon as an NE field fired.
+ *
+ * Regular fields: sum(min)/sum(max) over `em.matchWeights[f.field]`, with
+ * missing/empty entries skipped (unchanged pre-NE behavior).
+ *
+ * NE fields (`mk.negativeEvidence`):
+ * - `penaltyBits` set: contributes `(-abs(penaltyBits), 0)` directly — the
+ *   fixed-override case needs no EM entry.
+ * - else: min/max over the EM-learned `matchWeights["__ne__<field>"]` entry
+ *   (stored as `[wFired, 0]`, so this reproduces `(min(wFired, 0),
+ *   max(wFired, 0))` regardless of sign).
+ * - An NE field with neither (shouldn't survive `validateEmResultFor`) is
+ *   defensively skipped — contributes `(0, 0)` rather than throwing.
+ */
+export function fsWeightRange(
+  em: EMResult,
+  mk: MatchkeyConfig,
+): { minWeight: number; maxWeight: number } {
+  let minWeight = 0;
+  let maxWeight = 0;
+  for (const f of mk.fields) {
+    const w = em.matchWeights[f.field];
+    if (!w || w.length === 0) continue;
+    maxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
+    minWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
+  }
+  for (const ne of mk.negativeEvidence ?? []) {
+    if (ne.penaltyBits !== undefined) {
+      minWeight += -Math.abs(ne.penaltyBits);
+      continue;
+    }
+    const entry = em.matchWeights[`__ne__${ne.field}`];
+    if (!entry || entry.length === 0) continue;
+    maxWeight += entry.reduce((m, v) => (v > m ? v : m), -Infinity);
+    minWeight += entry.reduce((m, v) => (v < m ? v : m), Infinity);
+  }
+  return { minWeight, maxWeight };
+}
+
+// ---------------------------------------------------------------------------
 // Public: scoreProbabilistic
 // ---------------------------------------------------------------------------
 
@@ -878,15 +977,8 @@ export function scoreProbabilistic(
     mk.type === "probabilistic" ? mk.linkThreshold : undefined;
   const threshold = options?.threshold ?? linkThreshold ?? 0.5;
 
-  // Min/max possible weight totals for normalization.
-  let maxWeight = 0;
-  let minWeight = 0;
-  for (const f of fields) {
-    const w = em.matchWeights[f.field];
-    if (!w || w.length === 0) continue;
-    maxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
-    minWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
-  }
+  // Min/max possible weight totals for normalization (NE-aware envelope).
+  const { minWeight, maxWeight } = fsWeightRange(em, mk);
   const weightRange = maxWeight - minWeight;
 
   const rowIds: number[] = [];
@@ -945,14 +1037,7 @@ export function scoreProbabilisticPair(
   const fields = mk.fields;
   if (fields.length === 0) return 0.5;
 
-  let maxWeight = 0;
-  let minWeight = 0;
-  for (const f of fields) {
-    const w = em.matchWeights[f.field];
-    if (!w || w.length === 0) continue;
-    maxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
-    minWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
-  }
+  const { minWeight, maxWeight } = fsWeightRange(em, mk);
   const weightRange = maxWeight - minWeight;
   if (weightRange <= 0) return 0.5;
 
