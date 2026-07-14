@@ -158,6 +158,87 @@ def test_router_falls_to_scalar_for_ne_with_unsupported_ne_scorer(monkeypatch):
     assert scorer.__name__ == "_scalar"
 
 
+def test_batched_scorer_declines_vec_for_ne_with_unsupported_ne_scorer(monkeypatch):
+    """The batched sibling of the router test above:
+    ``score_probabilistic_blocks_batched`` has its OWN ``use_vec`` computation
+    (now the shared ``_fs_vectorized_supported``); pre-fix it checked only
+    ``mk.fields``, so an NE field with a matrix-incapable scorer
+    (record_embedding) wrongly took the SxS batch path and crashed in
+    ``_field_score_matrix_dedup`` (ValueError: unknown fuzzy scorer) on a live
+    pipeline.py path. Pins: (1) the batched vectorized unit scorer is never
+    selected for such a matchkey, (2) no crash, (3) the scalar fallback scores
+    correctly (NE suppresses the differing-value pair; same-value pair kept).
+
+    A minimal score_pair-only plugin is registered under 'record_embedding'
+    (restored in ``finally``) so the scalar fallback can resolve the scorer the
+    way a live pipeline with the embedding plugin registered does -- without
+    the spy in (1) that registration would let the pre-fix double-loop matrix
+    fallback pass vacuously.
+    """
+    import polars as pl
+    from goldenmatch.core import probabilistic as p
+    from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.plugins.registry import PluginRegistry
+
+    monkeypatch.setattr(p, "_fs_native_enabled", lambda: False)  # isolate use_vec gate
+    monkeypatch.setenv("GOLDENMATCH_FS_WORKERS", "1")
+
+    def _never_batched(*a, **kw):
+        raise AssertionError(
+            "score_probabilistic_vectorized_batch must not be selected for a "
+            "matchkey whose NE scorer is not vectorized_scorer_supported"
+        )
+
+    monkeypatch.setattr(p, "score_probabilistic_vectorized_batch", _never_batched)
+
+    class _ExactLikeScorer:
+        name = "record_embedding"
+
+        def score_pair(self, a, b):
+            if a is None or b is None:
+                return None
+            return 1.0 if a == b else 0.0
+
+    reg = PluginRegistry.instance()
+    prior = reg.get_scorer("record_embedding")
+    reg.register_scorer("record_embedding", _ExactLikeScorer())
+    try:
+        mk = _mk(
+            field="name", scorer="exact", levels=2,
+            negative_evidence=[
+                NegativeEvidenceField(
+                    field="emb", scorer="record_embedding", threshold=1.0, penalty_bits=20.0,
+                ),
+            ],
+        )
+        mk.link_threshold = 0.5
+        em = EMResult(
+            m_probs={"name": [0.1, 0.9]}, u_probs={"name": [0.9, 0.1]},
+            match_weights={"name": [-3.0, 3.0]},
+            converged=True, iterations=1, proportion_matched=0.1,
+        )
+        df = pl.DataFrame({
+            "__row_id__": [0, 1, 2, 3],
+            "name": ["alice"] * 4,
+            "city": ["springfield"] * 4,
+            # rows 0/1 share emb (NE never fires); rows 2/3 differ from
+            # everyone (NE fires on every pair involving them).
+            "emb": ["X", "X", "Y", "Z"],
+        })
+        blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["city"])])
+        blocks = build_blocks(df.lazy(), blocking)
+        pairs = p.score_probabilistic_blocks_batched(blocks, mk, em, set())
+        kept = {(a, b) for a, b, _s in pairs}
+        # weights: agree=+3; fired NE adds -20 -> normalized (3-20+23)/26 ~ 0.23
+        # < 0.5 suppressed; un-fired pair normalizes to 1.0 -> kept.
+        assert kept == {(0, 1)}
+    finally:
+        if prior is None:
+            reg._scorers.pop("record_embedding", None)
+        else:
+            reg._scorers["record_embedding"] = prior
+
+
 # ── 4. match_fused_fs_ready: False on NE, True on plain probabilistic ───────
 
 

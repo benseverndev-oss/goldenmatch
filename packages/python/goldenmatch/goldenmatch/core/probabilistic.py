@@ -1863,6 +1863,25 @@ def vectorized_scorer_supported(scorer: str) -> bool:
     return scorer not in ("embedding", "record_embedding")
 
 
+def _fs_vectorized_supported(mk: MatchkeyConfig) -> bool:
+    """Whether every scorer (mk) needs is expressible on the NxN matrix path.
+
+    Covers BOTH regular fields and NE fields: NE routes through the same
+    matrix machinery (``_add_ne_matrix_contribution`` ->
+    ``_field_score_matrix_dedup``), so an NE scorer the matrix path can't
+    express (embedding / record_embedding) must force the scalar path too,
+    mirroring how an unsupported REGULAR field scorer already does. The ONE
+    shared gate for every use_vec decision -- a per-site copy that checks
+    only ``mk.fields`` crashes in ``_field_score_matrix_dedup`` as soon as
+    an NE field carries a model-backed scorer.
+    """
+    return all(
+        vectorized_scorer_supported(f.scorer) for f in mk.fields
+    ) and all(
+        vectorized_scorer_supported(ne.scorer) for ne in (mk.negative_evidence or [])
+    )
+
+
 def score_probabilistic_vectorized(
     block_df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -2104,7 +2123,7 @@ def score_probabilistic_blocks_batched(
     use_vec = (
         not _fs_native_eligible(mk)
         and _fs_vectorized_enabled()
-        and all(vectorized_scorer_supported(f.scorer) for f in mk.fields)
+        and _fs_vectorized_supported(mk)
     )
     base_excl = set(exclude_pairs)
 
@@ -2371,16 +2390,7 @@ def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
             return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
         return _native
 
-    # NE fields also route through the vectorized matrix path
-    # (_add_ne_matrix_contribution -> _field_score_matrix_dedup) when use_vec
-    # is chosen -- an NE scorer the matrix path can't express (embedding /
-    # record_embedding) must force the scalar path too, mirroring how an
-    # unsupported REGULAR field scorer already does.
-    use_vec = _fs_vectorized_enabled() and all(
-        vectorized_scorer_supported(f.scorer) for f in mk.fields
-    ) and all(
-        vectorized_scorer_supported(ne.scorer) for ne in (mk.negative_evidence or [])
-    )
+    use_vec = _fs_vectorized_enabled() and _fs_vectorized_supported(mk)
     if use_vec:
         def _scorer(block_df, exclude_pairs=None):
             return score_probabilistic_vectorized(block_df, mk, em_result, exclude_pairs)
