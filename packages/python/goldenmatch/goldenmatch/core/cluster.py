@@ -784,13 +784,18 @@ def _emit_cluster_profile_frames(
     if not _emitter_stack.get():
         return  # fast path: no capture active
 
-    import polars as _pl
+    # arrow-port (ClusterFrames eviction): this telemetry emitter runs during the
+    # autoconfig sample capture, where metadata/assignments are arrow on the
+    # arrow-native lane -- route every read through the Frame seam so it never
+    # imports polars / subscripts a pa.Table. Byte-identical on the polars path.
+    from goldenmatch.core.frame import to_frame as _tf_prof
 
-    if metadata.is_empty():
+    _mf = _tf_prof(metadata)
+    if _mf.height == 0:
         current_emitter().set_cluster(ClusterProfile())
         return
 
-    sizes = sorted(metadata["size"].to_list())
+    sizes = sorted(_mf.column("size").to_list())
 
     def percentile(xs: list, q: float) -> int:
         if not xs:
@@ -799,14 +804,15 @@ def _emit_cluster_profile_frames(
         return xs[idx]
 
     confidences = sorted(
-        v for v in metadata["confidence"].to_list() if v is not None
+        v for v in _mf.column("confidence").to_list() if v is not None
     )
 
     members_by_cluster: dict[int, list[int]] = {}
-    if not assignments.is_empty():
+    _af = _tf_prof(assignments)
+    if _af.height > 0:
         for cid, mid in zip(
-            assignments["cluster_id"].to_list(),
-            assignments["member_id"].to_list(),
+            _af.column("cluster_id").to_list(),
+            _af.column("member_id").to_list(),
             strict=True,
         ):
             members_by_cluster.setdefault(int(cid), []).append(int(mid))
@@ -829,11 +835,11 @@ def _emit_cluster_profile_frames(
     threshold = min(aggregated_scores.values()) if aggregated_scores else 0.5
 
     oversized_count = int(
-        metadata.filter(_pl.col("oversized")).height
+        _mf.filter_mask(_mf.column("oversized")).height
     )
 
     profile = ClusterProfile(
-        n_clusters=metadata.height,
+        n_clusters=_mf.height,
         cluster_size_p50=percentile(sizes, 0.50),
         cluster_size_p99=percentile(sizes, 0.99),
         cluster_size_max=sizes[-1] if sizes else 0,
