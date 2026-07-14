@@ -230,10 +230,18 @@ class ControllerTab(Static):
             if field_bits:
                 lines.append(f"    [dim]{' '.join(field_bits)}[/dim]")
             for nf in ne:
+                # weighted/exact NE carries a flat penalty; probabilistic NE
+                # carries penalty_bits (fixed LLR override) or neither
+                # (EM-learned weight).
+                if nf.penalty is not None:
+                    penalty_str = f"penalty [magenta]-{nf.penalty:.2f}[/]"
+                elif getattr(nf, "penalty_bits", None) is not None:
+                    penalty_str = f"penalty_bits [magenta]-{abs(nf.penalty_bits):.1f}[/]"
+                else:
+                    penalty_str = "weight [magenta]EM-learned[/]"
                 lines.append(
                     f"    [magenta]NE[/] {nf.field} · {nf.scorer} · "
-                    f"threshold {nf.threshold:.2f} · "
-                    f"penalty [magenta]-{nf.penalty:.2f}[/]"
+                    f"threshold {nf.threshold:.2f} · {penalty_str}"
                 )
         return "\n".join(lines)
 

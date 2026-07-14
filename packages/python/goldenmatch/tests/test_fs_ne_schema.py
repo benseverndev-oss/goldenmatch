@@ -128,3 +128,66 @@ def test_weighted_ne_round_trip_unchanged():
     ]
     assert dumped["type"] == "weighted"
     assert dumped["threshold"] == 0.85
+
+
+# ── Render/telemetry surfaces must not crash on probabilistic NE shapes ─────
+# (penalty=None is now a valid schema state; these surfaces previously did
+# float(field.penalty) / f"-{nf.penalty:.2f}" unconditionally.)
+
+
+class _StubConfig:
+    def __init__(self, matchkeys):
+        self._matchkeys = matchkeys
+
+    def get_matchkeys(self):
+        return self._matchkeys
+
+
+def _render_fixture_matchkeys() -> list[MatchkeyConfig]:
+    """One matchkey per NE shape: weighted+penalty, probabilistic+penalty_bits,
+    probabilistic EM-learned (neither set)."""
+    return [
+        _mk("weighted", penalty=0.4),
+        _mk("probabilistic", penalty_bits=3.0),
+        _mk("probabilistic"),
+    ]
+
+
+def test_web_telemetry_negative_evidence_handles_all_ne_shapes():
+    from goldenmatch.web.controller_telemetry import _negative_evidence
+
+    out = _negative_evidence(_StubConfig(_render_fixture_matchkeys()))
+    assert len(out) == 3
+    by_source = {row["weight_source"]: row for row in out}
+    assert set(by_source) == {"penalty", "penalty_bits", "em_learned"}
+    assert all(row["field"] == "phone" for row in out)
+    assert by_source["penalty"]["penalty"] == 0.4
+    assert by_source["penalty"]["penalty_bits"] is None
+    assert by_source["penalty_bits"]["penalty"] is None
+    assert by_source["penalty_bits"]["penalty_bits"] == 3.0
+    assert by_source["em_learned"]["penalty"] is None
+    assert by_source["em_learned"]["penalty_bits"] is None
+
+
+def test_cli_controller_render_negative_evidence_handles_all_ne_shapes():
+    from goldenmatch.cli._controller_render import _ne_penalty_label, _negative_evidence
+
+    table = _negative_evidence(_StubConfig(_render_fixture_matchkeys()))
+    assert table is not None  # built without crashing on penalty=None
+    labels = [_ne_penalty_label(ne) for mk in _render_fixture_matchkeys()
+              for ne in (mk.negative_evidence or [])]
+    assert labels == ["-0.40", "-3.0 bits", "EM-learned"]
+
+
+def test_tui_controller_tab_render_committed_handles_all_ne_shapes():
+    textual = pytest.importorskip("textual")  # noqa: F841
+    from goldenmatch.tui.engine import ControllerTelemetry
+    from goldenmatch.tui.tabs.controller_tab import ControllerTab
+
+    t = ControllerTelemetry(committed_config=_StubConfig(_render_fixture_matchkeys()))
+    # _render_committed only reads `t`; call unbound so no widget mount needed.
+    rendered = ControllerTab._render_committed(None, t)  # type: ignore[arg-type]
+    assert "phone" in rendered
+    assert "penalty" in rendered            # weighted flat penalty
+    assert "penalty_bits" in rendered       # probabilistic fixed override
+    assert "EM-learned" in rendered         # probabilistic learned weight

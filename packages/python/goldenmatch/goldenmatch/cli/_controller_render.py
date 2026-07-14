@@ -143,6 +143,21 @@ def _committed_matchkeys(committed_config: Any) -> RenderableType | None:
     return table
 
 
+def _ne_penalty_label(nf: Any) -> str:
+    """Truthful penalty display for all three NE shapes.
+
+    weighted/exact carry a flat ``penalty``; probabilistic NE carries either
+    a fixed ``penalty_bits`` override or nothing (EM-learned weight).
+    """
+    penalty = getattr(nf, "penalty", None)
+    if penalty is not None:
+        return f"-{penalty:.2f}"
+    penalty_bits = getattr(nf, "penalty_bits", None)
+    if penalty_bits is not None:
+        return f"-{abs(penalty_bits):.1f} bits"
+    return "EM-learned"
+
+
 def _negative_evidence(committed_config: Any) -> RenderableType | None:
     if committed_config is None:
         return None
@@ -158,7 +173,7 @@ def _negative_evidence(committed_config: Any) -> RenderableType | None:
                 nf.field,
                 nf.scorer,
                 f"{nf.threshold:.2f}",
-                f"-{nf.penalty:.2f}",
+                _ne_penalty_label(nf),
             ))
     if not rows:
         return None

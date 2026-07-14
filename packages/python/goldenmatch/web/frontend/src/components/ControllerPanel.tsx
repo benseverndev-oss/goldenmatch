@@ -186,10 +186,24 @@ function CommittedConfig({
                     {neFields.map((nf, i) => (
                       <li key={i} className="font-mono text-ink-600">
                         {nf.field} · {nf.scorer} · threshold{" "}
-                        {nf.threshold.toFixed(2)} · penalty{" "}
-                        <span className="text-violet-700">
-                          -{nf.penalty.toFixed(2)}
-                        </span>
+                        {nf.threshold.toFixed(2)} ·{" "}
+                        {nf.penalty != null ? (
+                          <>
+                            penalty{" "}
+                            <span className="text-violet-700">
+                              -{nf.penalty.toFixed(2)}
+                            </span>
+                          </>
+                        ) : nf.penalty_bits != null ? (
+                          <>
+                            penalty_bits{" "}
+                            <span className="text-violet-700">
+                              -{Math.abs(nf.penalty_bits).toFixed(1)}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-violet-700">EM-learned</span>
+                        )}
                       </li>
                     ))}
                   </ul>
