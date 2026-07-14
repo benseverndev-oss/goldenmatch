@@ -4,6 +4,17 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Added
+- **Fellegi-Sunter negative evidence** (full mirror of Python #1764): probabilistic matchkeys now honor `negative_evidence` end-to-end. `trainEM` learns each penalty-bits-free NE field as a constrained 2-state dimension (separate NE matrix, u from the same random-pair sample, full likelihood inside the EM loop, `[wFired, 0.0]` clamp applied at STORAGE only under `__ne__<field>`); scoring (`scoreProbabilistic` / `scoreProbabilisticPair`) adds the fired weight (or `-abs(penalty_bits)` for the fixed override) and normalizes against the NE-aware `fsWeightRange` envelope; `validateEmResultFor` requires a 2-entry `__ne__<field>` model entry per EM-learned NE field; the tiny-dataset fallback ships Python's exact NE entries (`[-3.0, 0.0]`). New exports: `neFired`, `fsWeightRange`, `NegativeEvidenceUnsupportedError`.
+- Loader/validation matrix for `negative_evidence`: the config loader now PARSES `negative_evidence` for all three matchkey types (previously it was silently dropped for every type — weighted/exact NE via YAML/JSON configs was lost too, a pre-existing bug fixed here) and enforces the per-type knob matrix: weighted/exact require `penalty` and reject `penalty_bits`; probabilistic rejects `penalty` and accepts `penalty_bits` or neither (the EM-learned shape).
+- Cross-surface parity: a committed Python-trained fixture (`tests/parity/fs-negative-evidence-fixtures.json`) is re-scored in TS at FULL float equality (EM-learned and penalty-bits variants), plus a TS homonym E2E mirroring the Python #1764 success bar.
+
+### Changed
+- **Loud decline instead of silent mis-scoring.** This port opened by making every FS entry point throw `NegativeEvidenceUnsupportedError` on NE-bearing probabilistic matchkeys (before it, a Python-authored NE config consumed in TS scored WITHOUT the veto and without warning), then lifted the throws as the capability landed. Two declines are PERMANENT, matching Python: the continuous (Winkler) path (`trainEMContinuous` / `scoreProbabilisticContinuous`) rejects NE, and `derive_from` negative evidence is rejected at the loader (goldenmatch-js has no derived-column materialization — materialize the column in your data, or use the Python runtime).
+- WASM: documented no-op — no FS scoring path exists in WASM, so negative evidence changes nothing there (the PR #1755 precedent).
+
 ## [1.2.0] - 2026-07-13
 
 ### Added

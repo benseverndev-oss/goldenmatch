@@ -981,10 +981,10 @@ export function trainEM(
     // apply — an NE dimension is never a blocking key.
     for (let j = 0; j < emNeFields.length; j++) {
       const ne = emNeFields[j]!;
-      const counts = [0, 0];
-      for (let i = 0; i < nPairs; i++) counts[neMatrix[i]![j]!]! += posteriors[i]!;
+      const newM = [0, 0];
+      for (let i = 0; i < nPairs; i++) newM[neMatrix[i]![j]!]! += posteriors[i]!;
       const denom = totalMatch + 2 * 1e-6;
-      mNe[ne.field] = [(counts[0]! + 1e-6) / denom, (counts[1]! + 1e-6) / denom];
+      mNe[ne.field] = [(newM[0]! + 1e-6) / denom, (newM[1]! + 1e-6) / denom];
     }
 
     // Convergence: max m delta INCLUDING NE dims (mirrors Python train_em).
@@ -1035,6 +1035,10 @@ export function trainEM(
   // or an inconclusive comparison never boosts the score, only a confident
   // disagreement subtracts from it. Applied at STORAGE ONLY — the EM loop
   // above always saw the full 2-state likelihood.
+  // Porting note: Python's train_em ends with an optional monotonicity
+  // repair that SKIPS `__ne__` keys (they are [fired, not_fired]-ordered,
+  // not level-ordered). TS has no monotonicity guard today; any future port
+  // of it must skip `__ne__` keys the same way.
   for (const ne of emNeFields) {
     const key = `__ne__${ne.field}`;
     m[key] = [...mNe[ne.field]!];
@@ -1238,8 +1242,8 @@ export function scoreProbabilisticPair(
  * `matchWeights["__ne__<field>"] = [-3.0, 0.0]` (m=0.0625, u=0.5 ->
  * log2(0.0625/0.5) == -3.0 exactly -- consistent with a symmetric
  * u=[0.5, 0.5] non-match prior). penaltyBits NE fields need no EM entry
- * (fixed override). Exported for tests/T5; production callers reach it
- * through `trainEM`.
+ * (fixed override). Exported for tests; in-module callers (`trainEM`) reach
+ * it directly.
  */
 export function fallbackResult(mk: MatchkeyConfig): EMResult {
   const m: Record<string, number[]> = {};

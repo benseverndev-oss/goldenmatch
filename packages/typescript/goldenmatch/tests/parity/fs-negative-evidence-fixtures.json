@@ -1,0 +1,832 @@
+{
+  "generator": "scratchpad gen_fs_ne_parity_fixtures.py (not committed): Python train_em (random-pair path, defaults, seed=42) + score_pair_probabilistic scalar path, GOLDENMATCH_FS_CALIBRATED/GOLDENMATCH_FS_MONOTONIC unset, goldenmatch @ ts-fs-ne branch 2026-07-14",
+  "rows": [
+    {
+      "city": "Boston",
+      "given_name": "Jonathan",
+      "phone": "5551000000",
+      "surname": "Smith"
+    },
+    {
+      "city": "Boston",
+      "given_name": "Jonathanx",
+      "phone": "5551000000",
+      "surname": "Smith"
+    },
+    {
+      "city": "Denver",
+      "given_name": "Michael",
+      "phone": null,
+      "surname": "Smith"
+    },
+    {
+      "city": "Denver",
+      "given_name": "Michaelx",
+      "phone": null,
+      "surname": "Smith"
+    },
+    {
+      "city": "Austin",
+      "given_name": "Robert",
+      "phone": "-",
+      "surname": "Smith"
+    },
+    {
+      "city": "Austin",
+      "given_name": "Robertx",
+      "phone": "5551000004",
+      "surname": "Smith"
+    },
+    {
+      "city": "Seattle",
+      "given_name": "Susan",
+      "phone": "5552000006",
+      "surname": "Smith"
+    },
+    {
+      "city": "Seattle",
+      "given_name": "Susan",
+      "phone": "5552000007",
+      "surname": "Smith"
+    },
+    {
+      "city": "Phoenix",
+      "given_name": "Karen",
+      "phone": "5551000008",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Phoenix",
+      "given_name": "Karenx",
+      "phone": "5551000008",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Atlanta",
+      "given_name": "David",
+      "phone": "5551000010",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Atlanta",
+      "given_name": "Davidx",
+      "phone": "5551000010",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Portland",
+      "given_name": "Linda",
+      "phone": "5551000012",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Portland",
+      "given_name": "Lindax",
+      "phone": "5551000012",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Chicago",
+      "given_name": "Steven",
+      "phone": "5552000014",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Chicago",
+      "given_name": "Steven",
+      "phone": "5552000015",
+      "surname": "Johnson"
+    },
+    {
+      "city": "Miami",
+      "given_name": "Nancy",
+      "phone": "5551000016",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Miami",
+      "given_name": "Nancyx",
+      "phone": "5551000016",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Dallas",
+      "given_name": "Brian",
+      "phone": "5551000018",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Dallas",
+      "given_name": "Brianx",
+      "phone": "5551000018",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Newark",
+      "given_name": "Patricia",
+      "phone": "5551000020",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Newark",
+      "given_name": "Patriciax",
+      "phone": "5551000020",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Tampa",
+      "given_name": "Kevin",
+      "phone": "5552000022",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Tampa",
+      "given_name": "Kevin",
+      "phone": "5552000023",
+      "surname": "Garcia"
+    },
+    {
+      "city": "Reno",
+      "given_name": "Laura",
+      "phone": "5551000024",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Reno",
+      "given_name": "Laurax",
+      "phone": "5551000024",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Salem",
+      "given_name": "Edward",
+      "phone": "5551000026",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Salem",
+      "given_name": "Edwardx",
+      "phone": "5551000026",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Fresno",
+      "given_name": "Diane",
+      "phone": "5551000028",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Fresno",
+      "given_name": "Dianex",
+      "phone": "5551000028",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Toledo",
+      "given_name": "Gregory",
+      "phone": "5552000030",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Toledo",
+      "given_name": "Gregory",
+      "phone": "5552000031",
+      "surname": "Nguyen"
+    },
+    {
+      "city": "Akron",
+      "given_name": "Sandra",
+      "phone": "5551000032",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Akron",
+      "given_name": "Sandrax",
+      "phone": "5551000032",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Eugene",
+      "given_name": "Peter",
+      "phone": "5551000034",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Eugene",
+      "given_name": "Peterx",
+      "phone": "5551000034",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Boise",
+      "given_name": "Carol",
+      "phone": "5551000036",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Boise",
+      "given_name": "Carolx",
+      "phone": "5551000036",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Tulsa",
+      "given_name": "Frank",
+      "phone": "5552000038",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Tulsa",
+      "given_name": "Frank",
+      "phone": "5552000039",
+      "surname": "Okafor"
+    },
+    {
+      "city": "Naples",
+      "given_name": "Deborah",
+      "phone": "5551000040",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Naples",
+      "given_name": "Deborahx",
+      "phone": "5551000040",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Modesto",
+      "given_name": "Raymond",
+      "phone": "5551000042",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Modesto",
+      "given_name": "Raymondx",
+      "phone": "5551000042",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Waco",
+      "given_name": "Cynthia",
+      "phone": "5551000044",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Waco",
+      "given_name": "Cynthiax",
+      "phone": "5551000044",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Provo",
+      "given_name": "Jack",
+      "phone": "5552000046",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Provo",
+      "given_name": "Jack",
+      "phone": "5552000047",
+      "surname": "Petrov"
+    },
+    {
+      "city": "Yuma",
+      "given_name": "Amy",
+      "phone": "5551000048",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Yuma",
+      "given_name": "Amyx",
+      "phone": "5551000048",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Erie",
+      "given_name": "Dennis",
+      "phone": "5551000050",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Erie",
+      "given_name": "Dennisx",
+      "phone": "5551000050",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Wichita",
+      "given_name": "Angela",
+      "phone": "5551000052",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Wichita",
+      "given_name": "Angelax",
+      "phone": "5551000052",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Duluth",
+      "given_name": "Jerry",
+      "phone": "5552000054",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Duluth",
+      "given_name": "Jerry",
+      "phone": "5552000055",
+      "surname": "Alvarez"
+    },
+    {
+      "city": "Macon",
+      "given_name": "Melissa",
+      "phone": "5551000056",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Macon",
+      "given_name": "Melissax",
+      "phone": "5551000056",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Biloxi",
+      "given_name": "Tyler",
+      "phone": "5551000058",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Biloxi",
+      "given_name": "Tylerx",
+      "phone": "5551000058",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Laredo",
+      "given_name": "Brenda",
+      "phone": "5551000060",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Laredo",
+      "given_name": "Brendax",
+      "phone": "5551000060",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Odessa",
+      "given_name": "Aaron",
+      "phone": "5552000062",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Odessa",
+      "given_name": "Aaron",
+      "phone": "5552000063",
+      "surname": "Kowalski"
+    },
+    {
+      "city": "Bangor",
+      "given_name": "Emma",
+      "phone": "5551000064",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Bangor",
+      "given_name": "Emmax",
+      "phone": "5551000064",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Casper",
+      "given_name": "Henry",
+      "phone": "5551000066",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Casper",
+      "given_name": "Henryx",
+      "phone": "5551000066",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Sheridan",
+      "given_name": "Julie",
+      "phone": "5551000068",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Sheridan",
+      "given_name": "Juliex",
+      "phone": "5551000068",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Helena",
+      "given_name": "Adam",
+      "phone": "5552000070",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Helena",
+      "given_name": "Adam",
+      "phone": "5552000071",
+      "surname": "Haddad"
+    },
+    {
+      "city": "Butte",
+      "given_name": "Joyce",
+      "phone": "5551000072",
+      "surname": "Kim"
+    },
+    {
+      "city": "Butte",
+      "given_name": "Joycex",
+      "phone": "5551000072",
+      "surname": "Kim"
+    },
+    {
+      "city": "Pierre",
+      "given_name": "Douglas",
+      "phone": "5551000074",
+      "surname": "Kim"
+    },
+    {
+      "city": "Pierre",
+      "given_name": "Douglasx",
+      "phone": "5551000074",
+      "surname": "Kim"
+    },
+    {
+      "city": "Fargo",
+      "given_name": "Virginia",
+      "phone": "5551000076",
+      "surname": "Kim"
+    },
+    {
+      "city": "Fargo",
+      "given_name": "Virginiax",
+      "phone": "5551000076",
+      "surname": "Kim"
+    },
+    {
+      "city": "Rapid",
+      "given_name": "Nathan",
+      "phone": "5552000078",
+      "surname": "Kim"
+    },
+    {
+      "city": "Rapid",
+      "given_name": "Nathan",
+      "phone": "5552000079",
+      "surname": "Kim"
+    }
+  ],
+  "variants": {
+    "em_learned": {
+      "config": {
+        "allow_slow_path": false,
+        "blocking": {
+          "ann_model": "all-MiniLM-L6-v2",
+          "ann_top_k": 20,
+          "auto_select": false,
+          "auto_suggest": false,
+          "keys": [
+            {
+              "fields": [
+                "surname"
+              ],
+              "transforms": []
+            }
+          ],
+          "learned_min_recall": 0.95,
+          "learned_min_reduction": 0.9,
+          "learned_predicate_depth": 2,
+          "learned_sample_size": 5000,
+          "max_block_size": 1000,
+          "skip_oversized": false,
+          "strategy": "static",
+          "union_mode": true,
+          "window_size": 20
+        },
+        "exclude_columns": [],
+        "llm_auto": false,
+        "llm_boost": false,
+        "matchkeys": [
+          {
+            "auto_threshold": false,
+            "convergence_threshold": 0.001,
+            "em_iterations": 20,
+            "fields": [
+              {
+                "field": "given_name",
+                "levels": 2,
+                "partial_threshold": 0.8,
+                "scorer": "jaro_winkler",
+                "tf_adjustment": false,
+                "transforms": [
+                  "lowercase",
+                  "strip"
+                ]
+              },
+              {
+                "field": "city",
+                "levels": 2,
+                "partial_threshold": 0.8,
+                "scorer": "exact",
+                "tf_adjustment": false,
+                "transforms": [
+                  "lowercase",
+                  "strip"
+                ]
+              }
+            ],
+            "link_threshold": 0.98,
+            "name": "fs_ne",
+            "negative_evidence": [
+              {
+                "field": "phone",
+                "scorer": "exact",
+                "threshold": 1.0,
+                "transforms": [
+                  "digits_only"
+                ]
+              }
+            ],
+            "rerank": false,
+            "rerank_band": 0.1,
+            "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "type": "probabilistic"
+          }
+        ],
+        "mode": "standard",
+        "output": {
+          "lineage_provenance": false
+        },
+        "partitioned_block_scoring": false,
+        "planning_effort": "normal",
+        "prepared_record_store": false
+      },
+      "em_model": {
+        "__type__": "goldenmatch.EMResult",
+        "__version__": 1,
+        "converged": true,
+        "iterations": 5,
+        "m_probs": {
+          "__ne__phone": [
+            0.24048669006961212,
+            0.7595133099303877
+          ],
+          "city": [
+            1.1800617229891058e-06,
+            0.9999988199382767
+          ],
+          "given_name": [
+            2.538132908367114e-08,
+            0.9999999746186707
+          ]
+        },
+        "match_weights": {
+          "__ne__phone": [
+            -1.9311040818837266,
+            0.0
+          ],
+          "city": [
+            -19.674327718004182,
+            6.303779010552625
+          ],
+          "given_name": [
+            -25.210964746160133,
+            6.133855678970481
+          ]
+        },
+        "proportion_matched": 0.012480243537138532,
+        "tf_collision": null,
+        "tf_freqs": null,
+        "u_probs": {
+          "__ne__phone": [
+            0.9170886073309564,
+            0.08291139266904342
+          ],
+          "city": [
+            0.9873417718434545,
+            0.012658228156545423
+          ],
+          "given_name": [
+            0.9857594933634433,
+            0.014240506636556639
+          ]
+        }
+      },
+      "expected_pair_scores": [
+        {
+          "a_idx": 0,
+          "b_idx": 1,
+          "score": 1.0
+        },
+        {
+          "a_idx": 6,
+          "b_idx": 7,
+          "score": 0.9674097434112726
+        },
+        {
+          "a_idx": 2,
+          "b_idx": 3,
+          "score": 1.0
+        },
+        {
+          "a_idx": 4,
+          "b_idx": 5,
+          "score": 1.0
+        },
+        {
+          "a_idx": 0,
+          "b_idx": 6,
+          "score": 0.0
+        },
+        {
+          "a_idx": 0,
+          "b_idx": 2,
+          "score": 0.03259025658872727
+        },
+        {
+          "a_idx": 8,
+          "b_idx": 15,
+          "score": 0.0
+        },
+        {
+          "a_idx": 10,
+          "b_idx": 11,
+          "score": 1.0
+        }
+      ]
+    },
+    "penalty_bits": {
+      "config": {
+        "allow_slow_path": false,
+        "blocking": {
+          "ann_model": "all-MiniLM-L6-v2",
+          "ann_top_k": 20,
+          "auto_select": false,
+          "auto_suggest": false,
+          "keys": [
+            {
+              "fields": [
+                "surname"
+              ],
+              "transforms": []
+            }
+          ],
+          "learned_min_recall": 0.95,
+          "learned_min_reduction": 0.9,
+          "learned_predicate_depth": 2,
+          "learned_sample_size": 5000,
+          "max_block_size": 1000,
+          "skip_oversized": false,
+          "strategy": "static",
+          "union_mode": true,
+          "window_size": 20
+        },
+        "exclude_columns": [],
+        "llm_auto": false,
+        "llm_boost": false,
+        "matchkeys": [
+          {
+            "auto_threshold": false,
+            "convergence_threshold": 0.001,
+            "em_iterations": 20,
+            "fields": [
+              {
+                "field": "given_name",
+                "levels": 2,
+                "partial_threshold": 0.8,
+                "scorer": "jaro_winkler",
+                "tf_adjustment": false,
+                "transforms": [
+                  "lowercase",
+                  "strip"
+                ]
+              },
+              {
+                "field": "city",
+                "levels": 2,
+                "partial_threshold": 0.8,
+                "scorer": "exact",
+                "tf_adjustment": false,
+                "transforms": [
+                  "lowercase",
+                  "strip"
+                ]
+              }
+            ],
+            "link_threshold": 0.98,
+            "name": "fs_ne",
+            "negative_evidence": [
+              {
+                "field": "phone",
+                "penalty_bits": 6.0,
+                "scorer": "exact",
+                "threshold": 1.0,
+                "transforms": [
+                  "digits_only"
+                ]
+              }
+            ],
+            "rerank": false,
+            "rerank_band": 0.1,
+            "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "type": "probabilistic"
+          }
+        ],
+        "mode": "standard",
+        "output": {
+          "lineage_provenance": false
+        },
+        "partitioned_block_scoring": false,
+        "planning_effort": "normal",
+        "prepared_record_store": false
+      },
+      "em_model": {
+        "__type__": "goldenmatch.EMResult",
+        "__version__": 1,
+        "converged": true,
+        "iterations": 5,
+        "m_probs": {
+          "city": [
+            9.29200650724812e-05,
+            0.9999070799349273
+          ],
+          "given_name": [
+            3.555995470167084e-08,
+            0.9999999644400452
+          ]
+        },
+        "match_weights": {
+          "city": [
+            -13.375271780196162,
+            6.303646651477146
+          ],
+          "given_name": [
+            -24.724478877115462,
+            6.133855664285828
+          ]
+        },
+        "proportion_matched": 0.01248137185578143,
+        "tf_collision": null,
+        "tf_freqs": null,
+        "u_probs": {
+          "city": [
+            0.9873417718434545,
+            0.012658228156545423
+          ],
+          "given_name": [
+            0.9857594933634433,
+            0.014240506636556639
+          ]
+        }
+      },
+      "expected_pair_scores": [
+        {
+          "a_idx": 0,
+          "b_idx": 1,
+          "score": 1.0
+        },
+        {
+          "a_idx": 6,
+          "b_idx": 7,
+          "score": 0.8938752824998863
+        },
+        {
+          "a_idx": 2,
+          "b_idx": 3,
+          "score": 1.0
+        },
+        {
+          "a_idx": 4,
+          "b_idx": 5,
+          "score": 1.0
+        },
+        {
+          "a_idx": 0,
+          "b_idx": 6,
+          "score": 0.0
+        },
+        {
+          "a_idx": 0,
+          "b_idx": 2,
+          "score": 0.10612471750011361
+        },
+        {
+          "a_idx": 8,
+          "b_idx": 15,
+          "score": 0.0
+        },
+        {
+          "a_idx": 10,
+          "b_idx": 11,
+          "score": 1.0
+        }
+      ]
+    }
+  }
+}
