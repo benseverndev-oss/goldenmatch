@@ -6,7 +6,21 @@
 > `convert.rs::json_to_polars_df` + the bridge's whole Python core-API surface.
 > Scope only; do NOT implement without approval.
 
-## STATUS 2026-07-14 (FINAL) — DROP IMPLEMENTED + armed in PR #1772
+## STATUS 2026-07-14 (COMPLETE) — DROP MERGED to main (PR #1772, 21:04Z)
+
+`[polars]` stopgap DROPPED across all three bridge lanes (rust/rust_coverage/
+rust_pgrx); `ci-required` green. The match-pipeline arrow-flip landed. Plan
+COMPLETE.
+
+**One tracked follow-up (NOT a regression, pre-existing, out of scope):** a direct
+caller holding BOTH the `[polars]` extra AND `goldenmatch-native`, calling
+`dedupe_df(pa.Table)`, hits a `_polars_importable()`-gated "polars-present WALL
+optimization" that does `.height` on the arrow frame (surfaced in the pgrx lane
+before it too dropped `[polars]`; needs a native box to reproduce). Fix in the
+golden/pipeline `_polars_importable()` path separately. The bridge lanes are
+polars-free so this never fires there.
+
+## (superseded) STATUS — DROP IMPLEMENTED + armed in PR #1772
 
 The match-pipeline arrow-flip turned out **tractable, not multi-week** (the seam
 primitives already existed) and is DONE. PR #1772 (supersedes #1770) is the
