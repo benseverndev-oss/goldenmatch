@@ -764,7 +764,9 @@ def score_buckets(
                 import numpy as np
 
                 row_mask = np.repeat(np.array(keep, dtype=bool), size_list)
-                if isinstance(sorted_df, pl.DataFrame):
+                from goldenmatch.core.frame import is_polars_dataframe as _ipd
+
+                if _ipd(sorted_df):
                     native_sorted_df = sorted_df.filter(pl.Series(row_mask))
                 else:  # pa.Table lane: Table.filter takes a boolean array
                     import pyarrow as _pa
@@ -773,7 +775,9 @@ def score_buckets(
                 kept_size_list = [s for s, k in zip(size_list, keep) if k]
                 if not kept_size_list:
                     return [], 0
-            if isinstance(native_sorted_df, pl.DataFrame):
+            from goldenmatch.core.frame import is_polars_dataframe as _ipd2
+
+            if _ipd2(native_sorted_df):
                 row_ids_arrow = native_sorted_df["__row_id__"].cast(pl.Int64).to_arrow()
                 field_arrays_arrow = [
                     native_sorted_df[col].to_arrow()

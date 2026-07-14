@@ -588,6 +588,7 @@ def build_cluster_frames(
     if native is not None and arrow_fn is not None:
         frames0 = build_clusters_arrow_native(
             pairs_df, all_ids=all_ids, max_cluster_size=max_cluster_size,
+            backend=backend,
         )
         assignments = frames0.assignments
         from goldenmatch.core.frame import to_frame as _tf
@@ -1936,9 +1937,10 @@ def build_clusters_v2_columnar(
 
 
 def build_clusters_arrow_native(
-    pairs_df: pl.DataFrame,  # PAIR_STREAM_SCHEMA columns
+    pairs_df: Any,  # PAIR_STREAM_SCHEMA columns (pl.DataFrame | pa.Table)
     all_ids: list[int] | None = None,
     max_cluster_size: int = 100,
+    backend: str = "polars",
 ) -> ClusterFrames:
     """Rust Arrow native cluster builder. Reads the pair stream's Arrow
     buffers directly via the C Data Interface, runs Union-Find in Rust,
@@ -2024,25 +2026,44 @@ def build_clusters_arrow_native(
         m_cid, m_size, m_conf, m_over, m_bot_a, m_bot_b, m_min, m_avg,
     ) = arrow_fn(a_arrow, b_arrow, s_arrow, all_ids_arrow, max_cluster_size)
 
-    import polars as _pl
+    # PERF/D6: lane-native output -- the kernel returns arrow arrays; the
+    # arrow lane wraps them ZERO-COPY (pa.table); the polars lane keeps the
+    # original construction byte-identically.
+    if backend == "arrow":
+        assignments = _pa.table({"cluster_id": a_cid, "member_id": a_mid})
+        metadata = _pa.table({
+            "cluster_id": m_cid,
+            "size": m_size,
+            "confidence": m_conf,
+            "quality": _pa.array(
+                ["strong"] * metadata_height(m_cid), type=_pa.large_string()
+            ),
+            "oversized": m_over,
+            "bottleneck_pair_a": m_bot_a,
+            "bottleneck_pair_b": m_bot_b,
+            "min_edge": m_min,
+            "avg_edge": m_avg,
+        })
+    else:
+        import polars as _pl
 
-    assignments = _pl.DataFrame({
-        "cluster_id": _pl.from_arrow(a_cid),
-        "member_id":  _pl.from_arrow(a_mid),
-    })
-    metadata = _pl.DataFrame({
-        "cluster_id":       _pl.from_arrow(m_cid),
-        "size":             _pl.from_arrow(m_size),
-        "confidence":       _pl.from_arrow(m_conf),
-        "quality":          _pl.Series(
-            "quality", ["strong"] * metadata_height(m_cid), dtype=_pl.Utf8,
-        ),
-        "oversized":        _pl.from_arrow(m_over),
-        "bottleneck_pair_a": _pl.from_arrow(m_bot_a),
-        "bottleneck_pair_b": _pl.from_arrow(m_bot_b),
-        "min_edge":         _pl.from_arrow(m_min),
-        "avg_edge":         _pl.from_arrow(m_avg),
-    })
+        assignments = _pl.DataFrame({
+            "cluster_id": _pl.from_arrow(a_cid),
+            "member_id":  _pl.from_arrow(a_mid),
+        })
+        metadata = _pl.DataFrame({
+            "cluster_id":       _pl.from_arrow(m_cid),
+            "size":             _pl.from_arrow(m_size),
+            "confidence":       _pl.from_arrow(m_conf),
+            "quality":          _pl.Series(
+                "quality", ["strong"] * metadata_height(m_cid), dtype=_pl.Utf8,
+            ),
+            "oversized":        _pl.from_arrow(m_over),
+            "bottleneck_pair_a": _pl.from_arrow(m_bot_a),
+            "bottleneck_pair_b": _pl.from_arrow(m_bot_b),
+            "min_edge":         _pl.from_arrow(m_min),
+            "avg_edge":         _pl.from_arrow(m_avg),
+        })
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 

@@ -16,9 +16,17 @@ from pathlib import Path
 _PROBE = Path(__file__).parent / "_zero_polars_probe.py"
 
 
-def test_arrow_lane_exact_dedupe_imports_zero_polars():
+import pytest
+
+
+@pytest.mark.parametrize("native", ["0", "1"], ids=["pure", "native"])
+def test_arrow_lane_exact_dedupe_imports_zero_polars(native):
+    # BOTH lanes: the default install is native-ON -- the native kernel
+    # branches have their own polars touchpoints (a raw isinstance in the
+    # bucket fast worker escaped the pure-lane-only gate).
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).parent.parent)
+    env["GOLDENMATCH_NATIVE_GATE"] = native
     proc = subprocess.run(
         [sys.executable, str(_PROBE)],
         capture_output=True, text=True, env=env, timeout=300,

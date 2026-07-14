@@ -41,13 +41,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   7.6s -> 5.5s. (These were mentioned in the 3.1.0 notes but merged just
   after the 3.1.0 tag; this patch actually ships them.)
 
+### Performance
+- **The polars-free install is now the FAST configuration** (measured
+  head-to-head at 500K: 7.11s polars-free vs 7.55s polars-present, identical
+  outputs). A module-level polars literal in `golden_fused.py` was silently
+  making the Rust golden kernel unreachable on polars-free installs (the
+  import error was swallowed as a routine kernel decline), routing every
+  golden build to the slow Python oracle. The `[polars]` extra is a
+  compatibility surface, not an accelerator. The zero-polars gate now also
+  runs native-ON (the default install shape) so this class cannot recur.
+
 ## [3.1.0] - 2026-07-13
 
 <!-- README-callout
-**3.1.0 — polars is optional.** The engine is Arrow-native end to end (a
-zero-polars CI gate proves a full dedupe with polars imports blocked);
-`pip install 'goldenmatch[polars]'` lights up the polars wall-optimizations
-and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical to 3.0.x.
+**3.1.0 — polars is optional (and the polars-free install is the fast
+configuration).** The engine is Arrow-native end to end with the Rust fused
+kernels on the hot paths (a zero-polars CI gate proves a full dedupe with
+polars imports blocked); `pip install 'goldenmatch[polars]'` is a
+compatibility extra (classic lane, kernel-absent golden replay,
+cell-quality weighting), byte-identical to 3.0.x.
 -->
 
 ### Changed

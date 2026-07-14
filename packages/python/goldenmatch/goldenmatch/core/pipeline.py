@@ -456,11 +456,13 @@ def _apply_domain_extraction(
         return combined_lf
 
     from goldenmatch.core.domain import detect_domain, extract_features
-    from goldenmatch.core.frame import to_frame as _tf_dom_p
 
     # A6: dual-rep -- accepts a LazyFrame (classic), eager native, or seam
     # Frame; the extractors are seam-driven and preserve the caller's lane.
-    _was_lazy = isinstance(combined_lf, pl.LazyFrame)
+    from goldenmatch.core.frame import is_polars_lazyframe as _ipl_dom
+    from goldenmatch.core.frame import to_frame as _tf_dom_p
+
+    _was_lazy = _ipl_dom(combined_lf)
     combined_df_tmp = combined_lf.collect() if _was_lazy else _tf_dom_p(combined_lf).native
     user_cols = [
         c for c in _tf_dom_p(combined_df_tmp).columns if not c.startswith("__")
@@ -981,7 +983,9 @@ def _as_polars_df(obj: Any) -> pl.DataFrame:
     Typed non-optional for the callers' sake; a None input passes through
     (the golden branch guards emptiness before the builders run).
     """
-    if obj is None or isinstance(obj, pl.DataFrame):
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd_b
+
+    if obj is None or _ipd_b(obj):
         return cast("pl.DataFrame", obj)
     return cast("pl.DataFrame", pl.from_arrow(obj))
 
@@ -1349,7 +1353,9 @@ def _try_fused_golden(
     # (__cluster_id__ Int64 / __golden_confidence__ Float64 already agree). We
     # deliberately do NOT keep native dtypes -- that would change the slow
     # path's own behavior, out of scope for a transparent routing flag.
-    if isinstance(result, pl.DataFrame):
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd_g
+
+    if _ipd_g(result):
         return result.with_columns(
             [pl.col(c).cast(pl.Utf8) for c in result.columns if not c.startswith("__")]
         )
@@ -1441,7 +1447,9 @@ def _golden_from_multi_df(
     # native directly (no round-trip). On kernel decline/absence, BRIDGE and
     # replay the exact polars demux so output stays byte-identical to the
     # classic lane.
-    _is_pl = isinstance(multi_df, pl.DataFrame)
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd_d
+
+    _is_pl = _ipd_d(multi_df)
     fast_eligible = (
         _is_pl
         and not provenance_on
@@ -3296,8 +3304,10 @@ def _run_dedupe_pipeline(
                 # still go through the list[dict] path so the existing semantics
                 # (per-field source_row_id, custom merge_field rules) stay intact.
                 _provenance_on = config.output.lineage_provenance
+                from goldenmatch.core.frame import is_polars_dataframe as _ipd_f
+
                 _fast_eligible = (
-                    isinstance(multi_df, pl.DataFrame)
+                    _ipd_f(multi_df)
                     and not _provenance_on
                     and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
                 )

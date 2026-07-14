@@ -58,10 +58,12 @@ pip install golden-suite    # the WHOLE suite (Check + Flow + Match + Analysis +
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **v3.1.0** — **3.1.0 — polars is optional.** The engine is Arrow-native end to end (a
-zero-polars CI gate proves a full dedupe with polars imports blocked);
-`pip install 'goldenmatch[polars]'` lights up the polars wall-optimizations
-and the classic `GOLDENMATCH_FRAME=polars` lane, byte-identical to 3.0.x.
+> **v3.1.0** — **3.1.0 — polars is optional (and the polars-free install is the fast
+configuration).** The engine is Arrow-native end to end with the Rust fused
+kernels on the hot paths (a zero-polars CI gate proves a full dedupe with
+polars imports blocked); `pip install 'goldenmatch[polars]'` is a
+compatibility extra (classic lane, kernel-absent golden replay,
+cell-quality weighting), byte-identical to 3.0.x.
 >
 > **v3.0.0** — **v3.0.0 — Arrow-native results.** Result frames are now `pyarrow.Table`
 (migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
