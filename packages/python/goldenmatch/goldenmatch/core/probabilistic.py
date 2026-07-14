@@ -23,7 +23,7 @@ from itertools import combinations
 import numpy as np
 
 from goldenmatch._polars_lazy import pl
-from goldenmatch.config.schemas import MatchkeyConfig
+from goldenmatch.config.schemas import MatchkeyConfig, NegativeEvidenceField
 from goldenmatch.core.scorer import score_field
 
 logger = logging.getLogger(__name__)
@@ -443,6 +443,103 @@ def _build_comparison_matrix(
     return matrix
 
 
+def _ne_fired(row_a: dict, row_b: dict, ne_field: NegativeEvidenceField) -> bool:
+    """Return True iff a Fellegi-Sunter negative-evidence field FIRES.
+
+    Fires when BOTH values are present (post-transform, non-empty) AND the
+    scorer similarity is STRICTLY below ``ne_field.threshold`` — matching the
+    weighted-NE firing rule (``core/scorer.py:292``,
+    ``backends/score_buckets.py:942``). Any missing/empty value on either
+    side (including nulls, which is the deliberate NE null-handling that
+    differs from regular FS fields where null -> disagree/level-0) means the
+    dimension does NOT fire — negative evidence never boosts a pair, so an
+    inconclusive comparison must not count against a match either.
+    """
+    from goldenmatch.utils.transforms import apply_transforms
+
+    val_a = row_a.get(ne_field.field)
+    val_b = row_b.get(ne_field.field)
+    if val_a is None or val_b is None:
+        return False
+    val_a = str(val_a)
+    val_b = str(val_b)
+    if ne_field.transforms:
+        val_a = apply_transforms(val_a, ne_field.transforms)
+        val_b = apply_transforms(val_b, ne_field.transforms)
+    if not val_a or not val_b:
+        return False
+    sim = score_field(val_a, val_b, ne_field.scorer)
+    if sim is None:
+        return False
+    return sim < ne_field.threshold
+
+
+def _em_ne_fields(mk: MatchkeyConfig) -> list:
+    """NE fields that participate in EM (excludes ``penalty_bits`` overrides,
+    which skip EM entirely and contribute a fixed weight at scoring time)."""
+    return [ne for ne in (mk.negative_evidence or []) if ne.penalty_bits is None]
+
+
+def _build_ne_matrix(
+    pairs: list[tuple[int, int]],
+    row_lookup: dict[int, dict],
+    mk: MatchkeyConfig,
+) -> np.ndarray:
+    """Build an n_pairs x n_ne int8 matrix of NE firing state for EM.
+
+    0 = fired, 1 = not-fired (including nulls on either side). A SEPARATE
+    matrix from :func:`_build_comparison_matrix` — NE dimensions are not
+    regular FS fields, and comparison-matrix consumers assume
+    ``len(row) == len(mk.fields)``. Only ``penalty_bits``-free NE fields are
+    included (penalty_bits fields skip EM entirely); the column order
+    matches :func:`_em_ne_fields`.
+    """
+    ne_fields = _em_ne_fields(mk)
+    n_pairs = len(pairs)
+    n_ne = len(ne_fields)
+    matrix = np.ones((n_pairs, n_ne), dtype=np.int8)  # default: not-fired
+    for i, (a, b) in enumerate(pairs):
+        row_a = row_lookup.get(a, {})
+        row_b = row_lookup.get(b, {})
+        for j, ne in enumerate(ne_fields):
+            if _ne_fired(row_a, row_b, ne):
+                matrix[i, j] = 0
+    return matrix
+
+
+def _ne_u_probs_from_matrix(ne_matrix: np.ndarray, ne_fields: list) -> dict[str, list[float]]:
+    """Observed [fired, not_fired] rates from a NE matrix — the u estimate.
+
+    Same smoothing style as the regular-field u estimate in :func:`train_em`
+    (additive 1e-6 per state).
+    """
+    out: dict[str, list[float]] = {}
+    for j, ne in enumerate(ne_fields):
+        fired = float((ne_matrix[:, j] == 0).sum())
+        not_fired = float((ne_matrix[:, j] == 1).sum())
+        total = fired + not_fired + 2 * 1e-6
+        out[ne.field] = [(fired + 1e-6) / total, (not_fired + 1e-6) / total]
+    return out
+
+
+def _warn_ne_blocking_overlap(ne_fields: list, blocking_fields: list[str]) -> None:
+    """Log a warning per NE field that also names a blocking field.
+
+    Within-block pairs are guaranteed to agree on blocking fields, so an NE
+    field that is also a blocking key never fires in the EM training sample
+    — a degenerate m/u estimate. Not a hard error: multi-pass blocking may
+    only partially overlap.
+    """
+    for ne in ne_fields:
+        if ne.field in blocking_fields:
+            logger.warning(
+                "FS negative-evidence field '%s' is also a blocking field; "
+                "within-block pairs are guaranteed to agree on it, so it will "
+                "never fire during EM training (degenerate m/u estimate).",
+                ne.field,
+            )
+
+
 def _sample_blocked_pairs(
     blocks: list,
     n_pairs: int = 10000,
@@ -540,7 +637,19 @@ def train_em(
 
     from goldenmatch.core.frame import to_frame as _tf_w6
 
+    ne_fields_em = _em_ne_fields(mk)
+    _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
+
     cols = [f.field for f in mk.fields if f.field != "__record__"]
+    # Extend with NE field names (incl. derive_from-synthesized columns,
+    # which are materialized under the NE field's own name by
+    # precompute_matchkey_transforms before train_em ever sees the frame) —
+    # else NE-only fields (the canonical phone example) are absent from
+    # row_lookup, read as missing/null, and NE never fires during EM
+    # (degenerate m/u estimate).
+    for ne in (mk.negative_evidence or []):
+        if ne.field not in cols:
+            cols.append(ne.field)
     row_lookup: dict[int, dict] = {}
     for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
@@ -575,6 +684,13 @@ def train_em(
 
     logger.info("u-probabilities estimated from %d random pairs", len(random_pairs))
 
+    # NE dims: u from the SAME random-pair sample as regular fields (an NE
+    # dimension is never a blocking key by construction, so no neutral-u
+    # override is needed here — see _warn_ne_blocking_overlap above for the
+    # degenerate case where it accidentally is one).
+    random_ne_matrix = _build_ne_matrix(random_pairs, row_lookup, mk)
+    u_probs_ne = _ne_u_probs_from_matrix(random_ne_matrix, ne_fields_em)
+
     # ── Step 2: Get blocked pairs for m estimation ──
     if blocks:
         pairs = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
@@ -587,6 +703,7 @@ def train_em(
         return _fallback_result(mk)
 
     comp_matrix = _build_comparison_matrix(pairs, row_lookup, mk)
+    ne_matrix = _build_ne_matrix(pairs, row_lookup, mk)
     n_pairs = len(pairs)
     _n_fields = len(mk.fields)
 
@@ -600,10 +717,15 @@ def train_em(
         total = sum(raw)
         m_probs[f.field] = [r / total for r in raw]
 
+    # NE dims: fired is rare in matches (a true match usually agrees on the
+    # NE field), so seed m with a low fired-probability prior.
+    m_probs_ne: dict[str, list[float]] = {ne.field: [0.05, 0.95] for ne in ne_fields_em}
+
     # ── Step 3: EM iterations — only update m, fix u ──
     converged = False
     for iteration in range(max_iterations):
         old_m = {k: list(v) for k, v in m_probs.items()}
+        old_m_ne = {k: list(v) for k, v in m_probs_ne.items()}
 
         # E-step: compute posterior P(match | comparison vector).
         # Vectorized over pairs (this was the FS-training bottleneck: a
@@ -618,6 +740,15 @@ def train_em(
             levels_j = comp_matrix[:, j]
             m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
             u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
+            log_m += m_table[levels_j]
+            log_u += u_table[levels_j]
+
+        # NE dims: same E-step accumulation, 2-entry [fired, not_fired]
+        # lookup tables indexed by the NE matrix's {0, 1} columns.
+        for j, ne in enumerate(ne_fields_em):
+            levels_j = ne_matrix[:, j]
+            m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
+            u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
             log_m += m_table[levels_j]
             log_u += u_table[levels_j]
 
@@ -643,6 +774,15 @@ def train_em(
                 new_m[level] = (posteriors[mask].sum() + 1e-6) / (total_match + n_levels * 1e-6)
             m_probs[f.field] = new_m
 
+        # NE dims: same M-step update. Blocking-field neutralization does NOT
+        # apply here — an NE dimension is never a blocking key.
+        for j, ne in enumerate(ne_fields_em):
+            new_m_ne = [0.0, 0.0]
+            for level in range(2):
+                mask = ne_matrix[:, j] == level
+                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (total_match + 2 * 1e-6)
+            m_probs_ne[ne.field] = new_m_ne
+
         # Check convergence (only m changes)
         max_delta = 0.0
         for f in mk.fields:
@@ -650,6 +790,9 @@ def train_em(
                 continue
             for k in range(f.levels):
                 max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
+        for ne in ne_fields_em:
+            for k in range(2):
+                max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
 
         if max_delta < convergence:
             converged = True
@@ -681,15 +824,30 @@ def train_em(
             weights.append(math.log2(m_val / u_val))
         match_weights[f.field] = weights
 
+    # NE dims: store under __ne__<field> — [w_fired, 0.0]. The 0.0 for
+    # not-fired is the NEGATIVE-EVIDENCE CLAMP (not log2(m1/u1)): agreement
+    # or an inconclusive comparison never boosts the score, only a
+    # confident disagreement subtracts from it.
+    for ne in ne_fields_em:
+        key = f"__ne__{ne.field}"
+        m0 = max(m_probs_ne[ne.field][0], 1e-10)
+        u0 = max(u_probs_ne[ne.field][0], 1e-10)
+        m_probs[key] = list(m_probs_ne[ne.field])
+        u_probs[key] = list(u_probs_ne[ne.field])
+        match_weights[key] = [math.log2(m0 / u0), 0.0]
+
     # Guard: FS match weights are expected non-decreasing in agreement level.
     # EM can invert a rare-but-discriminative middle level above exact
     # agreement. Default 'warn' surfaces it (Splink posture) without changing
     # the weights; 'enforce' isotonically repairs them (measured to trade F1
-    # on some data — opt in deliberately).
+    # on some data — opt in deliberately). __ne__ entries are [fired,
+    # not_fired]-ordered, not level-ordered, so they must never be repaired —
+    # skip_fields excludes them (mirrors blocking_fields' exclusion).
     _mono_mode = _fs_monotonic_mode()
     if _mono_mode != "off":
+        _ne_skip = {k for k in match_weights if k.startswith("__ne__")}
         repaired, adjusted = enforce_weight_monotonicity(
-            match_weights, skip_fields=blocking_fields,
+            match_weights, skip_fields=list(blocking_fields) + list(_ne_skip),
         )
         if adjusted and _mono_mode == "enforce":
             match_weights = repaired
@@ -807,7 +965,13 @@ def estimate_m_from_labels(
 
     from goldenmatch.core.frame import to_frame as _tf_w6
 
+    ne_fields_em = _em_ne_fields(mk)
+    _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
+
     cols = [f.field for f in mk.fields if f.field != "__record__"]
+    for ne in (mk.negative_evidence or []):
+        if ne.field not in cols:
+            cols.append(ne.field)
     row_lookup: dict[int, dict] = {}
     for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
@@ -833,14 +997,21 @@ def estimate_m_from_labels(
     # ── u from RANDOM pairs (mirrors train_em Step 1) ──
     random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
     u_probs: dict[str, list[float]] = {}
+    u_probs_ne: dict[str, list[float]] = {}
     if len(random_pairs) >= 10:
         random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
         for j, f in enumerate(mk.fields):
             counts = [float((random_matrix[:, j] == lvl).sum()) for lvl in range(f.levels)]
             total = sum(counts) + f.levels * 1e-6
             u_probs[f.field] = [(c + 1e-6) / total for c in counts]
+        random_ne_matrix = _build_ne_matrix(random_pairs, row_lookup, mk)
+        u_probs_ne = _ne_u_probs_from_matrix(random_ne_matrix, ne_fields_em)
     else:
-        u_probs = _fallback_result(mk).u_probs
+        fallback = _fallback_result(mk)
+        u_probs = fallback.u_probs
+        u_probs_ne = {
+            ne.field: fallback.u_probs[f"__ne__{ne.field}"] for ne in ne_fields_em
+        }
     # Blocking fields: neutral u (random pairs give a biased u for them).
     for f in mk.fields:
         if f.field in blocking_fields:
@@ -859,6 +1030,17 @@ def estimate_m_from_labels(
         total = sum(counts) + f.levels * smoothing
         m_probs[f.field] = [(c + smoothing) / total for c in counts]
 
+    # NE dims: m from the observed fired-rate among LABELED matches (the
+    # supervised twin of train_em's EM-estimated m); u from the same
+    # random-pair sample as regular fields, computed above.
+    label_ne_matrix = _build_ne_matrix(label_pairs, row_lookup, mk)
+    for j, ne in enumerate(ne_fields_em):
+        fired = float((label_ne_matrix[:, j] == 0).sum())
+        not_fired = float((label_ne_matrix[:, j] == 1).sum())
+        total = fired + not_fired + 2 * smoothing
+        m_probs[f"__ne__{ne.field}"] = [(fired + smoothing) / total, (not_fired + smoothing) / total]
+        u_probs[f"__ne__{ne.field}"] = list(u_probs_ne.get(ne.field, [0.5, 0.5]))
+
     # ── match weights (blocking fixed) — mirrors train_em ──
     match_weights: dict[str, list[float]] = {}
     for f in mk.fields:
@@ -873,10 +1055,19 @@ def estimate_m_from_labels(
             for k in range(f.levels)
         ]
 
+    # NE dims: [w_fired, 0.0] — the not-fired weight is the negative-evidence
+    # clamp, not log2(m1/u1). Mirrors train_em's storage exactly.
+    for ne in ne_fields_em:
+        key = f"__ne__{ne.field}"
+        m0 = max(m_probs[key][0], 1e-10)
+        u0 = max(u_probs[key][0], 1e-10)
+        match_weights[key] = [math.log2(m0 / u0), 0.0]
+
     _mono_mode = _fs_monotonic_mode()
     if _mono_mode != "off":
+        _ne_skip = {k for k in match_weights if k.startswith("__ne__")}
         repaired, adjusted = enforce_weight_monotonicity(
-            match_weights, skip_fields=blocking_fields,
+            match_weights, skip_fields=list(blocking_fields) + list(_ne_skip),
         )
         if adjusted and _mono_mode == "enforce":
             match_weights = repaired
@@ -1216,6 +1407,24 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
             m_probs[f.field] = m
             u_probs[f.field] = u
             match_weights[f.field] = [math.log2(m_i / u_i) for m_i, u_i in zip(m, u)]
+
+    ne_fields_em = _em_ne_fields(mk)
+    if ne_fields_em:
+        logger.warning(
+            "FS EM training fell back to conservative defaults (too few pairs); "
+            "negative-evidence field(s) %s get a fixed -3.0 bit weight instead of "
+            "an EM-learned one.",
+            ", ".join(ne.field for ne in ne_fields_em),
+        )
+    for ne in ne_fields_em:
+        key = f"__ne__{ne.field}"
+        # m=0.0625, u=0.5 -> log2(0.0625/0.5) == -3.0 exactly (a conservative
+        # fixed weight consistent with a symmetric u=[0.5, 0.5] non-match
+        # prior, mirroring the pipeline-wide fallback posture).
+        m_probs[key] = [0.0625, 0.9375]
+        u_probs[key] = [0.5, 0.5]
+        match_weights[key] = [-3.0, 0.0]
+
     return EMResult(
         m_probs=m_probs, u_probs=u_probs, match_weights=match_weights,
         converged=False, iterations=0, proportion_matched=0.05,
