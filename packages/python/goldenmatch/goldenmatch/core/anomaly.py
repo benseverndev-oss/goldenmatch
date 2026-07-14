@@ -67,7 +67,14 @@ def detect_anomalies(
             "use 'low', 'medium', or 'high'."
         )
 
-    cols = [c for c in df.columns if not c.startswith("__")]
+    # Dual-rep (Frame lane): df may be a pl.DataFrame or a pa.Table. Read column
+    # names + rows through the Arrow seam so the path stays polars-free when
+    # polars is uninstalled (D6). `.to_pylist()` preserves row order + values,
+    # byte-identical to the polars `.to_dicts()` it replaces.
+    from goldenmatch.core.frame import to_frame
+
+    _arrow = to_frame(df).to_arrow()
+    cols = [c for c in _arrow.column_names if not c.startswith("__")]
     anomalies = []
 
     # Detect column types by name
@@ -77,7 +84,7 @@ def detect_anomalies(
     _name_cols = [c for c in cols if _is_likely_column(c, ["name", "first_name", "last_name", "full_name"])]
     _date_cols = [c for c in cols if _is_likely_column(c, ["date", "dob", "birth", "created"])]
 
-    rows = df.to_dicts()
+    rows = _arrow.to_pylist()
 
     for i, row in enumerate(rows):
         rid = row.get("__row_id__", i)

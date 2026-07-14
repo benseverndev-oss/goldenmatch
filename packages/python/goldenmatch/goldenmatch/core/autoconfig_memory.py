@@ -56,11 +56,25 @@ def profile_signature(df: pl.DataFrame, *, mode: str = "dedupe") -> str:
     """
     # Sort by name so column ORDER doesn't change the signature; it's the
     # set of (name, dtype) pairs that matters.
-    pairs = sorted(
-        (c, str(df.schema[c]))
-        for c in df.columns
-        if not c.startswith("__")
-    )
+    # Dual-rep (Frame lane): df may be a pl.DataFrame or a pa.Table. Read the
+    # schema via the Arrow seam on the arrow lane so the path stays polars-free
+    # (D6), and keep the polars branch byte-identical (the cache key is
+    # dtype-string-sensitive, so the two lanes hash to distinct keys -- a benign
+    # cache miss for a local cross-run cache, never a correctness issue).
+    import pyarrow as _pa
+
+    if isinstance(df, _pa.Table):
+        pairs = sorted(
+            (f.name, str(f.type))
+            for f in df.schema
+            if not f.name.startswith("__")
+        )
+    else:
+        pairs = sorted(
+            (c, str(df.schema[c]))
+            for c in df.columns
+            if not c.startswith("__")
+        )
     key = (mode, tuple(pairs))
     return hashlib.sha256(repr(key).encode()).hexdigest()[:16]
 

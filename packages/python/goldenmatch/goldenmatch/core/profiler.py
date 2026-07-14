@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from typing import TYPE_CHECKING, Any
 
 from rich.panel import Panel
@@ -114,18 +115,37 @@ def _as_column(series: Any) -> Column:
     return PolarsColumn(series)
 
 
-def profile_column(series: pl.Series) -> dict[str, Any]:
+def _polars_importable() -> bool:
+    """True when polars can be imported (False in the D6 zero-polars end-state).
+
+    Under the zero-polars import blocker the ``import polars`` raises
+    ImportError, so this returns False and callers take the seam-native path."""
+    try:
+        import polars  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def profile_column(series: Any, name: str | None = None) -> dict[str, Any]:
     """Profile a single column and return a statistics dict.
 
     W3c: internals route through the Column seam (PolarsColumn wraps the
     series -- byte-identical delegation; an ArrowColumn caller gets the same
-    stats via the parity-pinned pc twins)."""
+    stats via the parity-pinned pc twins).
+
+    ``series`` may be a ``pl.Series`` (name + dtype spelling read intrinsically,
+    byte-identical) or an already-seam ``Column`` (polars-free path); on the
+    latter the caller passes ``name`` and dtype falls back to the semantic
+    spelling (the ``pl.Series`` dtype string is unavailable without polars)."""
     col = _as_column(series)
-    if isinstance(series, pl.Series):
+    _is_pl_series = "polars" in sys.modules and isinstance(series, pl.Series)
+    if _is_pl_series:
         name = series.name
         dtype = str(series.dtype)
     else:
-        name = "<column>"
+        name = name if name is not None else "<column>"
         dtype = col.semantic_dtype()
     total = len(col)
     null_count = col.null_count()
@@ -199,7 +219,14 @@ def _columns_as_polars_series(frame: Any) -> list[Any]:
     if isinstance(frame, PolarsFrame):
         native = frame.native
         return [native[c] for c in frame.columns]
-    return [pl.Series(c, frame.column(c).to_arrow()) for c in frame.columns]
+    # Arrow frame: wrap each column as a pl.Series so profile_column reads the
+    # exact same name + polars dtype spelling as the polars lane (byte-identical)
+    # -- but ONLY when polars is importable. In the D6 zero-polars end-state the
+    # wrap is impossible, so hand the caller the seam Column instead (name is
+    # threaded separately in profile_dataframe).
+    if _polars_importable():
+        return [pl.Series(c, frame.column(c).to_arrow()) for c in frame.columns]
+    return [frame.column(c) for c in frame.columns]
 
 
 def _count_all_empty_rows(frame: Any) -> int:
@@ -243,7 +270,13 @@ def profile_dataframe(df: Any) -> dict[str, Any]:
     frame = to_frame(df)
     total_rows = frame.height
     total_columns = len(frame.columns)
-    columns = [profile_column(s) for s in _columns_as_polars_series(frame)]
+    # Thread the column name explicitly: profile_column reads it intrinsically
+    # from a pl.Series (name arg ignored, byte-identical) and from the arg on
+    # the polars-free seam-Column path.
+    columns = [
+        profile_column(s, name=c)
+        for s, c in zip(_columns_as_polars_series(frame), frame.columns)
+    ]
 
     # Duplicate rows: count of rows that appear more than once
     # (== total_rows - distinct_row_count(), full-row identity over all columns).
