@@ -10,14 +10,20 @@ import yaml
 from goldenmatch.config.schemas import GoldenMatchConfig
 
 # Keys in golden_rules that are part of the schema (not field names).
-# NOTE: max_cluster_size / auto_split / quality_weighting / weak_cluster_threshold /
-# split_edge_budget / adaptive / use_llm_for_ambiguous / cluster_overrides are
-# intentionally omitted -- those are set programmatically, not via flat YAML;
-# adding them here is out of scope for this change. The two new keys below
-# (field_groups, field_group_detection) are added so the YAML loader does not
-# sweep them into field_rules where they fail validation.
+# NOTE: max_cluster_size WAS historically omitted as "set programmatically,
+# not via flat YAML" -- that assumption is stale: the Splink upgrade pass's
+# fan_out guard lever (config/splink_upgrade_fanout.py) now writes it into
+# the upgraded YAML, so it must not be swept into field_rules (where it
+# fails GoldenFieldRule validation on reload). The other programmatic keys
+# (auto_split, quality_weighting, weak_cluster_threshold, split_edge_budget,
+# adaptive, use_llm_for_ambiguous, cluster_overrides) remain omitted
+# DELIBERATELY -- adding them would change behavior for data columns that
+# happen to share those names. field_groups / field_group_detection are here
+# so the loader does not sweep them into field_rules where they fail
+# validation.
 _GOLDEN_RULES_SPECIAL_KEYS = frozenset({
     "default_strategy", "field_rules", "field_groups", "field_group_detection",
+    "max_cluster_size",
 })
 
 

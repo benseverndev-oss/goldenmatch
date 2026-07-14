@@ -428,3 +428,71 @@ def test_non_upgrade_combined_line_after_table(tmp_path):
         # And the summary is not printed anywhere on its own BEFORE the
         # combined line (pre-refactor printed it exactly once, combined).
         assert normalized.count("error(s)") == 1
+
+
+# ── 8. Regression: the upgraded YAML survives a load_config round-trip when
+# the fan_out lever fired (NE fields + tuned max_cluster_size) ───────────────
+
+
+def test_upgraded_yaml_with_fanout_output_reloads(tmp_path):
+    """Wild-bench regression: the fan_out guard lever writes
+    ``golden_rules.max_cluster_size`` into the upgraded YAML, but
+    ``loader._normalize_golden_rules`` used to sweep any key outside
+    ``_GOLDEN_RULES_SPECIAL_KEYS`` into ``field_rules`` (the key was omitted
+    on a now-stale "set programmatically, never via YAML" assumption), so
+    reloading the CLI's own output failed schema validation
+    (``field_rules.max_cluster_size ... should be ... GoldenFieldRule``).
+
+    Reuses the Task F6 homonym fixture (tests/test_splink_upgrade_fanout_e2e)
+    so the fan_out lever genuinely fires end-to-end through the CLI: NE on
+    phone AND guard tuning from --labels. --no-measure skips the two dedupe
+    runs -- the lever outputs (not the measurement) are what must round-trip.
+    Doubles as the CLI-level NE YAML regression test: the written matchkey's
+    negative_evidence must survive the reload in EM-learned shape.
+    """
+    from goldenmatch.config.loader import load_config
+
+    from tests.test_splink_upgrade_fanout_e2e import (
+        _build_fixture,
+    )
+    from tests.test_splink_upgrade_fanout_e2e import (
+        _trained_settings as _fanout_trained_settings,
+    )
+
+    settings_path = _write_settings(tmp_path, _fanout_trained_settings())
+    df, labels = _build_fixture()
+    data_path = _write_parquet(tmp_path, df)
+    labels_path = _write_parquet(tmp_path, labels, name="labels.parquet")
+    out_path = tmp_path / "out.yaml"
+    model_path = tmp_path / "model.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "import-splink", str(settings_path),
+            "-o", str(out_path),
+            "--model-out", str(model_path),
+            "--upgrade", str(data_path),
+            "--labels", str(labels_path),
+            "--id-column", "rec_id",
+            "--no-measure",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    # Sanity: the lever really fired -- the raw YAML carries both outputs.
+    raw = yaml.safe_load(out_path.read_text(encoding="utf-8"))
+    assert raw["golden_rules"]["max_cluster_size"] == 10
+    assert raw["matchkeys"][0]["negative_evidence"][0]["field"] == "phone"
+
+    # THE regression: the CLI's own output must reload through load_config.
+    cfg = load_config(str(out_path))
+    gr = cfg.golden_rules
+    assert gr is not None
+    assert gr.max_cluster_size == 10  # tuned value, NOT swept into field_rules
+    assert "max_cluster_size" not in (gr.field_rules or {})
+
+    ne = cfg.get_matchkeys()[0].negative_evidence
+    assert ne, "negative_evidence did not survive the YAML round-trip"
+    assert [n.field for n in ne] == ["phone"]
+    assert ne[0].penalty is None and ne[0].penalty_bits is None  # EM-learned
