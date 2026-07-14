@@ -9,6 +9,25 @@ from goldenmatch._polars_lazy import pl
 
 logger = logging.getLogger(__name__)
 
+# One-time guard for the arrow-lane quality-fix polars-absent warning.
+_QUALITY_FIX_POLARS_WARNED = False
+
+
+def _warn_quality_fix_needs_polars_once() -> None:
+    """Warn (once) that auto-fix is skipped on the arrow lane because polars is
+    absent. The arrow-native SCAN still ran; only the polars-native goldencheck
+    fixer is unavailable. Install ``goldenmatch[polars]`` to re-enable auto-fix."""
+    global _QUALITY_FIX_POLARS_WARNED
+    if _QUALITY_FIX_POLARS_WARNED:
+        return
+    _QUALITY_FIX_POLARS_WARNED = True
+    logger.warning(
+        "GoldenCheck auto-fix skipped: the fixer is polars-native and polars is "
+        "not installed. The arrow-native quality SCAN still ran; detected issues "
+        "are reported but not auto-fixed. Install goldenmatch[polars] to re-enable "
+        "auto-fix on the arrow lane."
+    )
+
 
 def _scan_findings(df, domain: str | None):
     """Run the goldencheck scan and confidence-downgrade pass.
@@ -307,22 +326,41 @@ def _scan_and_fix(
     """Run GoldenCheck scan + apply fixes.
 
     A1: the SCAN runs arrow-native on a pa.Table; ``apply_fixes`` is the
-    single remaining polars surface in goldencheck's fix engine, so the
-    bridge narrows to exactly that call -- and only when the scan found
-    anything (a clean frame stays polars-free). goldencheck-side arrow
-    port of apply_fixes is filed in the endgame plan.
+    single remaining polars surface in goldencheck's fix engine (goldencheck's
+    fixer is polars-native -- its ``[polars]`` extra), so the bridge narrows to
+    exactly that call, and only when the scan found anything (a clean frame
+    stays polars-free).
+
+    Polars-absent degradation (zero-config arrow eviction): on the arrow lane
+    when polars is not importable, keep the arrow-native SCAN but SKIP auto-fix,
+    degrading to scan-only (report the detected issues, apply none) instead of
+    crashing -- auto-fix on the arrow lane requires ``goldenmatch[polars]``. The
+    polars-present path is byte-identical to before.
     """
+    import pyarrow as _pa  # noqa: PLC0415
     from goldencheck.engine.fixer import apply_fixes
 
     findings = _scan_findings(df, domain=domain)
 
-    if not findings and not isinstance(df, pl.DataFrame):
+    # `isinstance(df, pa.Table)` is the arrow-lane discriminator and never imports
+    # polars (pyarrow is always present). A non-arrow frame is the polars lane.
+    _is_arrow = isinstance(df, _pa.Table)
+
+    if not findings and _is_arrow:
         return df, []
 
-    # Apply fixes (polars surface; bridge the table here only)
-    _df_pl = df if isinstance(df, pl.DataFrame) else pl.from_arrow(df)
+    if _is_arrow:
+        try:
+            import polars as _pl_fix  # noqa: PLC0415
+        except ImportError:
+            _warn_quality_fix_needs_polars_once()
+            return _scan_only(df, mode, domain)
+        _df_pl = _pl_fix.from_arrow(df)
+    else:
+        _df_pl = df  # already a polars frame
+
     fixed_df, report = apply_fixes(_df_pl, findings, mode=fix_mode)
-    if not isinstance(df, pl.DataFrame):
+    if _is_arrow:
         fixed_df = fixed_df.to_arrow()  # stay on the caller's lane
 
     # Convert to autofix-compatible format
