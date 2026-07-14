@@ -7,6 +7,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Added
+- **Negative evidence on Fellegi-Sunter (`type: probabilistic`) matchkeys**
+  (Formulation B, EM-learned): `negative_evidence` was previously silently
+  ignored on probabilistic matchkeys (weighted/exact only), which meant every
+  Splink-converted config — exactly one FS matchkey — had no defense against
+  the fan-out/homonym snowball (two distinct people sharing name+city merging
+  because name evidence dominates). Each NE field now joins `train_em` as a
+  constrained EM-learned dimension contributing `log2(m_fired/u_fired)` when
+  it FIRES (both values present + `scorer(a, b) < threshold`, strict `<`) and
+  exactly 0 otherwise — the fired-else-zero clamp is what makes it negative
+  evidence rather than a regular scored field. `NegativeEvidenceField` gets a
+  new `penalty_bits` (log2 LLR fixed override, probabilistic-only, `abs()`
+  applied) alongside the existing `penalty` (still required on weighted/exact,
+  now rejected on probabilistic — set `penalty_bits` instead). Guards: native,
+  fused, and the fast-path scorer all decline NE-bearing FS matchkeys (pure
+  Python fallback; a future kernel port adds `FS_SUPPORTS_NE`); the bucket
+  backend's slim-projection keep-list was extended so an NE-only field (e.g.
+  `phone`, never a regular matchkey field) survives the default
+  `GOLDENMATCH_BUCKET_SLIM_PROJECTION`. `EMResult.validate_for` now requires
+  `match_weights["__ne__<field>"]` for every NE field without `penalty_bits`,
+  so a model trained (or a Splink model imported) before this feature fails
+  loudly instead of silently scoring NE at weight 0. An unregistered/unknown
+  NE scorer on FS fails loud at validation time — unlike weighted's swallow-
+  and-warn `_NE_BROKEN` fallback, this is intentional. Continuous/Winkler-path
+  (`train_em_continuous`) NE is out of scope and rejected with a clear error.
+  Supersedes the deferral in `docs/superpowers/specs/2026-05-21-ne-fs-investigation.md`
+  (Wave D): that investigation judged the Bayesian-factor formulation correct
+  but deferred it believing `P(disagree_NE | match)` needed labeled pairs —
+  stale, since EM already estimates match-conditional probabilities for every
+  regular FS field without labels, and the same machinery estimates them for
+  NE dimensions.
 - **Splink migration upgrade pass** (`goldenmatch import-splink SETTINGS.json
   --upgrade DATA.parquet --model-out MODEL.json`, or
   `gm.upgrade_splink_conversion(conversion, data)` from Python): a data-aware

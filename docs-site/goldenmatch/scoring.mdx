@@ -126,6 +126,39 @@ Key details:
 - Comparison vectors apply field transforms before scoring
 - **Achieves P=0.978 / R=0.958 / F1=0.968 on DBLP-ACM** (full-block vectorized scoring). The old "98.8% / 57.6%" figure was a benchmark artifact — a per-block size cap, not the scorer.
 
+### Negative evidence on Fellegi-Sunter matchkeys
+
+`negative_evidence` is valid on `type: probabilistic` matchkeys (not just `weighted`/`exact`). Each NE field is a constrained EM-learned dimension: it **fires** when both values are present and `scorer(a, b) < threshold` (strict `<`), contributing `log2(m_fired/u_fired)` bits when fired and **exactly 0 when not fired** — that fired-else-zero clamp is what makes it negative evidence rather than a normal scored field (agreement never adds weight; only a hard disagreement subtracts it).
+
+```yaml
+matchkeys:
+  - name: fs_person
+    type: probabilistic
+    fields:
+      - field: first_name
+        scorer: jaro_winkler
+        levels: 2
+        partial_threshold: 0.8
+      - field: city
+        scorer: exact
+        levels: 2
+    negative_evidence:
+      - field: phone
+        scorer: exact
+        threshold: 1.0
+        # penalty_bits: 6.0   # optional fixed override, see below
+```
+
+Two ways to set the fired weight:
+- **EM-learned (default):** omit `penalty_bits`. The weight is estimated from data during `train_em` the same way every other field's m/u is — `m_fired = P(fired | match)`, `u_fired = P(fired | non-match)`, both from the same EM loop and random-pair sample as the regular fields.
+- **`penalty_bits` (fixed override):** a literal log2 LLR in bits; the fired contribution is exactly `-abs(penalty_bits)`, no EM training for that dimension. Useful when you know the right veto strength (e.g. migrating a Splink config) without waiting on EM to converge on enough data.
+
+`penalty` (the weighted/exact knob) and `penalty_bits` are mutually exclusive by matchkey type: weighted/exact matchkeys still require `penalty` and reject `penalty_bits`; probabilistic matchkeys reject `penalty` and accept `penalty_bits` (or neither, for EM-learned).
+
+An unregistered/unknown NE scorer on a probabilistic matchkey **fails loudly** at validation time — unlike the weighted path, which silently swallows a broken NE scorer and warns. This is intentional: FS negative evidence is new enough that a silent no-op would be worse than a hard error.
+
+Guards: the native kernel, the fused-match path, and the fast-path scorer all decline NE-bearing FS matchkeys (pure-Python fallback only; a kernel port is a future phase). Persisted/imported EM models trained before this feature (including imported Splink models) fail loudly on load if the matchkey has NE fields without `penalty_bits` and the model lacks the corresponding trained weights, rather than silently scoring NE at weight 0 — retrain, or set `penalty_bits` to bypass EM entirely. NE is not supported on the continuous/Winkler EM path (`train_em_continuous`), which rejects it with a clear error.
+
 ### Splink-parity surface
 
 The Fellegi-Sunter matchkey is a full probabilistic-linkage engine, not just a scorer:
