@@ -24,7 +24,9 @@ The planned fan-out upgrade lever (v2) is blocked on this core capability.
 Treat an NE disagreement as an additional likelihood factor preserving LLR additivity:
 
 ```
-fired      = both values present (post-transform) AND scorer(a, b) <= threshold
+fired      = both values present (post-transform) AND scorer(a, b) < threshold   # STRICT <, matching
+                                                                                  # weighted NE (core/scorer.py:292,
+                                                                                  # backends/score_buckets.py:942)
 m_ne       = P(fired | match)        # EM-learned (or penalty_bits override)
 u_ne       = P(fired | non-match)    # from random pairs, like every u
 w_fired    = log2(m_ne / u_ne)       # negative when matches rarely fire
@@ -65,9 +67,16 @@ would credit agreement.
   stores `[w_fired, 0.0]`. This rides EMResult schema v1 unchanged (plain dict entries; TS serde
   passes them through; `to_dict`/`from_dict`/`save_json` untouched) -- cross-surface compatible
   for free.
-- The monotone-weights repair (`GOLDENMATCH_FS_MONOTONIC`) must NOT touch `__ne__` entries
-  ([w_fired, 0.0] is intentionally "decreasing" when w_fired < 0... it is [fired, not_fired]
-  ordered, not level-ordered -- exclude NE keys from the repair pass).
+- The monotone-weights repair (`GOLDENMATCH_FS_MONOTONIC`) must exclude `__ne__` entries.
+  Rationale: `[w_fired, 0.0]` is [fired, not_fired]-ordered, not level-ordered. In the normal
+  case (w_fired < 0) the list is non-decreasing and PAV would leave it alone anyway; the
+  exclusion is defensive for the degenerate w_fired > 0 case AND kills the false detection
+  warning `warn` mode would emit. The repair helper already has a `skip_fields` hook
+  (probabilistic.py:153) -- use it.
+- NE field names must NOT appear among the blocking key fields: within-block m-estimation is
+  degenerate when blocking guarantees the NE field agrees (NE never fires in the EM sample).
+  Validation: warning finding/log at train time when an NE field is also a blocking field
+  (not a hard error -- multi-pass blocking may only partially overlap).
 
 ## Scoring
 
@@ -78,8 +87,23 @@ would credit agreement.
   threshold.
 - Normalization/calibration: the min/max total-weight range used by linear normalization and
   `compute_thresholds` must include NE ranges -- min includes `sum(min(w_fired, 0))`, max includes
-  `sum(max(w_fired, 0))` (w_fired is normally negative, so max adds 0). Posterior calibration
-  needs no change (weights are weights).
+  `sum(max(w_fired, 0))` (w_fired is normally negative, so max adds 0). Storing
+  `[w_fired, 0.0]` means `min(list)`/`max(list)` over the `__ne__` entry reproduces these bounds
+  for free IF the range computation iterates all match_weights entries relevant to the matchkey.
+  The range sum is HAND-ROLLED at ~6 sites -- probabilistic.py ~1305, ~1563, ~1675, ~1966, ~2040
+  and probabilistic_fast.py ~79 -- the plan must either centralize it or enumerate and update
+  EVERY site (a missed site produces out-of-[0,1] normalized scores only when NE fires).
+  Posterior calibration needs no change (weights are weights).
+- **Bucket backend slim projection (CRITICAL, easy to miss):** `backends/score_buckets.py:583-604`
+  keeps raw source columns for probabilistic scoring only for `f in mk.fields`; an NE-only field
+  (the canonical phone example) is projected away under the default-on
+  `GOLDENMATCH_BUCKET_SLIM_PROJECTION`, so FS NE would silently never fire on the default bucket
+  backend. Extend the keep-list with `mk.negative_evidence` fields (incl. `derive_from` source
+  columns and synthesized names). The E2E success-bar test must run on the DEFAULT backend to
+  pin this.
+- `core/probabilistic_fast.py` `_resolve_probabilistic_fast_path`: add a negative_evidence
+  decline to its gate (parity-tested fast path currently test-only; a future re-wire must not
+  resurrect the silent-ignore).
 - Continuous/Winkler path (`train_em_continuous` / `score_probabilistic_continuous`): OUT of
   scope -- NE fields are rejected with a clear error if that path is selected with NE present
   (document; that path is already N-level-untested).
@@ -122,3 +146,6 @@ import time -- out of scope here.)
   mechanism).
 - Autoconfig suggesting NE fields on probabilistic matchkeys.
 - Continuous/Winkler-path NE.
+- Explain/evaluate surfaces showing NE contributions (probabilistic.py ~2112, core/evaluate.py
+  ~242 -- they won't break, they just won't itemize NE; follow-up so explain output doesn't
+  misstate totals).
