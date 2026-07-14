@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseConfig } from "../../src/core/index.js";
+import { parse as parseYaml } from "yaml";
+import { parseConfig, parseConfigYaml } from "../../src/core/index.js";
 
 describe("parseConfig", () => {
   it("accepts snake_case keys", () => {
@@ -296,6 +297,128 @@ describe("parseConfig", () => {
       } finally {
         console.warn = origWarn;
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // negative_evidence parsing (was silently dropped for all three types)
+  // -------------------------------------------------------------------------
+
+  describe("negative_evidence parsing", () => {
+    const neSnake = [
+      {
+        field: "phone",
+        transforms: ["digits_only"],
+        scorer: "exact",
+        threshold: 0.5,
+        penalty: 0.4,
+      },
+    ];
+
+    it("parses negative_evidence on weighted matchkeys (regression: was dropped)", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "w",
+            type: "weighted",
+            threshold: 0.9,
+            fields: [
+              { field: "name", transforms: [], scorer: "jaro_winkler", weight: 1 },
+            ],
+            negative_evidence: neSnake,
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("weighted");
+      const ne = mk?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      expect(ne?.[0]?.transforms).toEqual(["digits_only"]);
+      expect(ne?.[0]?.scorer).toBe("exact");
+      expect(ne?.[0]?.threshold).toBe(0.5);
+      expect(ne?.[0]?.penalty).toBe(0.4);
+    });
+
+    it("parses negative_evidence on exact matchkeys", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "e",
+            type: "exact",
+            fields: [{ field: "email", transforms: ["lowercase"], scorer: "exact", weight: 1 }],
+            negative_evidence: neSnake,
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("exact");
+      const ne = mk?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      expect(ne?.[0]?.penalty).toBe(0.4);
+    });
+
+    it("parses negative_evidence on probabilistic matchkeys, camelizing penalty_bits", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "p",
+            type: "probabilistic",
+            fields: [
+              { field: "name", transforms: [], scorer: "jaro_winkler", weight: 1 },
+            ],
+            negative_evidence: [
+              {
+                field: "phone",
+                transforms: ["digits_only"],
+                scorer: "exact",
+                threshold: 0.5,
+                penalty_bits: 2.5,
+              },
+            ],
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("probabilistic");
+      const ne = mk?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      // penalty omitted on the EM-learned/penalty_bits probabilistic shape.
+      expect(ne?.[0]?.penalty).toBeUndefined();
+      // penalty_bits camelized and carried through (typed in a later task).
+      const raw0 = ne?.[0] as unknown as Record<string, unknown>;
+      expect(raw0.penaltyBits).toBe(2.5);
+    });
+
+    it("parses negative_evidence from a YAML config (fan-out lever ingestion path)", () => {
+      const yamlStr = [
+        "matchkeys:",
+        "  - name: w",
+        "    type: weighted",
+        "    threshold: 0.9",
+        "    fields:",
+        "      - field: name",
+        "        transforms: [lowercase]",
+        "        scorer: jaro_winkler",
+        "        weight: 1.0",
+        "    negative_evidence:",
+        "      - field: phone",
+        "        transforms: [digits_only]",
+        "        scorer: exact",
+        "        threshold: 0.5",
+        "        penalty: 0.4",
+      ].join("\n");
+      const config = parseConfigYaml(yamlStr, parseYaml);
+      const ne = config.matchkeys?.[0]?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      expect(ne?.[0]?.transforms).toEqual(["digits_only"]);
+      expect(ne?.[0]?.penalty).toBe(0.4);
     });
   });
 });

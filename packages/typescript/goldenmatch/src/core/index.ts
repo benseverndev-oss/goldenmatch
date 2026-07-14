@@ -299,6 +299,7 @@ export {
   emResultFromJson,
   validateEmResultFor,
   FSModelMismatchError,
+  NegativeEvidenceUnsupportedError,
   EM_RESULT_SCHEMA_VERSION,
 } from "./probabilistic.js";
 export type { EMResult, EMOptions, ContinuousEMResult } from "./probabilistic.js";

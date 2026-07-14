@@ -74,6 +74,34 @@ export class FSModelMismatchError extends Error {
 }
 
 /**
+ * FS negative evidence is not scored on this path (yet). Thrown loudly by
+ * every FS entry point when a probabilistic matchkey carries non-empty
+ * `negativeEvidence`, so a Python-authored NE config can never silently
+ * mis-score in TS. The discrete-path throws are lifted as the port lands
+ * later in this branch; the continuous (Winkler) path never supports NE,
+ * matching Python.
+ */
+export class NegativeEvidenceUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NegativeEvidenceUnsupportedError";
+  }
+}
+
+/** Throw loudly when a probabilistic matchkey carries negative evidence. */
+function assertNoNegativeEvidence(mk: MatchkeyConfig, path: string): void {
+  if (mk.type !== "probabilistic") return;
+  const ne = mk.negativeEvidence;
+  if (ne && ne.length > 0) {
+    const names = ne.map((n) => n.field).join(", ");
+    throw new NegativeEvidenceUnsupportedError(
+      `${path}: negative evidence (${names}) is not scored on this path yet -- ` +
+        `FS negative evidence lands later in this branch; the continuous path never supports it`,
+    );
+  }
+}
+
+/**
  * Serialize an EMResult to the exact JSON shape Python's `EMResult.to_dict()`
  * produces: snake_case keys, `__type__`/`__version__` markers, `tf_freqs`/
  * `tf_collision` as `null` when absent (not omitted — matches Python's
@@ -173,6 +201,7 @@ function matchkeyFieldLevelCount(f: MatchkeyField): number {
  * model.
  */
 export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
+  assertNoNegativeEvidence(mk, "validateEmResultFor");
   for (const f of mk.fields) {
     const weights = em.matchWeights[f.field];
     if (weights === undefined) {
@@ -426,6 +455,7 @@ export function trainEMContinuous(
   mk: MatchkeyConfig,
   options?: EMOptions,
 ): ContinuousEMResult {
+  assertNoNegativeEvidence(mk, "trainEMContinuous");
   const emIterations =
     mk.type === "probabilistic" ? mk.emIterations : undefined;
   const convergenceThreshold =
@@ -595,6 +625,7 @@ export function scoreProbabilisticContinuous(
   em: ContinuousEMResult,
   options?: ProbScoreOptions,
 ): ScoredPair[] {
+  assertNoNegativeEvidence(mk, "scoreProbabilisticContinuous");
   const fields = mk.fields;
   if (fields.length === 0) return [];
 
@@ -658,6 +689,7 @@ export function trainEM(
   mk: MatchkeyConfig,
   options?: EMOptions,
 ): EMResult {
+  assertNoNegativeEvidence(mk, "trainEM");
   // Probabilistic-only parameters; fall through to defaults for other variants.
   const emIterations =
     mk.type === "probabilistic" ? mk.emIterations : undefined;
@@ -837,6 +869,7 @@ export function scoreProbabilistic(
   em: EMResult,
   options?: ProbScoreOptions,
 ): ScoredPair[] {
+  assertNoNegativeEvidence(mk, "scoreProbabilistic");
   const fields = mk.fields;
   if (fields.length === 0) return [];
 
@@ -908,6 +941,7 @@ export function scoreProbabilisticPair(
   mk: MatchkeyConfig,
   em: EMResult,
 ): number {
+  assertNoNegativeEvidence(mk, "scoreProbabilisticPair");
   const fields = mk.fields;
   if (fields.length === 0) return 0.5;
 

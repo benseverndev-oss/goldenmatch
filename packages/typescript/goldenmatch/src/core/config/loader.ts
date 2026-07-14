@@ -9,6 +9,7 @@ import type {
   GoldenMatchConfig,
   MatchkeyConfig,
   MatchkeyField,
+  NegativeEvidenceField,
   BlockingConfig,
   BlockingKeyConfig,
   GoldenRulesConfig,
@@ -339,6 +340,30 @@ function parseMatchkeyField(raw: unknown, ctx: string): MatchkeyField {
   }) as MatchkeyField;
 }
 
+/**
+ * Parse a single negative-evidence entry. Pass-through parsing only: the
+ * per-matchkey-type validation matrix (penalty vs penaltyBits) lives in a
+ * separate validation seam, not here. `penaltyBits` (probabilistic-only,
+ * already camelized from `penalty_bits`) is carried through so loaded
+ * configs don't silently lose it.
+ */
+function parseNegativeEvidenceField(
+  raw: unknown,
+  ctx: string,
+): NegativeEvidenceField {
+  const obj = asObj(raw, ctx);
+  return stripUndefined({
+    field: asStr(obj.field, `${ctx}.field`),
+    transforms: Array.isArray(obj.transforms)
+      ? (obj.transforms as string[])
+      : [],
+    scorer: asStr(obj.scorer, `${ctx}.scorer`),
+    threshold: asNum(obj.threshold, `${ctx}.threshold`),
+    penalty: optNum(obj.penalty),
+    penaltyBits: optNum(obj.penaltyBits),
+  }) as unknown as NegativeEvidenceField;
+}
+
 function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
   const obj = asObj(raw, ctx);
   const fields = Array.isArray(obj.fields)
@@ -355,8 +380,20 @@ function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
     "weighted",
   ) as "exact" | "weighted" | "probabilistic";
 
+  // Parsed for all three matchkey types (previously silently dropped).
+  const negativeEvidence = Array.isArray(obj.negativeEvidence)
+    ? obj.negativeEvidence.map((n: unknown, i: number) =>
+        parseNegativeEvidenceField(n, `${ctx}.negativeEvidence[${i}]`),
+      )
+    : undefined;
+
   if (type === "exact") {
-    return { name, type: "exact", fields };
+    return stripUndefined({
+      name,
+      type: "exact" as const,
+      fields,
+      negativeEvidence,
+    }) as MatchkeyConfig;
   }
   if (type === "probabilistic") {
     return stripUndefined({
@@ -369,6 +406,7 @@ function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
       linkThreshold: optNum(obj.linkThreshold),
       reviewThreshold: optNum(obj.reviewThreshold),
       modelPath: optStr(obj.modelPath),
+      negativeEvidence,
     }) as MatchkeyConfig;
   }
   // weighted
@@ -381,6 +419,7 @@ function parseMatchkeyConfig(raw: unknown, ctx: string): MatchkeyConfig {
     rerank: optBool(obj.rerank),
     rerankModel: optStr(obj.rerankModel),
     rerankBand: optNum(obj.rerankBand),
+    negativeEvidence,
   }) as MatchkeyConfig;
 }
 
