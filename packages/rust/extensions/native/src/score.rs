@@ -374,6 +374,13 @@ pub fn score_block_pairs_fs(
                 )));
             }
         }
+        for (k, &sid) in ns.iter().enumerate() {
+            if sid > 3 {
+                return Err(PyValueError::new_err(format!(
+                    "score_block_pairs_fs: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3)"
+                )));
+            }
+        }
     }
     // NE slices hoisted out of the rayon hot loop (same rationale as
     // `field_thresholds` above); empty slices when NE is absent.

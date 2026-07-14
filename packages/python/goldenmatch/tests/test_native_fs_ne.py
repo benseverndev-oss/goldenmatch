@@ -17,6 +17,7 @@ Skipped when the native extension isn't built.
 from __future__ import annotations
 
 import polars as pl
+import pyarrow as pa
 import pytest
 from goldenmatch.config.schemas import (
     GoldenMatchConfig,
@@ -250,9 +251,7 @@ class TestFsNativeEligibleNE:
     def test_fs_native_eligible_ensemble_ne_declines(self, monkeypatch):
         monkeypatch.delenv("GOLDENMATCH_FS_NATIVE", raising=False)
         monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
-        mk = _ne_mk(
-            [NegativeEvidenceField(field="phone", scorer="ensemble", threshold=0.5)]
-        )
+        mk = _ne_mk([NegativeEvidenceField(field="phone", scorer="ensemble", threshold=0.5)])
         assert _fs_native_eligible(mk) is False
 
 
@@ -272,9 +271,7 @@ def test_native_kwargs_not_sent_without_ne(monkeypatch):
 
     monkeypatch.setattr(_native_loader, "native_module", lambda: _Spy())
 
-    mk = MatchkeyConfig(
-        name="fs", type="probabilistic", fields=_base_fields(), link_threshold=0.0
-    )
+    mk = MatchkeyConfig(name="fs", type="probabilistic", fields=_base_fields(), link_threshold=0.0)
     df = _block_df()
     pairs = score_probabilistic_native(df, mk, _em(_BASE_WEIGHTS))
     assert pairs, "expected pairs at link_threshold=0.0"
@@ -401,9 +398,7 @@ def test_native_success_bar_homonym(monkeypatch):
             f"true duplicate pair {(a, b)} failed to merge on the native path"
         )
     for a, b in homonym_pairs:
-        assert not _same_cluster(mapping, a, b), (
-            f"homonym trap {(a, b)} merged on the native path"
-        )
+        assert not _same_cluster(mapping, a, b), f"homonym trap {(a, b)} merged on the native path"
 
     # Byte-identical clustering vs the pure-Python (numpy) run.
     monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
@@ -413,8 +408,254 @@ def test_native_success_bar_homonym(monkeypatch):
     def _membership(res) -> set[frozenset]:
         clusters = res.clusters
         infos = clusters.values() if isinstance(clusters, dict) else clusters
-        return {
-            frozenset(c["members"] if isinstance(c, dict) else c) for c in infos
-        }
+        return {frozenset(c["members"] if isinstance(c, dict) else c) for c in infos}
 
     assert _membership(native_result) == _membership(python_result)
+
+
+# ---------------------------------------------------------------------------
+# R3: fused kernel (match_fused_fs) — NE + level_thresholds, kernel-direct
+# ---------------------------------------------------------------------------
+
+
+def _fused_fs_call(
+    mod,
+    keys: list[str],
+    field_vals: list[list[str | None]],
+    *,
+    scorer_ids: list[int],
+    levels: list[int],
+    partials: list[float],
+    weights: list[list[float]],
+    min_w: float,
+    w_range: float,
+    threshold: float,
+    **kwargs,
+):
+    """Kernel-direct match_fused_fs call, positional shape mirroring
+    run_match_fused_fs_arrow (fused_match.py): row_ids int64, one large_string
+    block-key column, large_string score columns. calibrated=False, prior_w=0."""
+    n = len(keys)
+    row_ids = pa.array(range(n), type=pa.int64())
+    key_arrs = [pa.array(keys, type=pa.large_string())]
+    score_arrs = [pa.array(v, type=pa.large_string()) for v in field_vals]
+    return mod.match_fused_fs(
+        row_ids,
+        key_arrs,
+        score_arrs,
+        scorer_ids,
+        levels,
+        partials,
+        weights,
+        False,
+        0.0,
+        min_w,
+        w_range,
+        threshold,
+        **kwargs,
+    )
+
+
+def _memberships(clusters) -> set[frozenset]:
+    return {frozenset(c) for c in clusters}
+
+
+def _multi_memberships(clusters) -> set[frozenset]:
+    return {frozenset(c) for c in clusters if len(c) >= 2}
+
+
+def test_fused_exports_level_thresholds_const():
+    mod = _native_loader.native_module()
+    assert getattr(mod, "FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", False) is True
+
+
+# Interleaved block keys: rows of the same key are NOT adjacent in input order,
+# so the kernel's block gather REORDERS rows. Block "b" = rows {0, 2}, block
+# "a" = rows {1, 3}.
+_FUSED_KEYS = ["b", "a", "b", "a"]
+
+
+def _fused_ne_base_kwargs() -> dict:
+    """One exact regular field, all values identical (agreement weight 2.0 for
+    every within-block pair). NE-aware normalization range hand-set:
+    min = -2.0 + -4.0 = -6.0, max = 2.0, range = 8.0. No fire -> score 1.0;
+    fired (-4.0) -> score 0.5. threshold 0.75 sits between the two."""
+    return dict(
+        scorer_ids=[_EXACT],
+        levels=[2],
+        partials=[0.5],
+        weights=[[-2.0, 2.0]],
+        min_w=-6.0,
+        w_range=8.0,
+        threshold=0.75,
+    )
+
+
+def test_fused_fs_ne_fires():
+    """NE flips both within-block pairs below the threshold — and doubles as
+    the gather-trap test: NE values are chosen per ORIGINAL row index
+    (["P", "P", "Q", "Q"]) so that after the block gather (either block-order:
+    [0,2,1,3] or [1,3,0,2]) an unpermuted-NE bug would read same-valued
+    positions (no fire, pairs merge) instead of the true differing row values
+    (fire, all singletons)."""
+    mod = _native_loader.native_module()
+    kw = _fused_ne_base_kwargs()
+    field_vals = [["same", "same", "same", "same"]]
+
+    without_ne = _fused_fs_call(mod, _FUSED_KEYS, field_vals, **kw)
+    # No NE: both within-block pairs score 1.0 >= 0.75 -> {0,2} and {1,3} merge.
+    assert _multi_memberships(without_ne) == {frozenset({0, 2}), frozenset({1, 3})}
+
+    with_ne = _fused_fs_call(
+        mod,
+        _FUSED_KEYS,
+        field_vals,
+        **kw,
+        ne_fields=[pa.array(["P", "P", "Q", "Q"], type=pa.large_string())],
+        ne_scorer_ids=[_EXACT],
+        ne_thresholds=[0.5],
+        ne_weights=[-4.0],
+    )
+    # Correct NE indexing: row 0 ("P") vs row 2 ("Q") fires; row 1 ("P") vs
+    # row 3 ("Q") fires -> both pairs drop to 0.5 < 0.75 -> all singletons.
+    # An unpermuted-NE bug reads adjacent gathered positions (equal values,
+    # no fire) and wrongly keeps both merges.
+    assert _multi_memberships(with_ne) == set()
+    assert _memberships(with_ne) == {
+        frozenset({0}),
+        frozenset({1}),
+        frozenset({2}),
+        frozenset({3}),
+    }
+
+
+def test_fused_fs_ne_null_and_empty_never_fire():
+    mod = _native_loader.native_module()
+    kw = _fused_ne_base_kwargs()
+    field_vals = [["same", "same", "same", "same"]]
+    without_ne = _fused_fs_call(mod, _FUSED_KEYS, field_vals, **kw)
+    # None on one side / "" on one side: inconclusive, NE contributes 0.
+    with_ne = _fused_fs_call(
+        mod,
+        _FUSED_KEYS,
+        field_vals,
+        **kw,
+        ne_fields=[pa.array([None, "", "X", "Y"], type=pa.large_string())],
+        ne_scorer_ids=[_EXACT],
+        ne_thresholds=[0.5],
+        ne_weights=[-4.0],
+    )
+    assert _memberships(with_ne) == _memberships(without_ne)
+
+
+def test_fused_fs_level_thresholds_bands():
+    """Custom banding [[0.9, 0.5]] + 3-entry weights, hand-computed membership.
+
+    Single block, levenshtein sims: (0,1)=1.0, (0,2)=(1,2)=0.75, (2,3)=0.25,
+    (0,3)=(1,3)=0.0. Weights [-2.0, 1.0, 3.0], linear range [-2.0, 3.0]:
+    level 2 -> 1.0, level 1 -> 0.6, level 0 -> 0.0. threshold 0.55.
+
+    Custom banding: 0.75 >= 0.5 -> level 1 (0.6 links) -> cluster {0, 1, 2}.
+    Legacy 3-level banding (partial 0.8): 0.75 < 0.8 -> level 0 -> only (0,1)
+    links -> cluster {0, 1}. A kernel that ignores the kwarg fails the first
+    assertion; the second proves the difference is the kwarg."""
+    mod = _native_loader.native_module()
+    keys = ["k", "k", "k", "k"]
+    field_vals = [["aaaa", "aaaa", "aaab", "bbbb"]]
+    kw = dict(
+        scorer_ids=[1],  # levenshtein
+        levels=[3],
+        partials=[0.8],
+        weights=[[-2.0, 1.0, 3.0]],
+        min_w=-2.0,
+        w_range=5.0,
+        threshold=0.55,
+    )
+    custom = _fused_fs_call(mod, keys, field_vals, **kw, level_thresholds=[[0.9, 0.5]])
+    assert _multi_memberships(custom) == {frozenset({0, 1, 2})}
+
+    legacy = _fused_fs_call(mod, keys, field_vals, **kw)
+    assert _multi_memberships(legacy) == {frozenset({0, 1})}
+
+
+def test_fused_fs_ne_validation_errors():
+    mod = _native_loader.native_module()
+    kw = _fused_ne_base_kwargs()
+    field_vals = [["same", "same", "same", "same"]]
+    ne_col = pa.array(["P", "P", "Q", "Q"], type=pa.large_string())
+
+    # Partial NE kwarg group.
+    with pytest.raises(ValueError, match="match_fused_fs"):
+        _fused_fs_call(mod, _FUSED_KEYS, field_vals, **kw, ne_fields=[ne_col])
+
+    # Mismatched lengths across the four (2 fields vs 1 of the rest).
+    with pytest.raises(ValueError, match="match_fused_fs"):
+        _fused_fs_call(
+            mod,
+            _FUSED_KEYS,
+            field_vals,
+            **kw,
+            ne_fields=[ne_col, ne_col],
+            ne_scorer_ids=[_EXACT],
+            ne_thresholds=[0.5],
+            ne_weights=[-4.0],
+        )
+
+    # ne_fields[k] length != row count.
+    with pytest.raises(ValueError, match="match_fused_fs"):
+        _fused_fs_call(
+            mod,
+            _FUSED_KEYS,
+            field_vals,
+            **kw,
+            ne_fields=[pa.array(["P", "Q"], type=pa.large_string())],
+            ne_scorer_ids=[_EXACT],
+            ne_thresholds=[0.5],
+            ne_weights=[-4.0],
+        )
+
+    # NE scorer id outside score_one's implemented 0..=3 range.
+    with pytest.raises(ValueError, match="match_fused_fs"):
+        _fused_fs_call(
+            mod,
+            _FUSED_KEYS,
+            field_vals,
+            **kw,
+            ne_fields=[ne_col],
+            ne_scorer_ids=[9],
+            ne_thresholds=[0.5],
+            ne_weights=[-4.0],
+        )
+
+    # level_thresholds length != field count.
+    with pytest.raises(ValueError, match="match_fused_fs"):
+        _fused_fs_call(
+            mod,
+            _FUSED_KEYS,
+            field_vals,
+            **kw,
+            level_thresholds=[[0.9, 0.5], [0.9]],
+        )
+
+    # weights-vs-thresholds arity: 2 thresholds need 3 weights, got 2.
+    with pytest.raises(ValueError, match="match_fused_fs"):
+        _fused_fs_call(
+            mod,
+            _FUSED_KEYS,
+            field_vals,
+            **kw,
+            level_thresholds=[[0.9, 0.5]],
+        )
+
+
+def test_kernel_ne_scorer_id_validated():
+    """Ride-along: score_block_pairs_fs rejects NE scorer ids outside 0..=3."""
+    mod = _native_loader.native_module()
+    with pytest.raises(ValueError, match="score_block_pairs_fs"):
+        mod.score_block_pairs_fs(
+            *_base_args(),
+            ne_values=[["X", "X", "Y"]],
+            ne_scorer_ids=[9],
+            ne_thresholds=[0.5],
+            ne_weights=[-4.0],
+        )
