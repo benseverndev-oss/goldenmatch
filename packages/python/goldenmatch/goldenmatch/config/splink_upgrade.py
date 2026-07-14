@@ -434,12 +434,145 @@ def _lever_distance_thresholds(ctx: _LeverContext) -> None:
             ]
 
 
+# Pair-count cap for calibration scoring -- matches train_em's
+# n_sample_pairs default (the same distributional budget EM trains on).
+_CALIBRATION_MAX_PAIRS = 10_000
+
+# compute_thresholds' data-driven branch requires len(scored_weights)
+# STRICTLY > 50; at or below it silently falls through to fixed defaults
+# (0.50, 0.35), which must never be presented as "calibrated".
+_CALIBRATION_MIN_PAIRS = 50
+
+
 def _lever_calibration(ctx: _LeverContext) -> None:
+    # Runs AFTER levers 1-2 by design (registry order): it calibrates the
+    # thresholds against the model users will actually run.
     if ctx.conversion.em_model is None:
         ctx.report.info("upgrade:calibration", _BARE_SETTINGS_SKIP_MSG, mapped_to=None)
         return
-    # U4 replaces this stub with the real lever.
-    raise NotImplementedError("calibration lever body lands in Task U4")
+
+    from goldenmatch.core.probabilistic import (
+        _fs_calibration_mode,
+        _sample_blocked_pairs,
+        comparison_vector,
+        compute_thresholds,
+    )
+
+    mapped_to = "matchkeys[0].link_threshold/review_threshold"
+
+    # Posterior mode check FIRST, before any pair work: in posterior scoring
+    # mode (GOLDENMATCH_FS_CALIBRATED=posterior, read via
+    # _fs_calibration_mode) compute_thresholds deliberately returns fixed
+    # absolute probability cuts (0.99, 0.50) and ignores the distribution,
+    # so there is nothing data-driven to calibrate.
+    if _fs_calibration_mode() == "posterior":
+        ctx.report.info(
+            "upgrade:calibration",
+            "skipped: posterior calibration mode (GOLDENMATCH_FS_CALIBRATED) "
+            "uses fixed absolute cuts (0.99/0.50) by design; distribution "
+            "calibration does not apply",
+            mapped_to=mapped_to,
+        )
+        return
+
+    assert ctx.em_model is not None  # copy of conversion.em_model (checked above)
+    em = ctx.em_model
+    mk = ctx.upgraded_config.get_matchkeys()[0]
+
+    blocking = ctx.upgraded_config.blocking
+    if blocking is None:
+        ctx.report.warn(
+            "upgrade:calibration",
+            "skipped: config has no blocking configuration, cannot enumerate "
+            "blocked candidate pairs",
+            mapped_to=mapped_to,
+        )
+        return
+
+    # Candidate pairs -- PREFERRED route (Task U4 investigation): reuse the
+    # exact pipeline entrypoints rather than re-deriving blocking semantics.
+    # core/pipeline.py builds `blocks = build_blocks(combined_lf,
+    # config.blocking)` on a __row_id__-carrying LazyFrame (its private
+    # `_add_row_ids` = with_row_index("__row_id__") + Int64 cast, mirrored
+    # inline here) and hands them to train_em, which samples via
+    # `_sample_blocked_pairs(blocks, n_pairs, seed)`. Calling the same two
+    # functions keeps the lever's candidate set identical in shape to what
+    # EM trains on; the group-rows-yourself fallback was not needed.
+    from goldenmatch.core.blocker import build_blocks
+
+    lf = ctx.df.lazy()
+    if "__row_id__" not in ctx.df.columns:
+        lf = lf.with_row_index("__row_id__")
+    lf = lf.with_columns(pl.col("__row_id__").cast(pl.Int64))
+    blocks = build_blocks(lf, blocking)
+    pairs = _sample_blocked_pairs(blocks, n_pairs=_CALIBRATION_MAX_PAIRS, seed=ctx.seed)
+
+    if len(pairs) <= _CALIBRATION_MIN_PAIRS:
+        ctx.report.warn(
+            "upgrade:calibration",
+            f"skipped: only {len(pairs)} blocked candidate pair(s) on the "
+            f"sample; data-driven threshold calibration needs more than "
+            f"{_CALIBRATION_MIN_PAIRS} scored pairs (below that "
+            "compute_thresholds falls back to fixed defaults, which would "
+            "not be calibrated) -- thresholds left unset",
+            mapped_to=mapped_to,
+        )
+        return
+
+    # Score every candidate pair with the UPGRADED model (post levers 1-2):
+    # comparison vector + summed Fellegi-Sunter match weights, with NO
+    # link-threshold cut (score_probabilistic filters to survivors; the
+    # calibration needs the full distribution). Row lookup mirrors train_em.
+    from goldenmatch.core.frame import to_frame
+
+    cols = [f.field for f in mk.fields if f.field is not None and f.field != "__record__"]
+    row_lookup: dict[int, dict] = {}
+    for row in to_frame(lf.collect()).select_dicts(["__row_id__"] + cols):
+        row_lookup[row["__row_id__"]] = row
+
+    # (index-into-comparison-vector, model-weight-key) pairs; converted
+    # configs always carry a field name, the filter narrows the Optional.
+    indexed_fields = [(k, f.field) for k, f in enumerate(mk.fields) if f.field is not None]
+
+    total_weights: list[float] = []
+    for a, b in pairs:
+        vec = comparison_vector(row_lookup.get(a, {}), row_lookup.get(b, {}), mk)
+        total_weights.append(
+            sum(em.match_weights[name][vec[k]] for k, name in indexed_fields)
+        )
+
+    # Normalize the SAME way runtime scoring does (score_probabilistic):
+    # against the MODEL-derived min/max total weight, not the observed
+    # min/max -- at run time mk.link_threshold is compared to model-range
+    # normalized scores, so the calibrated cuts must live on that scale.
+    max_weight = sum(max(em.match_weights[name]) for _, name in indexed_fields)
+    min_weight = sum(min(em.match_weights[name]) for _, name in indexed_fields)
+    weight_range = max_weight - min_weight
+    if weight_range <= 0:
+        ctx.report.warn(
+            "upgrade:calibration",
+            "skipped: model match-weight range is degenerate (max == min), "
+            "cannot normalize pair weights -- thresholds left unset",
+            mapped_to=mapped_to,
+        )
+        return
+    normalized = [(w - min_weight) / weight_range for w in total_weights]
+
+    link, review = compute_thresholds(em, scored_weights=normalized)
+    mk.link_threshold = link
+    mk.review_threshold = review
+
+    sorted_norm = sorted(normalized)
+    n = len(sorted_norm)
+    p50 = sorted_norm[n // 2]
+    p95 = sorted_norm[min(n - 1, int(round(0.95 * (n - 1))))]
+    ctx.report.info(
+        "upgrade:calibration",
+        f"link_threshold={link}, review_threshold={review} calibrated from "
+        f"{n} blocked candidate pairs (normalized weight p50={p50:.4f}, "
+        f"p95={p95:.4f})",
+        mapped_to=mapped_to,
+    )
 
 
 _LEVER_REGISTRY: dict[str, Callable[[_LeverContext], None]] = {

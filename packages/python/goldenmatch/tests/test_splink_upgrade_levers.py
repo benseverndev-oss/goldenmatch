@@ -286,19 +286,6 @@ def test_bare_settings_distance_thresholds_lever_still_applies():
     assert result.em_model is None
 
 
-# ── Trained settings: calibration lever body not yet implemented ─────────────
-
-
-def test_trained_settings_calibration_lever_reaches_stub():
-    conversion = from_splink(_trained_settings())
-    assert conversion.em_model is not None
-
-    with pytest.raises(NotImplementedError):
-        upgrade_splink_conversion(
-            conversion, _sample_df(), levers={"calibration"}, measure=False
-        )
-
-
 # ── Lever 1: TF tables ────────────────────────────────────────────────────────
 
 
@@ -697,6 +684,191 @@ def test_distance_thresholds_lever_baseline_thresholds_unchanged():
 
     assert conversion.config.model_dump() == baseline_dump_before
     assert _field(conversion.config, "email").level_thresholds == pytest.approx([0.9, 0.7])
+
+
+# ── Lever 3: threshold calibration ───────────────────────────────────────────
+
+
+def _calibration_settings():
+    """Trained settings blocked on surname ONLY (a single static key), so the
+    blocked candidate pairs are exactly the within-surname-group pairs --
+    tests engineer the pair count via group sizes (a group of n rows yields
+    n*(n-1)/2 pairs).
+
+    proportion_matched drives compute_thresholds' percentile indices
+    (link at 1 - 2*p, review at 1 - 5*p): 0.05 lands them in the BODY of the
+    570-pair fixture distribution. A near-zero p would push both indices
+    into the saturated exact-dupe top (normalized weight 1.0) and collapse
+    link == review == the 0.95 clamp."""
+    return {
+        "comparisons": [_trained_jw_comparison(), _trained_exact_comparison("surname")],
+        "blocking_rules_to_generate_predictions": ['l."surname" = r."surname"'],
+        "probability_two_random_records_match": 0.05,
+    }
+
+
+def _calibration_block_names():
+    """20 first_names with a similarity SPREAD: exact dupes, near-dupes,
+    unrelated."""
+    return (
+        ["alice"] * 5  # exact duplicates
+        + ["alicia", "alissa"]  # near-dupes of alice
+        + ["bob", "bobb"]  # near pair
+        + [
+            "carol", "dave", "erin", "frank", "grace", "henry",
+            "irene", "jack", "karen", "louis", "xavier",
+        ]  # unrelated
+    )
+
+
+def _calibration_df():
+    """60 rows in three surname blocks of 20 rows each -- 3 * C(20,2) = 570
+    blocked candidate pairs (well over 50) with a spread of first_name
+    similarities inside every block."""
+    fn: list[str] = []
+    sn: list[str] = []
+    for s in ("smith", "jones", "brown"):
+        fn.extend(_calibration_block_names())
+        sn.extend([s] * 20)
+    return pl.DataFrame({"first_name": fn, "surname": sn})
+
+
+def test_calibration_lever_sets_thresholds_and_finding():
+    conversion = from_splink(_calibration_settings())
+    assert conversion.em_model is not None
+    baseline_mk = conversion.config.get_matchkeys()[0]
+    assert baseline_mk.link_threshold is None
+    assert baseline_mk.review_threshold is None
+
+    result = upgrade_splink_conversion(
+        conversion, _calibration_df(), levers={"calibration"}, measure=False
+    )
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    assert isinstance(upgraded_mk.link_threshold, float)
+    assert isinstance(upgraded_mk.review_threshold, float)
+    assert 0.0 < upgraded_mk.link_threshold < 1.0
+    assert 0.0 < upgraded_mk.review_threshold < 1.0
+    assert upgraded_mk.review_threshold < upgraded_mk.link_threshold
+
+    # Baseline stays uncalibrated (copy-on-write).
+    assert conversion.config.get_matchkeys()[0].link_threshold is None
+    assert conversion.config.get_matchkeys()[0].review_threshold is None
+
+    findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "info"
+    ]
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert str(upgraded_mk.link_threshold) in msg
+    assert str(upgraded_mk.review_threshold) in msg
+    assert "570" in msg  # n blocked candidate pairs
+
+
+def test_calibration_lever_exactly_50_pairs_skips():
+    """compute_thresholds' data-driven branch requires len STRICTLY > 50; at
+    exactly 50 it silently falls through to fixed defaults, which must never
+    be presented as calibrated -- the lever skips at <= 50."""
+    conversion = from_splink(_calibration_settings())
+
+    # Block sizes 5 + 9 + 3 + 2 -> 10 + 36 + 3 + 1 = exactly 50 pairs;
+    # unique-surname singletons contribute nothing.
+    sizes = {"smith": 5, "jones": 9, "brown": 3, "davis": 2, "solo1": 1, "solo2": 1}
+    fn: list[str] = []
+    sn: list[str] = []
+    i = 0
+    for surname, n in sizes.items():
+        for _ in range(n):
+            fn.append(f"name{i}")
+            sn.append(surname)
+            i += 1
+    df = pl.DataFrame({"first_name": fn, "surname": sn})
+
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"calibration"}, measure=False
+    )
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold is None
+    assert upgraded_mk.review_threshold is None
+
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "warning"
+    ]
+    assert len(warn_findings) == 1
+    assert "50" in warn_findings[0].message
+    assert "skip" in warn_findings[0].message.lower()
+
+
+def test_calibration_lever_tiny_df_skips():
+    conversion = from_splink(_calibration_settings())
+    df = pl.DataFrame(
+        {
+            "first_name": ["alice", "alice", "bob", "bob"],
+            "surname": ["smith", "smith", "jones", "jones"],
+        }
+    )  # two blocks of 2 -> 2 blocked pairs
+
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"calibration"}, measure=False
+    )
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold is None
+    assert upgraded_mk.review_threshold is None
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "warning"
+    ]
+    assert len(warn_findings) == 1
+
+
+def test_calibration_lever_posterior_mode_skips(monkeypatch):
+    """Posterior scoring mode: compute_thresholds returns fixed absolute cuts
+    (0.99/0.50) by design and ignores the distribution -- the lever detects
+    the mode (read from GOLDENMATCH_FS_CALIBRATED by _fs_calibration_mode)
+    and skips with an info note, before any pair work."""
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+    conversion = from_splink(_calibration_settings())
+
+    result = upgrade_splink_conversion(
+        conversion, _calibration_df(), levers={"calibration"}, measure=False
+    )
+
+    upgraded_mk = result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold is None
+    assert upgraded_mk.review_threshold is None
+    info_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "info"
+    ]
+    assert len(info_findings) == 1
+    assert "posterior" in info_findings[0].message.lower()
+
+
+def test_lever_order_tf_tables_then_distance_then_calibration():
+    """All three levers emit at least one finding on any trained run; their
+    first occurrences must appear in canonical registry order."""
+    from goldenmatch.config.splink_upgrade import _LEVER_ORDER
+
+    assert _LEVER_ORDER == ("tf_tables", "distance_thresholds", "calibration")
+
+    conversion = from_splink(_trained_settings_with_levenshtein())
+    # 15 identical emails -> one block of 15 -> 105 blocked pairs (> 50), so
+    # the calibration lever runs for real after the distance lever adjusts
+    # the model.
+    df = _levenshtein_df(mean_len=20, n=15)
+
+    result = upgrade_splink_conversion(conversion, df, measure=False)
+
+    paths = [f.splink_path for f in result.report.findings]
+    first = {
+        name: paths.index(f"upgrade:{name}")
+        for name in ("tf_tables", "distance_thresholds", "calibration")
+    }
+    assert first["tf_tables"] < first["distance_thresholds"] < first["calibration"]
 
 
 # ── Unknown lever name ────────────────────────────────────────────────────────
