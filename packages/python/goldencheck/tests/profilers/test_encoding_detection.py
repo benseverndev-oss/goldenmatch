@@ -40,6 +40,24 @@ def test_control_chars_detected():
     assert any("control" in f.message.lower() for f in findings)
 
 
+def test_zero_width_and_smart_quotes_detected_arrow_path():
+    """Regression: on the Arrow scan path (``scan_dataframe(pa.Table)``) the
+    zero-width / smart-quote patterns run through Polars' Rust regex, which
+    rejects ``\\uXXXX`` escapes with ``invalid escape sequence: \\u`` -- so the
+    profiler raised on EVERY string column and detection was silently dead.
+    Building the char classes from literal chars fixes it."""
+    import pyarrow as pa
+
+    tbl = pa.table({"c": ["clean", "bad​value", "he‘llo", "normal"]})
+    findings = EncodingDetectionProfiler().profile(tbl, "c")
+    messages = [f.message.lower() for f in findings]
+    assert any("zero-width" in m for m in messages)
+    assert any("smart quote" in m or "curly" in m for m in messages)
+    # clean-only Arrow column: no error, no false positive
+    clean = pa.table({"c": ["ann", "bob", "cara"]})
+    assert EncodingDetectionProfiler().profile(clean, "c") == []
+
+
 def test_zero_width_confidence():
     df = pl.DataFrame({"name": ["Alice", "Bob\u200B", "Charlie"]})
     findings = EncodingDetectionProfiler().profile(df, "name")

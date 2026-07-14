@@ -15,11 +15,16 @@ SMART_QUOTES = "\u2018\u2019\u201C\u201D"
 # Common encoding-issue chars: é, ñ, ü, etc.
 NON_ASCII_PATTERN = r"[^\x00-\x7F]"
 
-# Zero-width pattern
-ZERO_WIDTH_PATTERN = r"[\u200B\u200C\u200D\uFEFF]"
+# Zero-width / smart-quote char classes built from the ACTUAL characters, NOT
+# `\uXXXX` escapes: these patterns run through Polars' Rust `regex` engine
+# (`str_match_count` / `str_filter`), which does NOT accept `\u` syntax and raised
+# `invalid escape sequence: \u` on EVERY string column -- silently killing
+# zero-width + smart-quote detection. Literal Unicode chars in a `[...]` class are
+# accepted; the chars here are not regex metacharacters, so no escaping is needed.
+ZERO_WIDTH_PATTERN = f"[{ZERO_WIDTH_CHARS}]"
 
 # Smart quotes pattern
-SMART_QUOTES_PATTERN = r"[\u2018\u2019\u201C\u201D]"
+SMART_QUOTES_PATTERN = f"[{SMART_QUOTES}]"
 
 # Control characters (non-printable, excluding tab/newline/CR)
 CONTROL_CHAR_PATTERN = r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]"
