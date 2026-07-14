@@ -38,6 +38,18 @@ from goldenmatch.config.from_splink import (
 from goldenmatch.config.from_splink import (
     SplinkConversionError as SplinkConversionError,
 )
+
+# MigrationResult/SplinkUpgradeError re-exported alongside
+# upgrade_splink_conversion() below, mirroring the SplinkConversion pattern
+# above -- lightweight dataclass/exception types, no heavy deps beyond
+# config.splink_upgrade (which is itself import-light; the measurement
+# stage's dedupe_df pull is lazy-imported inside the function body).
+from goldenmatch.config.splink_upgrade import (
+    MigrationResult,
+)
+from goldenmatch.config.splink_upgrade import (
+    SplinkUpgradeError as SplinkUpgradeError,
+)
 from goldenmatch.core.autoconfig_verify import PostflightReport
 
 if TYPE_CHECKING:
@@ -394,6 +406,39 @@ def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkCon
     """
     from goldenmatch.config.from_splink import from_splink as _from_splink
     return _from_splink(source, strict=strict)
+
+
+def upgrade_splink_conversion(
+    conversion: SplinkConversion,
+    data: pl.DataFrame | str | Path,
+    *,
+    sample_cap: int = 100_000,
+    seed: int = 42,
+    splink_clusters: pl.DataFrame | str | Path | None = None,
+    labels: pl.DataFrame | str | Path | None = None,
+    levers: set[str] | None = None,
+    measure: bool = True,
+    id_column: str | None = None,
+) -> MigrationResult:
+    """Run the data-aware upgrade pass over a converted Splink config.
+
+    See :func:`goldenmatch.config.splink_upgrade.upgrade_splink_conversion`
+    for the canonical docstring (levers, sampling, measurement contract).
+    """
+    from goldenmatch.config.splink_upgrade import (
+        upgrade_splink_conversion as _upgrade_splink_conversion,
+    )
+    return _upgrade_splink_conversion(
+        conversion,
+        data,
+        sample_cap=sample_cap,
+        seed=seed,
+        splink_clusters=splink_clusters,
+        labels=labels,
+        levers=levers,
+        measure=measure,
+        id_column=id_column,
+    )
 
 
 def dedupe(
