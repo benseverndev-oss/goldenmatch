@@ -653,7 +653,11 @@ def _lever_calibration(ctx: _LeverContext) -> None:
 
     # The imported random-pair prior is deliberately discarded in favor of an
     # errs-HIGH within-block re-estimate; see _estimate_within_block_prior's
-    # docstring for the full safety rationale. The scratch copy keeps the
+    # docstring for the full safety rationale. This estimate is NE-INCLUSIVE
+    # by design (total_weights above already carry per-pair NE contributions,
+    # matching runtime scoring); the fan_out lever's regular-only estimate is
+    # different on purpose -- it runs pre-NE, gating whether NE should exist
+    # at all (see splink_upgrade_fanout). The scratch copy keeps the
     # SHIPPED model's proportion_matched untouched: the re-estimated rate only
     # parameterizes this threshold computation.
     within_block_rate = _estimate_within_block_prior(total_weights)

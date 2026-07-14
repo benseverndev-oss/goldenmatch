@@ -175,7 +175,9 @@ def import_splink_cmd(
         None,
         "--upgrade",
         help=(
-            "Run the data-aware upgrade pass against this dataset (parquet/csv). "
+            "Run the data-aware upgrade pass against this dataset (parquet/csv): "
+            "four levers -- tf_tables, distance_thresholds, fan_out (negative "
+            "evidence + cluster-guard tuning), calibration. "
             "Writes the UPGRADED config/model to --output/--model-out and the "
             "faithful baseline alongside as out.baseline.yaml/model.baseline.json."
         ),

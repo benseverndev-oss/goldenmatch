@@ -945,6 +945,20 @@ def test_calibration_runs_on_ne_bearing_config():
     assert len(info_findings) == 1
     assert "570" in info_findings[0].message  # n blocked candidate pairs
 
+    # Mutation square: the NE contributions genuinely MOVE the calibrated
+    # cuts. An implementation that silently dropped NE from the per-pair
+    # weight sums / normalization range would still produce in-range floats
+    # above -- but it would land exactly where the plain (no-NE) conversion
+    # lands on the same data, and this assert would catch it.
+    plain_result = upgrade_splink_conversion(
+        from_splink(_calibration_settings()),
+        _calibration_df_with_phone(phones),
+        levers={"calibration"},
+        measure=False,
+    )
+    plain_mk = plain_result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold != plain_mk.link_threshold
+
 
 def test_calibration_ne_parity_when_never_fires():
     """A zero-contribution NE (``__ne__`` weight range [0.0, 0.0]) on an
