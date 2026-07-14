@@ -229,6 +229,21 @@ function optNum(v: unknown): number | undefined {
   return typeof v === "number" ? v : undefined;
 }
 
+/**
+ * Like `optNum`, but throws when the value is PRESENT and not a number
+ * (mirrors Pydantic's type errors). `optNum`'s silent-undefined behavior is
+ * wrong for validated knobs: a mistyped `penalty: "0.4"` would vanish, then
+ * either produce a misleading "requires 'penalty'" error (weighted/exact) or
+ * be silently accepted (probabilistic).
+ */
+function optNumStrict(v: unknown, ctx: string): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "number") {
+    throw new Error(`${ctx}: expected number, got ${typeof v}`);
+  }
+  return v;
+}
+
 function optBool(v: unknown): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
@@ -375,14 +390,15 @@ function parseNegativeEvidenceField(
     );
   }
 
-  const penalty = optNum(obj.penalty);
+  const penalty = optNumStrict(obj.penalty, `${ctx}.penalty`);
   if (penalty !== undefined && !(penalty >= 0 && penalty <= 1)) {
     throw new Error(`${ctx}.penalty: must be in [0, 1], got ${penalty}.`);
   }
 
-  // penaltyBits (camelized from penalty_bits) is deliberately unconstrained,
-  // matching Python's `penalty_bits: float | None = None` (no ge/le bounds).
-  const penaltyBits = optNum(obj.penaltyBits);
+  // penaltyBits (camelized from penalty_bits) is deliberately unconstrained
+  // in RANGE, matching Python's `penalty_bits: float | None = None` (no
+  // ge/le bounds) — but its TYPE is still enforced (strict, like penalty).
+  const penaltyBits = optNumStrict(obj.penaltyBits, `${ctx}.penalty_bits`);
 
   return {
     field: asStr(obj.field, `${ctx}.field`),

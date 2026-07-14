@@ -477,9 +477,12 @@ describe("parseConfig", () => {
     });
 
     it("probabilistic NE with penalty throws, pointing at penalty_bits", () => {
+      // /EM-learned/ is unique to the probabilistic-side message (the
+      // weighted-side message also mentions penalty_bits, so matching that
+      // alone would pass under a matrix routing bug).
       expect(() =>
         parseConfig(mkWith("probabilistic", { penalty: 0.4 })),
-      ).toThrow(/penalty_bits/);
+      ).toThrow(/EM-learned/);
     });
 
     it("probabilistic NE with penalty_bits parses, penaltyBits typed and set", () => {
@@ -534,6 +537,28 @@ describe("parseConfig", () => {
       expect(() => parseConfig(mkWith("weighted", { penalty: -0.1 }))).toThrow(
         /penalty/,
       );
+    });
+
+    it("NE threshold NaN throws (negated-conjunction range check rejects NaN)", () => {
+      // YAML can't express NaN, but parseConfig takes JS objects directly.
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: 0.4, threshold: NaN })),
+      ).toThrow(/threshold/);
+    });
+
+    it("mistyped NE penalty (string) throws a type error naming penalty", () => {
+      // Easy YAML mistake: quoted number. Must NOT vanish into undefined
+      // (misleading "requires 'penalty'" on weighted, silent accept on
+      // probabilistic — Python's Pydantic raises a type error here).
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: "0.4" })),
+      ).toThrow(/penalty.*expected number, got string/);
+    });
+
+    it("mistyped NE penalty_bits (string) throws a type error on probabilistic", () => {
+      expect(() =>
+        parseConfig(mkWith("probabilistic", { penalty_bits: "2.5" })),
+      ).toThrow(/penalty_bits.*expected number, got string/);
     });
 
     it("NE penalty_bits is unconstrained (negative and large values parse)", () => {
