@@ -4,6 +4,14 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.5] - 2026-07-14
+
+### Changed
+- goldenmatch floor to `goldenmatch[polars]>=3.3` (3.3.0: Arrow-native
+  auto-config input -- `auto_configure_df` / zero-config `dedupe_df` accept a
+  bare `pyarrow.Table`; the auto-config stack drops its own hard Polars
+  dependency -- plus the fused golden kernel reachable on the Polars-free lane).
+
 ## [0.2.4] - 2026-07-13
 
 ### Changed

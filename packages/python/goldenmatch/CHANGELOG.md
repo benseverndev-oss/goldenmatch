@@ -4,6 +4,27 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [3.3.0] - 2026-07-14
+
+### Added
+- **Arrow-native auto-config input**: `auto_configure_df` (and `dedupe_df` /
+  `match_df` zero-config) now accept a bare `pyarrow.Table` (or any Frame) in
+  addition to a `polars.DataFrame` / `LazyFrame`; the pre-3.3 Arrow shim rejected
+  a bare `pa.Table` with a `TypeError`. The auto-config layer (arrow-to-polars
+  dtype classification, controller gates, sampling, blocking-size measurement,
+  the v0 heuristic, negative-evidence, and preflight verify) is ported onto the
+  Frame seam, so the auto-config stack no longer carries a hard Polars dependency
+  of its own -- the last Polars island the 3.0.0 eviction left in the zero-config
+  path's config layer. A non-Polars input is coerced to Polars once at the
+  boundary, producing a byte-identical config to the same data passed as a
+  `polars.DataFrame`.
+
+### Performance
+- **Fused golden kernel reachable on the Polars-free lane**: the Arrow-native
+  fused golden-record kernel was silently unreachable on the Polars-free path;
+  wiring it up makes the Polars-free lane beat the Polars-present lane on the
+  golden-record build.
+
 ## [3.2.0] - 2026-07-13
 
 ### Added
