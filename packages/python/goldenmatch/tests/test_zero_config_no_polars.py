@@ -147,7 +147,12 @@ def test_zero_config_arrow_with_exact_column_matches_polars():
                     )
                 ),
             )
-        return (getattr(cfg, "backend", None), mks, blk)
+        # `backend` EXCLUDED: with GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default-on
+        # the arrow sample routes to the bucket scorer, so `backend` reads
+        # "bucket" on arrow vs None on polars -- a benign difference (identical
+        # clusters, #526). Everything that decides the output (mks + blocking)
+        # must still agree.
+        return (mks, blk)
 
     cfg_pl = auto_configure_df(pl.DataFrame(data), _skip_finalize=True)
     cfg_pa = auto_configure_df(pa.table(data), _skip_finalize=True)

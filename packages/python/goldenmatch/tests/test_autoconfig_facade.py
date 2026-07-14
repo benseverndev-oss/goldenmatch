@@ -155,8 +155,17 @@ def test_auto_configure_df_accepts_polars_frame_wrapper():
 
 
 def test_auto_configure_df_accepts_arrow_frame_wrapper():
-    """An ArrowFrame-wrapped df goes through the pl.from_arrow shim (W5
-    removes the shim; until then the config must match the polars call)."""
+    """An ArrowFrame-wrapped df produces an EQUIVALENT config to the polars call.
+
+    Since GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE defaults on (2026-07-14), the arrow
+    path stays native through the controller instead of coercing to polars. It is
+    CLUSTER-equivalent to the polars path (proven comprehensively in
+    test_autoconfig_arrow_native_parity.py) but NOT byte-identical in the
+    committed config: the sample dedupe routes to the bucket scorer, so `backend`
+    reads "bucket" vs None; and blocking-COLUMN selection can differ on a near-tie
+    because `Frame.sample` is statistical-not-byte across backends by design. So
+    assert the identity-determining part (matchkeys) matches and the config is
+    valid, rather than a full model_dump byte-match."""
     from goldenmatch.core.frame import ArrowFrame
     df = pl.DataFrame({
         "name": ["alice", "bob", "carol"] * 4,
@@ -165,4 +174,11 @@ def test_auto_configure_df_accepts_arrow_frame_wrapper():
     raw = goldenmatch.auto_configure_df(df)
     wrapped = goldenmatch.auto_configure_df(ArrowFrame(df.to_arrow()))
     assert isinstance(wrapped, GoldenMatchConfig)
-    assert wrapped.model_dump() == raw.model_dump()
+
+    def _mks(cfg):
+        return sorted(
+            (mk.type, tuple(sorted(f.field for f in (mk.fields or []) if f.field)))
+            for mk in cfg.get_matchkeys()
+        )
+
+    assert _mks(wrapped) == _mks(raw)

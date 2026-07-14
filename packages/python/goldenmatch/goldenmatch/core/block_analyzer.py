@@ -327,9 +327,12 @@ def estimate_recall(
     if not pairs_above:
         return 1.0  # No pairs to miss
 
-    # Apply candidate transforms to sample and get block keys
+    # Apply candidate transforms to sample and get block keys. The helper
+    # returns a seam Frame (not a raw frame), so read the column through the
+    # seam -- a raw `["__block_key__"]` subscript raises on the arrow-native
+    # lane ('PolarsFrame'/'ArrowFrame' object is not subscriptable).
     sample_with_key = _apply_candidate_transforms(sample_frame.native, candidate)
-    block_keys = sample_with_key["__block_key__"].to_list()
+    block_keys = to_frame(sample_with_key).column("__block_key__").to_list()
 
     # Check how many pairs share the same block key
     pairs_in_same_block = sum(
