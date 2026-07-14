@@ -121,7 +121,7 @@ def _polars_importable() -> bool:
     Under the zero-polars import blocker the ``import polars`` raises
     ImportError, so this returns False and callers take the seam-native path."""
     try:
-        import polars  # noqa: F401
+        import polars  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
         return True
     except ImportError:

@@ -4649,7 +4649,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
 
 
 def auto_configure_probabilistic_df(
-    df: pl.DataFrame | pl.LazyFrame,
+    df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (arrow lane)
     llm_provider: str | None = None,
 ) -> GoldenMatchConfig:
     """Build a Fellegi-Sunter *probabilistic* config straight from a DataFrame.

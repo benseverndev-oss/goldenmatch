@@ -14,11 +14,9 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import polars as pl
-
     from goldenmatch.config.schemas import GoldenMatchConfig
 
 logger = logging.getLogger(__name__)
@@ -37,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_autoconfig_sig ON autoconfig_runs (profile_signat
 """
 
 
-def profile_signature(df: pl.DataFrame, *, mode: str = "dedupe") -> str:
+def profile_signature(df: Any, *, mode: str = "dedupe") -> str:
     """Compute a per-column-name signature for a DataFrame.
 
     Two frames hash to the same signature only when they have the same

@@ -3814,7 +3814,7 @@ def run_match(
 
 
 def _run_match_pipeline(
-    combined_lf: pl.LazyFrame,
+    combined_lf: Any,  # pl.LazyFrame (classic) | seam Frame (arrow lane)
     config: GoldenMatchConfig,
     matchkeys: list,
     target_ids: set,
@@ -4167,12 +4167,12 @@ def _run_match_pipeline(
 
 
 def _run_match_scoring_and_output(
-    combined_frame,
+    combined_frame: Any,
     config: GoldenMatchConfig,
     matchkeys: list,
     target_ids: set,
-    memory_store,
-    quarantine_df_match,
+    memory_store: Any,
+    quarantine_df_match: Any,
     *,
     output_matched: bool = False,
     output_unmatched: bool = False,
@@ -4319,7 +4319,7 @@ def _run_match_scoring_and_output(
 
     matched_target_ids = set(target_matches.keys())
     unmatched_ids = target_ids - matched_target_ids
-    _unmatched_mask = pc.is_in(
+    _unmatched_mask = pc.is_in(  # pyright: ignore[reportAttributeAccessIssue]
         combined_native.column("__row_id__"),
         value_set=pa.array(sorted(unmatched_ids)),
     )
@@ -4383,7 +4383,7 @@ def run_match_df(
 
         from goldenmatch.core.frame import to_frame as _tf_rmd
 
-        def _prep_arrow(tbl, source, offset):
+        def _prep_arrow(tbl: Any, source: str, offset: int):
             n = tbl.num_rows
             arrs, names = [], []
             for name in tbl.column_names:
