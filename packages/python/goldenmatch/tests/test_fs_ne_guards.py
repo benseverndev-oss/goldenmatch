@@ -1,4 +1,9 @@
-"""Guards: NE never crosses the native/fused/fast-path boundaries.
+"""Guards: NE capability boundaries for the native/fused/fast paths.
+
+Native (R2, FS_SUPPORTS_NE): the real kernel now scores NE, so the native
+gate ACCEPTS NE-bearing matchkeys when every NE scorer is native AND the
+module advertises ``FS_SUPPORTS_NE``; old wheels (the mocks below) lack the
+const and decline. The fused and probabilistic-fast paths still decline NE.
 
 Mirrors the level_thresholds gate-test scaffolding in
 tests/test_nlevel_banding.py -- synthetic native mocks + a real-kernel
@@ -56,10 +61,10 @@ def _mk_plain():
 
 
 def _fake_native_module_supporting():
-    """A kernel advertising every capability this suite might ask for
-    (mirrors test_nlevel_banding.py's supporting fake) -- NE must still
-    decline because the kernel never advertises FS_SUPPORTS_NE (it doesn't
-    exist yet; this is a future capability the kernel port will add)."""
+    """A kernel advertising every PRE-NE capability (mirrors
+    test_nlevel_banding.py's supporting fake) -- i.e. an OLD WHEEL: it has the
+    FS kernel + FS_SUPPORTS_LEVEL_THRESHOLDS but lacks FS_SUPPORTS_NE, so an
+    NE-bearing matchkey must decline (NE never crosses an old wheel's FFI)."""
     class _Fake:
         FS_SUPPORTS_LEVEL_THRESHOLDS = True
 
@@ -102,14 +107,17 @@ def _native_fs_available():
 
 
 @pytest.mark.skipif(not _native_fs_available(), reason="native FS kernel not built")
-def test_fs_native_eligible_declines_ne_real_kernel(monkeypatch):
-    """Against the real in-tree/wheel kernel: an NE-bearing matchkey is
-    declined regardless of what the kernel advertises (no FS_SUPPORTS_NE
-    exists yet)."""
+def test_fs_native_eligible_accepts_ne_real_kernel(monkeypatch):
+    """Against the real in-tree/wheel kernel: an NE-bearing matchkey whose NE
+    scorer is native IS eligible when the kernel advertises FS_SUPPORTS_NE
+    (R2 gate widening); a kernel without the const declines (mock test above).
+    Eligibility tracks the loaded kernel's capability, either way."""
     monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
     monkeypatch.setenv("GOLDENMATCH_NATIVE", "1")
 
-    assert _fs_native_eligible(_mk_ne()) is False
+    from goldenmatch.core import _native_loader
+    supports_ne = getattr(_native_loader.native_module(), "FS_SUPPORTS_NE", False)
+    assert _fs_native_eligible(_mk_ne()) is bool(supports_ne)
     assert _fs_native_eligible(_mk_plain()) is True
 
 

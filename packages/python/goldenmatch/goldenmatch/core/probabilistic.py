@@ -2276,16 +2276,21 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
     without it declines here, so those environments keep the pure-Python
     (numpy/scalar) fallback where `_levels_from_similarity` does the banding.
 
-    NE never crosses the FFI; a future kernel port adds ``FS_SUPPORTS_NE``.
-    Any ``mk.negative_evidence`` declines here unconditionally, keeping
-    NE-bearing matchkeys on the pure-Python (numpy/scalar) fallback.
+    Negative evidence (``mk.negative_evidence``) is native from
+    goldenmatch-native >= 0.1.15: eligible when EVERY NE field's scorer is in
+    ``_NATIVE_FS_SCORER_IDS`` (an ``ensemble``-scorer NE field — autoconfig's
+    default pick for unknown columns — declines the whole matchkey to the
+    numpy path) AND the loaded module exposes ``FS_SUPPORTS_NE``. Old wheels
+    lack the const and decline here exactly as before the port.
     """
     if not _fs_native_enabled():
         return False
     if not mk.fields:
         return False
-    if mk.negative_evidence:
-        return False
+    ne_fields = mk.negative_evidence or []
+    for ne in ne_fields:
+        if ne.scorer not in _NATIVE_FS_SCORER_IDS:
+            return False
     needs_level_thresholds = False
     for f in mk.fields:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
@@ -2303,6 +2308,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             mod, "FS_SUPPORTS_LEVEL_THRESHOLDS", False
         ):
             return False  # old wheel: level_thresholds never crosses its FFI
+        if ne_fields and not getattr(mod, "FS_SUPPORTS_NE", False):
+            return False  # old wheel: NE never crosses its FFI
         return True
     except Exception:
         return False
@@ -2319,7 +2326,9 @@ def score_probabilistic_native(
     Output-equivalent (within rapidfuzz tolerance) to
     ``score_probabilistic_vectorized``: same transformed values
     (``_field_values_for_block``), same level mapping, same EM match weights,
-    same calibration + threshold. The kernel replaces the per-field numpy NxN
+    same negative-evidence firing rule + fired weights (EM-learned
+    ``__ne__<field>`` entries or the ``penalty_bits`` override), same
+    calibration + threshold. The kernel replaces the per-field numpy NxN
     matrices with a single GIL-released per-pair Rust loop. Caller gates on
     ``_fs_native_eligible``.
     """
@@ -2336,11 +2345,11 @@ def score_probabilistic_native(
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
-    # NE never crosses the FFI (the kernel's score_one doesn't implement it) --
-    # a future kernel port adds FS_SUPPORTS_NE. `_fs_native_eligible` declines
-    # NE-bearing matchkeys, so `fs_weight_range` sees no NE fields here in
-    # practice; centralized anyway so this site can't drift from the other
-    # scoring paths for non-NE configs.
+    # NE-aware weight envelope (FS_SUPPORTS_NE): NE fields cross the FFI on
+    # this path now, and `fs_weight_range` genuinely covers their (min, max)
+    # contribution here -- `-abs(penalty_bits)` or the EM-learned
+    # `__ne__<field>` fired weight -- the same centralized envelope the numpy
+    # and scalar paths normalize against.
     min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
     if mk.link_threshold is not None:
@@ -2356,24 +2365,47 @@ def score_probabilistic_native(
     # Kernel canonicalizes pair_key to (min,max); pass exclude pre-canonicalized.
     excl = [(a, b) if a < b else (b, a) for a, b in exclude_pairs]
 
-    # Custom banding (goldenmatch-native >= 0.1.14). Only send the kwarg when a
-    # field actually sets level_thresholds — an old wheel must NEVER see it,
-    # even if the eligibility gate ever drifted.
+    # Optional capability kwargs. Each group is sent ONLY when the matchkey
+    # actually uses the feature — an old wheel must NEVER see the kwarg, even
+    # if the eligibility gate ever drifted.
+    opt_kwargs: dict = {}
+
+    # Custom banding (goldenmatch-native >= 0.1.14).
     level_thresholds = [
         list(f.level_thresholds) if f.level_thresholds is not None else None
         for f in mk.fields
     ]
     if any(t is not None for t in level_thresholds):
-        pairs = native_module().score_block_pairs_fs(
-            row_ids, [n], field_values, scorer_ids, levels, partials, weights,
-            calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
-            level_thresholds=level_thresholds,
-        )
-    else:
-        pairs = native_module().score_block_pairs_fs(
-            row_ids, [n], field_values, scorer_ids, levels, partials, weights,
-            calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
-        )
+        opt_kwargs["level_thresholds"] = level_thresholds
+
+    # Negative evidence (goldenmatch-native >= 0.1.15, FS_SUPPORTS_NE). Values
+    # go through the same _field_values_for_block transform path as regular
+    # fields (NegativeEvidenceField shares the .field/.transforms duck-type;
+    # derive_from-synthesized NE columns already exist on the block frame via
+    # precompute_matchkey_transforms upstream). w_fired resolution mirrors
+    # _ne_scalar_contribution: -abs(penalty_bits) when set, else the
+    # EM-learned __ne__<field> fired weight (a missing entry raising KeyError
+    # matches the scalar path's contract; validate_for guarantees it exists).
+    ne_fields = mk.negative_evidence or []
+    if ne_fields:
+        opt_kwargs["ne_values"] = [
+            _field_values_for_block(block_df, ne, n) for ne in ne_fields
+        ]
+        opt_kwargs["ne_scorer_ids"] = [
+            _NATIVE_FS_SCORER_IDS[ne.scorer] for ne in ne_fields
+        ]
+        opt_kwargs["ne_thresholds"] = [float(ne.threshold) for ne in ne_fields]
+        opt_kwargs["ne_weights"] = [
+            -abs(float(ne.penalty_bits)) if ne.penalty_bits is not None
+            else float(em_result.match_weights[f"__ne__{ne.field}"][0])
+            for ne in ne_fields
+        ]
+
+    pairs = native_module().score_block_pairs_fs(
+        row_ids, [n], field_values, scorer_ids, levels, partials, weights,
+        calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
+        **opt_kwargs,
+    )
     return [(a, b, round(float(s), 4)) for a, b, s in pairs]
 
 
