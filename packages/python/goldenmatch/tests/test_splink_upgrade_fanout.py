@@ -1,8 +1,8 @@
 """Tests for the fan_out upgrade lever -- Task F1 scaffold (registry wiring,
 lever ordering, bare-settings skip, the shared within-block prior helper,
-reference-input context threading), Task F2 NE candidate eligibility, and
-Task F3 risk gate + posterior-weighted NE estimation. The cluster-guard
-tuning body is a no-op stub until Task F4.
+reference-input context threading), Task F2 NE candidate eligibility, Task
+F3 risk gate + posterior-weighted NE estimation, and Task F4 cluster-guard
+tuning.
 
 Spec: docs/superpowers/specs/2026-07-14-fanout-ne-upgrade-lever-design.md
 """
@@ -590,6 +590,168 @@ def test_fan_out_block_size_findings():
     assert res.upgraded_config.blocking.max_block_size == conversion.config.blocking.max_block_size
 
 
+# ── Posterior definition + weighting pin (F3 ride-along) ─────────────────────
+
+
+def _mixed_pair_df():
+    """One ``city`` block designed so the pinned within-block-prior posterior
+    and an equal-odds (prior_w=0) posterior genuinely diverge around the 0.9
+    confidence floor:
+
+    - 6 homonym groups of 3 (both names shared, phones differ): confident
+      FIRING pairs under either prior.
+    - 10 true-duplicate groups of 3 (names + phone shared): confident
+      non-firing pairs.
+    - 4 MIXED rows (shared surname, distinct first names, distinct phones):
+      C(4,2)=6 pairs whose total weight (+10 surname-agree, -6 first_name-
+      disagree = +4 bits under ``_mixed_pair_em_model``) sits ABOVE the 0.9
+      floor equal-odds (posterior ~0.94) but BELOW it under the re-estimated
+      within-block prior -- an equal-odds substitution would misclassify
+      them AND weight them differently in m_fire.
+    """
+    rows: list[dict] = []
+    counter = 0
+
+    def next_phone() -> str:
+        nonlocal counter
+        counter += 1
+        return f"555-{counter:07d}"
+
+    for g in range(6):
+        for _ in range(3):
+            rows.append(
+                {
+                    "first_name": f"homfn{g}",
+                    "surname": f"homsn{g}",
+                    "city": "c1",
+                    "phone": next_phone(),
+                }
+            )
+    for g in range(10):
+        shared = next_phone()
+        for _ in range(3):
+            rows.append(
+                {
+                    "first_name": f"dupfn{g}",
+                    "surname": f"dupsn{g}",
+                    "city": "c1",
+                    "phone": shared,
+                }
+            )
+    for k in range(4):
+        rows.append(
+            {
+                "first_name": f"mixfn{k}",
+                "surname": "mixshared",
+                "city": "c1",
+                "phone": next_phone(),
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def _mixed_pair_em_model():
+    """Asymmetric hand-built weights: surname-agree-only pairs land at
+    10 - 6 = +4 bits -- confident equal-odds (0.941 >= 0.9) but not under
+    the within-block prior re-estimate (prior << 0.5 on this block)."""
+    return EMResult(
+        m_probs={"first_name": [0.05, 0.95], "surname": [0.02, 0.98]},
+        u_probs={"first_name": [0.9, 0.1], "surname": [0.95, 0.05]},
+        match_weights={"first_name": [-6.0, 4.0], "surname": [-6.0, 10.0]},
+        converged=True,
+        iterations=5,
+        proportion_matched=0.01,
+    )
+
+
+def test_fan_out_posterior_definition_pinned():
+    """Pin the POSTERIOR DEFINITION (within-block prior re-estimate, not
+    equal-odds) and the posterior WEIGHTING of m_fire (not count-based):
+    replicate the pinned math by hand in the test and require the stored
+    ``match_weights["__ne__phone"][0]`` to match it to 1e-9, while both an
+    equal-odds substitution and a count-based m_fire come out different."""
+    from goldenmatch.config.schemas import NegativeEvidenceField
+    from goldenmatch.config.splink_upgrade import _CALIBRATION_MAX_PAIRS
+    from goldenmatch.config.splink_upgrade_fanout import (
+        _PROB_CLAMP,
+        _random_pair_firing_rate,
+    )
+    from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.core.probabilistic import (
+        _ne_fired,
+        _sample_blocked_pairs,
+        comparison_vector,
+        posterior_from_weight,
+        prior_weight,
+    )
+
+    df = _mixed_pair_df()
+    conversion = _fanout_conversion(em=_mixed_pair_em_model())
+
+    res = upgrade_splink_conversion(
+        conversion, df, levers={"fan_out"}, measure=False
+    )
+
+    key = "__ne__phone"
+    assert res.em_model is not None and key in res.em_model.match_weights
+    stored_w = res.em_model.match_weights[key][0]
+
+    # ── Hand-replicate the pinned math on the same pair sample ──────────
+    mk = res.upgraded_config.get_matchkeys()[0]
+    em_weights = {"first_name": [-6.0, 4.0], "surname": [-6.0, 10.0]}
+    lf = (
+        df.lazy()
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    blocks = build_blocks(lf, _blocking("city"))
+    pairs = _sample_blocked_pairs(blocks, n_pairs=_CALIBRATION_MAX_PAIRS, seed=42)
+    row_lookup = {
+        i: {**row, "__row_id__": i} for i, row in enumerate(df.to_dicts())
+    }
+    indexed = [(k, f.field) for k, f in enumerate(mk.fields)]
+    totals = []
+    for a, b in pairs:
+        vec = comparison_vector(row_lookup[a], row_lookup[b], mk)
+        totals.append(sum(em_weights[name][vec[k]] for k, name in indexed))
+
+    # Pinned posterior: within-block prior re-estimate, NOT equal-odds.
+    prior = _estimate_within_block_prior(totals)
+    prior_w = prior_weight(prior)
+    posteriors = [posterior_from_weight(w, prior_w) for w in totals]
+    ne = NegativeEvidenceField(
+        field="phone", transforms=["digits_only"], scorer="exact", threshold=0.4
+    )
+    fired = [_ne_fired(row_lookup[a], row_lookup[b], ne) for a, b in pairs]
+
+    def clamp(p):
+        return min(max(p, _PROB_CLAMP), 1.0 - _PROB_CLAMP)
+
+    m_fire = clamp(
+        sum(p for p, f in zip(posteriors, fired) if f) / sum(posteriors)
+    )
+    u_fire = clamp(_random_pair_firing_rate(row_lookup, ne, 42))
+    expected_w = math.log2(m_fire / u_fire)
+    assert stored_w == pytest.approx(expected_w, abs=1e-9)
+
+    # ── The fixture genuinely separates the two priors at the 0.9 floor ──
+    post_eq = [posterior_from_weight(w, 0.0) for w in totals]
+    assert any(pe >= 0.9 > pp for pe, pp in zip(post_eq, posteriors))
+
+    # ── An equal-odds substitution would change the stored value ────────
+    m_eq = clamp(sum(p for p, f in zip(post_eq, fired) if f) / sum(post_eq))
+    w_eq = math.log2(m_eq / u_fire)
+    assert abs(w_eq - stored_w) > 1e-6
+
+    # ── A count-based m_fire (fired/confident counts) would too ─────────
+    confident = [p >= 0.9 for p in posteriors]
+    m_count = clamp(
+        sum(1 for f, c in zip(fired, confident) if f and c) / sum(confident)
+    )
+    w_count = math.log2(m_count / u_fire)
+    assert abs(w_count - stored_w) > 1e-6
+
+
 def test_fan_out_runs_under_posterior_mode(monkeypatch):
     """The lever's posterior math is mode-independent: it RUNS (does not
     skip) under GOLDENMATCH_FS_CALIBRATED=posterior -- only the calibration
@@ -603,3 +765,171 @@ def test_fan_out_runs_under_posterior_mode(monkeypatch):
 
     mk = res.upgraded_config.get_matchkeys()[0]
     assert [ne.field for ne in (mk.negative_evidence or [])] == ["phone"]
+
+
+# ── Cluster-guard tuning (Task F4) ───────────────────────────────────────────
+
+
+def _guard_df():
+    """The F3 fixture frame with a unique ``rec_id`` id column (0..199) so
+    guard tuning can join a reference (``rec_id`` is not a default id-column
+    name, so tests pass ``id_column="rec_id"`` explicitly)."""
+    return _fanout_df().with_row_index("rec_id")
+
+
+def _labels_df(n_rows, big_cluster_size, prefix="c"):
+    """rec_id 0..n-1: one cluster of ``big_cluster_size``, rest singletons."""
+    clusters = [
+        f"{prefix}big" if i < big_cluster_size else f"{prefix}{i}"
+        for i in range(n_rows)
+    ]
+    return pl.DataFrame({"rec_id": list(range(n_rows)), "cluster": clusters})
+
+
+def _guard_findings(result, severity=None):
+    return [
+        f
+        for f in _fan_out_findings(result, severity)
+        if "max_cluster_size" in f.message or "guard tuning" in f.message
+    ]
+
+
+def test_guard_tuned_from_labels():
+    # Symmetric clamp: the floor wins (max(10, 2*4)=10), mid-size doubles
+    # (30 -> 60), and a genuinely-large reference RAISES the default 100
+    # (80 -> 160).
+    for ref_max, expected in ((4, 10), (30, 60), (80, 160)):
+        res = upgrade_splink_conversion(
+            _fanout_conversion(),
+            _guard_df(),
+            labels=_labels_df(200, ref_max),
+            id_column="rec_id",
+            levers={"fan_out"},
+            measure=False,
+        )
+
+        gr = res.upgraded_config.golden_rules
+        assert gr is not None
+        assert gr.max_cluster_size == expected
+
+        tuned = [
+            f for f in _guard_findings(res, "info") if "->" in f.message
+        ]
+        assert len(tuned) == 1
+        msg = tuned[0].message
+        assert f"100 -> {expected}" in msg
+        assert "labels" in msg
+        assert str(ref_max) in msg
+
+
+def test_guard_prefers_labels_over_splink_clusters():
+    res = upgrade_splink_conversion(
+        _fanout_conversion(),
+        _guard_df(),
+        labels=_labels_df(200, 4),
+        splink_clusters=_labels_df(200, 30, prefix="s"),
+        id_column="rec_id",
+        levers={"fan_out"},
+        measure=False,
+    )
+
+    gr = res.upgraded_config.golden_rules
+    assert gr is not None
+    # labels (max 4 -> cap 10) win over splink_clusters (max 30 -> cap 60).
+    assert gr.max_cluster_size == 10
+    tuned = [f for f in _guard_findings(res, "info") if "->" in f.message]
+    assert len(tuned) == 1
+    assert "labels" in tuned[0].message
+    assert "splink_clusters" not in tuned[0].message
+
+
+def test_guard_skips_without_reference():
+    res = upgrade_splink_conversion(
+        _fanout_conversion(), _guard_df(), id_column="rec_id",
+        levers={"fan_out"}, measure=False,
+    )
+
+    # BASELINE default semantics preserved: no golden_rules invented, so the
+    # runtime default max_cluster_size=100 stays in effect.
+    assert res.upgraded_config.golden_rules is None
+    skips = [
+        f for f in _guard_findings(res, "info") if "no reference" in f.message
+    ]
+    assert len(skips) == 1
+
+
+def test_guard_skips_on_unjoinable_ids():
+    # Reference ids share nothing with the data's rec_id values.
+    disjoint = pl.DataFrame(
+        {"rec_id": [f"X{i}" for i in range(200)], "cluster": ["c"] * 200}
+    )
+    res = upgrade_splink_conversion(
+        _fanout_conversion(),
+        _guard_df(),
+        labels=disjoint,
+        id_column="rec_id",
+        levers={"fan_out"},
+        measure=False,
+    )
+
+    assert res.upgraded_config.golden_rules is None
+    skips = [
+        f for f in _guard_findings(res, "info") if "id_column" in f.message
+    ]
+    assert len(skips) == 1
+    assert "labels" in skips[0].message
+
+    # Positional fallback: no id_column and no id-ish column in the df --
+    # positional indices cannot join a reference, even one keyed 0..n-1.
+    res2 = upgrade_splink_conversion(
+        _fanout_conversion(),
+        _fanout_df(),  # first_name/surname/city/phone only
+        labels=_labels_df(200, 30),
+        levers={"fan_out"},
+        measure=False,
+    )
+
+    assert res2.upgraded_config.golden_rules is None
+    skips2 = [
+        f for f in _guard_findings(res2, "info") if "id_column" in f.message
+    ]
+    assert len(skips2) == 1
+    assert "positional" in skips2[0].message
+
+
+def test_guard_baseline_untouched():
+    conversion = _fanout_conversion()
+
+    res = upgrade_splink_conversion(
+        conversion,
+        _guard_df(),
+        labels=_labels_df(200, 30),
+        id_column="rec_id",
+        levers={"fan_out"},
+        measure=False,
+    )
+
+    # The guard DID tune the upgraded copy...
+    assert res.upgraded_config.golden_rules is not None
+    assert res.upgraded_config.golden_rules.max_cluster_size == 60
+    # ...while baseline + original conversion stay untouched (copy-on-write).
+    assert conversion.config.golden_rules is None
+    assert res.baseline_config.golden_rules is None
+
+
+def test_guard_bad_id_column_warns():
+    res = upgrade_splink_conversion(
+        _fanout_conversion(),
+        _guard_df(),
+        labels=_labels_df(200, 30),
+        id_column="nope",
+        levers={"fan_out"},
+        measure=False,
+    )
+
+    # Never-fail contract: _resolve_ids raises SplinkUpgradeError for a
+    # missing id_column; the guard wraps it into a warn+skip.
+    assert res.upgraded_config.golden_rules is None
+    warns = [f for f in _guard_findings(res, "warning") if "nope" in f.message]
+    assert len(warns) == 1
+    assert "skipped" in warns[0].message.lower()

@@ -8,24 +8,27 @@ Runs between ``distance_thresholds`` and ``calibration`` in the upgrade pass
 imports this module). Task F1 landed the scaffold (bare-settings skip, no-op
 stub bodies); Task F2 the NE candidate eligibility (``_ne_candidates``);
 Task F3 the risk gate + posterior-weighted NE estimation
-(``_suggest_negative_evidence``). The cluster-guard tuning body arrives in
-Task F4.
+(``_suggest_negative_evidence``); Task F4 the reference-driven cluster-guard
+tuning (``_tune_cluster_guard``).
 """
 from __future__ import annotations
 
 import math
 import random
+from collections import Counter
 from dataclasses import dataclass
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import (
     BlockingConfig,
+    GoldenRulesConfig,
     MatchkeyConfig,
     NegativeEvidenceField,
 )
 from goldenmatch.config.splink_upgrade import (
     _CALIBRATION_MAX_PAIRS,
     _CALIBRATION_MIN_PAIRS,
+    SplinkUpgradeError,
     _estimate_within_block_prior,
     _LeverContext,
 )
@@ -372,5 +375,111 @@ def _random_pair_firing_rate(
     return n_fired / drawn if drawn else 0.0
 
 
+_GUARD_MAPPED_TO = "golden_rules.max_cluster_size"
+
+
 def _tune_cluster_guard(ctx: _LeverContext) -> None:
-    pass  # Task F4
+    """Reference-driven ``golden_rules.max_cluster_size`` tuning (spec:
+    "Guard tuning").
+
+    Reference priority: ``ctx.labels`` (true cluster sizes) ->
+    ``ctx.splink_clusters`` (the user's old Splink output sizes) -> skip with
+    an info finding (no invented reference). The reference joins the sampled
+    rows through the same ``id_column`` mechanism measurement uses; when ids
+    cannot be joined (positional fallback, zero overlap) the guard skips with
+    an info finding naming ``id_column=``. With a joined reference the cap is
+    SYMMETRIC -- ``max(_GUARD_MIN_CAP, 2 * reference_max_cluster_size)`` may
+    tighten below or loosen above the default 100. Never fails the pass:
+    ``_resolve_ids`` raises on a missing/duplicate explicit ``id_column`` and
+    ``_load_reference`` on a bad path/shape; both become warn+skip here
+    (measurement's later identical calls surface the same problems there).
+    """
+    # Lazy: the measure module pulls in metric helpers (mirrors how
+    # splink_upgrade lazy-imports run_measurement; keeps fanout import-light).
+    from goldenmatch.config.splink_upgrade_measure import (
+        _POSITIONAL_ID_SOURCE,
+        _load_reference,
+        _resolve_ids,
+    )
+
+    if ctx.labels is not None:
+        reference, ref_name = ctx.labels, "labels"
+    elif ctx.splink_clusters is not None:
+        reference, ref_name = ctx.splink_clusters, "splink_clusters"
+    else:
+        ctx.report.info(
+            "upgrade:fan_out",
+            "guard tuning skipped: no reference provided (pass labels= or "
+            "splink_clusters=); golden_rules.max_cluster_size untouched",
+            mapped_to=_GUARD_MAPPED_TO,
+        )
+        return
+
+    try:
+        ids, id_source = _resolve_ids(ctx.df, ctx.id_column)
+    except SplinkUpgradeError as exc:
+        ctx.report.warn(
+            "upgrade:fan_out",
+            f"guard tuning skipped: {exc} -- golden_rules.max_cluster_size "
+            "untouched",
+            mapped_to=_GUARD_MAPPED_TO,
+        )
+        return
+    if id_source == _POSITIONAL_ID_SOURCE:
+        ctx.report.info(
+            "upgrade:fan_out",
+            "guard tuning skipped: sample ids are positional row indices, "
+            f"which cannot join the {ref_name} reference -- pass id_column= "
+            "naming the data column that matches the reference ids",
+            mapped_to=_GUARD_MAPPED_TO,
+        )
+        return
+
+    try:
+        mapping, n_ref_rows = _load_reference(reference, set(ids))
+    except Exception as exc:  # bad path/shape: the lever never fails the pass
+        ctx.report.warn(
+            "upgrade:fan_out",
+            f"guard tuning skipped: could not load the {ref_name} reference "
+            f"({exc}) -- golden_rules.max_cluster_size untouched",
+            mapped_to=_GUARD_MAPPED_TO,
+        )
+        return
+    if not mapping:
+        # Zero id overlap (or an empty reference) is an id-join failure, not
+        # a clustering signal -- same posture as measurement's
+        # _checked_reference.
+        ctx.report.info(
+            "upgrade:fan_out",
+            f"guard tuning skipped: the {ref_name} reference "
+            f"({n_ref_rows} row(s)) shares no ids with the sample (ids came "
+            f"from column '{id_source}') -- pass id_column= naming the data "
+            "column that matches the reference ids",
+            mapped_to=_GUARD_MAPPED_TO,
+        )
+        return
+
+    # Cluster sizes restricted to the sampled ids.
+    sizes = sorted(Counter(mapping.values()).values())
+    ref_max = sizes[-1]
+    ref_p99 = sizes[min(len(sizes) - 1, round(0.99 * (len(sizes) - 1)))]
+    new_cap = max(_GUARD_MIN_CAP, 2 * ref_max)
+
+    if ctx.upgraded_config.golden_rules is None:
+        # "most_complete" is what the pipeline substitutes when golden_rules
+        # is absent (core/pipeline.py), so creating the config with it
+        # changes nothing but the cap we are about to set.
+        ctx.upgraded_config.golden_rules = GoldenRulesConfig(
+            default_strategy="most_complete"
+        )
+    rules = ctx.upgraded_config.golden_rules
+    old_cap = rules.max_cluster_size
+    rules.max_cluster_size = new_cap
+    ctx.report.info(
+        "upgrade:fan_out",
+        f"golden_rules.max_cluster_size tuned {old_cap} -> {new_cap} = "
+        f"max({_GUARD_MIN_CAP}, 2 * {ref_max}) from the {ref_name} "
+        f"reference (max cluster size {ref_max}, p99 {ref_p99}, over "
+        f"{len(mapping)} joined sample id(s))",
+        mapped_to=_GUARD_MAPPED_TO,
+    )
