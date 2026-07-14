@@ -6,36 +6,50 @@
 > `convert.rs::json_to_polars_df` + the bridge's whole Python core-API surface.
 > Scope only; do NOT implement without approval.
 
-## STATUS 2026-07-14 — stopgap drop is CI-BLOCKED on native-present leaks
+## STATUS 2026-07-14 — aux fixes LANDED (PR #1770); DROP blocked on cross-source match arrow-port
 
-The aux SOURCE fixes (validate / anomaly / autoconfig_memory / profiler
-discriminators + seam routing) land — they are byte-identical on every
-polars-present lane and pass the `native=0` arrow tripwire.
+**Merged/merging (PR #1770):** the aux SOURCE fixes — validate / anomaly /
+autoconfig_memory / profiler discriminators + seam routing. Byte-identical on
+every polars-present lane; `native=0` arrow tripwire green.
 
-**The actual `[polars]` DROP is blocked.** PR #1770 tried the full drop
-(convert.rs→arrow + local polars-free install) and the `rust` bridge lane went
-RED with **5 failures that only appear with `goldenmatch-native` PRESENT +
-polars ABSENT** — a combination this dev box cannot reproduce (no native locally;
-`GOLDENMATCH_NATIVE=0` exercises the seam-safe pure paths, which pass):
+**The `[polars]` DROP itself is blocked — now diagnosed to exact lines** (the
+initial "native-present" reading was only half right; the real blockers are the
+bridge GLUE + a deliberate cross-source-match polars gap, both reproducible on a
+native-less box once you go through the bridge wrappers). PR #1770's first
+revision (convert.rs→arrow + local polars-free install) failed the `rust` lane on
+5 tests. Root causes, precisely:
 
-- `test_autofix_table` — `auto_fix_dataframe(pa.Table)` → `'pyarrow.lib.Table'
-  has no attribute 'height'` (native-gated auto_fix path)
-- `test_validate_table_no_rules` — same `.height` on the native validate path
-- `test_match_tables_basic` / `test_match_pairs_reference_id_is_zero_based` —
-  `'pyarrow.lib.ChunkedArray' has no attribute 'startswith'` (a raw `.columns`
-  iteration in the native match/dedupe path)
-- `test_autoconfig_mode_probabilistic_builds_probabilistic_matchkeys` —
-  `ModuleNotFoundError: No module named 'polars'` building the v0 virtual
-  history entry (autoconfig controller, native path)
+1. **Bridge Rust GLUE reads polars-only accessors on the returned frame — TRIVIAL.**
+   `validate_table` (api.rs:1513-1515) + `autofix_table` (api.rs:1536-1537) call
+   `.getattr("height")` + `.call_method0("to_dicts")`; the match path
+   (api.rs:476) calls `target_df.getattr("height")`. With convert.rs feeding a
+   `pa.Table`, these functions RETURN a `pa.Table` (`ArrowFrame.native`), which
+   has `.num_rows`/`.to_pylist()` — not `.height`/`.to_dicts()`. FIX: a robust
+   Rust helper (`hasattr num_rows -> num_rows else height`, same for
+   to_pylist/to_dicts) at those 4 sites. (My local aux probe called the Python
+   fns directly, bypassing the glue — that's why it missed these.)
 
-Root cause class: several bridge-reachable paths route a raw `pa.Table` through
-native-gated code that still expects a polars frame (`.height`/`.columns`) or
-imports polars (autoconfig v0 history). These are NOT the aux-fn leaks fixed
-here; they live in the native/fused + controller paths and belong to the broader
-autoconfig/engine arrow wave. **The drop requires those native-present paths
-arrow-clean first, verified in CI (they can't be exercised on a native-less box).**
-The convert.rs→arrow change + the ci.yml local-install drop are reverted from this
-PR and staged for that follow-up.
+2. **Cross-source match is DELIBERATELY not arrow-native — REAL FEATURE WORK.**
+   `autoconfig.py:3787-3792` force-disables `_arrow_native_ac` whenever
+   `reference is not None` (the warn message: "cross-source match (reference) is
+   not arrow-native yet"), so the target coerces to polars at `autoconfig.py:3802`
+   (`import polars; pl.from_arrow`), AND the reference itself is REQUIRED to be a
+   `pl.DataFrame` (`autoconfig.py:3841` raises `TypeError` otherwise). So
+   `match_df` cannot run with polars absent until the cross-source/reference
+   controller path is arrow-ported. This is recall-correctness-sensitive feature
+   work in the match controller, part of the broader arrow-native wave — NOT a
+   bridge-stopgap fix. It is the true blocker for dropping `[polars]`.
+
+3. **Probabilistic autoconfig v0 history** — `autoconfig_controller.py:390`
+   `_run_pipeline_sample` on a probabilistic config imports polars building the
+   v0 virtual history entry (`ModuleNotFoundError` in CI). Same class as #2 (the
+   FS sample pipeline isn't arrow-native for that path).
+
+**Verdict:** #1 is trivial; #2 (+#3) is the substantial blocker — the cross-source
+match / reference controller must go arrow-native first, which is its own scoped
+feature (recall-correctness sensitive, out of this plan's clean scope). The
+convert.rs→arrow + ci.yml drop are held for the follow-up that lands #1 + the
+match arrow-port together, verified in CI.
 
 ## The central fact
 
