@@ -280,13 +280,11 @@ class TestBucketSlimProjectionKeepsNeField:
             converged=True, iterations=0, proportion_matched=0.02,
         )
 
-    def test_ne_only_field_fires_through_default_slim_projection(self, monkeypatch):
-        # TODO(N4): remove once `_fs_native_eligible` declines NE-bearing
-        # matchkeys -- pre-N4 the native FS kernel doesn't score NE at all, so
-        # forcing it off here isolates the slim-projection fix under test
-        # from that separate (already-known, N4-scoped) gap.
-        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
-        monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    def test_ne_only_field_fires_through_default_slim_projection(self):
+        # Native ENABLED: `_fs_native_eligible` declines NE-bearing matchkeys
+        # (N4), so this exercises the real decline routing to the pure-Python
+        # path rather than relying on env overrides to isolate the
+        # slim-projection fix under test.
         from goldenmatch.backends.score_buckets import score_buckets
 
         mk_no_ne = MatchkeyConfig(
@@ -338,11 +336,10 @@ class TestDedupeDfDefaultBackendNe:
             MatchkeyField(field="last_name", scorer="exact", levels=2),
         ]
 
-    def test_homonym_pair_merges_without_ne_and_separates_with_ne(self, monkeypatch):
-        # TODO(N4): remove once `_fs_native_eligible` declines NE-bearing
-        # matchkeys -- see TestBucketSlimProjectionKeepsNeField above.
-        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
-        monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    def test_homonym_pair_merges_without_ne_and_separates_with_ne(self):
+        # Native ENABLED: see TestBucketSlimProjectionKeepsNeField above --
+        # `_fs_native_eligible` declines NE-bearing matchkeys (N4), so this
+        # runs the real decline rather than an env override.
         from goldenmatch import dedupe_df
 
         config_a = GoldenMatchConfig(

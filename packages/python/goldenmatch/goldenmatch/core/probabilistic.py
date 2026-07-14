@@ -291,6 +291,26 @@ class EMResult:
                     f"levels but the matchkey expects {f.levels}. Retrain or clear "
                     f"the model_path."
                 )
+        for ne in (mk.negative_evidence or []):
+            if ne.penalty_bits is not None:
+                continue  # fixed override -- no EM entry needed
+            key = f"__ne__{ne.field}"
+            weights = self.match_weights.get(key)
+            if weights is None:
+                raise FSModelMismatchError(
+                    f"Persisted FS model has no weights for negative_evidence "
+                    f"field '{ne.field}' (expected key '{key}'). The matchkey "
+                    f"added this NE field since training — retrain the model, "
+                    f"or set `penalty_bits` on the negative_evidence entry to "
+                    f"skip EM for this field."
+                )
+            if len(weights) != 2:
+                raise FSModelMismatchError(
+                    f"Persisted FS model for negative_evidence field "
+                    f"'{ne.field}' (key '{key}') has {len(weights)} entries but "
+                    f"NE weights must be a 2-element [fired, not_fired] list. "
+                    f"Retrain or clear the model_path."
+                )
 
 
 class FSModelMismatchError(ValueError):
@@ -2234,10 +2254,16 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
     kernel's ``FS_SUPPORTS_LEVEL_THRESHOLDS`` module const — an older wheel
     without it declines here, so those environments keep the pure-Python
     (numpy/scalar) fallback where `_levels_from_similarity` does the banding.
+
+    NE never crosses the FFI; a future kernel port adds ``FS_SUPPORTS_NE``.
+    Any ``mk.negative_evidence`` declines here unconditionally, keeping
+    NE-bearing matchkeys on the pure-Python (numpy/scalar) fallback.
     """
     if not _fs_native_enabled():
         return False
     if not mk.fields:
+        return False
+    if mk.negative_evidence:
         return False
     needs_level_thresholds = False
     for f in mk.fields:
@@ -2345,8 +2371,15 @@ def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
             return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
         return _native
 
+    # NE fields also route through the vectorized matrix path
+    # (_add_ne_matrix_contribution -> _field_score_matrix_dedup) when use_vec
+    # is chosen -- an NE scorer the matrix path can't express (embedding /
+    # record_embedding) must force the scalar path too, mirroring how an
+    # unsupported REGULAR field scorer already does.
     use_vec = _fs_vectorized_enabled() and all(
         vectorized_scorer_supported(f.scorer) for f in mk.fields
+    ) and all(
+        vectorized_scorer_supported(ne.scorer) for ne in (mk.negative_evidence or [])
     )
     if use_vec:
         def _scorer(block_df, exclude_pairs=None):
