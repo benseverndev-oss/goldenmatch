@@ -42,6 +42,26 @@ from goldenmatch.core.profiler import _guess_type
 
 logger = logging.getLogger(__name__)
 
+# One-time guard for the arrow-native autoconfig coercion-fallback warning
+# (GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default-on): a sub-feature that still
+# assumes a polars target (match/throughput) coerces the arrow input to polars.
+# Warn once per feature per process instead of once per auto_configure_df call.
+_ARROW_NATIVE_COERCED_WARNED: set[str] = set()
+
+
+def _warn_arrow_native_coerced_once(feature: str) -> None:
+    if feature in _ARROW_NATIVE_COERCED_WARNED:
+        return
+    _ARROW_NATIVE_COERCED_WARNED.add(feature)
+    logger.warning(
+        "auto_configure_df: %s is not arrow-native yet; coercing the arrow input "
+        "to polars for this run (config-equivalent, imports polars). The "
+        "zero-config dedupe path stays arrow-native. Set "
+        "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=0 to always coerce.",
+        feature,
+    )
+
+
 # Refdata-aware matchkey-field refinement. Hoisted to module-top so the
 # per-iteration loop in build_matchkeys / build_probabilistic_matchkeys
 # doesn't pay the `from X import Y` lookup cost or re-run the try/except
@@ -3747,13 +3767,29 @@ def auto_configure_df(
     )
     from goldenmatch.distributed._utils import is_ray_dataset as _is_ray_boundary
 
-    # GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1 (default 0) skips the coercion and
-    # keeps a pa.Table native through the controller -- the in-progress scoring-
-    # lane port (indicators guards done; exclusion detectors + build_blocks spine
-    # pending). Default OFF: coerce, so production zero-config is unchanged.
+    # GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default-ON (2026-07-14): a non-polars
+    # input (pa.Table / Frame / dict-of-arrays) stays NATIVE through the
+    # controller -- the zero-config config-GENERATION lane is arrow-native
+    # (indicators guards + exclusion / discriminative-veto / source-partition
+    # detectors seam-ported, sample scoring on the arrow-native bucket scorer;
+    # parity-gated in test_autoconfig_arrow_native_parity.py). `=0` restores the
+    # legacy arrow->polars boundary coercion.
+    #
+    # GUARDED FALLBACK: two sub-features are NOT arrow-native yet and still assume
+    # a polars target -- cross-source match (`reference`, coerced to polars below
+    # and whose match-scoring path is unproven on arrow) and the throughput tier
+    # (its early text-column validation only fires for a polars df). For those we
+    # coerce to polars (legacy behaviour) and WARN once, so a decline is visible
+    # rather than a silent divergence.
     _arrow_native_ac = os.environ.get(
-        "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", "0"
+        "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE", "1"
     ).lower() in ("1", "true", "yes")
+    if _arrow_native_ac and (reference is not None or throughput is not None):
+        _warn_arrow_native_coerced_once(
+            "cross-source match (reference)" if reference is not None
+            else "throughput tier"
+        )
+        _arrow_native_ac = False
     if not (
         _is_ray_boundary(df)
         or is_polars_lazyframe(df)
