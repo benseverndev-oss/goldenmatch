@@ -2841,7 +2841,11 @@ jobs:
         # (and goldenflow, for the goldenflow_* transform functions) at
         # runtime. The package install here is what `init()` in the
         # bridge will find when Postgres starts.
-        run: pip install --break-system-packages 'goldenmatch[polars]>=1.1.0' goldenflow pyarrow
+        # Local base goldenmatch (NO [polars]) -- the bridge core-API surface is
+        # arrow-native, so the pgrx lane runs polars-free against current source
+        # too (drops the #1747 stopgap here as well). goldenflow's base has no
+        # polars dep (it's a [polars] extra), so this stays polars-free.
+        run: pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow pyarrow
 
       - name: Install cargo-pgrx
         # 0.12.9 pin matches the pgrx version in
@@ -2886,7 +2890,7 @@ jobs:
         run: |
           PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
           sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
-          sudo pip install --break-system-packages 'goldenmatch[polars]>=1.1.0' goldenflow 2>/dev/null || true
+          sudo pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow 2>/dev/null || true
           echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
 
       - name: psql smoke (scalar scorer, dedupe, autoconfig)
