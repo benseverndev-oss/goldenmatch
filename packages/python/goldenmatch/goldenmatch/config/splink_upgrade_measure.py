@@ -185,11 +185,13 @@ def _resolve_ids(df: pl.DataFrame, id_column: str | None) -> tuple[list[str], st
 
 def _load_reference(
     ref: pl.DataFrame | str | Path, sample_ids: set[str]
-) -> dict[str, str]:
+) -> tuple[dict[str, str], int]:
     """Load an id -> cluster_id reference frame, restricted to the sample ids.
 
     Column convention: first column = id, second = cluster_id (both cast to
-    str). Raises when the frame has fewer than two columns.
+    str). Returns ``(mapping, n_reference_rows)`` -- the raw row count lets
+    the caller distinguish "empty reference" from "no ids overlap the
+    sample". Raises when the frame has fewer than two columns.
     """
     frame = _load_frame(ref)
     if len(frame.columns) < 2:
@@ -203,6 +205,41 @@ def _load_reference(
         key = str(rid)
         if key in sample_ids:
             mapping[key] = str(cid)
+    return mapping, len(frame)
+
+
+def _checked_reference(
+    ref: pl.DataFrame | str | Path,
+    sample_ids: set[str],
+    name: str,
+    id_source: str,
+    ctx: _LeverContext,
+) -> dict[str, str] | None:
+    """Load a reference and refuse a zero-overlap id join.
+
+    A non-empty reference whose ids share NOTHING with the sample ids is an
+    id-join failure (wrong/missing id column), not a real clustering signal --
+    computing metrics against it would yield all-0.0 P/R/F1 that looks like a
+    catastrophic regression. Warn (naming the id source + the fix) and return
+    ``None`` so the metrics block is absent instead of garbage.
+    """
+    mapping, n_rows = _load_reference(ref, sample_ids)
+    if not mapping and n_rows > 0:
+        source_desc = (
+            "positional row indices"
+            if id_source == _POSITIONAL_ID_SOURCE
+            else f"column '{id_source}'"
+        )
+        ctx.report.warn(
+            "upgrade:measure",
+            f"{name} reference ({n_rows} rows) shares no ids with the sample "
+            f"(measurement ids came from {source_desc}) -- this is an id-join "
+            f"failure, so metrics vs {name} are skipped rather than reported "
+            "as 0.0; pass id_column= naming the data column that matches the "
+            "reference ids",
+            mapped_to=None,
+        )
+        return None
     return mapping
 
 
@@ -340,14 +377,18 @@ def run_measurement(
         if tmpdir is not None:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    # References with ZERO id overlap come back None (warning emitted) so
+    # their metrics blocks are absent instead of all-0.0 garbage.
     sample_id_set = set(ids)
     splink_map = (
-        _load_reference(splink_clusters, sample_id_set)
+        _checked_reference(splink_clusters, sample_id_set, "splink_clusters", id_source, ctx)
         if splink_clusters is not None
         else None
     )
     labels_map = (
-        _load_reference(labels, sample_id_set) if labels is not None else None
+        _checked_reference(labels, sample_id_set, "labels", id_source, ctx)
+        if labels is not None
+        else None
     )
 
     # Snowball reference: splink max when provided, else each run's own p99.
@@ -394,7 +435,7 @@ def run_measurement(
             upgraded=_truth_metrics(upgraded_map),
         )
 
-    if splink_map is None and labels_map is None:
+    if splink_clusters is None and labels is None:
         ctx.report.info(
             "upgrade:measure",
             "shape-only comparison: no splink_clusters or labels reference "

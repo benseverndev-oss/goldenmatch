@@ -259,6 +259,87 @@ def test_labels_reference_yields_truth_metrics():
             assert 0.0 <= metrics[key] <= 1.0
 
 
+# ── 3b. Zero-overlap references: refuse the id join, don't report 0.0 ────────
+
+
+def test_zero_overlap_splink_clusters_yields_none_and_warning():
+    conversion = from_splink(_trained_settings())
+    df = _measure_data_df()  # ids r0..r59
+    bogus_ref = pl.DataFrame(
+        {
+            "unique_id": [f"x{i}" for i in range(len(df))],
+            "cluster_id": [f"e{i // 3}" for i in range(len(df))],
+        }
+    )
+
+    result = upgrade_splink_conversion(
+        conversion, df, splink_clusters=bogus_ref, measure=True
+    )
+
+    m = result.measurement
+    assert m is not None
+    assert m.vs_splink is None
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:measure" and f.severity == "warning"
+        and "splink_clusters" in f.message
+    ]
+    assert len(warn_findings) == 1
+    assert "id_column" in warn_findings[0].message
+    assert "unique_id" in warn_findings[0].message  # names the id source used
+
+
+def test_zero_overlap_labels_yields_none_and_warning():
+    conversion = from_splink(_trained_settings())
+    df = _measure_data_df()
+    bogus_labels = pl.DataFrame(
+        {
+            "unique_id": [f"x{i}" for i in range(len(df))],
+            "cluster_id": [f"e{i // 3}" for i in range(len(df))],
+        }
+    )
+
+    result = upgrade_splink_conversion(
+        conversion, df, labels=bogus_labels, measure=True
+    )
+
+    m = result.measurement
+    assert m is not None
+    assert m.vs_labels is None
+    warn_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:measure" and f.severity == "warning"
+        and "labels" in f.message
+    ]
+    assert len(warn_findings) == 1
+    assert "id_column" in warn_findings[0].message
+
+
+def test_partial_overlap_reference_still_computes():
+    conversion = from_splink(_trained_settings())
+    df = _measure_df()
+    # Reference covering only the first half of the sample ids.
+    half = _truth_frame(df).head(len(df) // 2)
+
+    result = upgrade_splink_conversion(
+        conversion, df.drop("__entity__"), splink_clusters=half, measure=True
+    )
+
+    m = result.measurement
+    assert m is not None
+    vs = m.vs_splink
+    assert isinstance(vs, PairwiseAgreement)
+    for metrics in (vs.baseline, vs.upgraded):
+        for key in ("precision", "recall", "f1"):
+            assert 0.0 <= metrics[key] <= 1.0
+    # No zero-overlap warning on the partial path.
+    assert not any(
+        f.splink_path == "upgrade:measure" and f.severity == "warning"
+        and "shares no ids" in f.message
+        for f in result.report.findings
+    )
+
+
 # ── 4. No reference: shape-only ──────────────────────────────────────────────
 
 
