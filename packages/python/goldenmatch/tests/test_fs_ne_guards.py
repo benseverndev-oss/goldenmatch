@@ -3,7 +3,9 @@
 Native (R2, FS_SUPPORTS_NE): the real kernel now scores NE, so the native
 gate ACCEPTS NE-bearing matchkeys when every NE scorer is native AND the
 module advertises ``FS_SUPPORTS_NE``; old wheels (the mocks below) lack the
-const and decline. The fused and probabilistic-fast paths still decline NE.
+const and decline. The fused FS gate (R4) tracks the same capability (plus a
+derive_from decline of its own); the probabilistic-fast path still declines
+NE unconditionally.
 
 Mirrors the level_thresholds gate-test scaffolding in
 tests/test_nlevel_banding.py -- synthetic native mocks + a real-kernel
@@ -247,7 +249,7 @@ def test_batched_scorer_declines_vec_for_ne_with_unsupported_ne_scorer(monkeypat
             reg._scorers["record_embedding"] = prior
 
 
-# ── 4. match_fused_fs_ready: False on NE, True on plain probabilistic ───────
+# ── 4. match_fused_fs_ready: NE tracks the loaded kernel's capability ────────
 
 
 def _fused_config(negative_evidence=None):
@@ -263,13 +265,45 @@ def _fused_config(negative_evidence=None):
     )
 
 
-def test_match_fused_fs_ready_false_on_ne():
-    assert fused_match.match_fused_fs_ready(_fused_config()) is True
+def test_match_fused_fs_ready_tracks_ne_capability(monkeypatch):
+    """R4 FLIP: this test used to pin the UNCONDITIONAL fused NE decline. The
+    fused gate is now capability-tracking (same style as the R2 classic gate):
+    an old wheel lacking ``FS_SUPPORTS_NE`` (the supporting-but-pre-NE mock)
+    declines NE-bearing configs; a kernel advertising it accepts. Plain
+    configs stay pure-config ready either way."""
     ne_config = _fused_config(negative_evidence=[
         NegativeEvidenceField(field="phone", scorer="exact", threshold=1.0, penalty_bits=20.0),
     ])
+    # Old wheel: FS kernel + level_thresholds const, but no FS_SUPPORTS_NE.
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", _fake_native_module_supporting
+    )
     assert fused_match.match_fused_fs_ready(ne_config) is False
-    # Plain config still ready (mirrors test_fused_match.py's gate tests).
+    assert fused_match.match_fused_fs_ready(_fused_config()) is True
+
+    # NE-capable kernel: the same config is now ready.
+    class _NeCapable:
+        FS_SUPPORTS_NE = True
+
+        def match_fused_fs(self, *a, **kw):  # pragma: no cover - not invoked
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", lambda: _NeCapable()
+    )
+    assert fused_match.match_fused_fs_ready(ne_config) is True
+
+
+@pytest.mark.skipif(not _native_fs_available(), reason="native FS kernel not built")
+def test_match_fused_fs_ready_ne_real_kernel():
+    """Against the real kernel, fused NE readiness tracks FS_SUPPORTS_NE."""
+    from goldenmatch.core import _native_loader
+
+    supports_ne = getattr(_native_loader.native_module(), "FS_SUPPORTS_NE", False)
+    ne_config = _fused_config(negative_evidence=[
+        NegativeEvidenceField(field="phone", scorer="exact", threshold=1.0, penalty_bits=20.0),
+    ])
+    assert fused_match.match_fused_fs_ready(ne_config) is bool(supports_ne)
     assert fused_match.match_fused_fs_ready(_fused_config()) is True
 
 

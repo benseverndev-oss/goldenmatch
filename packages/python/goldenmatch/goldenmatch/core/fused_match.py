@@ -256,19 +256,30 @@ def match_fused_fs_ready(config: Any) -> bool:
     """Covered boundary for the fused Fellegi-Sunter (probabilistic) path.
 
     Covered: `static` single-key blocking + exactly one `probabilistic` matchkey
-    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`) and no
-    custom `level_thresholds` (the fused kernel, like `score_block_pairs_fs`,
-    only receives a level count + `partial_threshold` and bands similarities
-    with its hard-coded default banding (2/3-level partial_threshold rule +
-    even-spaced N-level); custom `level_thresholds` lists never cross the
-    FFI, so they must stay on the Python paths). Transforms covered (derived
-    host-side).
-    `run_match_fused_fs_arrow` takes a PRE-TRAINED `EMResult` — training is the
-    caller's O(n) model fit, unchanged.
+    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`).
+    Transforms covered (derived host-side). `run_match_fused_fs_arrow` takes a
+    PRE-TRAINED `EMResult` — training is the caller's O(n) model fit, unchanged.
 
-    NE never crosses the FFI; a future kernel port adds `FS_SUPPORTS_NE`. Any
-    `mk.negative_evidence` declines here unconditionally, same playbook as
-    `_fs_native_eligible`.
+    Two features are additionally gated on the LOADED kernel's capability
+    consts (goldenmatch-native >= 0.1.15); when the config uses NEITHER, the
+    gate stays pure-config and never probes the native module:
+
+    - Custom `level_thresholds` banding: ready only when the kernel exposes
+      `FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS`. Older wheels band with the
+      hard-coded default banding only, so the lists must never cross their
+      FFI — those environments decline to the Python paths.
+    - Negative evidence (`mk.negative_evidence`): ready only when the kernel
+      exposes `FS_SUPPORTS_NE` AND every NE scorer is FS-native (an
+      `ensemble`-scorer NE field declines) AND no NE field uses `derive_from`.
+      The derive_from decline exists because `run_match_fused_fs_arrow` takes
+      a raw `columns` mapping and never runs `precompute_matchkey_transforms`
+      (it builds `src_cols` from blocking keys + matchkey/NE fields only), so
+      a derive_from-SYNTHESIZED `ne.field` would not exist in the frame and
+      NE would silently never fire; declining keeps parity with the classic
+      path, which synthesizes derive_from columns upstream — that is why
+      `_fs_native_eligible` does NOT decline the same matchkey. (The
+      Arrow-lane `derive_ne_joined` seam is the future synthesize option if
+      fused derive_from coverage is ever wanted.)
     """
     b = getattr(config, "blocking", None)
     if b is None or getattr(b, "strategy", "static") != "static":
@@ -280,16 +291,37 @@ def match_fused_fs_ready(config: Any) -> bool:
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
         return False
-    if getattr(mks[0], "negative_evidence", None):
-        return False
     from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
 
-    return all(
-        f.field
-        and f.scorer in _NATIVE_FS_SCORER_IDS
-        and getattr(f, "level_thresholds", None) is None
-        for f in mks[0].fields
+    mk = mks[0]
+    ne_fields = getattr(mk, "negative_evidence", None) or []
+    uses_level_thresholds = any(
+        getattr(f, "level_thresholds", None) is not None for f in mk.fields
     )
+    if not all(f.field and f.scorer in _NATIVE_FS_SCORER_IDS for f in mk.fields):
+        return False
+    for ne in ne_fields:
+        if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.derive_from:
+            return False
+    if ne_fields or uses_level_thresholds:
+        # Capability probe ONLY when a gated feature is in play — the gate is
+        # pure-config otherwise. Local import (not the module-level binding)
+        # so the loaded module is resolved at call time.
+        try:
+            from goldenmatch.core._native_loader import native_module as _nm
+
+            mod = _nm()
+        except Exception:
+            return False
+        if mod is None:
+            return False
+        if ne_fields and not getattr(mod, "FS_SUPPORTS_NE", False):
+            return False
+        if uses_level_thresholds and not getattr(
+            mod, "FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", False
+        ):
+            return False
+    return True
 
 
 def _match_fused_fs_symbol() -> Any | None:
@@ -310,8 +342,9 @@ def run_match_fused_fs_arrow(
     Byte-parity by construction: the block key is derived via
     `_build_block_key_expr`, the score columns via `_field_values_for_block`, and
     the FS kernel args (levels/partial_thresholds/match_weights/calibration/
-    thresholds) are assembled EXACTLY as `score_probabilistic_native` does — so
-    the fused kernel scores identically to the pipeline's native FS block scorer.
+    thresholds, plus the capability-gated `level_thresholds` + NE kwarg groups)
+    are assembled EXACTLY as `score_probabilistic_native` does — so the fused
+    kernel scores identically to the pipeline's native FS block scorer.
     Returns a `(__row_id__, __cluster_id__)` Table, or None if uncovered / native
     absent.
     """
@@ -320,6 +353,7 @@ def run_match_fused_fs_arrow(
         _field_values_from_list,
         _fs_calibration_mode,
         compute_thresholds,
+        fs_weight_range,
         prior_weight,
     )
 
@@ -329,7 +363,18 @@ def run_match_fused_fs_arrow(
 
     key_cfg = config.blocking.keys[0]
     mk = config.get_matchkeys()[0]
-    src_cols = list(dict.fromkeys([*key_cfg.fields, *[f.field for f in mk.fields]]))
+    ne_fields = mk.negative_evidence or []
+    src_cols = list(
+        dict.fromkeys(
+            [
+                *key_cfg.fields,
+                *[f.field for f in mk.fields],
+                # NE columns ride along; an NE field absent from `columns` is
+                # skipped here and degrades to all-null below (never fires).
+                *[ne.field for ne in ne_fields if ne.field in columns],
+            ]
+        )
+    )
     n = n_rows if n_rows is not None else len(columns[src_cols[0]])
     frame = _prep_frame(columns, src_cols)
 
@@ -338,8 +383,10 @@ def run_match_fused_fs_arrow(
     # FS kernel args — mirrors score_probabilistic_native exactly.
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
-    max_w = sum(max(em_result.match_weights[f.field]) for f in mk.fields)
-    min_w = sum(min(em_result.match_weights[f.field]) for f in mk.fields)
+    # NE-aware weight envelope: the centralized fs_weight_range covers the
+    # `__ne__` entries / penalty_bits contributions a hand-rolled per-field
+    # min/max sum would miss (which would mis-normalize every fused NE score).
+    min_w, max_w = fs_weight_range(em_result, mk)
     weight_range = max_w - min_w
     if mk.link_threshold is not None:
         link_threshold = float(mk.link_threshold)
@@ -358,9 +405,51 @@ def run_match_fused_fs_arrow(
         vals = _field_values_from_list(raw, f, n)
         score_arrs.append(pa.array(vals, type=pa.large_string()))
 
+    # Optional capability kwargs — each group is sent ONLY when the matchkey
+    # actually uses the feature, so an old wheel never sees an unknown kwarg
+    # even if the readiness gate ever drifted (the #1752 discipline; same
+    # opt_kwargs shape as score_probabilistic_native).
+    opt_kwargs: dict = {}
+
+    # Custom banding (FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS).
+    level_thresholds = [
+        list(f.level_thresholds) if f.level_thresholds is not None else None
+        for f in mk.fields
+    ]
+    if any(t is not None for t in level_thresholds):
+        opt_kwargs["level_thresholds"] = level_thresholds
+
+    # Negative evidence (FS_SUPPORTS_NE). Prep mirrors the score_arrs loop:
+    # seam extraction + the same pure-Python transform pass. An NE field
+    # absent from `columns` is unreachable given the gate (non-derive_from NE
+    # fields are data columns), but degrades to all-null — NE never fires —
+    # rather than raising, matching the classic path's missing-column
+    # behavior. w_fired mirrors _ne_scalar_contribution: -abs(penalty_bits)
+    # when set, else the EM-learned __ne__<field> fired weight (a missing
+    # entry raising KeyError matches the scalar path's contract; validate_for
+    # guarantees it exists).
+    if ne_fields:
+        ne_arrs = []
+        for ne in ne_fields:
+            raw = frame.utf8_values(ne.field) if ne.field in frame.columns else None
+            ne_arrs.append(
+                pa.array(_field_values_from_list(raw, ne, n), type=pa.large_string())
+            )
+        opt_kwargs["ne_fields"] = ne_arrs
+        opt_kwargs["ne_scorer_ids"] = [
+            _NATIVE_FS_SCORER_IDS[ne.scorer] for ne in ne_fields
+        ]
+        opt_kwargs["ne_thresholds"] = [float(ne.threshold) for ne in ne_fields]
+        opt_kwargs["ne_weights"] = [
+            -abs(float(ne.penalty_bits)) if ne.penalty_bits is not None
+            else float(em_result.match_weights[f"__ne__{ne.field}"][0])
+            for ne in ne_fields
+        ]
+
     row_ids = pa.array(range(n), type=pa.int64())
     clusters = fn(
         row_ids, key_arrs, score_arrs, scorer_ids, levels, partials, weights,
         calibrated, prior_w, min_w, weight_range, link_threshold,
+        **opt_kwargs,
     )
     return _clusters_to_table(clusters)

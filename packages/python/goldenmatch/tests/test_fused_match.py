@@ -19,6 +19,7 @@ from goldenmatch.config.schemas import (
     GoldenMatchConfig,
     MatchkeyConfig,
     MatchkeyField,
+    NegativeEvidenceField,
 )
 from goldenmatch.core import fused_match
 from goldenmatch.core._native_loader import native_module
@@ -241,16 +242,24 @@ def test_fs_ready_true_on_probabilistic_false_on_weighted():
     assert fused_match.match_fused_fs_ready(_covered_config()) is False  # weighted
 
 
-def test_fs_ready_false_on_level_thresholds():
-    # The fused FS kernel only receives a level count + partial_threshold
-    # (see run_match_fused_fs_arrow) -- it can't band with a custom N-level
-    # threshold list, so level_thresholds matchkeys must stay on Python paths.
-    config = _probabilistic_config()
-    f = config.matchkeys[0].fields[0]
-    f.levels = 4
-    f.level_thresholds = [1.0, 0.92, 0.88]
+def test_fs_ready_level_thresholds_tracks_kernel_capability(monkeypatch):
+    # R4 FLIP: level_thresholds was an unconditional decline (the fused kernel
+    # could only band with the hard-coded default banding); it is now a
+    # per-feature capability gate on FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS --
+    # an old wheel (stub below, lacking the const) still declines so custom
+    # lists never cross its FFI; a supporting kernel accepts.
+    config = _lt_config()
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module",
+        lambda: _stub_kernel(),  # old wheel: no FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS
+    )
     assert fused_match.match_fused_fs_ready(config) is False
-    # A plain matchkey is unaffected.
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module",
+        lambda: _stub_kernel(FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True),
+    )
+    assert fused_match.match_fused_fs_ready(config) is True
+    # A plain matchkey is pure-config either way.
     assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
 
 
@@ -299,6 +308,276 @@ def test_match_fused_fs_matches_pipeline_fs_block_scorer():
         comps[find(i)].append(i)
     want = {frozenset(v) for v in comps.values() if len(v) >= 2}
     assert got == want
+
+
+# ---- Fellegi-Sunter fused path: NE + level_thresholds capability (R4) ----
+
+def _stub_kernel(**consts):
+    """A fake native module carrying the fused FS symbol + the given
+    capability consts -- i.e. some published wheel vintage. No consts =
+    an old wheel that predates both the NE and the fused-level_thresholds
+    ports."""
+    class _Stub:
+        def match_fused_fs(self, *a, **kw):  # pragma: no cover - not invoked
+            raise NotImplementedError
+
+        def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+    stub = _Stub()
+    for k, v in consts.items():
+        setattr(stub, k, v)
+    return stub
+
+
+def _supporting_stub():
+    return _stub_kernel(
+        FS_SUPPORTS_NE=True,
+        FS_SUPPORTS_LEVEL_THRESHOLDS=True,
+        FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True,
+    )
+
+
+def _ne(**kw):
+    base = dict(field="phone", scorer="exact", threshold=1.0, penalty_bits=20.0)
+    base.update(kw)
+    return NegativeEvidenceField(**base)
+
+
+def _ne_config(*ne_fields):
+    config = _probabilistic_config()
+    config.matchkeys[0].negative_evidence = list(ne_fields) or [_ne()]
+    return config
+
+
+def _lt_config(ne=None):
+    config = _probabilistic_config()
+    f = config.matchkeys[0].fields[0]
+    f.levels = 4
+    f.level_thresholds = [1.0, 0.92, 0.88]
+    if ne is not None:
+        config.matchkeys[0].negative_evidence = [ne]
+    return config
+
+
+def _real_kernel():
+    try:
+        return native_module()
+    except Exception:
+        return None
+
+
+_HAS_FUSED_NE = bool(
+    _HAS_FUSED and getattr(_real_kernel(), "FS_SUPPORTS_NE", False)
+)
+_HAS_FUSED_LT = bool(
+    _HAS_FUSED
+    and getattr(_real_kernel(), "FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", False)
+)
+
+
+@pytest.mark.skipif(not _HAS_FUSED_NE, reason="kernel lacks fused FS_SUPPORTS_NE")
+def test_fs_ready_ne_true_on_real_kernel():
+    assert fused_match.match_fused_fs_ready(_ne_config()) is True
+
+
+@pytest.mark.skipif(not _HAS_FUSED_LT, reason="kernel lacks FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS")
+def test_fs_ready_level_thresholds_true_on_real_kernel():
+    assert fused_match.match_fused_fs_ready(_lt_config()) is True
+
+
+def test_fs_ready_ne_declines_on_old_wheel(monkeypatch):
+    # Old wheel: has the fused FS kernel but no FS_SUPPORTS_NE -> NE-bearing
+    # configs decline (NE never crosses its FFI); the SAME stub still accepts
+    # a no-NE config (the decline is NE-specific).
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", lambda: _stub_kernel()
+    )
+    assert fused_match.match_fused_fs_ready(_ne_config()) is False
+    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
+
+
+def test_fs_ready_declines_derive_from_ne_even_when_kernel_supports_ne(monkeypatch):
+    # derive_from-synthesized NE columns never exist in the raw `columns`
+    # mapping run_match_fused_fs_arrow receives (it never runs
+    # precompute_matchkey_transforms), so NE would silently never fire ->
+    # decline EVEN with a fully-supporting kernel.
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", _supporting_stub
+    )
+    cfg = _ne_config(
+        _ne(field="full_name", scorer="token_sort", threshold=0.6,
+            derive_from=["first_name", "last_name"])
+    )
+    assert fused_match.match_fused_fs_ready(cfg) is False
+
+    # The spec's asymmetry: the CLASSIC native gate does NOT decline the same
+    # matchkey -- derive_from columns are synthesized upstream
+    # (precompute_matchkey_transforms) before its block frames are scored.
+    from goldenmatch.core import probabilistic as p
+
+    monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
+    assert p._fs_native_eligible(cfg.matchkeys[0]) is True
+
+
+def test_fs_ready_declines_ensemble_ne_scorer(monkeypatch):
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module", _supporting_stub
+    )
+    cfg = _ne_config(_ne(scorer="ensemble", threshold=0.5))
+    assert fused_match.match_fused_fs_ready(cfg) is False
+
+
+def test_fs_ready_per_feature_capability_independence(monkeypatch):
+    # NE-only wheel: NE configs ready, level_thresholds configs declined.
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module",
+        lambda: _stub_kernel(FS_SUPPORTS_NE=True),
+    )
+    assert fused_match.match_fused_fs_ready(_ne_config()) is True
+    assert fused_match.match_fused_fs_ready(_lt_config()) is False
+    # level_thresholds-only wheel: the reverse.
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module",
+        lambda: _stub_kernel(FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True),
+    )
+    assert fused_match.match_fused_fs_ready(_ne_config()) is False
+    assert fused_match.match_fused_fs_ready(_lt_config()) is True
+
+
+def test_fs_ready_pure_config_without_gated_features(monkeypatch):
+    # A config using NEITHER gated feature must never probe the native module
+    # (the gate stays pure-config); feature-bearing configs decline gracefully
+    # when the loader raises, rather than propagating.
+    def _boom():
+        raise AssertionError("gate must not probe the native module")
+
+    monkeypatch.setattr("goldenmatch.core._native_loader.native_module", _boom)
+    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
+    assert fused_match.match_fused_fs_ready(_ne_config()) is False
+    assert fused_match.match_fused_fs_ready(_lt_config()) is False
+
+
+def test_fused_weight_range_uses_fs_weight_range(monkeypatch):
+    # The hand-rolled min/max weight sums ignored __ne__ entries and would
+    # mis-normalize every fused NE score; the caller must resolve the weight
+    # envelope through the centralized fs_weight_range.
+    from goldenmatch.core import probabilistic as p
+
+    class _Sentinel(Exception):
+        pass
+
+    def _tripwire(em, mk):
+        raise _Sentinel
+
+    monkeypatch.setattr(p, "fs_weight_range", _tripwire)
+    monkeypatch.setattr(
+        fused_match, "_match_fused_fs_symbol", lambda: lambda *a, **kw: []
+    )
+    columns = {"blk": pa.array(["a", "a"]), "name": pa.array(["x", "y"])}
+    with pytest.raises(_Sentinel):
+        fused_match.run_match_fused_fs_arrow(columns, _probabilistic_config(), _em())
+
+
+def _classic_fs_clusters(df, config, em):
+    """Reference clusters via the classic pipeline: build_blocks + the routed
+    probabilistic block scorer + the same union-find the fused kernel applies
+    (mirrors test_match_fused_fs_matches_pipeline_fs_block_scorer)."""
+    from goldenmatch.core.blocker import build_blocks
+    from goldenmatch.core.probabilistic import probabilistic_block_scorer
+
+    scorer = probabilistic_block_scorer(config.get_matchkeys()[0], em)
+    pairs = []
+    for br in build_blocks(df.lazy(), config.blocking):
+        g = br.materialize().native if hasattr(br.df, "collect") else br.df
+        pairs += scorer(g)
+    parent = list(range(df.height))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b, _s in pairs:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    comps = defaultdict(list)
+    for i in range(df.height):
+        comps[find(i)].append(i)
+    return {frozenset(v) for v in comps.values() if len(v) >= 2}
+
+
+@pytest.mark.skipif(not _HAS_FUSED_NE, reason="kernel lacks fused FS_SUPPORTS_NE")
+def test_fused_fs_ne_parity():
+    # NE (penalty_bits) parity vs the classic pipeline: same data, same EM,
+    # identical cluster membership. Similarities sit away from every banding /
+    # NE threshold (the documented boundary-tolerance class).
+    import polars as pl
+
+    config = _ne_config()  # phone exact-NE, penalty_bits=20
+    em = _em()
+    keys = ["a", "a", "a", "b", "b", "c"]
+    names = ["jonathan", "jonathon", "michael", "sarah", "sara", "solo"]
+    # jonathan/jonathon share a phone (NE never fires -> merge survives);
+    # sarah/sara disagree (NE fires: 2.585 - 20 normalizes < 0.5 -> suppressed).
+    phones = ["555", "555", "999", "111", "222", "000"]
+    df = (
+        pl.DataFrame({"blk": keys, "name": names, "phone": phones})
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    columns = {
+        "blk": pa.array(keys), "name": pa.array(names), "phone": pa.array(phones)
+    }
+
+    tbl = fused_match.run_match_fused_fs_arrow(columns, config, em)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+    assert got == _classic_fs_clusters(df, config, em)
+    # NE actually changed the outcome on BOTH paths (guards vacuous parity).
+    assert frozenset({0, 1}) in got
+    assert frozenset({3, 4}) not in got
+
+
+@pytest.mark.skipif(
+    not (_HAS_FUSED_NE and _HAS_FUSED_LT),
+    reason="kernel lacks fused NE + level_thresholds",
+)
+def test_fused_fs_ne_with_level_thresholds_parity():
+    # Combined coverage: custom level_thresholds banding + an EM-learned NE
+    # weight (penalty_bits=None -> __ne__phone fired weight), fused vs classic.
+    import polars as pl
+    from goldenmatch.core.probabilistic import EMResult
+
+    config = _lt_config(ne=_ne(penalty_bits=None))
+    em = EMResult(
+        m_probs={"name": [0.05, 0.1, 0.25, 0.6], "__ne__phone": [0.0625, 0.9375]},
+        u_probs={"name": [0.6, 0.25, 0.1, 0.05], "__ne__phone": [0.5, 0.5]},
+        match_weights={"name": [-2.0, 0.5, 1.5, 2.585], "__ne__phone": [-8.0, 0.0]},
+        converged=True,
+        iterations=1,
+        proportion_matched=0.1,
+    )
+    keys = ["a", "a", "a", "b", "b", "c"]
+    names = ["jonathan", "jonathon", "michael", "sarah", "sara", "solo"]
+    phones = ["555", "555", "999", "111", "222", "000"]
+    df = (
+        pl.DataFrame({"blk": keys, "name": names, "phone": phones})
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    columns = {
+        "blk": pa.array(keys), "name": pa.array(names), "phone": pa.array(phones)
+    }
+
+    tbl = fused_match.run_match_fused_fs_arrow(columns, config, em)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+    assert got == _classic_fs_clusters(df, config, em)
+    assert frozenset({0, 1}) in got  # banded level-2 agreement, NE silent
+    assert frozenset({3, 4}) not in got  # EM-learned NE fired -> suppressed
 
 
 # ---- multi-pass blocking fused path ------------------------------------
