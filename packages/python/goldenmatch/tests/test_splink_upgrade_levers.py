@@ -883,18 +883,32 @@ def test_unknown_lever_name_raises():
         )
 
 
-# ── measure=True placeholder (U5 not yet wired) ───────────────────────────────
+# ── measure wiring (U5) ───────────────────────────────────────────────────────
 
 
-def test_measure_true_records_not_yet_wired_and_measurement_none():
+def test_measure_true_runs_measurement():
+    """Bare-settings + measure=True: measurement runs (EM trains on the
+    sample at run time). Deep coverage lives in test_splink_upgrade_measure."""
+    from goldenmatch.config.splink_upgrade import MeasurementResult
+
     conversion = from_splink(_bare_settings())
 
     result = upgrade_splink_conversion(
         conversion, _sample_df(), levers=set(), measure=True
     )
 
+    assert isinstance(result.measurement, MeasurementResult)
+
+
+def test_measure_false_records_skip_note():
+    conversion = from_splink(_bare_settings())
+
+    result = upgrade_splink_conversion(
+        conversion, _sample_df(), levers=set(), measure=False
+    )
+
     assert result.measurement is None
     assert any(
-        f.splink_path == "upgrade:measure" and "not yet wired" in f.message
+        f.splink_path == "upgrade:measure" and "skipped" in f.message
         for f in result.report.findings
     )

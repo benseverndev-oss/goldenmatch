@@ -612,6 +612,7 @@ def upgrade_splink_conversion(
     labels: pl.DataFrame | str | Path | None = None,
     levers: set[str] | None = None,
     measure: bool = True,
+    id_column: str | None = None,
 ) -> MigrationResult:
     """Run the data-aware upgrade pass over a converted Splink config.
 
@@ -635,6 +636,12 @@ def upgrade_splink_conversion(
             on the sample. ``False`` skips measurement (an info finding
             records why); also the escape hatch for scale where running
             both configs is infeasible.
+        id_column: Column holding each row's user-facing id for measurement
+            (cluster mappings + reference joins). ``None`` (default) tries
+            ``unique_id``/``id``/``record_id`` (first unique-valued match),
+            else positional row indices (which cannot join to
+            ``splink_clusters``/``labels`` -- pass an explicit column when
+            providing a reference).
 
     Returns:
         A :class:`MigrationResult` with the untouched baseline config, a
@@ -689,14 +696,33 @@ def upgrade_splink_conversion(
 
     measurement: MeasurementResult | None = None
     if measure:
-        # U5: wires goldenmatch.config.splink_upgrade_measure.run_measurement
-        # here. Until then, record why measurement isn't present yet.
+        # Lazy import: the measurement stage pulls in dedupe_df (the full
+        # pipeline); this module stays import-light without it.
+        from goldenmatch.config.splink_upgrade_measure import run_measurement
+
+        try:
+            measurement = run_measurement(
+                ctx,
+                sampled=sampled,
+                splink_clusters=splink_clusters,
+                labels=labels,
+                id_column=id_column,
+            )
+        except Exception as exc:  # noqa: BLE001 - spec: measurement failure
+            # downgrades the pass to transform-only, never fails it.
+            report.error(
+                "upgrade:measure",
+                f"measurement failed ({exc}); result downgraded to "
+                "transform-only",
+                mapped_to=None,
+            )
+            measurement = None
+    else:
         report.info(
             "upgrade:measure",
-            "measurement not yet wired",
+            "measurement skipped (measure=False)",
             mapped_to=None,
         )
-        measurement = None
 
     return MigrationResult(
         baseline_config=conversion.config,
