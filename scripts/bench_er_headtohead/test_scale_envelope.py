@@ -182,3 +182,29 @@ def test_run_gm_converted_person(tmp_path):
     assert r["lane"] == "gm_converted_splink" and r["shape"] == "person"
     if r["status"] == "ok":
         assert r["dedupe_wall_seconds"] is not None and pred.exists()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: lane-model orchestrator
+# ---------------------------------------------------------------------------
+def test_lane_registry_and_cmd():
+    orch = _load("orchestrate")
+    lanes = orch.LANES
+    assert set(lanes) == {"splink", "gm_hand_built", "gm_probabilistic",
+        "gm_probabilistic_native", "gm_zeroconfig", "gm_converted_splink"}
+    # numpy lane forces the env off; native lane forces it on (spec 4)
+    assert lanes["gm_probabilistic"].env["GOLDENMATCH_FS_NATIVE"] == "0"
+    assert lanes["gm_probabilistic_native"].env["GOLDENMATCH_FS_NATIVE"] == "1"
+    cmd = orch.build_cmd(lanes["gm_probabilistic"], input="f.parquet", rows=100,
+                         out="o.json", pred="p.parquet", threshold=0.85, shape="person")
+    assert "run_goldenmatch.py" in " ".join(cmd)
+    assert "--mode" in cmd and "probabilistic" in cmd and "--shape" in cmd
+
+
+def test_lane_env_is_merged_not_mutating(monkeypatch):
+    orch = _load("orchestrate")
+    monkeypatch.setenv("SENTINEL", "keep")
+    env = orch.lane_env(orch.LANES["gm_probabilistic"])
+    assert env["SENTINEL"] == "keep" and env["GOLDENMATCH_FS_NATIVE"] == "0"
+    import os as _os
+    assert "GOLDENMATCH_FS_NATIVE" not in _os.environ  # never mutated the parent

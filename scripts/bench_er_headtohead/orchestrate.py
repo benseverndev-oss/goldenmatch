@@ -23,9 +23,65 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+
+# ---------------------------------------------------------------------------
+# Lane model (spec 4): a lane is {name, script, mode, env}. The sweep iterates
+# lanes x shapes x scales. Lane env is applied PER SUBPROCESS only -- never to
+# the orchestrator's own os.environ (spec 4 hard constraint), or the numpy FS
+# lane's GOLDENMATCH_FS_NATIVE=0 would leak into the native/zeroconfig lanes.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Lane:
+    name: str
+    script: str
+    mode: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+
+
+# The four run_goldenmatch.py-backed GM lanes: run_goldenmatch.py calls
+# native_enabled("block_scoring") for EVERY mode above the mode branch, which
+# RAISES under the default require-native when the kernel is absent -- so all
+# four need --allow-pure-python locally (CI builds native and passes False).
+_GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
+                 "gm_probabilistic_native", "gm_zeroconfig"}
+
+LANES: dict[str, Lane] = {
+    "splink": Lane("splink", "run_splink.py"),
+    "gm_hand_built": Lane("gm_hand_built", "run_goldenmatch.py", mode="hand_built"),
+    "gm_probabilistic": Lane("gm_probabilistic", "run_goldenmatch.py",
+                             mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "0"}),
+    "gm_probabilistic_native": Lane("gm_probabilistic_native", "run_goldenmatch.py",
+                                    mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "1"}),
+    "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
+    "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
+}
+
+
+def lane_env(lane: Lane) -> dict[str, str]:
+    """A NEW env dict = parent env overlaid with the lane's extra env. NEVER
+    mutates os.environ (spec 4 hard constraint)."""
+    return {**os.environ, **lane.env}
+
+
+def build_cmd(lane: Lane, *, input, rows: int, out, pred, threshold: float,
+              shape: str, allow_pure_python: bool = False) -> list[str]:
+    """Build the subprocess argv for one datapoint of `lane`."""
+    cmd = [sys.executable, str(HERE / lane.script),
+           "--input", str(input), "--rows", str(rows),
+           "--out", str(out), "--pred-out", str(pred),
+           "--threshold", str(threshold), "--shape", shape]
+    if lane.mode:
+        cmd += ["--mode", lane.mode]
+    # Only the run_goldenmatch.py-backed lanes accept --allow-pure-python; the
+    # native gate raises for ALL its modes, not just hand_built.
+    if allow_pure_python and lane.name in _GM_RUN_LANES:
+        cmd.append("--allow-pure-python")
+    return cmd
 
 # Per-scale subprocess wall-clock cap (seconds). Raised after the first run so a
 # slow-but-progressing datapoint isn't cut off; a true hang still ends eventually.
