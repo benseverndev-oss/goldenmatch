@@ -142,28 +142,38 @@ def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
     return to_frame(collected_df).height <= _BUCKET_DEFAULT_MAX_ROWS
 
 
-def _fs_default_bucket(config: GoldenMatchConfig, mk: Any) -> bool:
-    """Whether to default-route this probabilistic (Fellegi-Sunter) matchkey to
-    the memory-bounded bucket scorer (issue #1792).
+def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
+    """Whether a probabilistic (Fellegi-Sunter) matchkey scores via the
+    memory-bounded bucket scorer -- the DEFAULT FS route (#1803 item 3,
+    superseding #1792's native-gated ``_fs_default_bucket``) -- vs the legacy
+    per-block batched scorer. The ONE routing decision shared by all three
+    pipeline FS sites (dedupe + both match lanes), so the gates cannot drift
+    between them again.
 
-    The bucket backend bounds *frame* memory (two-level hash partition, one pass
-    resident) AND -- with the batched native FS scorer -- scores a whole bucket
-    in one kernel call, so an FS matchkey gets a path that is both memory-bounded
-    and fast at scale (the default/native-FS per-block path OOMs by materializing
-    the full candidate-pair set). Fires ONLY when:
+    Bucket is the default because it partitions the frame internally (two-level
+    hash partition, one pass resident, slim projection) while the batched
+    fallback consumes eagerly-materialized ``build_blocks`` output -- the #1798
+    OOM path. Unlike the pre-#1803 gate this does NOT require the native FS
+    kernel (the non-native bucket lane scores via the vectorized per-block
+    scorer and is still frame-memory-bounded; measured at 1M: cluster-identical,
+    RSS at parity, wall within noise of the batched route) and has NO row cap.
+    The exclusions that remain are correctness- or contract-driven:
 
-      - ``config.backend`` is None/unset (an EXPLICIT non-bucket backend --
-        polars-direct / ray / duckdb / ... -- keeps its own routing; an explicit
-        ``backend="bucket"`` is already handled by the caller), AND
-      - the native FS kernel is available (``native_enabled("block_scoring")``)
-        AND every field/NE scorer is native-eligible (``_fs_native_eligible``).
-
-    Non-native / model-backed / TF-adjusted matchkeys fall through to the
-    per-block batched scorer (the legacy default route), so this never regresses
-    a workload the native kernel can't accelerate. Escape hatch:
-    ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` forces the legacy per-block route.
+      - an EXPLICIT scale backend (ray / duckdb / datafusion / chunked) keeps
+        its own routing; ``polars-direct`` is the planner's in-band choice and
+        keeps the default (same band semantics as ``_use_bucket_scorer``);
+      - ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` escape hatch (legacy batched);
+      - ``GOLDENMATCH_COLUMNAR_PIPELINE`` opt-in wins;
+      - active profile emitter: auto-config reads the legacy block-size
+        signals during sample runs (the final committed dedupe gets bucket);
+      - blocking strategies bucket cannot replicate (non static/multi_pass --
+        lsh / ann / learned / canopy / sorted_neighborhood candidates are not
+        field-hash reproducible).
     """
-    if getattr(config, "backend", None) is not None:
+    backend = getattr(config, "backend", None)
+    if backend == "bucket":
+        return True  # explicit choice -- honored at any size
+    if backend not in (None, "polars-direct"):
         return False
     if (
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
@@ -172,20 +182,14 @@ def _fs_default_bucket(config: GoldenMatchConfig, mk: Any) -> bool:
         return False
     if _columnar_pipeline_enabled():
         return False
-    # Keep controller-profiled sample runs on the legacy route so auto-config
-    # reads the same block-size signals it always has (mirrors _use_bucket_scorer);
-    # the final committed dedupe runs with no active emitter and gets bucket.
+    _blk = getattr(config, "blocking", None)
+    if _blk is not None and getattr(_blk, "strategy", None) not in (
+        None, "static", "multi_pass",
+    ):
+        return False
     from goldenmatch.core.profile_emitter import has_active_emitter
 
-    if has_active_emitter():
-        return False
-    from goldenmatch.core._native_loader import native_enabled
-
-    if not native_enabled("block_scoring"):
-        return False
-    from goldenmatch.core.probabilistic import _fs_native_eligible
-
-    return _fs_native_eligible(mk)
+    return not has_active_emitter()
 
 
 def _get_block_scorer(config: GoldenMatchConfig):
@@ -2600,9 +2604,7 @@ def _run_dedupe_pipeline(
             # partition_by materializes millions of tiny eager frames (the
             # dataset duplicated per blocking pass) and SIGKILLed the runner
             # BEFORE scoring ever started — issue #1798.
-            _fs_use_bucket = _use_bucket_scorer(
-                config, collected_df
-            ) or _fs_default_bucket(config, mk)
+            _fs_use_bucket = _fs_use_bucket_route(config, mk)
             _fs_need_blocks = (
                 bool(_bench_dump_dir)
                 or not _fs_use_bucket
@@ -4108,9 +4110,7 @@ def _run_match_pipeline(
             # Bucket route + preloaded model -> blocks are never read (EM is
             # skipped and score_buckets partitions internally); skip the
             # full-frame block materialization that OOM'd at 14M (#1798).
-            _fs_use_bucket = config.backend == "bucket" or _fs_default_bucket(
-                config, mk
-            )
+            _fs_use_bucket = _fs_use_bucket_route(config, mk)
             blocks = (
                 []
                 if _fs_use_bucket and fs_model_preloaded(mk)
@@ -4347,9 +4347,7 @@ def _run_match_scoring_and_output(
             # Bucket route + preloaded model -> blocks are never read (EM is
             # skipped and score_buckets partitions internally); skip the
             # full-frame block materialization that OOM'd at 14M (#1798).
-            _fs_use_bucket = config.backend == "bucket" or _fs_default_bucket(
-                config, mk
-            )
+            _fs_use_bucket = _fs_use_bucket_route(config, mk)
             blocks = (
                 []
                 if _fs_use_bucket and fs_model_preloaded(mk)

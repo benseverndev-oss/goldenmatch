@@ -208,10 +208,20 @@ BUCKET_HASH_SEED = 0xC2B5C0BBE7ED5E5D
 xxHash seed so block_key -> bucket assignment is stable across runs."""
 
 
-def _default_n_buckets() -> int:
-    """Default bucket count. min(cpu_count() * 4, 1024). Same heuristic as
-    Component 2 v2's materialize_bucketed_blocks."""
-    return min((os.cpu_count() or 4) * 4, 1024)
+def _default_n_buckets(height: int | None = None) -> int:
+    """CPU-derived floor, data-scaled above it (#1803 item 5).
+
+    Bucket count tracks rows upward (target ~50K rows/bucket, capped at 4096
+    to bound partition bookkeeping) so per-bucket frame size stays bounded at
+    10M+ instead of growing linearly under the old CPU-only cap. Output pairs
+    are invariant to the bucket count (blocks hash wholly into one bucket);
+    only the partition granularity changes. ``height=None`` keeps the legacy
+    CPU-only formula for callers without a frame in hand.
+    """
+    base = min((os.cpu_count() or 4) * 4, 1024)
+    if height is None:
+        return base
+    return min(max(base, height // 50_000), 4096)
 
 
 def _resolve_score_pair_callable(
@@ -581,7 +591,7 @@ def score_buckets(
     max_block_size = blocking_config.max_block_size
 
     if n_buckets is None:
-        n_buckets = _default_n_buckets()
+        n_buckets = _default_n_buckets(_prep_frame.height)
 
     # Diag prints (flushed) so we can see substep timing on runner heartbeats
     # independent of the bench stage recorder, which only logs CLOSED stages.
