@@ -101,7 +101,7 @@ distributed/polyglot workload before building — none exists today.
 
 ## Pipeline Flow
 ```
-load_file -> GoldenCheck.scan_file(path) -> decide_flow(findings)
+load_file -> GoldenCheck.scan_dataframe(ctx.df) -> decide_flow(findings)
   -> if fixable: GoldenFlow.transform_df(df) -> updated df
   -> decide_match(findings, row_count, strategy_override)
   -> GoldenMatch.dedupe_df(df) or AgentSession.deduplicate(path)

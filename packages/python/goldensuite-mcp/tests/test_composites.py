@@ -1,5 +1,7 @@
 import csv as _csv
 import os
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from goldensuite_mcp.composites import run_step
@@ -7,6 +9,11 @@ from goldensuite_mcp.composites import run_step
 
 def _table(**tools):
     return dict(tools)
+
+
+def _pipe_available():
+    import importlib.util
+    return importlib.util.find_spec("goldenpipe") is not None
 
 
 def test_run_step_success():
@@ -220,7 +227,10 @@ def _fake_clean_table(rec, transforms_ok=True):
     return {"upload_dataset": upload, "run_transforms": transforms, "agent_deduplicate": dedup}
 
 
-def test_clean_and_dedupe_happy():
+@patch("goldensuite_mcp.composites.HAS_PIPE", False)
+def test_clean_and_dedupe_happy_fallback_chain():
+    # Fallback (no goldenpipe): the legacy run_transforms -> agent_deduplicate
+    # CSV chain still works and threads the cleaned path into the dedupe.
     from goldensuite_mcp.composites import build_composites
     rec = []
     _, dispatch = build_composites(_fake_clean_table(rec))
@@ -237,6 +247,7 @@ def test_clean_and_dedupe_happy():
     assert isinstance(out["summary"], str) and out["summary"]
 
 
+@patch("goldensuite_mcp.composites.HAS_PIPE", False)
 def test_clean_and_dedupe_soft_dep_short_circuit():
     from goldensuite_mcp.composites import build_composites
     rec = []
@@ -246,6 +257,102 @@ def test_clean_and_dedupe_soft_dep_short_circuit():
     assert [s["step"] for s in out["steps"]] == ["upload", "clean"]
     # deduplicate never ran
     assert not any(k == "dedup" for k, _ in rec)
+
+
+def _fake_pipe_result(golden_rows=2, total=5, pairs=((0, 1, 1.0), (2, 3, 1.0))):
+    import polars as pl
+    golden = pl.DataFrame({"id": [str(i) for i in range(golden_rows)]})
+    return SimpleNamespace(
+        status=SimpleNamespace(value="success"),
+        errors=[],
+        artifacts={"golden": golden, "match_stats": {"total_records": total},
+                   "scored_pairs": list(pairs)},
+    )
+
+
+def test_clean_and_dedupe_inprocess_single_step(tmp_path):
+    # In-process path: one "pipeline" step, golden written once, NO cleaned.csv,
+    # confidence buckets reconstructed from scored_pairs. run_transforms and
+    # agent_deduplicate are NEVER dispatched.
+    from goldensuite_mcp.composites import build_composites
+    src = tmp_path / "in.csv"
+    src.write_text("id\n1\n2\n")
+    rec = []
+    fake = _fake_clean_table(rec)  # dispatch fakes that must NOT be called
+    fake_gp = SimpleNamespace(run=lambda p: _fake_pipe_result())
+    with patch("goldensuite_mcp.composites.HAS_PIPE", True), \
+            patch("goldensuite_mcp.composites._gp", fake_gp):
+        _, dispatch = build_composites(fake)
+        out = dispatch["clean_and_dedupe"]("clean_and_dedupe", {"file_path": str(src)})
+    assert out["ok"] is True
+    assert [s["step"] for s in out["steps"]] == ["upload", "pipeline"]
+    assert not any(k in ("clean", "dedup") for k, _ in rec)  # legacy tools untouched
+    assert out["outputs"]["golden_records"] == 2
+    assert out["outputs"]["total_records"] == 5
+    assert "cleaned_path" not in out["outputs"]  # no intermediate CSV
+    gp = out["outputs"]["golden_path"]
+    assert os.path.exists(gp)
+    assert not os.path.exists(str(src).replace(".csv", ".cleaned.csv"))
+    pipe_step = next(s for s in out["steps"] if s["step"] == "pipeline")
+    assert pipe_step["auto_merge"] == 2 and pipe_step["review"] == 0  # gate_pairs buckets
+
+
+def test_clean_and_dedupe_inprocess_pipeline_failure(tmp_path):
+    from goldensuite_mcp.composites import build_composites
+    src = tmp_path / "in.csv"
+    src.write_text("id\n1\n")
+    failed = SimpleNamespace(status=SimpleNamespace(value="failed"), errors=["boom"], artifacts={})
+    fake_gp = SimpleNamespace(run=lambda p: failed)
+    with patch("goldensuite_mcp.composites.HAS_PIPE", True), \
+            patch("goldensuite_mcp.composites._gp", fake_gp):
+        _, dispatch = build_composites({})
+        out = dispatch["clean_and_dedupe"]("clean_and_dedupe", {"file_path": str(src)})
+    assert out["ok"] is False
+    assert [s["step"] for s in out["steps"]] == ["upload", "pipeline"]
+    assert "boom" in out["summary"]
+
+
+@pytest.mark.skipif(not _pipe_available(), reason="goldenmatch autoconfig not available")
+def test_clean_and_dedupe_inprocess_threads_exclude_columns(tmp_path):
+    # exclude_columns must reach goldenmatch's auto-config via the same
+    # _RUNTIME_EXCLUDE_COLUMNS ContextVar agent_deduplicate uses.
+    from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+    from goldensuite_mcp.composites import build_composites
+    src = tmp_path / "in.csv"
+    src.write_text("id\n1\n")
+    seen = {}
+
+    def _run(p):
+        seen["excl"] = _RUNTIME_EXCLUDE_COLUMNS.get()  # captured mid-run
+        return _fake_pipe_result()
+
+    fake_gp = SimpleNamespace(run=_run)
+    with patch("goldensuite_mcp.composites.HAS_PIPE", True), \
+            patch("goldensuite_mcp.composites._gp", fake_gp):
+        _, dispatch = build_composites({})
+        dispatch["clean_and_dedupe"]("clean_and_dedupe",
+                                     {"file_path": str(src), "exclude_columns": ["ssn"]})
+    assert seen["excl"] == ["ssn"]
+    # and it's reset afterward (no leak into the next call)
+    assert _RUNTIME_EXCLUDE_COLUMNS.get() != ["ssn"]
+
+
+@pytest.mark.skipif(not _pipe_available(), reason="goldenpipe not installed")
+def test_clean_and_dedupe_inprocess_end_to_end(tmp_path):
+    """Real GoldenPipe run through the composite: golden CSV lands, no cleaned.csv."""
+    from goldensuite_mcp.composites import orchestrate_clean_and_dedupe
+    csv_path = tmp_path / "people.csv"
+    _write_people_csv(csv_path)
+    # _upload short-circuits on a file_path arg, so an empty dispatch is fine.
+    out = orchestrate_clean_and_dedupe({}, {"file_path": str(csv_path)})
+    assert out["ok"] is True, out
+    assert [s["step"] for s in out["steps"]] == ["upload", "pipeline"]
+    golden = out["outputs"]["golden_path"]
+    assert golden and os.path.exists(golden)
+    assert not os.path.exists(str(csv_path).replace(".csv", ".cleaned.csv"))
+    with open(golden, encoding="utf-8") as fh:
+        rows = sum(1 for _ in fh)
+    assert rows >= 2  # header + >=1 golden record
 
 
 def test_all_four_composites_exist_no_dangling_curated():

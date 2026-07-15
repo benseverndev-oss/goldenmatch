@@ -1,4 +1,5 @@
-"""GoldenCheck adapter -- wraps scan_file()."""
+"""GoldenCheck adapter -- scans the in-memory frame (scan_dataframe), falling
+back to scan_file() only when no frame is available."""
 from __future__ import annotations
 
 import logging
@@ -9,11 +10,13 @@ from goldenpipe.models.stage import StageInfo
 logger = logging.getLogger(__name__)
 
 try:
+    from goldencheck import scan_dataframe as _scan_df
     from goldencheck import scan_file as _scan
     HAS_CHECK = True
 except ImportError:
     HAS_CHECK = False
     _scan = None
+    _scan_df = None
 
 
 class ScanStage:
@@ -27,20 +30,31 @@ class ScanStage:
     def run(self, ctx: PipeContext) -> StageResult:
         source = ctx.metadata.get("source", "")
         stage_cfg = ctx.stage_config
-        if stage_cfg:
-            logger.info("Passing stage config to GoldenCheck scan")
-            result = _scan(source, **stage_cfg)
+        if ctx.df is not None:
+            # Scan the frame the pipeline already loaded -- no redundant disk
+            # re-read, and it works for DataFrame/DuckDB sources whose `source`
+            # string ("<DataFrame>"/"duckdb:...") is not a readable path.
+            # `file_path` is cosmetic (populates DatasetProfile.file_path).
+            if stage_cfg:
+                logger.info("Passing stage config to GoldenCheck scan_dataframe")
+                result = _scan_df(ctx.df, file_path=source, **stage_cfg)
+            else:
+                result = _scan_df(ctx.df, file_path=source)
         else:
-            result = _scan(source)
+            # Defensive fallback: no in-memory frame. A local stage normally has
+            # ctx.df materialized by the Runner before it runs, so this path is
+            # rare; keep the file scan for it.
+            logger.info("ScanStage: no ctx.df; falling back to scan_file(%s)", source)
+            result = _scan(source, **stage_cfg) if stage_cfg else _scan(source)
 
-        # scan_file returns (findings, profile) tuple
+        # scan_dataframe/scan_file both return a (findings, profile) tuple
         if isinstance(result, tuple) and len(result) >= 2:
             raw_findings, profile = result[0], result[1]
         else:
             raw_findings = result.findings if hasattr(result, "findings") else []
             profile = None
             logger.warning(
-                "ScanStage: scan_file returned %s (expected tuple). "
+                "ScanStage: scan returned %s (expected tuple). "
                 "Profile will be None — column context pipeline may not produce contexts.",
                 type(result).__name__,
             )

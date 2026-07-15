@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 
 from mcp.types import Tool
 
+logger = logging.getLogger(__name__)
+
 Dispatch = dict[str, Callable[[str, dict], dict]]
+
+# GoldenPipe runs check->flow->dedupe in ONE process on an in-memory frame, so a
+# composite can chain the stages without writing intermediate CSVs to disk. It is
+# a hard dependency of this package (`goldenpipe[mcp]`); the guard only matters in
+# a stripped build, where the composite falls back to the tool-dispatch chain.
+try:
+    import goldenpipe as _gp
+
+    HAS_PIPE = True
+except ImportError:  # pragma: no cover - goldenpipe is a declared dependency
+    HAS_PIPE = False
+    _gp = None
 
 
 def run_step(dispatch: Dispatch, tool_name: str, args: dict) -> tuple[bool, dict]:
@@ -105,17 +120,118 @@ def orchestrate_dedupe_file(dispatch, args):
     return _finish("dedupe_file", steps, config=config, outputs=outputs)
 
 
-def orchestrate_clean_and_dedupe(dispatch, args):
-    """Normalize then dedupe: upload -> run_transforms -> agent_deduplicate.
-    The cleaned file that run_transforms writes is threaded into the dedupe."""
-    steps = []
-    excl = {"exclude_columns": args["exclude_columns"]} if args.get("exclude_columns") else {}
+def _golden_to_polars(golden):
+    """Normalize a DedupeStage `golden` artifact to a Polars frame for writing.
 
+    Depending on the goldenmatch build, `result.golden` is a `pl.DataFrame`
+    (has `.write_csv`) or a `pa.Table` (Arrow-native path). Returns None for an
+    unrecognized/absent value so the caller degrades cleanly."""
+    if golden is None:
+        return None
+    if hasattr(golden, "write_csv"):  # polars.DataFrame
+        return golden
+    try:
+        import polars as pl
+        import pyarrow as pa
+
+        if isinstance(golden, pa.Table):
+            return pl.from_arrow(golden)
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("clean_and_dedupe: could not normalize golden artifact")
+    return None
+
+
+def _confidence_from_scored_pairs(scored_pairs):
+    """Reconstruct the auto_merge/review/reject buckets agent_deduplicate reports.
+
+    GoldenPipe runs plain `dedupe_df` (no review gating), so it surfaces
+    `scored_pairs` but not the confidence distribution. Re-derive it with the
+    same thresholds AgentSession uses (gate_pairs: >0.95 merge, 0.75-0.95
+    review, <0.75 reject). Returns {} if pairs are absent or gating is
+    unavailable."""
+    if not scored_pairs:
+        return {}
+    try:
+        from goldenmatch.core.review_queue import gate_pairs
+
+        merged, review, rejected = gate_pairs(list(scored_pairs))
+        return {"auto_merged": len(merged), "review": len(review), "auto_rejected": len(rejected)}
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("clean_and_dedupe: could not reconstruct confidence distribution")
+        return {}
+
+
+def _run_pipeline_inprocess(path, exclude_columns, golden_path):
+    """Run GoldenPipe's check->flow->dedupe chain in-process on `path` and write
+    golden once. No intermediate CSVs. Returns the fields the composite summary
+    needs, or {"error": ...} on failure."""
+    token = None
+    if exclude_columns:
+        # Same mechanism agent_deduplicate uses to exclude columns from matching;
+        # threads into GoldenPipe's internal auto-config (DedupeStage calls the
+        # goldenmatch controller).
+        from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+
+        token = _RUNTIME_EXCLUDE_COLUMNS.set(list(exclude_columns))
+    try:
+        result = _gp.run(path)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        if token is not None:
+            from goldenmatch.core.autoconfig import _RUNTIME_EXCLUDE_COLUMNS
+
+            _RUNTIME_EXCLUDE_COLUMNS.reset(token)
+
+    if result.status.value == "failed":
+        return {"error": "; ".join(result.errors) or "pipeline failed"}
+
+    golden = _golden_to_polars(result.artifacts.get("golden"))
+    stats = result.artifacts.get("match_stats") or {}
+    conf = _confidence_from_scored_pairs(result.artifacts.get("scored_pairs"))
+    if golden is not None:
+        golden.write_csv(golden_path)
+    return {
+        "golden_path": golden_path if golden is not None else None,
+        "golden_records": golden.height if golden is not None else None,
+        "total_records": stats.get("total_records"),
+        "confidence_distribution": conf,
+    }
+
+
+def orchestrate_clean_and_dedupe(dispatch, args):
+    """Normalize then dedupe. In-process (default): upload -> one GoldenPipe
+    check->flow->dedupe run, no intermediate CSV. Fallback (no goldenpipe):
+    upload -> run_transforms -> agent_deduplicate over a cleaned CSV on disk."""
+    steps = []
     ok, res, label = _upload(dispatch, args)
     steps.append({"step": label, "ok": ok, **({"path": res.get("path")} if ok else {"error": res.get("error")})})
     if not ok:
         return _finish("clean_and_dedupe", steps)
     path = res["path"]
+
+    if not HAS_PIPE:
+        return _clean_and_dedupe_via_dispatch(dispatch, args, path, steps)
+
+    golden_path = _gen_output_path(path, "golden")
+    pr = _run_pipeline_inprocess(path, args.get("exclude_columns"), golden_path)
+    if "error" in pr:
+        steps.append({"step": "pipeline", "ok": False, "error": pr["error"]})
+        return _finish("clean_and_dedupe", steps)
+    cd = pr["confidence_distribution"]
+    steps.append({"step": "pipeline", "ok": True,
+                  "golden_path": pr["golden_path"], "auto_merge": cd.get("auto_merged"),
+                  "review": cd.get("review"), "reject": cd.get("auto_rejected")})
+    outputs = {"golden_path": pr["golden_path"], "golden_records": pr["golden_records"],
+               "total_records": pr["total_records"]}
+    return _finish("clean_and_dedupe", steps, outputs=outputs)
+
+
+def _clean_and_dedupe_via_dispatch(dispatch, args, path, steps):
+    """Legacy tool-dispatch chain (run_transforms -> agent_deduplicate over a
+    cleaned CSV). Used only when goldenpipe is unavailable. `steps` already
+    carries the upload step."""
+    excl = {"exclude_columns": args["exclude_columns"]} if args.get("exclude_columns") else {}
 
     cleaned_path = _gen_output_path(path, "cleaned")
     ok, res = run_step(dispatch, "run_transforms", {"file_path": path, "output_path": cleaned_path})
@@ -234,6 +350,11 @@ def _summarize(workflow, steps, outputs, degraded_steps=frozenset()):
         tail = f" Written to {dest}." if dest else ""
         return f"Matched two sources: {pairs} matched pairs.{tail}"
     if workflow == "clean_and_dedupe" and outputs:
+        p = next((s for s in steps if s["step"] == "pipeline"), None)
+        if p:  # in-process GoldenPipe path
+            return (f"{outputs.get('total_records')} records cleaned + deduped in-process -> "
+                    f"{outputs.get('golden_records')} golden; {p.get('auto_merge')} merged, "
+                    f"{p.get('review')} to review. Written to {outputs.get('golden_path')}.")
         c = next((s for s in steps if s["step"] == "clean"), {})
         d = next((s for s in steps if s["step"] == "deduplicate"), {})
         return (f"{outputs.get('total_records')} records cleaned "
