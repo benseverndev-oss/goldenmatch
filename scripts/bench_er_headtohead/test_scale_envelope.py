@@ -272,3 +272,39 @@ def test_merge_later_timestamp_wins(tmp_path):
     got = {(r["shape"], r["lane"], r["rows_requested"]): r for r in merged["results"]}
     assert got[("person", "splink", 100)]["dedupe_wall_seconds"] == 7.0   # later run wins
     assert len(merged["runs"]) == 2                                       # both headers kept
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: eval-join dtype lock
+# ---------------------------------------------------------------------------
+def test_eval_join_casts_record_id_dtype_mismatch(tmp_path):
+    # The autoconfig/probabilistic/converted GM lanes write a STRING record_id
+    # pred parquet while the generator truth is INT64 (spec 10). The join must
+    # cast both sides to VARCHAR so the same clustering scores F1 == 1.0 even
+    # across the dtype mismatch -- locked here so an implicit-cast change can't
+    # silently break it.
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    evaluate = _load("evaluate")
+
+    # Same 6 records, same clustering (two 3-member clusters). pred uses STRING
+    # record_id, truth uses INT64 record_id -- describing the identical grouping.
+    ids = ["0", "1", "2", "3", "4", "5"]
+    pred_clusters = [10, 10, 10, 20, 20, 20]
+    truth_clusters = [100, 100, 100, 200, 200, 200]
+
+    pred = tmp_path / "pred.parquet"
+    truth = tmp_path / "truth.parquet"
+    pq.write_table(pa.table({
+        "record_id": pa.array(ids, pa.string()),
+        "pred_cluster_id": pa.array(pred_clusters, pa.int64()),
+    }), pred)
+    pq.write_table(pa.table({
+        "record_id": pa.array([int(i) for i in ids], pa.int64()),
+        "cluster_id": pa.array(truth_clusters, pa.int64()),
+    }), truth)
+
+    m = evaluate.evaluate(pred, truth)
+    assert m["n_records_evaluated"] == 6          # the join matched every record
+    assert m["pairwise"]["f1"] == 1.0             # identical clustering scores perfectly
