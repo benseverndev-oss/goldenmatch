@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+<!-- README-callout
+**Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
+`record_embedding` field scorers now train (EM) and score end-to-end on the
+probabilistic path via the vectorized matrix — previously they raised
+`Unknown scorer` on both training and scoring. They are matrix-only, so a
+matchkey carrying one always runs vectorized, and the TUI now routes FS through
+the same native/vectorized selector.
+-->
+
+### Added
+
+- **Embeddings as first-class Fellegi-Sunter scorers.** `embedding` /
+  `record_embedding` fields train and score on the FS path (vectorized EM
+  E-step + block scoring); they were unusable before (both EM training and the
+  scalar scorer raised `Unknown scorer`). Model-backed scorers always run
+  vectorized — `GOLDENMATCH_FS_VECTORIZED=0` only affects string scorers. The
+  TUI engine now routes probabilistic matchkeys through the block-scorer
+  selector, so it gets native/vectorized FS too.
+
+### Fixed
+
+- **Term-frequency (`tf_adjustment`) now applies on the scalar FS path**, matching
+  the vectorized path — the same config no longer scores differently depending on
+  route (a model-backed scorer or `GOLDENMATCH_FS_VECTORIZED=0` forces scalar).
+- **Distributed and chunked lanes fail loudly on probabilistic matchkeys.** An FS
+  matchkey routed through the distributed (`GOLDENMATCH_DISTRIBUTED_PIPELINE`) or
+  chunked lane previously contributed zero pairs silently; it now raises
+  `NotImplementedError` at lane entry. Run FS configs single-box (in-memory /
+  bucket backend).
+
 ## [3.3.1] - 2026-07-15
 
 ### Fixed

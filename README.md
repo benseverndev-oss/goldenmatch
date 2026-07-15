@@ -58,6 +58,13 @@ pip install golden-suite    # the WHOLE suite (Check + Flow + Match + Analysis +
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
+> **Unreleased** — **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
+`record_embedding` field scorers now train (EM) and score end-to-end on the
+probabilistic path via the vectorized matrix — previously they raised
+`Unknown scorer` on both training and scoring. They are matrix-only, so a
+matchkey carrying one always runs vectorized, and the TUI now routes FS through
+the same native/vectorized selector.
+>
 > **v3.3.0** — **3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
 now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
 (no labels needed; `penalty_bits` as a fixed override), and the Splink
@@ -72,11 +79,6 @@ kernels on the hot paths (a zero-polars CI gate proves a full dedupe with
 polars imports blocked); `pip install 'goldenmatch[polars]'` is a
 compatibility extra (classic lane, kernel-absent golden replay,
 cell-quality weighting), byte-identical to 3.0.x.
->
-> **v3.0.0** — **v3.0.0 — Arrow-native results.** Result frames are now `pyarrow.Table`
-(migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
-Arrow frame backend is the default — measured ~36% faster end-to-end on the
-100K zero-config benchmark — with `GOLDENMATCH_FRAME=polars` as the opt-out.
 <!-- README-callouts:end -->
 
 ---
