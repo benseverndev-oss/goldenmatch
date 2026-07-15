@@ -83,9 +83,17 @@ Lane = {
 
 The sweep iterates **lanes x shapes x scales**. Every datapoint is one isolated
 subprocess (OS reclaims memory on exit; SIGKILL/OOM synthesizes an `OOM` result;
-timeout ladder unchanged). Results are keyed by the triple `(shape, lane, scale)`
+timeout ladder in §7.3). Results are keyed by the triple `(shape, lane, scale)`
 and flushed to `bench_results.json` after every datapoint, so a late
 OOM/timeout never discards earlier points.
+
+**Hard implementation constraint — lane env is applied per subprocess, never to
+the orchestrator's own environment.** Each child is spawned with
+`subprocess.run(cmd, env={**os.environ, **lane.env})`. The orchestrator MUST NOT
+`os.environ.update(lane.env)` — that would leak `GOLDENMATCH_FS_NATIVE=0` from the
+`gm_probabilistic` lane into the following `gm_probabilistic_native` / `gm_zeroconfig`
+datapoints in the same process and silently invalidate them (the exact failure the
+numpy-lane force guards against, reintroduced via env plumbing).
 
 The lane registry (default full set of 6):
 
@@ -135,29 +143,40 @@ realistic bibliographic variation:
 - venue full-name vs abbreviation,
 - occasional null year.
 
-**Blocking-key cardinality must be high and grow-with-N, not fixed.** This is the
-trap the person shape already avoids: the person generator blocks on `postcode`
-with a **fixed** pool of `N_POSTCODE=200_000` (`generate_fixture.py`), so at 100M
-rows blocks are ~500 rows each — large, but bounded, which is exactly why 100M
-person is the expected single-node OOM ceiling rather than an N^2 blow-up. A
-`(venue, year)` key with a few hundred venues x ~60 years is only ~18K distinct
-blocks — a **constant** independent of N, giving `pairs ≈ N^2 / (2·18K)`
-(~1.7e10 at 25M, quadratic). That would wedge biblio far below the person OOM
-ceiling and is NOT a fair envelope.
+**Blocking-key cardinality `C` must be large enough that per-block size (`≈ N/C`)
+stays bounded at the target N.** Both shapes use a fixed-cardinality key — this is
+not "linear-in-N blocking," it is `O(N²/C)` with a large `C`. Person blocks on
+`postcode` with `N_POSTCODE=200_000` (`generate_fixture.py`), so at 100M rows
+blocks are ~500 rows each: bounded, which is exactly why 100M person is the
+expected single-node OOM ceiling rather than a blow-up. The trap is a *small* `C`:
+a `(venue, year)` key with a few hundred venues x ~60 years is only ~18K distinct
+blocks, giving ~5,500 rows/block at 100M (`pairs ≈ N²/(2·18K)`, ~1.7e10 at 25M) —
+that wedges biblio far below the person ceiling and is NOT a fair envelope. The
+fix is to match person's `C ≈ 200K`, NOT to find a mythical N-scaling key.
 
-Fix: the biblio bucket single-key is a **high-cardinality title-token key**
-(first significant title token, or a `(title_token, year)` compound) sized so its
-distinct-block count is comparable to person's ~200K — i.e. the block-size-vs-N
-curve mirrors the person shape, making the two envelopes and their OOM ceilings
-comparable. Splink unions that title-token key + `(author_surname, year)`.
+Fix: the biblio bucket single-key is the **`(title_token, year)` compound**
+(committed, not one option among several): a title-token pool of ~3,500 tokens x
+~60 years ≈ 200K distinct blocks, mirroring person's `C` so the block-size-vs-N
+curves — and the two OOM ceilings — are comparable. Splink unions that
+`(title_token, year)` key + `(author_surname, year)`. The token pool size is a
+named generator constant so the projection guard has a concrete `C` to assert.
 
-**The block-size guard must extrapolate, not assert-at-smoke-scale.** For a
-fixed-cardinality key, block size grows linearly with N, so a 100K smoke check
-(~6 rows/block) says nothing about 100M. The generator instead computes each
-shape's blocking-key cardinality `C` and asserts the **projected** max block size
-at the target N (`≈ N / C` for a uniform key, scaled by the key's skew factor)
-stays under a ceiling — catching a fixed-cardinality (N^2) key at design time
-regardless of the smoke scale.
+**The blocking token must be the STABLE token, or biblio has a recall ceiling
+person doesn't.** Single-key bucket blocking never scores a pair whose block keys
+differ, so if the `title_token` a duplicate blocks on is the one that got typo'd or
+dropped, that duplicate is unreachable — a structural recall loss that is an
+artifact of corrupting the blocking field, not a real engine property. Person
+avoids this by blocking on `postcode`, which duplicates never typo (only ~5% null).
+Biblio mirrors it: the generator applies title corruption (typos, word-drop) ONLY
+to non-blocking tokens and keeps the chosen `title_token` (+ `year`) stable on
+duplicates. Title-token *ordering*/abbreviation variation is confined to the
+scored fields, not the block key.
+
+**The block-size guard must extrapolate, not assert-at-smoke-scale.** A 100K smoke
+check (~6 rows/block) says nothing about 100M. The generator computes each shape's
+blocking-key cardinality `C` and asserts the **projected** max block size at the
+target N (`≈ N / C`, scaled by the key's skew factor) stays under a ceiling —
+catching a too-small-`C` (effectively N²) key at design time regardless of scale.
 
 ## 6. Shape config registries
 
@@ -245,12 +264,16 @@ blow the cap or let one hung 100M lane (8h) starve the other 11 datapoints. So:
   job holds only a few long datapoints and stays under the cap.
 
 Recommended dispatch plan (documented in the README):
-1. Dispatch A: `shapes=person biblio`, `scales=100000 1000000 5000000`, all 6 lanes
-   (fast band; runs the cheap datapoints and surfaces a bad biblio fixture early).
-2. Dispatch B..N: `shapes=person biblio`, `scales=25000000 100000000`, **one or two
+1. Dispatch A: `shapes=person biblio`, `scales=100000 1000000`, all 6 lanes
+   (cheap band; surfaces a bad biblio fixture early, well under the cap).
+2. Dispatch B: `shapes=person biblio`, `scales=5000000`, all 6 lanes — 5M is split
+   OUT of the cheap band because FS-numpy at 5M is slow (§7.1) and 6 lanes at 5M
+   could otherwise crowd the cap; its per-datapoint timeout is sized to the
+   measured FS-numpy 5M wall so a legitimately-slow point isn't cut to `timeout`.
+3. Dispatch C..N: `shapes=person biblio`, `scales=25000000 100000000`, **one or two
    lanes per dispatch** (heavy band; the 100M GM bucket lanes are expected OOM
    ceilings, Splink 100M may run for hours or OOM its own DuckDB temp).
-3. Merge all dispatch artifacts -> final doc.
+4. Merge all dispatch artifacts -> final doc.
 
 ## 8. Metrics recorded per datapoint
 
@@ -269,16 +292,24 @@ Standardized result schema (superset of what each runner already emits):
 - **accuracy** (from `evaluate.py`, identical code both engines): pairwise
   precision/recall/F1 + confusion (TP/FP/FN/TN), and B-cubed P/R/F1.
 - **lane telemetry** (GoldenMatch): `native_loaded`, `native_block_scoring`,
-  `fs_native_requested`, `fs_native_symbol_present`, and — new — `fs_native_active`:
-  the actual return of `probabilistic._fs_native_enabled()` recorded at scoring
-  time. The existing `fs_native_requested` reflects only the ENV flag, which (with
-  FS-native default-ON) reads `False` on a lane that nonetheless ran native — so it
-  can't prove execution. `fs_native_active` is the real signal: the
-  `gm_probabilistic` lane must show `fs_native_active=False` (numpy fallback,
-  forced by `GOLDENMATCH_FS_NATIVE=0`) and `gm_probabilistic_native` must show
-  `fs_native_active=True`. If the numpy lane ever reports `True`, the run is
-  invalid. (Implementation: surface `_fs_native_enabled()` into the bench blob the
-  runner already emits, or expose a tiny read-only helper the runner calls.)
+  `fs_native_requested`, `fs_native_symbol_present`, and — new — two FS-dispatch
+  signals. `fs_native_gate` = the global gate `_fs_native_enabled()`
+  (env + symbol). `fs_native_blocks` / `fs_numpy_blocks` = the **actual per-matchkey
+  dispatch counts** — how many block-scoring calls went to the Rust
+  `score_block_pairs_fs` kernel vs the numpy path. The global gate is NOT
+  sufficient proof: native FS is decided **per matchkey** by `_fs_native_eligible`
+  (`probabilistic.py`), which declines any matchkey with a non-native scorer (an
+  `ensemble` NE field — autoconfig's default for unknown columns) or a
+  `tf_adjustment` field to numpy. Since these lanes run
+  `auto_configure_probabilistic_df` under FS-autoconfig-v2 (which can add NE/TF
+  fields), `gm_probabilistic_native` can pass the global gate yet score some blocks
+  on numpy. The real proof is the counts: `gm_probabilistic` must show
+  `fs_native_blocks=0` (forced off by `GOLDENMATCH_FS_NATIVE=0`); if it is ever
+  non-zero the run is invalid. `gm_probabilistic_native` reports its actual split,
+  so the doc can state honestly "X% of blocks scored native." (Implementation:
+  increment counters at the `_fs_native_eligible(mk)` decision / kernel-call site
+  into the bench blob the runner already emits — a small, additive, read-only
+  instrumentation hook, no public-API change to the scoring contract.)
 
 ### Reproducibility header (one per run, top-level in `bench_results.json`)
 `bench_results.json` is `{"header": {...}, "results": [...]}` (not a bare list —
@@ -339,11 +370,12 @@ produces numbers (a second, data-only PR / commit).
   runtime is absent — the existing guard, kept under test. This and the ok-smoke
   are distinct cases; they don't contradict because the ok-smoke passes the flag.
 - **FS-lane telemetry assertion**: at smoke scale assert `gm_probabilistic`
-  reports `fs_native_active=False` (the `=0` force works even without the native
-  ext). The `gm_probabilistic_native` -> `fs_native_active=True` half is
-  **conditional on `native_loaded`**: the normal pytest lane doesn't build native,
-  so that assertion is skipped there and is exercised in the bench workflow (which
-  runs `build_native.py`). This is the §8 proof-of-execution.
+  reports `fs_native_blocks=0` (the `=0` force works even without the native ext).
+  The `gm_probabilistic_native` -> `fs_native_blocks > 0` half is **conditional on
+  `native_loaded`**: the normal pytest lane doesn't build native, so that assertion
+  is skipped there and is exercised in the bench workflow (which runs
+  `build_native.py`). This is the §8 proof-of-execution — asserted on the actual
+  per-matchkey dispatch counts, not the global gate.
 - **Merge test**: `merge_results.py` over two synthetic partial-artifact JSONs
   (differing `run_timestamp`) asserts union + later-timestamp-wins per
   `(shape, lane, scale)` key, and that the `{header, results}` object shape and
@@ -367,6 +399,11 @@ produces numbers (a second, data-only PR / commit).
   person `postcode`); Splink unions rules (~0.99). The recall gap is a genuine
   property of each engine's fast path, surfaced via the accuracy columns and the
   `scored_pairs` column.
+- **Biblio's single blocking key is `(title_token, year)` on a token kept STABLE
+  under corruption** (§5.2). Both engines' biblio recall is therefore capped by
+  `(title_token, year)` coverage; the doc states biblio's coverage number
+  explicitly rather than folding it into the generic person-shape asymmetry above,
+  since the two shapes cap recall differently.
 - **FS-native vs numpy may differ marginally.** FS's discrete comparison levels
   amplify tiny rapidfuzz float differences at exact thresholds, so
   `gm_probabilistic` (numpy) and `gm_probabilistic_native` are reported as two
