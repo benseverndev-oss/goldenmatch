@@ -162,3 +162,22 @@ def test_run_splink_shape_biblio(tmp_path):
     if r["status"] == "ok":
         assert r["shape"] == "biblio"
         assert isinstance(r["splink_version"], str) and r["splink_version"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: converted-Splink lane
+# ---------------------------------------------------------------------------
+def test_run_gm_converted_person(tmp_path):
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="person")
+    out, pred = tmp_path / "r.json", tmp_path / "r.pred.parquet"
+    rc = subprocess.run([sys.executable, str(HERE / "run_gm_converted.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
+        "--threshold", "0.85", "--shape", "person"], env=_env()).returncode
+    r = json.loads(out.read_text())
+    # ok when splink is installed; skipped (exit 0) when it isn't -- never a crash.
+    assert r["status"] in {"ok", "skipped", "refused"}
+    assert r["lane"] == "gm_converted_splink" and r["shape"] == "person"
+    if r["status"] == "ok":
+        assert r["dedupe_wall_seconds"] is not None and pred.exists()
