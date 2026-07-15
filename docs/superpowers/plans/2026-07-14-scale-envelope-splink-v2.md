@@ -93,6 +93,14 @@ def test_person_shape_metadata():
     assert s.columns == ["record_id", "first_name", "surname", "dob", "postcode", "city"]
     assert s.blocking_fields == ["postcode"]
     assert s.blocking_cardinality == 200_000   # C, for the projection guard
+
+def test_shapes_import_does_not_drag_goldenmatch():
+    # shapes.py must import cleanly without pulling goldenmatch into sys.modules
+    # (run_splink + the generator import it and must stay GM-free at import time).
+    for m in [k for k in list(sys.modules) if k == "goldenmatch" or k.startswith("goldenmatch.")]:
+        del sys.modules[m]
+    _load("shapes")
+    assert not any(k == "goldenmatch" or k.startswith("goldenmatch.") for k in sys.modules)
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -125,8 +133,15 @@ class Shape:
 ```
 Add a `_person_gm_hand_built(threshold)` that returns the EXACT config currently
 inline in `run_goldenmatch.py:407-428` (bucket, n_buckets=256, postcode blocking,
-first_name/surname/dob weighted jaro_winkler, `rerank=False`). Add
-`_person_splink_settings(s)` copied from `run_splink.py::_default_person_settings`.
+first_name/surname/dob weighted jaro_winkler, `rerank=False`). **The
+`goldenmatch.config.schemas` imports (`GoldenMatchConfig`, `BlockingConfig`,
+`BlockingKeyConfig`, `MatchkeyConfig`, `MatchkeyField`) MUST live INSIDE the
+builder body, not at module top** — `shapes.py` is imported by `run_splink.py`
+(Task 6) and `generate_fixture.py` (Task 3), both of which must import cleanly
+without dragging in goldenmatch (run_splink is designed to skip when splink/GM
+are absent; the generator needs only numpy/pyarrow). Add
+`_person_splink_settings(s)` copied from `run_splink.py::_default_person_settings`
+— it is already `s`-dict-driven (no top-level splink import).
 Assemble `SHAPES = {"person": Shape("person", [...], ["postcode"], 200_000, _person_gm_hand_built, _person_splink_settings)}`.
 
 - [ ] **Step 4: Run the test to confirm it passes**
@@ -188,7 +203,19 @@ def projected_max_block_size(rows: int, cardinality: int, skew: float = 3.0) -> 
     design-time guard from spec 5.2 -- it does NOT depend on the smoke scale."""
     return skew * rows / max(1, cardinality)
 ```
-Add `_biblio_gm_hand_built(threshold)` -> `GoldenMatchConfig(backend="bucket",
+**Before writing `_biblio_gm_hand_built`, verify the 2-field composite bucket key
+works**: the person key is single-field (`fields=["postcode"]`), and the bucket
+backend docstring (`run_goldenmatch.py:130-136`) describes single-key blocking.
+Check `packages/python/goldenmatch/goldenmatch/core/blocker.py` for how
+`BlockingKeyConfig(fields=[a, b], transforms=[...])` composes a key (concatenation
+vs positional transform) and that the bucket path accepts it. If a 2-field
+composite is NOT supported by the bucket single-key path, fall back to a single
+real column with `C≈200K` (widen `N_VENUE` so venue alone gives ~200K) and block
+on `["venue"]` — the spec's requirement is `C≈200K` on a stable key, not the
+composite specifically. Record which was used in a comment.
+
+Add `_biblio_gm_hand_built(threshold)` (schema imports INSIDE the body, per Task 1)
+-> `GoldenMatchConfig(backend="bucket",
 n_buckets=256, blocking=BlockingConfig(max_block_size=5000, skip_oversized=False,
 keys=[BlockingKeyConfig(fields=["venue", "year"], transforms=["strip"])]),
 matchkeys=[MatchkeyConfig(name="paper", type="weighted", threshold=threshold,
@@ -365,7 +392,7 @@ def test_run_goldenmatch_handbuilt_biblio(tmp_path):
 - [ ] **Step 3: Implement**
   - Add `--shape` arg.
   - In the `--input` (non-dataset) path, replace `_default_person_settings(s)` with `shapes.SHAPES[args.shape].splink_settings(s)`.
-  - Record `result["splink_version"] = getattr(splink, "__version__", "?")` (import `splink` lazily where it's already imported) and `result["shape"] = args.shape`.
+  - Record `result["splink_version"]` and `result["shape"] = args.shape`. **The bare name `splink` is NOT bound** in `run_splink.py` (it does `import splink.comparison_library as cl` / `from splink import ...`), so add an explicit `import splink` next to those and use `getattr(splink, "__version__", "?")`.
   - Keep the `--dataset` path and its `_SETTINGS_BY_DATASET` untouched (real-dataset accuracy panel, out of scope).
 - [ ] **Step 4: Run, confirm pass** (locally likely `skipped` unless splink installed — assert accepts both).
 - [ ] **Step 5: Commit** `feat(bench): run_splink --shape from shapes.py + record splink_version`.
@@ -395,12 +422,14 @@ def test_probabilistic_numpy_lane_zero_native_eligible(tmp_path):
     e = _env(); e["GOLDENMATCH_FS_NATIVE"] = "0"     # numpy lane
     rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
         "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
-        "--threshold", "0.85", "--mode", "probabilistic", "--shape", "person"],
+        "--threshold", "0.85", "--mode", "probabilistic", "--shape", "person",
+        "--allow-pure-python"],  # REQUIRED: native not built locally; without it
+                                 # GOLDENMATCH_NATIVE=1 makes native_enabled() RAISE
         env=e).returncode
     assert rc == 0
     r = json.loads(out.read_text())
     assert r["status"] == "ok"
-    assert r["fs_native_eligible_matchkeys"] == 0     # forced off
+    assert r["fs_native_eligible_matchkeys"] == 0     # forced off (FS_NATIVE=0)
     assert r["fs_matchkeys_total"] >= 1
 ```
 
@@ -455,10 +484,12 @@ def test_run_gm_converted_person(tmp_path):
 - [ ] **Step 2: Run, confirm fail** (file doesn't exist).
 - [ ] **Step 3: Implement** `run_gm_converted.py`:
   - argparse `--input/--rows/--out/--pred-out/--threshold/--shape`; `_peak_rss_mb`/`_atomic_write` copied from `run_goldenmatch.py`.
-  - Lazy Splink import -> on ImportError write `status="skipped"` result (exit 0), like `run_splink._write_skip`.
-  - Build the shape's Splink `SettingsCreator` via `shapes.SHAPES[shape].splink_settings(s)`; `settings.create_settings_dict(sql_dialect_str="duckdb")`; `from goldenmatch.config.from_splink import from_splink`; `conversion = from_splink(settings_dict)`; on a conversion that yields no usable config, write `status="refused"` with the `ConversionReport` summary (spec §12).
-  - `pl.read_parquet(input)`, `dedupe_df(df, config=conversion.config)` timed; write pred parquet with the STRING record_id remap (copy the autoconfig branch from `run_goldenmatch.py:501-522`).
-  - Result dict includes `lane="gm_converted_splink"`, `shape`, `status`, wall, peak_rss, scored_pairs/cluster_count from the bench blob, and the `ConversionReport` summary string.
+  - **Every result payload — ok, skipped, refused, error — carries `lane="gm_converted_splink"` and `shape=args.shape`.** The reference `run_splink._write_skip` omits both; the test asserts them unconditionally (before the ok-guard), so the skip/refused writer here MUST include them. Build a small `_base_result(shape)` dict and update it per branch.
+  - Lazy Splink import -> on ImportError write a `skipped` result (exit 0) that still has `lane`/`shape`.
+  - Build the shape's Splink `SettingsCreator` via `shapes.SHAPES[shape].splink_settings(s)`; `settings.create_settings_dict(sql_dialect_str="duckdb")`; `from goldenmatch.config.from_splink import from_splink`; `conversion = from_splink(settings_dict)` (returns `.config` + `.report`, per `run_converted_splink.py`); on a conversion that yields no usable config, write `status="refused"` (with `lane`/`shape`) + the `conversion.report.summary()` string (spec §12).
+  - `pl.read_parquet(input)`; wrap the dedupe in `with bench_capture() as bench: ded = dedupe_df(df, config=conversion.config)` (import `bench_capture` from `goldenmatch.core.bench`, as `run_goldenmatch.py` does) so `scored_pairs`/`cluster_count` come from `bench.to_dict()["metrics"]` — the reference `run_converted_splink` only times the call and has NO bench blob, so this wrapper must be added.
+  - Write pred parquet with the STRING record_id remap (copy the autoconfig branch from `run_goldenmatch.py:501-522`).
+  - Result dict: `lane`, `shape`, `status`, wall, peak_rss, scored_pairs/cluster_count, conversion summary.
 - [ ] **Step 4: Run, confirm pass.**
 - [ ] **Step 5: Commit** `feat(bench): run_gm_converted converted-Splink lane over a fixture`.
 
@@ -501,7 +532,7 @@ def test_lane_env_is_merged_not_mutating(monkeypatch):
 - [ ] **Step 3: Implement**
   - Add a `Lane` dataclass `{name, script, mode, env}` and the `LANES` dict (spec §4 table). `splink`->run_splink.py, `gm_*`->run_goldenmatch.py (with mode), `gm_converted_splink`->run_gm_converted.py.
   - `lane_env(lane)` -> `{**os.environ, **lane.env}` (NEW dict; never mutate `os.environ` — spec §4 hard constraint).
-  - `build_cmd(lane, *, input, rows, out, pred, threshold, shape)` -> arg list: base `--input/--rows/--out/--pred-out/--threshold/--shape`, append `--mode <lane.mode>` when set, append `--allow-pure-python` only for `gm_hand_built` when `allow_pure_python` (keep the existing flag path).
+  - `build_cmd(lane, *, input, rows, out, pred, threshold, shape, allow_pure_python=False)` -> arg list: base `--input/--rows/--out/--pred-out/--threshold/--shape`, append `--mode <lane.mode>` when set. **Append `--allow-pure-python` for EVERY `run_goldenmatch.py`-backed GM lane (`gm_hand_built`, `gm_probabilistic`, `gm_probabilistic_native`, `gm_zeroconfig`) when `allow_pure_python` is set** — not just `gm_hand_built`. Reason: `run_goldenmatch.py:90-92` calls `native_enabled("block_scoring")` for ALL modes above the mode branch, and with the default `GOLDENMATCH_NATIVE=1` (require) that RAISES `RuntimeError` when the kernel is absent (`_native_loader.py:269`). So locally (native not built) every GM lane needs the flag; in CI (native built) `allow_pure_python=False` so all GM lanes run native-required. `run_gm_converted.py` and `run_splink.py` take no such flag.
 - [ ] **Step 4: Run, confirm pass.**
 - [ ] **Step 5: Commit** `feat(bench): orchestrate lane registry + per-subprocess env`.
 
@@ -530,7 +561,9 @@ def test_sweep_person_two_lanes_smoke(tmp_path):
 - [ ] **Step 2: Run, confirm fail.**
 - [ ] **Step 3: Implement**
   - Add `run_sweep(*, scales, shapes, lanes, workdir, dupe_rate, threshold, allow_pure_python=False, seed=42, run_tag="local")` factored out of `main()`.
-  - For each `(shape, scale)`: `generate(...)` with `--shape shape`; write truth per shape/scale. For each `lane`: `run_engine(lane, shape, scale, ...)` builds cmd via `build_cmd`, runs `subprocess.run(cmd, env=lane_env(lane), timeout=_timeout_for(scale))`, loads/synthesizes the result, stamps `shape`/`lane`/`rows_requested`, runs `evaluate_datapoint` (unchanged), appends to `results`, flushes `{header, results}` after every datapoint.
+  - **Namespace every fixture + truth path by shape**: `fixtures / f"bench_{shape}_{rows}.parquet"` (and `.truth.parquet`). The existing `generate()` helper (`orchestrate.py:76-89`) hardcodes `bench_{rows}` and *reuses if it exists* — with two shapes at the same scale the biblio pass would otherwise pick up the person parquet and run biblio lanes on person columns. Update `generate()` to take `shape` and build the shape-keyed path.
+  - For each `(shape, scale)`: `generate(shape, rows, ...)`; the truth path is the shape-keyed one. For each `lane`: `run_engine(lane, shape, scale, ...)` builds cmd via `build_cmd(..., allow_pure_python=allow_pure_python)`, runs `subprocess.run(cmd, env=lane_env(lane), timeout=_timeout_for(scale))`, loads/synthesizes the result, stamps `shape`/`lane`/`rows_requested`, runs `evaluate_datapoint` (unchanged, uses the shape-keyed truth), appends to `results`, flushes `{header, results}` after every datapoint.
+  - **`run_sweep` flushes ONLY the `{header, results}` JSON — it does NOT call `render_markdown`** (that stays in `main()` / is exercised by Task 12). Calling the not-yet-rewritten renderer here would key on the absent `engine` field.
   - Header built once at sweep start: `run_timestamp` (`time.time()`), `git_sha` (`git rev-parse HEAD`), `runner_label`/`cpu_count`/`total_ram_gb` (env + `os.cpu_count()` + `/proc/meminfo` best-effort), `dupe_rate`, `threshold`, `seed`, `goldenmatch_version` (import), `splink_version` (from any splink result, else None).
   - `_load_or_synthesize` gains `shape`/`lane` in its synthesized dict.
   - `main()` now parses `--lanes` (default all 6), `--shapes` (default `person biblio`), `--run-tag`, delegates to `run_sweep`.
