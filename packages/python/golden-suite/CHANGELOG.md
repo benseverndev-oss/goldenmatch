@@ -4,6 +4,13 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.2.5] - 2026-07-14
+
+- Floor bump: `goldenmatch[polars]>=3.3` (FS negative evidence on probabilistic
+  matchkeys, Splink migration upgrade pass incl. the fan-out/NE lever) and
+  `goldenmatch-native>=0.1.15` (native FS negative evidence + fused N-level
+  banding, `FS_SUPPORTS_NE`).
+
 ## [0.2.4] - 2026-07-13
 
 ### Changed
