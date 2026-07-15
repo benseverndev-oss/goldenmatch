@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [3.3.0] - 2026-07-14
 
+<!-- README-callout
+**3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
+now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
+(no labels needed; `penalty_bits` as a fixed override), and the Splink
+migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
+plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
+0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
+pure-Python fallback automatically).
+-->
+
 ### Added
 - **Negative evidence on Fellegi-Sunter (`type: probabilistic`) matchkeys**
   (Formulation B, EM-learned): `negative_evidence` was previously silently
@@ -20,8 +30,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   new `penalty_bits` (log2 LLR fixed override, probabilistic-only, `abs()`
   applied) alongside the existing `penalty` (still required on weighted/exact,
   now rejected on probabilistic — set `penalty_bits` instead). Guards: native,
-  fused, and the fast-path scorer all decline NE-bearing FS matchkeys (pure
-  Python fallback; a future kernel port adds `FS_SUPPORTS_NE`); the bucket
+  fused, and the fast-path scorer all decline NE-bearing FS matchkeys
+  (pure-Python fallback on wheels older than `goldenmatch-native` 0.1.15; the
+  native port below adds `FS_SUPPORTS_NE` in this same release — only the
+  fast-path scorer still declines); the bucket
   backend's slim-projection keep-list was extended so an NE-only field (e.g.
   `phone`, never a regular matchkey field) survives the default
   `GOLDENMATCH_BUCKET_SLIM_PROJECTION`. `EMResult.validate_for` now requires

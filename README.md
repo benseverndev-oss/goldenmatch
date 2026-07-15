@@ -58,6 +58,14 @@ pip install golden-suite    # the WHOLE suite (Check + Flow + Match + Analysis +
 ```
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
+> **v3.3.0** — **3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
+now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
+(no labels needed; `penalty_bits` as a fixed override), and the Splink
+migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
+plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
+0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
+pure-Python fallback automatically).
+>
 > **v3.1.0** — **3.1.0 — polars is optional (and the polars-free install is the fast
 configuration).** The engine is Arrow-native end to end with the Rust fused
 kernels on the hot paths (a zero-polars CI gate proves a full dedupe with
@@ -69,8 +77,6 @@ cell-quality weighting), byte-identical to 3.0.x.
 (migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
 Arrow frame backend is the default — measured ~36% faster end-to-end on the
 100K zero-config benchmark — with `GOLDENMATCH_FRAME=polars` as the opt-out.
->
-> **v2.4.0 — The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 <!-- README-callouts:end -->
 
 ---

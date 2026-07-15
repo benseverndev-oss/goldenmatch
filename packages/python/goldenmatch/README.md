@@ -57,6 +57,14 @@ npm install goldenmatch
 > core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
+> **v3.3.0** — **3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
+now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
+(no labels needed; `penalty_bits` as a fixed override), and the Splink
+migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
+plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
+0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
+pure-Python fallback automatically).
+>
 > **v3.1.0** — **3.1.0 — polars is optional (and the polars-free install is the fast
 configuration).** The engine is Arrow-native end to end with the Rust fused
 kernels on the hot paths (a zero-polars CI gate proves a full dedupe with
@@ -68,8 +76,6 @@ cell-quality weighting), byte-identical to 3.0.x.
 (migrate with `pl.from_arrow(result.golden)`); inputs are unchanged. The
 Arrow frame backend is the default — measured ~36% faster end-to-end on the
 100K zero-config benchmark — with `GOLDENMATCH_FRAME=polars` as the opt-out.
->
-> **v2.4.0 — The healing loop, now default-on across every surface** — every `dedupe_df` run surfaces ranked, self-verified config-suggestions on `result.suggestions` when there's headroom (free on a healthy run, no second pipeline pass). `dedupe_df(suggest=True)` returns verified suggestions; `heal=True` applies them and re-runs, returning the healed `result.config` + `result.heal_trail`. Available across Python, CLI (`--suggest` / `--heal`), MCP, A2A, REST, web, the TUI, and the edge-safe TypeScript port via WebAssembly. Needs `goldenmatch[native]`; degrades gracefully without it. Kill-switch `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`.
 <!-- README-callouts:end -->
 
 ---
@@ -224,7 +230,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 - **One-command config conversion** — `goldenmatch import-splink settings.json -o goldenmatch.yaml [--model-out model.json]` converts a Splink settings (or trained-model) JSON into a GoldenMatch YAML config; `--model-out` persists trained m/u probabilities so GoldenMatch reuses them instead of re-training via EM. Same conversion from Python: `gm.from_splink("settings.json")`, or the `convert_splink_config` MCP tool.
 - **What converts cleanly vs what warns** — exact/Jaro-Winkler/Levenshtein-style comparison levels, `block_on` blocking rules (incl. SUBSTR), and trained m/u import all map directly; unrecognized SQL (OR rules, cross-column conditions, custom UDFs) is dropped with a warning in the returned `ConversionReport` (pass `strict=True` to make any lossy finding raise instead).
 - **Parity-gated** — a converted config lands within the 0.05 F1 gate of native Splink on the shared `bench_er_headtohead` synthetic-person benchmark (measured delta 0.0203).
-- **Data-aware upgrade pass** — `goldenmatch import-splink settings.json --upgrade data.parquet -o goldenmatch.yaml --model-out model.json` runs three levers over the converted config with your data in hand: term-frequency tables (Splink exports don't carry them), distance thresholds re-derived from measured string lengths, and link/review thresholds calibrated from the blocked-pair score distribution. The faithful baseline is written alongside as `*.baseline.*`. Measured on wild Splink configs (pairwise F1 vs truth): 0.482 → **0.633**, 0.677 → **0.766**, 0.707 → **0.740** — beating native Splink (0.601 / 0.699 / 0.686) on all three benchmark pairs. Optional `--splink-clusters` / `--labels` files (first column id, second cluster_id) add agreement / truth F1 to the printed delta table. From Python: `gm.upgrade_splink_conversion(conversion, data)`.
+- **Data-aware upgrade pass** — `goldenmatch import-splink settings.json --upgrade data.parquet -o goldenmatch.yaml --model-out model.json` runs four levers over the converted config with your data in hand: term-frequency tables (Splink exports don't carry them), distance thresholds re-derived from measured string lengths, fan-out defenses (a risk-gated negative-evidence suggestion for unused identity-grade columns plus `golden_rules.max_cluster_size` tuned from the reference clusters), and link/review thresholds calibrated from the blocked-pair score distribution (NE-aware). The faithful baseline is written alongside as `*.baseline.*`. Measured on wild Splink configs (pairwise F1 vs truth): 0.482 → **0.633**, 0.677 → **0.766**, 0.707 → **0.740** — beating native Splink (0.601 / 0.699 / 0.686) on all three benchmark pairs. Optional `--splink-clusters` / `--labels` files (first column id, second cluster_id) add agreement / truth F1 to the printed delta table. From Python: `gm.upgrade_splink_conversion(conversion, data)`.
 
 ### Learning Memory (v1.6.0)
 - **Persistent corrections** — every steward decision, unmerge, boost-tab y/n, LLM vote, and agent approve/reject writes to a local SQLite (or Postgres) store

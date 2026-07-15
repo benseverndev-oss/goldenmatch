@@ -2,6 +2,24 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-15 — GoldenMatch 3.3.0: FS negative evidence, EM-learned (ADR 0038)
+- `negative_evidence` now works on `type: probabilistic` matchkeys: each NE field
+  joins `train_em` as a constrained 2-state EM-learned `__ne__<field>` dimension
+  (storage-only `[w_fired, 0]` clamp; fires when both present + strictly below
+  threshold; `penalty_bits` fixed override). No labels needed — supersedes the
+  Wave D deferral. Loud declines: continuous path (both surfaces), TS pipeline,
+  fused `derive_from`.
+- Splink migration upgrade pass gains the `fan_out` lever (risk-gated NE
+  suggestion + `golden_rules.max_cluster_size` tuning from reference clusters;
+  calibration lever now NE-aware) plus `--sample-cap` / `--no-measure` /
+  `--id-column`.
+- `goldenmatch-native 0.1.15` scores NE in the Rust kernels (`FS_SUPPORTS_NE`)
+  and the fused kernel scores custom `level_thresholds`
+  (`FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS`); older wheels keep the pure-Python
+  fallback. `goldenmatch-js 1.3.0` is a full FS-NE mirror (parity pinned
+  bit-exact via committed Python-generated fixtures). `golden-suite 0.2.5`
+  floors. ADR 0038.
+
 ## 2026-07-13 — GoldenFlow 2.1.0: owned auto-detect profile kernel (ADR 0037)
 - Zero-config's type-inference *decision* is now an owned `goldenflow_core::profile`
   kernel: `infer_type(values, hint)` on every surface (Polars columnar, Polars-free
