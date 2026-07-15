@@ -1,7 +1,7 @@
 import polars as pl
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.blocker import build_blocks
-from goldenmatch.core.probabilistic import _sample_blocked_pairs
+from goldenmatch.core.probabilistic import _sample_blocked_pairs, _sample_pairs
 
 
 def _person_df():
@@ -32,3 +32,48 @@ def test_sample_blocked_pairs_is_order_independent():
     s3 = _sample_blocked_pairs(b3, n_pairs=200, seed=42)
     assert set(s1) == set(s2) == set(s3), "sample must be invariant to block input order"
     assert len(s1) > 0
+
+
+def test_sample_pairs_linkage_enumerates_only_cross_table_pairs():
+    df = pl.DataFrame({"__row_id__": [0, 1, 2, 3, 4]})
+    target_ids = {0, 1, 2}
+
+    pairs = _sample_pairs(df, n_pairs=100, seed=42, target_ids=target_ids)
+
+    assert set(pairs) == {
+        (0, 3), (0, 4),
+        (1, 3), (1, 4),
+        (2, 3), (2, 4),
+    }
+
+
+def test_sample_pairs_linkage_is_bounded_and_deterministic_when_imbalanced():
+    df = pl.DataFrame({"__row_id__": list(range(102))})
+    target_ids = set(range(100))
+
+    first = _sample_pairs(df, n_pairs=50, seed=7, target_ids=target_ids)
+    second = _sample_pairs(df, n_pairs=50, seed=7, target_ids=target_ids)
+
+    assert first == second
+    assert len(first) == 50
+    assert all((a in target_ids) != (b in target_ids) for a, b in first)
+
+
+def test_sample_blocked_pairs_linkage_drops_same_side_pairs():
+    df = pl.DataFrame({
+        "__row_id__": [0, 1, 2, 3, 4, 5],
+        "surname": ["Smith"] * 6,
+    })
+    cfg = BlockingConfig(keys=[BlockingKeyConfig(fields=["surname"])])
+    blocks = build_blocks(df.lazy(), cfg)
+    target_ids = {0, 1, 2}
+
+    pairs = _sample_blocked_pairs(
+        blocks,
+        n_pairs=100,
+        seed=42,
+        target_ids=target_ids,
+    )
+
+    assert len(pairs) == 9
+    assert all((a in target_ids) != (b in target_ids) for a, b in pairs)

@@ -446,8 +446,13 @@ def _sample_pairs(
     df: pl.DataFrame,
     n_pairs: int = 10000,
     seed: int = 42,
+    target_ids: set[int] | None = None,
 ) -> list[tuple[int, int]]:
-    """Sample random pairs for EM training."""
+    """Sample random pairs for EM training.
+
+    ``target_ids`` selects two-table linkage mode: the pair universe is the
+    target x reference Cartesian product, never either table's self-pairs.
+    """
     from goldenmatch.core.frame import to_frame as _tf_w6
 
     row_ids = _tf_w6(df).column("__row_id__").to_list()
@@ -455,6 +460,28 @@ def _sample_pairs(
 
     if len(row_ids) < 2:
         return []
+
+    if target_ids is not None:
+        targets = sorted(row_id for row_id in row_ids if row_id in target_ids)
+        references = sorted(row_id for row_id in row_ids if row_id not in target_ids)
+        max_possible = len(targets) * len(references)
+        if max_possible == 0:
+            return []
+        if max_possible <= n_pairs:
+            return [
+                (min(target, reference), max(target, reference))
+                for target in targets
+                for reference in references
+            ]
+        sampled_offsets = rng.sample(range(max_possible), n_pairs)
+        n_references = len(references)
+        return [
+            (
+                min(targets[offset // n_references], references[offset % n_references]),
+                max(targets[offset // n_references], references[offset % n_references]),
+            )
+            for offset in sampled_offsets
+        ]
 
     # For small datasets, use all pairs
     max_possible = len(row_ids) * (len(row_ids) - 1) // 2
@@ -594,6 +621,7 @@ def _sample_blocked_pairs(
     blocks: list,
     n_pairs: int = 10000,
     seed: int = 42,
+    target_ids: set[int] | None = None,
 ) -> list[tuple[int, int]]:
     """Sample within-block pairs for EM training.
 
@@ -629,20 +657,46 @@ def _sample_blocked_pairs(
         )  # canonical order before the seeded sample
         if len(row_ids) < 2:
             continue
-        # Limit per-block pairs for large blocks
-        if len(row_ids) > 100:
+        # Limit per-block pairs for large blocks. In linkage mode preserve both
+        # sides even on highly imbalanced blocks instead of sampling 100 ids
+        # from the combined population and potentially missing the small side.
+        if target_ids is not None:
+            target_rows = [row_id for row_id in row_ids if row_id in target_ids]
+            reference_rows = [row_id for row_id in row_ids if row_id not in target_ids]
+            if not target_rows or not reference_rows:
+                continue
+            if len(row_ids) > 100:
+                n_target = min(len(target_rows), 50)
+                n_reference = min(len(reference_rows), 50)
+                remaining = 100 - n_target - n_reference
+                add_target = min(remaining, len(target_rows) - n_target)
+                n_target += add_target
+                remaining -= add_target
+                n_reference += min(remaining, len(reference_rows) - n_reference)
+                target_rows = rng.sample(target_rows, n_target)
+                reference_rows = rng.sample(reference_rows, n_reference)
+            for target in target_rows:
+                for reference in reference_rows:
+                    all_block_pairs.append(
+                        (min(target, reference), max(target, reference))
+                    )
+        elif len(row_ids) > 100:
             sampled_ids = rng.sample(row_ids, 100)
         else:
             sampled_ids = row_ids
-        for i in range(len(sampled_ids)):
-            for j in range(i + 1, len(sampled_ids)):
-                all_block_pairs.append((min(sampled_ids[i], sampled_ids[j]),
-                                        max(sampled_ids[i], sampled_ids[j])))
+        if target_ids is None:
+            for i in range(len(sampled_ids)):
+                for j in range(i + 1, len(sampled_ids)):
+                    all_block_pairs.append((min(sampled_ids[i], sampled_ids[j]),
+                                            max(sampled_ids[i], sampled_ids[j])))
         if len(all_block_pairs) >= target:
             break
 
     # Deduplicate and sample down if too many
-    all_block_pairs = list(set(all_block_pairs))
+    unique_pairs = set(all_block_pairs)
+    all_block_pairs = (
+        sorted(unique_pairs) if target_ids is not None else list(unique_pairs)
+    )
     if len(all_block_pairs) > n_pairs:
         all_block_pairs = rng.sample(all_block_pairs, n_pairs)
 
@@ -658,6 +712,7 @@ def train_em(
     seed: int = 42,
     blocks: list | None = None,
     blocking_fields: list[str] | None = None,
+    target_ids: set[int] | None = None,
 ) -> EMResult:
     """Train Fellegi-Sunter model using Expectation-Maximization.
 
@@ -678,6 +733,9 @@ def train_em(
         seed: Random seed for pair sampling.
         blocks: Optional list of BlockResult for within-block sampling.
         blocking_fields: Fields used for blocking (excluded from EM training).
+        target_ids: Target-side row ids for two-table linkage training. When
+            provided, random and blocked samples contain only target-reference
+            pairs.
 
     Returns:
         EMResult with trained m/u probabilities and match weights.
@@ -702,7 +760,12 @@ def train_em(
     # ── Step 1: Estimate u from RANDOM pairs (Splink approach) ──
     # Random pairs are overwhelmingly non-matches, so the observed
     # level distribution approximates u directly. No EM needed for u.
-    random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
+    random_pairs = _sample_pairs(
+        df,
+        min(n_sample_pairs, 5000),
+        seed,
+        target_ids=target_ids,
+    )
     if len(random_pairs) < 10:
         logger.warning("Too few pairs (%d) for EM training", len(random_pairs))
         return _fallback_result(mk)
@@ -713,7 +776,12 @@ def train_em(
     # ``__row_id__`` / the blocks, never the lookup, so the sampled pairs — and
     # the trained model — are unchanged by this reordering.
     if blocks:
-        blocked_pairs = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
+        blocked_pairs = _sample_blocked_pairs(
+            blocks,
+            n_sample_pairs,
+            seed,
+            target_ids=target_ids,
+        )
     else:
         blocked_pairs = random_pairs
     row_lookup = _row_lookup_for_pairs(df, cols, [random_pairs, blocked_pairs])
@@ -956,6 +1024,7 @@ def load_or_train_em(
     blocking_fields: list[str] | None = None,
     max_iterations: int | None = None,
     convergence: float | None = None,
+    target_ids: set[int] | None = None,
 ) -> EMResult:
     """Return a trained EMResult, reusing ``mk.model_path`` when present.
 
@@ -979,6 +1048,7 @@ def load_or_train_em(
         convergence=convergence if convergence is not None else mk.convergence_threshold,
         blocks=blocks,
         blocking_fields=blocking_fields,
+        target_ids=target_ids,
     )
     if path:
         em.save_json(path)

@@ -4123,6 +4123,7 @@ def _run_match_pipeline(
                 combined_df, mk,
                 blocks=blocks,
                 blocking_fields=blocking_fields,
+                target_ids=target_ids,
             )
             # Default-route FS to the memory-bounded bucket scorer when the
             # native FS kernel is available (issue #1792) or backend='bucket'
@@ -4357,7 +4358,11 @@ def _run_match_scoring_and_output(
                 collect_blocking_fields(config.blocking) if config.blocking else []
             )
             em_result = load_or_train_em(
-                combined_native, mk, blocks=blocks, blocking_fields=blocking_fields
+                combined_native,
+                mk,
+                blocks=blocks,
+                blocking_fields=blocking_fields,
+                target_ids=target_ids,
             )
             # Default-route FS to the memory-bounded bucket scorer when the
             # native FS kernel is available (issue #1792) or backend='bucket'
