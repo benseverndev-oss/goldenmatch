@@ -1697,6 +1697,21 @@ def score_probabilistic(
     else:
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
+    # Precompute per-row transformed values for TF-adjustment fields so the
+    # per-pair loop can apply the same Winkler adjustment the vectorized path
+    # does (#1801). Keyed identically to the freq table (str() + transforms).
+    tf_row_vals: dict[str, dict[int, str | None]] = {}
+    if em_result.tf_freqs:
+        for f in mk.fields:
+            if not getattr(f, "tf_adjustment", False):
+                continue
+            if f.field not in em_result.tf_freqs:
+                continue
+            tf_row_vals[f.field] = {
+                rid: _transform_field_value(row_lookup.get(rid, {}).get(f.field), f)
+                for rid in row_ids
+            }
+
     ne_fields = mk.negative_evidence or []
     results = []
     for i in range(len(row_ids)):
@@ -1710,17 +1725,25 @@ def score_probabilistic(
             row_b = row_lookup.get(b, {})
             vec = comparison_vector(row_a, row_b, mk)
 
-            # Sum match weights
+            # Sum match weights (+ Winkler TF adjustment where opted in).
             total_weight = 0.0
             for k, f in enumerate(mk.fields):
                 total_weight += em_result.match_weights[f.field][vec[k]]
+                per_row = tf_row_vals.get(f.field)
+                if per_row is not None:
+                    total_weight += _scalar_tf_contribution(
+                        per_row.get(a), per_row.get(b), vec[k], f, em_result,
+                    )
             for ne in ne_fields:
                 total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
 
             if calibrated:
                 normalized = posterior_from_weight(total_weight, prior_w)
             elif weight_range > 0:
-                normalized = (total_weight - min_weight) / weight_range
+                # Clip into [0, 1]: TF (and NE) can push the summed weight
+                # past the per-level max/min, matching the vectorized path's
+                # np.clip so the two routes score identically (#1801).
+                normalized = min(1.0, max(0.0, (total_weight - min_weight) / weight_range))
             else:
                 normalized = 0.5
 
@@ -1898,6 +1921,47 @@ def _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n) -> None:
     apply = equal & (lvl == top)
     if apply.any():
         total_weight += np.where(apply, adj[:, None], 0.0)
+
+
+def _transform_field_value(raw, f) -> str | None:
+    """One value transformed the way ``comparison_vector`` and the TF freq
+    table do: ``str()``-coerce a non-null value then apply the field
+    transforms. ``None`` stays ``None`` (treated as disagree)."""
+    if raw is None:
+        return None
+    from goldenmatch.utils.transforms import apply_transforms
+    s = str(raw)
+    if f.transforms:
+        s = apply_transforms(s, f.transforms)
+    return s
+
+
+def _scalar_tf_contribution(va, vb, level: int, f, em_result) -> float:
+    """Winkler term-frequency adjustment for a single scalar pair on ``f``.
+
+    Scalar mirror of the vectorized ``_apply_tf_adjustment`` (#1801): a rare
+    exact agreement gets a positive bump, a common one a penalty, applied
+    ONLY on an exact-equal, top-level agreement (``level == f.levels - 1``
+    and ``va == vb`` non-null -- matching the vectorized ``equal & (lvl ==
+    top)`` mask). ``va``/``vb`` are the field values transformed identically
+    to the freq table (via ``_transform_field_value``). Returns 0.0 unless
+    the field opted into ``tf_adjustment`` and EM produced a table.
+    """
+    if not getattr(f, "tf_adjustment", False):
+        return 0.0
+    if not em_result.tf_freqs or f.field not in em_result.tf_freqs:
+        return 0.0
+    collision = (em_result.tf_collision or {}).get(f.field)
+    if not collision:
+        return 0.0
+    if level != int(f.levels) - 1:
+        return 0.0
+    if va is None or va != vb:
+        return 0.0
+    fv = em_result.tf_freqs[f.field].get(va)
+    if not fv:
+        return 0.0
+    return float(np.clip(math.log2(collision / fv), -_TF_CLAMP, _TF_CLAMP))
 
 
 def vectorized_scorer_supported(scorer: str) -> bool:
@@ -2561,13 +2625,20 @@ def score_pair_probabilistic(
     total_weight = 0.0
     for k, f in enumerate(mk.fields):
         total_weight += em_result.match_weights[f.field][vec[k]]
+        if getattr(f, "tf_adjustment", False):
+            total_weight += _scalar_tf_contribution(
+                _transform_field_value(row_a.get(f.field), f),
+                _transform_field_value(row_b.get(f.field), f),
+                vec[k], f, em_result,
+            )
     for ne in (mk.negative_evidence or []):
         total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
 
     if _fs_calibration_mode() == "posterior":
         return posterior_from_weight(total_weight, prior_weight(em_result.proportion_matched))
     if weight_range > 0:
-        return (total_weight - min_weight) / weight_range
+        # Clip into [0, 1] so a TF/NE overshoot can't leave the score contract.
+        return min(1.0, max(0.0, (total_weight - min_weight) / weight_range))
     return 0.5
 
 
