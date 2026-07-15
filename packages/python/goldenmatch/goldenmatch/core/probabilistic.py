@@ -2214,6 +2214,7 @@ def score_probabilistic_blocks_batched(
     em_result: EMResult,
     exclude_pairs: set[tuple[int, int]] | None = None,
     cap: int | None = None,
+    target_ids: set[int] | None = None,
 ):
     """Collect + score ``blocks`` in row-capped batches via the SxS batch scorer.
 
@@ -2222,8 +2223,10 @@ def score_probabilistic_blocks_batched(
     block-by-block ``matched_pairs`` dedup. Falls back to the per-block scorer
     when the vectorized numpy path isn't active (native FS kernel / scalar /
     model-backed scorers), since the batching is a numpy-path optimization.
-    Does NOT mutate the caller's ``exclude_pairs``; the caller folds the returned
-    pairs into ``matched_pairs`` as before.
+    When ``target_ids`` is provided (two-table linkage), only pairs with exactly
+    one target-side id are returned. Does NOT mutate the caller's
+    ``exclude_pairs``; the caller folds the returned pairs into ``matched_pairs``
+    as before.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -2242,6 +2245,15 @@ def score_probabilistic_blocks_batched(
 
     def _bdf(block):
         return block.materialize().native
+
+    def _eligible(pairs):
+        if target_ids is None:
+            return pairs
+        return [
+            (a, b, score)
+            for a, b, score in pairs
+            if (a in target_ids) != (b in target_ids)
+        ]
 
     # Split the work into independent scoring units + a per-unit scorer. Native/
     # scalar path: one unit per block. Vectorized path: row-capped batches of
@@ -2281,7 +2293,7 @@ def score_probabilistic_blocks_batched(
     if workers <= 1 or len(units) <= 1:
         excl = set(base_excl)
         for unit in units:
-            pairs = _score_unit(unit, excl)
+            pairs = _eligible(_score_unit(unit, excl))
             for a, b, _s in pairs:
                 excl.add((min(a, b), max(a, b)))
             results.extend(pairs)
@@ -2298,7 +2310,7 @@ def score_probabilistic_blocks_batched(
     seen: set[tuple[int, int]] = set(frozen)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         for pairs in executor.map(lambda u: _score_unit(u, frozen), units):
-            for a, b, s in pairs:
+            for a, b, s in _eligible(pairs):
                 key = (a, b) if a < b else (b, a)
                 if key in seen:
                     continue

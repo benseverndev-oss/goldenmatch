@@ -4148,6 +4148,7 @@ def _run_match_pipeline(
             # Does not mutate matched_pairs; fold the returned pairs in below.
             pairs = score_probabilistic_blocks_batched(
                 blocks, mk, em_result, matched_pairs,
+                target_ids=target_ids,
             )
             all_pairs.extend(pairs)
             for a, b, _s in pairs:
@@ -4381,7 +4382,8 @@ def _run_match_scoring_and_output(
                     matched_pairs.add((min(a, b), max(a, b)))
                 continue
             pairs = score_probabilistic_blocks_batched(
-                blocks, mk, em_result, matched_pairs
+                blocks, mk, em_result, matched_pairs,
+                target_ids=target_ids,
             )
             all_pairs.extend(pairs)
             for a, b, _s in pairs:

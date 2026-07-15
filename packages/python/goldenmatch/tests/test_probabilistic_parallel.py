@@ -104,5 +104,40 @@ def test_batched_pairs_match_sequential(monkeypatch):
     assert len(par_pairs) == len(set(par_pairs))  # no duplicate emissions
 
 
+@pytest.mark.parametrize("workers", [1, 8])
+@pytest.mark.parametrize("vectorized", [False, True])
+def test_batched_target_ids_drop_same_side_pairs(monkeypatch, workers, vectorized):
+    """Every fallback FS execution mode must honor two-table linkage scope."""
+    df = _frame().with_row_index("__row_id__")
+    cfg = _config()
+    mk = cfg.matchkeys[0]
+    blocks = build_blocks(df.lazy(), cfg.blocking)
+    em = load_or_train_em(df, mk, blocks=blocks, blocking_fields=["name", "zip"])
+    target_ids = set(range(0, df.height, 2))
+
+    monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_VECTORIZED", "1" if vectorized else "0")
+    _fs_workers(monkeypatch, workers)
+
+    unfiltered = score_probabilistic_blocks_batched(blocks, mk, em, set())
+    assert any(
+        (a in target_ids) == (b in target_ids)
+        for a, b, _score in unfiltered
+    ), "fixture must expose at least one same-side pair"
+
+    filtered = score_probabilistic_blocks_batched(
+        blocks,
+        mk,
+        em,
+        set(),
+        target_ids=target_ids,
+    )
+    assert filtered
+    assert all(
+        (a in target_ids) != (b in target_ids)
+        for a, b, _score in filtered
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
