@@ -347,12 +347,22 @@ _BLOCK_SUBSTR_RE = re.compile(
     rf'\s*=\s*SUBSTR(?:ING)?\s*\(\s*{_BLOCK_COL_R}\s*,\s*(\d+)\s*,\s*(\d+)\s*\)',
     re.IGNORECASE,
 )
+# IS NOT NULL guard conjunct (#1783): Splink CustomRule blocking rules
+# routinely carry `AND l.col IS NOT NULL` guards on the equality columns. GM's
+# blocker already implements those semantics (a null component nulls the whole
+# concat_str key and null keys form no block -- core/blocker.py), so guards on
+# key columns are recognized here and ignored exactly, instead of dropping the
+# whole rule as unparseable. `[lr]` covers both prefixes under IGNORECASE;
+# fixed words with `\s+` separators keep the pattern linear (no nested
+# quantifiers -- py/polynomial-redos convention as the ' AND ' split above).
+_BLOCK_NOT_NULL_RE = re.compile(r'[lr]\."?(\w+)"?\s+IS\s+NOT\s+NULL', re.IGNORECASE)
 
 
 @dataclass
 class _BlockConjunct:
     field: str
     transform: str | None  # e.g. "substring:0:4", or None for plain equality
+    is_null_guard: bool = False  # True for `l.col IS NOT NULL` guard conjuncts
 
 
 def _strip_outer_parens(s: str) -> str:
@@ -385,11 +395,11 @@ def _strip_outer_parens(s: str) -> str:
 def _recognize_blocking_conjunct(conjunct: str) -> _BlockConjunct | None:
     """Recognize one top-level AND-conjunct of a Splink blocking_rule.
 
-    Returns None for anything not a same-column equality or a same-column/
-    same-offset SUBSTR(...) equality (OR, cross-column, arithmetic, ranges,
-    etc. all fail to fullmatch and are rejected here). Balanced outer
-    parentheses (Splink 4 ``block_on`` serialization style) are stripped
-    before matching.
+    Returns None for anything not a same-column equality, a same-column/
+    same-offset SUBSTR(...) equality, or an ``IS NOT NULL`` guard (OR,
+    cross-column, arithmetic, ranges, etc. all fail to fullmatch and are
+    rejected here). Balanced outer parentheses (Splink 4 ``block_on``
+    serialization style) are stripped before matching.
     """
     conjunct = _strip_outer_parens(conjunct)
 
@@ -414,6 +424,10 @@ def _recognize_blocking_conjunct(conjunct: str) -> _BlockConjunct | None:
         if col_l != col_r:
             return None
         return _BlockConjunct(col_l, None)
+
+    m = _BLOCK_NOT_NULL_RE.fullmatch(conjunct)
+    if m:
+        return _BlockConjunct(m.group(1), None, is_null_guard=True)
 
     return None
 
@@ -451,6 +465,18 @@ def _convert_one_blocking_rule(
             return None
         recognized.append(r)
 
+    # Partition IS NOT NULL guards from key components (#1783). A rule with
+    # ONLY guards has nothing to block on -> the unrecognized-drop path.
+    guards = [r for r in recognized if r.is_null_guard]
+    recognized = [r for r in recognized if not r.is_null_guard]
+    if not recognized:
+        report.warn(
+            rule_path,
+            f"unrecognized blocking rule, dropped: {sql_norm}",
+            mapped_to=None,
+        )
+        return None
+
     # Dedupe repeated fields (order-preserving): `l.a = r.a AND l.a = r.a`
     # is one field, not two identical key components.
     fields = list(dict.fromkeys(r.field for r in recognized))
@@ -473,6 +499,33 @@ def _convert_one_blocking_rule(
         )
         return None
     transforms = [next(iter(transform_values))] if transform_values else []
+
+    # IS NOT NULL guards (#1783): GM's blocker already nulls the whole key
+    # when any key field is null (concat_str default) and filters null keys
+    # before blocks form, so a guard on a KEY column adds zero information --
+    # ignored exactly (info, so strict=True is not tripped on a faithful
+    # conversion). A guard on a NON-key column can't be expressed (GM has no
+    # null-constraint slot outside the key): dropping it makes the candidates
+    # a superset of Splink's -- safe for blocking (scoring decides), but lossy
+    # -> warn, matching the SUBSTR-widening convention below.
+    guard_fields = list(dict.fromkeys(g.field for g in guards))
+    ignored_guards = [g for g in guard_fields if g in fields]
+    extra_guards = [g for g in guard_fields if g not in fields]
+    if ignored_guards:
+        report.info(
+            rule_path,
+            f"null guards ignored (implicit in GM blocking): {ignored_guards}",
+            mapped_to=None,
+        )
+    if extra_guards:
+        report.warn(
+            rule_path,
+            f"approximate mapping: IS NOT NULL guard(s) on non-key column(s) "
+            f"{extra_guards} dropped (GoldenMatch cannot express a "
+            "null-constraint on a column outside the blocking key); "
+            f"candidates are a superset of Splink's ({sql_norm})",
+            mapped_to=None,
+        )
 
     key = BlockingKeyConfig(fields=fields, transforms=transforms)
     plain_fields = list(dict.fromkeys(r.field for r in recognized if r.transform is None))
