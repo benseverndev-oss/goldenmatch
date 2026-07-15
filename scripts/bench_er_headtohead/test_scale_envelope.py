@@ -175,6 +175,7 @@ def test_run_gm_converted_person(tmp_path):
     rc = subprocess.run([sys.executable, str(HERE / "run_gm_converted.py"),
         "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
         "--threshold", "0.85", "--shape", "person"], env=_env()).returncode
+    assert rc == 0
     r = json.loads(out.read_text())
     # ok when splink is installed; skipped (exit 0) when it isn't -- never a crash.
     assert r["status"] in {"ok", "skipped", "refused"}

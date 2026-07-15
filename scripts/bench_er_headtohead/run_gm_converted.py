@@ -147,11 +147,8 @@ def main() -> None:
         try:
             conversion = from_splink(settings_dict)
         except SplinkConversionError as e:
+            # refusal -- let the finally do the single write+print (lane/shape/status)
             result.update(status="refused", conversion_summary=str(e))
-            result["total_wall_seconds"] = round(time.perf_counter() - t_start, 2)
-            result["peak_rss_mb"] = _peak_rss_mb()
-            _atomic_write(args.out, result)
-            print(f"[gm_converted] shape={args.shape} status=refused reason=conversion-error")
             return
 
         summary = conversion.report.summary()
@@ -159,11 +156,8 @@ def main() -> None:
         config = conversion.config
         # A conversion that yields no usable matchkey is a refusal, not a crash.
         if config is None or not config.get_matchkeys():
+            # refusal -- let the finally do the single write+print (lane/shape/status)
             result.update(status="refused")
-            result["total_wall_seconds"] = round(time.perf_counter() - t_start, 2)
-            result["peak_rss_mb"] = _peak_rss_mb()
-            _atomic_write(args.out, result)
-            print(f"[gm_converted] shape={args.shape} status=refused reason=no-matchkeys")
             return
 
         # Force rerank off so a weighted matchkey can't pull a cross-encoder model
