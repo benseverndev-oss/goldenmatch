@@ -905,6 +905,107 @@ class TestDedupeWithPersistedModel:
         assert _parts(second) == _parts(baseline)
 
 
+class TestModelReuseSkipsBuildBlocks:
+    """Issue #1798: preloaded FS model + bucket route must skip build_blocks.
+
+    At 14M rows, build_blocks' partition_by materializes millions of tiny
+    eager per-block frames (the whole dataset duplicated per blocking pass)
+    and SIGKILLed the runner BEFORE scoring started. On the train-once/reuse
+    path those blocks are thrown away unused: load_or_train_em loads
+    mk.model_path (EM skipped) and score_buckets partitions internally,
+    memory-bounded. The pipeline must not build them.
+    """
+
+    def _cfg(self, model_path=None, **kwargs):
+        from goldenmatch.config.schemas import (
+            BlockingConfig,
+            BlockingKeyConfig,
+            GoldenMatchConfig,
+        )
+        return GoldenMatchConfig(
+            matchkeys=[_make_probabilistic_mk(model_path=model_path)],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _parts(r):
+        return sorted(
+            tuple(sorted(c["members"]))
+            for c in r.clusters.values() if len(c.get("members", [])) > 1
+        )
+
+    def _counting_build_blocks(self, monkeypatch):
+        from goldenmatch.core import pipeline as pipeline_mod
+
+        calls = {"n": 0}
+        real = pipeline_mod.build_blocks
+
+        def _counting(*a, **k):
+            calls["n"] += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(pipeline_mod, "build_blocks", _counting)
+        return calls
+
+    def test_preloaded_model_bucket_route_skips_build_blocks(
+        self, tmp_path, monkeypatch
+    ):
+        from goldenmatch import dedupe_df
+
+        calls = self._counting_build_blocks(monkeypatch)
+        df = _make_dedupe_df().drop("__row_id__")
+        path = str(tmp_path / "m.json")
+        # First run: no model on disk yet -> EM trains -> blocks ARE built.
+        first = dedupe_df(df, config=self._cfg(path, backend="bucket"))
+        assert (tmp_path / "m.json").exists()
+        assert calls["n"] >= 1
+        n_after_first = calls["n"]
+        # Second run: model preloaded + bucket route -> build_blocks skipped.
+        second = dedupe_df(df, config=self._cfg(path, backend="bucket"))
+        assert calls["n"] == n_after_first, (
+            "build_blocks ran on the preloaded-model bucket route (#1798)"
+        )
+        # Identical output with and without the skip.
+        assert self._parts(second) == self._parts(first)
+
+    def test_legacy_route_still_builds_blocks(self, tmp_path, monkeypatch):
+        # The per-block scorer consumes blocks even when EM is skipped, so a
+        # preloaded model on the LEGACY route must still build them. Force
+        # legacy: kill both bucket defaults (backend=None would otherwise
+        # bucket-route in-band / via native FS).
+        from goldenmatch import dedupe_df
+
+        monkeypatch.setenv("GOLDENMATCH_BUCKET_DEFAULT", "0")
+        monkeypatch.setenv("GOLDENMATCH_FS_DEFAULT_BUCKET", "0")
+        calls = self._counting_build_blocks(monkeypatch)
+        df = _make_dedupe_df().drop("__row_id__")
+        path = str(tmp_path / "m.json")
+        first = dedupe_df(df, config=self._cfg(path))
+        n_after_first = calls["n"]
+        assert n_after_first >= 1
+        second = dedupe_df(df, config=self._cfg(path))
+        assert calls["n"] == 2 * n_after_first  # built again on reuse run
+        assert self._parts(second) == self._parts(first)
+
+    def test_bench_dump_still_builds_blocks(self, tmp_path, monkeypatch):
+        # The opt-in GOLDENMATCH_BENCH_DUMP_PAIRS hook enumerates candidate
+        # pairs from the blocks, so it must keep building them even on the
+        # preloaded-model bucket route.
+        from goldenmatch import dedupe_df
+
+        dump_dir = tmp_path / "dump"
+        dump_dir.mkdir()
+        monkeypatch.setenv("GOLDENMATCH_BENCH_DUMP_PAIRS", str(dump_dir))
+        calls = self._counting_build_blocks(monkeypatch)
+        df = _make_dedupe_df().drop("__row_id__")
+        path = str(tmp_path / "m.json")
+        dedupe_df(df, config=self._cfg(path, backend="bucket"))
+        n_after_first = calls["n"]
+        dedupe_df(df, config=self._cfg(path, backend="bucket"))
+        assert calls["n"] == 2 * n_after_first
+
+
 # ── Supervised m-training (Phase 1b) ───────────────────────────────────────
 
 
