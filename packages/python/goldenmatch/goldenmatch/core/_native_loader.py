@@ -33,13 +33,24 @@ logger = logging.getLogger(__name__)
 #   2. ``goldenmatch_native._native`` — the separately-distributed
 #      ``goldenmatch-native`` abi3 wheel (``pip install goldenmatch[native]``),
 #      the polars / polars-runtime split. Same ``_native`` pymodule either way.
+# Distinguish "not installed" (ModuleNotFoundError -> expected, pure Python) from
+# "installed but failed to load" (a broken .so / ABI mismatch -> anomaly). The
+# anomaly is captured here and reported LAZILY (on the first native_enabled call)
+# so importing this module never triggers diagnostics / an import cycle.
+_NATIVE_IMPORT_ERROR: Exception | None = None
 try:
     import goldenmatch._native as _native  # pyright: ignore[reportMissingImports]
-except Exception:  # noqa: BLE001 - any import/load failure falls back below
+except Exception as _e_intree:  # noqa: BLE001 - any import/load failure falls back below
     try:
         from goldenmatch_native import _native  # pyright: ignore[reportMissingImports]
-    except Exception:  # noqa: BLE001 - neither path available -> pure Python
+    except Exception as _e_wheel:  # noqa: BLE001 - neither path available -> pure Python
         _native = None
+        # A non-ModuleNotFoundError from either path means the module IS present
+        # but failed to load -- a broken install worth reporting.
+        for _e in (_e_intree, _e_wheel):
+            if not isinstance(_e, ModuleNotFoundError):
+                _NATIVE_IMPORT_ERROR = _e
+                break
 
 
 # Components whose native path has cleared parity + DQbench and may run under
@@ -206,6 +217,32 @@ def _has_symbol(component: str) -> bool:
 # of the kernel. This counter answers "did stage X go native on THIS run?".
 _DISPATCH_LOG: dict[str, dict[str, int]] = {}
 _AUTO_HINT_LOGGED = False
+_IMPORT_ANOMALY_REPORTED = False
+
+
+def _maybe_report_import_anomaly() -> None:
+    """If a native module was present but failed to LOAD (broken install, ABI
+    mismatch), prompt an issue -- once. A plain 'not installed' never fires."""
+    global _IMPORT_ANOMALY_REPORTED
+    if _IMPORT_ANOMALY_REPORTED or _NATIVE_IMPORT_ERROR is None:
+        return
+    _IMPORT_ANOMALY_REPORTED = True
+    try:
+        from goldenmatch.core.diagnostics import report_anomaly
+
+        report_anomaly(
+            "native-import",
+            "the goldenmatch native module is installed but failed to load; "
+            "running on the pure-Python fallback",
+            detail=(
+                "This is a broken/partial native install (not a plain "
+                "'native not installed'), so acceleration is silently off."
+            ),
+            exc=_NATIVE_IMPORT_ERROR,
+            once_key="native-import-error",
+        )
+    except Exception:  # noqa: BLE001 - diagnostics must never be load-bearing
+        pass
 
 
 def _record_dispatch(component: str, native: bool) -> None:
@@ -262,6 +299,7 @@ def native_enabled(component: str, symbol: str | None = None) -> bool:
     every optional sub-kernel being present.)
     """
     global _AUTO_HINT_LOGGED
+    _maybe_report_import_anomaly()
     mode = os.environ.get("GOLDENMATCH_NATIVE", "auto").lower()
     if mode == "0":
         _record_dispatch(component, False)
@@ -442,6 +480,34 @@ def warn_if_slow_path(
         summary.hot_path_native_calls,
         summary.hot_path_fallback_calls,
     )
+    # Wheel-skew subclass (the #688 class): a hot-path component fell back while
+    # its kernel symbol is MISSING from the loaded wheel. Unlike "a scorer has no
+    # native kernel" (legit, symbol present) this is anomalous -- the published
+    # wheel lags the host's expected symbols -- so prompt an issue. Symbol PRESENT
+    # + fallback is not flagged (that's the legit case).
+    skew = [
+        c
+        for c in _HOT_PATH_COMPONENTS
+        if summary.components.get(c, {}).get("fallback", 0) > 0 and not _has_symbol(c)
+    ]
+    if skew:
+        try:
+            from goldenmatch.core.diagnostics import report_anomaly
+
+            report_anomaly(
+                "native-wheel-skew",
+                "the installed goldenmatch-native wheel is missing a kernel symbol "
+                f"the scoring hot path expected ({', '.join(sorted(skew))}); "
+                "running on the slow pure-Python fallback",
+                detail=(
+                    "The published wheel predates a kernel symbol the host code "
+                    "depends on (the #688 wheel-skew class). Republishing / "
+                    "reinstalling goldenmatch-native restores the fast path."
+                ),
+                once_key=f"native-wheel-skew:{','.join(sorted(skew))}",
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must never be load-bearing
+            pass
     return True
 
 
