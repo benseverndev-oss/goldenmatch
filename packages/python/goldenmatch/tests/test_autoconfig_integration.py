@@ -19,6 +19,7 @@ from pathlib import Path
 
 import goldenmatch
 import polars as pl
+import pyarrow as pa
 import pytest
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core.autoconfig import _LAST_CONTROLLER_RUN
@@ -62,6 +63,22 @@ def test_controller_iterates_on_real_dedupe_data():
     # Blocking sub-profile should reflect a real run (not the empty default)
     bp = history.entries[0].profile.blocking
     assert bp.n_blocks > 0, "blocking instrumentation didn't emit (or wiring broken)"
+
+
+def test_auto_configure_df_accepts_arrow_table() -> None:
+    """Arrow is a public zero-config input, including composite-blocking search."""
+    table = pa.table(
+        {
+            "first_name": ["Ada", "Ada", "Grace", "Grace"],
+            "last_name": ["Lovelace", "Lovelace", "Hopper", "Hopper"],
+            "email": ["ada@example.com", "ada@example.com", "grace@example.com", "grace@example.com"],
+        }
+    )
+
+    config = goldenmatch.auto_configure_df(table)
+
+    assert isinstance(config, GoldenMatchConfig)
+    assert config.matchkeys
 
 
 def test_controller_match_mode_with_real_reference():
