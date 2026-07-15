@@ -2737,6 +2737,40 @@ def _throughput_blocking(
         column=col, mode="word", k=2, num_perms=128, threshold=0.5, seed=0))
 
 
+def _compute_max_safe_block(height: int, native_scoring: bool) -> int:
+    """The largest per-block size auto-config will accept for a blocking key.
+
+    Scale-proportional (``height // 40``) with a 1000 floor and a scorer-aware
+    ceiling. Rationale:
+
+    - **Why proportional, not a fixed cap.** The old ``max(1000, height // 200)``
+      pinned at 1000 for every dataset <= 200K rows. On census-Zipfian surnames the
+      top surname-soundex block grows ~``0.013 * height`` and crosses 1000 between
+      ~70K-90K rows; there the strong-identity surname pass was rejected as
+      "oversized", which silently promoted surname into Fellegi-Sunter SCORING
+      (blocking fields are excluded from scoring) where its weight over-merged
+      same-block distinct people -- person F1 collapsed 0.97 -> 0.34 at 100K.
+      ``height // 40`` (= ``0.025 * height``) grows faster than the surname block,
+      so the pass is kept (validated: F1 back to ~0.96 at 100K/200K, at no wall
+      cost -- the over-merged baseline is actually slower).
+
+    - **Why the 1000 floor.** Below 40K rows ``height // 40 < 1000``, so the cap
+      stays exactly 1000 -- byte-identical to the old behavior on the small
+      datasets the accuracy gates use (DQbench/Febrl are unaffected; a 5000-row
+      block on a 5K dataset would be the whole dataset in one degenerate block).
+
+    - **Why the ceiling is scorer-aware.** The cap's original purpose was bounding
+      the NUMPY ensemble scorer's NxN block matrix (float32 10K-block ~= 400 MB;
+      50K OOMs). The native FS / bucket scorer scores PER-PAIR with no matrix, so
+      memory is O(N) not O(N^2) and that basis doesn't bind -- when native
+      block-scoring is active the ceiling lifts to 50K (wall/pair budget, not
+      memory, then governs via the #715 projected-pair guard). Pure-numpy keeps
+      the conservative 10K matrix ceiling.
+    """
+    ceiling = 50_000 if native_scoring else 10_000
+    return max(1000, min(ceiling, height // 40))
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -2883,13 +2917,18 @@ def build_blocking(
     # full scale that the pipeline filtered at max_block_size=5000 —
     # leaving no candidate pairs and ~99% singleton output.
     #
-    # Row-count-aware scaling: total_rows // 200, clamped to [1000, 10000].
-    # Preserves existing behavior at 200K and below (where 1000 always
-    # wins the clamp), bumps to 5000 at 1M (matches the pipeline default),
-    # and headroom to 10K for 2M+. Cap at 10K because a 10K-row block
-    # under float32 ensemble is ~400 MB per scorer call which is the
-    # practical OOM ceiling on a 16 GB runner.
-    max_safe_block = max(1000, min(10_000, int(_bf_height) // 200))
+    # Auto-config's "is this blocking key safe?" ceiling. See _compute_max_safe_block:
+    # scale-proportional (height // 40) with a 1000 floor and a scorer-aware cap.
+    # Fixes the >=~90K over-merge (the census-Zipfian surname-soundex block crosses
+    # the old fixed 1000 between 70K-90K rows, so the strong-identity surname pass
+    # was DROPPED as "oversized" -> surname silently entered FS scoring -> person F1
+    # collapsed 0.97 -> 0.34 at 100K); keeps small data (< 40K) at exactly 1000 so
+    # DQbench/Febrl are byte-unchanged.
+    from goldenmatch.core._native_loader import native_enabled as _native_enabled
+
+    max_safe_block = _compute_max_safe_block(
+        int(_bf_height), _native_enabled("block_scoring")
+    )
 
     # #715: gate every emitted blocking key/pass by its PROJECTED full-N max
     # block size. build_blocking runs on a sample (or, in the v0 path, the
