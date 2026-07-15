@@ -30,8 +30,10 @@ pure-Python fallback automatically).
   new `penalty_bits` (log2 LLR fixed override, probabilistic-only, `abs()`
   applied) alongside the existing `penalty` (still required on weighted/exact,
   now rejected on probabilistic — set `penalty_bits` instead). Guards: native,
-  fused, and the fast-path scorer all decline NE-bearing FS matchkeys (pure
-  Python fallback; a future kernel port adds `FS_SUPPORTS_NE`); the bucket
+  fused, and the fast-path scorer all decline NE-bearing FS matchkeys
+  (pure-Python fallback on wheels older than `goldenmatch-native` 0.1.15; the
+  native port below adds `FS_SUPPORTS_NE` in this same release — only the
+  fast-path scorer still declines); the bucket
   backend's slim-projection keep-list was extended so an NE-only field (e.g.
   `phone`, never a regular matchkey field) survives the default
   `GOLDENMATCH_BUCKET_SLIM_PROJECTION`. `EMResult.validate_for` now requires
