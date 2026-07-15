@@ -221,3 +221,10 @@ def test_sweep_person_two_lanes_smoke(tmp_path):
     keys = {(r["shape"], r["lane"], r["rows_requested"]) for r in agg["results"]}
     assert ("person", "gm_hand_built", 1500) in keys
     assert all(r.get("shape") and r.get("lane") for r in agg["results"])
+
+
+def test_timeout_ladder_fits_cap():
+    orch = _load("orchestrate")
+    # 25M + 100M for ONE lane must fit under ~560 min (spec 7.3)
+    assert orch._timeout_for(25_000_000) + orch._timeout_for(100_000_000) <= 560 * 60
+    assert orch._timeout_for(100_000) < orch._timeout_for(5_000_000)  # monotone

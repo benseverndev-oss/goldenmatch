@@ -86,11 +86,11 @@ def build_cmd(lane: Lane, *, input, rows: int, out, pred, threshold: float,
 # Per-scale subprocess wall-clock cap (seconds). Raised after the first run so a
 # slow-but-progressing datapoint isn't cut off; a true hang still ends eventually.
 TIMEOUT_BY_ROWS = [
-    (100_000, 900),
-    (1_000_000, 2400),
-    (5_000_000, 7200),
-    (25_000_000, 14400),
-    (100_000_000, 28800),
+    (100_000, 900),       # 15 min
+    (1_000_000, 1800),    # 30 min
+    (5_000_000, 5400),    # 90 min
+    (25_000_000, 9000),   # 150 min
+    (100_000_000, 18000), # 300 min  -> 25M + 100M = 450 min, under the ~560 cap
 ]
 
 
@@ -98,7 +98,7 @@ def _timeout_for(rows: int) -> int:
     for ceiling, t in TIMEOUT_BY_ROWS:
         if rows <= ceiling:
             return t
-    return 28800
+    return 18000
 
 
 def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
