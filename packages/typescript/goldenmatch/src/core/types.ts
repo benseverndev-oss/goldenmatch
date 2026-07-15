@@ -60,8 +60,24 @@ export interface NegativeEvidenceField {
   readonly field: string;
   readonly transforms: readonly string[];
   readonly scorer: string;
+  /** Similarity cutoff in [0, 1]; the NE fires when scorer similarity is
+   *  STRICTLY below it (both values present post-transform). */
   readonly threshold: number;
-  readonly penalty: number;
+  /** Weighted/exact only: flat 0-1 penalty subtracted from the score when
+   *  this field disagrees. REQUIRED for weighted/exact and REJECTED for
+   *  probabilistic matchkeys — enforced by the loader validation matrix
+   *  (mirrors Python `MatchkeyConfig` schemas.py). Probabilistic matchkeys
+   *  use EM-learned NE weights instead (or the `penaltyBits` override). */
+  readonly penalty?: number;
+  /** Probabilistic only: fixed LLR override in log2 units. When set, the NE
+   *  dimension skips EM and contributes -abs(penaltyBits) when fired, else 0.
+   *  Absent => the weight is EM-learned. Rejected on weighted/exact matchkeys
+   *  (they use `penalty`). Unconstrained range, matching Python. */
+  readonly penaltyBits?: number;
+  // NOTE: Python's `derive_from` (synthesized-column NE) is deliberately NOT
+  // on this type. goldenmatch-js has no derived-column materialization, so a
+  // loaded derive_from NE would silently never fire — the loader rejects it
+  // at parse time instead (see parseNegativeEvidenceField).
 }
 
 export interface ExactMatchkey {
@@ -97,8 +113,11 @@ export interface ProbabilisticMatchkey {
   readonly convergenceThreshold?: number;
   readonly linkThreshold?: number;
   readonly reviewThreshold?: number;
-  /** v1.11: negative evidence — unused at scoring time on probabilistic but
-   *  preserved here for round-trip parity with Python's MatchkeyConfig. */
+  /** FS negative evidence — trained and scored on the FS discrete path
+   *  (ported from Python #1764): EM-learned NE weights per field, or a
+   *  fixed `penaltyBits` override. Training/scoring/validation/fallback all
+   *  honor NE; only the continuous (Winkler) path throws
+   *  `NegativeEvidenceUnsupportedError`, permanently, matching Python. */
   readonly negativeEvidence?: readonly NegativeEvidenceField[];
   /**
    * Persisted EM model path (Splink-style train-once -> reuse). Mirrors
@@ -547,6 +566,10 @@ export function makeMatchkeyField(
  * Mirrors the Python ``NegativeEvidenceField`` Pydantic constructor.
  * - ``threshold`` default 0.5 (per spec; eager-promote rule uses 0.4)
  * - ``penalty`` default 0.5 (per spec; eager-promote rule uses 0.3)
+ *
+ * Produces the weighted/exact NE shape (penalty set). Probabilistic NE
+ * (EM-learned or ``penaltyBits``) should be constructed literally without
+ * ``penalty`` — the loader validation matrix rejects ``penalty`` there.
  */
 export function makeNegativeEvidenceField(
   partial: Partial<NegativeEvidenceField> & Pick<NegativeEvidenceField, "field" | "scorer">,

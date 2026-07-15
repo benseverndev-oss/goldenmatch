@@ -159,7 +159,11 @@ import { readFile, writeCsv } from "goldenmatch/node";              // Node-only
 
 ### Scoring algorithms
 - Exact, Jaro-Winkler, Levenshtein, Token-Sort, Soundex, Dice, Jaccard, Ensemble
-- Probabilistic (Fellegi-Sunter with Splink-style EM)
+- Probabilistic (Fellegi-Sunter with Splink-style EM), including negative
+  evidence: a hard-disagreeing field (e.g. phone) subtracts an EM-learned or
+  fixed `penalty_bits` weight, separating homonyms that agree on every scored
+  field. Python-config/model compatible; the continuous (Winkler) path and
+  `derive_from` NE are declined loudly, matching the Python runtime's limits.
 - LLM scorer (OpenAI/Anthropic via fetch — edge-safe)
 - Cross-encoder reranking (via @huggingface/transformers)
 

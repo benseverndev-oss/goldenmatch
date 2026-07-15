@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseConfig } from "../../src/core/index.js";
+import { parse as parseYaml } from "yaml";
+import { parseConfig, parseConfigYaml } from "../../src/core/index.js";
 
 describe("parseConfig", () => {
   it("accepts snake_case keys", () => {
@@ -295,6 +296,305 @@ describe("parseConfig", () => {
         expect(warnings).toHaveLength(0);
       } finally {
         console.warn = origWarn;
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // negative_evidence parsing (was silently dropped for all three types)
+  // -------------------------------------------------------------------------
+
+  describe("negative_evidence parsing", () => {
+    const neSnake = [
+      {
+        field: "phone",
+        transforms: ["digits_only"],
+        scorer: "exact",
+        threshold: 0.5,
+        penalty: 0.4,
+      },
+    ];
+
+    it("parses negative_evidence on weighted matchkeys (regression: was dropped)", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "w",
+            type: "weighted",
+            threshold: 0.9,
+            fields: [
+              { field: "name", transforms: [], scorer: "jaro_winkler", weight: 1 },
+            ],
+            negative_evidence: neSnake,
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("weighted");
+      const ne = mk?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      expect(ne?.[0]?.transforms).toEqual(["digits_only"]);
+      expect(ne?.[0]?.scorer).toBe("exact");
+      expect(ne?.[0]?.threshold).toBe(0.5);
+      expect(ne?.[0]?.penalty).toBe(0.4);
+    });
+
+    it("parses negative_evidence on exact matchkeys", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "e",
+            type: "exact",
+            fields: [{ field: "email", transforms: ["lowercase"], scorer: "exact", weight: 1 }],
+            negative_evidence: neSnake,
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("exact");
+      const ne = mk?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      expect(ne?.[0]?.penalty).toBe(0.4);
+    });
+
+    it("parses negative_evidence on probabilistic matchkeys, camelizing penalty_bits", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "p",
+            type: "probabilistic",
+            fields: [
+              { field: "name", transforms: [], scorer: "jaro_winkler", weight: 1 },
+            ],
+            negative_evidence: [
+              {
+                field: "phone",
+                transforms: ["digits_only"],
+                scorer: "exact",
+                threshold: 0.5,
+                penalty_bits: 2.5,
+              },
+            ],
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("probabilistic");
+      const ne = mk?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      // penalty omitted on the EM-learned/penalty_bits probabilistic shape.
+      expect(ne?.[0]?.penalty).toBeUndefined();
+      // penalty_bits camelized, carried through, and typed.
+      expect(ne?.[0]?.penaltyBits).toBe(2.5);
+    });
+
+    it("parses negative_evidence from a YAML config (fan-out lever ingestion path)", () => {
+      const yamlStr = [
+        "matchkeys:",
+        "  - name: w",
+        "    type: weighted",
+        "    threshold: 0.9",
+        "    fields:",
+        "      - field: name",
+        "        transforms: [lowercase]",
+        "        scorer: jaro_winkler",
+        "        weight: 1.0",
+        "    negative_evidence:",
+        "      - field: phone",
+        "        transforms: [digits_only]",
+        "        scorer: exact",
+        "        threshold: 0.5",
+        "        penalty: 0.4",
+      ].join("\n");
+      const config = parseConfigYaml(yamlStr, parseYaml);
+      const ne = config.matchkeys?.[0]?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.field).toBe("phone");
+      expect(ne?.[0]?.transforms).toEqual(["digits_only"]);
+      expect(ne?.[0]?.penalty).toBe(0.4);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // negative_evidence validation matrix (mirrors Python config/schemas.py:
+  // per-matchkey-type penalty vs penalty_bits rules + range checks)
+  // -------------------------------------------------------------------------
+
+  describe("negative_evidence validation matrix", () => {
+    const mkWith = (
+      type: "exact" | "weighted" | "probabilistic",
+      ne: Record<string, unknown>,
+    ) => ({
+      matchkeys: [
+        {
+          name: "mk",
+          type,
+          ...(type === "weighted" ? { threshold: 0.9 } : {}),
+          fields: [
+            { field: "name", transforms: [], scorer: "jaro_winkler", weight: 1 },
+          ],
+          negative_evidence: [
+            {
+              field: "phone",
+              transforms: ["digits_only"],
+              scorer: "exact",
+              threshold: 0.5,
+              ...ne,
+            },
+          ],
+        },
+      ],
+    });
+
+    it("weighted NE without penalty throws naming penalty", () => {
+      expect(() => parseConfig(mkWith("weighted", {}))).toThrow(
+        /requires 'penalty'/,
+      );
+    });
+
+    it("exact NE without penalty throws naming penalty", () => {
+      expect(() => parseConfig(mkWith("exact", {}))).toThrow(
+        /requires 'penalty'/,
+      );
+    });
+
+    it("weighted NE with penalty_bits throws (probabilistic-only knob)", () => {
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: 0.4, penalty_bits: 2.5 })),
+      ).toThrow(/penalty_bits.*only valid on\s+probabilistic/s);
+    });
+
+    it("exact NE with penalty_bits throws (probabilistic-only knob)", () => {
+      expect(() =>
+        parseConfig(mkWith("exact", { penalty: 0.4, penalty_bits: 2.5 })),
+      ).toThrow(/penalty_bits.*only valid on\s+probabilistic/s);
+    });
+
+    it("probabilistic NE with penalty throws, pointing at penalty_bits", () => {
+      // /EM-learned/ is unique to the probabilistic-side message (the
+      // weighted-side message also mentions penalty_bits, so matching that
+      // alone would pass under a matrix routing bug).
+      expect(() =>
+        parseConfig(mkWith("probabilistic", { penalty: 0.4 })),
+      ).toThrow(/EM-learned/);
+    });
+
+    it("probabilistic NE with penalty_bits parses, penaltyBits typed and set", () => {
+      const config = parseConfig(mkWith("probabilistic", { penalty_bits: 2.5 }));
+      const ne = config.matchkeys?.[0]?.negativeEvidence;
+      expect(ne?.[0]?.penaltyBits).toBe(2.5);
+      expect(ne?.[0]?.penalty).toBeUndefined();
+    });
+
+    it("probabilistic NE with neither penalty nor penalty_bits parses (EM-learned shape)", () => {
+      const config = parseConfig(mkWith("probabilistic", {}));
+      const ne = config.matchkeys?.[0]?.negativeEvidence;
+      expect(ne?.length).toBe(1);
+      expect(ne?.[0]?.penalty).toBeUndefined();
+      expect(ne?.[0]?.penaltyBits).toBeUndefined();
+    });
+
+    it("derive_from NE on a weighted matchkey throws (not supported in goldenmatch-js)", () => {
+      expect(() =>
+        parseConfig(
+          mkWith("weighted", {
+            penalty: 0.4,
+            derive_from: ["first_name", "last_name"],
+          }),
+        ),
+      ).toThrow(/derive_from negative evidence is not supported in goldenmatch-js/);
+    });
+
+    it("derive_from NE on a probabilistic matchkey throws (not supported in goldenmatch-js)", () => {
+      expect(() =>
+        parseConfig(
+          mkWith("probabilistic", {
+            derive_from: ["first_name", "last_name"],
+          }),
+        ),
+      ).toThrow(/derive_from negative evidence is not supported in goldenmatch-js/);
+    });
+
+    it("NE threshold outside [0, 1] throws", () => {
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: 0.4, threshold: 1.5 })),
+      ).toThrow(/threshold/);
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: 0.4, threshold: -0.1 })),
+      ).toThrow(/threshold/);
+    });
+
+    it("NE penalty outside [0, 1] throws", () => {
+      expect(() => parseConfig(mkWith("weighted", { penalty: 1.5 }))).toThrow(
+        /penalty/,
+      );
+      expect(() => parseConfig(mkWith("weighted", { penalty: -0.1 }))).toThrow(
+        /penalty/,
+      );
+    });
+
+    it("NE threshold NaN throws (negated-conjunction range check rejects NaN)", () => {
+      // YAML can't express NaN, but parseConfig takes JS objects directly.
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: 0.4, threshold: NaN })),
+      ).toThrow(/threshold/);
+    });
+
+    it("mistyped NE penalty (string) throws a type error naming penalty", () => {
+      // Easy YAML mistake: quoted number. Must NOT vanish into undefined
+      // (misleading "requires 'penalty'" on weighted, silent accept on
+      // probabilistic — Python's Pydantic raises a type error here).
+      expect(() =>
+        parseConfig(mkWith("weighted", { penalty: "0.4" })),
+      ).toThrow(/penalty.*expected number, got string/);
+    });
+
+    it("mistyped NE penalty_bits (string) throws a type error on probabilistic", () => {
+      expect(() =>
+        parseConfig(mkWith("probabilistic", { penalty_bits: "2.5" })),
+      ).toThrow(/penalty_bits.*expected number, got string/);
+    });
+
+    it("NE penalty_bits is unconstrained (negative and large values parse)", () => {
+      const neg = parseConfig(mkWith("probabilistic", { penalty_bits: -12.5 }));
+      expect(neg.matchkeys?.[0]?.negativeEvidence?.[0]?.penaltyBits).toBe(-12.5);
+      const big = parseConfig(mkWith("probabilistic", { penalty_bits: 900 }));
+      expect(big.matchkeys?.[0]?.negativeEvidence?.[0]?.penaltyBits).toBe(900);
+    });
+
+    it("exact matchkey carries threshold through the loader (regression: was dropped)", () => {
+      const raw = {
+        matchkeys: [
+          {
+            name: "e",
+            type: "exact",
+            threshold: 0.6,
+            fields: [
+              { field: "email", transforms: ["lowercase"], scorer: "exact", weight: 1 },
+            ],
+            negative_evidence: [
+              {
+                field: "phone",
+                transforms: ["digits_only"],
+                scorer: "exact",
+                threshold: 0.5,
+                penalty: 0.4,
+              },
+            ],
+          },
+        ],
+      };
+      const config = parseConfig(raw);
+      const mk = config.matchkeys?.[0];
+      expect(mk?.type).toBe("exact");
+      if (mk?.type === "exact") {
+        expect(mk.threshold).toBe(0.6);
       }
     });
   });

@@ -111,7 +111,12 @@ export function applyNegativeEvidence(
       continue;
     }
     if (sim === null) continue;
-    if (sim < f.threshold) total += f.penalty;
+    // The loader validation matrix guarantees `penalty` is set on
+    // weighted/exact NE (this function's only callers). `?? 0` covers
+    // hand-built configs that bypassed the loader — previously such a
+    // penalty-less entry would have produced NaN via `total += undefined`;
+    // the load-time matrix closes that window for parsed configs.
+    if (sim < f.threshold) total += f.penalty ?? 0;
   }
   return total;
 }
