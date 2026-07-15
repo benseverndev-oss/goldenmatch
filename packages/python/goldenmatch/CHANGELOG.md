@@ -6,19 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-<<<<<<< HEAD
-### Fixed
-- **`from_splink` recognizes `IS NOT NULL` blocking guards** (#1783): compound
-  `CustomRule` blocking rules carrying trailing `AND l.col IS NOT NULL` guard
-  conjuncts were dropped whole as unrecognized — on a 1M production dedupe the
-  converted model blocked on 3 of 6 keys, costing ~28 points of pairwise
-  recall. Guards on key columns are now recognized and ignored exactly
-  (GoldenMatch blocking already implements the guard semantics: a null key
-  component forms no block), reported as info. A guard on a column outside the
-  blocking key still converts but warns (guard dropped, candidates are a
-  superset of Splink's; `strict=True` gates on it), and a guards-only rule
-  keeps the existing unrecognized-drop path.
-=======
 ### Added
 
 - **Anomaly diagnostics with prefilled GitHub issue prompts** (in-tree:
@@ -51,6 +38,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **`from_splink` recognizes `IS NOT NULL` blocking guards** (#1783): compound
+  `CustomRule` blocking rules carrying trailing `AND l.col IS NOT NULL` guard
+  conjuncts were dropped whole as unrecognized — on a 1M production dedupe the
+  converted model blocked on 3 of 6 keys, costing ~28 points of pairwise
+  recall. Guards on key columns are now recognized and ignored exactly
+  (GoldenMatch blocking already implements the guard semantics: a null key
+  component forms no block), reported as info. A guard on a column outside the
+  blocking key still converts but warns (guard dropped, candidates are a
+  superset of Splink's; `strict=True` gates on it), and a guards-only rule
+  keeps the existing unrecognized-drop path.
 - **The #1318 TF name downweight now reaches the default (bucket) scoring
   path** (#1781): the bucket backend's fast path resolved plugin scorers via a
   bare `plugin.score_pair`, so the per-dataset TF table behind
@@ -65,7 +62,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   sample height) silently disabled the `REFUSE_AT_N` refuse gate, so runs that
   should raise `ControllerNotConfidentError` on a RED config could slip
   through.
->>>>>>> origin/main
 
 ## [3.3.0] - 2026-07-14
 
