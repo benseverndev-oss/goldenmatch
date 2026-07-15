@@ -79,6 +79,137 @@ def test_kernel_exports_fs_supports_ne():
     assert getattr(mod, "FS_SUPPORTS_NE", False) is True
 
 
+# ── #1803: zero-copy arrow FS entry + shared exclude handle ────────────────
+
+
+def _arrow_args():
+    """The _base_args fixture with row_ids/field columns as arrow arrays,
+    in score_block_pairs_fs_arrow's argument order."""
+    (row_ids, sizes, field_values, scorer_ids, levels, partials, weights,
+     calibrated, prior_w, min_w, w_range, threshold, _excl) = _base_args()
+    return (
+        pa.array(row_ids, type=pa.int64()),
+        [pa.array(v, type=pa.large_string()) for v in field_values],
+        sizes, scorer_ids, levels, partials, weights,
+        calibrated, prior_w, min_w, w_range, threshold,
+    )
+
+
+def test_kernel_exports_fs_arrow_and_exclude_consts():
+    mod = _native_loader.native_module()
+    assert getattr(mod, "FS_SUPPORTS_ARROW", False) is True
+    assert getattr(mod, "FS_SUPPORTS_EXCLUDE_SET", False) is True
+
+
+def test_fs_arrow_entry_matches_vec_entry():
+    mod = _native_loader.native_module()
+    vec = mod.score_block_pairs_fs(*_base_args())
+    arrow = mod.score_block_pairs_fs_arrow(*_arrow_args())
+    assert arrow == vec
+
+
+def test_fs_arrow_entry_matches_vec_entry_ne():
+    mod = _native_loader.native_module()
+    ne_kw = dict(ne_scorer_ids=[_EXACT], ne_thresholds=[0.5], ne_weights=[-4.0])
+    vec = mod.score_block_pairs_fs(
+        *_base_args(), ne_values=[["X", "X", "Y"]], **ne_kw
+    )
+    arrow = mod.score_block_pairs_fs_arrow(
+        *_arrow_args(),
+        ne_arrays=[pa.array(["X", "X", "Y"], type=pa.large_string())],
+        **ne_kw,
+    )
+    assert arrow == vec
+    # Null / empty-string NE values contribute exactly 0 on both entries.
+    vec2 = mod.score_block_pairs_fs(
+        *_base_args(), ne_values=[[None, "X", ""]], **ne_kw
+    )
+    arrow2 = mod.score_block_pairs_fs_arrow(
+        *_arrow_args(),
+        ne_arrays=[pa.array([None, "X", ""], type=pa.large_string())],
+        **ne_kw,
+    )
+    assert arrow2 == vec2
+
+
+def test_fs_arrow_entry_matches_vec_entry_level_thresholds():
+    mod = _native_loader.native_module()
+    # 3-weight field with custom 2-threshold banding.
+    (row_ids, sizes, _fv, scorer_ids, levels, partials, _w,
+     calibrated, prior_w, _minw, _range, threshold, excl) = _base_args()
+    field_values = [["smith", "smyth", "jones"]]
+    weights = [[-2.0, 0.5, 2.0]]
+    lt = [[0.7, 0.95]]
+    vec = mod.score_block_pairs_fs(
+        row_ids, sizes, field_values, [0], levels, partials, weights,
+        calibrated, prior_w, -2.0, 4.0, threshold, excl,
+        level_thresholds=lt,
+    )
+    arrow = mod.score_block_pairs_fs_arrow(
+        pa.array(row_ids, type=pa.int64()),
+        [pa.array(v, type=pa.large_string()) for v in field_values],
+        sizes, [0], levels, partials, weights,
+        calibrated, prior_w, -2.0, 4.0, threshold,
+        level_thresholds=lt,
+    )
+    assert arrow == vec
+
+
+def test_fs_exclude_handle_parity_both_entries():
+    mod = _native_loader.native_module()
+    handle = mod.build_exclude_set([(2, 1)])  # canonicalized to (1, 2)
+    base = _base_args()
+    vec_list = mod.score_block_pairs_fs(*base[:-1], [(1, 2)])
+    vec_handle = mod.score_block_pairs_fs(*base, exclude_set=handle)
+    arrow_handle = mod.score_block_pairs_fs_arrow(*_arrow_args(), exclude_set=handle)
+    assert vec_handle == vec_list
+    assert arrow_handle == vec_list
+    assert (1, 2) not in {(a, b) for a, b, _ in vec_handle}
+
+
+class _FakeNativeRecorder:
+    """Duck-typed native module recording which FS entry was called."""
+
+    def __init__(self, consts: dict, result=None):
+        self._consts = consts
+        self.calls: list[tuple[str, dict]] = []
+        self._result = result if result is not None else []
+
+    def __getattr__(self, name):
+        if name in self._consts:
+            return self._consts[name]
+        raise AttributeError(name)
+
+    def score_block_pairs_fs(self, *a, **kw):
+        self.calls.append(("vec", kw))
+        return list(self._result)
+
+    def score_block_pairs_fs_arrow(self, *a, **kw):
+        self.calls.append(("arrow", kw))
+        return list(self._result)
+
+
+def test_score_fs_native_frame_routes_to_arrow(monkeypatch):
+    from goldenmatch.core import probabilistic as p
+
+    fake = _FakeNativeRecorder({"FS_SUPPORTS_ARROW": True, "FS_SUPPORTS_EXCLUDE_SET": True})
+    monkeypatch.setattr(_native_loader, "native_module", lambda: fake)
+    df = _block_df()
+    p._score_fs_native_frame(df, [df.height], _ne_mk([]), _em(_BASE_WEIGHTS), set())
+    assert [c[0] for c in fake.calls] == ["arrow"]
+
+
+def test_score_fs_native_frame_old_wheel_uses_vec(monkeypatch):
+    from goldenmatch.core import probabilistic as p
+
+    fake = _FakeNativeRecorder({})  # neither const -> legacy vec entry
+    monkeypatch.setattr(_native_loader, "native_module", lambda: fake)
+    df = _block_df()
+    p._score_fs_native_frame(df, [df.height], _ne_mk([]), _em(_BASE_WEIGHTS), {(1, 2)})
+    assert [c[0] for c in fake.calls] == ["vec"]
+    assert "exclude_set" not in fake.calls[0][1]  # old wheel never sees the kwarg
+
+
 def test_kernel_ne_fires_strictly_below_threshold():
     mod = _native_loader.native_module()
     # Rows 1/2 share the NE value (sim 1.0 >= 0.5 -> no fire); rows 1/3 and
@@ -269,6 +400,11 @@ def test_native_kwargs_not_sent_without_ne(monkeypatch):
             captured["kwargs"] = dict(kwargs)
             return real.score_block_pairs_fs(*args, **kwargs)
 
+        def score_block_pairs_fs_arrow(self, *args, **kwargs):
+            # New wheels route here (#1803); same no-NE-kwargs discipline.
+            captured["kwargs"] = dict(kwargs)
+            return real.score_block_pairs_fs_arrow(*args, **kwargs)
+
     monkeypatch.setattr(_native_loader, "native_module", lambda: _Spy())
 
     mk = MatchkeyConfig(name="fs", type="probabilistic", fields=_base_fields(), link_threshold=0.0)
@@ -276,6 +412,7 @@ def test_native_kwargs_not_sent_without_ne(monkeypatch):
     pairs = score_probabilistic_native(df, mk, _em(_BASE_WEIGHTS))
     assert pairs, "expected pairs at link_threshold=0.0"
     assert "kwargs" in captured, "spy never saw the kernel call"
+    assert "ne_arrays" not in captured["kwargs"]
     assert "ne_values" not in captured["kwargs"]
     assert "ne_scorer_ids" not in captured["kwargs"]
     assert "ne_thresholds" not in captured["kwargs"]

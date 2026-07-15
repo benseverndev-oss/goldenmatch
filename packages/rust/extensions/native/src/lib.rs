@@ -36,6 +36,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Wheel-skew capability flag: Python's `match_fused_fs_ready` gates custom
     // level_thresholds on this (old wheels never see the kwarg).
     m.add("FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;
+    // Wheel-skew capability flag: `score_block_pairs_fs` accepts the shared
+    // `exclude_set=` Arc handle (the #552/#688 fix, FS side). Old wheels keep
+    // the legacy Vec-per-call path (#1803).
+    m.add("FS_SUPPORTS_EXCLUDE_SET", true)?;
+    // Wheel-skew capability flag: the zero-copy `score_block_pairs_fs_arrow`
+    // entry exists. Python's `_score_fs_native_frame` routes to it when set;
+    // old wheels keep the Vec entry (#1803).
+    m.add("FS_SUPPORTS_ARROW", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
@@ -59,6 +67,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
+    m.add_function(wrap_pyfunction!(score::score_block_pairs_fs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_pairwise, m)?)?;
