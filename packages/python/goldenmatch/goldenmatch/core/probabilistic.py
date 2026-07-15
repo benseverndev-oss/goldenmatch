@@ -899,6 +899,20 @@ def train_em(
     )
 
 
+def fs_model_preloaded(mk: MatchkeyConfig) -> bool:
+    """True when :func:`load_or_train_em` will load ``mk.model_path`` from
+    disk and skip EM training entirely (same check it performs internally).
+
+    Callers use this to avoid building the within-block training pairs that
+    only EM consumes: at scale ``build_blocks``'s partition materializes
+    millions of tiny eager frames (the dataset duplicated per blocking pass),
+    which SIGKILLed a 14M-row FS dedupe before scoring started even though
+    the loaded-model path never reads them (issue #1798).
+    """
+    path = getattr(mk, "model_path", None)
+    return bool(path and os.path.exists(path))
+
+
 def load_or_train_em(
     df: pl.DataFrame,
     mk: MatchkeyConfig,

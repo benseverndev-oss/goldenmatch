@@ -2586,9 +2586,34 @@ def _run_dedupe_pipeline(
             if config.blocking is None:
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import load_or_train_em, probabilistic_block_scorer
+            from goldenmatch.core.probabilistic import (
+                fs_model_preloaded,
+                load_or_train_em,
+                probabilistic_block_scorer,
+            )
+            # Resolve the bucket route BEFORE building blocks: the blocks feed
+            # (a) EM training — skipped when the model is preloaded from
+            # mk.model_path, (b) the legacy per-block scorer — skipped on the
+            # bucket route (score_buckets partitions internally, memory-
+            # bounded), and (c) the opt-in bench dump. When all three are out
+            # of play, skip build_blocks entirely: at 14M rows its
+            # partition_by materializes millions of tiny eager frames (the
+            # dataset duplicated per blocking pass) and SIGKILLed the runner
+            # BEFORE scoring ever started — issue #1798.
+            _fs_use_bucket = _use_bucket_scorer(
+                config, collected_df
+            ) or _fs_default_bucket(config, mk)
+            _fs_need_blocks = (
+                bool(_bench_dump_dir)
+                or not _fs_use_bucket
+                or not fs_model_preloaded(mk)
+            )
             # Build blocks first, then train EM on within-block pairs
-            blocks = build_blocks(combined_lf, config.blocking)
+            blocks = (
+                build_blocks(combined_lf, config.blocking)
+                if _fs_need_blocks
+                else []
+            )
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
             # Reuses mk.model_path when set (Splink-style train-once), else trains.
@@ -2608,10 +2633,13 @@ def _run_dedupe_pipeline(
             # (parity asserted in scripts/bench_fs_and_stages.py). EM still
             # samples within-block pairs above; at true scale pair train-once via
             # mk.model_path so EM is skipped on reuse.
-            if _use_bucket_scorer(config, collected_df) or _fs_default_bucket(
-                config, mk
-            ):
+            if _fs_use_bucket:
                 from goldenmatch.backends.score_buckets import score_buckets
+                # Free EM's training blocks before the bucket partition builds
+                # (score_buckets repartitions internally; the bench dump below
+                # is the only remaining reader).
+                if not _bench_dump_dir:
+                    blocks = []
                 pairs = score_buckets(
                     collected_df,
                     config.blocking,
@@ -4073,10 +4101,21 @@ def _run_match_pipeline(
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
             from goldenmatch.core.probabilistic import (
+                fs_model_preloaded,
                 load_or_train_em,
                 score_probabilistic_blocks_batched,
             )
-            blocks = build_blocks(combined_lf, config.blocking)
+            # Bucket route + preloaded model -> blocks are never read (EM is
+            # skipped and score_buckets partitions internally); skip the
+            # full-frame block materialization that OOM'd at 14M (#1798).
+            _fs_use_bucket = config.backend == "bucket" or _fs_default_bucket(
+                config, mk
+            )
+            blocks = (
+                []
+                if _fs_use_bucket and fs_model_preloaded(mk)
+                else build_blocks(combined_lf, config.blocking)
+            )
             # Collect from keys AND passes (multi_pass puts keys in `.passes`).
             blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
             # Reuses mk.model_path when set (Splink-style train-once), else trains.
@@ -4088,8 +4127,10 @@ def _run_match_pipeline(
             # Default-route FS to the memory-bounded bucket scorer when the
             # native FS kernel is available (issue #1792) or backend='bucket'
             # is explicit; else the per-block batched scorer (legacy default).
-            if config.backend == "bucket" or _fs_default_bucket(config, mk):
+            if _fs_use_bucket:
                 from goldenmatch.backends.score_buckets import score_buckets
+                # Free EM's training blocks before the bucket partition builds.
+                blocks = []
                 pairs = score_buckets(
                     combined_df,
                     config.blocking,
@@ -4299,10 +4340,21 @@ def _run_match_scoring_and_output(
                 continue
             from goldenmatch.core.blocker import collect_blocking_fields
             from goldenmatch.core.probabilistic import (
+                fs_model_preloaded,
                 load_or_train_em,
                 score_probabilistic_blocks_batched,
             )
-            blocks = build_blocks(combined_frame, config.blocking)
+            # Bucket route + preloaded model -> blocks are never read (EM is
+            # skipped and score_buckets partitions internally); skip the
+            # full-frame block materialization that OOM'd at 14M (#1798).
+            _fs_use_bucket = config.backend == "bucket" or _fs_default_bucket(
+                config, mk
+            )
+            blocks = (
+                []
+                if _fs_use_bucket and fs_model_preloaded(mk)
+                else build_blocks(combined_frame, config.blocking)
+            )
             blocking_fields = (
                 collect_blocking_fields(config.blocking) if config.blocking else []
             )
@@ -4313,8 +4365,10 @@ def _run_match_scoring_and_output(
             # native FS kernel is available (issue #1792) or backend='bucket'
             # is explicit; else the per-block batched scorer (legacy default).
             # score_buckets is dual-rep -- the pa.Table native passes through.
-            if config.backend == "bucket" or _fs_default_bucket(config, mk):
+            if _fs_use_bucket:
                 from goldenmatch.backends.score_buckets import score_buckets
+                # Free EM's training blocks before the bucket partition builds.
+                blocks = []
                 pairs = score_buckets(
                     combined_native,
                     config.blocking,
