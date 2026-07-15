@@ -142,6 +142,52 @@ def _use_bucket_scorer(config: GoldenMatchConfig, collected_df: Any) -> bool:
     return to_frame(collected_df).height <= _BUCKET_DEFAULT_MAX_ROWS
 
 
+def _fs_default_bucket(config: GoldenMatchConfig, mk: Any) -> bool:
+    """Whether to default-route this probabilistic (Fellegi-Sunter) matchkey to
+    the memory-bounded bucket scorer (issue #1792).
+
+    The bucket backend bounds *frame* memory (two-level hash partition, one pass
+    resident) AND -- with the batched native FS scorer -- scores a whole bucket
+    in one kernel call, so an FS matchkey gets a path that is both memory-bounded
+    and fast at scale (the default/native-FS per-block path OOMs by materializing
+    the full candidate-pair set). Fires ONLY when:
+
+      - ``config.backend`` is None/unset (an EXPLICIT non-bucket backend --
+        polars-direct / ray / duckdb / ... -- keeps its own routing; an explicit
+        ``backend="bucket"`` is already handled by the caller), AND
+      - the native FS kernel is available (``native_enabled("block_scoring")``)
+        AND every field/NE scorer is native-eligible (``_fs_native_eligible``).
+
+    Non-native / model-backed / TF-adjusted matchkeys fall through to the
+    per-block batched scorer (the legacy default route), so this never regresses
+    a workload the native kernel can't accelerate. Escape hatch:
+    ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` forces the legacy per-block route.
+    """
+    if getattr(config, "backend", None) is not None:
+        return False
+    if (
+        os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
+        in _BUCKET_DEFAULT_OPT_OUT
+    ):
+        return False
+    if _columnar_pipeline_enabled():
+        return False
+    # Keep controller-profiled sample runs on the legacy route so auto-config
+    # reads the same block-size signals it always has (mirrors _use_bucket_scorer);
+    # the final committed dedupe runs with no active emitter and gets bucket.
+    from goldenmatch.core.profile_emitter import has_active_emitter
+
+    if has_active_emitter():
+        return False
+    from goldenmatch.core._native_loader import native_enabled
+
+    if not native_enabled("block_scoring"):
+        return False
+    from goldenmatch.core.probabilistic import _fs_native_eligible
+
+    return _fs_native_eligible(mk)
+
+
 def _get_block_scorer(config: GoldenMatchConfig):
     """Return the block scoring function based on configured backend."""
     backend = getattr(config, "backend", None)
@@ -2562,7 +2608,9 @@ def _run_dedupe_pipeline(
             # (parity asserted in scripts/bench_fs_and_stages.py). EM still
             # samples within-block pairs above; at true scale pair train-once via
             # mk.model_path so EM is skipped on reuse.
-            if _use_bucket_scorer(config, collected_df):
+            if _use_bucket_scorer(config, collected_df) or _fs_default_bucket(
+                config, mk
+            ):
                 from goldenmatch.backends.score_buckets import score_buckets
                 pairs = score_buckets(
                     collected_df,
@@ -4037,6 +4085,24 @@ def _run_match_pipeline(
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
+            # Default-route FS to the memory-bounded bucket scorer when the
+            # native FS kernel is available (issue #1792) or backend='bucket'
+            # is explicit; else the per-block batched scorer (legacy default).
+            if config.backend == "bucket" or _fs_default_bucket(config, mk):
+                from goldenmatch.backends.score_buckets import score_buckets
+                pairs = score_buckets(
+                    combined_df,
+                    config.blocking,
+                    mk,
+                    matched_pairs,
+                    n_buckets=config.n_buckets,
+                    target_ids=target_ids,
+                    em_result=em_result,
+                )
+                all_pairs.extend(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
             # Blocks scored in parallel across cores (GIL-releasing FS kernels).
             # Does not mutate matched_pairs; fold the returned pairs in below.
             pairs = score_probabilistic_blocks_batched(
@@ -4243,6 +4309,25 @@ def _run_match_scoring_and_output(
             em_result = load_or_train_em(
                 combined_native, mk, blocks=blocks, blocking_fields=blocking_fields
             )
+            # Default-route FS to the memory-bounded bucket scorer when the
+            # native FS kernel is available (issue #1792) or backend='bucket'
+            # is explicit; else the per-block batched scorer (legacy default).
+            # score_buckets is dual-rep -- the pa.Table native passes through.
+            if config.backend == "bucket" or _fs_default_bucket(config, mk):
+                from goldenmatch.backends.score_buckets import score_buckets
+                pairs = score_buckets(
+                    combined_native,
+                    config.blocking,
+                    mk,
+                    matched_pairs,
+                    n_buckets=config.n_buckets,
+                    target_ids=target_ids,
+                    em_result=em_result,
+                )
+                all_pairs.extend(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
             pairs = score_probabilistic_blocks_batched(
                 blocks, mk, em_result, matched_pairs
             )
