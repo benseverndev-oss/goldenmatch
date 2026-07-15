@@ -12,8 +12,10 @@ make the comparison a lie. Verified again via native_enabled() before timing.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -21,6 +23,29 @@ try:
     import resource  # Unix-only; absent on Windows dev boxes (CI/bench runs on Linux)
 except ImportError:  # pragma: no cover - Windows fallback path
     resource = None
+
+
+def _load_shapes_module():
+    """Import the sibling shapes.py whether run as a script or from elsewhere."""
+    try:
+        import shapes as _shapes  # type: ignore
+        return _shapes
+    except ImportError:
+        pass
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    try:
+        import shapes as _shapes  # type: ignore
+        return _shapes
+    except ImportError:
+        sh_path = here / "shapes.py"
+        spec = importlib.util.spec_from_file_location("shapes", sh_path)
+        if spec is None or spec.loader is None:
+            raise
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
 # Must be set BEFORE importing goldenmatch so the native loader + planner see them.
 os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")  # clean, reproducible CI runs
@@ -55,6 +80,8 @@ def main() -> None:
                     help="hand_built = explicit bucket+native config (default); "
                          "zeroconfig = auto_configure_df controller; "
                          "probabilistic = Fellegi-Sunter auto-config")
+    ap.add_argument("--shape", choices=["person", "biblio"], default="person",
+                    help="fixture shape; selects the hand_built config from shapes.py")
     ap.add_argument("--require-native", action="store_true", default=True)
     ap.add_argument("--allow-pure-python", dest="require_native", action="store_false")
     args = ap.parse_args()
@@ -68,19 +95,15 @@ def main() -> None:
         "status": "error",
         "threshold": args.threshold,
         "mode": args.mode,
+        "shape": args.shape,
     }
     t_start = time.perf_counter()
     try:
         import polars as pl
-        from goldenmatch.config.schemas import (
-            BlockingConfig,
-            BlockingKeyConfig,
-            GoldenMatchConfig,
-            MatchkeyConfig,
-            MatchkeyField,
-        )
         from goldenmatch.core._native_loader import native_enabled, native_module
         from goldenmatch.core.bench import bench_capture
+
+        shapes = _load_shapes_module()
 
         try:
             from goldenmatch import dedupe_df
@@ -128,34 +151,12 @@ def main() -> None:
             # — compound blocking + native Jaro-Winkler scoring — for a fair
             # head-to-head. NOTE: the bucket backend does SINGLE-KEY blocking (one
             # eager bucket pass — it ignores multi_pass `passes`); that's how it
-            # stays fast at scale. So we give it its best single key. On this
-            # fixture, blocking on the stable, rarely-corrupted `postcode` covers
-            # ~0.94 of true pairs with small blocks, vs ~0.48 for surname+dob
-            # (surnames get typo'd). Splink, by contrast, unions 3 blocking rules
-            # (~0.99 coverage) — a real engine difference the benchmark surfaces
-            # rather than hides.
-            config = GoldenMatchConfig(
-                backend="bucket",
-                n_buckets=256,
-                blocking=BlockingConfig(
-                    max_block_size=5000,
-                    skip_oversized=False,  # rely on bucket scorer's hot-block split
-                    keys=[BlockingKeyConfig(fields=["postcode"], transforms=["strip"])],
-                ),
-                matchkeys=[
-                    MatchkeyConfig(
-                        name="person",
-                        type="weighted",
-                        threshold=args.threshold,
-                        rerank=False,  # no cross-encoder -> no HuggingFace download
-                        fields=[
-                            MatchkeyField(field="first_name", scorer="jaro_winkler", weight=0.3, transforms=["lowercase"]),
-                            MatchkeyField(field="surname", scorer="jaro_winkler", weight=0.4, transforms=["lowercase"]),
-                            MatchkeyField(field="dob", scorer="jaro_winkler", weight=0.3),
-                        ],
-                    )
-                ],
-            )
+            # stays fast at scale. So we give it its best single key. Splink, by
+            # contrast, unions multiple blocking rules — a real engine difference the
+            # benchmark surfaces rather than hides. The per-shape config is the single
+            # source of truth in shapes.py (person blocks on stable postcode; biblio
+            # on the composite (venue, year) key).
+            config = shapes.SHAPES[args.shape].gm_hand_built(args.threshold)
 
             t0 = time.perf_counter()
             with bench_capture() as bench:
@@ -195,6 +196,27 @@ def main() -> None:
             for mk in cfg.get_matchkeys():
                 if getattr(mk, "type", None) == "weighted":
                     mk.rerank = False
+            # FS-native per-matchkey eligibility telemetry (spec section 8): count
+            # how many resolved matchkeys the native FS kernel could score. Under
+            # the numpy lane (GOLDENMATCH_FS_NATIVE=0) _fs_native_enabled()
+            # short-circuits, so _fs_native_eligible is False for every mk -> 0.
+            # Guarded so a future internal rename degrades to None, not a crash.
+            try:
+                from goldenmatch.core.probabilistic import (
+                    _fs_native_eligible,
+                    _fs_native_enabled,
+                )
+
+                mks = cfg.get_matchkeys()
+                result["fs_matchkeys_total"] = len(mks)
+                result["fs_native_eligible_matchkeys"] = sum(
+                    1 for mk in mks if _fs_native_eligible(mk)
+                )
+                result["fs_native_gate"] = bool(_fs_native_enabled())
+            except (ImportError, AttributeError):
+                result["fs_matchkeys_total"] = None
+                result["fs_native_eligible_matchkeys"] = None
+                result["fs_native_gate"] = None
             t0 = time.perf_counter()
             with bench_capture() as bench:
                 ded = dedupe_df(df, config=cfg)

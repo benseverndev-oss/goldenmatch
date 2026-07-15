@@ -42,7 +42,8 @@ def evaluate(pred: Path, truth: Path) -> dict:
         CREATE TEMP TABLE cont AS
         SELECT p.pred_cluster_id AS pc, t.cluster_id AS tc, count(*) AS n
         FROM read_parquet('{pred}') p
-        JOIN read_parquet('{truth}') t ON p.record_id = t.record_id
+        JOIN read_parquet('{truth}') t
+          ON CAST(p.record_id AS VARCHAR) = CAST(t.record_id AS VARCHAR)
         GROUP BY 1, 2;
         CREATE TEMP TABLE psize AS SELECT pc, sum(n) AS a FROM cont GROUP BY pc;
         CREATE TEMP TABLE tsize AS SELECT tc, sum(n) AS b FROM cont GROUP BY tc;

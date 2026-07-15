@@ -26,11 +26,38 @@ import argparse
 import importlib.util
 import json
 import os
-import resource
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+try:
+    import resource  # Unix-only; absent on Windows dev boxes (CI/bench runs on Linux)
+except ImportError:  # pragma: no cover - Windows fallback path
+    resource = None
+
+
+def _load_shapes_module():
+    """Import the sibling shapes.py whether run as a script or from elsewhere."""
+    try:
+        import shapes as _shapes  # type: ignore
+        return _shapes
+    except ImportError:
+        pass
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    try:
+        import shapes as _shapes  # type: ignore
+        return _shapes
+    except ImportError:
+        sh_path = here / "shapes.py"
+        spec = importlib.util.spec_from_file_location("shapes", sh_path)
+        if spec is None or spec.loader is None:
+            raise
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
 
 def _load_datasets_module():
@@ -56,7 +83,9 @@ def _load_datasets_module():
         return mod
 
 
-def _peak_rss_mb() -> float:
+def _peak_rss_mb() -> float | None:
+    if resource is None:  # Windows dev box: no rusage, perf RSS only meaningful on CI.
+        return None
     return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
 
 
@@ -195,32 +224,6 @@ _SETTINGS_BY_DATASET = {
 }
 
 
-def _default_person_settings(s):
-    """Legacy --input person fixture spec (generate_fixture columns:
-    record_id, first_name, surname, dob, postcode, city)."""
-    SettingsCreator = s["SettingsCreator"]
-    block_on = s["block_on"]
-    cl = s["cl"]
-    settings = SettingsCreator(
-        link_type="dedupe_only",
-        unique_id_column_name="record_id",
-        blocking_rules_to_generate_predictions=[
-            block_on("surname", "substr(dob, 1, 4)"),
-            block_on("first_name", "substr(dob, 1, 4)"),
-            block_on("postcode"),
-        ],
-        comparisons=[
-            cl.JaroWinklerAtThresholds("first_name", [0.9, 0.7]),
-            cl.JaroWinklerAtThresholds("surname", [0.9, 0.7]),
-            cl.DamerauLevenshteinAtThresholds("dob", [1, 2]),
-            cl.DamerauLevenshteinAtThresholds("postcode", [1, 2]),
-            cl.ExactMatch("city"),
-        ],
-    )
-    training_rules = [block_on("surname", "dob"), block_on("first_name", "dob")]
-    return settings, training_rules
-
-
 def _run_splink_linker(
     settings, training_rules, input_view, db_api, s, args, result
 ) -> None:
@@ -294,13 +297,18 @@ def main() -> None:
                     help="write {record_id, cluster_id} truth parquet (dataset mode)")
     ap.add_argument("--threshold", type=float, default=0.95)
     ap.add_argument("--max-pairs", type=float, default=2e6, help="u-estimation sample size")
+    ap.add_argument("--shape", choices=["person", "biblio"], default="person",
+                    help="fixture shape (--input mode); selects settings from shapes.py")
     args = ap.parse_args()
 
     if args.dataset is None and args.input is None:
         ap.error("one of --input or --dataset is required")
 
     # Splink import: a missing competitor engine is a SKIP, never a crash.
+    # The bare name `splink` is imported explicitly (the other imports bind
+    # submodules/symbols, not the top-level package) so we can record __version__.
     try:
+        import splink
         import splink.comparison_library as cl
         from splink import DuckDBAPI, Linker, SettingsCreator, block_on
     except ImportError as e:
@@ -321,6 +329,8 @@ def main() -> None:
         "rows_requested": args.rows,
         "status": "error",
         "threshold": args.threshold,
+        "shape": args.shape,
+        "splink_version": getattr(splink, "__version__", "?"),
     }
     if args.dataset is not None:
         result["dataset"] = args.dataset
@@ -374,8 +384,11 @@ def main() -> None:
                 )
                 return
         else:
+            # --input fixture mode: settings come from the shape registry (single
+            # source of truth). person == shapes._person_splink_settings.
             input_path = args.input
-            settings, training_rules = _default_person_settings(s)
+            shapes = _load_shapes_module()
+            settings, training_rules = shapes.SHAPES[args.shape].splink_settings(s)
 
         # Register the parquet as a DuckDB view so it's read lazily (no pandas
         # materialization at scale). A bare path string gets templated raw into
