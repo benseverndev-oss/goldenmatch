@@ -115,6 +115,19 @@ would silently run native and the two FS lanes would be native-vs-native, guttin
 the "numpy fallback vs native kernel" comparison. The `zeroconfig` lane inherits
 whatever the controller picks (default native) and does not force the env.
 
+**Both FS lanes pass `--fs-basic-scorers`.** Autoconfig's probabilistic path picks
+specialized name scorers (`given_name_aliased_jw` for first_name,
+`name_freq_weighted_jw` for surname) that are NOT in the native FS kernel's set
+(`{exact, jaro_winkler, levenshtein, token_sort}`), so `_fs_native_eligible()`
+declines the matchkey and the `gm_probabilistic_native` lane silently runs numpy —
+identical to `gm_probabilistic`. The flag rewrites any field scorer outside the
+kernel set to `jaro_winkler`, which (a) makes the matchkey native-eligible so the
+native lane actually engages the Rust kernel and the two lanes form a real matched
+numpy-vs-native pair, and (b) matches Splink's own JaroWinkler-based FS model for a
+more apples-to-apples comparison. The rewrite happens before the eligibility
+telemetry is counted, and the `(field, old_scorer)` pairs are recorded on
+`fs_basic_scorers_rewritten`.
+
 Lanes are selectable at the workflow level (`lanes` input), so any subset can be
 dispatched. `splink` is not privileged in code — it is just another lane — but
 the results doc always reports it as the reference column.
