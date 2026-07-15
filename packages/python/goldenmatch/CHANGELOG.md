@@ -4,7 +4,7 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
-## [Unreleased]
+## [3.3.0] - 2026-07-14
 
 ### Added
 - **Negative evidence on Fellegi-Sunter (`type: probabilistic`) matchkeys**
@@ -57,6 +57,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   **0.707 → 0.740** (Splink: 0.686) — the upgraded conversion beats native
   Splink on all three pairs.
 
+- **Fan-out / negative-evidence upgrade lever** (`fan_out`, in the default
+  `import-splink --upgrade` lever set, between `distance_thresholds` and
+  `calibration`): detects unused identity-grade columns (phone/email/id-named,
+  high-cardinality, non-matchkey, non-blocking) whose disagreement contradicts
+  pairs the imported model would confidently merge (posterior >= 0.9), and —
+  when the contradiction rate clears the risk gate (>= 2%, >= 10 firing
+  pairs) — adds the column as `negative_evidence` with posterior-weighted
+  EM-shape weights written into the upgraded model (`__ne__<field>` entries).
+  Also tunes `golden_rules.max_cluster_size = max(10, 2 * reference max
+  cluster size)` from `--labels` (preferred) or `--splink-clusters`, so
+  `auto_split` catches mid-size homonym snowballs the static default (100)
+  ignores on person-shaped data. The calibration lever is now NE-aware
+  (`fs_weight_range` + per-pair NE contributions; its warn+skip tripwire is
+  removed). Wild-bench: no regressions; `model_h50k` improved 0.7396 -> 0.7421
+  on guard tuning alone.
+- **Native negative-evidence scoring** (`goldenmatch-native >= 0.1.15`): the
+  Rust kernels now score FS negative evidence — `score_block_pairs_fs` AND the
+  fused `match_fused_fs`, which also gained custom `level_thresholds` banding
+  (full kernel parity). Detection is capability-gated (`FS_SUPPORTS_NE`,
+  `FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS`), so older wheels keep the pure-Python
+  fallback with no behavior change; NE-bearing matchkeys previously always
+  took the pure-Python path. The fused path declines `derive_from` NE (its
+  raw-columns entry never materializes derived columns).
+
 ### Fixed
 - **Threshold calibration on imported Splink models**: the calibration lever
   now re-estimates the within-block match rate from the model's likelihood
@@ -65,6 +89,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   orders of magnitude below the post-blocking rate the percentile math
   expects. Trusting it cut at the extreme top of the score distribution and
   collapsed recall (F1 0.482 → 0.157 on the bench pair above).
+- **Tuned `max_cluster_size` survives the YAML loader round-trip**: the
+  config loader's `golden_rules` normalization swept `max_cluster_size` into
+  `field_rules` (the "set programmatically, never via YAML" assumption went
+  stale when the fan-out lever started writing it), so `import-splink
+  --upgrade` output failed to reload. It is now a recognized top-level
+  golden_rules key.
 
 ## [3.2.0] - 2026-07-13
 

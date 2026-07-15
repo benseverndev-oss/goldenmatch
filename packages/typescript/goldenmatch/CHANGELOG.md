@@ -4,7 +4,7 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-14
 
 ### Added
 - **Fellegi-Sunter negative evidence** (full mirror of Python #1764): the FS API surface now honors `negative_evidence` on probabilistic matchkeys end-to-end (`trainEM` -> `scoreProbabilistic` -> validation -> fallback). `trainEM` learns each penalty-bits-free NE field as a constrained 2-state dimension (separate NE matrix, u from the same random-pair sample, full likelihood inside the EM loop, `[wFired, 0.0]` clamp applied at STORAGE only under `__ne__<field>`); scoring (`scoreProbabilistic` / `scoreProbabilisticPair`) adds the fired weight (or `-abs(penalty_bits)` for the fixed override) and normalizes against the NE-aware `fsWeightRange` envelope; `validateEmResultFor` requires a 2-entry `__ne__<field>` model entry per EM-learned NE field; the tiny-dataset fallback ships Python's exact NE entries (`[-3.0, 0.0]`). New exports: `neFired`, `fsWeightRange`, `NegativeEvidenceUnsupportedError`.
