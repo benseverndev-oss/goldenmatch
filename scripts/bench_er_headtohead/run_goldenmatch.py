@@ -196,6 +196,27 @@ def main() -> None:
             for mk in cfg.get_matchkeys():
                 if getattr(mk, "type", None) == "weighted":
                     mk.rerank = False
+            # FS-native per-matchkey eligibility telemetry (spec section 8): count
+            # how many resolved matchkeys the native FS kernel could score. Under
+            # the numpy lane (GOLDENMATCH_FS_NATIVE=0) _fs_native_enabled()
+            # short-circuits, so _fs_native_eligible is False for every mk -> 0.
+            # Guarded so a future internal rename degrades to None, not a crash.
+            try:
+                from goldenmatch.core.probabilistic import (
+                    _fs_native_eligible,
+                    _fs_native_enabled,
+                )
+
+                mks = cfg.get_matchkeys()
+                result["fs_matchkeys_total"] = len(mks)
+                result["fs_native_eligible_matchkeys"] = sum(
+                    1 for mk in mks if _fs_native_eligible(mk)
+                )
+                result["fs_native_gate"] = bool(_fs_native_enabled())
+            except (ImportError, AttributeError):
+                result["fs_matchkeys_total"] = None
+                result["fs_native_eligible_matchkeys"] = None
+                result["fs_native_gate"] = None
             t0 = time.perf_counter()
             with bench_capture() as bench:
                 ded = dedupe_df(df, config=cfg)

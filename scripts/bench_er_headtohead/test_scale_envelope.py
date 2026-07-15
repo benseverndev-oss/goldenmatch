@@ -128,6 +128,25 @@ def test_run_goldenmatch_handbuilt_biblio(tmp_path):
     assert r["shape"] == "biblio"
 
 
+def test_probabilistic_numpy_lane_zero_native_eligible(tmp_path):
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="person")
+    out, pred = tmp_path / "r.json", tmp_path / "r.pred.parquet"
+    e = _env(); e["GOLDENMATCH_FS_NATIVE"] = "0"     # numpy lane
+    rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
+        "--threshold", "0.85", "--mode", "probabilistic", "--shape", "person",
+        "--allow-pure-python"],  # REQUIRED: native not built locally; without it
+                                 # GOLDENMATCH_NATIVE=1 makes native_enabled() RAISE
+        env=e).returncode
+    assert rc == 0
+    r = json.loads(out.read_text())
+    assert r["status"] == "ok"
+    assert r["fs_native_eligible_matchkeys"] == 0     # forced off (FS_NATIVE=0)
+    assert r["fs_matchkeys_total"] >= 1
+
+
 def test_run_splink_shape_biblio(tmp_path):
     gen = _load("generate_fixture")
     fx, tr = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
