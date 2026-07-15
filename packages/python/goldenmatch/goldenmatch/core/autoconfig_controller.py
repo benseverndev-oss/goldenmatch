@@ -30,6 +30,8 @@ from goldenmatch.core.complexity_profile import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from goldenmatch.core.autoconfig_history import HistoryEntry
     from goldenmatch.distributed.record_store import PreparedRecordStore
 from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
@@ -964,15 +966,17 @@ class AutoConfigController:
         # precision-collapse detector; when the rule fired this run, commit
         # must not prefer an entry the rule would still flag (mirrors
         # precision_collapse_floor). Otherwise pass None (byte-identical).
-        _demote_suspect = None
+        _demote_suspect: Callable[[HistoryEntry], bool] | None = None
         if any(
             d.rule_name == "precision_anchor_threshold_raise"
             for d in history.decisions
         ):
             from goldenmatch.core.autoconfig_rules import precision_anchor_would_fire
 
-            def _demote_suspect(e: HistoryEntry) -> bool:
+            def _demote_precision_suspect(e: HistoryEntry) -> bool:
                 return precision_anchor_would_fire(e.config, e.profile, ctx)
+
+            _demote_suspect = _demote_precision_suspect
         best_entry = history.pick_committed(
             precision_collapse_floor=0.9,
             use_zero_label_confidence=_zero_label_commit_enabled(),
