@@ -1006,6 +1006,98 @@ class TestModelReuseSkipsBuildBlocks:
         assert calls["n"] == 2 * n_after_first
 
 
+class TestBoundedRowLookup:
+    """Epic #1803 item 4: EM trainers must materialize row dicts ONLY for the
+    sampled pair ids, not the whole dataframe. At 10M+ rows the full-df
+    row_lookup dict was the dominant training-memory cost while the samplers
+    only ever touch a few thousand rows.
+    """
+
+    def test_row_lookup_for_pairs_returns_only_sampled_ids(self):
+        from goldenmatch.core.probabilistic import _row_lookup_for_pairs
+        df = pl.DataFrame({
+            "__row_id__": list(range(100)),
+            "first_name": [f"n{i}" for i in range(100)],
+        })
+        lookup = _row_lookup_for_pairs(
+            df, ["first_name"], [[(1, 2), (5, 9)], [(2, 40)]]
+        )
+        assert set(lookup) == {1, 2, 5, 9, 40}
+        assert lookup[40]["first_name"] == "n40"
+
+    def test_train_em_uses_bounded_lookup(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+
+        seen = {}
+        real = p._row_lookup_for_pairs
+
+        def _spy(df, cols, pairs_lists):
+            lookup = real(df, cols, pairs_lists)
+            seen["n_ids"] = len(lookup)
+            return lookup
+
+        monkeypatch.setattr(p, "_row_lookup_for_pairs", _spy)
+        # 4000 rows, but only n_sample_pairs=20 pairs sampled -> the lookup
+        # must hold far fewer rows than the frame.
+        df = pl.DataFrame({
+            "__row_id__": list(range(4000)),
+            "first_name": [f"n{i}" for i in range(4000)],
+            "last_name": [f"l{i % 7}" for i in range(4000)],
+            "zip": [f"{i % 5:05d}" for i in range(4000)],
+        })
+        p.train_em(df, _make_probabilistic_mk(), n_sample_pairs=20,
+                   blocking_fields=["zip"])
+        assert seen["n_ids"] > 0
+        assert seen["n_ids"] < 1000  # far below df height
+
+    def test_train_em_bounded_lookup_model_unchanged(self):
+        # Same fixture + seed as the historical full-lookup path; sampling
+        # depends only on row ids + blocks, so the trained model must be
+        # identical. Guarded by the wider suites (nlevel/ne/monotonicity)
+        # asserting exact m/u values on fixtures.
+        from goldenmatch.core.probabilistic import train_em
+        df = _make_dedupe_df()
+        em1 = train_em(df, _make_probabilistic_mk(), blocking_fields=["zip"])
+        em2 = train_em(df, _make_probabilistic_mk(), blocking_fields=["zip"])
+        assert em1.match_weights == em2.match_weights
+
+    def test_estimate_m_from_labels_bounded(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+
+        seen = {}
+        real = p._row_lookup_for_pairs
+
+        def _spy(df, cols, pairs_lists):
+            lookup = real(df, cols, pairs_lists)
+            seen["n_ids"] = len(lookup)
+            return lookup
+
+        monkeypatch.setattr(p, "_row_lookup_for_pairs", _spy)
+        df = pl.DataFrame({
+            "__row_id__": list(range(4000)),
+            "first_name": ["John", "Jon"] * 2000,
+            "last_name": ["Smith", "Smith"] * 2000,
+            "zip": [f"{i % 5:05d}" for i in range(4000)],
+        })
+        em = p.estimate_m_from_labels(
+            df, _make_probabilistic_mk(), [(0, 1), (2, 3)],
+            n_sample_pairs=20, blocking_fields=["zip"],
+        )
+        assert em.iterations == 0
+        assert seen["n_ids"] < 1000
+
+    def test_estimate_m_from_labels_still_drops_unknown_ids(self):
+        # The membership filter used to ride the full row_lookup; it must
+        # keep dropping label ids absent from the frame.
+        from goldenmatch.core.probabilistic import estimate_m_from_labels
+        df = _supervised_df()
+        em = estimate_m_from_labels(
+            df, _make_probabilistic_mk(),
+            [(0, 1), (99, 100)], blocking_fields=["zip"],
+        )
+        assert em.converged is True  # (99,100) dropped, (0,1) used
+
+
 # ── Supervised m-training (Phase 1b) ───────────────────────────────────────
 
 

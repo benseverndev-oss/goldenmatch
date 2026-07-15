@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -412,6 +413,35 @@ def _build_continuous_matrix(
     return matrix
 
 
+def _row_lookup_for_pairs(
+    df: pl.DataFrame,
+    cols: list[str],
+    pairs_lists: Sequence[Sequence[tuple[int, int]]],
+) -> dict[int, dict]:
+    """Row dicts for ONLY the ids appearing in the given pair lists.
+
+    The EM trainers used to materialize the ENTIRE dataframe as Python dicts
+    before sampling, while the samplers only ever touch a few thousand rows —
+    the dominant training-memory cost at 10M+ rows (epic #1803). Sampling
+    depends only on ``__row_id__`` + blocks, so restricting the lookup to the
+    sampled ids leaves the trained model byte-identical.
+    """
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
+    ids: set[int] = set()
+    for pairs in pairs_lists:
+        for a, b in pairs:
+            ids.add(a)
+            ids.add(b)
+    lookup: dict[int, dict] = {}
+    if not ids:
+        return lookup
+    frame = _tf_w6(df).filter_in("__row_id__", list(ids))
+    for row in frame.select_dicts(["__row_id__"] + cols):
+        lookup[row["__row_id__"]] = row
+    return lookup
+
+
 def _sample_pairs(
     df: pl.DataFrame,
     n_pairs: int = 10000,
@@ -655,7 +685,6 @@ def train_em(
     if blocking_fields is None:
         blocking_fields = []
 
-    from goldenmatch.core.frame import to_frame as _tf_w6
 
     ne_fields_em = _em_ne_fields(mk)
     _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
@@ -670,10 +699,6 @@ def train_em(
     for ne in (mk.negative_evidence or []):
         if ne.field not in cols:
             cols.append(ne.field)
-    row_lookup: dict[int, dict] = {}
-    for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
-        row_lookup[row["__row_id__"]] = row
-
     # ── Step 1: Estimate u from RANDOM pairs (Splink approach) ──
     # Random pairs are overwhelmingly non-matches, so the observed
     # level distribution approximates u directly. No EM needed for u.
@@ -681,6 +706,17 @@ def train_em(
     if len(random_pairs) < 10:
         logger.warning("Too few pairs (%d) for EM training", len(random_pairs))
         return _fallback_result(mk)
+
+    # Sample the m-estimation pairs up front too, so the row-dict lookup below
+    # can be restricted to the sampled ids (#1803 item 4 — the full-df dict was
+    # the dominant training-memory cost at 10M+ rows). Sampling reads only
+    # ``__row_id__`` / the blocks, never the lookup, so the sampled pairs — and
+    # the trained model — are unchanged by this reordering.
+    if blocks:
+        blocked_pairs = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
+    else:
+        blocked_pairs = random_pairs
+    row_lookup = _row_lookup_for_pairs(df, cols, [random_pairs, blocked_pairs])
 
     random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
     u_probs = {}
@@ -711,12 +747,11 @@ def train_em(
     random_ne_matrix = _build_ne_matrix(random_pairs, row_lookup, mk)
     u_probs_ne = _ne_u_probs_from_matrix(random_ne_matrix, ne_fields_em)
 
-    # ── Step 2: Get blocked pairs for m estimation ──
+    # ── Step 2: Blocked pairs for m estimation (sampled in Step 1's prelude) ──
+    pairs = blocked_pairs
     if blocks:
-        pairs = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
         logger.info("EM training m on %d within-block pairs", len(pairs))
     else:
-        pairs = random_pairs
         logger.info("No blocks provided; using random pairs for m estimation")
 
     if len(pairs) < 10:
@@ -1006,15 +1041,14 @@ def estimate_m_from_labels(
     for ne in (mk.negative_evidence or []):
         if ne.field not in cols:
             cols.append(ne.field)
-    row_lookup: dict[int, dict] = {}
-    for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
-        row_lookup[row["__row_id__"]] = row
-
     # Keep only labels whose ids are present and distinct; canonicalize + dedup.
+    # Membership rides the (cheap, ints-only) id column — the row dicts are
+    # materialized below for ONLY the sampled/labeled ids (#1803 item 4).
+    valid_ids = set(_tf_w6(df).column("__row_id__").to_list())
     valid = {
         (min(a, b), max(a, b))
         for a, b in labels
-        if a != b and a in row_lookup and b in row_lookup
+        if a != b and a in valid_ids and b in valid_ids
     }
     if not valid:
         raise ValueError(
@@ -1030,6 +1064,8 @@ def estimate_m_from_labels(
 
     # ── u from RANDOM pairs (mirrors train_em Step 1) ──
     random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
+    # Row dicts for ONLY the labeled + sampled ids (#1803 item 4).
+    row_lookup = _row_lookup_for_pairs(df, cols, [label_pairs, random_pairs])
     u_probs: dict[str, list[float]] = {}
     u_probs_ne: dict[str, list[float]] = {}
     if len(random_pairs) >= 10:
@@ -1237,18 +1273,15 @@ def train_em_continuous(
     if blocking_fields is None:
         blocking_fields = []
 
-    from goldenmatch.core.frame import to_frame as _tf_w6
 
     cols = [f.field for f in mk.fields if f.field != "__record__"]
-    row_lookup: dict[int, dict] = {}
-    for row in _tf_w6(df).select_dicts(["__row_id__"] + cols):
-        row_lookup[row["__row_id__"]] = row
-
     if blocks:
         pairs = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
         logger.info("Continuous EM training on %d within-block pairs", len(pairs))
     else:
         pairs = _sample_pairs(df, n_sample_pairs, seed)
+    # Row dicts for ONLY the sampled ids (#1803 item 4).
+    row_lookup = _row_lookup_for_pairs(df, cols, [pairs])
 
     if len(pairs) < 10:
         logger.warning("Too few pairs for continuous EM")
