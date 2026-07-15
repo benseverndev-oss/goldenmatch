@@ -1222,7 +1222,11 @@ def rule_precision_anchor_threshold_raise(
     - An exact matchkey with a field whose ``ctx.column_priors`` entry has
       ``identity_score >= 0.75`` coexists (the strong-identifier recall
       anchor that makes the raise safe; without it the raise could cost
-      recall and the rule must not fire).
+      recall and the rule must not fire). This assumes the anchor is
+      disjoint from the over-merging name columns: an exact matchkey on
+      the name column itself would satisfy the check, but in practice the
+      priors classifier does not score name columns >= 0.75, which is
+      what keeps the assumption safe.
     - ANY of the weighted matchkey's name fields carries ``tf_freqs`` (the
       #1318 downweight must be live for the raise to separate same-name
       strangers; identical names WITHOUT the table score 1.0 and clear any
@@ -1378,7 +1382,7 @@ DEFAULT_RULES = [
     rule_no_matches,                       # 13 tuning: nothing matches
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
     rule_select_probabilistic_matchkey,    # NEW #491: wide fuzzy-only weighted mk + recall-limited + no exact anchor -> probabilistic
-    rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept second-to-last)
+    rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept after the structural rules; only the precision-raise + sparse-expand threshold rules follow)
     rule_precision_anchor_threshold_raise, # 17 NEW #1319: raise name-only weighted threshold on the over-merge shape (before sparse-expand's loosen)
     rule_sparse_match_expand,              # 16 NEW v1.10: lower threshold proxy for sparse datasets (kept last)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
