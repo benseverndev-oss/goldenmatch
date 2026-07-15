@@ -103,7 +103,7 @@ def main() -> None:
     }
     t_start = time.perf_counter()
     try:
-        import polars as pl
+        import pyarrow.parquet as pq
         from goldenmatch.core._native_loader import native_enabled, native_module
         from goldenmatch.core.bench import bench_capture
 
@@ -144,8 +144,8 @@ def main() -> None:
             )
 
         t0 = time.perf_counter()
-        df = pl.read_parquet(args.input)
-        result["rows_loaded"] = df.height
+        df = pq.read_table(args.input)
+        result["rows_loaded"] = df.num_rows
         load_wall = time.perf_counter() - t0
 
         if args.mode == "hand_built":
@@ -279,7 +279,7 @@ def main() -> None:
                 # REAL record_id as a STRING column (mirrors run_panel.py:83-108).
                 # The real benchmark datasets carry STRING record_ids (historical_50k
                 # Q-ids, dblp_acm 'dblp:123', febrl3 'rec-123-org').
-                rid = df["record_id"].to_list()
+                rid = df.column("record_id").to_pylist()
                 rids, cids = [], []
                 for cid, c in clusters.items():
                     members = c["members"] if isinstance(c, dict) else c.members
@@ -310,8 +310,8 @@ def main() -> None:
             # Splink's `count(distinct cluster_id)`. multi-member tracked separately.
             cluster_count=metrics.get("cluster_count"),
             multi_member_clusters=metrics.get("multi_member_cluster_count"),
-            duplicate_rows_found=getattr(getattr(ded, "dupes", None), "height", None),
-            unique_records=getattr(getattr(ded, "unique", None), "height", None),
+            duplicate_rows_found=getattr(getattr(ded, "dupes", None), "num_rows", None),
+            unique_records=getattr(getattr(ded, "unique", None), "num_rows", None),
             bench=bench_blob,
         )
     except MemoryError as e:

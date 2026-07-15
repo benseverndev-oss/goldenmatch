@@ -52,6 +52,18 @@ def _import_sibling(name: str):
         return mod
 
 
+def _truth_string_record_id(truth):
+    """Cast the truth table's record_id column to string (join key parity with
+    the string-keyed pred parquets)."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    idx = truth.schema.get_field_index("record_id")
+    return truth.set_column(
+        idx, "record_id", pc.cast(truth.column("record_id"), pa.string())
+    )
+
+
 def _gm_predictions_path(records, truth, gm_pred_path: Path, dump_dir: Path):
     """Run the GoldenMatch probabilistic path, write predictions, return the
     (candidate_recordid, emitted_recordid) pair sets in dataset record_id space.
@@ -60,7 +72,6 @@ def _gm_predictions_path(records, truth, gm_pred_path: Path, dump_dir: Path):
     an `error` row for the dataset.
     """
     import numpy as np
-    import polars as pl  # noqa: F401  (ensures polars import errors surface here)
     import pyarrow as pa
     import pyarrow.parquet as pq
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
@@ -70,7 +81,7 @@ def _gm_predictions_path(records, truth, gm_pred_path: Path, dump_dir: Path):
     except ImportError:  # older layouts expose this on _api
         from goldenmatch._api import dedupe_df
 
-    rid = records["record_id"].to_list()
+    rid = records.column("record_id").to_pylist()
 
     dump_dir.mkdir(parents=True, exist_ok=True)
     os.environ["GOLDENMATCH_BENCH_DUMP_PAIRS"] = str(dump_dir)
@@ -119,11 +130,11 @@ def _remap_pairs(path: Path, rid: list) -> set:
     """
     if not path.exists():
         return set()
-    import polars as pl
+    import pyarrow.parquet as pq
 
-    df = pl.read_parquet(path)
+    df = pq.read_table(path)
     out: set = set()
-    for a, b in zip(df["a"].to_list(), df["b"].to_list()):
+    for a, b in zip(df.column("a").to_pylist(), df.column("b").to_pylist()):
         ra, rb = rid[a], rid[b]
         # canonical (min, max) in string space (record_ids may be int or str).
         sa, sb = str(ra), str(rb)
@@ -198,7 +209,7 @@ def _run_splink(name, records, out_dir, truth_path, threshold):
             sys.executable,
             str(_HERE / "run_splink.py"),
             "--dataset", name,
-            "--rows", str(records.height),
+            "--rows", str(records.num_rows),
             "--out", str(splink_json),
             "--pred-out", str(splink_pred),
             "--threshold", str(threshold),
@@ -349,13 +360,13 @@ def main() -> None:
                 )
             continue
 
-        import polars as pl
+        import pyarrow.parquet as pq
 
         ds_dir = out_dir / name
         ds_dir.mkdir(parents=True, exist_ok=True)
         truth_path = ds_dir / "truth.parquet"
         # Truth written in string record_id space to join the string-keyed preds.
-        truth.with_columns(pl.col("record_id").cast(pl.Utf8)).write_parquet(truth_path)
+        pq.write_table(_truth_string_record_id(truth), truth_path)
 
         if "goldenmatch" in engines:
             rows.append(

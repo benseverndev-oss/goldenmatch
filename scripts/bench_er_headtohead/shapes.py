@@ -110,7 +110,7 @@ def _person_splink_settings(s):
 # ---------------------------------------------------------------------------
 # Block-key choice: the 2-field COMPOSITE (venue, year). VERIFIED supported by
 # the bucket single-key path -- blocker._build_block_key_expr / derive_block_key
-# concatenate multiple fields into one "__block_key__" via pl.concat_str, so a
+# concatenate multiple fields into one "__block_key__" via a concat_str expr, so a
 # BlockingKeyConfig(fields=["venue","year"]) is transparent to the eager bucket
 # pass (no single-column fallback needed). C = N_VENUE * N_YEAR ~ 210K, mirroring
 # person's ~200K distinct blocks.

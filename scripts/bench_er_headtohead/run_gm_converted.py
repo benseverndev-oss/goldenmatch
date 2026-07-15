@@ -120,7 +120,7 @@ def main() -> None:
         return
 
     try:
-        import polars as pl
+        import pyarrow.parquet as pq
 
         from goldenmatch.config.from_splink import SplinkConversionError, from_splink
         from goldenmatch.core.bench import bench_capture
@@ -166,8 +166,8 @@ def main() -> None:
                 mk.rerank = False
 
         t0 = time.perf_counter()
-        df = pl.read_parquet(args.input)
-        result["rows_loaded"] = df.height
+        df = pq.read_table(args.input)
+        result["rows_loaded"] = df.num_rows
         load_wall = time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -183,7 +183,7 @@ def main() -> None:
             import pyarrow.parquet as pq
 
             clusters = getattr(ded, "clusters", None) or {}
-            rid = df["record_id"].to_list()
+            rid = df.column("record_id").to_pylist()
             rids, cids = [], []
             for cid, c in clusters.items():
                 members = c["members"] if isinstance(c, dict) else c.members
