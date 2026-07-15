@@ -308,3 +308,48 @@ def test_eval_join_casts_record_id_dtype_mismatch(tmp_path):
     m = evaluate.evaluate(pred, truth)
     assert m["n_records_evaluated"] == 6          # the join matched every record
     assert m["pairwise"]["f1"] == 1.0             # identical clustering scores perfectly
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: native-gate refusal lock (test-only)
+# ---------------------------------------------------------------------------
+def test_hand_built_refuses_without_pure_python_flag(tmp_path):
+    # run_goldenmatch.py --mode hand_built WITHOUT --allow-pure-python must REFUSE
+    # (non-zero exit, no `ok` result) when the native runtime is absent -- the
+    # existing guard (run_goldenmatch.py:131-140), locked under test. If native
+    # IS built in this environment the guard passes and the run succeeds, so we
+    # detect that (belt-and-suspenders) and skip the assertion.
+    import pytest
+
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="person")
+
+    # Belt-and-suspenders: probe once WITH the flag. If the runner returns ok with
+    # native active, the environment has native built -> the refusal path can't be
+    # exercised, so skip.
+    probe_out = tmp_path / "probe.json"
+    probe_pred = tmp_path / "probe.pred.parquet"
+    probe_rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(probe_out),
+        "--pred-out", str(probe_pred), "--threshold", "0.85",
+        "--mode", "hand_built", "--shape", "person", "--allow-pure-python"],
+        env=_env()).returncode
+    if probe_rc == 0 and probe_out.exists():
+        probe = json.loads(probe_out.read_text())
+        if probe.get("status") == "ok" and probe.get("native_loaded"):
+            pytest.skip("native runtime is built in this environment; "
+                        "the pure-Python refusal path cannot be exercised")
+
+    # Native absent (the local / normal-pytest reality): refuse without the flag.
+    out = tmp_path / "r.json"
+    pred = tmp_path / "r.pred.parquet"
+    rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out),
+        "--pred-out", str(pred), "--threshold", "0.85",
+        "--mode", "hand_built", "--shape", "person"],  # NO --allow-pure-python
+        env=_env()).returncode
+    assert rc != 0                                   # refused -> non-zero exit
+    if out.exists():
+        r = json.loads(out.read_text())
+        assert r.get("status") != "ok"              # never reports a pure-Python number as ok
