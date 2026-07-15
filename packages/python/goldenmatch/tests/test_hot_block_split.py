@@ -126,6 +126,36 @@ class TestHotBlockSplit:
         assert results[0].block_key == "19382"
         assert results[0].materialize().native.height == 3
 
+    def test_arrow_backed_frame_auto_splits(self):
+        """Auto-split must work on an ARROW-native (pa.Table) frame.
+
+        Regression for #1790: `_auto_split_block` used raw `block_df.columns`,
+        which on a `pa.Table` returns ChunkedArrays (not names) ->
+        AttributeError -> the split silently no-op'd (caught by the caller's
+        try/except) and the mega-block was scored whole -> OOM at scale. Every
+        OTHER test here passes `df.lazy()` (polars-backed), which masked the
+        arrow-path crash. Exercise the seam Frame (arrow) path explicitly.
+        """
+        import pyarrow as pa
+        from goldenmatch.core.frame import to_frame
+        tbl = pa.table({
+            "id": list(range(8)),
+            "zip": ["19382"] * 8,
+            "city": ["A", "A", "B", "B", "C", "C", "D", "D"],
+        })
+        config = BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["zip"], transforms=[])],
+            max_block_size=3,
+            skip_oversized=False,
+        )
+        results = build_blocks(to_frame(tbl), config)
+        block_keys = sorted(r.block_key for r in results)
+        split_subs = [k for k in block_keys if k.startswith("19382||")]
+        assert len(split_subs) == 4, f"arrow-path auto-split failed: {block_keys}"
+        for r in results:
+            size = to_frame(r.materialize().native).height
+            assert size <= 3, f"Block {r.block_key} has {size} rows > max=3"
+
     def test_bench_records_split_count(self):
         """`hot_blocks_split_count` should land on the active recorder."""
         config = BlockingConfig(

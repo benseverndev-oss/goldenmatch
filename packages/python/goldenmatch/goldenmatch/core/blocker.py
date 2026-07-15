@@ -764,7 +764,7 @@ def _sub_block(
 
 
 def _auto_split_block(
-    block_df: pl.DataFrame,
+    block_df: Any,  # pl.DataFrame | pa.Table | seam Frame -- normalized via to_frame
     max_block_size: int,
     parent_key: str,
 ) -> list[BlockResult]:
@@ -773,26 +773,30 @@ def _auto_split_block(
     When no sub_block_keys are configured, this provides a zero-config fallback
     that splits by the column with the most unique values.
     """
-    # Find non-internal columns
-    candidates = [c for c in block_df.columns if not c.startswith("__")]
+    from goldenmatch.core.frame import to_frame
+
+    # Seam-normalize FIRST: block_df may be a pa.Table (arrow-native path) whose
+    # ``.columns`` are ChunkedArrays, not names -- ``bframe.columns`` returns
+    # NAMES on both backends. (The raw ``block_df.columns`` here was the
+    # arrow-path AttributeError that made auto-split silently no-op and let the
+    # mega-block fall through to be scored whole -> OOM. See #372/#1790.)
+    bframe = to_frame(block_df)
+    candidates = [c for c in bframe.columns if not c.startswith("__")]
     if not candidates:
         logger.warning(
             "Auto-split of %r: no non-internal columns available. Processing as-is.",
             parent_key,
         )
-        return [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key)]
+        return [BlockResult(block_key=parent_key, df=bframe.native, strategy="adaptive", depth=1, parent_key=parent_key)]
 
     # Pick column whose cardinality best splits blocks near max_block_size.
     # Ideal: each group has ~max_block_size records.
     # Score = number of groups with >= 2 records (useful groups).
-    n = len(block_df)
+    n = bframe.height
     best_col = candidates[0]
     best_useful_groups = 0
     best_nunique = 0
 
-    from goldenmatch.core.frame import to_frame
-
-    bframe = to_frame(block_df)
     for col in candidates:
         nunique = bframe.column(col).n_unique()
         # Estimate: if we split by this column, avg group size = n / nunique
@@ -828,7 +832,7 @@ def _auto_split_block(
             )
         results.append(BlockResult(
             block_key=f"{parent_key}||{key_str}",
-            df=group_frame.drop(["__auto_split__"]).native.lazy(),
+            df=group_frame.drop(["__auto_split__"]).native,
             strategy="adaptive",
             depth=1,
             parent_key=parent_key,
@@ -836,9 +840,9 @@ def _auto_split_block(
 
     logger.info(
         "Auto-split %r (%d records) into %d sub-blocks using column %r (cardinality=%d)",
-        parent_key, len(block_df), len(results), best_col, best_nunique,
+        parent_key, bframe.height, len(results), best_col, best_nunique,
     )
-    return results if results else [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key)]
+    return results if results else [BlockResult(block_key=parent_key, df=bframe.native, strategy="adaptive", depth=1, parent_key=parent_key)]
 
 
 def _build_sorted_neighborhood_blocks(
