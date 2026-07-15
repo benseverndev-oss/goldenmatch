@@ -131,8 +131,11 @@ Weighted/exact NE behavior is untouched throughout.
 
 ## 5. Surfaces
 
-- No new CLI/MCP commands: `api.ts`/pipeline already route probabilistic scoring through these
-  functions, so NE support arrives transparently. The parity manifest (`parity/goldenmatch.yaml`)
+- No new CLI/MCP commands. CORRECTION (final review): the TS pipeline does NOT route
+  probabilistic matchkeys through the FS functions (it uses simplified weighted-style scoring, a
+  pre-existing TS scope gap) -- so the pipeline path gained a LOUD probabilistic+NE decline
+  instead of transparent support; NE scoring lives on the FS API surface (trainEM ->
+  scoreProbabilistic). The parity manifest (`parity/goldenmatch.yaml`)
   gains no entries; the API-parity gate must stay green.
 - WASM: no FS scoring path exists in WASM -- documented no-op (the PR #1755 precedent).
 - Docs: package README/CHANGELOG note the capability; the docs-site sweep rides the release
