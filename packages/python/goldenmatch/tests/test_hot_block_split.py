@@ -72,11 +72,15 @@ class TestHotBlockSplit:
             f"got {[r.block_key for r in results]}"
         )
 
-    def test_skip_oversized_false_still_processes_anyway(self):
-        """`skip_oversized=False` is an explicit "keep big blocks" mode.
+    def test_skip_oversized_false_auto_splits_splittable_block(self):
+        """`skip_oversized=False` now auto-splits a splittable mega-block first.
 
-        Auto-split should NOT fire when the user has opted into processing
-        oversized blocks intact (preserves the prior semantic).
+        Sub-partitioning preserves recall AND avoids the O(n^2) scoring OOM,
+        so it is the default recovery even when the caller opted into
+        processing oversized blocks. (Previously this mode scored the whole
+        block, which OOM'd the runner on coarse auto-config keys -- e.g. the
+        FS year-diversify pass and the #1784-kept common-surname block, which
+        produce 10k+ record blocks. See #372.)
         """
         config = BlockingConfig(
             keys=[BlockingKeyConfig(fields=["zip"], transforms=[])],
@@ -89,10 +93,38 @@ class TestHotBlockSplit:
             "city": ["A", "A", "B", "B", "C", "C", "D", "D"],
         })
         results = build_blocks(df.lazy(), config)
-        # One single 8-row block, intact.
+        block_keys = sorted(r.block_key for r in results)
+        split_subs = [k for k in block_keys if k.startswith("19382||")]
+        assert len(split_subs) == 4, (
+            f"Expected 4 city sub-blocks under skip_oversized=False; got {block_keys}"
+        )
+        for r in results:
+            size = r.materialize().native.height
+            assert size <= 3, f"Block {r.block_key} has {size} rows > max=3"
+
+    def test_skip_oversized_false_processes_unsplittable_block_anyway(self):
+        """`skip_oversized=False` keeps the opt-in fallback for UNSPLITTABLE blocks.
+
+        When auto-split can't reduce the block (no in-block column varies), the
+        explicit `skip_oversized=False` still processes it whole -- whereas
+        `skip_oversized=True` would skip it. This preserves the "keep big
+        blocks" escape hatch for the genuinely-unsplittable case.
+        """
+        config = BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["zip"], transforms=[])],
+            max_block_size=2,
+            skip_oversized=False,
+        )
+        df = pl.DataFrame({
+            "id": [1, 2, 3],
+            "zip": ["19382", "19382", "19382"],
+            "city": ["Westfield", "Westfield", "Westfield"],
+        })
+        results = build_blocks(df.lazy(), config)
+        # Unsplittable + opt-in => processed whole (NOT skipped).
         assert len(results) == 1
         assert results[0].block_key == "19382"
-        assert results[0].materialize().native.height == 8
+        assert results[0].materialize().native.height == 3
 
     def test_bench_records_split_count(self):
         """`hot_blocks_split_count` should land on the active recorder."""
