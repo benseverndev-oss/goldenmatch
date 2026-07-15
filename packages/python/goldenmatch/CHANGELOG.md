@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [3.3.0] - 2026-07-14
 
+<!-- README-callout
+**3.3.0 — negative evidence on Fellegi-Sunter matchkeys.** `negative_evidence`
+now works on `type: probabilistic` matchkeys as EM-learned `__ne__` dimensions
+(no labels needed; `penalty_bits` as a fixed override), and the Splink
+migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
+plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
+0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
+pure-Python fallback automatically).
+-->
+
 ### Added
 - **Negative evidence on Fellegi-Sunter (`type: probabilistic`) matchkeys**
   (Formulation B, EM-learned): `negative_evidence` was previously silently

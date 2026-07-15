@@ -326,7 +326,7 @@ def check_docs_nav_integrity(res: Result) -> None:
         # Skip snippet/partial conventions if they ever appear.
         if any(p in {"snippets", "_partials"} for p in parts) or rel.name.startswith("_"):
             continue
-        slug = str(rel.with_suffix(""))
+        slug = rel.with_suffix("").as_posix()  # nav refs use forward slashes; str() breaks on Windows
         if slug not in referenced:
             orphans.append(slug)
     res.record(

@@ -242,6 +242,7 @@ install whichever you need directly: `pg` (Postgres), `@duckdb/node-api`
 
 - **Probabilistic matching** — Fellegi-Sunter with Splink-style EM
 - **Splink config converter** — `import-splink` CLI / `convert_splink_config` MCP tool / `fromSplink()` API converts a Splink settings (or trained-model) JSON into a GoldenMatch config, importing trained m/u probabilities directly
+- **Negative evidence on Fellegi-Sunter matchkeys** — goldenmatch-js 1.3.0 is a full FS-NE mirror of Python (trainEM / scoring / validation / loader matrix; new exports `neFired`, `fsWeightRange`, `NegativeEvidenceUnsupportedError`; the loader now parses `negative_evidence` for all matchkey types instead of silently dropping it). The TS pipeline (`dedupe` / `matchRecords`) throws on probabilistic+NE (its probabilistic scoring is a simplified weighted-style average), the continuous path rejects NE, and `derive_from` NE is rejected in TS — materialize the column first, or use Python
 - **PPRL** — Privacy-preserving record linkage with SHA-256 bloom filters (3 security levels: standard, high, paranoid)
 - **Graph ER** — Multi-table entity resolution with evidence propagation
 - **Streaming** — Incremental single-record matching
@@ -266,6 +267,7 @@ See [`packages/goldenmatch-js/examples/`](https://github.com/benseverndev-oss/go
 | Refdata name scorers | `given_name_aliased_jw` + `name_freq_weighted_jw` | Both (bundled tables, 4-decimal parity) |
 | Fellegi-Sunter | Yes | Yes |
 | Splink config converter (`import-splink` / `convert_splink_config`) | Yes | Yes |
+| FS negative evidence (`negative_evidence` on probabilistic matchkeys) | Yes | Yes (direct FS APIs; the pipeline declines probabilistic+NE) |
 | PPRL | SHA-256 | SHA-256 (interop verified byte-for-byte) |
 | Graph ER | Yes | Yes |
 | LLM scorer | Yes | Yes (via fetch, edge-safe) |
