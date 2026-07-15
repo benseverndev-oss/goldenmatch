@@ -228,3 +228,26 @@ def test_timeout_ladder_fits_cap():
     # 25M + 100M for ONE lane must fit under ~560 min (spec 7.3)
     assert orch._timeout_for(25_000_000) + orch._timeout_for(100_000_000) <= 560 * 60
     assert orch._timeout_for(100_000) < orch._timeout_for(5_000_000)  # monotone
+
+
+def test_render_markdown_shape_lane_sections():
+    orch = _load("orchestrate")
+    results = [
+        {"shape": "person", "lane": "splink", "rows_requested": 100000,
+         "status": "ok", "dedupe_wall_seconds": 10.0, "peak_rss_mb": 500,
+         "scored_pairs": 1000, "cluster_count": 50,
+         "accuracy": {"pairwise": {"precision": 1, "recall": 1, "f1": 1,
+             "confusion": {"tp": 1, "fp": 0, "fn": 0, "tn": 0}},
+             "bcubed": {"precision": 1, "recall": 1, "f1": 1}}},
+        {"shape": "person", "lane": "gm_probabilistic", "rows_requested": 100000,
+         "status": "ok", "dedupe_wall_seconds": 5.0, "peak_rss_mb": 400,
+         "scored_pairs": 900, "cluster_count": 50,
+         "accuracy": {"pairwise": {"precision": 1, "recall": 0.9, "f1": 0.95,
+             "confusion": {"tp": 1, "fp": 0, "fn": 0, "tn": 0}},
+             "bcubed": {"precision": 1, "recall": 1, "f1": 1}}},
+    ]
+    md = orch.render_markdown(results, {"dupe_rate": 0.2})
+    assert "## person" in md
+    assert "splink" in md and "gm_probabilistic" in md
+    # head-to-head is per GM lane vs splink (reference column)
+    assert "vs splink" in md.lower() or "GM/Splink" in md

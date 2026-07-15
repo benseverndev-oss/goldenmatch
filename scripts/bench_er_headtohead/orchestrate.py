@@ -205,7 +205,7 @@ def evaluate_datapoint(pred: Path, truth: Path, results_dir: Path, engine: str, 
 
 def _fmt(v) -> str:
     if v is None:
-        return "—"
+        return "-"
     if isinstance(v, float):
         return f"{v:,.1f}"
     if isinstance(v, int):
@@ -215,68 +215,102 @@ def _fmt(v) -> str:
 
 def _r(v) -> str:
     """3-decimal formatter for ratio metrics (F1/precision/recall)."""
-    return f"{v:.3f}" if isinstance(v, (int, float)) else "—"
+    return f"{v:.3f}" if isinstance(v, (int, float)) else "-"
 
 
-def render_markdown(results: list[dict], dupe_rate: float) -> str:
-    lines = [
-        "# ER head-to-head: Splink (DuckDB) vs GoldenMatch (bucket+native+arrow)",
-        "",
-        f"Single machine, identical parquet fixture per scale, dupe-rate={dupe_rate}. "
-        "Wall is end-to-end dedupe (Splink: train+predict+cluster; GoldenMatch: "
-        "auto_configure+dedupe). Peak RSS is the per-process high-water mark. "
-        "`scored pairs` is recorded so blocking-aggressiveness differences are visible.",
-        "",
-        "| rows | engine | status | dedupe wall (s) | peak RSS (MB) | scored pairs | clusters | pairs/sec | pairwise F1 | B³ F1 |",
+def _lane_sort_key(r: dict) -> tuple:
+    """Order rows by (scale, lane) with splink first per scale (reference col)."""
+    return (r.get("rows_requested", 0), 0 if r.get("lane") == "splink" else 1,
+            r.get("lane", ""))
+
+
+def _shape_section(shape: str, rows_for_shape: list[dict]) -> list[str]:
+    lines = [f"## {shape}", ""]
+
+    # Main table: one row per (lane, scale), splink first per scale.
+    lines += [
+        "| scale | lane | status | dedupe wall (s) | peak RSS (MB) | scored pairs "
+        "| clusters | pairs/sec | pairwise F1 | B3 F1 |",
         "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for r in sorted(results, key=lambda x: (x["rows_requested"], x["engine"])):
+    for r in sorted(rows_for_shape, key=_lane_sort_key):
         wall = r.get("dedupe_wall_seconds")
         pairs = r.get("scored_pairs")
         pps = round(pairs / wall) if (pairs and wall) else None
         acc = r.get("accuracy") or {}
         pw = acc.get("pairwise") or {}
         bc = acc.get("bcubed") or {}
-        lines.append(
-            "| " + " | ".join([
-                _fmt(r["rows_requested"]), r["engine"], r.get("status", "?"),
-                _fmt(wall), _fmt(r.get("peak_rss_mb")), _fmt(pairs),
-                _fmt(r.get("cluster_count")), _fmt(pps),
-                _r(pw.get("f1")), _r(bc.get("f1")),
-            ]) + " |"
-        )
+        lines.append("| " + " | ".join([
+            _fmt(r.get("rows_requested")), r.get("lane", "?"), r.get("status", "?"),
+            _fmt(wall), _fmt(r.get("peak_rss_mb")), _fmt(pairs),
+            _fmt(r.get("cluster_count")), _fmt(pps),
+            _r(pw.get("f1")), _r(bc.get("f1")),
+        ]) + " |")
 
-    # Accuracy detail: pairwise P/R + B³ P/R + confusion matrix.
-    lines += ["", "## Accuracy (vs ground truth)", "",
-              "| rows | engine | pw P | pw R | pw F1 | B³ P | B³ R | B³ F1 | TP | FP | FN |",
+    # Accuracy detail: pairwise P/R/F1 + B3 P/R/F1 + confusion.
+    lines += ["", f"### {shape}: accuracy (vs ground truth)", "",
+              "| scale | lane | pw P | pw R | pw F1 | B3 P | B3 R | B3 F1 | TP | FP | FN |",
               "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
-    for r in sorted(results, key=lambda x: (x["rows_requested"], x["engine"])):
+    for r in sorted(rows_for_shape, key=_lane_sort_key):
         acc = r.get("accuracy")
         if not acc:
             continue
         pw, bc, cm = acc["pairwise"], acc["bcubed"], acc["pairwise"]["confusion"]
         lines.append("| " + " | ".join([
-            _fmt(r["rows_requested"]), r["engine"],
+            _fmt(r.get("rows_requested")), r.get("lane", "?"),
             _r(pw["precision"]), _r(pw["recall"]), _r(pw["f1"]),
             _r(bc["precision"]), _r(bc["recall"]), _r(bc["f1"]),
             _fmt(cm["tp"]), _fmt(cm["fp"]), _fmt(cm["fn"]),
         ]) + " |")
-    # Per-scale head-to-head deltas (only where both engines produced a wall).
-    lines += ["", "## Head-to-head (where both completed)", ""]
-    by_rows: dict[int, dict[str, dict]] = {}
+
+    # Head-to-head: each GM lane vs the splink reference row at that scale.
+    lines += ["", f"### {shape}: head-to-head (each GM lane vs splink)", "",
+              "| scale | gm lane | gm wall | splink wall | wall ratio (GM/Splink) "
+              "| gm RSS | splink RSS | RSS ratio (GM/Splink) |",
+              "|---:|---|---:|---:|---:|---:|---:|---:|"]
+    by_scale: dict[int, dict[str, dict]] = {}
+    for r in rows_for_shape:
+        by_scale.setdefault(r.get("rows_requested"), {})[r.get("lane")] = r
+    for scale in sorted(k for k in by_scale if k is not None):
+        sp = by_scale[scale].get("splink", {})
+        sw = sp.get("dedupe_wall_seconds")
+        srss = sp.get("peak_rss_mb")
+        for lane in sorted(by_scale[scale]):
+            if lane == "splink":
+                continue
+            gm = by_scale[scale][lane]
+            gw = gm.get("dedupe_wall_seconds")
+            grss = gm.get("peak_rss_mb")
+            wratio = round(gw / sw, 2) if (gw and sw) else None
+            rratio = round(grss / srss, 2) if (grss and srss) else None
+            lines.append("| " + " | ".join([
+                _fmt(scale), lane, _fmt(gw), _fmt(sw), _fmt(wratio),
+                _fmt(grss), _fmt(srss), _fmt(rratio),
+            ]) + " |")
+    lines.append("")
+    return lines
+
+
+def render_markdown(results: list[dict], header: dict) -> str:
+    """Render one section per shape (spec 9 item 1). splink is the fixed
+    reference column; head-to-head deltas are per GM lane vs splink."""
+    dupe_rate = (header or {}).get("dupe_rate")
+    lines = [
+        "# ER head-to-head: Splink (DuckDB) vs GoldenMatch (bucket+native+arrow)",
+        "",
+        f"Single machine, identical parquet fixture per (shape, scale), "
+        f"dupe-rate={dupe_rate}. Wall is end-to-end dedupe (Splink: "
+        "train+predict+cluster; GoldenMatch: auto_configure+dedupe). Peak RSS is "
+        "the per-process high-water mark. `scored pairs` is recorded so "
+        "blocking-aggressiveness differences are visible. splink is the reference "
+        "lane; head-to-head deltas are each GM lane vs splink.",
+        "",
+    ]
+    by_shape: dict[str, list[dict]] = {}
     for r in results:
-        by_rows.setdefault(r["rows_requested"], {})[r["engine"]] = r
-    lines.append("| rows | GoldenMatch wall | Splink wall | wall ratio (GM/Splink) | GM RSS | Splink RSS |")
-    lines.append("|---:|---:|---:|---:|---:|---:|")
-    for rows in sorted(by_rows):
-        gm = by_rows[rows].get("goldenmatch", {})
-        sp = by_rows[rows].get("splink", {})
-        gw, sw = gm.get("dedupe_wall_seconds"), sp.get("dedupe_wall_seconds")
-        ratio = round(gw / sw, 2) if (gw and sw) else None
-        lines.append("| " + " | ".join([
-            _fmt(rows), _fmt(gw), _fmt(sw), _fmt(ratio),
-            _fmt(gm.get("peak_rss_mb")), _fmt(sp.get("peak_rss_mb")),
-        ]) + " |")
+        by_shape.setdefault(r.get("shape", "unknown"), []).append(r)
+    for shape in sorted(by_shape):
+        lines += _shape_section(shape, by_shape[shape])
     return "\n".join(lines) + "\n"
 
 
@@ -407,12 +441,18 @@ def main() -> None:
                          "'optimized backend' claim.")
     args = ap.parse_args()
 
-    run_sweep(scales=args.scales, shapes=args.shapes, lanes=args.lanes,
-              workdir=args.workdir, dupe_rate=args.dupe_rate,
-              threshold=args.threshold, allow_pure_python=args.allow_pure_python,
-              seed=args.seed, run_tag=args.run_tag)
-    # Rendering (summary.md + $GITHUB_STEP_SUMMARY) is wired in Task 12 once
-    # render_markdown is rewritten for the shape/lane/scale schema.
+    agg = run_sweep(scales=args.scales, shapes=args.shapes, lanes=args.lanes,
+                    workdir=args.workdir, dupe_rate=args.dupe_rate,
+                    threshold=args.threshold, allow_pure_python=args.allow_pure_python,
+                    seed=args.seed, run_tag=args.run_tag)
+
+    md = render_markdown(agg["results"], agg["header"])
+    (args.workdir / "summary.md").write_text(md)
+    print(md)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a") as fh:
+            fh.write(md)
 
 
 if __name__ == "__main__":
