@@ -31,6 +31,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import pyarrow.parquet as pq
+
 try:
     import resource  # Unix-only; absent on Windows dev boxes (CI/bench runs on Linux)
 except ImportError:  # pragma: no cover - Windows fallback path
@@ -364,16 +366,16 @@ def main() -> None:
             # Materialize records to a temp parquet (Splink reads parquet via view).
             tmpdir = tempfile.TemporaryDirectory(prefix="splink_ds_")
             input_path = Path(tmpdir.name) / "records.parquet"
-            records.write_parquet(input_path)
-            result["rows_requested"] = records.height
+            pq.write_table(records, input_path)
+            result["rows_requested"] = records.num_rows
             if args.truth_out is not None:
                 args.truth_out.parent.mkdir(parents=True, exist_ok=True)
-                truth.write_parquet(args.truth_out)
+                pq.write_table(truth, args.truth_out)
 
             kind, builder = spec
             try:
                 if kind == "person":
-                    settings, training_rules = builder(s, records.columns)
+                    settings, training_rules = builder(s, records.column_names)
                 else:
                     settings, training_rules = builder(s)
             except KeyError as e:

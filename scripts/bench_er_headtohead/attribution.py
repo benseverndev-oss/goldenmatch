@@ -47,11 +47,18 @@ def attribution(
 
 
 def truth_to_pairs(truth: Any) -> set[Pair]:
-    """Expand a {record_id, cluster_id} frame into within-cluster GT pairs."""
+    """Expand a {record_id, cluster_id} pa.Table into within-cluster GT pairs."""
+    from collections import defaultdict
     from itertools import combinations
+
+    groups: dict[Any, list] = defaultdict(list)
+    rids = truth.column("record_id").to_pylist()
+    cids = truth.column("cluster_id").to_pylist()
+    for rid, cid in zip(rids, cids):
+        groups[cid].append(rid)
+
     pairs = set()
-    for _cid, grp in truth.group_by("cluster_id"):
-        ids = grp["record_id"].to_list()
+    for ids in groups.values():
         if len(ids) > 1:
             pairs.update((min(a, b), max(a, b)) for a, b in combinations(ids, 2))
     return pairs

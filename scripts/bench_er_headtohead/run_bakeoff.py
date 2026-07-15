@@ -423,7 +423,9 @@ def main(argv: list[str] | None = None) -> None:
 
     datasets = _import_sibling("datasets")
 
-    import polars as pl
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
 
     per_engine_results: dict[str, dict[str, tuple[dict, dict | None]]] = {}
     for name in names:
@@ -449,13 +451,17 @@ def main(argv: list[str] | None = None) -> None:
 
         # Records: preserve the REAL record_id verbatim for the engine subprocess.
         records_parquet = ds_dir / "records.parquet"
-        records.write_parquet(records_parquet)
+        pq.write_table(records, records_parquet)
         # Truth in STRING record_id space so it joins both GM (string preds) and
         # Splink (real-id preds) under the shared evaluator.
         truth_path = ds_dir / "truth.parquet"
-        truth.with_columns(pl.col("record_id").cast(pl.Utf8)).write_parquet(truth_path)
+        _tidx = truth.schema.get_field_index("record_id")
+        truth_str = truth.set_column(
+            _tidx, "record_id", pc.cast(truth.column("record_id"), pa.string())
+        )
+        pq.write_table(truth_str, truth_path)
 
-        rows_n = records.height
+        rows_n = records.num_rows
 
         for eng in ("gm_zeroconfig", "gm_probabilistic", "gm_prob_native"):
             result, metrics = _run_gm(

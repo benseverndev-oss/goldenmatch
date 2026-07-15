@@ -2,8 +2,8 @@
 """Dataset loaders for the probabilistic accuracy panel.
 
 Each loader returns (records, truth):
-  records: polars.DataFrame with a 'record_id' column + matchable fields
-  truth:   polars.DataFrame with columns {record_id, cluster_id}
+  records: pyarrow.Table with a 'record_id' column + matchable fields
+  truth:   pyarrow.Table with columns {record_id, cluster_id}
 
 historical_50k is Splink's home-turf biographical dataset (Wikidata historical
 people, with a ground-truth cluster label). Loaded via splink_datasets when
@@ -17,9 +17,24 @@ import tempfile
 from collections.abc import Hashable
 from pathlib import Path
 
-import polars as pl
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
+
+
+def _rename_columns(table: pa.Table, mapping: dict[str, str]) -> pa.Table:
+    """Rename columns via a {old: new} mapping (pyarrow renames by full list)."""
+    return table.rename_columns(
+        [mapping.get(name, name) for name in table.column_names]
+    )
+
+
+def _cast_column_to_string(table: pa.Table, name: str) -> pa.Table:
+    """Return a copy of ``table`` with column ``name`` cast to pa.string()."""
+    idx = table.schema.get_field_index(name)
+    return table.set_column(idx, name, pc.cast(table.column(name), pa.string()))
 
 REPO = Path(__file__).resolve().parents[2]
 DATASETS_DIR = REPO / "packages" / "python" / "goldenmatch" / "tests" / "benchmarks" / "datasets"
@@ -69,7 +84,7 @@ def _cluster_ids_from_pairs(
     return cluster_id
 
 
-def _historical_50k() -> tuple[pl.DataFrame, pl.DataFrame]:
+def _historical_50k() -> tuple[pa.Table, pa.Table]:
     df = None
     try:
         from splink import splink_datasets  # type: ignore
@@ -77,7 +92,9 @@ def _historical_50k() -> tuple[pl.DataFrame, pl.DataFrame]:
         splink_datasets = None  # type: ignore
     if splink_datasets is not None:
         try:
-            df = pl.from_pandas(splink_datasets.historical_50k)  # type: ignore
+            df = pa.Table.from_pandas(
+                splink_datasets.historical_50k, preserve_index=False  # type: ignore
+            )
         except Exception as e:  # splink present but dataset unusable -> try vendored
             logger.warning(
                 "splink_datasets.historical_50k failed (%s); trying vendored parquet", e
@@ -90,17 +107,17 @@ def _historical_50k() -> tuple[pl.DataFrame, pl.DataFrame]:
                 "install `goldenmatch[bench]` (for splink_datasets) or vendor "
                 f"{vendored}"
             )
-        df = pl.read_parquet(vendored)
+        df = pq.read_table(vendored)
 
     # historical_50k columns: unique_id, cluster, first_name, surname, dob,
     # birth_place, postcode_fake, occupation, ...
-    df = df.rename({"unique_id": "record_id", "cluster": "cluster_id"})
+    df = _rename_columns(df, {"unique_id": "record_id", "cluster": "cluster_id"})
     truth = df.select(["record_id", "cluster_id"])
-    records = df.drop("cluster_id")
+    records = df.drop_columns(["cluster_id"])
     return records, truth
 
 
-def _dblp_acm() -> tuple[pl.DataFrame, pl.DataFrame]:
+def _dblp_acm() -> tuple[pa.Table, pa.Table]:
     """Leipzig DBLP-ACM bibliographic ER (cross-source dedupe).
 
     Unions DBLP2.csv + ACM.csv into one records frame with source-prefixed
@@ -118,28 +135,40 @@ def _dblp_acm() -> tuple[pl.DataFrame, pl.DataFrame]:
             f"{base}); missing: {[p.name for p in missing]}"
         )
 
-    # latin-1 / utf8-lossy: the Leipzig CSVs carry invalid UTF-8 bytes.
-    dblp = pl.read_csv(dblp_path, encoding="utf8-lossy", infer_schema_length=0)
-    acm = pl.read_csv(acm_path, encoding="utf8-lossy", infer_schema_length=0)
+    # utf8-lossy: the Leipzig CSVs carry invalid UTF-8 bytes; replace them (mirrors
+    # polars' utf8-lossy). dtype=str + keep_default_na=False keeps every field a
+    # string (matching the prior infer_schema_length=0 all-Utf8 read).
+    import pandas as pd
 
-    def _prefix(df: pl.DataFrame, src: str) -> pl.DataFrame:
-        return df.with_columns(
-            (pl.lit(f"{src}:") + pl.col("id").cast(pl.Utf8)).alias("record_id")
-        ).drop("id")
+    def _read_csv(path: Path):
+        return pd.read_csv(
+            path,
+            dtype=str,
+            keep_default_na=False,
+            encoding="utf-8",
+            encoding_errors="replace",
+        )
 
-    records = pl.concat(
-        [_prefix(dblp, "dblp"), _prefix(acm, "acm")], how="diagonal"
+    def _prefix(pdf, src: str):
+        pdf = pdf.copy()
+        pdf["record_id"] = f"{src}:" + pdf["id"].astype(str)
+        return pdf.drop(columns=["id"])
+
+    records_pdf = pd.concat(
+        [_prefix(_read_csv(dblp_path), "dblp"), _prefix(_read_csv(acm_path), "acm")],
+        ignore_index=True,
+        sort=False,
     )
+    records = pa.Table.from_pandas(records_pdf, preserve_index=False)
 
-    gt = pl.read_csv(gt_path, encoding="utf8-lossy", infer_schema_length=0)
+    gt = _read_csv(gt_path)
     pairs: list[tuple[Hashable, Hashable]] = [
-        (f"dblp:{row['idDBLP']}", f"acm:{row['idACM']}")
-        for row in gt.iter_rows(named=True)
+        (f"dblp:{d}", f"acm:{a}") for d, a in zip(gt["idDBLP"], gt["idACM"])
     ]
 
-    all_ids = records["record_id"].to_list()
+    all_ids = records.column("record_id").to_pylist()
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
-    truth = pl.DataFrame(
+    truth = pa.table(
         {
             "record_id": all_ids,
             "cluster_id": [cmap[r] for r in all_ids],
@@ -148,7 +177,7 @@ def _dblp_acm() -> tuple[pl.DataFrame, pl.DataFrame]:
     return records, truth
 
 
-def _febrl3() -> tuple[pl.DataFrame, pl.DataFrame]:
+def _febrl3() -> tuple[pa.Table, pa.Table]:
     """recordlinkage's Febrl3 synthetic person dataset (with duplicates).
 
     Records come from the dataframe (index reset into ``record_id``);
@@ -168,15 +197,16 @@ def _febrl3() -> tuple[pl.DataFrame, pl.DataFrame]:
     pdf = df.reset_index()
     # The reset index column is the febrl record id (e.g. 'rec-123-org').
     id_col = str(pdf.columns[0])
-    records = pl.from_pandas(pdf).rename({id_col: "record_id"})
-    records = records.with_columns(pl.col("record_id").cast(pl.Utf8))
+    records = pa.Table.from_pandas(pdf, preserve_index=False)
+    records = _rename_columns(records, {id_col: "record_id"})
+    records = _cast_column_to_string(records, "record_id")
 
-    all_ids = records["record_id"].to_list()
+    all_ids = records.column("record_id").to_pylist()
     pairs: list[tuple[Hashable, Hashable]] = [
         (str(a), str(b)) for a, b in links
     ]
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
-    truth = pl.DataFrame(
+    truth = pa.table(
         {
             "record_id": all_ids,
             "cluster_id": [cmap[r] for r in all_ids],
@@ -185,7 +215,7 @@ def _febrl3() -> tuple[pl.DataFrame, pl.DataFrame]:
     return records, truth
 
 
-def _ncvr() -> tuple[pl.DataFrame, pl.DataFrame]:
+def _ncvr() -> tuple[pa.Table, pa.Table]:
     """NC Voter Registration 10K sample.
 
     The raw NCVR sample is one row per voter (``ncid`` is unique across all
@@ -208,7 +238,7 @@ def _ncvr() -> tuple[pl.DataFrame, pl.DataFrame]:
     )
 
 
-def _synthetic_person() -> tuple[pl.DataFrame, pl.DataFrame]:
+def _synthetic_person() -> tuple[pa.Table, pa.Table]:
     """Synthetic person rows from the bench fixture generator.
 
     Reuses ``generate_fixture.generate`` (writes records + truth parquet to a
@@ -240,8 +270,8 @@ def _synthetic_person() -> tuple[pl.DataFrame, pl.DataFrame]:
             seed=42,
             batch=1_000_000,
         )
-        records = pl.read_parquet(out)
-        truth = pl.read_parquet(truth_path)
+        records = pq.read_table(out)
+        truth = pq.read_table(truth_path)
     return records, truth
 
 
@@ -254,7 +284,7 @@ _LOADERS = {
 }
 
 
-def load_dataset(name: str) -> tuple[pl.DataFrame, pl.DataFrame]:
+def load_dataset(name: str) -> tuple[pa.Table, pa.Table]:
     if name not in _LOADERS:
         raise KeyError(f"unknown dataset {name!r}; have {sorted(_LOADERS)}")
     return _LOADERS[name]()
