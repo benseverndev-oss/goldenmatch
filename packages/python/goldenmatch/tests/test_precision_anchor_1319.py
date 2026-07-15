@@ -226,6 +226,60 @@ class TestConditionFalsification:
         ) is None
 
 
+class TestTriggerHelper:
+    """#1319 Change B: ``precision_anchor_would_fire`` is the extracted
+    single source of truth for the five trigger conditions -- the rule
+    delegates to it, and the commit stage re-evaluates it as a
+    labels-free precision-collapse detector (``demote_suspect``)."""
+
+    def _helper(self):
+        from goldenmatch.core.autoconfig_rules import precision_anchor_would_fire
+        return precision_anchor_would_fire
+
+    def test_true_on_should_fire_shape(self):
+        cfg = _cfg([_exact_mk("email"), _weighted_mk(threshold=0.8)])
+        assert self._helper()(cfg, _profile_with_mass_above(1.0), _strong_email_ctx()) is True
+
+    def test_false_on_mass_below_gate(self):
+        cfg = _cfg([_exact_mk("email"), _weighted_mk()])
+        assert self._helper()(cfg, _profile_with_mass_above(0.94), _strong_email_ctx()) is False
+
+    def test_false_without_tf_freqs(self):
+        cfg = _cfg([_exact_mk("email"), _weighted_mk(fields=[
+            _name_field("first_name", "given_name_aliased_jw", None),
+            _name_field("last_name", "name_freq_weighted_jw", None),
+        ])])
+        assert self._helper()(cfg, _profile_with_mass_above(1.0), _strong_email_ctx()) is False
+
+    def test_false_on_threshold_already_raised(self):
+        cfg = _cfg([_exact_mk("email"), _weighted_mk(threshold=0.9)])
+        assert self._helper()(cfg, _profile_with_mass_above(1.0), _strong_email_ctx()) is False
+
+    def test_false_on_ctx_none(self):
+        cfg = _cfg([_exact_mk("email"), _weighted_mk()])
+        assert self._helper()(cfg, _profile_with_mass_above(1.0), None) is False
+
+    def test_rule_fires_iff_helper_true(self):
+        """The rule must return a proposal exactly when the helper says
+        the trigger holds -- pins the delegation (no drift possible)."""
+        helper = self._helper()
+        ctx = _strong_email_ctx()
+        rows = [
+            (_cfg([_exact_mk("email"), _weighted_mk(threshold=0.8)]),
+             _profile_with_mass_above(1.0)),           # fires
+            (_cfg([_exact_mk("email"), _weighted_mk()]),
+             _profile_with_mass_above(0.94)),          # mass gate fails
+            (_cfg([_weighted_mk()]),
+             _profile_with_mass_above(1.0)),           # no exact anchor
+        ]
+        for cfg, profile in rows:
+            fired = _call(profile, cfg, ctx) is not None
+            assert fired == helper(cfg, profile, ctx), (
+                f"rule fired={fired} but helper says "
+                f"{helper(cfg, profile, ctx)} on {[m.name for m in cfg.matchkeys]}"
+            )
+
+
 class TestRegistration:
     def test_registered_directly_before_sparse_match_expand(self):
         assert (

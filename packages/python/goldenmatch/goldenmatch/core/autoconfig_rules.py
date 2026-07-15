@@ -1188,6 +1188,65 @@ _ANCHOR_MASS_MIN = 0.95
 _ANCHOR_RAISED_THRESHOLD = 0.9
 
 
+def _precision_anchor_trigger(
+    cfg: GoldenMatchConfig,
+    profile: ComplexityProfile,
+    ctx: IndicatorContext | None,
+) -> tuple[MatchkeyConfig, str] | None:
+    """Evaluate the five #1319 trigger conditions (see
+    ``rule_precision_anchor_threshold_raise`` for the full rationale).
+
+    Returns ``(target_weighted_mk, anchor_field)`` when ALL five hold,
+    else None. Single source of truth: the rule delegates here for its
+    trigger, and ``precision_anchor_would_fire`` re-exposes it as the
+    labels-free precision-collapse detector the commit stage uses.
+    """
+    if ctx is None:
+        return None
+    if profile.scoring.mass_above_threshold < _ANCHOR_MASS_MIN:
+        return None
+    target = None
+    for mk in cfg.matchkeys or []:
+        if mk.type != "weighted" or not mk.fields:
+            continue
+        if any(f.scorer not in _ANCHOR_NAME_SCORERS for f in mk.fields):
+            continue
+        if mk.threshold is None or mk.threshold >= _ANCHOR_RAISED_THRESHOLD:
+            continue
+        if not any(f.tf_freqs for f in mk.fields):
+            continue
+        target = mk
+        break
+    if target is None:
+        return None
+    for mk in cfg.matchkeys or []:
+        if mk.type != "exact":
+            continue
+        for f in mk.fields or []:
+            if f.field is None:
+                continue
+            prior = ctx.column_priors.get(f.field)
+            if prior is not None and prior.identity_score >= _ANCHOR_IDENTITY_MIN:
+                return target, f.field
+    return None
+
+
+def precision_anchor_would_fire(
+    cfg: GoldenMatchConfig,
+    profile: ComplexityProfile,
+    ctx: IndicatorContext | None,
+) -> bool:
+    """True when the #1319 over-merge trigger shape holds on ``cfg`` +
+    ``profile`` (all five conditions of
+    ``rule_precision_anchor_threshold_raise``; ``ctx is None`` -> False).
+
+    Used by the controller's commit stage as a labels-free
+    precision-collapse detector (``pick_committed(demote_suspect=...)``):
+    commit must not prefer an entry the rule would still flag.
+    """
+    return _precision_anchor_trigger(cfg, profile, ctx) is not None
+
+
 def rule_precision_anchor_threshold_raise(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
     ctx: IndicatorContext | None = None,
@@ -1251,39 +1310,10 @@ def rule_precision_anchor_threshold_raise(
     this rule structurally cannot fire on healthy commits -- the crafted
     fixture measures overall_health YELLOW.
     """
-    if ctx is None:
+    trigger = _precision_anchor_trigger(current, profile, ctx)
+    if trigger is None:
         return None
-    if profile.scoring.mass_above_threshold < _ANCHOR_MASS_MIN:
-        return None
-    target = None
-    for mk in current.matchkeys or []:
-        if mk.type != "weighted" or not mk.fields:
-            continue
-        if any(f.scorer not in _ANCHOR_NAME_SCORERS for f in mk.fields):
-            continue
-        if mk.threshold is None or mk.threshold >= _ANCHOR_RAISED_THRESHOLD:
-            continue
-        if not any(f.tf_freqs for f in mk.fields):
-            continue
-        target = mk
-        break
-    if target is None:
-        return None
-    anchor_field = None
-    for mk in current.matchkeys or []:
-        if mk.type != "exact":
-            continue
-        for f in mk.fields or []:
-            if f.field is None:
-                continue
-            prior = ctx.column_priors.get(f.field)
-            if prior is not None and prior.identity_score >= _ANCHOR_IDENTITY_MIN:
-                anchor_field = f.field
-                break
-        if anchor_field is not None:
-            break
-    if anchor_field is None:
-        return None
+    target, anchor_field = trigger
     new_mk = target.model_copy(update={"threshold": _ANCHOR_RAISED_THRESHOLD})
     new_matchkeys = [new_mk if m is target else m for m in (current.matchkeys or [])]
     new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
