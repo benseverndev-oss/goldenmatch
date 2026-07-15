@@ -95,3 +95,51 @@ def test_generator_projection_check_rejects_small_C():
     ok2, _ = gen.check_block_size_for_cardinality(cardinality=18_000,
                                                   target_rows=100_000_000, ceiling=2000)
     assert ok2 is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: shape-aware runners
+# ---------------------------------------------------------------------------
+import json  # noqa: E402
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def _env():
+    e = dict(os.environ)
+    e["PYTHONPATH"] = "packages/python/goldenmatch"
+    e["POLARS_SKIP_CPU_CHECK"] = "1"
+    e["PYTHONIOENCODING"] = "utf-8"
+    return e
+
+
+def test_run_goldenmatch_handbuilt_biblio(tmp_path):
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="biblio")
+    out, pred = tmp_path / "r.json", tmp_path / "r.pred.parquet"
+    rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
+        "--threshold", "0.85", "--mode", "hand_built", "--shape", "biblio",
+        "--allow-pure-python"], env=_env()).returncode
+    assert rc == 0
+    r = json.loads(out.read_text())
+    assert r["status"] == "ok" and r["dedupe_wall_seconds"] is not None
+    assert r["shape"] == "biblio"
+
+
+def test_run_splink_shape_biblio(tmp_path):
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="biblio")
+    out, pred = tmp_path / "r.json", tmp_path / "r.pred.parquet"
+    rc = subprocess.run([sys.executable, str(HERE / "run_splink.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
+        "--threshold", "0.95", "--shape", "biblio"], env=_env()).returncode
+    assert rc == 0
+    r = json.loads(out.read_text())
+    # skipped iff splink not installed; ok when it is. Never a crash.
+    assert r["status"] in {"ok", "skipped"}
+    if r["status"] == "ok":
+        assert r["shape"] == "biblio"
+        assert isinstance(r["splink_version"], str) and r["splink_version"]
