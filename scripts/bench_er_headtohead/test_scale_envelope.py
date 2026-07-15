@@ -251,3 +251,24 @@ def test_render_markdown_shape_lane_sections():
     assert "splink" in md and "gm_probabilistic" in md
     # head-to-head is per GM lane vs splink (reference column)
     assert "vs splink" in md.lower() or "GM/Splink" in md
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: merge
+# ---------------------------------------------------------------------------
+def test_merge_later_timestamp_wins(tmp_path):
+    merge = _load("merge_results")
+    a = {"header": {"run_timestamp": 100.0, "git_sha": "aaa"},
+         "results": [{"shape": "person", "lane": "splink", "rows_requested": 100,
+                      "status": "ok", "dedupe_wall_seconds": 9.0}]}
+    b = {"header": {"run_timestamp": 200.0, "git_sha": "bbb"},
+         "results": [{"shape": "person", "lane": "splink", "rows_requested": 100,
+                      "status": "ok", "dedupe_wall_seconds": 7.0}]}
+    (tmp_path / "a" / "bench_results.json").parent.mkdir(parents=True)
+    (tmp_path / "a" / "bench_results.json").write_text(json.dumps(a))
+    (tmp_path / "b" / "bench_results.json").parent.mkdir(parents=True)
+    (tmp_path / "b" / "bench_results.json").write_text(json.dumps(b))
+    merged = merge.merge_dir(tmp_path)
+    got = {(r["shape"], r["lane"], r["rows_requested"]): r for r in merged["results"]}
+    assert got[("person", "splink", 100)]["dedupe_wall_seconds"] == 7.0   # later run wins
+    assert len(merged["runs"]) == 2                                       # both headers kept
