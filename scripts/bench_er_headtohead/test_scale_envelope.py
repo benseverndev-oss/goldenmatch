@@ -208,3 +208,16 @@ def test_lane_env_is_merged_not_mutating(monkeypatch):
     assert env["SENTINEL"] == "keep" and env["GOLDENMATCH_FS_NATIVE"] == "0"
     import os as _os
     assert "GOLDENMATCH_FS_NATIVE" not in _os.environ  # never mutated the parent
+
+
+def test_sweep_person_two_lanes_smoke(tmp_path):
+    orch = _load("orchestrate")
+    orch.run_sweep(scales=[1500], shapes=["person"],
+        lanes=["gm_hand_built", "gm_probabilistic"], workdir=tmp_path,
+        dupe_rate=0.3, threshold=0.85, allow_pure_python=True, seed=42)
+    agg = json.loads((tmp_path / "bench_results.json").read_text())
+    assert set(agg) == {"header", "results"}          # object, not list
+    assert agg["header"]["run_timestamp"]              # present
+    keys = {(r["shape"], r["lane"], r["rows_requested"]) for r in agg["results"]}
+    assert ("person", "gm_hand_built", 1500) in keys
+    assert all(r.get("shape") and r.get("lane") for r in agg["results"])

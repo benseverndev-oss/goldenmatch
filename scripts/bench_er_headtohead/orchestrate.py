@@ -110,7 +110,8 @@ def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
         return -1, "timeout"
 
 
-def _load_or_synthesize(path: Path, returncode: int, how: str, engine: str, rows: int) -> dict:
+def _load_or_synthesize(path: Path, returncode: int, how: str,
+                        shape: str, lane: str, rows: int) -> dict:
     if path.exists():
         try:
             r = json.loads(path.read_text())
@@ -121,49 +122,67 @@ def _load_or_synthesize(path: Path, returncode: int, how: str, engine: str, rows
     # No JSON => the child died before its finally block could write (SIGKILL/OOM).
     status = "timeout" if how == "timeout" else ("OOM" if returncode in (-9, 137) else "killed")
     return {
-        "engine": engine,
+        "shape": shape,
+        "lane": lane,
         "rows_requested": rows,
         "status": status,
         "returncode": returncode,
-        "note": "no result file written — process terminated by OS (likely OOM) or timed out",
+        "note": "no result file written -- process terminated by OS (likely OOM) or timed out",
     }
 
 
-def generate(rows: int, dupe_rate: float, fixtures: Path) -> Path:
-    out = fixtures / f"bench_{rows}.parquet"
-    truth = fixtures / f"bench_{rows}.truth.parquet"
+def _fixture_paths(fixtures: Path, shape: str, rows: int) -> tuple[Path, Path]:
+    return (fixtures / f"bench_{shape}_{rows}.parquet",
+            fixtures / f"bench_{shape}_{rows}.truth.parquet")
+
+
+def generate(shape: str, rows: int, dupe_rate: float, fixtures: Path, seed: int = 42) -> Path:
+    out, truth = _fixture_paths(fixtures, shape, rows)
     if out.exists():
         print(f"[orchestrate] fixture exists, reusing {out}")
         return out
-    print(f"[orchestrate] generating {rows:,} rows -> {out}")
+    print(f"[orchestrate] generating {shape} {rows:,} rows -> {out}")
     subprocess.run(
         [sys.executable, str(HERE / "generate_fixture.py"),
          "--rows", str(rows), "--dupe-rate", str(dupe_rate),
-         "--out", str(out), "--ground-truth", str(truth)],
-        check=True, timeout=_timeout_for(rows),
+         "--out", str(out), "--ground-truth", str(truth),
+         "--seed", str(seed), "--shape", shape],  # --shape: without it a biblio
+        check=True, timeout=_timeout_for(rows),    # fixture gets person columns
     )
     return out
 
 
-def run_engine(engine: str, fixture: Path, rows: int, results_dir: Path,
+def run_engine(lane: Lane, shape: str, fixture: Path, rows: int, results_dir: Path,
                threshold: float, allow_pure_python: bool = False) -> tuple[dict, Path]:
-    out = results_dir / f"{engine}_{rows}.json"
-    pred = results_dir / f"{engine}_{rows}.pred.parquet"
+    slug = f"{shape}_{lane.name}_{rows}"
+    out = results_dir / f"{slug}.json"
+    pred = results_dir / f"{slug}.pred.parquet"
     for stale in (out, pred):
         if stale.exists():
             stale.unlink()  # a stale artifact must not masquerade as fresh
-    runner = HERE / (f"run_{engine}.py")
-    cmd = [sys.executable, str(runner), "--input", str(fixture),
-           "--rows", str(rows), "--out", str(out), "--pred-out", str(pred),
-           "--threshold", str(threshold)]
-    if engine == "goldenmatch" and allow_pure_python:
-        cmd.append("--allow-pure-python")  # local smoke only; CI builds native
+    cmd = build_cmd(lane, input=fixture, rows=rows, out=out, pred=pred,
+                    threshold=threshold, shape=shape,
+                    allow_pure_python=allow_pure_python)
     t0 = time.perf_counter()
-    rc, how = _run(cmd, _timeout_for(rows))
+    rc, how = _run_with_env(cmd, lane_env(lane), _timeout_for(rows))
     wall = round(time.perf_counter() - t0, 1)
-    res = _load_or_synthesize(out, rc, how, engine, rows)
+    res = _load_or_synthesize(out, rc, how, shape, lane.name, rows)
     res["orchestrator_wall_seconds"] = wall
+    # Stamp the stable (shape, lane, scale) triple regardless of what the child
+    # wrote (a synthesized OOM result already has them, but an ok child may not).
+    res["shape"] = shape
+    res["lane"] = lane.name
+    res["rows_requested"] = rows
     return res, pred
+
+
+def _run_with_env(cmd: list[str], env: dict[str, str], timeout: int) -> tuple[int, str]:
+    """Like _run but with an explicit per-subprocess env (never mutates parent)."""
+    try:
+        proc = subprocess.run(cmd, env=env, timeout=timeout)
+        return proc.returncode, "exited"
+    except subprocess.TimeoutExpired:
+        return -1, "timeout"
 
 
 def evaluate_datapoint(pred: Path, truth: Path, results_dir: Path, engine: str, rows: int) -> dict | None:
@@ -261,63 +280,139 @@ def render_markdown(results: list[dict], dupe_rate: float) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _git_sha() -> str | None:
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(HERE),
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _total_ram_gb() -> float | None:
+    """Best-effort total RAM in GB via /proc/meminfo (None on Windows)."""
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return round(int(line.split()[1]) / (1024 * 1024), 1)
+    except Exception:
+        pass
+    return None
+
+
+def _goldenmatch_version() -> str | None:
+    try:
+        import goldenmatch
+        return getattr(goldenmatch, "__version__", None)
+    except Exception:
+        return None
+
+
+def _build_header(*, dupe_rate: float, threshold: float, seed: int, run_tag: str) -> dict:
+    """One reproducibility header per run (spec 8). run_timestamp is the merge
+    tiebreak; splink_version is filled in later from the first splink result."""
+    return {
+        "run_timestamp": time.time(),
+        "git_sha": _git_sha(),
+        "runner_label": os.environ.get("RUNNER_NAME")
+                        or os.environ.get("RUNNER_LABEL") or "local",
+        "cpu_count": os.cpu_count(),
+        "total_ram_gb": _total_ram_gb(),
+        "dupe_rate": dupe_rate,
+        "threshold": threshold,
+        "seed": seed,
+        "goldenmatch_version": _goldenmatch_version(),
+        "splink_version": None,
+        "run_tag": run_tag,
+    }
+
+
+def run_sweep(*, scales, shapes, lanes, workdir, dupe_rate, threshold,
+              allow_pure_python: bool = False, seed: int = 42,
+              run_tag: str = "local") -> dict:
+    """Sweep lanes x shapes x scales, one isolated subprocess per datapoint.
+    Flushes the {header, results} object after EVERY datapoint. Does NOT render
+    markdown (that is main()/merge's job -- the renderer keys on fields this
+    stamps but is decoupled from the flush). Returns the aggregate object."""
+    workdir = Path(workdir)
+    fixtures = workdir / "fixtures"
+    results_dir = workdir / "results"
+    fixtures.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    lane_objs = [LANES[name] for name in lanes]
+    header = _build_header(dupe_rate=dupe_rate, threshold=threshold,
+                           seed=seed, run_tag=run_tag)
+    all_results: list[dict] = []
+    agg_path = workdir / "bench_results.json"
+
+    def _flush() -> None:
+        agg_path.write_text(json.dumps({"header": header, "results": all_results}, indent=2))
+
+    _flush()  # persist the header even before the first datapoint
+    for shape in shapes:
+        for rows in scales:
+            _, truth = _fixture_paths(fixtures, shape, rows)
+            try:
+                fixture = generate(shape, rows, dupe_rate, fixtures, seed=seed)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                for lane in lane_objs:
+                    all_results.append({"shape": shape, "lane": lane.name,
+                                        "rows_requested": rows,
+                                        "status": "fixture_failed", "error": str(e)})
+                    _flush()
+                continue
+
+            for lane in lane_objs:
+                print(f"[orchestrate] === {lane.name} @ {shape} {rows:,} rows ===")
+                res, pred = run_engine(lane, shape, fixture, rows, results_dir,
+                                       threshold, allow_pure_python=allow_pure_python)
+                # Accuracy eval runs here, BEFORE pred cleanup below.
+                acc = evaluate_datapoint(pred, truth, results_dir,
+                                         f"{shape}_{lane.name}", rows)
+                if acc is not None:
+                    res["accuracy"] = acc
+                pred.unlink(missing_ok=True)
+                if (lane.name == "splink" and res.get("splink_version")
+                        and not header["splink_version"]):
+                    header["splink_version"] = res["splink_version"]
+                all_results.append(res)
+                _flush()  # after EVERY datapoint so a later OOM can't lose earlier points
+
+            # Clean this (shape, scale) fixture before the next -- bound disk.
+            for f in fixtures.glob(f"bench_{shape}_{rows}.*"):
+                f.unlink(missing_ok=True)
+
+    return {"header": header, "results": all_results}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scales", type=int, nargs="+",
                     default=[100_000, 1_000_000, 5_000_000, 25_000_000])
-    ap.add_argument("--engines", nargs="+", default=["goldenmatch", "splink"])
+    ap.add_argument("--lanes", nargs="+", default=list(LANES),
+                    help="lane names to run (default: all 6)")
+    ap.add_argument("--shapes", nargs="+", default=["person", "biblio"])
     ap.add_argument("--workdir", type=Path, default=Path(".bench_er"))
     ap.add_argument("--dupe-rate", type=float, default=0.20)
     ap.add_argument("--threshold", type=float, default=0.85)
-    ap.add_argument("--keep-fixtures", action="store_true",
-                    help="don't delete each fixture after its engines run (uses more disk)")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--run-tag", default="local")
     ap.add_argument("--allow-pure-python", action="store_true",
                     help="LOCAL SMOKE ONLY: let GoldenMatch run without the native "
-                         "Arrow runtime. Never pass this in CI — it invalidates the "
+                         "Arrow runtime. Never pass this in CI -- it invalidates the "
                          "'optimized backend' claim.")
     args = ap.parse_args()
 
-    fixtures = args.workdir / "fixtures"
-    results_dir = args.workdir / "results"
-    fixtures.mkdir(parents=True, exist_ok=True)
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    all_results: list[dict] = []
-    for rows in args.scales:
-        try:
-            fixture = generate(rows, args.dupe_rate, fixtures)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            for engine in args.engines:
-                all_results.append({"engine": engine, "rows_requested": rows,
-                                    "status": "fixture_failed", "error": str(e)})
-            continue
-
-        truth = fixtures / f"bench_{rows}.truth.parquet"
-        for engine in args.engines:
-            print(f"[orchestrate] === {engine} @ {rows:,} rows ===")
-            res, pred = run_engine(engine, fixture, rows, results_dir, args.threshold,
-                                   allow_pure_python=args.allow_pure_python)
-            # Accuracy eval runs here, BEFORE fixture/pred cleanup below.
-            acc = evaluate_datapoint(pred, truth, results_dir, engine, rows)
-            if acc is not None:
-                res["accuracy"] = acc
-            pred.unlink(missing_ok=True)
-            all_results.append(res)
-            # Flush the aggregate after EVERY datapoint so a later OOM can't lose
-            # earlier results.
-            (args.workdir / "bench_results.json").write_text(json.dumps(all_results, indent=2))
-
-        if not args.keep_fixtures:
-            for f in fixtures.glob(f"bench_{rows}.*"):
-                f.unlink(missing_ok=True)
-
-    md = render_markdown(all_results, args.dupe_rate)
-    (args.workdir / "summary.md").write_text(md)
-    print(md)
-    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if step_summary:
-        with open(step_summary, "a") as fh:
-            fh.write(md)
+    run_sweep(scales=args.scales, shapes=args.shapes, lanes=args.lanes,
+              workdir=args.workdir, dupe_rate=args.dupe_rate,
+              threshold=args.threshold, allow_pure_python=args.allow_pure_python,
+              seed=args.seed, run_tag=args.run_tag)
+    # Rendering (summary.md + $GITHUB_STEP_SUMMARY) is wired in Task 12 once
+    # render_markdown is rewritten for the shape/lane/scale schema.
 
 
 if __name__ == "__main__":
