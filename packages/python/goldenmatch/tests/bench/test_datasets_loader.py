@@ -22,12 +22,12 @@ def test_load_historical_50k_shape_or_skip():
         records, truth = mod.load_dataset("historical_50k")
     except mod.DatasetUnavailable as e:
         pytest.skip(f"historical_50k unavailable: {e}")
-    # records: polars DF with a 'record_id' col; truth: {record_id, cluster_id}
-    assert "record_id" in records.columns
-    assert set(truth.columns) >= {"record_id", "cluster_id"}
-    assert records.height > 1000
-    rec_ids = set(records["record_id"].to_list())
-    assert set(truth["record_id"].to_list()).issubset(rec_ids)
+    # records: pa.Table with a 'record_id' col; truth: {record_id, cluster_id}
+    assert "record_id" in records.column_names
+    assert set(truth.column_names) >= {"record_id", "cluster_id"}
+    assert records.num_rows > 1000
+    rec_ids = set(records.column("record_id").to_pylist())
+    assert set(truth.column("record_id").to_pylist()).issubset(rec_ids)
 
 
 @pytest.mark.benchmark
@@ -38,6 +38,8 @@ def test_adapter_contract_or_skip(name: str):
         records, truth = mod.load_dataset(name)
     except mod.DatasetUnavailable as e:
         pytest.skip(f"{name} unavailable: {e}")
-    assert "record_id" in records.columns
-    assert set(truth.columns) >= {"record_id", "cluster_id"}
-    assert set(truth["record_id"].to_list()).issubset(set(records["record_id"].to_list()))
+    assert "record_id" in records.column_names
+    assert set(truth.column_names) >= {"record_id", "cluster_id"}
+    assert set(truth.column("record_id").to_pylist()).issubset(
+        set(records.column("record_id").to_pylist())
+    )
