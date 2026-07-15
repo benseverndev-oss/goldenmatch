@@ -23,8 +23,8 @@ column.
 |---|---|---|---|---|
 | `splink` | `run_splink.py` | - | - | Fellegi-Sunter reference engine (pinned `splink==4.0.16`) |
 | `gm_hand_built` | `run_goldenmatch.py` | hand_built | - | GM fast weighted bucket+native path (speed reference) |
-| `gm_probabilistic` | `run_goldenmatch.py` | probabilistic | `GOLDENMATCH_FS_NATIVE=0` | EM-trained FS, **numpy fallback** - like-for-like vs Splink FS |
-| `gm_probabilistic_native` | `run_goldenmatch.py` | probabilistic | `GOLDENMATCH_FS_NATIVE=1` | same, **Rust FS kernel** (reference-mode default, made explicit) |
+| `gm_probabilistic` | `run_goldenmatch.py` | probabilistic (`--fs-basic-scorers`) | `GOLDENMATCH_FS_NATIVE=0` | EM-trained FS, **numpy fallback** - like-for-like vs Splink FS |
+| `gm_probabilistic_native` | `run_goldenmatch.py` | probabilistic (`--fs-basic-scorers`) | `GOLDENMATCH_FS_NATIVE=1` | same, **Rust FS kernel** (reference-mode default, made explicit) |
 | `gm_zeroconfig` | `run_goldenmatch.py` | zeroconfig | - | zero-effort controller vs a tuned Splink spec |
 | `gm_converted_splink` | `run_gm_converted.py` | - | - | GM running Splink's own spec, auto-converted via `from_splink` |
 
@@ -44,6 +44,19 @@ two lanes would be native-vs-native, gutting the comparison. FS's discrete
 comparison levels amplify tiny rapidfuzz float differences at exact thresholds,
 so the two are reported as separate lanes rather than one silently substituting
 the other.
+
+**Both FS lanes pass `--fs-basic-scorers` (name fields forced to `jaro_winkler`).**
+Autoconfig picks specialized name scorers (`given_name_aliased_jw` for first_name,
+`name_freq_weighted_jw` for surname) that the native FS kernel does NOT implement
+(its set is `{exact, jaro_winkler, levenshtein, token_sort}`), so
+`_fs_native_eligible()` declines the matchkey and the native lane silently runs
+numpy - identical to the numpy lane. `--fs-basic-scorers` rewrites any field scorer
+outside the kernel set to `jaro_winkler`, which makes the matchkey native-eligible
+so the two lanes form a real matched numpy-vs-native pair that actually exercises
+the Rust kernel. It also makes the FS model JaroWinkler-comparable to Splink's own
+JaroWinkler FS. The rewrite runs before the eligibility telemetry below, so the
+counts reflect the config actually scored; the rewritten `(field, old_scorer)`
+pairs are recorded on `fs_basic_scorers_rewritten`.
 
 **Proof-of-execution field (`fs_native_eligible_matchkeys`).** The global gate is
 NOT sufficient proof that a `gm_probabilistic_native` row actually ran the kernel:

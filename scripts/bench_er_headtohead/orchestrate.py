@@ -42,6 +42,7 @@ class Lane:
     script: str
     mode: str | None = None
     env: dict[str, str] = field(default_factory=dict)
+    extra_args: tuple[str, ...] = ()
 
 
 # The four run_goldenmatch.py-backed GM lanes: run_goldenmatch.py calls
@@ -55,9 +56,11 @@ LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
     "gm_hand_built": Lane("gm_hand_built", "run_goldenmatch.py", mode="hand_built"),
     "gm_probabilistic": Lane("gm_probabilistic", "run_goldenmatch.py",
-                             mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "0"}),
+                             mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "0"},
+                             extra_args=("--fs-basic-scorers",)),
     "gm_probabilistic_native": Lane("gm_probabilistic_native", "run_goldenmatch.py",
-                                    mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "1"}),
+                                    mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "1"},
+                                    extra_args=("--fs-basic-scorers",)),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
 }
@@ -82,6 +85,7 @@ def build_cmd(lane: Lane, *, input, rows: int, out, pred, threshold: float,
     # native gate raises for ALL its modes, not just hand_built.
     if allow_pure_python and lane.name in _GM_RUN_LANES:
         cmd.append("--allow-pure-python")
+    cmd += list(lane.extra_args)
     return cmd
 
 # Per-scale subprocess wall-clock cap (seconds). Raised after the first run so a

@@ -147,6 +147,36 @@ def test_probabilistic_numpy_lane_zero_native_eligible(tmp_path):
     assert r["fs_matchkeys_total"] >= 1
 
 
+def test_fs_basic_scorers_rewrite_engages_native(tmp_path):
+    # --fs-basic-scorers must rewrite autoconfig's specialized name scorers
+    # (given_name_aliased_jw / name_freq_weighted_jw) to jaro_winkler, which the
+    # native FS kernel implements -- so with native LOADED the matchkey becomes
+    # _fs_native_eligible and the Rust kernel engages.
+    gen = _load("generate_fixture")
+    fx, tr = tmp_path / "p.parquet", tmp_path / "p.truth.parquet"
+    gen.generate(2000, 0.3, fx, tr, 42, 2000, shape="person")
+    out, pred = tmp_path / "r.json", tmp_path / "r.pred.parquet"
+    e = _env(); e["GOLDENMATCH_FS_NATIVE"] = "1"       # native lane
+    rc = subprocess.run([sys.executable, str(HERE / "run_goldenmatch.py"),
+        "--input", str(fx), "--rows", "2000", "--out", str(out), "--pred-out", str(pred),
+        "--threshold", "0.85", "--mode", "probabilistic", "--shape", "person",
+        "--fs-basic-scorers", "--allow-pure-python"],  # allow-pure-python so a
+                                 # missing native build doesn't RAISE; the kernel
+                                 # still engages when native IS loaded
+        env=e).returncode
+    assert rc == 0
+    r = json.loads(out.read_text())
+    assert r["status"] == "ok"
+    # The two name scorers get rewritten regardless of whether native is built.
+    assert r["fs_basic_scorers_rewritten"], "expected name scorers to be rewritten"
+    # Only when native is actually loaded can the kernel become eligible.
+    if r.get("native_loaded"):
+        assert r["fs_native_eligible_matchkeys"] >= 1, (
+            "basic scorers should make >=1 matchkey native-eligible when native "
+            "is loaded -- something else is declining it"
+        )
+
+
 def test_run_splink_shape_biblio(tmp_path):
     gen = _load("generate_fixture")
     fx, tr = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
@@ -199,6 +229,19 @@ def test_lane_registry_and_cmd():
                          out="o.json", pred="p.parquet", threshold=0.85, shape="person")
     assert "run_goldenmatch.py" in " ".join(cmd)
     assert "--mode" in cmd and "probabilistic" in cmd and "--shape" in cmd
+
+
+def test_fs_basic_scorers_flag_only_on_fs_lanes():
+    orch = _load("orchestrate")
+    lanes = orch.LANES
+    kw = dict(input="f.parquet", rows=100, out="o.json", pred="p.parquet",
+              threshold=0.85, shape="person")
+    # BOTH FS lanes carry --fs-basic-scorers ...
+    for name in ("gm_probabilistic", "gm_probabilistic_native"):
+        assert "--fs-basic-scorers" in orch.build_cmd(lanes[name], **kw), name
+    # ... and no other lane does.
+    for name in ("gm_hand_built", "gm_zeroconfig", "splink", "gm_converted_splink"):
+        assert "--fs-basic-scorers" not in orch.build_cmd(lanes[name], **kw), name
 
 
 def test_lane_env_is_merged_not_mutating(monkeypatch):
