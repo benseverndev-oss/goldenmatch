@@ -68,9 +68,11 @@ def test_generate_biblio_schema_and_stable_block_key(tmp_path):
     import polars as pl
     df = pl.read_parquet(out).join(pl.read_parquet(truth), on="record_id")
     per_cluster = df.group_by("cluster_id").agg(
-        pl.col("venue").n_unique().alias("nv"), pl.col("year").n_unique().alias("ny"))
+        pl.col("venue").n_unique().alias("nv"),
+        pl.col("year").drop_nulls().n_unique().alias("ny"))
     # allow year null (dropna) but non-null year must be unique per cluster; venue always unique
     assert per_cluster["nv"].max() == 1
+    assert per_cluster["ny"].max() == 1   # year stable per cluster where non-null
 
 
 def test_generate_biblio_titles_actually_vary(tmp_path):
