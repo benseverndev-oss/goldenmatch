@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-15 -- GoldenMatch precision-anchor threshold raise + commit demotion (ADR 0039)
+- New default auto-config rule `rule_precision_anchor_threshold_raise`: raises
+  the weighted threshold to 0.9 on the precision-collapse shape
+  (mass_above_threshold >= 0.95 + name-only weighted matchkey + strong exact
+  identity anchor + live TF table + threshold < 0.9). Crafted-fixture precision
+  0.009 -> 0.9868 at recall 1.0; NCVR unaffected. Closes #1207 / #1319.
+- Commit dynamics (both required; either alone still commits the over-merge):
+  the dip gate needs >= 30 scored pairs before a flat dip reads RED
+  (`_MIN_DIP_SUPPORT`), and `pick_committed` rank-demotes entries the rule's
+  trigger still flags (`demote_suspect`, controller-passed only when the rule
+  fired). Ride-along: fixed the `n_rows` shadow that silently disabled the
+  `REFUSE_AT_N` >= 100k RED-refuse gate. ADR 0039.
+- Same-day rollout ride-alongs: bucket fast path threads
+  `MatchkeyField.tf_freqs` so the #1318 TF name downweight now bites on the
+  default scoring path (#1782); anomaly diagnostics with prefilled issue URLs,
+  `GOLDEN_DIAGNOSTICS=0` to disable (#1791); goldenpipe check stage scans the
+  in-memory frame + goldensuite-mcp `clean_and_dedupe` is one in-process
+  `goldenpipe.run()` (#1789); `from_splink` recognizes `IS NOT NULL` blocking
+  guards (#1793).
+
 ## 2026-07-15 — GoldenMatch 3.3.0: FS negative evidence, EM-learned (ADR 0038)
 - `negative_evidence` now works on `type: probabilistic` matchkeys: each NE field
   joins `train_em` as a constrained 2-state EM-learned `__ne__<field>` dimension
