@@ -96,7 +96,8 @@ def test_bucket_path_applies_tf_freqs_table_1781():
     all sharing the common surname 'smith' (unique emails), one genuine
     'zorvath' duplicate pair, 18 unique fillers. With the table applied,
     identical-'smith' pairs score ~0.68 (< 0.8 threshold, no cluster) while
-    the rare zorvath pair scores 1.0 (clusters either way)."""
+    the rare zorvath pair scores ~0.925 (rarity log(20)/log(40) ~= 0.81 ->
+    weight ~= 0.925; still > 0.8, so it clusters either way)."""
     import goldenmatch.refdata  # noqa: F401  (registers name_freq_weighted_jw)
     import polars as pl
     from goldenmatch import dedupe_df
@@ -139,9 +140,9 @@ def test_bucket_path_applies_tf_freqs_table_1781():
 
     on = _members_1781(dedupe_df(df, config=_cfg(tf_freqs)))
     off = _members_1781(dedupe_df(df, config=_cfg(None)))
-    # The rare-name duplicate pair clusters in BOTH runs (weight 1.0 with the
-    # table; plain jw=1.0 without) -- so the diff below is table-driven, not
-    # empty-vs-empty.
+    # The rare-name duplicate pair clusters in BOTH runs (score ~0.925 > 0.8
+    # with the table; plain jw=1.0 without) -- so the diff below is
+    # table-driven, not empty-vs-empty.
     assert any(len(c) == 2 for c in on), f"zorvath pair missing from ON: {on}"
     assert any(len(c) == 20 for c in off), f"20-smith cluster missing from OFF: {off}"
     assert on != off, (
