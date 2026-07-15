@@ -83,9 +83,12 @@ export class FSModelMismatchError extends Error {
  * FS negative evidence is not scored on this path. Thrown loudly when a
  * probabilistic matchkey carries non-empty `negativeEvidence` on an entry
  * point that cannot honor it, so a Python-authored NE config can never
- * silently mis-score in TS. The whole discrete path (training, scoring,
- * validation, fallback) now covers NE; only the continuous (Winkler) path
- * throws, PERMANENTLY, matching Python.
+ * silently mis-score in TS. The whole discrete FS API path (training,
+ * scoring, validation, fallback) covers NE. Two surfaces throw: the
+ * continuous (Winkler) path, PERMANENTLY, matching Python; and the
+ * pipeline (dedupe/match), whose probabilistic scoring is a simplified
+ * weighted-style average (pre-existing TS scope gap) that cannot apply
+ * the veto — use the FS API (trainEM + scoreProbabilistic) directly.
  */
 export class NegativeEvidenceUnsupportedError extends Error {
   constructor(message: string) {

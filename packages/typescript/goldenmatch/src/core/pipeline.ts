@@ -27,6 +27,7 @@ import {
   scoreBlocksSequential,
 } from "./scorer.js";
 import { applyNegativeEvidenceToExactPairs } from "./autoconfigNegativeEvidence.js";
+import { NegativeEvidenceUnsupportedError } from "./probabilistic.js";
 import { buildClusters, pairKey } from "./cluster.js";
 import { buildGoldenRecord } from "./golden.js";
 import { postflight } from "./autoconfigVerify.js";
@@ -71,6 +72,34 @@ function buildSourceLookup(rows: readonly Row[]): Map<number, string> {
     }
   }
   return lookup;
+}
+
+/**
+ * Loud decline: the pipeline cannot honor FS negative evidence on
+ * probabilistic matchkeys. The pipeline's fuzzy phase scores probabilistic
+ * matchkeys through `findFuzzyMatches` (a simplified weighted-style
+ * averaging, a pre-existing TS scope gap — no EM training, no FS log-odds),
+ * and that path has no NE veto. Rather than silently scoring WITHOUT the
+ * veto, throw before any scoring work. Exact and weighted matchkeys honor
+ * NE in the pipeline (Path Y / scorer penalty) and pass through untouched.
+ */
+function assertPipelineSupportsNegativeEvidence(
+  matchkeys: readonly MatchkeyConfig[],
+): void {
+  for (const mk of matchkeys) {
+    if (mk.type !== "probabilistic") continue;
+    const ne = mk.negativeEvidence;
+    if (ne !== undefined && ne.length > 0) {
+      const names = ne.map((n) => n.field).join(", ");
+      throw new NegativeEvidenceUnsupportedError(
+        `matchkey '${mk.name}': the TS pipeline scores probabilistic ` +
+          `matchkeys with simplified (weighted-style) scoring that cannot ` +
+          `honor negative evidence (${names}) -- use the FS API directly ` +
+          `(trainEM + scoreProbabilistic), or remove negativeEvidence ` +
+          `from this matchkey`,
+      );
+    }
+  }
 }
 
 /** Collect all row IDs from rows. */
@@ -296,6 +325,10 @@ export async function runDedupePipeline(
   config: GoldenMatchConfig,
   options?: DedupeOptions,
 ): Promise<DedupeResult> {
+  // Loud decline BEFORE any work (even on empty input): probabilistic+NE
+  // configs must never reach the simplified fuzzy scorer silently.
+  assertPipelineSupportsNegativeEvidence(getMatchkeys(config));
+
   if (rows.length === 0) {
     return _emptyDedupeResult(config);
   }
@@ -501,6 +534,10 @@ export async function runMatchPipeline(
   config: GoldenMatchConfig,
   options?: DedupeOptions,
 ): Promise<MatchResult> {
+  // Same loud decline as runDedupePipeline — fires here too so an empty
+  // target/reference early-return can't skip it.
+  assertPipelineSupportsNegativeEvidence(getMatchkeys(config));
+
   if (targetRows.length === 0 || referenceRows.length === 0) {
     return {
       matched: [],

@@ -30,7 +30,14 @@ import {
   emResultToJson,
   emResultFromJson,
   FSModelMismatchError,
+  NegativeEvidenceUnsupportedError,
 } from "../../src/core/probabilistic.js";
+import {
+  runDedupePipeline,
+  runMatchPipeline,
+  makeConfig,
+  makeBlockingConfig,
+} from "../../src/core/index.js";
 import type { EMResult, ContinuousEMResult } from "../../src/core/probabilistic.js";
 import { parseConfig } from "../../src/core/config/loader.js";
 import { findFuzzyMatches } from "../../src/core/scorer.js";
@@ -845,5 +852,122 @@ describe("weighted NE scoring is untouched by the decline", () => {
     expect(out.length).toBe(1);
     expect(out[0]?.idA).toBe(0);
     expect(out[0]?.idB).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PIPELINE decline: the full pipeline (dedupe/match) scores probabilistic
+// matchkeys with simplified weighted-style averaging that cannot honor NE.
+// It must throw NegativeEvidenceUnsupportedError BEFORE any scoring work —
+// never silently score without the veto. Exact/weighted NE and NE-free
+// probabilistic configs run in the pipeline unchanged.
+// ---------------------------------------------------------------------------
+
+describe("pipeline declines probabilistic+NE loudly", () => {
+  const pipeRows: Row[] = [
+    { id: 1, name: "Alice Smith", phone: "555-1111", zip: "111" },
+    { id: 2, name: "Alice Smith", phone: "555-9999", zip: "111" },
+    { id: 3, name: "Zeke Xavier", phone: "555-2222", zip: "222" },
+  ];
+
+  /** Loader-shaped probabilistic+NE config (the fan-out-lever YAML hazard). */
+  const rawNeConfig = {
+    matchkeys: [
+      {
+        name: "p",
+        type: "probabilistic",
+        fields: [
+          { field: "name", transforms: [], scorer: "jaro_winkler", weight: 1 },
+        ],
+        negative_evidence: [
+          { field: "phone", transforms: [], scorer: "exact", threshold: 0.5 },
+        ],
+      },
+    ],
+  };
+
+  async function expectPipelineDecline(run: () => Promise<unknown>): Promise<void> {
+    const err = await run().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NegativeEvidenceUnsupportedError);
+    const e = err as Error;
+    expect(e.message).toContain("phone");
+    expect(e.message).toContain("simplified");
+    expect(e.message).toContain("trainEM");
+  }
+
+  it("loader-parsed probabilistic+NE config -> runDedupePipeline throws", async () => {
+    const config = parseConfig(rawNeConfig);
+    await expectPipelineDecline(() => runDedupePipeline(pipeRows, config));
+  });
+
+  it("loader-parsed probabilistic+NE config -> runMatchPipeline throws", async () => {
+    const config = parseConfig(rawNeConfig);
+    await expectPipelineDecline(() =>
+      runMatchPipeline(pipeRows.slice(0, 1), pipeRows.slice(1), config),
+    );
+  });
+
+  it("runMatchPipeline declines even when the target is empty (no silent early-return)", async () => {
+    const config = parseConfig(rawNeConfig);
+    await expectPipelineDecline(() => runMatchPipeline([], pipeRows, config));
+  });
+
+  it("weighted+NE config still runs through the pipeline (existing behavior untouched)", async () => {
+    const mk = makeMatchkeyConfig({
+      name: "w",
+      type: "weighted",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+      threshold: 0.9,
+      negativeEvidence: [
+        makeNegativeEvidenceField({
+          field: "phone",
+          scorer: "exact",
+          threshold: 0.5,
+          penalty: 0.5,
+        }),
+      ],
+    });
+    const blocking = makeBlockingConfig({
+      strategy: "static",
+      keys: [{ fields: ["zip"], transforms: [] }],
+    });
+    const config = makeConfig({ matchkeys: [mk], blocking });
+    const result = await runDedupePipeline(
+      [
+        { id: 1, name: "Alice Smith", phone: "555-1111", zip: "111" },
+        { id: 2, name: "Alice Smith", phone: "555-1111", zip: "111" },
+        { id: 3, name: "Alice Smith", phone: "555-9999", zip: "111" },
+      ],
+      config,
+    );
+    // Only the phone-agreeing pair survives the NE penalty.
+    expect(result.scoredPairs.length).toBe(1);
+    expect(result.scoredPairs[0]?.idA).toBe(0);
+    expect(result.scoredPairs[0]?.idB).toBe(1);
+  });
+
+  it("probabilistic config WITHOUT NE runs through the pipeline unchanged", async () => {
+    const mk = makeMatchkeyConfig({
+      name: "p",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "jaro_winkler" })],
+      threshold: 0.7,
+    });
+    const blocking = makeBlockingConfig({
+      strategy: "static",
+      keys: [{ fields: ["zip"], transforms: [] }],
+    });
+    const config = makeConfig({ matchkeys: [mk], blocking });
+    const result = await runDedupePipeline(pipeRows, config);
+    expect(result.stats.totalRecords).toBe(3);
+    // The two same-name rows still pair up on the simplified path.
+    const hasMatch = result.scoredPairs.some(
+      (p) =>
+        (p.idA === 0 && p.idB === 1) || (p.idA === 1 && p.idB === 0),
+    );
+    expect(hasMatch).toBe(true);
   });
 });
