@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-07-15
+
+### Fixed
+
+- **Linear identity golden-record resolution**: incremental identity resolution
+  now builds each golden record from the row payload index prepared once per
+  batch, rather than filtering the entire input frame once per cluster. This
+  removes the quadratic singleton-heavy archive ingestion path.
+
 ### Added
 
 - **Anomaly diagnostics with prefilled GitHub issue prompts** (in-tree:
