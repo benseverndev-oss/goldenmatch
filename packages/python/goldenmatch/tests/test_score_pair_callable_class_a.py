@@ -72,3 +72,102 @@ def test_jaccard_matches_matrix_path():
     ]
     for a, b in pairs:
         assert math.isclose(fn(a, b), _jaccard_score_single(a, b))
+
+
+# ── #1781: tf_freqs threading through the bucket fast path ──────────────────
+
+
+def _members_1781(res) -> frozenset:
+    cl = res.clusters or {}
+    return frozenset(
+        frozenset(int(m) for m in c.get("members", []))
+        for c in cl.values()
+        if len(c.get("members", [])) > 1
+    )
+
+
+def test_bucket_path_applies_tf_freqs_table_1781():
+    """#1781 signature regression: dedupe through the BUCKET path with
+    MatchkeyField.tf_freqs populated vs stripped must produce DIFFERENT
+    output. Pre-fix the resolver dropped the table, so ON == OFF
+    byte-identical (the bug's signature).
+
+    Miniaturized #1319 common-name fixture (~40 rows): 20 distinct people
+    all sharing the common surname 'smith' (unique emails), one genuine
+    'zorvath' duplicate pair, 18 unique fillers. With the table applied,
+    identical-'smith' pairs score ~0.68 (< 0.8 threshold, no cluster) while
+    the rare zorvath pair scores ~0.925 (rarity log(20)/log(40) ~= 0.81 ->
+    weight ~= 0.925; still > 0.8, so it clusters either way)."""
+    import goldenmatch.refdata  # noqa: F401  (registers name_freq_weighted_jw)
+    import polars as pl
+    from goldenmatch import dedupe_df
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    last = ["smith"] * 20 + ["zorvath"] * 2 + [f"filler{i}" for i in range(18)]
+    email = (
+        [f"s{i}@x.com" for i in range(20)]
+        + ["z@x.com", "z@x.com"]
+        + [f"f{i}@x.com" for i in range(18)]
+    )
+    df = pl.DataFrame({"last": last, "email": email})
+    # Real relative frequencies over the 40 rows: smith 0.5, zorvath 0.05,
+    # fillers 0.025 each. log_ref = log(40); rarity(smith) ~= 0.19 ->
+    # weight ~= 0.675 -> identical-pair score ~= 0.675 < 0.8.
+    tf_freqs = {"smith": 0.5, "zorvath": 0.05}
+    tf_freqs.update({f"filler{i}": 0.025 for i in range(18)})
+
+    def _cfg(table):
+        return GoldenMatchConfig(
+            backend="bucket",
+            matchkeys=[MatchkeyConfig(
+                name="k", type="weighted", threshold=0.8,
+                fields=[MatchkeyField(
+                    field="last", scorer="name_freq_weighted_jw",
+                    weight=1.0, tf_freqs=table,
+                )],
+            )],
+            blocking=BlockingConfig(
+                strategy="static",
+                keys=[BlockingKeyConfig(fields=["last"], transforms=["lowercase"])],
+            ),
+        )
+
+    on = _members_1781(dedupe_df(df, config=_cfg(tf_freqs)))
+    off = _members_1781(dedupe_df(df, config=_cfg(None)))
+    # The rare-name duplicate pair clusters in BOTH runs (score ~0.925 > 0.8
+    # with the table; plain jw=1.0 without) -- so the diff below is
+    # table-driven, not empty-vs-empty.
+    assert any(len(c) == 2 for c in on), f"zorvath pair missing from ON: {on}"
+    assert any(len(c) == 20 for c in off), f"20-smith cluster missing from OFF: {off}"
+    assert on != off, (
+        "bucket path ignored tf_freqs: ON == OFF byte-identical "
+        f"(the #1781 signature). clusters={on}"
+    )
+
+
+def test_resolver_tf_freqs_typeerror_fallback_1781():
+    """#1781 back-compat: a legacy plugin whose score_pair LACKS the tf_freqs
+    keyword must still score through the resolver when a table is supplied --
+    TypeError fallback to the bare call, twinning the score_matrix posture in
+    core/scorer.py:594-597. Registered inside the test (xdist self-contained)."""
+    from goldenmatch.plugins.registry import PluginRegistry
+
+    class _LegacyNoKwScorer:
+        name = "legacy_no_tf_kw_1781"
+
+        def score_pair(self, a, b):
+            return 0.42
+
+    PluginRegistry.instance().register_scorer(
+        "legacy_no_tf_kw_1781", _LegacyNoKwScorer()
+    )
+    fn = _resolve_score_pair_callable("legacy_no_tf_kw_1781", {"x": 0.5})
+    assert fn is not None
+    assert fn("a", "b") == 0.42  # TypeError fallback, no crash
+    assert fn("c", "d") == 0.42  # second call still works

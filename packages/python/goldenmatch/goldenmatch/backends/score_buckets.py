@@ -201,13 +201,25 @@ def _default_n_buckets() -> int:
     return min((os.cpu_count() or 4) * 4, 1024)
 
 
-def _resolve_score_pair_callable(scorer_name: str) -> Any:
+def _resolve_score_pair_callable(
+    scorer_name: str, tf_freqs: dict[str, float] | None = None
+) -> Any:
     """Return a (str_a, str_b) -> float | None callable for a scorer name.
 
     Used by the bucket scorer's fast path so per-pair work skips the
     PluginRegistry / dispatch overhead that ``_fuzzy_score_matrix`` does
     per (block x field). None when the scorer isn't fast-path safe
     (embedding, ensemble, record_embedding, unknown).
+
+    ``tf_freqs`` (#1781): the field's per-dataset value-frequency table
+    (``MatchkeyField.tf_freqs``). Only the PLUGIN branch consumes it --
+    built-in scorers ignore frequency tables, mirroring the legacy path
+    where the table travels only through the plugin protocol. When set,
+    the returned callable binds it as ``fn(a, b, tf_freqs=...)`` so the
+    fast path matches the legacy matrix path (core/scorer.py:1236);
+    pre-fix the table was silently dropped here, which is why the
+    sample-time controller telemetry showed the downweight biting while
+    the final dedupe output was byte-identical with it OFF.
     """
     if scorer_name == "jaro_winkler":
         from rapidfuzz.distance import JaroWinkler
@@ -264,7 +276,23 @@ def _resolve_score_pair_callable(scorer_name: str) -> Any:
     if plugin is None:
         return None
     fn = getattr(plugin, "score_pair", None)
-    return fn  # may itself be None for matrix-only plugins
+    if fn is None or not tf_freqs:
+        return fn  # may itself be None for matrix-only plugins
+    # #1781: bind the field's TF table so the fast path matches the legacy
+    # matrix path (core/scorer.py:1236). Without this, the sample-time
+    # controller telemetry shows the downweight biting (samples run legacy)
+    # while the final dedupe silently drops it. TypeError fallback = the
+    # score_pair-side twin of _fuzzy_score_matrix's score_matrix posture
+    # (core/scorer.py:594-597): a legacy plugin without the keyword degrades
+    # to the bare call. Per-call try is fine -- zero cost on the happy path.
+
+    def _with_tf(a, b, _fn=fn, _tf=tf_freqs):
+        try:
+            return _fn(a, b, tf_freqs=_tf)
+        except TypeError:
+            return _fn(a, b)
+
+    return _with_tf
 
 
 # Scorers that score_field() handles directly (without raising). NE entries
@@ -424,7 +452,7 @@ def _resolve_fast_path(
         if scorer is None or weight is None:
             _decline(f"field has scorer={scorer!r} weight={weight!r}")
             return None
-        fn = _resolve_score_pair_callable(scorer)
+        fn = _resolve_score_pair_callable(scorer, getattr(f, "tf_freqs", None))
         if fn is None:
             _decline(f"_resolve_score_pair_callable({scorer!r}) is None")
             return None
