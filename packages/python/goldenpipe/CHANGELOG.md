@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The `goldencheck.scan` stage now scans the in-memory frame** (`ctx.df` via
+  `goldencheck.scan_dataframe`) instead of re-reading the source path with
+  `scan_file`. This removes a redundant CSV parse mid-pipeline on file sources
+  and fixes a latent bug: for `run_df(df)` and DuckDB-table sources the "source"
+  string (`"<DataFrame>"` / `"duckdb:..."`) is not a readable path, so the old
+  `scan_file(source)` produced no profile and the downstream dedupe silently
+  lost its profile-driven config. A defensive `scan_file` fallback remains for
+  the rare no-frame case. `scan_dataframe` accepts a `pa.Table` natively, so the
+  stage is forward-compatible with the Arrow-native frame flip.
+
 ## 1.3.0 (2026-06-24)
 
 **Analysis reporting + a live TUI.** GoldenPipe gains an optional terminal reporting stage so one chain runs `Check -> Flow -> Match -> Identity -> Analysis`, and the 4-tab TUI is now wired to the real pipeline.
