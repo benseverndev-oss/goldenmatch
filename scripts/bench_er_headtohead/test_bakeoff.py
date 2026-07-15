@@ -4,7 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -12,14 +11,14 @@ HERE = Path(__file__).resolve().parent
 RUN_GM = HERE / "run_goldenmatch.py"
 
 def _tiny_parquet(tmp_path):
-    df = pl.DataFrame({
+    df = pa.table({
         "record_id": ["r0","r1","r2","r3","r4","r5"],
         "first_name": ["ann","ann","bob","bob","cara","dan"],
         "surname":    ["lee","lee","kim","kim","ng","ono"],
         "dob":        ["1990-01-01","1990-01-01","1985-02-02","1985-02-02","1972-03-03","1965-04-04"],
         "postcode":   ["AA1","AA1","BB2","BB2","CC3","DD4"],
     })
-    p = tmp_path / "tiny.parquet"; df.write_parquet(p); return p, df
+    p = tmp_path / "tiny.parquet"; pq.write_table(df, p); return p, df
 
 def _run(p, mode, tmp_path):
     out = tmp_path / "res.json"; pred = tmp_path / "pred.parquet"
@@ -43,7 +42,7 @@ def test_zeroconfig_emits_string_record_id_preds(tmp_path):
         t = pq.read_table(pred)
         assert t.column_names == ["record_id", "pred_cluster_id"]
         rids = set(t.column("record_id").to_pylist())
-        assert rids <= set(df["record_id"].to_list())
+        assert rids <= set(df.column("record_id").to_pylist())
         assert all(isinstance(x, str) for x in rids)
 
 def test_probabilistic_mode_runs_and_string_preds(tmp_path):

@@ -65,26 +65,46 @@ def test_generate_biblio_schema_and_stable_block_key(tmp_path):
     assert t.column_names == ["record_id", "title", "authors", "venue", "year"]
     # Within every truth cluster, venue+year (block key) must be identical across
     # members -- that's the stability guarantee that avoids the recall trap.
-    import polars as pl
-    df = pl.read_parquet(out).join(pl.read_parquet(truth), on="record_id")
-    per_cluster = df.group_by("cluster_id").agg(
-        pl.col("venue").n_unique().alias("nv"),
-        pl.col("year").drop_nulls().n_unique().alias("ny"))
-    # allow year null (dropna) but non-null year must be unique per cluster; venue always unique
-    assert per_cluster["nv"].max() == 1
-    assert per_cluster["ny"].max() == 1   # year stable per cluster where non-null
+    from collections import defaultdict
+
+    truth_t = pq.read_table(truth)
+    rids = t.column("record_id").to_pylist()
+    venue_by_id = dict(zip(rids, t.column("venue").to_pylist()))
+    year_by_id = dict(zip(rids, t.column("year").to_pylist()))
+    cl_venues: dict = defaultdict(set)
+    cl_years: dict = defaultdict(set)
+    for r, c in zip(truth_t.column("record_id").to_pylist(),
+                    truth_t.column("cluster_id").to_pylist()):
+        cl_venues[c].add(venue_by_id.get(r))
+        y = year_by_id.get(r)
+        if y is not None:  # allow year null (dropna equivalent)
+            cl_years[c].add(y)
+    # venue always unique per cluster; non-null year unique per cluster
+    assert max(len(v) for v in cl_venues.values()) == 1
+    assert max(len(y) for y in cl_years.values()) == 1   # year stable where non-null
 
 
 def test_generate_biblio_titles_actually_vary(tmp_path):
     gen = _load("generate_fixture")
     out, truth = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
     gen.generate(3000, 0.3, out, truth, 42, 1000, shape="biblio")
-    import polars as pl
-    df = pl.read_parquet(out).join(pl.read_parquet(truth), on="record_id")
-    multi = df.filter(pl.col("cluster_id").is_in(
-        df.group_by("cluster_id").len().filter(pl.col("len") > 1)["cluster_id"]))
+    import pyarrow.parquet as pq
+    from collections import defaultdict
+
+    t = pq.read_table(out)
+    truth_t = pq.read_table(truth)
+    title_by_id = dict(zip(t.column("record_id").to_pylist(),
+                           t.column("title").to_pylist()))
+    cl_members: dict = defaultdict(list)
+    for r, c in zip(truth_t.column("record_id").to_pylist(),
+                    truth_t.column("cluster_id").to_pylist()):
+        cl_members[c].append(r)
     # at least some multi-member clusters have >1 distinct title (corruption happened)
-    assert multi.group_by("cluster_id").agg(pl.col("title").n_unique().alias("nt"))["nt"].max() > 1
+    max_titles = 0
+    for members in cl_members.values():
+        if len(members) > 1:
+            max_titles = max(max_titles, len({title_by_id.get(m) for m in members}))
+    assert max_titles > 1
 
 
 def test_generator_projection_check_rejects_small_C():

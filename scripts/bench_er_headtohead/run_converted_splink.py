@@ -52,6 +52,10 @@ import time
 import types
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
 _HERE = Path(__file__).resolve().parent
 
 # Must be set before goldenmatch/polars imports (Windows WMI hang guard is a
@@ -111,7 +115,7 @@ def _run_native_splink(run_splink_mod, settings, training_rules, s,
     )
     with tempfile.TemporaryDirectory(prefix="conv_splink_") as td:
         input_path = Path(td) / "records.parquet"
-        records.write_parquet(input_path)
+        pq.write_table(records, input_path)
         db_api = DuckDBAPI()
         db_api._con.execute(
             f"CREATE OR REPLACE VIEW bench_input AS "
@@ -130,15 +134,13 @@ def _run_converted_goldenmatch(config, records, pred_out: Path) -> float:
     pred_cluster_id} parquet in STRING record_id space (mirrors run_panel.py's
     __row_id__ -> record_id remap). Returns the dedupe wall."""
     import numpy as np
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     try:
         from goldenmatch import dedupe_df
     except ImportError:  # older layouts expose this on _api
         from goldenmatch._api import dedupe_df
 
-    rid = records["record_id"].to_list()
+    rid = records.column("record_id").to_pylist()
     t0 = time.perf_counter()
     ded = dedupe_df(records, config=config)
     wall = time.perf_counter() - t0
@@ -185,7 +187,6 @@ def main() -> int:
     datasets = _import_sibling("datasets")
     evaluate_mod = _import_sibling("evaluate")
 
-    import polars as pl
     import splink.comparison_library as cl
     from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 
@@ -201,11 +202,16 @@ def main() -> int:
 
     # 1. Dataset.
     records, truth = datasets.load_dataset(args.dataset)
-    if args.max_rows and records.height > args.max_rows:
-        records = records.head(args.max_rows)
-        truth = truth.filter(pl.col("record_id").is_in(records["record_id"]))
-    print(f"[dataset] {args.dataset}: {records.height} records, "
-          f"{truth['cluster_id'].n_unique()} true clusters")
+    if args.max_rows and records.num_rows > args.max_rows:
+        records = records.slice(0, args.max_rows)
+        truth = truth.filter(
+            pc.is_in(
+                truth.column("record_id"),
+                value_set=records.column("record_id").combine_chunks(),
+            )
+        )
+    print(f"[dataset] {args.dataset}: {records.num_rows} records, "
+          f"{len(pc.unique(truth.column('cluster_id')))} true clusters")
 
     # 2. The SAME settings run_splink.py uses for this dataset.
     spec = run_splink_mod._SETTINGS_BY_DATASET.get(args.dataset)
@@ -215,7 +221,7 @@ def main() -> int:
         return 2
     kind, builder = spec
     if kind == "person":
-        settings, training_rules = builder(s, records.columns)
+        settings, training_rules = builder(s, records.column_names)
     else:
         settings, training_rules = builder(s)
 
@@ -227,7 +233,13 @@ def main() -> int:
     out_dir: Path = args.out_dir / args.dataset
     out_dir.mkdir(parents=True, exist_ok=True)
     truth_path = out_dir / "truth.parquet"
-    truth.with_columns(pl.col("record_id").cast(pl.Utf8)).write_parquet(truth_path)
+    _tidx = truth.schema.get_field_index("record_id")
+    pq.write_table(
+        truth.set_column(
+            _tidx, "record_id", pc.cast(truth.column("record_id"), pa.string())
+        ),
+        truth_path,
+    )
 
     # 4. Native Splink.
     splink_pred = out_dir / "splink_pred.parquet"
@@ -238,9 +250,14 @@ def main() -> int:
     )
     splink_wall = time.perf_counter() - t0
     # String record_id space to join the string-keyed truth.
-    pl.read_parquet(splink_pred).with_columns(
-        pl.col("record_id").cast(pl.Utf8)
-    ).write_parquet(splink_pred)
+    _sp = pq.read_table(splink_pred)
+    _spidx = _sp.schema.get_field_index("record_id")
+    pq.write_table(
+        _sp.set_column(
+            _spidx, "record_id", pc.cast(_sp.column("record_id"), pa.string())
+        ),
+        splink_pred,
+    )
     print(f"[splink] wall={splink_wall:.1f}s "
           f"scored_pairs={splink_result.get('scored_pairs')} "
           f"clusters={splink_result.get('cluster_count')}")
