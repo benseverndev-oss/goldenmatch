@@ -2315,30 +2315,36 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
 
 
-def score_probabilistic_native(
-    block_df: pl.DataFrame,
+def _score_fs_native_frame(
+    frame,
+    size_list,
     mk: MatchkeyConfig,
     em_result: EMResult,
     exclude_pairs: set[tuple[int, int]] | None = None,
 ) -> list[tuple[int, int, float]]:
-    """Score one block via the native Rust FS kernel (``score_block_pairs_fs``).
+    """Shared native FS kernel call over ``frame`` with per-block ``size_list``.
 
-    Output-equivalent (within rapidfuzz tolerance) to
-    ``score_probabilistic_vectorized``: same transformed values
-    (``_field_values_for_block``), same level mapping, same EM match weights,
-    same negative-evidence firing rule + fired weights (EM-learned
-    ``__ne__<field>`` entries or the ``penalty_bits`` override), same
-    calibration + threshold. The kernel replaces the per-field numpy NxN
-    matrices with a single GIL-released per-pair Rust loop. Caller gates on
-    ``_fs_native_eligible``.
+    ``frame`` must be sorted so blocks are contiguous in the order ``size_list``
+    delimits (``size_list`` is the run-length list of block sizes). All kernel
+    args (row_ids, per-field ``field_values``, negative-evidence arrays) are
+    built over the WHOLE frame in row order — the kernel slices per block using
+    ``size_list`` (``score.rs`` walks contiguous spans and only compares WITHIN
+    each block), so:
+
+      - single block:  ``size_list = [n]`` (``score_probabilistic_native``)
+      - whole bucket:  ``size_list`` = run-lengths over the block-sorted bucket
+        (``score_probabilistic_bucket_native``)
+
+    are byte-identical: the batched output equals concatenating per-block scores.
+    Caller gates on ``_fs_native_eligible``.
     """
     from goldenmatch.core._native_loader import native_module
+    from goldenmatch.core.frame import to_frame as _tf_w6
 
     if exclude_pairs is None:
         exclude_pairs = set()
-    from goldenmatch.core.frame import to_frame as _tf_w6
 
-    row_ids = _tf_w6(block_df).column("__row_id__").to_list()
+    row_ids = _tf_w6(frame).column("__row_id__").to_list()
     n = len(row_ids)
     if n < 2:
         return []
@@ -2357,7 +2363,7 @@ def score_probabilistic_native(
     else:
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
-    field_values = [_field_values_for_block(block_df, f, n) for f in mk.fields]
+    field_values = [_field_values_for_block(frame, f, n) for f in mk.fields]
     scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
     levels = [int(f.levels) for f in mk.fields]
     partials = [float(f.partial_threshold) for f in mk.fields]
@@ -2389,7 +2395,7 @@ def score_probabilistic_native(
     ne_fields = mk.negative_evidence or []
     if ne_fields:
         opt_kwargs["ne_values"] = [
-            _field_values_for_block(block_df, ne, n) for ne in ne_fields
+            _field_values_for_block(frame, ne, n) for ne in ne_fields
         ]
         opt_kwargs["ne_scorer_ids"] = [
             _NATIVE_FS_SCORER_IDS[ne.scorer] for ne in ne_fields
@@ -2402,11 +2408,69 @@ def score_probabilistic_native(
         ]
 
     pairs = native_module().score_block_pairs_fs(
-        row_ids, [n], field_values, scorer_ids, levels, partials, weights,
-        calibrated, prior_w, min_weight, weight_range, link_threshold, excl,
+        row_ids, [int(s) for s in size_list], field_values, scorer_ids, levels,
+        partials, weights, calibrated, prior_w, min_weight, weight_range,
+        link_threshold, excl,
         **opt_kwargs,
     )
     return [(a, b, round(float(s), 4)) for a, b, s in pairs]
+
+
+def score_probabilistic_native(
+    block_df: pl.DataFrame,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+    exclude_pairs: set[tuple[int, int]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Score one block via the native Rust FS kernel (``score_block_pairs_fs``).
+
+    Output-equivalent (within rapidfuzz tolerance) to
+    ``score_probabilistic_vectorized``: same transformed values
+    (``_field_values_for_block``), same level mapping, same EM match weights,
+    same negative-evidence firing rule + fired weights (EM-learned
+    ``__ne__<field>`` entries or the ``penalty_bits`` override), same
+    calibration + threshold. The kernel replaces the per-field numpy NxN
+    matrices with a single GIL-released per-pair Rust loop. Caller gates on
+    ``_fs_native_eligible``. Thin wrapper over ``_score_fs_native_frame`` with a
+    single-block ``size_list = [n]`` (the batched bucket path shares the prep).
+    """
+    from goldenmatch.core.frame import to_frame as _tf_w6
+
+    n = _tf_w6(block_df).height
+    return _score_fs_native_frame(block_df, [n], mk, em_result, exclude_pairs)
+
+
+def score_probabilistic_bucket_native(
+    sorted_bucket_df,
+    size_list,
+    mk: MatchkeyConfig,
+    em_result: EMResult,
+    exclude_pairs: set[tuple[int, int]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Score a WHOLE block-sorted bucket in ONE native FS kernel call.
+
+    The FS analog of the weighted bucket fast path (``score_block_pairs_arrow``
+    over a whole bucket): instead of one ``score_probabilistic_native`` call per
+    block, hand the kernel the block-sorted bucket plus its per-block run-length
+    ``size_list`` and let it isolate blocks by the sizes list (the same block
+    isolation the single-block path gets from ``[n]``).
+
+    Precondition: ``sorted_bucket_df`` is already sorted by ``__block_key__`` and
+    ``size_list`` is the run-length list of block sizes over it (blocks are
+    contiguous, in order). Caller guarantees ``_fs_native_eligible(mk)`` and
+    ``_fs_native_enabled()`` and has already applied the oversized / size<2 keep
+    mask (so every block in ``size_list`` is scoreable).
+
+    **Byte-parity:** for the same ``sorted_bucket_df`` + ``size_list``, the output
+    equals concatenating ``score_probabilistic_native(block_slice, ...)`` over
+    each block — identical values, identical 4dp rounding — because the kernel
+    only compares within-block pairs (``score.rs`` spans) and both paths feed the
+    same transformed per-field values. Asserted in
+    ``tests/test_fs_bucket_native.py``.
+    """
+    return _score_fs_native_frame(
+        sorted_bucket_df, size_list, mk, em_result, exclude_pairs
+    )
 
 
 def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
