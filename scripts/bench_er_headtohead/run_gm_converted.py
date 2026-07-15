@@ -109,7 +109,6 @@ def main() -> None:
     # skip payload STILL carries lane + shape (the test asserts them
     # unconditionally, before the ok-guard).
     try:
-        import splink  # noqa: F401
         import splink.comparison_library as cl
         from splink import DuckDBAPI, Linker, SettingsCreator, block_on
     except ImportError as e:
@@ -142,7 +141,7 @@ def main() -> None:
 
         # Build the SAME Splink settings the `splink` lane runs for this shape, then
         # serialize to the REAL dict the recognizers must parse and convert it.
-        settings, _training_rules = shapes.SHAPES[args.shape].splink_settings(s)
+        settings, _ = shapes.SHAPES[args.shape].splink_settings(s)
         settings_dict = settings.create_settings_dict(sql_dialect_str="duckdb")
         try:
             conversion = from_splink(settings_dict)

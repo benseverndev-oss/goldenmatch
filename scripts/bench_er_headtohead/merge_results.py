@@ -75,17 +75,23 @@ def main() -> None:
     args = ap.parse_args()
 
     merged = merge_dir(args.artifacts_dir)
-    args.out_json.write_text(json.dumps(merged, indent=2))
+    args.out_json.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
     orchestrate = _load("orchestrate")  # lazy: keeps merge_dir dependency-free
-    header = merged["runs"][0] if merged["runs"] else {}
-    md = orchestrate.render_markdown(merged["results"], header)
-    args.out_md.write_text(md)
+    # Render the banner from the LATEST run header (max run_timestamp), not the
+    # first artifact alphabetically -- so a re-dispatch's header wins.
+    hdr = (
+        max(merged["runs"], key=lambda h: h.get("run_timestamp", float("-inf")))
+        if merged["runs"]
+        else {}
+    )
+    md = orchestrate.render_markdown(merged["results"], hdr)
+    args.out_md.write_text(md, encoding="utf-8")
     print(md)
 
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
-        with open(step_summary, "a") as fh:
+        with open(step_summary, "a", encoding="utf-8") as fh:
             fh.write(md)
 
 

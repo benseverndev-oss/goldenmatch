@@ -15,6 +15,7 @@ Usage:
     python orchestrate.py --scales 100000 1000000 5000000 25000000 100000000 \
         --engines goldenmatch splink --workdir .bench_er --dupe-rate 0.20
 """
+# NOTE: keep top-level imports stdlib-only -- merge_results.py imports this module's render_markdown() in a dependency-free CI job (no uv sync).
 from __future__ import annotations
 
 import argparse
