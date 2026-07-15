@@ -108,7 +108,9 @@ def guard_entrypoint(category: str, summary: str) -> Callable[[_F], _F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return fn(*args, **kwargs)
-            except BaseException as exc:  # noqa: BLE001 - report then re-raise
+            except Exception as exc:  # noqa: BLE001 - report then re-raise
+                # Exception, not BaseException: KeyboardInterrupt/SystemExit are
+                # the user's action, not an anomaly -- they pass through silently.
                 report_unexpected(exc, category=category, summary=summary)
                 raise
 
