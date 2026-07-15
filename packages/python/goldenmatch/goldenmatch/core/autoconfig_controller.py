@@ -971,9 +971,8 @@ class AutoConfigController:
         ):
             from goldenmatch.core.autoconfig_rules import precision_anchor_would_fire
 
-            _demote_suspect = (
-                lambda e: precision_anchor_would_fire(e.config, e.profile, ctx)
-            )
+            def _demote_suspect(e: HistoryEntry) -> bool:
+                return precision_anchor_would_fire(e.config, e.profile, ctx)
         best_entry = history.pick_committed(
             precision_collapse_floor=0.9,
             use_zero_label_confidence=_zero_label_commit_enabled(),

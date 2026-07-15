@@ -164,7 +164,13 @@ class RunHistory:
         iteration tiebreak resolves it). Mirrors the
         ``precision_collapse_floor`` philosophy: commit must not prefer an
         entry the precision-anchor rule would still flag. Default None ->
-        byte-identical behavior.
+        byte-identical behavior. Known rank-3 collision: a demoted RED
+        entry (2+1) shares rank with a non-demoted collapse-floor entry
+        (3) but keeps its ``-sep`` tiebreaker while the collapse branch
+        neutralises sep to 0.0, so the demoted RED can now outrank the
+        collapsed entry — both are last-resort entries that v0 outranks
+        in practice, accepted as-is. The callable must not raise on any
+        surviving entry; exceptions propagate out of ``pick_committed``.
         """
         if (precision_collapse_floor is not None
                 and not (0.0 <= precision_collapse_floor <= 1.0)):
