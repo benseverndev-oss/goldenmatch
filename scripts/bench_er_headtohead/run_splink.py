@@ -224,32 +224,6 @@ _SETTINGS_BY_DATASET = {
 }
 
 
-def _default_person_settings(s):
-    """Legacy --input person fixture spec (generate_fixture columns:
-    record_id, first_name, surname, dob, postcode, city)."""
-    SettingsCreator = s["SettingsCreator"]
-    block_on = s["block_on"]
-    cl = s["cl"]
-    settings = SettingsCreator(
-        link_type="dedupe_only",
-        unique_id_column_name="record_id",
-        blocking_rules_to_generate_predictions=[
-            block_on("surname", "substr(dob, 1, 4)"),
-            block_on("first_name", "substr(dob, 1, 4)"),
-            block_on("postcode"),
-        ],
-        comparisons=[
-            cl.JaroWinklerAtThresholds("first_name", [0.9, 0.7]),
-            cl.JaroWinklerAtThresholds("surname", [0.9, 0.7]),
-            cl.DamerauLevenshteinAtThresholds("dob", [1, 2]),
-            cl.DamerauLevenshteinAtThresholds("postcode", [1, 2]),
-            cl.ExactMatch("city"),
-        ],
-    )
-    training_rules = [block_on("surname", "dob"), block_on("first_name", "dob")]
-    return settings, training_rules
-
-
 def _run_splink_linker(
     settings, training_rules, input_view, db_api, s, args, result
 ) -> None:
@@ -411,7 +385,7 @@ def main() -> None:
                 return
         else:
             # --input fixture mode: settings come from the shape registry (single
-            # source of truth). person == the old _default_person_settings spec.
+            # source of truth). person == shapes._person_splink_settings.
             input_path = args.input
             shapes = _load_shapes_module()
             settings, training_rules = shapes.SHAPES[args.shape].splink_settings(s)
