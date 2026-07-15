@@ -882,41 +882,127 @@ def test_calibration_lever_partial_model_skips():
     assert "surname" in warn_findings[0].message
 
 
-def test_calibration_lever_ne_bearing_matchkey_skips():
-    """Tripwire for the planned fan-out upgrade lever: the calibration
-    lever's pair-weight sum and model min/max range cover REGULAR fields
-    only -- no negative-evidence contributions. ``from_splink`` never emits
-    ``negative_evidence`` today, but the fan-out lever will; until the
-    lever is taught ``fs_weight_range``, an NE-bearing matchkey must warn +
-    skip (levers never fail the pass) rather than calibrate thresholds on
-    the wrong weight scale. Hand-built: a normal trained conversion with NE
-    injected onto the matchkey."""
+def _ne_bearing_conversion(*, w_fired=-3.0):
+    """A trained conversion in the F3 fan_out-lever output shape: the
+    matchkey carries an EM-learned ``NegativeEvidenceField`` on ``phone``
+    plus the matching ``__ne__phone`` model entries (``match_weights``
+    stored as ``[w_fired, 0.0]``)."""
     from goldenmatch.config.schemas import NegativeEvidenceField
 
     conversion = from_splink(_calibration_settings())
     assert conversion.em_model is not None
     conversion.config.get_matchkeys()[0].negative_evidence = [
-        NegativeEvidenceField(field="first_name", scorer="exact", threshold=1.0, penalty_bits=6.0),
+        NegativeEvidenceField(field="phone", scorer="exact", threshold=0.95),
     ]
+    key = "__ne__phone"
+    conversion.em_model.m_probs[key] = [0.0625, 0.9375]
+    conversion.em_model.u_probs[key] = [0.5, 0.5]
+    conversion.em_model.match_weights[key] = [w_fired, 0.0]
+    return conversion
 
-    # _calibration_df yields 570 blocked pairs -- calibration WOULD run if
-    # the NE tripwire didn't skip first.
+
+def _calibration_df_with_phone(values=None):
+    """``_calibration_df`` plus a ``phone`` column (all-null by default)."""
+    df = _calibration_df()
+    if values is None:
+        values = [None] * len(df)
+    return df.with_columns(pl.Series("phone", values, dtype=pl.Utf8))
+
+
+def test_calibration_runs_on_ne_bearing_config():
+    """The NE tripwire is GONE (Task F5): an NE-bearing matchkey (the F3
+    fan_out output shape -- NE field + ``__ne__`` model entries) calibrates
+    thresholds instead of warn+skipping. The per-pair weight sum includes
+    NE contributions (``_ne_scalar_contribution``) and the normalization
+    range comes from ``fs_weight_range``, so the calibrated cuts live on
+    the same scale runtime scoring uses for NE-bearing configs."""
+    conversion = _ne_bearing_conversion()
+    # Distinct phones within every block -> the NE FIRES on blocked pairs.
+    phones = [f"555-{i:07d}" for i in range(60)]
     result = upgrade_splink_conversion(
-        conversion, _calibration_df(), levers={"calibration"}, measure=False
+        conversion,
+        _calibration_df_with_phone(phones),
+        levers={"calibration"},
+        measure=False,
     )
 
     upgraded_mk = result.upgraded_config.get_matchkeys()[0]
-    assert upgraded_mk.link_threshold is None
-    assert upgraded_mk.review_threshold is None
+    assert isinstance(upgraded_mk.link_threshold, float)
+    assert isinstance(upgraded_mk.review_threshold, float)
+    assert 0.0 < upgraded_mk.link_threshold <= 1.0
+    assert 0.0 < upgraded_mk.review_threshold <= 1.0
 
+    # No warn finding about negative evidence -- the tripwire is gone.
     warn_findings = [
         f for f in result.report.findings
         if f.splink_path == "upgrade:calibration" and f.severity == "warning"
     ]
-    assert len(warn_findings) == 1
-    assert "negative_evidence" in warn_findings[0].message
-    assert "fs_weight_range" in warn_findings[0].message
-    assert "skip" in warn_findings[0].message.lower()
+    assert warn_findings == []
+    info_findings = [
+        f for f in result.report.findings
+        if f.splink_path == "upgrade:calibration" and f.severity == "info"
+    ]
+    assert len(info_findings) == 1
+    assert "570" in info_findings[0].message  # n blocked candidate pairs
+
+    # Mutation square: the NE contributions genuinely MOVE the calibrated
+    # cuts. An implementation that silently dropped NE from the per-pair
+    # weight sums / normalization range would still produce in-range floats
+    # above -- but it would land exactly where the plain (no-NE) conversion
+    # lands on the same data, and this assert would catch it.
+    plain_result = upgrade_splink_conversion(
+        from_splink(_calibration_settings()),
+        _calibration_df_with_phone(phones),
+        levers={"calibration"},
+        measure=False,
+    )
+    plain_mk = plain_result.upgraded_config.get_matchkeys()[0]
+    assert upgraded_mk.link_threshold != plain_mk.link_threshold
+
+
+def test_calibration_ne_parity_when_never_fires():
+    """A zero-contribution NE (``__ne__`` weight range [0.0, 0.0]) on an
+    all-null NE column (never fires) must leave calibration EXACTLY where
+    an otherwise-identical no-NE run lands: fs_weight_range adds (0, 0) to
+    the model range and _ne_scalar_contribution adds 0.0 to every pair."""
+    df = _calibration_df_with_phone()  # phone all-null: NE never fires
+
+    ne_result = upgrade_splink_conversion(
+        _ne_bearing_conversion(w_fired=0.0), df,
+        levers={"calibration"}, measure=False,
+    )
+    plain_result = upgrade_splink_conversion(
+        from_splink(_calibration_settings()), df,
+        levers={"calibration"}, measure=False,
+    )
+
+    ne_mk = ne_result.upgraded_config.get_matchkeys()[0]
+    plain_mk = plain_result.upgraded_config.get_matchkeys()[0]
+    assert ne_mk.link_threshold is not None
+    assert ne_mk.link_threshold == plain_mk.link_threshold
+    assert ne_mk.review_threshold == plain_mk.review_threshold
+
+
+def test_calibration_uses_fs_weight_range(monkeypatch):
+    """The hand-rolled min/max weight sums are gone: calibration reaches
+    the shared ``fs_weight_range`` (core/probabilistic) for its
+    normalization range. Monkeypatched to raise a sentinel -> the lever
+    hits it."""
+    import goldenmatch.core.probabilistic as prob
+
+    class _Sentinel(Exception):
+        pass
+
+    def _boom(em, mk):
+        raise _Sentinel("fs_weight_range reached")
+
+    monkeypatch.setattr(prob, "fs_weight_range", _boom)
+
+    conversion = from_splink(_calibration_settings())
+    with pytest.raises(_Sentinel):
+        upgrade_splink_conversion(
+            conversion, _calibration_df(), levers={"calibration"}, measure=False
+        )
 
 
 def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
@@ -977,12 +1063,19 @@ def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
     assert "within-block" in findings[0].message
 
 
-def test_lever_order_tf_tables_then_distance_then_calibration():
-    """All three levers emit at least one finding on any trained run; their
-    first occurrences must appear in canonical registry order."""
+def test_lever_order_canonical():
+    """The finding-emitting levers' first occurrences must appear in canonical
+    registry order. (fan_out sits between distance_thresholds and calibration
+    but its stub bodies emit no finding on trained input, so it is asserted
+    via _LEVER_ORDER only.)"""
     from goldenmatch.config.splink_upgrade import _LEVER_ORDER
 
-    assert _LEVER_ORDER == ("tf_tables", "distance_thresholds", "calibration")
+    assert _LEVER_ORDER == (
+        "tf_tables",
+        "distance_thresholds",
+        "fan_out",
+        "calibration",
+    )
 
     conversion = from_splink(_trained_settings_with_levenshtein())
     # 15 identical emails -> one block of 15 -> 105 blocked pairs (> 50), so

@@ -4,9 +4,9 @@ Spec: docs/superpowers/specs/2026-07-14-splink-migration-upgrade-design.md
 
 A faithful Splink -> GoldenMatch conversion (``from_splink``) is the trust
 anchor: pure, deterministic, data-free. This module runs AFTER conversion,
-with the user's data in hand, and applies three independent, individually
-skippable levers (TF tables, measured distance thresholds, threshold
-calibration) to produce an upgraded config -- plus (optionally) a measured
+with the user's data in hand, and applies four independent, individually
+skippable levers (TF tables, measured distance thresholds, fan-out/negative
+evidence, threshold calibration) to produce an upgraded config -- plus (optionally) a measured
 baseline-vs-upgraded comparison. The converter itself is never modified or
 imported for its side effects; this module only reads its public result
 shape (``SplinkConversion``).
@@ -165,6 +165,12 @@ class _LeverContext:
     ``upgraded_config`` / ``em_model`` are the copy-on-write targets levers
     mutate in place; ``report`` accumulates findings (all under an
     ``upgrade:``-prefixed splink_path); ``df`` is the (already sampled) data.
+
+    ``splink_clusters``/``labels``/``id_column`` are the orchestrator's
+    reference-input args passed through untouched (DataFrame-or-path, same
+    loose typing as the orchestrator signature) so reference-aware levers
+    (fan_out) can read them; measurement keeps receiving them separately,
+    exactly as before.
     """
 
     conversion: SplinkConversion
@@ -173,6 +179,13 @@ class _LeverContext:
     report: ConversionReport
     df: pl.DataFrame
     seed: int
+    splink_clusters: pl.DataFrame | str | Path | None = None
+    labels: pl.DataFrame | str | Path | None = None
+    id_column: str | None = None
+    # True when ``df`` is a subsample of the full input (sample_cap hit) --
+    # lets sample-sensitive levers (fan_out's guard tuning) caveat findings
+    # whose reference statistics may be fragmented by the subsampling.
+    sampled: bool = False
 
 
 _BARE_SETTINGS_SKIP_MSG = (
@@ -447,6 +460,37 @@ _CALIBRATION_MAX_PAIRS = 10_000
 _CALIBRATION_MIN_PAIRS = 50
 
 
+def _estimate_within_block_prior(total_weights: list[float]) -> float:
+    """Within-block match-rate estimate from model likelihood ratios under an
+    equal-odds prior: mean of 2^w/(1+2^w).
+
+    Extracted from ``_lever_calibration`` (shared with the fan_out lever).
+    Rationale: em.proportion_matched has TWO different semantics depending on
+    origin: GM's own train_em estimates it ON BLOCKED PAIRS (the within-block
+    match rate compute_thresholds' percentile math expects), while an imported
+    Splink model carries probability_two_random_records_match -- a RANDOM-
+    PAIR prior, orders of magnitude below the post-blocking rate. Feeding
+    the raw prior into the percentile cut pushes link into the extreme top
+    of the blocked-pair distribution and collapses recall (dogfood bench,
+    real_time_settings/fake_1000: F1 0.482 -> 0.157). So re-estimate the
+    within-block rate from the model's own likelihood ratios under an
+    equal-odds prior (prior weight 0): the mean pair posterior
+    2^w / (1 + 2^w) over the scored candidates. The mis-scaled imported
+    prior is deliberately discarded rather than trusted; when it errs, this
+    estimator errs HIGH (uninformative pairs pull toward 0.5), which only
+    loosens the percentile cut toward compute_thresholds' 0.40 link floor
+    -- the safe direction (erring low reproduces the recall collapse).
+    Bench validation vs truth: 0.539 est / 0.547 true and 0.485 / 0.484 on
+    the two well-separated pairs; 0.708 / 0.307 (high, floor-safe) on the
+    borderline-heavy one.
+    """
+    from goldenmatch.core.probabilistic import posterior_from_weight
+
+    if not total_weights:
+        raise ValueError("cannot estimate a within-block prior from zero pairs")
+    return sum(posterior_from_weight(w, 0.0) for w in total_weights) / len(total_weights)
+
+
 def _lever_calibration(ctx: _LeverContext) -> None:
     # Runs AFTER levers 1-2 by design (registry order): it calibrates the
     # thresholds against the model users will actually run.
@@ -456,10 +500,11 @@ def _lever_calibration(ctx: _LeverContext) -> None:
 
     from goldenmatch.core.probabilistic import (
         _fs_calibration_mode,
+        _ne_scalar_contribution,
         _sample_blocked_pairs,
         comparison_vector,
         compute_thresholds,
-        posterior_from_weight,
+        fs_weight_range,
     )
 
     mapped_to = "matchkeys[0].link_threshold/review_threshold"
@@ -482,24 +527,6 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     assert ctx.em_model is not None  # copy of conversion.em_model (checked above)
     em = ctx.em_model
     mk = ctx.upgraded_config.get_matchkeys()[0]
-
-    # Tripwire for the planned fan-out upgrade lever: this lever's per-pair
-    # weight sum and hand-rolled model min/max range below cover REGULAR
-    # fields only -- they do not include negative-evidence contributions
-    # (`__ne__<field>` entries / penalty_bits). Unreachable today
-    # (from_splink never emits negative_evidence), but the fan-out lever
-    # will emit exactly that shape; calibrating while ignoring NE weights
-    # would put the thresholds on the wrong scale. Warn + skip until this
-    # lever is taught fs_weight_range (core/probabilistic.py).
-    if mk.negative_evidence:
-        ctx.report.warn(
-            "upgrade:calibration",
-            "skipped: calibration does not yet account for negative_evidence "
-            "weights (the pair-weight sum and model range cover regular "
-            "fields only; see fs_weight_range) -- thresholds left unset",
-            mapped_to=mapped_to,
-        )
-        return
 
     # Mixed bare/trained input produces a PARTIAL imported model (import_em
     # skips bare comparisons with a warning), so em.match_weights does not
@@ -570,6 +597,9 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     from goldenmatch.core.frame import to_frame
 
     cols = [f.field for f in mk.fields if f.field is not None and f.field != "__record__"]
+    # NE fields (the fan_out lever's output shape) join the projection so
+    # _ne_fired can see the values when summing per-pair NE contributions.
+    cols += [ne.field for ne in (mk.negative_evidence or []) if ne.field not in cols]
     row_lookup: dict[int, dict] = {}
     for row in to_frame(lf.collect()).select_dicts(["__row_id__"] + cols):
         row_lookup[row["__row_id__"]] = row
@@ -587,17 +617,29 @@ def _lever_calibration(ctx: _LeverContext) -> None:
 
     total_weights: list[float] = []
     for a, b in pairs:
-        vec = comparison_vector(row_lookup.get(a, {}), row_lookup.get(b, {}), mk)
+        row_a = row_lookup.get(a, {})
+        row_b = row_lookup.get(b, {})
+        vec = comparison_vector(row_a, row_b, mk)
         total_weights.append(
             sum(em.match_weights[name][vec[k]] for k, name in indexed_fields)
+            # NE contributions: 0.0 unless the field FIRES (core scalar
+            # helper -- penalty_bits override or the EM-learned `__ne__`
+            # fired-weight), matching runtime FS scoring.
+            + sum(
+                _ne_scalar_contribution(row_a, row_b, ne, em)
+                for ne in (mk.negative_evidence or [])
+            )
         )
 
     # Normalize the SAME way runtime scoring does (score_probabilistic):
     # against the MODEL-derived min/max total weight, not the observed
     # min/max -- at run time mk.link_threshold is compared to model-range
     # normalized scores, so the calibrated cuts must live on that scale.
-    max_weight = sum(max(em.match_weights[name]) for _, name in indexed_fields)
-    min_weight = sum(min(em.match_weights[name]) for _, name in indexed_fields)
+    # fs_weight_range covers regular fields AND negative_evidence
+    # (`__ne__` entries / penalty_bits). It iterates ALL mk.fields (no
+    # __record__ exclusion), but converted configs never emit __record__
+    # pseudo-fields and the uncovered-fields guard above already ran.
+    min_weight, max_weight = fs_weight_range(em, mk)
     weight_range = max_weight - min_weight
     if weight_range <= 0:
         ctx.report.warn(
@@ -609,29 +651,16 @@ def _lever_calibration(ctx: _LeverContext) -> None:
         return
     normalized = [(w - min_weight) / weight_range for w in total_weights]
 
-    # em.proportion_matched has TWO different semantics depending on origin:
-    # GM's own train_em estimates it ON BLOCKED PAIRS (the within-block match
-    # rate compute_thresholds' percentile math expects), while an imported
-    # Splink model carries probability_two_random_records_match -- a RANDOM-
-    # PAIR prior, orders of magnitude below the post-blocking rate. Feeding
-    # the raw prior into the percentile cut pushes link into the extreme top
-    # of the blocked-pair distribution and collapses recall (dogfood bench,
-    # real_time_settings/fake_1000: F1 0.482 -> 0.157). Re-estimate the
-    # within-block rate from the model's own likelihood ratios under an
-    # equal-odds prior (prior weight 0): the mean pair posterior
-    # 2^w / (1 + 2^w) over the scored candidates. The mis-scaled imported
-    # prior is deliberately discarded rather than trusted; when it errs, this
-    # estimator errs HIGH (uninformative pairs pull toward 0.5), which only
-    # loosens the percentile cut toward compute_thresholds' 0.40 link floor
-    # -- the safe direction (erring low reproduces the recall collapse).
-    # Bench validation vs truth: 0.539 est / 0.547 true and 0.485 / 0.484 on
-    # the two well-separated pairs; 0.708 / 0.307 (high, floor-safe) on the
-    # borderline-heavy one. The scratch copy keeps the SHIPPED model's
-    # proportion_matched untouched: the re-estimated rate only parameterizes
-    # this threshold computation.
-    within_block_rate = sum(
-        posterior_from_weight(w, 0.0) for w in total_weights
-    ) / len(total_weights)
+    # The imported random-pair prior is deliberately discarded in favor of an
+    # errs-HIGH within-block re-estimate; see _estimate_within_block_prior's
+    # docstring for the full safety rationale. This estimate is NE-INCLUSIVE
+    # by design (total_weights above already carry per-pair NE contributions,
+    # matching runtime scoring); the fan_out lever's regular-only estimate is
+    # different on purpose -- it runs pre-NE, gating whether NE should exist
+    # at all (see splink_upgrade_fanout). The scratch copy keeps the
+    # SHIPPED model's proportion_matched untouched: the re-estimated rate only
+    # parameterizes this threshold computation.
+    within_block_rate = _estimate_within_block_prior(total_weights)
     em_scratch = _dc_replace(em, proportion_matched=within_block_rate)
 
     link, review = compute_thresholds(em_scratch, scored_weights=normalized)
@@ -654,13 +683,27 @@ def _lever_calibration(ctx: _LeverContext) -> None:
     )
 
 
+def _lever_fan_out(ctx: _LeverContext) -> None:
+    # Lazy import (mirrors the measurement lazy import): the fan_out lever
+    # body lives in its own module; this one stays import-light without it.
+    from goldenmatch.config.splink_upgrade_fanout import run_fan_out_lever
+
+    run_fan_out_lever(ctx)
+
+
 _LEVER_REGISTRY: dict[str, Callable[[_LeverContext], None]] = {
     "tf_tables": _lever_tf_tables,
     "distance_thresholds": _lever_distance_thresholds,
+    "fan_out": _lever_fan_out,
     "calibration": _lever_calibration,
 }
 
-_LEVER_ORDER: tuple[str, ...] = ("tf_tables", "distance_thresholds", "calibration")
+_LEVER_ORDER: tuple[str, ...] = (
+    "tf_tables",
+    "distance_thresholds",
+    "fan_out",
+    "calibration",
+)
 
 
 def _resolve_levers(levers: Iterable[str] | None) -> list[str]:
@@ -708,8 +751,8 @@ def upgrade_splink_conversion(
             prior Splink output) for pairwise-agreement measurement.
         labels: Optional ground-truth id -> cluster_id for true P/R/F1 +
             B-cubed measurement.
-        levers: Subset of ``{"tf_tables", "distance_thresholds",
-            "calibration"}`` to run; ``None`` (default) runs all three in
+        levers: Subset of ``{"tf_tables", "distance_thresholds", "fan_out",
+            "calibration"}`` to run; ``None`` (default) runs all four in
             that order. Unknown names raise :class:`SplinkUpgradeError`.
         measure: When True (default), runs baseline-vs-upgraded measurement
             on the sample. ``False`` skips measurement (an info finding
@@ -768,6 +811,10 @@ def upgrade_splink_conversion(
         report=report,
         df=sampled_df,
         seed=seed,
+        splink_clusters=splink_clusters,
+        labels=labels,
+        id_column=id_column,
+        sampled=sampled,
     )
 
     for name in lever_names:
