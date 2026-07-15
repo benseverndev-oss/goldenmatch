@@ -501,7 +501,7 @@ So an env var sets the default behavior for a process, a config field overrides 
 
 ## Full environment-variable reference
 
-Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. Defaults verified against source. Most users only ever touch the [recommended setups](#recommended-setups).
+Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` exception, `GOLDEN_DIAGNOSTICS`), grouped by who should care. Defaults verified against source. Most users only ever touch the [recommended setups](#recommended-setups).
 
 ### Everyday & scale
 
@@ -553,6 +553,7 @@ Every `GOLDENMATCH_*` variable the package reads, grouped by who should care. De
 | `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | est-peak-RSS calibration coefficients for the match pressure gate. |
 | `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Batch no-PK identity hashing. |
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
+| `GOLDEN_DIAGNOSTICS` | `1` (on) | Anomaly diagnostics (note: no `MATCH` in the name). On states that are probably a GoldenMatch bug -- a native wheel-skew slow path, an unexpected `dedupe_df`/`match_df` crash, the config linter itself crashing, or a broken native install -- emit a warning with a prefilled GitHub issue URL plus a PII-safe environment report. Never fires on expected fallbacks or user errors, and sends nothing anywhere (a better error message, not telemetry). `0` disables. |
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |
 | `GOLDENMATCH_STANDARDIZE_STAGED` | `0` | Staged standardization (experimental, may slow). |
 | `GOLDENMATCH_BUCKET_VEC_MIN` / `_MAX` | `32` / `2000` | Block-size band for the vectorized float64 NxN cdist path in bucket scoring. |
