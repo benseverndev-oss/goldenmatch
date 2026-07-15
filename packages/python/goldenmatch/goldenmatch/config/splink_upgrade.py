@@ -179,8 +179,8 @@ class _LeverContext:
     report: ConversionReport
     df: pl.DataFrame
     seed: int
-    splink_clusters: object | None = None
-    labels: object | None = None
+    splink_clusters: pl.DataFrame | str | Path | None = None
+    labels: pl.DataFrame | str | Path | None = None
     id_column: str | None = None
     # True when ``df`` is a subsample of the full input (sample_cap hit) --
     # lets sample-sensitive levers (fan_out's guard tuning) caveat findings
