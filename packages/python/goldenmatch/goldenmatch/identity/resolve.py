@@ -189,6 +189,24 @@ def _golden_record_from_members(
     return out
 
 
+def _golden_record_from_payloads(
+    payload_by_row_id: dict[int, dict[str, Any]], row_ids: list[int]
+) -> dict[str, Any]:
+    """Roll up pre-indexed member payloads without re-scanning the frame."""
+    members = [payload_by_row_id[row_id] for row_id in row_ids if row_id in payload_by_row_id]
+    if not members:
+        return {}
+    out: dict[str, Any] = {}
+    for col in members[0]:
+        non_null = [member[col] for member in members if member.get(col) is not None]
+        if not non_null:
+            continue
+        values = [(str(value), value) for value in non_null]
+        values.sort(key=lambda item: len(item[0]), reverse=True)
+        out[col] = values[0][1]
+    return out
+
+
 def _cluster_confidence(cluster_info: dict[str, Any]) -> float | None:
     val = cluster_info.get("confidence")
     if val is None:
@@ -456,7 +474,7 @@ def resolve_clusters(
         ):
             entity_id = new_entity_id()
             now = datetime.now()
-            golden = _golden_record_from_members(df, members)
+            golden = _golden_record_from_payloads(rowid_to_payload, members)
             bulk_node_rows.append({
                 "entity_id": entity_id,
                 "status": IdentityStatus.ACTIVE.value,
@@ -528,7 +546,7 @@ def resolve_clusters(
             store.upsert_identity(IdentityNode(
                 entity_id=entity_id,
                 status=IdentityStatus.ACTIVE.value,
-                golden_record=_golden_record_from_members(df, members),
+                golden_record=_golden_record_from_payloads(rowid_to_payload, members),
                 confidence=_cluster_confidence(info),
                 dataset=dataset,
                 created_at=now,
@@ -557,7 +575,7 @@ def resolve_clusters(
                 entity_id=entity_id,
                 status=existing_node.status if existing_node else IdentityStatus.ACTIVE.value,
                 merged_into=existing_node.merged_into if existing_node else None,
-                golden_record=_golden_record_from_members(df, members),
+                golden_record=_golden_record_from_payloads(rowid_to_payload, members),
                 confidence=_cluster_confidence(info),
                 dataset=dataset,
                 created_at=existing_node.created_at if existing_node else now,
@@ -590,7 +608,7 @@ def resolve_clusters(
                 entity_id=winner,
                 status=IdentityStatus.ACTIVE.value,
                 merged_into=None,
-                golden_record=_golden_record_from_members(df, members),
+                golden_record=_golden_record_from_payloads(rowid_to_payload, members),
                 confidence=_cluster_confidence(info),
                 dataset=dataset,
                 created_at=winner_node.created_at if winner_node else now,
