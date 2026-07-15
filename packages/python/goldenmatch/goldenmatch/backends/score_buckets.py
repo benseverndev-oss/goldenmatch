@@ -54,6 +54,19 @@ def _bkt_debug_on() -> bool:
     )
 
 
+def _fs_bucket_native_enabled() -> bool:
+    """Whether the batched native FS bucket scorer is active (default ON).
+
+    ``GOLDENMATCH_FS_BUCKET_NATIVE=0`` forces the per-block ``prob_scorer`` loop
+    inside ``_score_one_bucket`` (the parity escape hatch — byte-identical to the
+    per-block native path). Only gates the BATCHED bucket call; whether the
+    per-block loop itself is native still follows ``_fs_native_eligible`` /
+    ``GOLDENMATCH_FS_NATIVE``."""
+    return os.environ.get("GOLDENMATCH_FS_BUCKET_NATIVE", "1").strip().lower() not in (
+        "0", "false", "no", "off", "disabled",
+    )
+
+
 # One-time guard so the stale-native-wheel warning (issue #688) fires at most
 # once per process instead of once per score_buckets call.
 _WARNED_STALE_NATIVE_WHEEL = False
@@ -714,9 +727,20 @@ def score_buckets(
     # Resolved once (vectorized NxN by default; scalar fallback for model-backed
     # scorers) — mirrors the pipeline's probabilistic_block_scorer.
     prob_scorer = None
+    fs_bucket_native = False
     if is_probabilistic:
-        from goldenmatch.core.probabilistic import probabilistic_block_scorer
+        from goldenmatch.core.probabilistic import (
+            _fs_native_eligible,
+            probabilistic_block_scorer,
+        )
         prob_scorer = probabilistic_block_scorer(mk, em_result)
+        # Batched native FS: score a WHOLE block-sorted bucket in one
+        # score_block_pairs_fs call (the FS analog of the weighted fast path's
+        # single score_block_pairs_arrow call), instead of one
+        # score_probabilistic_native call per block. Byte-identical to the
+        # per-block loop by construction (the kernel isolates blocks by the
+        # sizes list). GOLDENMATCH_FS_BUCKET_NATIVE=0 forces the per-block loop.
+        fs_bucket_native = _fs_bucket_native_enabled() and _fs_native_eligible(mk)
 
     # Native fast-path eligibility resolved ONCE: gated on, and every field's
     # scorer implemented by the native kernel. None -> Python per-pair loop.
@@ -1039,6 +1063,60 @@ def score_buckets(
         size_list = sorted_frame.run_lengths("__block_key__")
         if not size_list:
             return [], 0
+
+        # Batched native FS: hand the WHOLE block-sorted bucket + its per-block
+        # run-length sizes to the kernel in ONE call (the FS analog of
+        # _score_one_bucket_fast's single score_block_pairs_arrow call). The
+        # kernel isolates blocks by the sizes list, so this is byte-identical to
+        # calling prob_scorer (score_probabilistic_native) per block. Mirror the
+        # fast path's oversized/size<2 keep mask + array-and-size filtering, then
+        # apply the same across_files_only / target_ids post-filters as the
+        # per-block loop. GOLDENMATCH_FS_BUCKET_NATIVE=0 -> fs_bucket_native False
+        # -> the per-block prob_scorer loop below (parity escape hatch).
+        if fs_bucket_native:
+            keep = [
+                (s >= 2) and not (skip_oversized and s > max_block_size)
+                for s in size_list
+            ]
+            fs_sorted_df = sorted_df
+            kept_size_list = size_list
+            if not all(keep):
+                import numpy as np
+
+                row_mask = np.repeat(np.array(keep, dtype=bool), size_list)
+                from goldenmatch.core.frame import is_polars_dataframe as _ipd
+
+                if _ipd(sorted_df):
+                    fs_sorted_df = sorted_df.filter(pl.Series(row_mask))
+                else:  # pa.Table lane: Table.filter takes a boolean array
+                    import pyarrow as _pa
+
+                    fs_sorted_df = sorted_df.filter(_pa.array(row_mask))
+                kept_size_list = [s for s, k in zip(size_list, keep) if k]
+                if not kept_size_list:
+                    return [], 0
+            from goldenmatch.core.probabilistic import (
+                score_probabilistic_bucket_native,
+            )
+
+            pairs = score_probabilistic_bucket_native(
+                fs_sorted_df, kept_size_list, mk, em_result, frozen_exclude
+            )
+            # Same post-filters as the per-block loop below (the native kernel
+            # doesn't know about source_lookup / target_ids).
+            if across_files_only and source_lookup:
+                pairs = [
+                    (a, b, s) for a, b, s in pairs
+                    if source_lookup.get(a) != source_lookup.get(b)
+                ]
+            if target_ids is not None:
+                pairs = [
+                    (a, b, s) for a, b, s in pairs
+                    if (a in target_ids) != (b in target_ids)
+                ]
+            local_blocks = sum(1 for s in kept_size_list if s >= 2)
+            return pairs, local_blocks
+
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0

@@ -37,8 +37,11 @@ The `HeuristicRefitPolicy` applies rules such as:
 | `rule_corruption_normalize` | Adds normalization for corrupted identity columns. |
 | `rule_sparse_match_expand` | Lowers the threshold and adds side-channel blocking for sparse matches. |
 | `promote_negative_evidence` | Adds negative-evidence penalties for identity-discriminating columns (v1.11). |
+| `rule_precision_anchor_threshold_raise` | Raises the weighted threshold to 0.9 on the precision-collapse shape: near-total scored mass above the threshold on a name-dominated weighted matchkey that also carries a strong exact identity anchor. |
 
 Configs are ranked by a health metric: GREEN > YELLOW > RED, with the initial config as a virtual fallback.
+
+**Precision-collapse detection.** The precision-anchor rule doubles as a labels-free precision-collapse detector at commit time: once it has fired, commit selection rank-demotes any candidate config whose shape still trips the rule's trigger, and the score-distribution unimodality (dip) gate only reads RED with at least 30 scored pairs behind it (a flat dip over fewer pairs is sampling noise, not evidence). Measured on the crafted over-merge fixture: precision 0.009 -> 0.9868 at recall 1.0, with NCVR unaffected.
 
 <Warning>
   At 100,000+ rows, auto-config raises `ControllerNotConfidentError` rather than silently committing a low-confidence (RED) config. Handle this explicitly instead of adding a silent fallback path.

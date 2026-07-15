@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Fixed
 - **`from_splink` recognizes `IS NOT NULL` blocking guards** (#1783): compound
   `CustomRule` blocking rules carrying trailing `AND l.col IS NOT NULL` guard
@@ -17,6 +18,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   blocking key still converts but warns (guard dropped, candidates are a
   superset of Splink's; `strict=True` gates on it), and a guards-only rule
   keeps the existing unrecognized-drop path.
+=======
+### Added
+
+- **Anomaly diagnostics with prefilled GitHub issue prompts** (in-tree:
+  `goldenmatch.core._diagnostics_report` + `goldenmatch.core.diagnostics`; no
+  new package or dependency). When GoldenMatch hits a state that is probably
+  its own bug, it emits an actionable message with a prefilled issue URL.
+  Fires only on *anomalies* -- never on expected fallbacks or user errors:
+  (1) a native **wheel-skew** slow path (the kernel symbol is missing from the
+  installed wheel -- the #688 class); (2) an **unexpected crash** at `dedupe_df` /
+  `match_df` (re-raised unchanged, with a traceback + PII-safe environment in the
+  prompt; `ControllerNotConfidentError`, bad config, `FileNotFound`, `ValueError`
+  and other by-design/user errors are never prompted); (3) the **config linter
+  itself** crashing; (4) a **broken native install** (module present but fails to
+  load, vs plain "not installed"). Sends nothing anywhere -- it is a better error
+  message, not telemetry. Silence with `GOLDEN_DIAGNOSTICS=0`. Diagnostics is
+  never load-bearing: the reporter never raises.
+
+- **Precision-anchor threshold raise** (closes the #1207 over-merge, #1319): a
+  new default auto-config rule, `rule_precision_anchor_threshold_raise`, that
+  raises the weighted threshold to 0.9 on the precision-collapse shape
+  (>= 95% of scored mass above the threshold on a name-dominated weighted
+  matchkey with a strong exact identity anchor, the TF table live, and the
+  threshold below 0.9). Two commit-dynamics fixes make the raise actually land
+  (either alone still commits the over-merging config): the scoring-health
+  unimodality (dip) gate now requires at least 30 scored pairs before a flat
+  dip reads RED (`_MIN_DIP_SUPPORT` -- a flat dip over fewer pairs is sampling
+  noise), and when the rule has fired, `pick_committed` rank-demotes entries
+  whose config the rule's trigger still flags. Measured on the crafted #1319
+  fixture: precision 0.009 -> 0.9868 at recall 1.0; NCVR results unchanged.
+
+### Fixed
+
+- **The #1318 TF name downweight now reaches the default (bucket) scoring
+  path** (#1781): the bucket backend's fast path resolved plugin scorers via a
+  bare `plugin.score_pair`, so the per-dataset TF table behind
+  `GOLDENMATCH_TF_NAME_WEIGHTING` (default-on) never reached
+  `name_freq_weighted_jw` on the default path -- the flag was a silent no-op
+  there. `MatchkeyField.tf_freqs` is now threaded through the bucket fast
+  path's plugin branch (with a `TypeError` back-compat fallback for legacy
+  plugins without the keyword); built-in scorer branches are untouched.
+- **The >= 100k RED-refuse gate enforces again after every controller branch**:
+  a latent `n_rows` shadow in `AutoConfigController.run()` (the
+  suspicious-tight-blocking GREEN branch rebound the full-frame height to the
+  sample height) silently disabled the `REFUSE_AT_N` refuse gate, so runs that
+  should raise `ControllerNotConfidentError` on a RED config could slip
+  through.
+>>>>>>> origin/main
 
 ## [3.3.0] - 2026-07-14
 

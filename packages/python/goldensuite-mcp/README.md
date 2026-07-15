@@ -97,7 +97,7 @@ tools it calls stay individually listed and callable.
 | **`dedupe_file`** | `upload_dataset` -> `auto_configure` -> `agent_deduplicate` | golden CSV |
 | **`match_sources`** | upload A + upload B -> `agent_match_sources` | matches CSV |
 | **`assess_file`** | `upload_dataset` -> `analyze_data` -> `scan` | nothing (read-only) |
-| **`clean_and_dedupe`** | `upload_dataset` -> `run_transforms` -> `agent_deduplicate` | golden CSV |
+| **`clean_and_dedupe`** | `upload_dataset` -> one in-process `goldenpipe.run()` (check -> flow -> dedupe) | golden CSV |
 
 Each accepts a file either inline (`file_content` + `filename`) or as an
 already-uploaded server path (`file_path`); `match_sources` takes the pair

@@ -99,11 +99,12 @@ def _fast_static_block_sizes(
 
     Returns ``None`` — caller falls back to the exact ``build_blocks`` loop —
     whenever the vectorized result would NOT be byte-identical to
-    ``_build_static_blocks``: a non-static strategy, or oversized blocks that
-    ``_build_static_blocks`` would ANN/auto-split (``skip_oversized=True``).
-    With ``skip_oversized=False`` oversized blocks are kept whole, so the raw
-    group-by sizes still match. Singletons (size < 2) are dropped to mirror the
-    ``if size < 2: continue`` skip in ``_build_static_blocks``.
+    ``_build_static_blocks``: a non-static strategy, or the presence of ANY
+    oversized block (``_build_static_blocks`` sub-splits it under both
+    ``skip_oversized`` values now -- ANN/auto-split/skip when True, zero-config
+    auto-split when False+splittable, #372 -- so the raw group-by sizes diverge).
+    Singletons (size < 2) are dropped to mirror the ``if size < 2: continue``
+    skip in ``_build_static_blocks``.
     """
     if getattr(config, "strategy", "static") != "static":
         return None
@@ -129,7 +130,6 @@ def _fast_static_block_sizes(
     frame = to_frame(lf.collect()) if is_polars_lazyframe(lf) else to_frame(lf)
 
     max_block_size = config.max_block_size
-    skip_oversized = config.skip_oversized
     all_sizes: list[int] = []
     # Chao1 inputs for n_blocks richness extrapolation (S1): counted from the
     # raw per-key sizes BEFORE the size<2 drop (singletons feed F1).
@@ -146,9 +146,11 @@ def _fast_static_block_sizes(
         f1 += sum(1 for s in all_key_sizes if s == 1)
         f2 += sum(1 for s in all_key_sizes if s == 2)
         sizes = [s for s in all_key_sizes if s >= 2]
-        # If _build_static_blocks WOULD sub-split/skip an oversized block, the
-        # vectorized sizes diverge — bail to the exact path.
-        if skip_oversized and any(s > max_block_size for s in sizes):
+        # An oversized block is sub-split by _build_static_blocks under BOTH
+        # skip_oversized values now (True -> ANN/auto-split/skip; False ->
+        # zero-config auto-split when splittable, see #372), so the raw group-by
+        # sizes no longer match the built blocks. Bail to the exact path.
+        if any(s > max_block_size for s in sizes):
             return None
         all_sizes.extend(sizes)
     return all_sizes, f1, f2
@@ -498,20 +500,65 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
                     )
                     hot_blocks_skipped += 1
                     continue
+                elif config.sub_block_keys:
+                    # The adaptive strategy splits this oversized block by its
+                    # configured ``sub_block_keys`` downstream (build_blocks'
+                    # adaptive path calls _sub_block). Leave it intact here so we
+                    # don't pre-empt that with the zero-config auto-split; the
+                    # block is NOT scored whole because the caller sub-blocks it.
+                    logger.debug(
+                        "Oversized block %r (%d records) left intact for "
+                        "configured sub_block_keys splitting.",
+                        key_str, size,
+                    )
                 else:
-                    # skip_oversized=False -- the caller explicitly opted
-                    # into processing oversized blocks. We honor that but
-                    # log at ERROR so the OOM-vs-correctness tradeoff is
-                    # obvious in the run log. The actionable recovery is
-                    # always `skip_oversized=True` (drops the offending
-                    # block but lets the rest of the run land).
+                    # skip_oversized=False. Attempt the SAME zero-config
+                    # hot-block auto-split first (sub-partition by the
+                    # highest-cardinality column) -- splitting preserves recall
+                    # AND avoids the O(n^2) scoring OOM, so it is strictly better
+                    # than scoring the whole mega-block. This is the default path
+                    # (auto-config's FS year-diversify pass and the #1784-kept
+                    # common-surname block produce 10k+ record blocks whose
+                    # ~100M+ pairs OOM'd the runner when scored whole). Only when
+                    # auto-split can't help do we honor the opt-in "process
+                    # anyway".
+                    try:
+                        sub_blocks = _auto_split_block(
+                            group_df, config.max_block_size, key_str,
+                        )
+                    except Exception:
+                        logger.error(
+                            "Hot-block auto-split failed for %r (%d records).",
+                            key_str, size, exc_info=True,
+                        )
+                        sub_blocks = []
+                    useful_subs = []
+                    for b in sub_blocks:
+                        try:
+                            sub_size = b.n_rows()
+                        except Exception:
+                            sub_size = size + 1  # treat unknown as not-useful
+                        if sub_size < size and sub_size >= 2:
+                            useful_subs.append(b)
+                    if useful_subs:
+                        results.extend(useful_subs)
+                        hot_blocks_split += 1
+                        logger.info(
+                            "Hot-block split %r (%d records) → %d sub-blocks",
+                            key_str, size, len(useful_subs),
+                        )
+                        continue
+                    # Auto-split couldn't help -- honor the opt-in and process
+                    # the whole block (log at ERROR so the OOM-vs-correctness
+                    # tradeoff is obvious in the run log).
                     logger.error(
                         f"Block {key_str!r} has {size} records "
                         f"(exceeds max_block_size={config.max_block_size}, "
-                        f"~{size * (size - 1) // 2:,} pairs to score). "
-                        f"Processing anyway because skip_oversized=False; "
-                        f"set blocking.skip_oversized=True to skip oversized "
-                        f"blocks instead of risking OOM. See #372."
+                        f"~{size * (size - 1) // 2:,} pairs to score) and "
+                        f"auto-split produced no useful sub-blocks. Processing "
+                        f"anyway because skip_oversized=False; set "
+                        f"blocking.skip_oversized=True to skip oversized blocks "
+                        f"instead of risking OOM. See #372."
                     )
 
             results.append(BlockResult(
@@ -717,7 +764,7 @@ def _sub_block(
 
 
 def _auto_split_block(
-    block_df: pl.DataFrame,
+    block_df: Any,  # pl.DataFrame | pa.Table | seam Frame -- normalized via to_frame
     max_block_size: int,
     parent_key: str,
 ) -> list[BlockResult]:
@@ -726,26 +773,30 @@ def _auto_split_block(
     When no sub_block_keys are configured, this provides a zero-config fallback
     that splits by the column with the most unique values.
     """
-    # Find non-internal columns
-    candidates = [c for c in block_df.columns if not c.startswith("__")]
+    from goldenmatch.core.frame import to_frame
+
+    # Seam-normalize FIRST: block_df may be a pa.Table (arrow-native path) whose
+    # ``.columns`` are ChunkedArrays, not names -- ``bframe.columns`` returns
+    # NAMES on both backends. (The raw ``block_df.columns`` here was the
+    # arrow-path AttributeError that made auto-split silently no-op and let the
+    # mega-block fall through to be scored whole -> OOM. See #372/#1790.)
+    bframe = to_frame(block_df)
+    candidates = [c for c in bframe.columns if not c.startswith("__")]
     if not candidates:
         logger.warning(
             "Auto-split of %r: no non-internal columns available. Processing as-is.",
             parent_key,
         )
-        return [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key)]
+        return [BlockResult(block_key=parent_key, df=bframe.native, strategy="adaptive", depth=1, parent_key=parent_key)]
 
     # Pick column whose cardinality best splits blocks near max_block_size.
     # Ideal: each group has ~max_block_size records.
     # Score = number of groups with >= 2 records (useful groups).
-    n = len(block_df)
+    n = bframe.height
     best_col = candidates[0]
     best_useful_groups = 0
     best_nunique = 0
 
-    from goldenmatch.core.frame import to_frame
-
-    bframe = to_frame(block_df)
     for col in candidates:
         nunique = bframe.column(col).n_unique()
         # Estimate: if we split by this column, avg group size = n / nunique
@@ -781,7 +832,7 @@ def _auto_split_block(
             )
         results.append(BlockResult(
             block_key=f"{parent_key}||{key_str}",
-            df=group_frame.drop(["__auto_split__"]).native.lazy(),
+            df=group_frame.drop(["__auto_split__"]).native,
             strategy="adaptive",
             depth=1,
             parent_key=parent_key,
@@ -789,9 +840,9 @@ def _auto_split_block(
 
     logger.info(
         "Auto-split %r (%d records) into %d sub-blocks using column %r (cardinality=%d)",
-        parent_key, len(block_df), len(results), best_col, best_nunique,
+        parent_key, bframe.height, len(results), best_col, best_nunique,
     )
-    return results if results else [BlockResult(block_key=parent_key, df=block_df.lazy(), strategy="adaptive", depth=1, parent_key=parent_key)]
+    return results if results else [BlockResult(block_key=parent_key, df=bframe.native, strategy="adaptive", depth=1, parent_key=parent_key)]
 
 
 def _build_sorted_neighborhood_blocks(
