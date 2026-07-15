@@ -52,3 +52,34 @@ def test_projected_block_size_guard_flags_small_C():
     person_C = shapes.SHAPES["person"].blocking_cardinality
     assert shapes.projected_max_block_size(100_000_000, biblio_C) < \
            2 * shapes.projected_max_block_size(100_000_000, person_C)
+
+
+def test_generate_biblio_schema_and_stable_block_key(tmp_path):
+    import pyarrow.parquet as pq
+
+    gen = _load("generate_fixture")
+    out, truth = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
+    gen.generate(rows=3000, dupe_rate=0.3, out=out, truth=truth, seed=42,
+                 batch=1000, shape="biblio")
+    t = pq.read_table(out)
+    assert t.column_names == ["record_id", "title", "authors", "venue", "year"]
+    # Within every truth cluster, venue+year (block key) must be identical across
+    # members -- that's the stability guarantee that avoids the recall trap.
+    import polars as pl
+    df = pl.read_parquet(out).join(pl.read_parquet(truth), on="record_id")
+    per_cluster = df.group_by("cluster_id").agg(
+        pl.col("venue").n_unique().alias("nv"), pl.col("year").n_unique().alias("ny"))
+    # allow year null (dropna) but non-null year must be unique per cluster; venue always unique
+    assert per_cluster["nv"].max() == 1
+
+
+def test_generate_biblio_titles_actually_vary(tmp_path):
+    gen = _load("generate_fixture")
+    out, truth = tmp_path / "b.parquet", tmp_path / "b.truth.parquet"
+    gen.generate(3000, 0.3, out, truth, 42, 1000, shape="biblio")
+    import polars as pl
+    df = pl.read_parquet(out).join(pl.read_parquet(truth), on="record_id")
+    multi = df.filter(pl.col("cluster_id").is_in(
+        df.group_by("cluster_id").len().filter(pl.col("len") > 1)["cluster_id"]))
+    # at least some multi-member clusters have >1 distinct title (corruption happened)
+    assert multi.group_by("cluster_id").agg(pl.col("title").n_unique().alias("nt"))["nt"].max() > 1

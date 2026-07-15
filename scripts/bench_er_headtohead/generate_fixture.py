@@ -30,14 +30,55 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import json
 import string
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+
+def _load_shapes_module():
+    """Import the sibling shapes.py whether run as a script or from elsewhere.
+
+    shapes.py is goldenmatch-free at import time (its schema imports live inside
+    the builder bodies), so pulling N_VENUE / N_YEAR here keeps the generator
+    dependency-light."""
+    try:
+        import shapes as _shapes  # type: ignore
+
+        return _shapes
+    except ImportError:
+        pass
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    try:
+        import shapes as _shapes  # type: ignore
+
+        return _shapes
+    except ImportError:
+        sh_path = here / "shapes.py"
+        spec = importlib.util.spec_from_file_location("shapes", sh_path)
+        if spec is None or spec.loader is None:
+            raise
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+
+_shapes = _load_shapes_module()
+N_VENUE = _shapes.N_VENUE
+N_YEAR = _shapes.N_YEAR
+
+# biblio pool sizes.
+N_TITLE_WORDS = 20_000  # title-word vocabulary
+K_TITLE = 4  # words composed into each title
+BIBLIO_YEAR_START = 1965
 
 # Pool sizes chosen so compound blocking (surname + dob-year) yields small blocks
 # at every scale, keeping candidate-pair growth ~linear rather than quadratic.
@@ -156,14 +197,60 @@ SCHEMA = pa.schema(
         ("city", pa.string()),
     ]
 )
+BIBLIO_SCHEMA = pa.schema(
+    [
+        ("record_id", pa.int64()),
+        ("title", pa.string()),
+        ("authors", pa.string()),
+        ("venue", pa.string()),
+        ("year", pa.string()),
+    ]
+)
 TRUTH_SCHEMA = pa.schema([("record_id", pa.int64()), ("cluster_id", pa.int64())])
 
 
-def generate(rows: int, dupe_rate: float, out: Path, truth: Path, seed: int, batch: int) -> dict:
-    pools = _build_pools(seed)
-    n_first = pools["n_first"]
-    n_surname = pools["n_surname"]
-    sur_cumw = pools["surname_cumw"]
+def _build_pools_biblio(seed: int):
+    """Biblio pools: title-word vocabulary (+ parallel typo array via the
+    [base|typo] trick), author-surname pool (real census surnames), venue pool
+    (N_VENUE), year range (N_YEAR)."""
+    rng = np.random.default_rng(seed)
+    title_base = _syllable_pool(N_TITLE_WORDS, rng, 4, 10)
+    title_typo = [_typo_variant(s, rng) for s in title_base]
+    sur_base, _sur_cumw, _first_base = _load_real_names(rng)
+    venues = [v + " Journal" for v in _syllable_pool(N_VENUE, rng, 4, 9)]
+    years = [str(BIBLIO_YEAR_START + i) for i in range(N_YEAR)]
+    return {
+        # Combined [base | typo] array so a single fancy-index picks exact-or-typo.
+        "title_words": np.array(title_base + title_typo, dtype=object),
+        "n_title_words": len(title_base),
+        "author_surnames": np.array(sur_base, dtype=object),
+        "n_surname": len(sur_base),
+        "venues": np.array(venues, dtype=object),
+        "years": np.array(years, dtype=object),
+    }
+
+
+def generate(
+    rows: int,
+    dupe_rate: float,
+    out: Path,
+    truth: Path,
+    seed: int,
+    batch: int,
+    shape: str = "person",
+) -> dict:
+    if shape not in ("person", "biblio"):
+        raise ValueError(f"unknown shape: {shape!r}")
+    schema = SCHEMA if shape == "person" else BIBLIO_SCHEMA
+    if shape == "person":
+        pools = _build_pools(seed)
+        n_first = pools["n_first"]
+        n_surname = pools["n_surname"]
+        sur_cumw = pools["surname_cumw"]
+    else:
+        pools = _build_pools_biblio(seed)
+        n_title_words = pools["n_title_words"]
+        n_author = pools["n_surname"]
     rng = np.random.default_rng(seed + 1)
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.parent.mkdir(parents=True, exist_ok=True)
@@ -180,7 +267,7 @@ def generate(rows: int, dupe_rate: float, out: Path, truth: Path, seed: int, bat
     n_dupes = 0
     t0 = time.perf_counter()
 
-    writer = pq.ParquetWriter(out, SCHEMA, compression="zstd")
+    writer = pq.ParquetWriter(out, schema, compression="zstd")
     twriter = pq.ParquetWriter(truth, TRUTH_SCHEMA, compression="zstd")
     try:
         while written < rows:
@@ -204,48 +291,95 @@ def generate(rows: int, dupe_rate: float, out: Path, truth: Path, seed: int, bat
             is_dup = pos > 0
             n_dupes += int(is_dup.sum())
 
-            # Canonical attribute indices per identity, broadcast to rows.
-            # Surnames are census frequency-weighted (Zipfian -> realistic hot blocks).
-            si_ident = np.searchsorted(sur_cumw, rng.random(len(sizes)))
-            fi = np.repeat(rng.integers(0, n_first, len(sizes)), sizes)
-            si = np.repeat(si_ident, sizes)
-            di = np.repeat(rng.integers(0, DOB_DAYS, len(sizes)), sizes)
-            pi = np.repeat(rng.integers(0, N_POSTCODE, len(sizes)), sizes)
-            ci = np.repeat(rng.integers(0, N_CITY, len(sizes)), sizes)
-
-            # Duplicate variation (vectorised masks). Typo => offset into [base|typo] half.
-            r = rng.random(total)
-            fi_pick = fi + np.where(is_dup & (r < 0.40), n_first, 0)
-            r = rng.random(total)
-            si_pick = si + np.where(is_dup & (r < 0.50), n_surname, 0)
-
-            first = pools["first"][fi_pick]
-            surname = pools["surname"][si_pick]
-            dob = pools["dob"][di].copy()
-            postcode = pools["postcode"][pi].copy()
-            city = pools["city"][ci].copy()
-
-            # Occasional nulls on weaker / strong fields for duplicate rows.
-            city = np.where(is_dup & (rng.random(total) < 0.20), None, city)
-            dnull = is_dup & (rng.random(total) < 0.05)
-            dob = np.where(dnull, None, dob)
-            pnull = is_dup & (rng.random(total) < 0.05)
-            postcode = np.where(pnull, None, postcode)
-
             rids = np.arange(next_rid, next_rid + total)
-            writer.write_table(
-                pa.table(
-                    {
-                        "record_id": pa.array(rids, pa.int64()),
-                        "first_name": pa.array(first, pa.string()),
-                        "surname": pa.array(surname, pa.string()),
-                        "dob": pa.array(dob, pa.string()),
-                        "postcode": pa.array(postcode, pa.string()),
-                        "city": pa.array(city, pa.string()),
-                    },
-                    schema=SCHEMA,
-                )
-            )
+
+            if shape == "person":
+                # Canonical attribute indices per identity, broadcast to rows.
+                # Surnames are census frequency-weighted (Zipfian -> hot blocks).
+                si_ident = np.searchsorted(sur_cumw, rng.random(len(sizes)))
+                fi = np.repeat(rng.integers(0, n_first, len(sizes)), sizes)
+                si = np.repeat(si_ident, sizes)
+                di = np.repeat(rng.integers(0, DOB_DAYS, len(sizes)), sizes)
+                pi = np.repeat(rng.integers(0, N_POSTCODE, len(sizes)), sizes)
+                ci = np.repeat(rng.integers(0, N_CITY, len(sizes)), sizes)
+
+                # Duplicate variation (vectorised masks). Typo => offset into
+                # [base|typo] half.
+                r = rng.random(total)
+                fi_pick = fi + np.where(is_dup & (r < 0.40), n_first, 0)
+                r = rng.random(total)
+                si_pick = si + np.where(is_dup & (r < 0.50), n_surname, 0)
+
+                first = pools["first"][fi_pick]
+                surname = pools["surname"][si_pick]
+                dob = pools["dob"][di].copy()
+                postcode = pools["postcode"][pi].copy()
+                city = pools["city"][ci].copy()
+
+                # Occasional nulls on weaker / strong fields for duplicate rows.
+                city = np.where(is_dup & (rng.random(total) < 0.20), None, city)
+                dnull = is_dup & (rng.random(total) < 0.05)
+                dob = np.where(dnull, None, dob)
+                pnull = is_dup & (rng.random(total) < 0.05)
+                postcode = np.where(pnull, None, postcode)
+
+                columns = {
+                    "record_id": pa.array(rids, pa.int64()),
+                    "first_name": pa.array(first, pa.string()),
+                    "surname": pa.array(surname, pa.string()),
+                    "dob": pa.array(dob, pa.string()),
+                    "postcode": pa.array(postcode, pa.string()),
+                    "city": pa.array(city, pa.string()),
+                }
+            else:  # biblio
+                # venue + year are the BLOCK KEY: canonical per identity, broadcast
+                # to rows, and NEVER offset for duplicates (stable block key, spec
+                # 5.2). Corruption lives only on the scored title/authors fields.
+                vi = np.repeat(rng.integers(0, N_VENUE, len(sizes)), sizes)
+                yi = np.repeat(rng.integers(0, N_YEAR, len(sizes)), sizes)
+
+                # Title: K words per identity, broadcast. On duplicate rows only
+                # the NON-FIRST words get the typo offset into the [base|typo] half.
+                title = None
+                for k in range(K_TITLE):
+                    wi = np.repeat(rng.integers(0, n_title_words, len(sizes)), sizes)
+                    if k == 0:
+                        wi_pick = wi
+                    else:
+                        r = rng.random(total)
+                        wi_pick = wi + np.where(is_dup & (r < 0.30), n_title_words, 0)
+                    word = pools["title_words"][wi_pick]
+                    title = word if title is None else (title + " " + word)
+
+                # Authors: 1-3 surnames per identity, broadcast. Duplicate variation
+                # = author-order permutation (swap first two) on ~half of duplicates.
+                a0 = pools["author_surnames"][np.repeat(rng.integers(0, n_author, len(sizes)), sizes)]
+                a1 = pools["author_surnames"][np.repeat(rng.integers(0, n_author, len(sizes)), sizes)]
+                a2 = pools["author_surnames"][np.repeat(rng.integers(0, n_author, len(sizes)), sizes)]
+                n_auth = np.repeat(rng.integers(1, 4, len(sizes)), sizes)
+                reorder = is_dup & (rng.random(total) < 0.50)
+                b0 = np.where(reorder & (n_auth >= 2), a1, a0)
+                b1 = np.where(reorder & (n_auth >= 2), a0, a1)
+                authors = b0
+                authors = np.where(n_auth >= 2, authors + ", " + b1, authors)
+                authors = np.where(n_auth >= 3, authors + ", " + a2, authors)
+
+                venue = pools["venues"][vi]  # stable, never corrupted/nulled
+                year = pools["years"][yi].copy()
+                # Occasional null year on duplicates (mirrors person null postcode);
+                # a null-year duplicate simply doesn't block, and year is unique per
+                # cluster where non-null.
+                year = np.where(is_dup & (rng.random(total) < 0.05), None, year)
+
+                columns = {
+                    "record_id": pa.array(rids, pa.int64()),
+                    "title": pa.array(title, pa.string()),
+                    "authors": pa.array(authors, pa.string()),
+                    "venue": pa.array(venue, pa.string()),
+                    "year": pa.array(year, pa.string()),
+                }
+
+            writer.write_table(pa.table(columns, schema=schema))
             twriter.write_table(
                 pa.table(
                     {"record_id": pa.array(rids, pa.int64()), "cluster_id": pa.array(row_cid, pa.int64())},
@@ -279,9 +413,12 @@ def main() -> None:
     ap.add_argument("--ground-truth", type=Path, required=True)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch", type=int, default=1_000_000)
+    ap.add_argument("--shape", choices=["person", "biblio"], default="person")
     args = ap.parse_args()
 
-    meta = generate(args.rows, args.dupe_rate, args.out, args.ground_truth, args.seed, args.batch)
+    meta = generate(
+        args.rows, args.dupe_rate, args.out, args.ground_truth, args.seed, args.batch, args.shape
+    )
     print(
         f"[generate] {meta['rows']:,} rows / {meta['clusters']:,} clusters / "
         f"dup={meta['duplicate_rate_actual']} / {meta['fixture_size_mb']} MB / "
