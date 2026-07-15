@@ -83,3 +83,13 @@ def test_generate_biblio_titles_actually_vary(tmp_path):
         df.group_by("cluster_id").len().filter(pl.col("len") > 1)["cluster_id"]))
     # at least some multi-member clusters have >1 distinct title (corruption happened)
     assert multi.group_by("cluster_id").agg(pl.col("title").n_unique().alias("nt"))["nt"].max() > 1
+
+
+def test_generator_projection_check_rejects_small_C():
+    gen = _load("generate_fixture")
+    # A hypothetical biblio-with-tiny-venue C would project a huge block at 100M.
+    ok, projected = gen.check_block_size("biblio", target_rows=100_000_000, ceiling=2000)
+    assert ok is True and projected < 2000
+    ok2, _ = gen.check_block_size_for_cardinality(cardinality=18_000,
+                                                  target_rows=100_000_000, ceiling=2000)
+    assert ok2 is False

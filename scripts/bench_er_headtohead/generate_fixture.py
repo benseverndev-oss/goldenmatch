@@ -405,16 +405,54 @@ def generate(
     return meta
 
 
+def check_block_size_for_cardinality(
+    cardinality: int, target_rows: int, ceiling: float
+) -> tuple[bool, float]:
+    """Projection guard: is the extrapolated max block size at ``target_rows`` for
+    a fixed-cardinality key under ``ceiling``? Returns (ok, projected)."""
+    projected = _shapes.projected_max_block_size(target_rows, cardinality)
+    return projected <= ceiling, projected
+
+
+def check_block_size(shape: str, target_rows: int, ceiling: float) -> tuple[bool, float]:
+    """Projection guard for a named shape, using its ``blocking_cardinality``."""
+    cardinality = _shapes.SHAPES[shape].blocking_cardinality
+    return check_block_size_for_cardinality(cardinality, target_rows, ceiling)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rows", type=int, required=True)
+    ap.add_argument("--rows", type=int, default=0)
     ap.add_argument("--dupe-rate", type=float, default=0.20)
-    ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--ground-truth", type=Path, required=True)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--ground-truth", type=Path, default=None)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch", type=int, default=1_000_000)
     ap.add_argument("--shape", choices=["person", "biblio"], default="person")
+    ap.add_argument(
+        "--check-block-size",
+        type=int,
+        default=None,
+        metavar="TARGET_ROWS",
+        help="projection self-check: verify the shape's blocking key keeps the "
+        "extrapolated max block size under --ceiling at TARGET_ROWS, then exit "
+        "(non-zero if it does not). Does NOT generate a fixture.",
+    )
+    ap.add_argument("--ceiling", type=float, default=5000.0)
     args = ap.parse_args()
+
+    if args.check_block_size is not None:
+        ok, projected = check_block_size(args.shape, args.check_block_size, args.ceiling)
+        status = "OK" if ok else "FAIL"
+        print(
+            f"[check-block-size] shape={args.shape} target_rows={args.check_block_size:,} "
+            f"C={_shapes.SHAPES[args.shape].blocking_cardinality:,} "
+            f"projected_max_block={projected:.1f} ceiling={args.ceiling:.0f} -> {status}"
+        )
+        raise SystemExit(0 if ok else 1)
+
+    if args.rows <= 0 or args.out is None or args.ground_truth is None:
+        ap.error("--rows, --out, and --ground-truth are required to generate a fixture")
 
     meta = generate(
         args.rows, args.dupe_rate, args.out, args.ground_truth, args.seed, args.batch, args.shape
