@@ -74,6 +74,30 @@ def test_resolve_singleton_creates_identity(store):
     assert store.find_entity_by_record("src:1") is not None
 
 
+def test_resolve_uses_preindexed_payloads_for_golden_records(store, monkeypatch):
+    """Resolution must not scan the whole frame once per singleton cluster."""
+    import goldenmatch.identity.resolve as resolve_mod
+
+    def _unexpected_frame_scan(*_args, **_kwargs):
+        raise AssertionError("golden record construction must use indexed payloads")
+
+    monkeypatch.setattr(resolve_mod, "_golden_record_from_members", _unexpected_frame_scan)
+    df = _df([{"id": str(i), "name": f"Person {i}"} for i in range(100)])
+    clusters = {
+        i: {
+            "members": [i], "size": 1, "oversized": False,
+            "pair_scores": {}, "confidence": 1.0,
+        }
+        for i in range(100)
+    }
+
+    summary = resolve_clusters(
+        clusters, df, [], None, store, run_name="indexed", source_pk_col="id",
+    )
+
+    assert summary.created == 100
+
+
 def test_resolve_singleton_can_be_skipped(store):
     df = _df([{"id": "1"}])
     clusters = {0: {"members": [0], "size": 1, "oversized": False, "pair_scores": {}}}
