@@ -102,15 +102,11 @@ _PARITY_CONFIGS = {
         max_block_size=1_000_000,
         skip_oversized=False,
     ),
-    # Oversized blocks present but skip_oversized=False => kept whole => the raw
-    # group-by sizes still match the fallback. This is the regime the planner
-    # cares about (fixed-cardinality blocks that grow with N).
-    "oversized_kept_whole": dict(
-        strategy="static",
-        keys=[BlockingKeyConfig(fields=["last_name"], transforms=[])],
-        max_block_size=10,
-        skip_oversized=False,
-    ),
+    # NOTE: an oversized-block config is intentionally NOT here -- since #372
+    # (default-path auto-split), oversized blocks are sub-split under BOTH
+    # skip_oversized values, so the fast path bails to the exact loop rather than
+    # trusting the raw group-by sizes. That bail is asserted in
+    # test_bails_on_oversized_split below.
 }
 
 
@@ -145,14 +141,17 @@ def test_bails_on_non_static_strategy() -> None:
     assert _fast_static_block_sizes(_person_df(50).lazy(), cfg.blocking) is None
 
 
-def test_bails_on_oversized_with_skip_oversized() -> None:
-    # skip_oversized=True => oversized blocks get ANN/auto-split => sizes diverge
-    # from a raw group-by => must bail so the exact path runs.
+@pytest.mark.parametrize("skip_oversized", [True, False])
+def test_bails_on_oversized_split(skip_oversized: bool) -> None:
+    # Oversized blocks are sub-split under BOTH skip_oversized values now
+    # (True => ANN/auto-split/skip; False => zero-config auto-split, #372), so
+    # the raw group-by sizes diverge from the built blocks => must bail so the
+    # exact path runs.
     cfg = _cfg(
         strategy="static",
         keys=[BlockingKeyConfig(fields=["last_name"], transforms=[])],
         max_block_size=10,
-        skip_oversized=True,
+        skip_oversized=skip_oversized,
     )
     assert _fast_static_block_sizes(_person_df(2000).lazy(), cfg.blocking) is None
 
