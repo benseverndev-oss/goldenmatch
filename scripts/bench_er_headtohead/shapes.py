@@ -15,6 +15,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+# Named generator constants (also imported by generate_fixture for pool sizing).
+N_VENUE = 3_500
+N_YEAR = 60  # ~60 distinct publication years
+
+
+def projected_max_block_size(rows: int, cardinality: int, skew: float = 3.0) -> float:
+    """Extrapolated max block size at target N for a fixed-cardinality uniform key,
+    scaled by a skew factor (real keys aren't perfectly uniform). This is the
+    design-time guard from spec 5.2 -- it does NOT depend on the smoke scale."""
+    return skew * rows / max(1, cardinality)
+
 
 @dataclass(frozen=True)
 class Shape:
@@ -95,7 +106,76 @@ def _person_splink_settings(s):
 
 
 # ---------------------------------------------------------------------------
-# Shape registry (person first; biblio appended in Task 2).
+# biblio shape (new; spec 5.2)
+# ---------------------------------------------------------------------------
+# Block-key choice: the 2-field COMPOSITE (venue, year). VERIFIED supported by
+# the bucket single-key path -- blocker._build_block_key_expr / derive_block_key
+# concatenate multiple fields into one "__block_key__" via pl.concat_str, so a
+# BlockingKeyConfig(fields=["venue","year"]) is transparent to the eager bucket
+# pass (no single-column fallback needed). C = N_VENUE * N_YEAR ~ 210K, mirroring
+# person's ~200K distinct blocks.
+def _biblio_gm_hand_built(threshold: float):
+    """GoldenMatch hand_built config for the biblio shape: bucket on the composite
+    (venue, year) block key; weighted jaro_winkler on the discriminative title +
+    authors fields (venue/year are stable blocking fields, never scored)."""
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        backend="bucket",
+        n_buckets=256,
+        blocking=BlockingConfig(
+            max_block_size=5000,
+            skip_oversized=False,
+            keys=[BlockingKeyConfig(fields=["venue", "year"], transforms=["strip"])],
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="paper",
+                type="weighted",
+                threshold=threshold,
+                rerank=False,
+                fields=[
+                    MatchkeyField(field="title", scorer="jaro_winkler", weight=0.6, transforms=["lowercase"]),
+                    MatchkeyField(field="authors", scorer="jaro_winkler", weight=0.4, transforms=["lowercase"]),
+                ],
+            )
+        ],
+    )
+
+
+def _biblio_splink_settings(s):
+    """Splink settings for the biblio shape: blocking union of (venue, year) +
+    (substr(authors,1,8), year); JaroWinkler on title/authors, ExactMatch on
+    venue, DamerauLevenshtein on year."""
+    SettingsCreator = s["SettingsCreator"]
+    block_on = s["block_on"]
+    cl = s["cl"]
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        unique_id_column_name="record_id",
+        blocking_rules_to_generate_predictions=[
+            block_on("venue", "year"),
+            block_on("substr(authors, 1, 8)", "year"),
+        ],
+        comparisons=[
+            cl.JaroWinklerAtThresholds("title", [0.9, 0.7]),
+            cl.JaroWinklerAtThresholds("authors", [0.9, 0.7]),
+            cl.ExactMatch("venue"),
+            cl.DamerauLevenshteinAtThresholds("year", [1, 2]),
+        ],
+    )
+    training_rules = [block_on("venue", "year")]
+    return settings, training_rules
+
+
+# ---------------------------------------------------------------------------
+# Shape registry (person, then biblio).
 # ---------------------------------------------------------------------------
 SHAPES: dict[str, Shape] = {
     "person": Shape(
@@ -105,5 +185,13 @@ SHAPES: dict[str, Shape] = {
         blocking_cardinality=200_000,
         gm_hand_built=_person_gm_hand_built,
         splink_settings=_person_splink_settings,
+    ),
+    "biblio": Shape(
+        name="biblio",
+        columns=["record_id", "title", "authors", "venue", "year"],
+        blocking_fields=["venue", "year"],
+        blocking_cardinality=N_VENUE * N_YEAR,  # ~210K, mirrors person's C
+        gm_hand_built=_biblio_gm_hand_built,
+        splink_settings=_biblio_splink_settings,
     ),
 }
