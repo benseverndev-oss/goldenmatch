@@ -4,6 +4,20 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Fixed
+- **`from_splink` recognizes `IS NOT NULL` blocking guards** (#1783): compound
+  `CustomRule` blocking rules carrying trailing `AND l.col IS NOT NULL` guard
+  conjuncts were dropped whole as unrecognized — on a 1M production dedupe the
+  converted model blocked on 3 of 6 keys, costing ~28 points of pairwise
+  recall. Guards on key columns are now recognized and ignored exactly
+  (GoldenMatch blocking already implements the guard semantics: a null key
+  component forms no block), reported as info. A guard on a column outside the
+  blocking key still converts but warns (guard dropped, candidates are a
+  superset of Splink's; `strict=True` gates on it), and a guards-only rule
+  keeps the existing unrecognized-drop path.
+
 ## [3.3.0] - 2026-07-14
 
 <!-- README-callout

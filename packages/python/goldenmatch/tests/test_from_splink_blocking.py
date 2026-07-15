@@ -9,7 +9,13 @@ Verified conventions (see goldenmatch/config/from_splink.py comments):
     to the same list, per `goldenmatch/core/autoconfig_rules.py:_with_multi_pass`
     (lines ~102-116), not `passes` alone.
 """
-from goldenmatch.config.from_splink import ConversionReport, convert_blocking
+import pytest
+from goldenmatch.config.from_splink import (
+    ConversionReport,
+    SplinkConversionError,
+    convert_blocking,
+    from_splink,
+)
 
 
 def test_single_equality_rule_is_static():
@@ -276,6 +282,147 @@ def test_unbalanced_parens_still_dropped():
 
     assert config is None
     assert report.has_errors
+
+
+# ── IS NOT NULL guard conjuncts (#1783) ──────────────────────────────────────
+#
+# Splink CustomRule blocking rules routinely carry trailing IS NOT NULL guards
+# on the equality columns. GM's blocker already implements those semantics
+# (null key components form no block), so guards on key columns are
+# recognized-and-ignored EXACTLY (info, not warn).
+
+# The two verbatim rules from issue #1783.
+_ISSUE_1783_RULE_1 = (
+    "l.first_name = r.first_name AND l.last_name = r.last_name "
+    "AND l.first_name IS NOT NULL AND l.last_name IS NOT NULL"
+)
+_ISSUE_1783_RULE_2 = (
+    "l.last_name = r.last_name AND l.phone_number = r.phone_number "
+    "AND l.last_name IS NOT NULL AND l.phone_number IS NOT NULL"
+)
+
+
+def test_issue_1783_rule_1_converts_with_no_warning():
+    report = ConversionReport()
+    config = convert_blocking([_ISSUE_1783_RULE_1], report)
+
+    assert config is not None
+    assert config.strategy == "static"
+    assert config.keys[0].fields == ["first_name", "last_name"]
+    assert config.keys[0].transforms == []
+    # Guards on key columns are implicit in GM blocking: info, never a warning
+    # (a warning would trip strict=True on a perfectly faithful conversion).
+    assert not report.has_warnings
+    assert not report.has_errors
+    infos = [f for f in report.findings if f.severity == "info"]
+    assert any("null guard" in f.message for f in infos)
+
+
+def test_issue_1783_rule_2_converts_with_no_warning():
+    report = ConversionReport()
+    config = convert_blocking([_ISSUE_1783_RULE_2], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["last_name", "phone_number"]
+    assert config.keys[0].transforms == []
+    assert not report.has_warnings
+
+
+def test_splink4_paren_wrapped_quoted_guards_convert():
+    rule = (
+        '(l."first_name" = r."first_name") AND (l."last_name" = r."last_name") '
+        'AND (l."first_name" IS NOT NULL) AND (l."last_name" IS NOT NULL)'
+    )
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["first_name", "last_name"]
+    assert config.keys[0].transforms == []
+    assert not report.has_warnings
+
+
+def test_guard_on_non_key_column_converts_with_warning():
+    # GM cannot express a null-constraint on a column that isn't part of the
+    # blocking key: the guard is dropped, candidates are a superset of
+    # Splink's. That's lossy -> warning (strict=True gates on it), but the
+    # rule still converts.
+    rule = "l.a = r.a AND l.b IS NOT NULL"
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is not None
+    assert config.keys[0].fields == ["a"]
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    msg = warnings[0].message
+    assert "approximate" in msg or "superset" in msg
+    assert "b" in msg
+
+
+def test_guards_only_rule_dropped_as_unrecognized():
+    # No equality/SUBSTR conjunct at all: nothing to block on -> the existing
+    # unrecognized-drop path.
+    rule = "l.a IS NOT NULL AND l.b IS NOT NULL"
+    report = ConversionReport()
+    config = convert_blocking([rule], report)
+
+    assert config is None
+    warnings = [f for f in report.findings if f.severity == "warning"]
+    assert len(warnings) == 1
+    assert "unrecognized" in warnings[0].message
+
+
+def _settings_with_blocking(rules):
+    return {
+        "comparisons": [
+            {
+                "output_column_name": "first_name",
+                "comparison_levels": [
+                    {
+                        "sql_condition": (
+                            '"first_name_l" IS NULL OR "first_name_r" IS NULL'
+                        ),
+                        "is_null_level": True,
+                    },
+                    {"sql_condition": '"first_name_l" = "first_name_r"'},
+                    {"sql_condition": "ELSE"},
+                ],
+            }
+        ],
+        "blocking_rules_to_generate_predictions": rules,
+    }
+
+
+def test_settings_level_simple_plus_guarded_rule_emits_both_keys():
+    # The issue's setup: block_on("npi")-style simple rule mixed with the
+    # compound guarded rule. Both keys must survive conversion.
+    settings = _settings_with_blocking(['l."npi" = r."npi"', _ISSUE_1783_RULE_1])
+    conversion = from_splink(settings)
+
+    blocking = conversion.config.blocking
+    assert blocking is not None
+    assert blocking.strategy == "multi_pass"
+    assert len(blocking.keys) == 2
+    assert blocking.keys[0].fields == ["npi"]
+    assert blocking.keys[1].fields == ["first_name", "last_name"]
+    assert not conversion.report.has_warnings
+
+
+def test_strict_true_raises_on_non_key_guard():
+    settings = _settings_with_blocking(["l.a = r.a AND l.b IS NOT NULL"])
+
+    with pytest.raises(SplinkConversionError) as exc_info:
+        from_splink(settings, strict=True)
+    assert "warning(s)" in str(exc_info.value)
+
+
+def test_strict_true_does_not_raise_on_key_column_guards():
+    # Faithful conversion: guards on key columns must NOT trip strict mode.
+    settings = _settings_with_blocking([_ISSUE_1783_RULE_1])
+    conversion = from_splink(settings, strict=True)
+
+    assert conversion.config.blocking.keys[0].fields == ["first_name", "last_name"]
 
 
 def test_paren_wrapped_unrecognizable_conjunct_dropped():

@@ -1,5 +1,10 @@
 import pytest
-from goldenmatch.config.from_splink import RecognizedLevel, recognize_level
+from goldenmatch.config.from_splink import (
+    RecognizedLevel,
+    _BlockConjunct,
+    _recognize_blocking_conjunct,
+    recognize_level,
+)
 
 
 @pytest.mark.parametrize(
@@ -125,3 +130,36 @@ def test_levenshtein_distance_floor_clamps_to_zero():
     assert result.kind == "levenshtein"
     assert result.sim_threshold == 0.0
     assert result.approx is True
+
+
+# ── Blocking conjuncts: IS NOT NULL guards (#1783) ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "l.first_name IS NOT NULL",
+        "r.first_name IS NOT NULL",
+        'l."first_name" IS NOT NULL',
+        '(l."first_name" IS NOT NULL)',
+        "l.first_name is not null",
+        "l.first_name   IS   NOT   NULL",
+    ],
+)
+def test_not_null_guard_conjunct_recognized(sql):
+    result = _recognize_blocking_conjunct(sql)
+    assert result == _BlockConjunct("first_name", None, is_null_guard=True)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "l.first_name IS NULL",           # IS NULL is NOT a guard we can ignore
+        "first_name IS NOT NULL",         # no l./r. prefix
+        "l.first_name IS NOT NULL OR l.x = r.x",  # not a bare guard
+        "NOT NULL",                       # garbage
+        "l.first_name IS NOT",            # garbage
+    ],
+)
+def test_not_null_guard_negatives_stay_unrecognized(sql):
+    assert _recognize_blocking_conjunct(sql) is None
