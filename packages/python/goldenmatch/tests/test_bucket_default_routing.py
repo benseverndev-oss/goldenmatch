@@ -116,3 +116,30 @@ def test_bucket_default_output_identical_to_legacy(monkeypatch):
     bucket_dupes = res_bucket.dupes.num_rows if res_bucket.dupes is not None else 0
 
     assert bucket_dupes == legacy_dupes
+
+
+class TestDataScaledNBuckets:
+    """#1803 item 5: n_buckets grows with data size above the CPU-derived
+    floor (target ~50K rows/bucket, capped 4096); legacy formula when the
+    caller gives no height."""
+
+    def test_no_height_keeps_cpu_formula(self):
+        import os
+
+        from goldenmatch.backends.score_buckets import _default_n_buckets
+        assert _default_n_buckets() == min((os.cpu_count() or 4) * 4, 1024)
+
+    def test_small_height_uses_cpu_floor(self):
+        import os
+
+        from goldenmatch.backends.score_buckets import _default_n_buckets
+        floor = min((os.cpu_count() or 4) * 4, 1024)
+        assert _default_n_buckets(10_000) == floor
+
+    def test_large_height_scales_up(self):
+        from goldenmatch.backends.score_buckets import _default_n_buckets
+        assert _default_n_buckets(100_000_000) == 2000  # 100M / 50K
+
+    def test_capped_at_4096(self):
+        from goldenmatch.backends.score_buckets import _default_n_buckets
+        assert _default_n_buckets(1_000_000_000) == 4096

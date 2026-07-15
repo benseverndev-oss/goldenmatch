@@ -28,7 +28,6 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core.probabilistic import (
-    _fs_native_eligible,
     _fs_native_enabled,
     score_probabilistic_bucket_native,
     score_probabilistic_native,
@@ -232,24 +231,70 @@ def _prob_config(backend=None) -> GoldenMatchConfig:
     )
 
 
-def test_fs_default_bucket_decision(monkeypatch):
-    from goldenmatch.core.pipeline import _fs_default_bucket
+def test_fs_bucket_route_decision(monkeypatch):
+    """#1803 item 3: bucket is the FS route by default -- NO native-kernel
+    requirement, NO row cap. Exclusions: explicit scale backends, the
+    escape hatch, non-field blocking strategies, active profile emitter."""
+    from goldenmatch.core.pipeline import _fs_use_bucket_route
 
     mk = _mk()
     cfg = _prob_config(backend=None)
 
     monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
-    # Fires exactly when the native FS kernel would accept the matchkey.
-    assert _fs_default_bucket(cfg, mk) == _fs_native_eligible(mk)
+    # Default route regardless of the native kernel (the batched fallback
+    # needs eager build_blocks -- the #1798 OOM path; non-native bucket is
+    # still frame-memory-bounded).
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    assert _fs_use_bucket_route(cfg, mk) is True
+    monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
+    assert _fs_use_bucket_route(cfg, mk) is True
+
+    # polars-direct is the planner's in-band choice -> same default as None
+    # (parity with _use_bucket_scorer's band semantics).
+    assert _fs_use_bucket_route(_prob_config(backend="polars-direct"), mk) is True
+    # Explicit bucket honored, explicit scale backends keep their routing.
+    assert _fs_use_bucket_route(_prob_config(backend="bucket"), mk) is True
+    for be in ("ray", "duckdb", "datafusion"):
+        assert _fs_use_bucket_route(_prob_config(backend=be), mk) is False
 
     # Escape hatch always wins.
     monkeypatch.setenv("GOLDENMATCH_FS_DEFAULT_BUCKET", "0")
-    assert _fs_default_bucket(cfg, mk) is False
-
-    # Explicit non-bucket backends keep their own routing (never FS-default).
+    assert _fs_use_bucket_route(cfg, mk) is False
     monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
-    for be in ("polars-direct", "ray", "duckdb"):
-        assert _fs_default_bucket(_prob_config(backend=be), mk) is False
+
+    # Blocking strategies bucket can't replicate stay legacy.
+    lsh_cfg = _prob_config(backend=None)
+    lsh_cfg.blocking.strategy = "lsh"
+    assert _fs_use_bucket_route(lsh_cfg, mk) is False
+
+    # Controller-profiled sample runs keep legacy block-size signals.
+    from goldenmatch.core.profile_emitter import profile_capture
+
+    with profile_capture():
+        assert _fs_use_bucket_route(cfg, mk) is False
+
+
+def test_fs_bucket_route_nonnative_e2e(monkeypatch):
+    """A backend=None FS dedupe with the native kernel OFF must still score
+    via score_buckets (pre-#1803 it fell back to the batched legacy path)."""
+    import goldenmatch as gm
+    import goldenmatch.backends.score_buckets as sb_mod
+
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    monkeypatch.setenv("GOLDENMATCH_BUCKET_DEFAULT", "0")  # isolate the FS route
+    monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
+
+    calls = {"bucket": 0}
+    real_sb = sb_mod.score_buckets
+
+    def spy_sb(*a, **k):
+        calls["bucket"] += 1
+        return real_sb(*a, **k)
+
+    monkeypatch.setattr(sb_mod, "score_buckets", spy_sb)
+    df = _multiblock_df().drop("__row_id__")
+    gm.dedupe_df(df, config=_prob_config(backend=None))
+    assert calls["bucket"] >= 1
 
 
 @native_required
