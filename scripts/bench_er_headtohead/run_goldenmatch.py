@@ -84,6 +84,10 @@ def main() -> None:
                     help="fixture shape; selects the hand_built config from shapes.py")
     ap.add_argument("--require-native", action="store_true", default=True)
     ap.add_argument("--allow-pure-python", dest="require_native", action="store_false")
+    ap.add_argument("--fs-basic-scorers", action="store_true", default=False,
+                    help="probabilistic mode only: rewrite any FS field scorer NOT in "
+                         "the native FS kernel set to jaro_winkler, so both FS lanes "
+                         "engage the Rust kernel and match Splink's JaroWinkler model")
     args = ap.parse_args()
 
     os.environ["GOLDENMATCH_NATIVE"] = "1" if args.require_native else "auto"
@@ -196,6 +200,26 @@ def main() -> None:
             for mk in cfg.get_matchkeys():
                 if getattr(mk, "type", None) == "weighted":
                     mk.rerank = False
+            # Optionally force any specialized name scorer autoconfig picked
+            # (given_name_aliased_jw / name_freq_weighted_jw) that the native FS
+            # kernel doesn't implement to jaro_winkler. This makes BOTH FS lanes
+            # native-eligible (a matched numpy-vs-native pair) and comparable to
+            # Splink's JaroWinkler FS model. Runs BEFORE the eligibility telemetry
+            # below so the counts reflect the config actually scored.
+            rewritten: list = []
+            if args.fs_basic_scorers:
+                try:
+                    from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
+
+                    for mk in cfg.get_matchkeys():
+                        for f in getattr(mk, "fields", None) or []:
+                            sc = getattr(f, "scorer", None)
+                            if sc is not None and sc not in _NATIVE_FS_SCORER_IDS:
+                                rewritten.append((getattr(f, "field", None), sc))
+                                f.scorer = "jaro_winkler"
+                except (ImportError, AttributeError):
+                    pass
+            result["fs_basic_scorers_rewritten"] = rewritten
             # FS-native per-matchkey eligibility telemetry (spec section 8): count
             # how many resolved matchkeys the native FS kernel could score. Under
             # the numpy lane (GOLDENMATCH_FS_NATIVE=0) _fs_native_enabled()
