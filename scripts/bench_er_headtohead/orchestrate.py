@@ -270,7 +270,10 @@ def _shape_section(shape: str, rows_for_shape: list[dict]) -> list[str]:
               "|---:|---|---:|---:|---:|---:|---:|---:|"]
     by_scale: dict[int, dict[str, dict]] = {}
     for r in rows_for_shape:
-        by_scale.setdefault(r.get("rows_requested"), {})[r.get("lane")] = r
+        rid = r.get("rows_requested")
+        if rid is None:
+            continue
+        by_scale.setdefault(rid, {})[r.get("lane")] = r
     for scale in sorted(k for k in by_scale if k is not None):
         sp = by_scale[scale].get("splink", {})
         sw = sp.get("dedupe_wall_seconds")
