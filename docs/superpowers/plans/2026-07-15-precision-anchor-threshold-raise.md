@@ -145,6 +145,50 @@ unit-test file; one controller-integration test; a scratchpad success-bar re-mea
 - [ ] **Step 4:** Green + adjacent controller tests (`tests/test_autoconfig_regressions.py -q`)
   still green. **Step 5:** Commit `test(autoconfig): precision-anchor fires through the real controller` (+ trailers).
 
+### Task P2.5: Commit-dynamics fixes (spec Addendum -- READ IT FIRST)
+
+P2 proved the rule fires on the original Leg-A fixture but `pick_committed` discards the raised
+entry (dip false-RED on 2 scored pairs + iteration tiebreak). The spec's Addendum section pins
+both fixes and the probe evidence; this task implements them. Both are required -- either alone
+still commits 0.8 (validated via `probe_dipfix.py` / `probe_demote.py` in the session
+scratchpad `.../scratchpad/1319/`).
+
+**Files:**
+- Modify: `goldenmatch/core/complexity_profile.py` (ScoringProfile.health dip clause, ~385)
+- Modify: `goldenmatch/core/autoconfig_rules.py` (extract `precision_anchor_would_fire` helper)
+- Modify: `goldenmatch/core/autoconfig_history.py` (pick_committed `demote_suspect` param)
+- Modify: `goldenmatch/core/autoconfig_controller.py` (~957: pass the closure when the rule fired)
+- Test: extend `tests/test_precision_anchor_1319.py` (+ the health/history unit-test homes --
+  locate with `grep -rln "ScoringProfile(" tests/` and `grep -rln "pick_committed" tests/`)
+
+- [ ] **Step 1: Failing unit tests (TDD).**
+  - Health: `ScoringProfile(n_pairs_scored=2, dip_statistic=0.0, mass_above_threshold=1.0,
+    candidates_compared=..., mass_in_borderline=1.0).health()` is NOT RED (borderline clause
+    decides: bord==mass -> GREEN); same profile with `n_pairs_scored=30` IS RED (boundary
+    pinned at the constant); `n_pairs_scored=0, candidates_compared=0` stays RED (unchanged
+    clause).
+  - pick_committed: hand-built RunHistory with two YELLOW entries (equal separation), suspect
+    one at iteration -1, non-suspect at iteration 1: bare call commits -1 (pins today's
+    tiebreak); with `demote_suspect` flagging the -1 entry, commits 1; RED-raise safety (suspect
+    YELLOW at -1 vs non-suspect RED at 1 -> -1 still wins); all-suspect -> same pick as bare.
+  - Trigger helper: `precision_anchor_would_fire` returns True/False on the same fixtures as the
+    P1 trigger matrix's fire/no-fire cases (import and call directly; the rule must delegate to
+    it -- assert via a small monkeypatch-spy or by checking the rule fires iff the helper is
+    True on 2-3 matrix rows).
+- [ ] **Step 2:** Run -> all new tests FAIL in the predicted modes.
+- [ ] **Step 3: Implement** exactly per the spec Addendum: `_MIN_DIP_SUPPORT = 30` constant +
+  dip clause `>= _MIN_DIP_SUPPORT`; helper extraction (pure refactor of the five conditions --
+  the rule body calls it, byte-equivalent trigger semantics); `demote_suspect` param with
+  `demoted` added to rank in ALL THREE key() return paths (collapse-floor, zero-label, normal);
+  controller closure gated on the rule having fired in `history.decisions`. Update
+  `pick_committed`'s docstring (the lex-key description) for the new param.
+- [ ] **Step 4:** New tests green; P1/P2 file fully green (the 399-row integration test must
+  still commit 0.9); blast-radius sweep: any existing test constructing tiny-n_pairs
+  ScoringProfiles expecting RED via the dip gate (grep `dip_statistic` in tests/) -- fix ONLY by
+  raising their `n_pairs_scored` to >= 30 where the test's intent is "flat dip -> RED", never by
+  weakening assertions; `tests/test_autoconfig_regressions.py` + rules test file green; ruff.
+- [ ] **Step 5:** Commit `feat(autoconfig): dip min-support guard + precision-suspect commit demotion (#1319)` (+ trailers).
+
 ### Task P3: Success bar + PR + close-out
 
 - [ ] **Step 1:** Re-run the #1319 Leg-A harness against THIS worktree (PYTHONPATH swap), flag

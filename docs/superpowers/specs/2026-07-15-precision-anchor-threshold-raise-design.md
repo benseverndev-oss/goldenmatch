@@ -93,9 +93,89 @@ its siblings; the CI regression net is the same as for every controller-rule cha
 - **Close-out:** post the numbers to #1319 and #1207; close BOTH when the bar holds (#1316 and
   #1317 remain open as their own tracks).
 
+## Addendum (2026-07-15, approved): commit dynamics -- fired-then-discarded
+
+P2's through-the-controller work found that on the ORIGINAL Leg-A fixture the rule FIRES but
+`pick_committed` discards the raised entry. Probe evidence (entry table, gm-pr2b at f1cfba2db):
+
+- iter0 (thr 0.8): rule fires; overall YELLOW; 18,769 pairs scored; dip 0.0619.
+- iter1 (thr 0.9, the raise): only **2 pairs** survive scoring (kernel prefilter at the raised
+  threshold) -> `dip_statistic = 0.0` -> the `< 0.005` unimodality gate
+  (complexity_profile.py:385) reads RED -> entry rank 2, discarded.
+- Even with the dip gate neutralized, iter1 ties v0 at (YELLOW, separation 0) and loses the
+  ascending-iteration tiebreak (`autoconfig_history.py:209`) -- the profile metrics cannot
+  distinguish the over-merged v0 from the correct raise (both read mass=1.0, bord=1.0).
+
+Both patches were validated empirically through the real controller on the original fixture
+(scratchpad probes `probe_dipfix.py`, `probe_demote.py`): with the two changes below the
+committed weighted threshold is **0.9**; either change alone still commits 0.8.
+
+### Change A: dip minimum-support guard (production, `complexity_profile.py`)
+
+A dip statistic over a handful of pairs is sampling noise, not a unimodality signal -- the same
+rationale as `_MIN_TRIPLE_SUPPORT = 30` for transitivity (`_profile_helpers.py:43-46`). In
+`ScoringProfile.health()`, the dip clause becomes:
+
+```python
+if self.dip_statistic < 0.005 and self.n_pairs_scored >= _MIN_DIP_SUPPORT:
+    return HealthVerdict.RED
+```
+
+with `_MIN_DIP_SUPPORT = 30` (module-level constant next to the class, comment citing the
+`_MIN_TRIPLE_SUPPORT` precedent). Profiles with 1-29 scored pairs and a flat dip fall through to
+the borderline/GREEN clauses instead of hard-RED. The `n_pairs_scored == 0` "nothing happened"
+clause above it is unchanged.
+
+### Change B: precision-suspect commit demotion (production, three files)
+
+The rule's trigger is a labels-free precision-collapse detector; the commit stage must not
+discard that knowledge. Mirrors the existing `precision_collapse_floor` philosophy (demote
+pathological entries at commit).
+
+- `autoconfig_rules.py`: extract the five trigger conditions into a module-level helper
+  `precision_anchor_would_fire(cfg, profile, ctx) -> bool`; the rule becomes
+  trigger-helper + remedy (single source of truth -- no drift possible).
+- `autoconfig_history.py`: `pick_committed` gains
+  `demote_suspect: Callable[[HistoryEntry], bool] | None = None`. In `key()`, compute
+  `demoted = 1 if (demote_suspect is not None and demote_suspect(e)) else 0`; the
+  collapse-floor branch returns `(3 + demoted, 0.0, e.iteration)` and the normal path returns
+  `(rank + demoted, -sep, e.iteration)` (zero-label branch likewise `rank + demoted`).
+  Default None -> byte-identical to today.
+- `autoconfig_controller.py` (~957): pass the closure ONLY when
+  `any(d.rule_name == "precision_anchor_threshold_raise" for d in history.decisions)`:
+  `demote_suspect=lambda e: precision_anchor_would_fire(e.config, e.profile, ctx)`.
+
+Dynamics on the fixture: v0/iter0 (thr 0.8, trigger still holds) demote YELLOW->rank 2; iter1
+(thr 0.9, condition 5 false) stays rank 1 -> commits. Safety: if the raised entry profiled RED
+(raise genuinely hurt), it sits at rank 2 alongside the demoted v0 and v0 wins the iteration
+tiebreak -- the remedy never beats v0 unless its measured profile is at least as healthy. If the
+rule fired on the final budget iteration (raise never profiled), every entry is suspect, ranks
+shift uniformly, commit unchanged. Runs where the rule never fires (NCVR): closure not passed,
+byte-identical.
+
+Known pre-existing inconsistency (unchanged): `autoconfig_verify.py:302` and
+`suggest/surface.py:59` re-run `pick_committed()` bare (already omitting collapse floor and
+zero-label); they keep doing so.
+
+### Addendum testing
+
+- Unit (health): `n_pairs_scored=2, dip=0.0` -> not RED; `n_pairs_scored=30, dip=0.0` -> RED
+  (boundary unchanged); the zero-pairs clause unchanged.
+- Unit (pick_committed): hand-built history -- two YELLOW entries where the suspect one is
+  earlier-iteration: without `demote_suspect` the earlier wins (pins today's tiebreak); with it
+  the non-suspect wins; RED-raise safety case (suspect YELLOW v0 vs RED raise -> v0 still wins);
+  all-suspect -> same pick as without.
+- Integration: the success bar itself -- the ORIGINAL Leg-A harness commits threshold 0.9
+  (covered by P3's measurement; the existing 399-row integration test must stay green).
+
 ## Out of scope
 
 - #1316 (learned-blocking vs union reconciliation at >= 50k) and #1317 (TS parity of the
   blocking union).
 - The parked B1 branch (discarded).
 - Any TF-weighting changes beyond what #1318/#1782 shipped; any new env flags.
+- The `unimodal_scoring` RULE still fires on the raised iteration's raw dip (it reads
+  `dip_statistic` directly, not `health()`), burning budget iterations 2-3 on the fixture. The
+  entries it produces are RED/discarded; harmless. Candidate follow-up, not this feature.
+- Making `autoconfig_verify`/`suggest` pass commit-selection args to their bare
+  `pick_committed()` calls (pre-existing).
