@@ -162,6 +162,35 @@ def test_scoring_red_when_unimodal():
     assert sp.health() == HealthVerdict.RED
 
 
+def test_scoring_flat_dip_with_tiny_pair_support_is_not_red():
+    """#1319 Change A: a dip statistic over a handful of scored pairs is
+    sampling noise, not a unimodality signal (the _MIN_TRIPLE_SUPPORT
+    precedent). 2 pairs with a flat dip must NOT read RED; with bord ==
+    mass the borderline clause doesn't fire either -> GREEN."""
+    sp = ScoringProfile(
+        n_pairs_scored=2, candidates_compared=100,
+        dip_statistic=0.0, mass_above_threshold=1.0, mass_in_borderline=1.0,
+    )
+    assert sp.health() == HealthVerdict.GREEN
+
+
+def test_scoring_flat_dip_at_min_support_boundary_is_red():
+    """#1319 Change A boundary pin: at exactly _MIN_DIP_SUPPORT (30) scored
+    pairs the flat-dip unimodality gate applies again (>=, not >)."""
+    sp = ScoringProfile(
+        n_pairs_scored=30, candidates_compared=100,
+        dip_statistic=0.0, mass_above_threshold=1.0, mass_in_borderline=1.0,
+    )
+    assert sp.health() == HealthVerdict.RED
+
+
+def test_scoring_zero_pairs_zero_candidates_still_red():
+    """#1319 Change A must not touch the zero-pairs 'nothing happened'
+    clause."""
+    sp = ScoringProfile(n_pairs_scored=0, candidates_compared=0)
+    assert sp.health() == HealthVerdict.RED
+
+
 def test_scoring_yellow_when_borderline_heavy():
     sp = ScoringProfile(
         n_pairs_scored=500, score_histogram=[0] * 14 + [100, 100, 100] + [0] * 3,

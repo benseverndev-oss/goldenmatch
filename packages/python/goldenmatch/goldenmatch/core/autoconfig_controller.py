@@ -30,6 +30,8 @@ from goldenmatch.core.complexity_profile import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from goldenmatch.core.autoconfig_history import HistoryEntry
     from goldenmatch.distributed.record_store import PreparedRecordStore
 from goldenmatch.core.autoconfig_memory import AutoConfigMemory, profile_signature
@@ -858,13 +860,19 @@ class AutoConfigController:
                     # Allow the policy to check recall-aware rules before committing.
                     sp = profile_n.scoring
                     bp = profile_n.blocking
-                    n_rows = profile_n.data.n_rows
+                    # NOTE: deliberately NOT named `n_rows` -- that's the
+                    # function-level FULL df height the RED-refuse gate
+                    # (REFUSE_AT_N) compares against after the loop.
+                    # Rebinding it here to the sample height silently
+                    # disabled the at-scale refuse whenever the loop broke
+                    # through this GREEN branch (#1319 P2.5 found the shadow).
+                    _sample_n_rows = profile_n.data.n_rows
                     _suspicious_tight_blocking = (
                         iteration == 0
                         and sp.mass_above_threshold >= 1.0
                         and sp.candidates_compared > 0
-                        and n_rows > 0
-                        and sp.candidates_compared < n_rows * 0.5
+                        and _sample_n_rows > 0
+                        and sp.candidates_compared < _sample_n_rows * 0.5
                         and bp.reduction_ratio > 0.995
                     )
                     if not _suspicious_tight_blocking:
@@ -954,9 +962,25 @@ class AutoConfigController:
         # Pick committed config. Zero-label Phase 2: commit by zero-label
         # confidence instead of the -mass_separation tiebreaker (default ON,
         # see _zero_label_commit_enabled).
+        # #1319: the precision-anchor rule's trigger is a labels-free
+        # precision-collapse detector; when the rule fired this run, commit
+        # must not prefer an entry the rule would still flag (mirrors
+        # precision_collapse_floor). Otherwise pass None (byte-identical).
+        _demote_suspect: Callable[[HistoryEntry], bool] | None = None
+        if any(
+            d.rule_name == "precision_anchor_threshold_raise"
+            for d in history.decisions
+        ):
+            from goldenmatch.core.autoconfig_rules import precision_anchor_would_fire
+
+            def _demote_precision_suspect(e: HistoryEntry) -> bool:
+                return precision_anchor_would_fire(e.config, e.profile, ctx)
+
+            _demote_suspect = _demote_precision_suspect
         best_entry = history.pick_committed(
             precision_collapse_floor=0.9,
             use_zero_label_confidence=_zero_label_commit_enabled(),
+            demote_suspect=_demote_suspect,
         )
         if best_entry is None:
             # Every iteration errored — no usable profile produced. Fall back to v0.

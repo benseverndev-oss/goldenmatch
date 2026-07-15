@@ -469,3 +469,71 @@ def test_pick_committed_floor_rejects_out_of_range():
     # Boundary values are valid
     h.pick_committed(precision_collapse_floor=0.0)   # no raise
     h.pick_committed(precision_collapse_floor=1.0)   # no raise
+
+
+# ============================================================
+# demote_suspect (#1319 Change B: precision-suspect commit demotion)
+# ============================================================
+
+def _yellow_entry(iteration: int, config) -> HistoryEntry:
+    """Overall-YELLOW entry via scoring (borderline swamps above-mass);
+    every entry built here has IDENTICAL separation (-0.15)."""
+    return _entry(iteration, config, _profile(scoring=ScoringProfile(
+        n_pairs_scored=500, score_histogram=[0] * 15 + [100] * 5,
+        dip_statistic=0.05, mass_above_threshold=0.2, mass_in_borderline=0.35,
+    )))
+
+
+def _red_entry_same_sep(iteration: int, config) -> HistoryEntry:
+    """Overall-RED entry (flat dip) with the SAME separation (-0.15) as
+    ``_yellow_entry`` so rank alone decides."""
+    return _entry(iteration, config, _profile(scoring=ScoringProfile(
+        n_pairs_scored=500, score_histogram=[0] * 15 + [100] * 5,
+        dip_statistic=0.001, mass_above_threshold=0.2, mass_in_borderline=0.35,
+    )))
+
+
+def test_pick_committed_bare_tiebreak_prefers_earlier_iteration_yellow():
+    """Pins today's behavior: two YELLOW entries at equal separation ->
+    the earlier iteration (v0 = -1) wins the ascending-iteration tiebreak.
+    This is exactly the tie the #1319 raised entry loses without
+    demote_suspect."""
+    h = RunHistory()
+    h.entries.append(_yellow_entry(-1, "suspect_v0"))
+    h.entries.append(_yellow_entry(1, "raised"))
+    assert h.entries[0].profile.health() == HealthVerdict.YELLOW
+    assert h.entries[1].profile.health() == HealthVerdict.YELLOW
+    assert h.pick_committed().config == "suspect_v0"
+
+
+def test_pick_committed_demote_suspect_flips_the_yellow_tie():
+    """#1319: with demote_suspect flagging the v0 entry, the non-suspect
+    later iteration wins the commit."""
+    h = RunHistory()
+    h.entries.append(_yellow_entry(-1, "suspect_v0"))
+    h.entries.append(_yellow_entry(1, "raised"))
+    best = h.pick_committed(demote_suspect=lambda e: e.config == "suspect_v0")
+    assert best.config == "raised"
+
+
+def test_pick_committed_demote_suspect_never_beats_a_red_raise():
+    """Safety: a suspect YELLOW (rank 1+1=2) vs a non-suspect RED (rank
+    2+0=2) at equal separation -> the earlier iteration still wins. The
+    demotion cannot promote a genuinely unhealthy raise over v0."""
+    h = RunHistory()
+    h.entries.append(_yellow_entry(-1, "suspect_v0"))
+    h.entries.append(_red_entry_same_sep(1, "red_raise"))
+    assert h.entries[1].profile.health() == HealthVerdict.RED
+    best = h.pick_committed(demote_suspect=lambda e: e.config == "suspect_v0")
+    assert best.config == "suspect_v0"
+
+
+def test_pick_committed_all_suspect_matches_bare_pick():
+    """When every entry is suspect (rule fired on the final budget
+    iteration), ranks shift uniformly and the pick is unchanged."""
+    h = RunHistory()
+    h.entries.append(_yellow_entry(-1, "suspect_v0"))
+    h.entries.append(_yellow_entry(1, "also_suspect"))
+    bare = h.pick_committed()
+    demoted = h.pick_committed(demote_suspect=lambda e: True)
+    assert demoted.config == bare.config == "suspect_v0"

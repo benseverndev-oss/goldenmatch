@@ -358,6 +358,15 @@ class BlockingProfile:
         return HealthVerdict.GREEN
 
 
+# Minimum scored-pair count for the dip statistic to count as a unimodality
+# signal. Below this, a flat dip is sampling noise, not evidence -- the same
+# rationale as _MIN_TRIPLE_SUPPORT = 30 for transitivity estimates
+# (core/_profile_helpers.py:43-46): a statistic over a handful of samples is
+# noise, not signal. (#1319: a raised threshold can leave only 2 pairs above
+# the kernel prefilter; dip=0.0 over 2 pairs must not hard-RED the entry.)
+_MIN_DIP_SUPPORT = 30
+
+
 @dataclass(frozen=True)
 class ScoringProfile:
     _version: int = 1
@@ -382,7 +391,7 @@ class ScoringProfile:
             return HealthVerdict.RED
         if self.mass_above_threshold == 0.0:
             return HealthVerdict.RED
-        if self.dip_statistic < 0.005 and self.n_pairs_scored > 0:
+        if self.dip_statistic < 0.005 and self.n_pairs_scored >= _MIN_DIP_SUPPORT:
             return HealthVerdict.RED
         # YELLOW only when the borderline band outweighs the above-threshold
         # tail. The legacy `mass_in_borderline > 0.3` rule fired YELLOW on any

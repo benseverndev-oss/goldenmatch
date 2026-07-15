@@ -1182,6 +1182,161 @@ def rule_matchkey_demote_high_cardinality_field(
     return None
 
 
+_ANCHOR_NAME_SCORERS = {"name_freq_weighted_jw", "given_name_aliased_jw"}
+_ANCHOR_IDENTITY_MIN = 0.75
+_ANCHOR_MASS_MIN = 0.95
+_ANCHOR_RAISED_THRESHOLD = 0.9
+
+
+def _precision_anchor_trigger(
+    cfg: GoldenMatchConfig,
+    profile: ComplexityProfile,
+    ctx: IndicatorContext | None,
+) -> tuple[MatchkeyConfig, str] | None:
+    """Evaluate the five #1319 trigger conditions (see
+    ``rule_precision_anchor_threshold_raise`` for the full rationale).
+
+    Returns ``(target_weighted_mk, anchor_field)`` when ALL five hold,
+    else None. Single source of truth: the rule delegates here for its
+    trigger, and ``precision_anchor_would_fire`` re-exposes it as the
+    labels-free precision-collapse detector the commit stage uses.
+    """
+    if ctx is None:
+        return None
+    if profile.scoring.mass_above_threshold < _ANCHOR_MASS_MIN:
+        return None
+    target = None
+    for mk in cfg.matchkeys or []:
+        if mk.type != "weighted" or not mk.fields:
+            continue
+        if any(f.scorer not in _ANCHOR_NAME_SCORERS for f in mk.fields):
+            continue
+        if mk.threshold is None or mk.threshold >= _ANCHOR_RAISED_THRESHOLD:
+            continue
+        if not any(f.tf_freqs for f in mk.fields):
+            continue
+        target = mk
+        break
+    if target is None:
+        return None
+    for mk in cfg.matchkeys or []:
+        if mk.type != "exact":
+            continue
+        for f in mk.fields or []:
+            if f.field is None:
+                continue
+            prior = ctx.column_priors.get(f.field)
+            if prior is not None and prior.identity_score >= _ANCHOR_IDENTITY_MIN:
+                return target, f.field
+    return None
+
+
+def precision_anchor_would_fire(
+    cfg: GoldenMatchConfig,
+    profile: ComplexityProfile,
+    ctx: IndicatorContext | None,
+) -> bool:
+    """True when the #1319 over-merge trigger shape holds on ``cfg`` +
+    ``profile`` (all five conditions of
+    ``rule_precision_anchor_threshold_raise``; ``ctx is None`` -> False).
+
+    Used by the controller's commit stage as a labels-free
+    precision-collapse detector (``pick_committed(demote_suspect=...)``):
+    commit must not prefer an entry the rule would still flag.
+    """
+    return _precision_anchor_trigger(cfg, profile, ctx) is not None
+
+
+def rule_precision_anchor_threshold_raise(
+    profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
+    ctx: IndicatorContext | None = None,
+) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
+    """Raise a name-only weighted matchkey's threshold to 0.9 on the #1207
+    over-merge shape (#1319).
+
+    Background: on null-sparse multi-source person data (#1207 observation
+    2), the controller commits a config whose weighted matchkey scores
+    names only, and identical common full names over-merge distinct people.
+    The 2026-07-15 measurement pass quantified it on a crafted 2600-row
+    common-name/strong-email fixture: precision 0.009 at the committed 0.8
+    threshold pre-#1782 (0.0305 with #1782's tf_freqs threading live), all
+    15,058 same-name-stranger pairs merged. With the threshold raised to
+    0.9 the same fixture measures P 0.987 / R 1.0 -- recall stays free
+    because the controller's own exact_email matchkey anchors every true
+    duplicate.
+
+    The trigger is the CONFIG SHAPE, not the mass signal alone: the healthy
+    NCVR run (P 0.96) also reads ``mass_above_threshold = 1.0``, so mass is
+    necessary but not sufficient. NCVR is excluded by the shape condition
+    instead -- its weighted matchkey carries address/gender scorers, not
+    name-class scorers only.
+
+    Triggers when ALL of:
+
+    - ``profile.scoring.mass_above_threshold >= 0.95`` (pathology gate).
+    - A weighted matchkey whose fields ALL carry a name-class scorer
+      (membership in ``_ANCHOR_NAME_SCORERS`` -- rules don't receive the
+      column classifier's output; scorer names are the config-visible
+      proxy, and auto-config assigns these scorers exactly to name fields).
+    - An exact matchkey with a field whose ``ctx.column_priors`` entry has
+      ``identity_score >= 0.75`` coexists (the strong-identifier recall
+      anchor that makes the raise safe; without it the raise could cost
+      recall and the rule must not fire). This assumes the anchor is
+      disjoint from the over-merging name columns: an exact matchkey on
+      the name column itself would satisfy the check, but in practice the
+      priors classifier does not score name columns >= 0.75, which is
+      what keeps the assumption safe.
+    - ANY of the weighted matchkey's name fields carries ``tf_freqs`` (the
+      #1318 downweight must be live for the raise to separate same-name
+      strangers; identical names WITHOUT the table score 1.0 and clear any
+      threshold < 1, so firing would be pure recall risk for typo'd dups
+      with zero precision gain).
+    - That weighted matchkey's ``threshold < 0.9``.
+
+    Single-shot remedy: threshold -> 0.9 (the measured operating point).
+    Convergence is by construction -- after firing, the ``threshold < 0.9``
+    condition is false, so the rule fires at most once (no incremental
+    steps burning controller budget, the #1654/#1680 lesson; the
+    measurement shows intermediate points don't help -- 0.85 left P at
+    0.03).
+
+    History: supersedes the parked B1 rule on
+    ``feat/1207-pr2b-precision-anchor`` -- that rule's designed shape
+    (demote/promote) was never emitted by the real controller, so it could
+    never fire. This rule triggers on what the controller actually commits.
+
+    Note the policy's implicit gate: ``HeuristicRefitPolicy.decide()``
+    returns None on an overall-GREEN profile (autoconfig_policy.py), so
+    this rule structurally cannot fire on healthy commits -- the crafted
+    fixture measures overall_health YELLOW.
+    """
+    trigger = _precision_anchor_trigger(current, profile, ctx)
+    if trigger is None:
+        return None
+    target, anchor_field = trigger
+    new_mk = target.model_copy(update={"threshold": _ANCHOR_RAISED_THRESHOLD})
+    new_matchkeys = [new_mk if m is target else m for m in (current.matchkeys or [])]
+    new_cfg = current.model_copy(update={"matchkeys": new_matchkeys})
+    name_fields = ", ".join(f.field or "" for f in target.fields)
+    decision = PolicyDecision(
+        rule_name="precision_anchor_threshold_raise",
+        rationale=(
+            f"#1319 over-merge shape: mass_above_threshold="
+            f"{profile.scoring.mass_above_threshold:.2f} >= {_ANCHOR_MASS_MIN} "
+            f"with name-only weighted matchkey '{target.name}' "
+            f"(fields: {name_fields}) at threshold {target.threshold}; "
+            f"strong-id exact anchor '{anchor_field}' keeps recall free; "
+            f"tf_freqs live on the name fields; raising threshold to "
+            f"{_ANCHOR_RAISED_THRESHOLD} (measured operating point)"
+        ),
+        config_diff={
+            f"matchkeys[{target.name}].threshold":
+                f"{target.threshold} -> {_ANCHOR_RAISED_THRESHOLD}",
+        },
+    )
+    return new_cfg, decision
+
+
 def rule_blocking_adaptive_on_p99_outlier(
     profile: ComplexityProfile, current: GoldenMatchConfig, history: RunHistory,
 ) -> tuple[GoldenMatchConfig, PolicyDecision] | None:
@@ -1257,7 +1412,8 @@ DEFAULT_RULES = [
     rule_no_matches,                       # 13 tuning: nothing matches
     rule_matchkey_demote_high_cardinality_field,  # 14 NEW 2026-05-29: matchkey YELLOW from uniquely-identifying field
     rule_select_probabilistic_matchkey,    # NEW #491: wide fuzzy-only weighted mk + recall-limited + no exact anchor -> probabilistic
-    rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept second-to-last)
+    rule_recall_gap_suspected,             # 15 tuning: random pair probe high OR over-tight signature (kept after the structural rules; only the precision-raise + sparse-expand threshold rules follow)
+    rule_precision_anchor_threshold_raise, # 17 NEW #1319: raise name-only weighted threshold on the over-merge shape (before sparse-expand's loosen)
     rule_sparse_match_expand,              # 16 NEW v1.10: lower threshold proxy for sparse datasets (kept last)
     # NOTE: rule_enable_llm_scorer is intentionally NOT in DEFAULT_RULES.
     # LLM scorer decoration happens post-iteration via

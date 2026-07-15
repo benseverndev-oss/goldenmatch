@@ -6,6 +6,7 @@ Spec: docs/superpowers/specs/2026-05-06-autoconfig-introspective-controller-desi
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -116,6 +117,7 @@ class RunHistory:
         self,
         precision_collapse_floor: float | None = None,
         use_zero_label_confidence: bool = False,
+        demote_suspect: Callable[[HistoryEntry], bool] | None = None,
     ) -> HistoryEntry | None:
         """Pick the entry to commit. Returns None ONLY if every entry
         errored or has no profile — otherwise returns the best entry by
@@ -127,9 +129,11 @@ class RunHistory:
         that profile is RED. The user-visible health verdict on the
         returned entry tells them what they got.
 
-        Lex key: ``(health_rank, -mass_separation, iteration)`` where
-        ``health_rank`` is 0/1/2 for GREEN/YELLOW/RED and
-        ``mass_separation = mass_above_threshold - mass_in_borderline``.
+        Lex key: ``(health_rank + demoted, -mass_separation, iteration)``
+        where ``health_rank`` is 0/1/2 for GREEN/YELLOW/RED,
+        ``mass_separation = mass_above_threshold - mass_in_borderline``,
+        and ``demoted`` is 1 when ``demote_suspect`` flags the entry
+        (0 otherwise; always 0 when ``demote_suspect`` is None).
 
         Filter: ``e.error is None and e.profile is not None`` (per the
         ``HistoryEntry`` invariant — guards the sentinel-mismatch case
@@ -151,6 +155,22 @@ class RunHistory:
         the everything-matches / no-matches / cluster-collapse guards, so this
         is defense-in-depth alongside ``precision_collapse_floor`` (which still
         applies). Default False -> identical behavior to before (no change).
+
+        ``demote_suspect`` (#1319): optional labels-free precision-collapse
+        detector evaluated per entry. Flagged entries get ``+1`` added to
+        their health rank in every branch of the lex key, so a non-suspect
+        entry of equal health/separation beats a suspect one, while a
+        genuinely healthier suspect still wins (YELLOW+1 ties RED+0 and the
+        iteration tiebreak resolves it). Mirrors the
+        ``precision_collapse_floor`` philosophy: commit must not prefer an
+        entry the precision-anchor rule would still flag. Default None ->
+        byte-identical behavior. Known rank-3 collision: a demoted RED
+        entry (2+1) shares rank with a non-demoted collapse-floor entry
+        (3) but keeps its ``-sep`` tiebreaker while the collapse branch
+        neutralises sep to 0.0, so the demoted RED can now outrank the
+        collapsed entry — both are last-resort entries that v0 outranks
+        in practice, accepted as-is. The callable must not raise on any
+        surviving entry; exceptions propagate out of ``pick_committed``.
         """
         if (precision_collapse_floor is not None
                 and not (0.0 <= precision_collapse_floor <= 1.0)):
@@ -172,6 +192,7 @@ class RunHistory:
                 HealthVerdict.YELLOW: 1,
                 HealthVerdict.RED: 2,
             }[verdict]
+            demoted = 1 if (demote_suspect is not None and demote_suspect(e)) else 0
             sp = e.profile.scoring
             sep = sp.mass_above_threshold - sp.mass_in_borderline
             if (precision_collapse_floor is not None
@@ -201,12 +222,12 @@ class RunHistory:
                 # most-lowered iteration; downstream pipeline produced 2,570
                 # clusters vs the ~145K v0 would have produced.
                 rank = 3
-                return (rank, 0.0, e.iteration)
+                return (rank + demoted, 0.0, e.iteration)
             # Zero-label Phase 2: prefer the most-plausible unlabeled structure
             # over the -sep heuristic (which is biased toward lower thresholds).
             if use_zero_label_confidence and e.profile.zero_label is not None:
-                return (rank, -e.profile.zero_label.overall_confidence, e.iteration)
-            return (rank, -sep, e.iteration)
+                return (rank + demoted, -e.profile.zero_label.overall_confidence, e.iteration)
+            return (rank + demoted, -sep, e.iteration)
 
         return min(survivors, key=key)
 
