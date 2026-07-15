@@ -253,6 +253,34 @@ def test_fs_default_bucket_decision(monkeypatch):
 
 
 @native_required
+def test_score_buckets_exclude_handle_parity(monkeypatch):
+    """#1803 item 1: score_buckets with a non-empty exclude set must produce
+    identical FS pairs on the batched-native path (which now builds the shared
+    ExcludeSet handle once at entry) and the per-block path
+    (GOLDENMATCH_FS_BUCKET_NATIVE=0), and both must drop the excluded pair."""
+    from goldenmatch.backends.score_buckets import score_buckets
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+
+    df = _multiblock_df()
+    mk = _mk()
+    em = train_em(df, mk, n_sample_pairs=200)
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["grp"])])
+
+    def _run():
+        matched = {(1, 2)}  # pre-matched pair: must be excluded from FS emit
+        pairs = score_buckets(df, blocking, mk, matched, em_result=em)
+        return _pairset(pairs)
+
+    monkeypatch.delenv("GOLDENMATCH_FS_BUCKET_NATIVE", raising=False)
+    native_batched = _run()
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_NATIVE", "0")
+    per_block = _run()
+
+    assert native_batched == per_block
+    assert (1, 2) not in native_batched
+
+
+@native_required
 def test_routing_backend_none_uses_bucket_when_native(monkeypatch):
     """With _use_bucket_scorer killed (GOLDENMATCH_BUCKET_DEFAULT=0), a
     backend=None FS matchkey still reaches score_buckets purely via

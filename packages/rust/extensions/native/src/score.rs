@@ -283,6 +283,7 @@ pub(crate) fn fs_level_from_sim(
     match_weights, calibrated, prior_w, min_weight, weight_range, threshold,
     exclude, level_thresholds=None,
     ne_values=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
+    exclude_set=None,
 ))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
@@ -304,8 +305,21 @@ pub fn score_block_pairs_fs(
     ne_scorer_ids: Option<Vec<u8>>,
     ne_thresholds: Option<Vec<f64>>,
     ne_weights: Option<Vec<f64>>,
+    exclude_set: Option<PyRef<'_, ExcludeSet>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
-    let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
+    // FS_SUPPORTS_EXCLUDE_SET: prefer the shared Arc handle (built once per
+    // score_buckets call via `build_exclude_set`), fall back to the legacy
+    // Vec-rebuilt-per-call path. Same resolution as score_block_pairs_arrow --
+    // the per-call HashSet rebuild was the #552/#688 pathology, previously
+    // fixed for weighted only.
+    let local_set: HashSet<(i64, i64)>;
+    let exclude: &HashSet<(i64, i64)> = match &exclude_set {
+        Some(handle) => &handle.set,
+        None => {
+            local_set = exclude.into_iter().collect();
+            &local_set
+        }
+    };
     let n_fields = scorer_ids.len();
 
     if let Some(lt) = &level_thresholds {
@@ -632,6 +646,261 @@ pub fn score_block_pairs_arrow(
     // large value = always sequential). Both paths walk spans in order, so the
     // emitted (min,max) pair sequence is byte-identical either way (parity
     // asserted in tests/test_native_block_seq_parity.py).
+    let total_pairs: u128 = block_sizes
+        .iter()
+        .map(|&s| {
+            let s = s as u128;
+            if s >= 2 {
+                s * (s - 1) / 2
+            } else {
+                0
+            }
+        })
+        .sum();
+    let rayon_min_pairs: u128 = std::env::var("GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20_000_000);
+
+    Ok(py.detach(|| {
+        if total_pairs >= rayon_min_pairs {
+            spans
+                .par_iter()
+                .flat_map_iter(|&(offset, size)| score_span(offset, size))
+                .collect()
+        } else {
+            spans
+                .iter()
+                .flat_map(|&(offset, size)| score_span(offset, size))
+                .collect()
+        }
+    }))
+}
+
+/// Arrow-native sibling of [`score_block_pairs_fs`]: identical Fellegi-Sunter
+/// scoring (levels / custom `level_thresholds` banding / negative evidence /
+/// `fs_normalize`), but `row_ids` (Int64) and the field/NE columns
+/// (Utf8/LargeUtf8) are read zero-copy from Arrow buffers via the C Data
+/// Interface — skipping the per-element `.to_list()` materialization + PyO3
+/// `Vec<Vec<Option<String>>>` clone the Vec entry pays (the same win
+/// `score_block_pairs_arrow` gave the weighted path, ~58% of native wall at
+/// 1M rows). Also takes the shared [`ExcludeSet`] handle and the issue #688
+/// sequential-vs-rayon dispatch gate, both of which the Vec entry historically
+/// lacked. Byte-identical output to the Vec entry for the same inputs (parity
+/// asserted in tests/test_native_fs_ne.py).
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+#[pyo3(signature = (
+    row_ids, field_arrays, block_sizes, scorer_ids, levels, partial_thresholds,
+    match_weights, calibrated, prior_w, min_weight, weight_range, threshold,
+    exclude=None, exclude_set=None, level_thresholds=None,
+    ne_arrays=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
+))]
+pub fn score_block_pairs_fs_arrow(
+    py: Python<'_>,
+    row_ids: PyArrowType<ArrayData>,
+    field_arrays: Vec<PyArrowType<ArrayData>>,
+    block_sizes: Vec<usize>,
+    scorer_ids: Vec<u8>,
+    levels: Vec<u8>,
+    partial_thresholds: Vec<f64>,
+    match_weights: Vec<Vec<f64>>,
+    calibrated: bool,
+    prior_w: f64,
+    min_weight: f64,
+    weight_range: f64,
+    threshold: f64,
+    exclude: Option<Vec<(i64, i64)>>,
+    exclude_set: Option<PyRef<'_, ExcludeSet>>,
+    level_thresholds: Option<Vec<Option<Vec<f64>>>>,
+    ne_arrays: Option<Vec<PyArrowType<ArrayData>>>,
+    ne_scorer_ids: Option<Vec<u8>>,
+    ne_thresholds: Option<Vec<f64>>,
+    ne_weights: Option<Vec<f64>>,
+) -> PyResult<Vec<(i64, i64, f64)>> {
+    let row_data = row_ids.0;
+    if row_data.data_type() != &DataType::Int64 {
+        return Err(PyValueError::new_err(format!(
+            "score_block_pairs_fs_arrow: row_ids must be int64, got {:?}",
+            row_data.data_type()
+        )));
+    }
+    let row_ids = Int64Array::from(row_data);
+    let fields: Vec<StrCol> = field_arrays
+        .into_iter()
+        .map(|p| StrCol::from_data(p.0))
+        .collect::<PyResult<_>>()?;
+    let n_rows = row_ids.len();
+    let n_fields = scorer_ids.len();
+    for (f, col) in fields.iter().enumerate() {
+        if col.len() != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_fs_arrow: field {f} length {} != row count {n_rows}",
+                col.len()
+            )));
+        }
+    }
+
+    // Custom-banding validation, verbatim from score_block_pairs_fs.
+    if let Some(lt) = &level_thresholds {
+        if lt.len() != n_fields {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_fs_arrow: level_thresholds length {} != field count {n_fields}",
+                lt.len()
+            )));
+        }
+        for (f, ts) in lt.iter().enumerate() {
+            if let Some(ts) = ts {
+                if match_weights[f].len() != ts.len() + 1 {
+                    return Err(PyValueError::new_err(format!(
+                        "score_block_pairs_fs_arrow: field {f} has {} match_weights but \
+                         {} level_thresholds (need thresholds + 1 weights)",
+                        match_weights[f].len(),
+                        ts.len()
+                    )));
+                }
+            }
+        }
+    }
+    let field_thresholds: Vec<Option<&[f64]>> = match &level_thresholds {
+        Some(lt) => lt.iter().map(|ts| ts.as_deref()).collect(),
+        None => vec![None; n_fields],
+    };
+
+    // Negative-evidence kwargs: all four present or all four absent
+    // (score_block_pairs_fs contract, arrow column type).
+    let n_present = [
+        ne_arrays.is_some(),
+        ne_scorer_ids.is_some(),
+        ne_thresholds.is_some(),
+        ne_weights.is_some(),
+    ]
+    .iter()
+    .filter(|&&p| p)
+    .count();
+    if n_present != 0 && n_present != 4 {
+        return Err(PyValueError::new_err(
+            "score_block_pairs_fs_arrow: ne_arrays, ne_scorer_ids, ne_thresholds \
+             and ne_weights must be passed together (all four or none)",
+        ));
+    }
+    let ne_cols: Vec<StrCol> = match ne_arrays {
+        Some(arrays) => arrays
+            .into_iter()
+            .map(|p| StrCol::from_data(p.0))
+            .collect::<PyResult<_>>()?,
+        None => Vec::new(),
+    };
+    let ne_scorer_ids_v: &[u8] = ne_scorer_ids.as_deref().unwrap_or(&[]);
+    let ne_thresholds_v: &[f64] = ne_thresholds.as_deref().unwrap_or(&[]);
+    let ne_weights_v: &[f64] = ne_weights.as_deref().unwrap_or(&[]);
+    let n_ne = ne_cols.len();
+    if ne_scorer_ids_v.len() != n_ne || ne_thresholds_v.len() != n_ne || ne_weights_v.len() != n_ne
+    {
+        return Err(PyValueError::new_err(format!(
+            "score_block_pairs_fs_arrow: ne_* lengths differ (ne_arrays {}, \
+             ne_scorer_ids {}, ne_thresholds {}, ne_weights {})",
+            n_ne,
+            ne_scorer_ids_v.len(),
+            ne_thresholds_v.len(),
+            ne_weights_v.len()
+        )));
+    }
+    for (k, col) in ne_cols.iter().enumerate() {
+        if col.len() != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_fs_arrow: ne_arrays[{k}] length {} != row count {n_rows}",
+                col.len()
+            )));
+        }
+    }
+    for (k, &sid) in ne_scorer_ids_v.iter().enumerate() {
+        if sid > 3 {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_fs_arrow: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3)"
+            )));
+        }
+    }
+
+    // Exclude resolution: shared Arc handle preferred, legacy Vec fallback
+    // (same as score_block_pairs_arrow).
+    let local_set: HashSet<(i64, i64)>;
+    let exclude_ref: &HashSet<(i64, i64)> = match (&exclude_set, exclude) {
+        (Some(handle), _) => &handle.set,
+        (None, Some(v)) => {
+            local_set = v.into_iter().collect();
+            &local_set
+        }
+        (None, None) => {
+            local_set = HashSet::new();
+            &local_set
+        }
+    };
+
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
+    let mut offset = 0usize;
+    for &size in &block_sizes {
+        spans.push((offset, size));
+        offset += size;
+    }
+
+    // Per-block FS scorer shared by the sequential and rayon paths (mirrors
+    // score_block_pairs_arrow's score_span; FS math verbatim from
+    // score_block_pairs_fs, including the `_ne_fired` strict-< semantics).
+    let score_span = |offset: usize, size: usize| -> Vec<(i64, i64, f64)> {
+        let mut local: Vec<(i64, i64, f64)> = Vec::new();
+        if size >= 2 {
+            let end = offset + size;
+            for i in offset..end - 1 {
+                let ri = row_ids.value(i);
+                for j in (i + 1)..end {
+                    let rj = row_ids.value(j);
+                    let pair_key = if ri < rj { (ri, rj) } else { (rj, ri) };
+                    if exclude_ref.contains(&pair_key) {
+                        continue;
+                    }
+                    let mut total_weight = 0.0_f64;
+                    for f in 0..n_fields {
+                        let level = match (fields[f].get(i), fields[f].get(j)) {
+                            (Some(a), Some(b)) => {
+                                let sim = score_one(scorer_ids[f], a, b);
+                                fs_level_from_sim(
+                                    sim,
+                                    levels[f],
+                                    partial_thresholds[f],
+                                    field_thresholds[f],
+                                )
+                            }
+                            // Null on either side -> disagree (level 0).
+                            _ => 0,
+                        };
+                        total_weight += match_weights[f][level];
+                    }
+                    for k in 0..n_ne {
+                        if let (Some(a), Some(b)) = (ne_cols[k].get(i), ne_cols[k].get(j)) {
+                            if !a.is_empty()
+                                && !b.is_empty()
+                                && score_one(ne_scorer_ids_v[k], a, b) < ne_thresholds_v[k]
+                            {
+                                total_weight += ne_weights_v[k];
+                            }
+                        }
+                    }
+                    let normalized =
+                        fs_normalize(total_weight, calibrated, prior_w, min_weight, weight_range);
+                    if normalized >= threshold {
+                        local.push((pair_key.0, pair_key.1, normalized));
+                    }
+                }
+            }
+        }
+        local
+    };
+
+    // Issue #688 dispatch gate (see score_block_pairs_arrow): score in the
+    // calling thread unless a single call carries enough intra-call work that
+    // rayon's dispatch beats the LockLatch-park risk. Both paths walk spans in
+    // order, so the emitted (min,max) sequence is byte-identical either way.
     let total_pairs: u128 = block_sizes
         .iter()
         .map(|&s| {

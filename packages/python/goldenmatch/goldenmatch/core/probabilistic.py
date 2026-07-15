@@ -2329,12 +2329,44 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
 
 
+def _fs_arrow_column(native_df, f, n: int):
+    """Arrow column of transformed values for one field (#1803 item 2).
+
+    Zero-copy when the column is already utf8/large_utf8 AND the field has no
+    transforms (``str(v)`` on a string is the identity, so the raw arrow
+    buffer IS the Vec entry's value list). Otherwise materialize exactly the
+    values the Vec entry would receive (``_field_values_from_list``) into one
+    arrow array — still one C-level build instead of the per-element PyO3
+    ``Vec<Vec<Option<String>>>`` clone. Byte-identical either way.
+    """
+    import pyarrow as _pa
+
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd
+    from goldenmatch.core.frame import to_frame as _tf
+
+    _bf = _tf(native_df)
+    if f.field not in _bf.columns:
+        return _pa.nulls(n, type=_pa.large_string())
+    native = _bf.native
+    if _ipd(native):
+        arr = native[f.field].to_arrow()
+    else:  # pa.Table lane
+        arr = native.column(f.field).combine_chunks()
+    if not f.transforms and (
+        _pa.types.is_string(arr.type) or _pa.types.is_large_string(arr.type)
+    ):
+        return arr
+    vals = _field_values_from_list(_bf.column(f.field).to_list(), f, n)
+    return _pa.array(vals, type=_pa.large_string())
+
+
 def _score_fs_native_frame(
     frame,
     size_list,
     mk: MatchkeyConfig,
     em_result: EMResult,
     exclude_pairs: set[tuple[int, int]] | None = None,
+    exclude_handle=None,
 ) -> list[tuple[int, int, float]]:
     """Shared native FS kernel call over ``frame`` with per-block ``size_list``.
 
@@ -2377,13 +2409,27 @@ def _score_fs_native_frame(
     else:
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
-    field_values = [_field_values_for_block(frame, f, n) for f in mk.fields]
+    mod = native_module()
+    # Zero-copy arrow entry (#1803 item 2): route to score_block_pairs_fs_arrow
+    # when the wheel carries it; old wheels keep the Vec entry byte-identically.
+    use_arrow = bool(getattr(mod, "FS_SUPPORTS_ARROW", False))
     scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
     levels = [int(f.levels) for f in mk.fields]
     partials = [float(f.partial_threshold) for f in mk.fields]
     weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
-    # Kernel canonicalizes pair_key to (min,max); pass exclude pre-canonicalized.
-    excl = [(a, b) if a < b else (b, a) for a, b in exclude_pairs]
+    # Shared exclude handle (#1803 item 1, the #552/#688 fix on the FS side):
+    # when the caller prebuilt an ExcludeSet (score_buckets, once per call),
+    # skip the per-call canonicalize + marshal entirely. Handle only usable
+    # when the wheel supports it (arrow entry always does; the Vec entry needs
+    # FS_SUPPORTS_EXCLUDE_SET); otherwise fall back to the Vec contract.
+    use_handle = exclude_handle is not None and (
+        use_arrow or bool(getattr(mod, "FS_SUPPORTS_EXCLUDE_SET", False))
+    )
+    if use_handle:
+        excl: list[tuple[int, int]] = []
+    else:
+        # Kernel canonicalizes pair_key to (min,max); pass pre-canonicalized.
+        excl = [(a, b) if a < b else (b, a) for a, b in exclude_pairs]
 
     # Optional capability kwargs. Each group is sent ONLY when the matchkey
     # actually uses the feature — an old wheel must NEVER see the kwarg, even
@@ -2408,9 +2454,14 @@ def _score_fs_native_frame(
     # matches the scalar path's contract; validate_for guarantees it exists).
     ne_fields = mk.negative_evidence or []
     if ne_fields:
-        opt_kwargs["ne_values"] = [
-            _field_values_for_block(frame, ne, n) for ne in ne_fields
-        ]
+        if use_arrow:
+            opt_kwargs["ne_arrays"] = [
+                _fs_arrow_column(frame, ne, n) for ne in ne_fields
+            ]
+        else:
+            opt_kwargs["ne_values"] = [
+                _field_values_for_block(frame, ne, n) for ne in ne_fields
+            ]
         opt_kwargs["ne_scorer_ids"] = [
             _NATIVE_FS_SCORER_IDS[ne.scorer] for ne in ne_fields
         ]
@@ -2421,7 +2472,36 @@ def _score_fs_native_frame(
             for ne in ne_fields
         ]
 
-    pairs = native_module().score_block_pairs_fs(
+    if use_arrow:
+        import pyarrow as _pa
+
+        from goldenmatch.core.frame import is_polars_dataframe as _ipd
+
+        native_df = _tf_w6(frame).native
+        if _ipd(native_df):
+            row_ids_arrow = native_df["__row_id__"].cast(pl.Int64).to_arrow()
+        else:  # pa.Table lane: combine chunks for the FFI
+            import pyarrow.compute as _pc
+
+            row_ids_arrow = _pc.cast(
+                native_df.column("__row_id__").combine_chunks(), _pa.int64()
+            )
+        field_arrays = [_fs_arrow_column(frame, f, n) for f in mk.fields]
+        if use_handle:
+            opt_kwargs["exclude_set"] = exclude_handle
+        pairs = mod.score_block_pairs_fs_arrow(
+            row_ids_arrow, field_arrays, [int(s) for s in size_list],
+            scorer_ids, levels, partials, weights, calibrated, prior_w,
+            min_weight, weight_range, link_threshold,
+            exclude=excl if excl else None,
+            **opt_kwargs,
+        )
+        return [(a, b, round(float(s), 4)) for a, b, s in pairs]
+
+    field_values = [_field_values_for_block(frame, f, n) for f in mk.fields]
+    if use_handle:
+        opt_kwargs["exclude_set"] = exclude_handle
+    pairs = mod.score_block_pairs_fs(
         row_ids, [int(s) for s in size_list], field_values, scorer_ids, levels,
         partials, weights, calibrated, prior_w, min_weight, weight_range,
         link_threshold, excl,
@@ -2460,6 +2540,7 @@ def score_probabilistic_bucket_native(
     mk: MatchkeyConfig,
     em_result: EMResult,
     exclude_pairs: set[tuple[int, int]] | None = None,
+    exclude_handle=None,
 ) -> list[tuple[int, int, float]]:
     """Score a WHOLE block-sorted bucket in ONE native FS kernel call.
 
@@ -2483,7 +2564,8 @@ def score_probabilistic_bucket_native(
     ``tests/test_fs_bucket_native.py``.
     """
     return _score_fs_native_frame(
-        sorted_bucket_df, size_list, mk, em_result, exclude_pairs
+        sorted_bucket_df, size_list, mk, em_result, exclude_pairs,
+        exclude_handle=exclude_handle,
     )
 
 

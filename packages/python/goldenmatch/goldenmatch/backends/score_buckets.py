@@ -742,6 +742,36 @@ def score_buckets(
         # sizes list). GOLDENMATCH_FS_BUCKET_NATIVE=0 forces the per-block loop.
         fs_bucket_native = _fs_bucket_native_enabled() and _fs_native_eligible(mk)
 
+    # #1803 item 1: build the FS exclude handle ONCE here, before the bucket
+    # worker loop — the FS analog of the weighted path's Track 1 Fix B below.
+    # Without it every bucket call re-marshals frozen_exclude as a Vec and the
+    # kernel rebuilds a Rust HashSet per call (O(buckets x |exclude|), the
+    # #552/#688 pathology). Old wheels (no FS_SUPPORTS_ARROW / _EXCLUDE_SET)
+    # keep the legacy Vec path — _score_fs_native_frame checks the consts and
+    # falls back byte-identically.
+    fs_exclude_handle = None
+    if fs_bucket_native and frozen_exclude:
+        try:
+            _mod = native_module()
+            _fs_build = getattr(_mod, "build_exclude_set", None)
+            if _fs_build is not None and (
+                getattr(_mod, "FS_SUPPORTS_ARROW", False)
+                or getattr(_mod, "FS_SUPPORTS_EXCLUDE_SET", False)
+            ):
+                _t_feb = time.perf_counter()
+                fs_exclude_handle = _fs_build(list(frozen_exclude))
+                if _bkt_debug_on():
+                    print(
+                        f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: "
+                        f"fs build_exclude_set({len(frozen_exclude)} pairs) in "
+                        f"{time.perf_counter()-_t_feb:.2f}s",
+                        flush=True,
+                    )
+            else:
+                _warn_stale_native_wheel_once(len(frozen_exclude))
+        except Exception:
+            fs_exclude_handle = None
+
     # Native fast-path eligibility resolved ONCE: gated on, and every field's
     # scorer implemented by the native kernel. None -> Python per-pair loop.
     # When NE has resolvable entries, force the Python path -- the native
@@ -1100,7 +1130,8 @@ def score_buckets(
             )
 
             pairs = score_probabilistic_bucket_native(
-                fs_sorted_df, kept_size_list, mk, em_result, frozen_exclude
+                fs_sorted_df, kept_size_list, mk, em_result, frozen_exclude,
+                exclude_handle=fs_exclude_handle,
             )
             # Same post-filters as the per-block loop below (the native kernel
             # doesn't know about source_lookup / target_ids).
