@@ -93,10 +93,19 @@ The lane registry (default full set of 6):
 |---|---|---|---|---|
 | `splink` | run_splink.py | — | — | Fellegi-Sunter reference engine |
 | `gm_hand_built` | run_goldenmatch.py | hand_built | — | GM fast weighted bucket+native path (speed reference) |
-| `gm_probabilistic` | run_goldenmatch.py | probabilistic | — | EM-trained FS, numpy — like-for-like vs Splink FS |
-| `gm_probabilistic_native` | run_goldenmatch.py | probabilistic | `GOLDENMATCH_FS_NATIVE=1` | same, Rust FS kernel (telemetry proves no numpy fallback) |
+| `gm_probabilistic` | run_goldenmatch.py | probabilistic | `GOLDENMATCH_FS_NATIVE=0` | EM-trained FS, **numpy fallback** — like-for-like vs Splink FS |
+| `gm_probabilistic_native` | run_goldenmatch.py | probabilistic | `GOLDENMATCH_FS_NATIVE=1` | same, **Rust FS kernel** (reference-mode default made explicit) |
 | `gm_zeroconfig` | run_goldenmatch.py | zeroconfig | — | zero-effort controller vs a tuned Splink spec |
 | `gm_converted_splink` | run_gm_converted.py | — | — | GM running Splink's own spec auto-converted via `from_splink` |
+
+**FS-native is default-ON** (`_fs_native_enabled()` in `probabilistic.py` returns
+native whenever the env is unset — Rust-is-the-reference mode, confirmed in the
+package CLAUDE.md). So the env is set **explicitly on both FS lanes**, not left to
+default: the numpy lane MUST force `GOLDENMATCH_FS_NATIVE=0`, and the native lane
+sets `=1` to make the default explicit. Without `=0` on `gm_probabilistic` it
+would silently run native and the two FS lanes would be native-vs-native, gutting
+the "numpy fallback vs native kernel" comparison. The `zeroconfig` lane inherits
+whatever the controller picks (default native) and does not force the env.
 
 Lanes are selectable at the workflow level (`lanes` input), so any subset can be
 dispatched. `splink` is not privileged in code — it is just another lane — but
@@ -119,21 +128,36 @@ compound (surname + dob-year) yields small blocks at every scale.
 ### 5.2 biblio (new)
 `record_id int64, title str, authors str, venue str, year str(YYYY)`.
 Pools: title-word pool (to compose multi-word titles), author-surname pool
-(to compose 1-4 author strings), venue pool (~a few hundred venues), year range
-(~60 distinct years). Duplicates carry realistic bibliographic variation:
+(to compose 1-4 author strings), venue pool, year range. Duplicates carry
+realistic bibliographic variation:
 - title single-char typos + occasional word drop,
 - author-list abbreviation ("Jane Smith" -> "J. Smith") and order permutation,
 - venue full-name vs abbreviation,
 - occasional null year.
-Blocking must keep blocks small at scale: the compound key is
-`(venue, year)` for GoldenMatch's bucket single-key path (its best single key
-for this shape), and Splink unions `(venue, year)` + a title-token rule. Pool
-sizes are chosen so `(venue, year)` cardinality grows with the year x venue
-product, keeping candidate pairs ~linear in N rather than N^2 (documented in a
-comment the same way the person generator documents its pool sizing).
 
-The generator asserts, at a small smoke scale, that the largest block stays
-under a sane ceiling for each shape (guards against an accidental N^2 fixture).
+**Blocking-key cardinality must be high and grow-with-N, not fixed.** This is the
+trap the person shape already avoids: the person generator blocks on `postcode`
+with a **fixed** pool of `N_POSTCODE=200_000` (`generate_fixture.py`), so at 100M
+rows blocks are ~500 rows each — large, but bounded, which is exactly why 100M
+person is the expected single-node OOM ceiling rather than an N^2 blow-up. A
+`(venue, year)` key with a few hundred venues x ~60 years is only ~18K distinct
+blocks — a **constant** independent of N, giving `pairs ≈ N^2 / (2·18K)`
+(~1.7e10 at 25M, quadratic). That would wedge biblio far below the person OOM
+ceiling and is NOT a fair envelope.
+
+Fix: the biblio bucket single-key is a **high-cardinality title-token key**
+(first significant title token, or a `(title_token, year)` compound) sized so its
+distinct-block count is comparable to person's ~200K — i.e. the block-size-vs-N
+curve mirrors the person shape, making the two envelopes and their OOM ceilings
+comparable. Splink unions that title-token key + `(author_surname, year)`.
+
+**The block-size guard must extrapolate, not assert-at-smoke-scale.** For a
+fixed-cardinality key, block size grows linearly with N, so a 100K smoke check
+(~6 rows/block) says nothing about 100M. The generator instead computes each
+shape's blocking-key cardinality `C` and asserts the **projected** max block size
+at the target N (`≈ N / C` for a uniform key, scaled by the key's skew factor)
+stays under a ceiling — catching a fixed-cardinality (N^2) key at design time
+regardless of the smoke scale.
 
 ## 6. Shape config registries
 
@@ -156,7 +180,18 @@ two lanes need shape-specific configuration:
   `SettingsCreator.create_settings_dict(sql_dialect_str="duckdb")`, runs it
   through `from_splink`, and dedupes the fixture with the converted config. It
   imports the builder, never copies it, so the converted lane always tracks the
-  exact spec the `splink` lane ran.
+  exact spec the `splink` lane ran. **This is a full new runner, not a light
+  wire-up of the existing `run_converted_splink.py`** — that reference module is
+  dataset-keyed (`--dataset`, `datasets.load_dataset`) and returns a parity-gate
+  exit code, whereas the sweep lane must be **fixture-keyed** (`--input`),
+  **shape-aware** (`--shape`), emit the **standard `(shape,lane,scale)` result
+  JSON** (status / wall / peak_rss / scored_pairs / cluster_count / accuracy
+  pred-parquet), and obey the same subprocess contract as every other runner
+  (`--input/--rows/--out/--pred-out/--threshold`). It reuses
+  `run_converted_splink.py`'s conversion logic but is budgeted as its own runner.
+  **Splink must be installed for this lane** (it builds a real `SettingsCreator`),
+  so the workflow installs Splink when the lane set contains `splink` OR
+  `gm_converted_splink` — see §7.
 
 ## 7. Orchestration, sharding, and merge
 
@@ -169,26 +204,53 @@ A single job will exceed the 600-minute cap.
 ### 7.2 Strategy
 - **Workflow `strategy.matrix` over shape** — `person` and `biblio` run as two
   parallel jobs on two 64 GB runners, `fail-fast: false`, each uploading its own
-  artifact (`er-headtohead-<shape>-<run_tag>`).
+  artifact `er-headtohead-<shape>-<run_tag>`.
 - **Everything selectable** — `lanes`, `shapes`, `scales`, `dupe_rate`,
-  `threshold`, `runner`, `run_tag`. A full matrix can therefore be split across
-  several dispatches (e.g. a small-scale band `100000 1000000 5000000` and a
-  heavy band `25000000 100000000`) without losing comparability, because results
-  are keyed by the stable `(shape, lane, scale)` triple.
-- **`merge_results.py`** unions any set of run artifacts into the final
-  `summary.md` + the scale-envelope tables. A dependent **merge job** runs it
-  automatically for a single dispatch (downloads all shape artifacts, merges,
-  uploads `er-headtohead-merged-<run_tag>` + writes `$GITHUB_STEP_SUMMARY`). For
-  a multi-dispatch run, `merge_results.py` is re-run over the downloaded
-  artifacts locally or via a `merge-only` dispatch mode.
-- Merge is **idempotent and last-writer-wins per key**: re-running a datapoint in
-  a later dispatch overwrites the earlier value for that `(shape, lane, scale)`.
+  `threshold`, `runner`, `run_tag`. A full matrix can be split across several
+  dispatches **by scale band AND by lane** (see §7.3) without losing
+  comparability, because results are keyed by the stable `(shape, lane, scale)`
+  triple.
+- **`bench_results.json` is an object, not a list.** To carry the per-run
+  reproducibility header (§8) it becomes
+  `{"header": {...}, "results": [ {shape, lane, scale, ...}, ... ]}`. The header
+  includes a `run_timestamp` (wall-clock at orchestrator start; Python `time`, not
+  a workflow-script clock) which is the merge tiebreak key.
+- **`merge_results.py`** unions any set of run artifacts. Merge semantics are
+  explicit: results are keyed by `(shape, lane, scale)`; on a key collision the
+  entry from the artifact with the **later `run_timestamp` wins** (deterministic
+  last-writer-wins, not artifact-order- or mtime-dependent). Merge keeps every
+  distinct header under a `runs[]` list so the final doc can show that different
+  bands ran at different `git_sha`s / timestamps. It renders the final `summary.md`
+  + envelope tables and writes `$GITHUB_STEP_SUMMARY`.
+- A dependent **merge job** runs it automatically for a single dispatch
+  (downloads all shape artifacts, merges, uploads `er-headtohead-merged-<run_tag>`).
+  For a multi-dispatch run, `merge_results.py` re-runs over the downloaded
+  artifacts (locally or via a `merge-only` dispatch mode).
+- **Artifact download layout must not collide.** Each shape/band job uploads its
+  own `bench_results.json` at the same relative path, so the merge job downloads
+  **one directory per artifact** (no `merge-multiple`) and `merge_results.py`
+  globs `*/bench_results.json` — otherwise the two shapes' files clobber.
 
-### 7.3 Recommended dispatch plan (documented in README)
-1. Dispatch A: `shapes=person biblio`, `scales=100000 1000000 5000000`, all lanes.
-2. Dispatch B: `shapes=person biblio`, `scales=25000000 100000000`, all lanes
-   (long; the 100M GM bucket lanes are expected OOM ceilings).
-3. Merge A+B artifacts -> final doc.
+### 7.3 Runtime budget vs the 600-minute cap
+The job cap is `timeout-minutes: 600` and datapoints run **sequentially** within a
+job; the per-datapoint timeout ladder currently tops out at 4h (25M) / 8h (100M).
+A single job doing `scales=25M 100M` x all 6 lanes for one shape can therefore
+blow the cap or let one hung 100M lane (8h) starve the other 11 datapoints. So:
+- **Per-datapoint timeouts are lowered** so no single datapoint can consume the
+  whole job (target: the sum of a job's datapoint timeouts fits under ~560 min with
+  headroom). A datapoint that hits its (lower) cap is recorded as `timeout` — a
+  legitimate "did not finish in budget" envelope result, same as `OOM`.
+- **The heavy tiers are dispatched at coarse lane granularity.** Because `lanes` is
+  a workflow input, the heavy band is split per-lane (or per lane-pair) so each
+  job holds only a few long datapoints and stays under the cap.
+
+Recommended dispatch plan (documented in the README):
+1. Dispatch A: `shapes=person biblio`, `scales=100000 1000000 5000000`, all 6 lanes
+   (fast band; runs the cheap datapoints and surfaces a bad biblio fixture early).
+2. Dispatch B..N: `shapes=person biblio`, `scales=25000000 100000000`, **one or two
+   lanes per dispatch** (heavy band; the 100M GM bucket lanes are expected OOM
+   ceilings, Splink 100M may run for hours or OOM its own DuckDB temp).
+3. Merge all dispatch artifacts -> final doc.
 
 ## 8. Metrics recorded per datapoint
 
@@ -207,20 +269,36 @@ Standardized result schema (superset of what each runner already emits):
 - **accuracy** (from `evaluate.py`, identical code both engines): pairwise
   precision/recall/F1 + confusion (TP/FP/FN/TN), and B-cubed P/R/F1.
 - **lane telemetry** (GoldenMatch): `native_loaded`, `native_block_scoring`,
-  `fs_native_requested`, `fs_native_symbol_present`. Proves the
-  `gm_probabilistic_native` lane really executed the Rust FS kernel and did not
-  silently fall back to numpy.
+  `fs_native_requested`, `fs_native_symbol_present`, and — new — `fs_native_active`:
+  the actual return of `probabilistic._fs_native_enabled()` recorded at scoring
+  time. The existing `fs_native_requested` reflects only the ENV flag, which (with
+  FS-native default-ON) reads `False` on a lane that nonetheless ran native — so it
+  can't prove execution. `fs_native_active` is the real signal: the
+  `gm_probabilistic` lane must show `fs_native_active=False` (numpy fallback,
+  forced by `GOLDENMATCH_FS_NATIVE=0`) and `gm_probabilistic_native` must show
+  `fs_native_active=True`. If the numpy lane ever reports `True`, the run is
+  invalid. (Implementation: surface `_fs_native_enabled()` into the bench blob the
+  runner already emits, or expose a tiny read-only helper the runner calls.)
 
-### Reproducibility header (one per run, in `bench_results.json`)
-`goldenmatch_version`, **pinned** `splink_version` (recorded from
+### Reproducibility header (one per run, top-level in `bench_results.json`)
+`bench_results.json` is `{"header": {...}, "results": [...]}` (not a bare list —
+see §7.2). Header fields: `run_timestamp` (orchestrator-start wall clock, the
+merge tiebreak), `goldenmatch_version`, **pinned** `splink_version` (recorded from
 `splink.__version__`), `git_sha`, `runner_label`, `cpu_count`, `total_ram_gb`,
 `dupe_rate`, `threshold`, `seed`. The workflow pins the Splink version
 (`uv pip install splink==<pinned>`), so the reference engine is fixed run to run.
+The merge step (§7.2) preserves every band's header under `runs[]`.
 
 ## 9. Deliverables (file-by-file)
 
 1. `scripts/bench_er_headtohead/orchestrate.py` — refactored to the lane model,
-   `(shape, lane, scale)` keys, per-datapoint flush, reproducibility header.
+   `(shape, lane, scale)` keys, per-datapoint flush, `{header, results}` object,
+   lowered per-datapoint timeouts. **`render_markdown` must be rewritten** — it
+   currently hardcodes `by_rows[rows].get("goldenmatch")` / `.get("splink")` and
+   sorts on `(engine, rows)`; the 6-lane x 2-shape output needs one section per
+   shape, one row per `(lane, scale)`, `splink` as the fixed reference column, and
+   head-to-head deltas computed per GM lane vs `splink`. Non-trivial; called out
+   so it isn't discovered mid-implementation.
 2. `scripts/bench_er_headtohead/merge_results.py` — new; union + render.
 3. `scripts/bench_er_headtohead/generate_fixture.py` — `--shape person|biblio`.
 4. `scripts/bench_er_headtohead/run_goldenmatch.py` — `--shape` + hand_built
@@ -230,7 +308,11 @@ Standardized result schema (superset of what each runner already emits):
 6. `scripts/bench_er_headtohead/run_gm_converted.py` — new; converted-Splink lane
    over a fixture.
 7. `.github/workflows/bench-er-headtohead.yml` — lane/shape/scale inputs, shape
-   matrix, pinned splink, merge job, `run_tag`.
+   matrix (`fail-fast: false`), **pinned** splink (installed when lanes contain
+   `splink` OR `gm_converted_splink`), merge job (one-dir-per-artifact download,
+   no `merge-multiple`), `run_tag`, and `ARROW_DEFAULT_MEMORY_POOL=system` at the
+   workflow `env:` level (this lane `pip install`s splink/duckdb from PyPI and runs
+   the pipeline — the documented mimalloc-SIGSEGV guard).
 8. `scripts/bench_er_headtohead/README.md` — refreshed (lanes, shapes, dispatch
    plan, merge).
 9. After the run: `docs/benchmarks/2026-07-14-scale-envelope-splink-6lane.md` —
@@ -246,16 +328,35 @@ produces numbers (a second, data-only PR / commit).
 - **Unit-ish smoke** (`test_bakeoff.py` sibling, runs in CI's normal lane): at a
   tiny scale (e.g. 2000 rows) per shape, assert each of the 6 lanes produces a
   result JSON with `status=ok` (or `skipped` for splink when uninstalled), a
-  non-null `dedupe_wall_seconds`, and an `accuracy` block with finite F1. This is
-  a plumbing test (does every lane run end-to-end and get scored), not an
-  accuracy-threshold test.
+  non-null `dedupe_wall_seconds`, and an `accuracy` block with finite F1. **The
+  ok-smoke runs the `gm_hand_built` lane with `--allow-pure-python`** — the normal
+  pytest lane does NOT run `build_native.py`, and `gm_hand_built` with the default
+  `--require-native` deliberately *refuses* without the native ext, so a
+  native-required smoke would always fail. This is a plumbing test (does every
+  lane run end-to-end and get scored), not an accuracy-threshold test.
+- **Native-gate honesty (separate case)**: assert `gm_hand_built` **without**
+  `--allow-pure-python` refuses (non-zero exit, no `ok` result) when the native
+  runtime is absent — the existing guard, kept under test. This and the ok-smoke
+  are distinct cases; they don't contradict because the ok-smoke passes the flag.
+- **FS-lane telemetry assertion**: at smoke scale assert `gm_probabilistic`
+  reports `fs_native_active=False` (the `=0` force works even without the native
+  ext). The `gm_probabilistic_native` -> `fs_native_active=True` half is
+  **conditional on `native_loaded`**: the normal pytest lane doesn't build native,
+  so that assertion is skipped there and is exercised in the bench workflow (which
+  runs `build_native.py`). This is the §8 proof-of-execution.
 - **Merge test**: `merge_results.py` over two synthetic partial-artifact JSONs
-  asserts union + last-writer-wins per `(shape, lane, scale)` key.
-- **Generator block-size guard**: at a smoke scale, assert the largest block for
-  each shape stays under the ceiling (catches an accidental N^2 fixture).
-- **Native-gate honesty**: assert `gm_hand_built` with `--require-native` refuses
-  (non-zero exit, no ok result) when the native runtime is absent — the existing
-  guard, kept under test.
+  (differing `run_timestamp`) asserts union + later-timestamp-wins per
+  `(shape, lane, scale)` key, and that the `{header, results}` object shape and
+  `runs[]` header-preservation hold.
+- **Generator block-size guard**: assert the **projected** max block size at the
+  target N (`≈ N / cardinality`, per §5.2) stays under the ceiling for each shape
+  — extrapolated, NOT asserted at smoke scale (a fixed-cardinality N^2 key passes
+  a smoke-scale check but fails the projection).
+- **Eval-join dtype**: the autoconfig/probabilistic/converted GM lanes write a
+  STRING `record_id` pred parquet while the generator truth is INT64. DuckDB casts
+  implicitly and joins correctly (verified), but the join in `evaluate.py` (or the
+  runners) casts `record_id` explicitly on both sides to match the parity gate's
+  posture — locked by a test so an implicit-cast change can't silently break it.
 - The real scale run is `workflow_dispatch` only (never on PR CI); the smoke
   tests are what gate the harness PR.
 
@@ -277,10 +378,13 @@ produces numbers (a second, data-only PR / commit).
 ## 12. Open risks
 
 - **Biblio at 25M/100M is the most expensive, least-proven part.** The person
-  generator is battle-tested to 100M; the biblio generator is new. Mitigation:
-  the block-size guard + a mandatory biblio smoke datapoint at 100k before the
-  heavy tiers, and the dispatch plan runs the small band first so a bad biblio
-  fixture surfaces cheaply.
+  generator is battle-tested to 100M; the biblio generator is new, and its
+  blocking-key cardinality is the make-or-break variable (§5.2 — a fixed-cardinality
+  key is a silent N^2 trap). Mitigation: the **projection-based** block-size guard
+  (not smoke-scale), a high-cardinality title-token key sized to mirror person's
+  ~200K distinct blocks, a mandatory biblio smoke datapoint, and the dispatch plan
+  running the fast band first so a bad biblio fixture surfaces cheaply before any
+  heavy-tier runner-hours are spent.
 - **Splink at 100M may run for hours or OOM its own DuckDB temp.** Handled by the
   timeout ladder + `OOM`/`timeout` status; a non-completing Splink 100M is itself
   a recorded envelope result.
