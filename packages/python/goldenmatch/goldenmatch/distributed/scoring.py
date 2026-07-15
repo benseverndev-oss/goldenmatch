@@ -214,6 +214,13 @@ def score_blocks_distributed(
         then needs a real distributed WCC rather than ``local_cc_assignments``
         (the WCC-at-scale question gates flipping the default).
     """
+    # Guard at driver entry, BEFORE dispatch: probabilistic (Fellegi-Sunter)
+    # matchkeys aren't scored by the per-partition kernel and would be
+    # silently dropped (#1800). Raising here (not inside the worker) avoids
+    # the ``_score_partition`` try/except swallowing the error per-partition.
+    from goldenmatch.core.pipeline import _reject_probabilistic_matchkeys
+    _reject_probabilistic_matchkeys(config.get_matchkeys(), "distributed")
+
     if _block_shuffle_enabled() and _has_colocation_plan(config):
         return _score_blocks_block_shuffle(df_ds, config)
     return _score_blocks_legacy(df_ds, config)

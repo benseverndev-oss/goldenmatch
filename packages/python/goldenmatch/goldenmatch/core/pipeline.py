@@ -4585,6 +4585,32 @@ def run_match_df(
     )
 
 
+def _reject_probabilistic_matchkeys(matchkeys: list, lane: str) -> None:
+    """Fail loudly if any matchkey is probabilistic (Fellegi-Sunter).
+
+    The distributed and chunked lanes score only ``exact`` + ``weighted``
+    matchkeys per partition / chunk. A ``type="probabilistic"`` matchkey
+    routed through them contributes ZERO pairs with no error and no log,
+    silently losing its FS scoring the moment a config that works single-
+    box crosses into either lane (issue #1800). Raise instead -- matching
+    the DataFusion backend's ``NotImplementedError`` and Sail's documented
+    one-box fallback.
+
+    ``lane`` names the offending lane for the error message. No-op when no
+    matchkey is probabilistic (so exact/weighted configs are unaffected).
+    """
+    fs = [mk.name for mk in matchkeys if getattr(mk, "type", None) == "probabilistic"]
+    if fs:
+        names = ", ".join(repr(n) for n in fs)
+        raise NotImplementedError(
+            f"The {lane} lane does not support probabilistic "
+            f"(Fellegi-Sunter) matchkeys ({names}); routing them here "
+            f"silently drops their scoring. Run this config single-box "
+            f"(in-memory, backend='bucket'), or convert the matchkey to "
+            f"type='weighted'.",
+        )
+
+
 def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
     df: pl.DataFrame,
     config: GoldenMatchConfig,
@@ -4625,6 +4651,10 @@ def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
     from goldenmatch.core.standardize import apply_standardization
 
     matchkeys = config.get_matchkeys()
+    # FS matchkeys are silently dropped by the weighted-only Phase 2 loop
+    # below (#1800). Fail loudly at kernel entry -- this also covers the
+    # db/sync streaming caller, which reuses this kernel.
+    _reject_probabilistic_matchkeys(matchkeys, "distributed")
     if not matchkeys or df.height < 2:
         return []
 

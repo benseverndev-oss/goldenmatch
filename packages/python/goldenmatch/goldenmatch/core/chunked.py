@@ -74,6 +74,11 @@ class ChunkedMatcher:
 
         file_path = Path(file_path)
         matchkeys = self.config.get_matchkeys()
+        # The within-chunk and cross-chunk loops handle only exact + weighted
+        # matchkeys; a probabilistic (FS) matchkey would be silently dropped
+        # (#1800). Fail loudly at lane entry -- run FS configs single-box.
+        from goldenmatch.core.pipeline import _reject_probabilistic_matchkeys
+        _reject_probabilistic_matchkeys(matchkeys, "chunked")
         t_start = time.perf_counter()
 
         # Determine reader
