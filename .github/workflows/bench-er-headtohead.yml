@@ -1,16 +1,33 @@
-# ER head-to-head scaling bench — Splink (DuckDB) vs GoldenMatch (bucket+native+arrow).
+# ER head-to-head scale-envelope bench - Splink (DuckDB) vs GoldenMatch.
 #
-# workflow_dispatch only. Runs both engines over a sweep of scales on ONE machine
-# with an identical per-scale parquet fixture, so wall + peak-RSS are comparable.
+# workflow_dispatch only. Sweeps a lane x shape x scale matrix on ONE 64 GB
+# machine with an identical per-scale parquet fixture, so wall + peak-RSS are
+# comparable across engines.
 #
-# Memory safety: scripts/bench_er_headtohead/orchestrate.py runs every (scale,
-# engine) datapoint as an isolated subprocess. The OS reclaims each datapoint's
-# memory on exit, and an OOM-killed datapoint is recorded as `OOM` rather than
-# crashing the sweep. The 100M tier is EXPECTED to OOM for GoldenMatch's in-memory
-# bucket backend on a single 64 GB box — that ceiling is itself a result.
+# Lanes (6, selectable via the `lanes` input):
+#   splink                  - Fellegi-Sunter reference engine (pinned version)
+#   gm_hand_built           - GM fast weighted bucket+native path (speed reference)
+#   gm_probabilistic        - EM-trained FS, numpy fallback (GOLDENMATCH_FS_NATIVE=0)
+#   gm_probabilistic_native - same, Rust FS kernel (GOLDENMATCH_FS_NATIVE=1)
+#   gm_zeroconfig           - zero-effort controller
+#   gm_converted_splink     - GM running Splink's own spec via from_splink
 #
-# Fixtures are generated in-job (streaming, bounded memory) and deleted after each
-# scale's engines run, so disk stays bounded too.
+# Shapes (2): person + biblio. The `shapes` input becomes a job matrix
+# (fail-fast: false), so each shape runs on its own runner and uploads its own
+# artifact `er-headtohead-<shape>-<run_tag>`.
+#
+# Memory safety: orchestrate.py runs every (shape, lane, scale) datapoint as an
+# isolated subprocess. The OS reclaims each datapoint's memory on exit, and an
+# OOM-killed / timed-out datapoint is recorded as `OOM` / `timeout` rather than
+# crashing the sweep. The 100M GM bucket tiers are EXPECTED to OOM on a single
+# 64 GB box - that ceiling is itself a result.
+#
+# Sharding: a full 6-lane x 2-shape x 5-scale matrix exceeds a single 600-min
+# job. Split it across dispatches by scale band AND by lane (see the README
+# dispatch plan). Results are keyed by the stable (shape, lane, scale) triple, so
+# merge_results.py can union any set of dispatch artifacts (later-timestamp-wins).
+# The dependent `merge` job unions a single dispatch's shape artifacts
+# automatically.
 #
 # To run: GitHub -> Actions -> "bench-er-headtohead" -> Run workflow.
 name: bench-er-headtohead
@@ -18,14 +35,18 @@ name: bench-er-headtohead
 on:
   workflow_dispatch:
     inputs:
+      lanes:
+        description: "Space-separated lanes to run"
+        required: false
+        default: "splink gm_hand_built gm_probabilistic gm_probabilistic_native gm_zeroconfig gm_converted_splink"
+      shapes:
+        description: "Space-separated fixture shapes (person biblio)"
+        required: false
+        default: "person biblio"
       scales:
         description: "Space-separated row counts to sweep"
         required: false
-        default: "100000 1000000 5000000 25000000"
-      engines:
-        description: "Engines to run (space-separated): goldenmatch splink"
-        required: false
-        default: "goldenmatch splink"
+        default: "100000 1000000"
       dupe_rate:
         description: "Fraction of duplicate rows in each fixture"
         required: false
@@ -35,19 +56,40 @@ on:
         required: false
         default: "0.85"
       runner:
-        description: "Runner label (needs 64 GB for the 25M bucket datapoint)"
+        description: "Runner label (needs 64 GB for the heavy tiers)"
         required: false
         default: "large-new-64GB"
+      run_tag:
+        description: "Tag stamped into artifact names for merge"
+        required: false
+        default: "manual"
 
 permissions:
   contents: read
 
+# This lane pip-installs splink/duckdb from PyPI and runs the pipeline, so it
+# needs the documented mimalloc-SIGSEGV guard (ARROW_DEFAULT_MEMORY_POOL=system).
+env:
+  ARROW_DEFAULT_MEMORY_POOL: system
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      shapes: ${{ steps.m.outputs.shapes }}
+    steps:
+      - id: m
+        run: echo "shapes=$(echo '${{ inputs.shapes }}' | jq -R -c 'split(" ")')" >> "$GITHUB_OUTPUT"
+
   bench:
+    needs: setup
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 600
-    env:
-      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        shape: ${{ fromJSON(needs.setup.outputs.shapes) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
@@ -68,12 +110,12 @@ jobs:
       - name: Sync workspace
         run: uv sync --all-packages
 
-      - name: Build native extension (bucket + Arrow kernels)
+      - name: Build native extension (bucket + Arrow + FS kernels)
         run: uv run python scripts/build_native.py
 
-      - name: Install Splink (competitor engine, not a repo dependency)
-        if: contains(inputs.engines, 'splink')
-        run: uv pip install splink
+      - name: Install Splink (competitor engine, pinned - not a repo dependency)
+        if: contains(inputs.lanes, 'splink') || contains(inputs.lanes, 'gm_converted_splink')
+        run: uv pip install splink==4.0.16
 
       - name: Install DuckDB (used by the engine-agnostic accuracy evaluator)
         run: uv pip install duckdb
@@ -82,18 +124,56 @@ jobs:
         run: |
           uv run python scripts/bench_er_headtohead/orchestrate.py \
             --scales ${{ inputs.scales }} \
-            --engines ${{ inputs.engines }} \
+            --shapes ${{ matrix.shape }} \
+            --lanes ${{ inputs.lanes }} \
             --dupe-rate ${{ inputs.dupe_rate }} \
             --threshold ${{ inputs.threshold }} \
+            --run-tag ${{ inputs.run_tag }} \
             --workdir .bench_er
 
       - name: Upload results artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: er-headtohead-results
+          name: er-headtohead-${{ matrix.shape }}-${{ inputs.run_tag }}
           path: |
             .bench_er/bench_results.json
             .bench_er/summary.md
             .bench_er/results/*.json
+          retention-days: 90
+
+  merge:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      # One directory per artifact (NO merge-multiple) so the two shapes'
+      # bench_results.json files do not clobber; merge_results.py globs
+      # */bench_results.json.
+      - name: Download all shape artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          path: merged
+
+      - name: Merge dispatch artifacts (later-timestamp-wins)
+        run: |
+          python scripts/bench_er_headtohead/merge_results.py \
+            --artifacts-dir merged \
+            --out-json merged.json \
+            --out-md merged.md
+
+      - name: Upload merged artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: er-headtohead-merged-${{ inputs.run_tag }}
+          path: |
+            merged.json
+            merged.md
           retention-days: 90
