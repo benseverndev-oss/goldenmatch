@@ -115,6 +115,53 @@ def test_bucket_equals_legacy_weighted(scorer, blocking):
     )
 
 
+def test_bucket_equals_legacy_tf_freqs_weighted():
+    """#1781: the bucket fast path must thread MatchkeyField.tf_freqs to plugin
+    scorers. Legacy scores name_freq_weighted_jw via score_matrix(values,
+    tf_freqs=...) (core/scorer.py:1236); pre-fix the bucket resolver grabbed
+    plugin.score_pair BARE, so the data-driven downweight was silently dropped.
+
+    Fixture: the table skews 'smith' COMMON (rarity ~0.13 -> weight ~0.65 ->
+    identical-pair score ~0.65, clearly BELOW the 0.8 threshold) and 'zorvath'
+    RARE (weight 1.0 -> score 1.0, clearly ABOVE). Legacy therefore clusters
+    ONLY the zorvath pair -- its clustering depends on the downweight. Pre-fix
+    bucket also clusters the smith pair (plain jw=1.0 short-circuit), diverging.
+    Scores sit >=0.1 away from the threshold on both sides (legacy float32
+    matrix vs bucket float64 per-pair; score_buckets.py:86-97 borderline-flip
+    caveat)."""
+    import goldenmatch.refdata  # noqa: F401  (registers name_freq_weighted_jw)
+    import polars as pl
+
+    df = pl.DataFrame({
+        "last": ["smith", "smith", "zorvath", "zorvath", "lee", "poe"],
+        "zip": ["10001", "10001", "10002", "10002", "10003", "10004"],
+    })
+    tf_freqs = {"smith": 0.4, "zorvath": 0.001}
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="k", type="weighted", threshold=0.8,
+            fields=[MatchkeyField(
+                field="last", scorer="name_freq_weighted_jw",
+                weight=1.0, tf_freqs=tf_freqs,
+            )],
+        )],
+        blocking=BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["zip"], transforms=["strip"])],
+        ),
+    )
+    legacy, bucket = _bucket_vs_legacy(cfg, df)
+    # Anchor: legacy's clustering must actually depend on the downweight --
+    # exactly ONE multi-member cluster (the rare zorvath pair). Without the
+    # table both same-name pairs would cluster (2 clusters) and this test
+    # couldn't detect the bucket-side drop.
+    assert len(legacy) == 1, f"fixture anchor broken: legacy={legacy}"
+    assert bucket == legacy, (
+        f"bucket != legacy with tf_freqs: only-legacy={legacy - bucket} "
+        f"only-bucket={bucket - legacy}"
+    )
+
+
 # ── Known gaps (bucket NOT yet identical -> routed to legacy by _use_bucket_scorer) ──
 
 
