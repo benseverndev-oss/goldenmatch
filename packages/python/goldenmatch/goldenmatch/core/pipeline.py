@@ -4663,34 +4663,39 @@ def run_match_df(
 
 
 def _reject_probabilistic_matchkeys(matchkeys: list, lane: str) -> None:
-    """Fail loudly if any matchkey is probabilistic (Fellegi-Sunter).
+    """Fail loudly for probabilistic (Fellegi-Sunter) matchkeys that reach a
+    scale lane WITHOUT a trained model available.
 
-    The distributed and chunked lanes score only ``exact`` + ``weighted``
-    matchkeys per partition / chunk. A ``type="probabilistic"`` matchkey
-    routed through them contributes ZERO pairs with no error and no log,
-    silently losing its FS scoring the moment a config that works single-
-    box crosses into either lane (issue #1800). Raise instead -- matching
-    the DataFusion backend's ``NotImplementedError`` and Sail's documented
-    one-box fallback.
+    The distributed and chunked lanes score FS matchkeys per partition /
+    chunk against ONE shared ``EMResult`` (trained once on the driver, or
+    loaded from ``mk.model_path``). Training per partition would fit a
+    different model on each non-representative slice -- inconsistent weights,
+    nondeterministic scores -- and before #1800 the matchkey was silently
+    dropped instead. So callers reject exactly the FS matchkeys they could
+    not resolve a model for, and this raises for those -- matching the
+    DataFusion backend's ``NotImplementedError`` posture.
 
     ``lane`` names the offending lane for the error message. No-op when no
-    matchkey is probabilistic (so exact/weighted configs are unaffected).
+    matchkey in the given list is probabilistic.
     """
     fs = [mk.name for mk in matchkeys if getattr(mk, "type", None) == "probabilistic"]
     if fs:
         names = ", ".join(repr(n) for n in fs)
         raise NotImplementedError(
-            f"The {lane} lane does not support probabilistic "
-            f"(Fellegi-Sunter) matchkeys ({names}); routing them here "
-            f"silently drops their scoring. Run this config single-box "
-            f"(in-memory, backend='bucket'), or convert the matchkey to "
-            f"type='weighted'.",
+            f"The {lane} lane cannot score probabilistic (Fellegi-Sunter) "
+            f"matchkeys ({names}) without a trained model: per-partition EM "
+            f"training would fit inconsistent weights. Set mk.model_path to "
+            f"a persisted model (train once via load_or_train_em), route "
+            f"through score_blocks_distributed (which trains once on the "
+            f"driver), run single-box (in-memory, backend='bucket'), or "
+            f"convert the matchkey to type='weighted'.",
         )
 
 
 def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
     df: pl.DataFrame,
     config: GoldenMatchConfig,
+    fs_em_results: dict[str, Any] | None = None,
 ) -> list[tuple[int, int, float]]:
     """Narrow scoring-only kernel for distributed per-partition execution.
 
@@ -4728,10 +4733,22 @@ def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
     from goldenmatch.core.standardize import apply_standardization
 
     matchkeys = config.get_matchkeys()
-    # FS matchkeys are silently dropped by the weighted-only Phase 2 loop
-    # below (#1800). Fail loudly at kernel entry -- this also covers the
-    # db/sync streaming caller, which reuses this kernel.
-    _reject_probabilistic_matchkeys(matchkeys, "distributed")
+    # FS matchkeys score per partition against ONE shared EMResult: either
+    # supplied by the driver (``fs_em_results``, keyed by matchkey name --
+    # score_blocks_distributed trains once before dispatch) or loaded from
+    # ``mk.model_path``. Training inside a partition would fit a different
+    # model per slice, so FS matchkeys with NEITHER source still fail
+    # loudly (#1800) -- this also covers the db/sync streaming caller,
+    # which reuses this kernel without a driver-side training step.
+    from goldenmatch.core.probabilistic import fs_model_preloaded
+
+    _fs_unresolved = [
+        mk for mk in matchkeys
+        if getattr(mk, "type", None) == "probabilistic"
+        and not (fs_em_results and mk.name in fs_em_results)
+        and not fs_model_preloaded(mk)
+    ]
+    _reject_probabilistic_matchkeys(_fs_unresolved, "distributed")
     if not matchkeys or df.height < 2:
         return []
 
@@ -4794,6 +4811,31 @@ def _score_partition_with_config(  # pyright: ignore[reportUnusedFunction]
     # explicitly in case a caller skips that step.
     if config.blocking is not None:
         for mk in matchkeys:
+            if mk.type == "probabilistic":
+                # FS: score via the memory-bounded bucket scorer against the
+                # shared model. The entry guard above guarantees a model is
+                # available (driver-supplied or mk.model_path on disk --
+                # load_or_train_em takes the load path, never trains here).
+                from goldenmatch.backends.score_buckets import score_buckets
+                from goldenmatch.core.probabilistic import load_or_train_em
+
+                em_result = (fs_em_results or {}).get(mk.name)
+                if em_result is None:
+                    em_result = load_or_train_em(collected_df, mk)
+                pairs = score_buckets(
+                    collected_df,
+                    config.blocking,
+                    mk,
+                    matched_pairs,
+                    n_buckets=config.n_buckets,
+                    across_files_only=False,
+                    source_lookup=None,
+                    em_result=em_result,
+                )
+                all_pairs.extend(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
             if mk.type != "weighted":
                 continue
             if config.backend == "bucket":

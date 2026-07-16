@@ -214,21 +214,115 @@ def score_blocks_distributed(
         then needs a real distributed WCC rather than ``local_cc_assignments``
         (the WCC-at-scale question gates flipping the default).
     """
-    # Guard at driver entry, BEFORE dispatch: probabilistic (Fellegi-Sunter)
-    # matchkeys aren't scored by the per-partition kernel and would be
-    # silently dropped (#1800). Raising here (not inside the worker) avoids
-    # the ``_score_partition`` try/except swallowing the error per-partition.
-    from goldenmatch.core.pipeline import _reject_probabilistic_matchkeys
-    _reject_probabilistic_matchkeys(config.get_matchkeys(), "distributed")
+    # Resolve one shared EMResult per probabilistic (Fellegi-Sunter) matchkey
+    # BEFORE dispatch: load from mk.model_path when persisted, else train ONCE
+    # on a driver-side sample. Workers must never train -- per-partition EM
+    # would fit a different model on each slice (inconsistent weights,
+    # nondeterministic scores; pre-#1800 the matchkey was silently dropped
+    # instead). The dict ships to workers via the closure like the config.
+    fs_em_results = _prepare_fs_models(df_ds, config)
 
     if _block_shuffle_enabled() and _has_colocation_plan(config):
-        return _score_blocks_block_shuffle(df_ds, config)
-    return _score_blocks_legacy(df_ds, config)
+        return _score_blocks_block_shuffle(df_ds, config, fs_em_results)
+    return _score_blocks_legacy(df_ds, config, fs_em_results)
+
+
+def _fs_training_sample(df_ds: Dataset, config: GoldenMatchConfig) -> Any:
+    """Materialize a driver-side sample of ``df_ds`` prepared for EM training
+    (same standardize/matchkey shape the scoring kernel derives per
+    partition, so ``train_em`` sees the columns it expects).
+
+    Row budget via ``GOLDENMATCH_DISTRIBUTED_FS_TRAIN_ROWS`` (default 200k --
+    EM itself samples ~10k within-block pairs from this, so the budget only
+    needs to be representative, not exhaustive).
+    """
+    import polars as pl
+
+    from goldenmatch.core.matchkey import (
+        compute_matchkeys,
+        precompute_matchkey_transforms,
+    )
+    from goldenmatch.core.standardize import apply_standardization
+
+    n = int(os.environ.get("GOLDENMATCH_DISTRIBUTED_FS_TRAIN_ROWS", "200000"))
+    batch = df_ds.take_batch(n, batch_format="pyarrow")
+    df = pl.from_arrow(batch)
+    assert isinstance(df, pl.DataFrame)
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__").with_columns(
+            pl.col("__row_id__").cast(pl.Int64),
+        )
+    lf = df.lazy()
+    if config.standardization and config.standardization.rules:
+        lf = apply_standardization(lf, config.standardization.rules)
+    matchkeys = config.get_matchkeys()
+    lf = compute_matchkeys(lf, matchkeys)
+    return precompute_matchkey_transforms(lf.collect(), matchkeys)
+
+
+def _prepare_fs_models(
+    df_ds: Dataset,
+    config: GoldenMatchConfig,
+) -> dict[str, Any] | None:
+    """Return ``{matchkey_name: EMResult}`` for every probabilistic matchkey,
+    or ``None`` when the config has none.
+
+    Per matchkey: a persisted ``mk.model_path`` is loaded and validated
+    (Splink-style train-once reuse -- the file only needs to exist on the
+    DRIVER; workers receive the loaded object, not the path). Otherwise EM
+    trains once on a driver-side sample (and persists to ``mk.model_path``
+    when the path is set but absent).
+    """
+    matchkeys = config.get_matchkeys()
+    fs_mks = [
+        mk for mk in matchkeys if getattr(mk, "type", None) == "probabilistic"
+    ]
+    if not fs_mks:
+        return None
+
+    from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
+    from goldenmatch.core.probabilistic import (
+        fs_model_preloaded,
+        load_or_train_em,
+    )
+
+    results: dict[str, Any] = {}
+    sample_df = None
+    sample_blocks: list[Any] = []
+    for mk in fs_mks:
+        if not fs_model_preloaded(mk):
+            if sample_df is None:
+                sample_df = _fs_training_sample(df_ds, config)
+                if config.blocking is not None:
+                    sample_blocks = build_blocks(
+                        sample_df.lazy(), config.blocking,
+                    )
+            logger.warning(
+                "FS matchkey %r: training EM once on a driver-side sample "
+                "of %d rows before distributed dispatch. For explicit "
+                "control over training data, train once and set "
+                "mk.model_path (load_or_train_em persists it).",
+                mk.name, sample_df.height,
+            )
+        # Loads mk.model_path when present (no training); else trains on the
+        # sample and saves to mk.model_path when set.
+        blocking_fields = (
+            collect_blocking_fields(config.blocking)
+            if config.blocking is not None
+            else []
+        )
+        results[mk.name] = load_or_train_em(
+            sample_df, mk,
+            blocks=sample_blocks,
+            blocking_fields=blocking_fields,
+        )
+    return results
 
 
 def _score_blocks_legacy(
     df_ds: Dataset,
     config: GoldenMatchConfig,
+    fs_em_results: dict[str, Any] | None = None,
 ) -> Dataset:
     """Per-partition fuzzy + exact scoring via the narrow scoring kernel.
 
@@ -270,7 +364,9 @@ def _score_blocks_legacy(
 
         _native_base = _native_worker_baseline()
         try:
-            pairs = _score_partition_with_config(df, local_cfg)
+            pairs = _score_partition_with_config(
+                df, local_cfg, fs_em_results=fs_em_results,
+            )
         except Exception as e:
             logger.warning("partition scoring failed: %s", e)
             return pa.table({"id_a": [], "id_b": [], "score": []})
@@ -378,6 +474,7 @@ def _attach_colocation_keys(df: Any, config: GoldenMatchConfig) -> Any:
 
 def _score_colocated_groups(
     df: Any, config: GoldenMatchConfig,
+    fs_em_results: dict[str, Any] | None = None,
 ) -> list[tuple[int, int, float]]:
     """Score the co-located records in this batch in a SINGLE vectorized pass.
     Returns ``list[(id_a, id_b, score)]``.
@@ -425,7 +522,9 @@ def _score_colocated_groups(
     if rec.height < 2:
         return []
     try:
-        return _score_partition_with_config(rec, local_cfg)
+        return _score_partition_with_config(
+            rec, local_cfg, fs_em_results=fs_em_results,
+        )
     except Exception as e:
         logger.warning("block-shuffle: partition scoring failed: %s", e)
         return []
@@ -434,6 +533,7 @@ def _score_colocated_groups(
 def _score_blocks_block_shuffle(
     df_ds: Dataset,
     config: GoldenMatchConfig,
+    fs_em_results: dict[str, Any] | None = None,
 ) -> Dataset:
     """Blocking-key-aware shuffle scoring (issue #844, opt-in).
 
@@ -501,7 +601,7 @@ def _score_blocks_block_shuffle(
         df = pl.from_arrow(batch)
         assert isinstance(df, pl.DataFrame)
         _native_base = _native_worker_baseline()
-        pairs = _score_colocated_groups(df, config)
+        pairs = _score_colocated_groups(df, config, fs_em_results)
         _warn_worker_slow_path(_native_base)
         if not pairs:
             return pa.table({"id_a": [], "id_b": [], "score": []})

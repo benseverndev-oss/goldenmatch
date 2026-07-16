@@ -44,6 +44,11 @@ class ChunkedMatcher:
         # configured with `strategy="static"`. Lets cross-chunk matching
         # skip pure-index blocks and avoid joint-frame block building.
         self._index_by_block: list[dict[str, pl.DataFrame]] | None = None
+        # One shared EMResult per probabilistic matchkey, resolved on first
+        # use (loaded from mk.model_path, else trained ONCE on the first
+        # chunk) and reused for every chunk -- per-chunk retraining would
+        # fit a different model per slice.
+        self._fs_em_results: dict[str, Any] = {}
         self._row_offset = 0
         self._total_processed = 0
         self._chunk_count = 0
@@ -74,11 +79,6 @@ class ChunkedMatcher:
 
         file_path = Path(file_path)
         matchkeys = self.config.get_matchkeys()
-        # The within-chunk and cross-chunk loops handle only exact + weighted
-        # matchkeys; a probabilistic (FS) matchkey would be silently dropped
-        # (#1800). Fail loudly at lane entry -- run FS configs single-box.
-        from goldenmatch.core.pipeline import _reject_probabilistic_matchkeys
-        _reject_probabilistic_matchkeys(matchkeys, "chunked")
         t_start = time.perf_counter()
 
         # Determine reader
@@ -135,6 +135,25 @@ class ChunkedMatcher:
                         blocks = build_blocks(chunk_df.lazy(), self.config.blocking)
                         pairs = score_blocks_parallel(blocks, mk, matched_pairs)
                         chunk_pairs.extend(pairs)
+                    elif mk.type == "probabilistic":
+                        # FS: memory-bounded bucket scorer against the ONE
+                        # shared model (loaded/trained by _ensure_fs_model on
+                        # the first chunk). Mirrors the single-box FS route.
+                        from goldenmatch.backends.score_buckets import (
+                            score_buckets,
+                        )
+
+                        em_result = self._ensure_fs_model(mk, chunk_df)
+                        pairs = score_buckets(
+                            chunk_df,
+                            self.config.blocking,
+                            mk,
+                            matched_pairs,
+                            em_result=em_result,
+                        )
+                        chunk_pairs.extend(pairs)
+                        for a, b, _s in pairs:
+                            matched_pairs.add((min(a, b), max(a, b)))
 
             # Match against index (cross-chunk matching)
             if self._index_df is not None and self._index_df.height > 0:
@@ -332,6 +351,27 @@ class ChunkedMatcher:
                     )
                     for a, b, s in weighted_pairs:
                         cross_pairs.append((min(a, b), max(a, b), s))
+                elif mk.type == "probabilistic":
+                    # FS cross-chunk: score the joint frame via the bucket
+                    # scorer with target_ids=chunk ids -- its XOR filter
+                    # emits exactly the (chunk x index) cross pairs, so
+                    # within-chunk and within-index pairs (already scored
+                    # on their own chunks) are never re-emitted.
+                    from goldenmatch.backends.score_buckets import (
+                        score_buckets,
+                    )
+
+                    em_result = self._ensure_fs_model(mk, joint_df)
+                    fs_pairs = score_buckets(
+                        joint_df,
+                        self.config.blocking,
+                        mk,
+                        matched_pairs,
+                        target_ids=set(range(chunk_lo, chunk_hi)),
+                        em_result=em_result,
+                    )
+                    for a, b, s in fs_pairs:
+                        cross_pairs.append((min(a, b), max(a, b), s))
 
         return cross_pairs
 
@@ -428,6 +468,44 @@ class ChunkedMatcher:
         return list(score_blocks_parallel(
             synthetic_blocks, mk, matched_pairs, target_ids=chunk_ids,
         ))
+
+    def _ensure_fs_model(self, mk: Any, df: pl.DataFrame) -> Any:
+        """Resolve the shared EMResult for a probabilistic matchkey.
+
+        First call wins: load from ``mk.model_path`` when persisted, else
+        train ONCE on the given frame (the first chunk that reaches an FS
+        matchkey) and reuse for every subsequent chunk. Retraining per
+        chunk would fit a different model on each slice -- inconsistent
+        weights and nondeterministic scores across the file.
+        """
+        em = self._fs_em_results.get(mk.name)
+        if em is not None:
+            return em
+
+        from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
+        from goldenmatch.core.probabilistic import (
+            fs_model_preloaded,
+            load_or_train_em,
+        )
+
+        blocks: list[Any] = []
+        blocking_fields: list[str] = []
+        if not fs_model_preloaded(mk):
+            logger.warning(
+                "FS matchkey %r: training EM once on the first chunk "
+                "(%d rows) and reusing the model for all chunks. For "
+                "explicit control over training data, train once on a "
+                "representative sample and set mk.model_path.",
+                mk.name, df.height,
+            )
+            if self.config.blocking is not None:
+                blocks = build_blocks(df.lazy(), self.config.blocking)
+                blocking_fields = collect_blocking_fields(self.config.blocking)
+        em = load_or_train_em(
+            df, mk, blocks=blocks, blocking_fields=blocking_fields,
+        )
+        self._fs_em_results[mk.name] = em
+        return em
 
     def _add_to_index(self, chunk_df: pl.DataFrame) -> None:
         """Append the chunk's slim slice to the persistent index frame.
