@@ -460,7 +460,6 @@ class TestPerFieldBlockingTransforms:
         assert members == {(1, 2)}
 
     def test_polars_and_arrow_derive_agree(self):
-        import pyarrow as pa
         from goldenmatch.core.frame import to_frame
 
         df = self._df()
@@ -468,7 +467,7 @@ class TestPerFieldBlockingTransforms:
         p = to_frame(df).derive_block_key(
             key.fields, key.transforms or [], field_transforms=key.field_transforms
         ).to_list()
-        a = to_frame(pa.Table.from_pandas(df.to_pandas())).derive_block_key(
+        a = to_frame(df.to_arrow()).derive_block_key(
             key.fields, key.transforms or [], field_transforms=key.field_transforms
         ).to_list()
         assert p == a == ["Smith||A", "Smith||A", "Smith||B", "Jones||A"]
