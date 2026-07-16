@@ -3515,7 +3515,8 @@ def _lower_learned_blocking(
     )
 
     try:
-        lf = df.lazy() if not hasattr(df, "collect") else df
+        # df is an eager DataFrame here; learn_rules_for_frame collects internally.
+        lf = df.lazy()
         rules = learn_rules_for_frame(lf, blocking)
         if not rules:
             logger.info("Learned-blocking lowering: no rules learned; keeping strategy='learned'.")
@@ -3538,11 +3539,11 @@ def _lower_learned_blocking(
         )
         return blocking
 
+    passes = lowered.passes or []
     logger.info(
         "Lowered learned blocking to multi_pass (%d rows, %d passes: %s) -- "
         "keeps the bucket scorer instead of forfeiting it to the legacy path.",
-        total_rows, len(lowered.passes),
-        [f"{p.fields}" for p in lowered.passes],
+        total_rows, len(passes), [f"{p.fields}" for p in passes],
     )
     return lowered
 
