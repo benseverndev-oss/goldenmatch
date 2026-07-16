@@ -23,7 +23,7 @@ from goldenmatch.config.schemas import (
     MatchkeyField,
 )
 from goldenmatch.core._paths import safe_path
-from goldenmatch.core.probabilistic import EMResult
+from goldenmatch.core.probabilistic import EMResult, _training_config_manifest
 
 Severity = Literal["info", "warning", "error"]
 
@@ -1076,6 +1076,11 @@ def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkCon
     # doesn't satisfy GoldenMatchConfig's own invariants) -- let it propagate
     # loudly rather than wrapping it in SplinkConversionError.
     config = GoldenMatchConfig(matchkeys=[mk], blocking=blocking)
+    if em_model is not None:
+        # Imported weights are immediately persisted by the CLI/MCP upgrade
+        # paths. Bind them to the converted comparison semantics so they use
+        # schema v2 and remain safely reusable after the round trip.
+        em_model.training_config = _training_config_manifest(mk)
 
     if strict and (report.has_warnings or report.has_errors):
         preview = _findings_preview(

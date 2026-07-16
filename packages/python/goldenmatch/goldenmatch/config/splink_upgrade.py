@@ -29,7 +29,7 @@ from goldenmatch._polars_lazy import pl
 from goldenmatch.config.from_splink import ConversionReport, SplinkConversion
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.core._paths import safe_path
-from goldenmatch.core.probabilistic import EMResult
+from goldenmatch.core.probabilistic import EMResult, _training_config_manifest
 
 
 class SplinkUpgradeError(ValueError):
@@ -819,6 +819,14 @@ def upgrade_splink_conversion(
 
     for name in lever_names:
         _LEVER_REGISTRY[name](ctx)
+
+    if ctx.em_model is not None:
+        # Levers can change comparison semantics (TF tables, thresholds, or
+        # negative evidence). Rebind the copied model before measurement or
+        # persistence so schema-v2 validation sees the upgraded manifest.
+        ctx.em_model.training_config = _training_config_manifest(
+            ctx.upgraded_config.get_matchkeys()[0]
+        )
 
     measurement: MeasurementResult | None = None
     if measure:
