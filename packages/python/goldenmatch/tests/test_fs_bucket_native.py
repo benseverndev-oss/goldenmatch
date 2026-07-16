@@ -544,3 +544,177 @@ def test_routing_fs_default_off_uses_batched(monkeypatch):
 
     assert calls["batched"] >= 1
     assert calls["bucket"] == 0
+
+
+# ── Strategy-generated FS candidates: external-blocks scorer ─────────────────
+
+
+def test_fs_external_blocks_route_decision(monkeypatch):
+    """The non-bucket FS refinement: strategy-generated candidates go to the
+    memory-bounded external-blocks scorer; the FS_DEFAULT_BUCKET=0 hatch,
+    explicit scale backends, and active-emitter probe runs keep legacy
+    batched."""
+    from goldenmatch.core.pipeline import _fs_external_blocks_route
+
+    monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
+
+    # static / multi_pass are the bucket route's job, not this one's.
+    assert _fs_external_blocks_route(_prob_config(backend=None)) is False
+
+    lsh_cfg = _prob_config(backend=None)
+    lsh_cfg.blocking.strategy = "lsh"
+    assert _fs_external_blocks_route(lsh_cfg) is True
+
+    # Hatch means "legacy batched" literally.
+    monkeypatch.setenv("GOLDENMATCH_FS_DEFAULT_BUCKET", "0")
+    assert _fs_external_blocks_route(lsh_cfg) is False
+    monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
+
+    # Explicit scale backends keep their own routing.
+    ray_cfg = _prob_config(backend="ray")
+    ray_cfg.blocking.strategy = "lsh"
+    assert _fs_external_blocks_route(ray_cfg) is False
+
+    # Emitter probe runs are calibrated against the legacy path (#1829).
+    from goldenmatch.core.profile_emitter import profile_capture
+
+    with profile_capture():
+        assert _fs_external_blocks_route(lsh_cfg) is False
+
+
+def _external_blocks(df: pl.DataFrame) -> list:
+    """Slice df into per-zip BlockResults tagged with a non-static strategy
+    (the shape lsh/canopy/sorted_neighborhood hand to the FS scorer)."""
+    from goldenmatch.core.blocker import BlockResult
+
+    return [
+        BlockResult(
+            block_key=str(z),
+            df=df.filter(pl.col("zip") == z).lazy(),
+            strategy="lsh",
+        )
+        for z in df["zip"].unique(maintain_order=True).to_list()
+    ]
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_fs_external_blocks_parity_with_batched(monkeypatch, native):
+    """Same blocks in -> same pair set + scores as the batched legacy scorer
+    (the path these strategies used before), on both scorer lanes."""
+    from goldenmatch.backends.score_buckets import (
+        score_probabilistic_external_blocks,
+    )
+    from goldenmatch.core.probabilistic import (
+        score_probabilistic_blocks_batched,
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_NATIVE", native)
+    df = _multiblock_df()
+    mk = _mk()
+    em = train_em(df, mk, n_sample_pairs=200)
+    blocking = BlockingConfig(
+        strategy="static", keys=[BlockingKeyConfig(fields=["zip"])]
+    )
+
+    got = score_probabilistic_external_blocks(
+        _external_blocks(df), blocking, mk, set(), em
+    )
+    ref = score_probabilistic_blocks_batched(_external_blocks(df), mk, em, set())
+    assert _pairset(got) == _pairset(ref)
+
+
+@pytest.mark.parametrize("native", ["1", "0"])
+def test_fs_external_blocks_oversized_semantics(monkeypatch, native):
+    """Oversized external blocks follow the bucket lane's semantics: SKIP on
+    skip_oversized=True; auto-split (never scored whole when splittable) on
+    the default skip_oversized=False."""
+    from goldenmatch.backends.score_buckets import (
+        score_probabilistic_external_blocks,
+    )
+    from goldenmatch.core.blocker import _auto_split_block
+    from goldenmatch.core.probabilistic import probabilistic_block_scorer
+
+    monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_NATIVE", native)
+    df = _splittable_oversized_df()
+    mk = _mk()
+    em = train_em(df, mk, n_sample_pairs=200)
+
+    def blocking(skip):
+        return BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["zip"])],
+            max_block_size=3,
+            skip_oversized=skip,
+        )
+
+    blocks = _external_blocks(df)  # zip A oversized (6 > 3), zip C control
+
+    # skip_oversized=True: oversized block contributes nothing; control kept.
+    skipped = _pairset(
+        score_probabilistic_external_blocks(blocks, blocking(True), mk, set(), em)
+    )
+    assert all(a > 6 or b > 6 for a, b in skipped)
+
+    # Default: auto-split. Expected = split sub-blocks + control block.
+    scorer = probabilistic_block_scorer(mk, em)
+    expected: list[tuple[int, int, float]] = []
+    big = df.filter(pl.col("zip") == "A")
+    for b in _auto_split_block(big, 3, "A"):
+        expected.extend(scorer(b.materialize().native, set()))
+    expected.extend(scorer(df.filter(pl.col("zip") == "C"), set()))
+    whole = _pairset(scorer(big, set()))
+    assert set(whole) - set(_pairset(expected)), "fixture no longer discriminates"
+
+    got = _pairset(
+        score_probabilistic_external_blocks(blocks, blocking(False), mk, set(), em)
+    )
+    assert got == _pairset(expected)
+
+
+def test_fs_external_blocks_dedupe_routing(monkeypatch):
+    """E2E: a sorted_neighborhood FS dedupe routes through the external-blocks
+    scorer (not score_buckets, not the batched scorer)."""
+    import goldenmatch as gm
+    import goldenmatch.backends.score_buckets as sb_mod
+    import goldenmatch.core.probabilistic as prob_mod
+    from goldenmatch.config.schemas import SortKeyField
+
+    monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
+
+    calls = {"external": 0, "bucket": 0, "batched": 0}
+    real_ext = sb_mod.score_probabilistic_external_blocks
+    real_sb = sb_mod.score_buckets
+    real_batched = prob_mod.score_probabilistic_blocks_batched
+
+    def spy_ext(*a, **k):
+        calls["external"] += 1
+        return real_ext(*a, **k)
+
+    def spy_sb(*a, **k):
+        calls["bucket"] += 1
+        return real_sb(*a, **k)
+
+    def spy_batched(*a, **k):
+        calls["batched"] += 1
+        return real_batched(*a, **k)
+
+    monkeypatch.setattr(
+        sb_mod, "score_probabilistic_external_blocks", spy_ext
+    )
+    monkeypatch.setattr(sb_mod, "score_buckets", spy_sb)
+    monkeypatch.setattr(
+        prob_mod, "score_probabilistic_blocks_batched", spy_batched
+    )
+
+    cfg = _prob_config(backend=None)
+    cfg.blocking = BlockingConfig(
+        strategy="sorted_neighborhood",
+        sort_key=[SortKeyField(column="last_name")],
+        window_size=4,
+    )
+    df = _multiblock_df().drop("__row_id__")
+    gm.dedupe_df(df, config=cfg)
+
+    assert calls["external"] >= 1
+    assert calls["bucket"] == 0
+    assert calls["batched"] == 0

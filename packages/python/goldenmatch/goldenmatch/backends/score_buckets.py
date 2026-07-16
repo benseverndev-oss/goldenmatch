@@ -506,6 +506,142 @@ def _resolve_fast_path(
     return (float(mk.threshold), total_weight, field_specs, ne_specs)
 
 
+def score_probabilistic_external_blocks(
+    blocks: list,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    matched_pairs: set[tuple[int, int]],
+    em_result,
+    target_ids: set[int] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Memory-bounded Fellegi-Sunter scoring over EXTERNALLY-GENERATED blocks.
+
+    ``score_buckets`` derives its own field-hash blocks, so candidate sets
+    from the non-field blocking strategies (lsh / ann / learned / canopy /
+    sorted_neighborhood) cannot route through it. This scorer consumes the
+    strategy's own ``BlockResult`` list ONE BLOCK AT A TIME with the bucket
+    lane's scale machinery: the frozen-exclude Arc handle built once
+    (#552/#688), oversized auto-split honoring ``skip_oversized``
+    (#1790/#1826), and the native (zero-copy arrow) / vectorized / scalar
+    per-block scorer selection -- replacing
+    ``score_probabilistic_blocks_batched``'s up-front all-units accumulation
+    for these strategies (whose whole-mega-block dense scoring is the #1826
+    OOM shape; a 388K-row canopy through the vectorized path is a 1.1 TiB
+    dense-matrix allocation).
+
+    Overlapping candidates (canopy membership, sorted-neighborhood windows)
+    can surface the same pair from two blocks; a canonical-key seen set
+    dedups in block order. Blocks carrying ``pre_scored_pairs`` (ann_pairs)
+    score their frames exactly like the batched scorer does -- FS weights
+    are not FAISS distances, so carried scores are ignored on this matchkey
+    type there too.
+    """
+    from goldenmatch.core.blocker import _auto_split_block
+    from goldenmatch.core.probabilistic import (
+        _fs_native_eligible,
+        probabilistic_block_scorer,
+        score_probabilistic_bucket_native,
+    )
+
+    if em_result is None:
+        raise ValueError(
+            "score_probabilistic_external_blocks requires em_result for "
+            "probabilistic scoring"
+        )
+
+    frozen_exclude = frozenset(matched_pairs)
+    max_block_size = blocking_config.max_block_size
+    skip_oversized = blocking_config.skip_oversized
+
+    use_native = _fs_bucket_native_enabled() and _fs_native_eligible(mk)
+    prob_scorer = None if use_native else probabilistic_block_scorer(mk, em_result)
+
+    # The #552/#688 fix, FS side: build the Rust exclude set ONCE, not per
+    # block call. Old wheels fall back to the Vec-per-call contract inside
+    # _score_fs_native_frame (byte-identical, just slower).
+    exclude_handle = None
+    if use_native and frozen_exclude:
+        try:
+            _mod = native_module()
+            _build = getattr(_mod, "build_exclude_set", None)
+            if _build is not None and (
+                getattr(_mod, "FS_SUPPORTS_ARROW", False)
+                or getattr(_mod, "FS_SUPPORTS_EXCLUDE_SET", False)
+            ):
+                exclude_handle = _build(list(frozen_exclude))
+            else:
+                _warn_stale_native_wheel_once(len(frozen_exclude))
+        except Exception:
+            exclude_handle = None
+
+    def _frames(block_df, n: int) -> list:
+        """Frames to score for one block: the block itself when within
+        bounds; auto-split sub-blocks when oversized (same semantics as the
+        bucket lane's _split_oversized: skip on skip_oversized=True, score
+        whole on split failure when skip_oversized=False)."""
+        if n <= max_block_size:
+            return [block_df]
+        if skip_oversized:
+            return []
+        try:
+            subs = _auto_split_block(
+                block_df, max_block_size, "__external_oversized__"
+            )
+        except Exception:
+            logger.error(
+                "external-blocks auto-split failed for an oversized block "
+                "(%d rows).", n, exc_info=True,
+            )
+            subs = []
+        useful = []
+        for b in subs:
+            try:
+                n_sub = b.n_rows()
+            except Exception:
+                n_sub = n + 1
+            if 2 <= n_sub < n:
+                useful.append(b.materialize().native)
+        if useful:
+            return useful
+        logger.error(
+            "Oversized external block (%d rows > max_block_size=%d, ~%s "
+            "pairs) could not be auto-split; scoring whole because "
+            "skip_oversized=False. See #1826.",
+            n, max_block_size, f"{n * (n - 1) // 2:,}",
+        )
+        return [block_df]
+
+    def _height(df) -> int:
+        return df.height if hasattr(df, "height") else df.num_rows
+
+    out: list[tuple[int, int, float]] = []
+    seen: set[tuple[int, int]] = set()
+    for block in blocks:
+        bdf = block.materialize().native
+        n = _height(bdf)
+        if n < 2:
+            continue
+        for frame in _frames(bdf, n):
+            if use_native:
+                pairs = score_probabilistic_bucket_native(
+                    frame, [_height(frame)], mk, em_result, frozen_exclude,
+                    exclude_handle=exclude_handle,
+                )
+            else:
+                pairs = prob_scorer(frame, frozen_exclude)
+            for a, b, s in pairs:
+                if target_ids is not None and (
+                    (a in target_ids) == (b in target_ids)
+                ):
+                    continue
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((a, b, s))
+    return out
+
+
 def score_buckets(
     prepared_df: pl.DataFrame,
     blocking_config: BlockingConfig,
