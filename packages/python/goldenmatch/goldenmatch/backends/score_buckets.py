@@ -1232,7 +1232,10 @@ def score_buckets(
             _slim_frame = _tf(slim_df)
             keyed = _slim_frame.with_column(
                 "__block_key__",
-                _slim_frame.derive_block_key(key.fields, key.transforms or []),
+                _slim_frame.derive_block_key(
+                    key.fields, key.transforms or [],
+                    field_transforms=getattr(key, "field_transforms", None),
+                ),
             ).native
             if _bkt_debug_on():
                 print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)

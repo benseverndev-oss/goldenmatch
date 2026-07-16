@@ -138,7 +138,10 @@ def _fast_static_block_sizes(
     for key_config in keys:
         keyed = frame.with_column(
             "__block_key__",
-            frame.derive_block_key(key_config.fields, key_config.transforms or []),
+            frame.derive_block_key(
+                key_config.fields, key_config.transforms or [],
+                field_transforms=getattr(key_config, "field_transforms", None),
+            ),
         )
         valid = keyed.filter_valid_key("__block_key__")
         # Per-key sizes AFTER the null/sentinel drop, BEFORE the size<2 drop.
@@ -322,9 +325,13 @@ def _build_block_key_expr(key_config: BlockingKeyConfig) -> pl.Expr:
     """
     from goldenmatch.core.matchkey import _try_native_chain
 
+    # Per-field chains (#1826): a field listed in field_transforms uses its
+    # OWN chain; others keep the key-level chain. getattr keeps the
+    # SimpleNamespace duck-type callers (frame.derive_block_key) working.
+    per_field = getattr(key_config, "field_transforms", None) or {}
     field_exprs: list[pl.Expr] = []
     for field_name in key_config.fields:
-        transforms = key_config.transforms or []
+        transforms = per_field.get(field_name, key_config.transforms or [])
         native = _try_native_chain(field_name, transforms) if transforms else None
         if native is not None:
             field_exprs.append(native)
@@ -417,7 +424,8 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
             _f = _f.with_column(
                 "__block_key__",
                 _f.derive_block_key(
-                    key_config.fields, key_config.transforms or []
+                    key_config.fields, key_config.transforms or [],
+                    field_transforms=getattr(key_config, "field_transforms", None)
                 ),
             )
             df_with_key = _f.filter_valid_key("__block_key__").native

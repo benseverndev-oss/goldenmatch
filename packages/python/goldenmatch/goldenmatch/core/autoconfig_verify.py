@@ -88,7 +88,10 @@ def _sample_block_sizes_per_key(
         try:
             keyed = sample.with_column(
                 "__block_key__",
-                sample.derive_block_key(key.fields, key.transforms or []),
+                sample.derive_block_key(
+                    key.fields, key.transforms or [],
+                    field_transforms=getattr(key, "field_transforms", None),
+                ),
             )
             sizes = keyed.group_len(["__block_key__"]).column("len").to_list()
         except Exception as exc:

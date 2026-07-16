@@ -464,11 +464,24 @@ class MatchkeyConfig(BaseModel):
 class BlockingKeyConfig(BaseModel):
     fields: list[str]
     transforms: list[str] = Field(default_factory=list)
+    # Per-field transform chains (#1826). A field present here uses ITS chain
+    # for the block-key derivation; fields absent keep the key-level
+    # ``transforms`` chain. This is what lets a mixed Splink rule
+    # (``l.last=r.last AND SUBSTR(l.first,1,1)=SUBSTR(r.first,1,1)``) map
+    # exactly instead of widening every field to the substring (the
+    # 388K-mega-block footgun).
+    field_transforms: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_fields_nonempty(self) -> BlockingKeyConfig:
         if not self.fields:
             raise ValueError("Blocking key must have at least one field.")
+        unknown = [f for f in self.field_transforms if f not in self.fields]
+        if unknown:
+            raise ValueError(
+                f"field_transforms references field(s) not in this key's "
+                f"fields: {unknown} (fields: {self.fields})"
+            )
         return self
 
 

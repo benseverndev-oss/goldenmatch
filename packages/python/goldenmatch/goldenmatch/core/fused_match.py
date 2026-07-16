@@ -163,7 +163,10 @@ def run_match_fused_arrow(
     frame = _prep_frame(columns, src_cols)
 
     key_arrs = [
-        frame.derive_block_key(key_cfg.fields, key_cfg.transforms or []).to_arrow()
+        frame.derive_block_key(
+            key_cfg.fields, key_cfg.transforms or [],
+            field_transforms=getattr(key_cfg, "field_transforms", None),
+        ).to_arrow()
     ]  # already transformed + "||"-concatenated
     score_arrs = [
         frame.derive_transformed_column(f.field, f.transforms or []).to_arrow()
@@ -378,7 +381,12 @@ def run_match_fused_fs_arrow(
     n = n_rows if n_rows is not None else len(columns[src_cols[0]])
     frame = _prep_frame(columns, src_cols)
 
-    key_arrs = [frame.derive_block_key(key_cfg.fields, key_cfg.transforms or []).to_arrow()]
+    key_arrs = [
+        frame.derive_block_key(
+            key_cfg.fields, key_cfg.transforms or [],
+            field_transforms=getattr(key_cfg, "field_transforms", None),
+        ).to_arrow()
+    ]
 
     # FS kernel args — mirrors score_probabilistic_native exactly.
     calibrated = _fs_calibration_mode() == "posterior"

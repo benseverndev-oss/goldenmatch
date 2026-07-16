@@ -192,14 +192,26 @@ def transformed_column(arr: Any, transforms: Sequence[str]) -> Any:
     return pa.array(vals, type=pa.large_string())
 
 
-def block_key(field_arrs: Sequence[Any], transforms: Sequence[str], sep: str = "||") -> Any:
-    """``blocker._build_block_key_expr`` twin: the SAME transform chain applies
-    to every key field, then fields concat with ``sep`` (any-null -> null,
-    matching ``pl.concat_str``); a single field skips the join entirely."""
+def block_key(
+    field_arrs: Sequence[Any],
+    transforms: Sequence[str],
+    sep: str = "||",
+    field_chains: Sequence[Sequence[str]] | None = None,
+) -> Any:
+    """``blocker._build_block_key_expr`` twin: each field's transform chain
+    applies (``field_chains[i]`` when given -- the per-field slot, #1826 --
+    else the shared ``transforms`` chain), then fields concat with ``sep``
+    (any-null -> null, matching ``pl.concat_str``); a single field skips the
+    join entirely."""
     import pyarrow as pa
     import pyarrow.compute as pc
 
-    cols = [transformed_column(a, transforms) for a in field_arrs]
+    chains = (
+        list(field_chains)
+        if field_chains is not None
+        else [transforms] * len(field_arrs)
+    )
+    cols = [transformed_column(a, c) for a, c in zip(field_arrs, chains)]
     if len(cols) == 1:
         return cols[0]
     sep_scalar = pa.scalar(sep, type=pa.large_string())  # match the column type
