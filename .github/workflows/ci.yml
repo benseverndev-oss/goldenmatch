@@ -878,6 +878,17 @@ jobs:
           workspaces: packages/rust/extensions/native
       - name: Build native ext (reference mode -> gate runs on the native path)
         run: uv run python scripts/build_native.py
+      # TEMPORARY (#1846 diagnostic -- revert before merge). historical_50k
+      # f1_probabilistic is 0.82 on Windows and 0.33 here, on the same commit
+      # with the same flags, and #1847 shows it needs no code change at all.
+      # Local cannot reproduce it, so dump the same facts here that the local
+      # run dumps and diff them.
+      - name: "#1846 diagnostic (temporary)"
+        if: always()
+        shell: bash
+        env:
+          GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+        run: uv run python scripts/diag_1846.py || true
       - name: Run auto-config quality gate
         shell: bash
         env:
