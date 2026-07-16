@@ -1443,6 +1443,20 @@ def _native_fs_available():
         return False
 
 
+def _native_fs_missing_neutral_available():
+    try:
+        from goldenmatch.core import _native_loader
+        return bool(
+            getattr(
+                _native_loader.native_module(),
+                "FS_SUPPORTS_MISSING_NEUTRAL",
+                False,
+            )
+        )
+    except Exception:
+        return False
+
+
 class TestNativeFSGating:
     def test_default_on_reference_mode(self, monkeypatch):
         # Reference mode (2026-07-01): native FS is authoritative by DEFAULT --
@@ -1508,6 +1522,8 @@ class TestNativeFSParity:
 
     def test_native_matches_numpy_with_missing_values(self, monkeypatch):
         from goldenmatch.core import probabilistic as p
+        if not _native_fs_missing_neutral_available():
+            pytest.skip("native FS kernel predates missing-neutral support")
         monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
         df = pl.DataFrame({
             "__row_id__": [1, 2, 3],
@@ -1525,6 +1541,8 @@ class TestNativeFSParity:
 
     def test_block_scorer_picks_native_when_opted_in(self, monkeypatch):
         from goldenmatch.core import probabilistic as p
+        if not _native_fs_missing_neutral_available():
+            pytest.skip("native FS kernel predates missing-neutral support")
         monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
         # _fs_native_enabled also consults native_enabled("block_scoring"),
         # which reads GOLDENMATCH_NATIVE; force it so an outer =0 run (the
