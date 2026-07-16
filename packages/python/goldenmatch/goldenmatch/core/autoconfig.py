@@ -3475,6 +3475,78 @@ def _maybe_promote_blocking_to_adaptive(
     return blocking.model_copy(update={"strategy": "adaptive"})
 
 
+def _lower_learned_blocking(
+    blocking: BlockingConfig,
+    df: pl.DataFrame,
+    total_rows: int,
+) -> BlockingConfig:
+    """Learn the blocking rules NOW and commit them as multi_pass passes (#1839).
+
+    ``strategy="learned"`` defers rule learning to runtime, inside build_blocks.
+    That forfeits the bucket scorer for EVERY zero-config run >= 50K rows:
+    ``_use_bucket_scorer`` refuses ``learned`` (bucket derives block keys from
+    ``passes``/``keys``, and a learned config carries neither), and the routing
+    decision is made BEFORE build_blocks runs -- so runtime-learned rules arrive
+    too late to matter. Learning at config time and lowering the rules into
+    multi_pass closes the gap using machinery that already exists (#1826
+    ``field_transforms``; score_buckets already honors it).
+
+    The learning pass is not new work -- it is the SAME sample-and-score pass
+    build_blocks would run at runtime, moved earlier. When the lowering succeeds,
+    build_blocks never runs the learned path at all.
+
+    Falls back to ``strategy="learned"`` (today's behavior, unchanged) whenever
+    the rules can't be learned or can't be lowered EXACTLY -- e.g. a same-field
+    conjunction, which ``field_transforms`` cannot express. Never lowers
+    approximately: that would silently change which pairs are generated
+    (precision stays 1.0, only recall moves -- the #1800 / #1837 / #1839 shape).
+
+    Kill-switch: ``GOLDENMATCH_LEARNED_LOWERING=0`` keeps the legacy path.
+    """
+    if os.environ.get("GOLDENMATCH_LEARNED_LOWERING", "1").strip().lower() in (
+        "0", "off", "false", "no",
+    ):
+        return blocking
+
+    from goldenmatch.core.blocker import learn_rules_for_frame
+    from goldenmatch.core.learned_blocking import (
+        LoweringUnsupportedError,
+        lower_rules_to_blocking_config,
+    )
+
+    try:
+        lf = df.lazy() if not hasattr(df, "collect") else df
+        rules = learn_rules_for_frame(lf, blocking)
+        if not rules:
+            logger.info("Learned-blocking lowering: no rules learned; keeping strategy='learned'.")
+            return blocking
+        lowered = lower_rules_to_blocking_config(
+            rules,
+            max_block_size=blocking.max_block_size,
+            skip_oversized=blocking.skip_oversized,
+        )
+    except LoweringUnsupportedError as e:
+        logger.info(
+            "Learned-blocking lowering not exact (%s); keeping strategy='learned' "
+            "(forfeits the bucket scorer, but preserves candidate pairs).", e,
+        )
+        return blocking
+    except Exception as e:  # noqa: BLE001 -- lowering is an optimization, never fatal
+        logger.warning(
+            "Learned-blocking lowering failed (%s: %s); keeping strategy='learned'.",
+            type(e).__name__, e,
+        )
+        return blocking
+
+    logger.info(
+        "Lowered learned blocking to multi_pass (%d rows, %d passes: %s) -- "
+        "keeps the bucket scorer instead of forfeiting it to the legacy path.",
+        total_rows, len(lowered.passes),
+        [f"{p.fields}" for p in lowered.passes],
+    )
+    return lowered
+
+
 def _maybe_prune_blocking_passes(
     blocking: BlockingConfig | None,
     df: pl.DataFrame,
@@ -4324,6 +4396,7 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
             "Upgraded to learned blocking (dataset has %d rows, sample_size=%d)",
             total_rows, blocking.learned_sample_size,
         )
+        blocking = _lower_learned_blocking(blocking, df, total_rows)
 
     # 2. Reranking for multi-field matchkeys
     for mk in matchkeys:

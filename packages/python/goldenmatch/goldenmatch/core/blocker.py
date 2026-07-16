@@ -1068,67 +1068,62 @@ def _build_ann_pair_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Blo
     )]
 
 
-def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
-    """Build blocks using learned predicates.
+def learn_rules_for_frame(lf: pl.LazyFrame, config: BlockingConfig) -> list:
+    """Learn blocking rules for a frame, or return [] if they can't be learned.
 
-    Two-pass approach:
-    1. If cached rules exist, load and apply them
-    2. Otherwise, run a fast sample with static blocking to generate training pairs,
-       then learn predicates from those pairs
+    Extracted from ``_build_learned_blocks`` (#1839) so auto-config can learn the
+    SAME rules at config time and lower them into a bucket-eligible multi_pass
+    config. Runtime learning cannot help bucket: the scorer routing decision
+    (``_use_bucket_scorer``) is made BEFORE ``build_blocks`` runs, and bucket
+    derives its own buckets from ``blocking.passes/keys`` rather than calling
+    build_blocks at all. So the rules have to exist by config time or not at all.
+
+    Returns [] (never raises) when learning isn't possible -- no columns, no
+    scored pairs from the sample. Callers fall back to their prior behavior.
     """
     from goldenmatch.core.learned_blocking import (
-        apply_learned_blocks,
         learn_blocking_rules,
         load_learned_rules,
         save_learned_rules,
     )
 
-    # Try loading cached rules
     if config.learned_cache_path:
         cached = load_learned_rules(config.learned_cache_path)
         if cached:
             logger.info("Using cached learned blocking rules from %s", config.learned_cache_path)
-            return apply_learned_blocks(lf, cached, config.max_block_size)
+            return cached
 
-    # Pass 1: fast static blocking on first key to generate training pairs
     df = lf.collect()
     sample_size = min(config.learned_sample_size, df.height)
-    if sample_size < df.height:
-        sample_df = df.sample(sample_size, seed=42)
-    else:
-        sample_df = df
+    sample_df = df.sample(sample_size, seed=42) if sample_size < df.height else df
 
-    # Use static blocking with the configured keys for the sample run
     sample_config = config.model_copy(update={"strategy": "static"})
     sample_blocks = _build_static_blocks(sample_df.lazy(), sample_config)
 
-    # Score sample blocks to get training pairs
     from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
     from goldenmatch.core.scorer import find_fuzzy_matches
 
-    # Build a simple weighted matchkey for scoring
     cols = [c for c in df.columns if not c.startswith("__")]
     if not cols:
-        return _build_static_blocks(lf, sample_config)
+        return []
 
-    # Use first few columns for a quick score
     score_fields = [
         MatchkeyField(field=c, scorer="token_sort", weight=1.0, transforms=["lowercase"])
         for c in cols[:3]
     ]
-    score_mk = MatchkeyConfig(name="_learned_score", type="weighted", threshold=0.5, fields=score_fields)
+    score_mk = MatchkeyConfig(
+        name="_learned_score", type="weighted", threshold=0.5, fields=score_fields
+    )
 
     scored_pairs = []
     for block in sample_blocks:
         block_df = block.materialize().native
-        pairs = find_fuzzy_matches(block_df, score_mk)
-        scored_pairs.extend(pairs)
+        scored_pairs.extend(find_fuzzy_matches(block_df, score_mk))
 
     if not scored_pairs:
-        logger.warning("No scored pairs from sample run. Falling back to static blocking.")
-        return _build_static_blocks(lf, sample_config)
+        logger.warning("No scored pairs from sample run; cannot learn blocking rules.")
+        return []
 
-    # Pass 2: learn rules from scored pairs
     rules = learn_blocking_rules(
         sample_df,
         scored_pairs,
@@ -1138,12 +1133,33 @@ def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[Bloc
         predicate_depth=config.learned_predicate_depth,
     )
 
-    # Cache rules
     if config.learned_cache_path and rules:
         save_learned_rules(rules, config.learned_cache_path)
         logger.info("Saved learned blocking rules to %s", config.learned_cache_path)
 
-    # Apply to full dataset
+    return rules or []
+
+
+def _build_learned_blocks(lf: pl.LazyFrame, config: BlockingConfig) -> list[BlockResult]:
+    """Build blocks using learned predicates.
+
+    Two-pass approach:
+    1. If cached rules exist, load and apply them
+    2. Otherwise, run a fast sample with static blocking to generate training pairs,
+       then learn predicates from those pairs
+
+    The learning itself lives in ``learn_rules_for_frame`` so auto-config can run
+    the same pass at config time (#1839); this stays the runtime application.
+    """
+    from goldenmatch.core.learned_blocking import apply_learned_blocks
+
+    rules = learn_rules_for_frame(lf, config)
+    if not rules:
+        # No columns, or no scored pairs from the sample -- same fallback the
+        # inline version had.
+        logger.warning("No learned rules available. Falling back to static blocking.")
+        return _build_static_blocks(lf, config.model_copy(update={"strategy": "static"}))
+
     return apply_learned_blocks(lf, rules, config.max_block_size)
 
 
