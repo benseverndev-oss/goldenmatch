@@ -236,6 +236,40 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     return not has_active_emitter()
 
 
+def _fs_external_blocks_route(config: GoldenMatchConfig) -> bool:
+    """Whether a probabilistic matchkey that is NOT on the bucket route
+    (see ``_fs_use_bucket_route``) scores its strategy-generated blocks via
+    the memory-bounded external-blocks scorer
+    (``score_probabilistic_external_blocks``) instead of the legacy batched
+    scorer.
+
+    True exactly when the bucket exclusion was the blocking STRATEGY
+    (lsh / ann / learned / canopy / sorted_neighborhood -- candidates the
+    bucket scorer cannot re-derive from field hashes). Those blocks
+    previously fell to the batched scorer, whose up-front all-units
+    accumulation + whole-mega-block dense scoring is the #1826 OOM shape.
+    Every OTHER exclusion keeps legacy batched: the
+    ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` hatch means "legacy" literally,
+    active-emitter probe runs are calibrated against the legacy path (the
+    #1829 lesson), and explicit scale backends keep their own routing.
+    """
+    if getattr(config, "backend", None) not in (None, "polars-direct"):
+        return False
+    if (
+        os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
+        in _BUCKET_DEFAULT_OPT_OUT
+    ):
+        return False
+    _blk = getattr(config, "blocking", None)
+    if _blk is None or getattr(_blk, "strategy", None) in (
+        None, "static", "multi_pass",
+    ):
+        return False
+    from goldenmatch.core.profile_emitter import has_active_emitter
+
+    return not has_active_emitter()
+
+
 def _get_block_scorer(config: GoldenMatchConfig):
     """Return the block scoring function based on configured backend."""
     backend = getattr(config, "backend", None)
@@ -2724,6 +2758,35 @@ def _run_dedupe_pipeline(
                     for a, b, _s in pairs:
                         _bench_emitted_pairs.add((min(a, b), max(a, b)))
                 continue
+            # Strategy-generated candidates (lsh / ann / learned / canopy /
+            # sorted_neighborhood): score the strategy's own blocks one at a
+            # time through the bucket lane's scale machinery (exclude Arc
+            # handle, oversized auto-split, native/vectorized selection)
+            # instead of the batched scorer's all-units accumulation. The
+            # bench-dump path keeps the per-block loop below for exact
+            # candidate accounting.
+            if not _bench_dump_dir and _fs_external_blocks_route(config):
+                from goldenmatch.backends.score_buckets import (
+                    score_probabilistic_external_blocks,
+                )
+                pairs = score_probabilistic_external_blocks(
+                    blocks, config.blocking, scoring_mk, matched_pairs,
+                    em_result,
+                )
+                if across_files_only:
+                    pairs = [
+                        (a, b, s) for a, b, s in pairs
+                        if source_lookup.get(a) != source_lookup.get(b)
+                    ]
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
+                all_pairs.extend(pairs)
+                fuzzy_pair_count += len(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
             # Vectorized NxN-matrix block scorer: one rapidfuzz cdist per field
             # + numpy level/weight/normalize, replacing the per-pair Python
             # loop. This makes full-block scoring cheap enough that large
@@ -4215,6 +4278,24 @@ def _run_match_pipeline(
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
                 continue
+            # Strategy-generated candidates: memory-bounded external-blocks
+            # scorer (same refinement as the dedupe site).
+            if _fs_external_blocks_route(config):
+                from goldenmatch.backends.score_buckets import (
+                    score_probabilistic_external_blocks,
+                )
+                pairs = score_probabilistic_external_blocks(
+                    blocks, config.blocking, scoring_mk, matched_pairs,
+                    em_result, target_ids=target_ids,
+                )
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
+                all_pairs.extend(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
             # Blocks scored in parallel across cores (GIL-releasing FS kernels).
             # Does not mutate matched_pairs; fold the returned pairs in below.
             pairs = score_probabilistic_blocks_batched(
@@ -4458,6 +4539,24 @@ def _run_match_scoring_and_output(
                     n_buckets=config.n_buckets,
                     target_ids=target_ids,
                     em_result=em_result,
+                )
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
+                all_pairs.extend(pairs)
+                for a, b, _s in pairs:
+                    matched_pairs.add((min(a, b), max(a, b)))
+                continue
+            # Strategy-generated candidates: memory-bounded external-blocks
+            # scorer (same refinement as the dedupe site).
+            if _fs_external_blocks_route(config):
+                from goldenmatch.backends.score_buckets import (
+                    score_probabilistic_external_blocks,
+                )
+                pairs = score_probabilistic_external_blocks(
+                    blocks, config.blocking, scoring_mk, matched_pairs,
+                    em_result, target_ids=target_ids,
                 )
                 pairs, candidates = _split_probabilistic_pairs(
                     pairs, link_threshold
