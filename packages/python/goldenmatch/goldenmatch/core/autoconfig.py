@@ -2771,6 +2771,30 @@ def _compute_max_safe_block(height: int, native_scoring: bool) -> int:
     return max(1000, min(ceiling, height // 40))
 
 
+def _learned_block_cap(total_rows: int, current_cap: int, native_scoring: bool) -> int:
+    """Runtime oversized-DROP cap for learned blocking.
+
+    Learned blocking runs with ``skip_oversized=True``, and
+    ``apply_learned_blocks`` DROPS any block bigger than ``max_block_size``
+    outright (``continue``) -- the whole block, and every true pair in it.
+    So that cap must never sit BELOW the budget auto-config used to *select* the
+    blocking key (``_compute_max_safe_block``): otherwise the selector accepts a
+    key on the promise "blocks up to max_safe_block are fine" and the runtime
+    then silently throws those very blocks away. The loss is recall-only (a drop
+    never invents a merge), which is why it hides -- precision stays 1.0.
+
+    That gap is scale-dependent, so it reads as a scale-invariance regression:
+    a key whose blocks sit under the cap at 500K crosses it at 1M and is
+    discarded. #1784 widened the gap further (its native ceiling puts
+    max_safe_block at 25K on a 1M frame, against the default 5000 cap), which
+    collapsed 1M zero-config recall to 0.82 while <=500K stayed at 1.0 (#1837).
+
+    Raise-only: never tighten below the configured cap, so datasets under ~200K
+    rows (where ``height // 40`` < 5000) keep their existing cap byte-for-byte.
+    """
+    return max(current_cap, _compute_max_safe_block(total_rows, native_scoring))
+
+
 def build_blocking(
     profiles: list[ColumnProfile],
     df: pl.DataFrame,
@@ -4320,9 +4344,17 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
         blocking.learned_sample_size = min(total_rows // 4, 5000)
         blocking.learned_min_recall = 0.95
         blocking.skip_oversized = True
+        # skip_oversized DROPS whole blocks above max_block_size, so the cap must
+        # not sit below the budget that picked the key (see _learned_block_cap).
+        from goldenmatch.core._native_loader import native_enabled as _native_enabled
+
+        blocking.max_block_size = _learned_block_cap(
+            total_rows, blocking.max_block_size, _native_enabled("block_scoring"),
+        )
         logger.info(
-            "Upgraded to learned blocking (dataset has %d rows, sample_size=%d)",
-            total_rows, blocking.learned_sample_size,
+            "Upgraded to learned blocking (dataset has %d rows, sample_size=%d, "
+            "max_block_size=%d)",
+            total_rows, blocking.learned_sample_size, blocking.max_block_size,
         )
 
     # 2. Reranking for multi-field matchkeys

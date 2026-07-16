@@ -299,6 +299,8 @@ def apply_learned_blocks(
     # set-identity key. Deduping here (not after the loop) also skips building the
     # duplicate LazyFrame at all. Same blocks, same first-wins order, no collects.
     seen: set[frozenset[int]] = set()
+    dropped_blocks = 0
+    dropped_rows = 0
 
     for rule in rules[:3]:  # limit to top 3 rules
         rows = df.select(
@@ -319,6 +321,14 @@ def apply_learned_blocks(
             if len(member_positions) < 2:
                 continue
             if len(member_positions) > max_block_size:
+                # Dropping a block discards every candidate pair in it -- a
+                # RECALL-only loss (a drop never invents a merge, so precision
+                # stays 1.0 and the damage is invisible in every signal except
+                # recall). Count it and warn below rather than eating it
+                # silently: a silent instance of exactly this cost a full day of
+                # scale-regression bisection (#1837).
+                dropped_blocks += 1
+                dropped_rows += len(member_positions)
                 continue
             members = frozenset(member_positions)
             if members in seen:
@@ -332,6 +342,16 @@ def apply_learned_blocks(
             ))
 
     logger.info("Learned blocking produced %d blocks from %d rules", len(all_blocks), min(len(rules), 3))
+    if dropped_blocks:
+        logger.warning(
+            "Learned blocking DROPPED %d oversized block(s) covering %d row(s) "
+            "(max_block_size=%d, skip_oversized). Every candidate pair in a "
+            "dropped block is lost -- this costs RECALL only, so it will not "
+            "show up as a precision or over-merge signal. Raise "
+            "blocking.max_block_size (or tighten the blocking key) if recall "
+            "looks low at scale.",
+            dropped_blocks, dropped_rows, max_block_size,
+        )
     return all_blocks
 
 
