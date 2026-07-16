@@ -1473,7 +1473,8 @@ def score_probabilistic_continuous(
     """Score pairs using continuous Fellegi-Sunter (Winkler extension).
 
     Computes log-likelihood ratios from Gaussian models of match/non-match
-    score distributions. Returns pairs above threshold as normalized 0-1 scores.
+    score distributions, adds the learned match-prior log-odds, and returns
+    pairs above the posterior-probability threshold.
     """
     if mk.negative_evidence:
         raise ValueError(
@@ -1510,7 +1511,11 @@ def score_probabilistic_continuous(
         log_u = -0.5 * ((sim - em.u_mean[f.field]) ** 2) / var_u - 0.5 * math.log(var_u)
         log_ratio += log_m - log_u
 
-    # Convert to 0-1 via sigmoid (clamped against overflow).
+    # Convert the likelihood ratio to a posterior by adding the learned prior
+    # log-odds before the sigmoid. Clamp the prior away from {0, 1} so malformed
+    # or degenerate training results remain numerically finite.
+    p_match = min(max(em.proportion_matched, 1e-10), 1.0 - 1e-10)
+    log_ratio += math.log(p_match / (1.0 - p_match))
     with np.errstate(over="ignore"):
         normalized = 1.0 / (1.0 + np.exp(-np.clip(log_ratio, -700.0, 700.0)))
 

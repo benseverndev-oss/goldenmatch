@@ -734,15 +734,9 @@ export function trainEMContinuous(
 
 /**
  * Score pairs using continuous Fellegi-Sunter (Winkler extension). Computes
- * Gaussian log-likelihood ratios and maps to [0,1] via sigmoid. Ports Python
+ * Gaussian log-likelihood ratios, adds learned prior log-odds, and maps the
+ * result to posterior probability via sigmoid. Ports Python
  * ``score_probabilistic_continuous``.
- *
- * Numeric note: Python's ``math.exp`` raises OverflowError on extreme
- * negative log-ratios; JS ``Math.exp`` returns Infinity (sigmoid -> 0) with
- * no error. The committed parity fixtures use score-compressed datasets that
- * never reach that branch, so both sides agree. With raw production data a
- * non-match pair can drive the ratio past Python's overflow point — the TS
- * port degrades gracefully to 0 where Python would raise.
  */
 export function scoreProbabilisticContinuous(
   rows: readonly Row[],
@@ -768,6 +762,8 @@ export function scoreProbabilisticContinuous(
   }
 
   const results: ScoredPair[] = [];
+  const pMatch = Math.min(Math.max(em.proportionMatched, 1e-10), 1 - 1e-10);
+  const priorLogOdds = Math.log(pMatch / (1 - pMatch));
   for (let i = 0; i < rowIds.length; i++) {
     for (let j = i + 1; j < rowIds.length; j++) {
       const a = Math.min(rowIds[i]!, rowIds[j]!);
@@ -790,6 +786,7 @@ export function scoreProbabilisticContinuous(
         logRatio += logM - logU;
       }
 
+      logRatio += priorLogOdds;
       const normalized = 1.0 / (1.0 + Math.exp(-logRatio));
       if (normalized >= threshold) {
         results.push(makeScoredPair(a, b, Math.round(normalized * 10000) / 10000));
