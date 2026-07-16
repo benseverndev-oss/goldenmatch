@@ -41,7 +41,11 @@ def test_bare_unquoted_columns_work():
     assert not report.has_warnings
 
 
-def test_surname_and_dob_substring_conjunction():
+def test_surname_and_dob_substring_conjunction_exact():
+    # #1826: mixed plain-equality + SUBSTR rules map EXACTLY via per-field
+    # transforms -- surname stays plain equality, dob gets its substring.
+    # (Pre-#1826 this widened the whole key to first-initials and produced
+    # the 388K mega-block.)
     rule = 'l."surname" = r."surname" AND SUBSTR(l."dob", 1, 4) = SUBSTR(r."dob", 1, 4)'
     report = ConversionReport()
     config = convert_blocking([rule], report)
@@ -51,21 +55,10 @@ def test_surname_and_dob_substring_conjunction():
     assert len(config.keys) == 1
     key = config.keys[0]
     assert key.fields == ["surname", "dob"]
-    # BlockingKeyConfig.transforms is a single chain applied to every field in
-    # the key (no per-field slot) -- the dob-only SUBSTR is carried as the
-    # key's one transform. SUBSTR(x, 1, 4) -> substring:0:4 per the verified
-    # convention above.
-    assert key.transforms == ["substring:0:4"]
-    # This is LOSSY: surname was plain equality in Splink but gets the
-    # substring transform here (key-level chain). It must be a WARNING so
-    # strict=True gates on it, not a silent info.
-    warnings = [f for f in report.findings if f.severity == "warning"]
-    assert len(warnings) == 1
-    assert report.has_warnings
-    msg = warnings[0].message
-    assert "widened" in msg or "approximate" in msg
-    assert "surname" in msg
-    assert "skip_oversized" in msg
+    assert key.transforms == []
+    assert key.field_transforms == {"dob": ["substring:0:4"]}
+    # Exact mapping: no lossy-widening warning anymore.
+    assert not report.has_warnings
 
 
 def test_pure_substr_rule_is_info_only():
@@ -197,15 +190,22 @@ def test_none_rule_dropped():
     assert "not a SQL string" in warnings[0].message
 
 
-def test_conflicting_substr_offsets_rule_dropped():
+def test_per_field_substr_offsets_convert_exactly():
+    # Pre-#1826 different offsets across fields dropped the whole rule (one
+    # key-level chain could not represent both). Per-field transforms can.
     rule = "SUBSTR(l.a, 1, 4) = SUBSTR(r.a, 1, 4) AND SUBSTR(l.b, 1, 2) = SUBSTR(r.b, 1, 2)"
     report = ConversionReport()
     config = convert_blocking([rule], report)
 
-    assert config is None
-    warnings = [f for f in report.findings if f.severity == "warning"]
-    assert len(warnings) == 1
-    assert "conflicting SUBSTR offsets" in warnings[0].message
+    assert config is not None
+    key = config.keys[0]
+    assert key.fields == ["a", "b"]
+    assert key.transforms == []
+    assert key.field_transforms == {
+        "a": ["substring:0:4"],
+        "b": ["substring:0:2"],
+    }
+    assert not report.has_warnings
 
 
 def test_substr_start_zero_dropped():
@@ -265,7 +265,10 @@ def test_splink4_serialized_parenthesized_conjuncts():
 
     assert config is not None
     assert config.keys[0].fields == ["surname", "dob"]
-    assert config.keys[0].transforms == ["substring:0:4"]
+    # Exact per-field mapping (#1826): dob carries its own chain, surname
+    # keeps plain equality.
+    assert config.keys[0].transforms == []
+    assert config.keys[0].field_transforms == {"dob": ["substring:0:4"]}
 
 
 def test_whole_rule_paren_wrapped():

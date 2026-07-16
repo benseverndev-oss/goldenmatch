@@ -414,3 +414,72 @@ class TestNullBlockKeyFilter:
             f"Found 'nan' block in {keys}: NaN records should be "
             "filtered before group_by. See #372."
         )
+
+
+class TestPerFieldBlockingTransforms:
+    """#1826: BlockingKeyConfig.field_transforms applies a per-field chain
+    (fields absent from the map keep the key-level ``transforms`` chain), so
+    a Splink ``last=last AND SUBSTR(first,1,1)=...`` rule maps exactly
+    instead of widening every field to the substring."""
+
+    def _df(self):
+        import polars as pl
+        return pl.DataFrame({
+            "__row_id__": [1, 2, 3, 4],
+            "last": ["Smith", "Smith", "Smith", "Jones"],
+            "first": ["Anna", "Albert", "Bella", "Anna"],
+        })
+
+    def _key(self):
+        from goldenmatch.config.schemas import BlockingKeyConfig
+        return BlockingKeyConfig(
+            fields=["last", "first"],
+            field_transforms={"first": ["substring:0:1"]},
+        )
+
+    def test_schema_validates_unknown_field(self):
+        import pytest as _pytest
+        from goldenmatch.config.schemas import BlockingKeyConfig
+        with _pytest.raises(ValueError, match="field_transforms"):
+            BlockingKeyConfig(
+                fields=["last"], field_transforms={"nope": ["lowercase"]}
+            )
+
+    def test_build_blocks_honors_field_transforms(self):
+        from goldenmatch.config.schemas import BlockingConfig
+        from goldenmatch.core.blocker import build_blocks
+
+        cfg = BlockingConfig(keys=[self._key()])
+        blocks = build_blocks(self._df().lazy(), cfg)
+        keys = sorted(b.block_key for b in blocks)
+        # last stays FULL (plain equality); first collapses to its initial:
+        # rows 1+2 share (Smith, A); row 3 is (Smith, B); row 4 (Jones, A).
+        assert keys == ["Smith||A"]
+        members = {tuple(sorted(b.materialize().column("__row_id__").to_list()))
+                   for b in blocks}
+        assert members == {(1, 2)}
+
+    def test_polars_and_arrow_derive_agree(self):
+        import pyarrow as pa
+        from goldenmatch.core.frame import to_frame
+
+        df = self._df()
+        key = self._key()
+        p = to_frame(df).derive_block_key(
+            key.fields, key.transforms or [], field_transforms=key.field_transforms
+        ).to_list()
+        a = to_frame(pa.Table.from_pandas(df.to_pandas())).derive_block_key(
+            key.fields, key.transforms or [], field_transforms=key.field_transforms
+        ).to_list()
+        assert p == a == ["Smith||A", "Smith||A", "Smith||B", "Jones||A"]
+
+    def test_key_level_transforms_still_apply_to_unmapped_fields(self):
+        from goldenmatch.core.frame import to_frame
+
+        df = self._df()
+        vals = to_frame(df).derive_block_key(
+            ["last", "first"], ["lowercase"],
+            field_transforms={"first": ["substring:0:1"]},
+        ).to_list()
+        # last gets the key-level lowercase; first gets ONLY its own chain.
+        assert vals == ["smith||A", "smith||A", "smith||B", "jones||A"]

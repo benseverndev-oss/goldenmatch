@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from goldenmatch._polars_lazy import pl
@@ -126,7 +126,11 @@ class Frame(Protocol):
     def column(self, name: str) -> Column: ...
     def to_arrow_columns(self, names: list[str]) -> dict[str, Any]: ...
     def derive_block_key(
-        self, fields: Sequence[str], transforms: Sequence[str], sep: str = "||"
+        self,
+        fields: Sequence[str],
+        transforms: Sequence[str],
+        sep: str = "||",
+        field_transforms: Mapping[str, Sequence[str]] | None = None,
     ) -> Column: ...
     def derive_transformed_column(self, field: str, transforms: Sequence[str]) -> Column: ...
     def utf8_values(self, field: str) -> list[str | None]: ...
@@ -371,7 +375,11 @@ class PolarsFrame:
         return {n: self._df[n].to_arrow() for n in names}
 
     def derive_block_key(
-        self, fields: Sequence[str], transforms: Sequence[str], sep: str = "||"
+        self,
+        fields: Sequence[str],
+        transforms: Sequence[str],
+        sep: str = "||",
+        field_transforms: Mapping[str, Sequence[str]] | None = None,
     ) -> PolarsColumn:
         # Byte-identical by construction: delegates to the pipeline's own
         # _build_block_key_expr over a Utf8 pre-cast frame (the fused prep's
@@ -380,7 +388,15 @@ class PolarsFrame:
 
         from goldenmatch.core.blocker import _build_block_key_expr
 
-        key_cfg = SimpleNamespace(fields=list(fields), transforms=list(transforms))
+        key_cfg = SimpleNamespace(
+            fields=list(fields),
+            transforms=list(transforms),
+            field_transforms=(
+                {k: list(v) for k, v in field_transforms.items()}
+                if field_transforms
+                else {}
+            ),
+        )
         df = self._df.with_columns([pl.col(f).cast(pl.Utf8) for f in fields])
         s = df.lazy().select(_build_block_key_expr(key_cfg)).collect().get_column("__block_key__")
         return PolarsColumn(s)
@@ -1145,12 +1161,20 @@ class ArrowFrame:
         return {n: self._tbl.column(n) for n in names}
 
     def derive_block_key(
-        self, fields: Sequence[str], transforms: Sequence[str], sep: str = "||"
+        self,
+        fields: Sequence[str],
+        transforms: Sequence[str],
+        sep: str = "||",
+        field_transforms: Mapping[str, Sequence[str]] | None = None,
     ) -> ArrowColumn:
         from goldenmatch.core import arrow_derive
 
         arrs = [self._tbl.column(f) for f in fields]
-        return ArrowColumn(arrow_derive.block_key(arrs, list(transforms), sep=sep))
+        per_field = field_transforms or {}
+        chains = [list(per_field.get(f, transforms)) for f in fields]
+        return ArrowColumn(
+            arrow_derive.block_key(arrs, list(transforms), sep=sep, field_chains=chains)
+        )
 
     def derive_transformed_column(self, field: str, transforms: Sequence[str]) -> ArrowColumn:
         from goldenmatch.core import arrow_derive

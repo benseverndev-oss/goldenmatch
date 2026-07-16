@@ -478,27 +478,39 @@ def _convert_one_blocking_rule(
         return None
 
     # Dedupe repeated fields (order-preserving): `l.a = r.a AND l.a = r.a`
-    # is one field, not two identical key components.
+    # is one field, not two identical key components. A field appearing with
+    # CONFLICTING transforms (e.g. plain equality AND a SUBSTR on the same
+    # column) keeps the strictest reading by dropping the rule -- ambiguous.
     fields = list(dict.fromkeys(r.field for r in recognized))
-    # BlockingKeyConfig.transforms is ONE chain applied uniformly to every
-    # field in the key (core/blocker.py:_build_block_key_expr) -- there is no
-    # per-field transform slot. A mixed rule (plain equality on one column +
-    # SUBSTR on another) is therefore approximated as a single key carrying
-    # the substring transform for ALL fields. This is safe for blocking
-    # (candidate generation only needs to be a superset of true matches;
-    # applying substring to the plain-equality field just widens that block
-    # slightly -- no recall loss, just looser precision at the blocking
-    # stage). If two conjuncts specify SUBSTR at different offsets, there is
-    # no single chain that represents both, so the rule is dropped.
-    transform_values = {r.transform for r in recognized if r.transform is not None}
-    if len(transform_values) > 1:
-        report.warn(
-            rule_path,
-            f"conflicting SUBSTR offsets across fields, rule dropped: {sql_norm}",
-            mapped_to=None,
-        )
-        return None
-    transforms = [next(iter(transform_values))] if transform_values else []
+    per_field: dict[str, str | None] = {}
+    for r in recognized:
+        if r.field in per_field and per_field[r.field] != r.transform:
+            report.warn(
+                rule_path,
+                f"conflicting transforms on field {r.field!r}, rule dropped: "
+                f"{sql_norm}",
+                mapped_to=None,
+            )
+            return None
+        per_field[r.field] = r.transform
+
+    # Exact per-field mapping (#1826). BlockingKeyConfig.field_transforms
+    # carries each SUBSTR'd field's own chain, so a mixed rule (plain
+    # equality on one column + SUBSTR on another) no longer widens the whole
+    # key to the substring -- pre-#1826 that collapsed e.g. last+zip5+
+    # first-initial into first-initials-only and produced a 388K-row
+    # mega-block at 1M rows. Uniform rules keep the legacy key-level
+    # `transforms` shape (backward-compatible config output).
+    transform_values = {t for t in per_field.values() if t is not None}
+    all_transformed = all(t is not None for t in per_field.values())
+    if len(transform_values) == 1 and all_transformed:
+        transforms = [next(iter(transform_values))]
+        field_transforms: dict[str, list[str]] = {}
+    else:
+        transforms = []
+        field_transforms = {
+            f: [t] for f, t in per_field.items() if t is not None
+        }
 
     # IS NOT NULL guards (#1783): GM's blocker already nulls the whole key
     # when any key field is null (concat_str default) and filters null keys
@@ -527,29 +539,17 @@ def _convert_one_blocking_rule(
             mapped_to=None,
         )
 
-    key = BlockingKeyConfig(fields=fields, transforms=transforms)
-    plain_fields = list(dict.fromkeys(r.field for r in recognized if r.transform is None))
-    if transforms and plain_fields:
-        # LOSSY: the key-level chain applies the substring transform to
-        # field(s) Splink compared with plain equality. Warn (not info) so
-        # strict=True gates on it, matching the approx-warn convention used
-        # for comparison levels above.
-        report.warn(
-            rule_path,
-            f"approximate mapping, blocking key widened: {transforms[0]} "
-            f"applied to all fields including plain-equality field(s) "
-            f"{plain_fields} (GoldenMatch transforms are key-level); "
-            "candidates are a superset of Splink's, precision may drop "
-            "(superset guarantee assumes skip_oversized stays False, the "
-            f"converter's emitted default) ({sql_norm})",
-            mapped_to=None,
-        )
-    else:
-        report.info(
-            rule_path,
-            f"converted to blocking key fields={fields} transforms={transforms}",
-            mapped_to=None,
-        )
+    key = BlockingKeyConfig(
+        fields=fields, transforms=transforms, field_transforms=field_transforms
+    )
+    # Exact mapping either way now (#1826): uniform rules ride the key-level
+    # chain, mixed rules ride field_transforms -- no widening, no warning.
+    report.info(
+        rule_path,
+        f"converted to blocking key fields={fields} transforms={transforms}"
+        + (f" field_transforms={field_transforms}" if field_transforms else ""),
+        mapped_to=None,
+    )
     return key
 
 
