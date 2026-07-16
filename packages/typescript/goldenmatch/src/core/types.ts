@@ -48,6 +48,8 @@ export interface MatchkeyField {
    * without silently losing the flag.
    */
   readonly tfAdjustment?: boolean;
+  /** Optional data-driven frequency table consumed by frequency-aware scorers. */
+  readonly tfFreqs?: Readonly<Record<string, number>>;
 }
 
 /**

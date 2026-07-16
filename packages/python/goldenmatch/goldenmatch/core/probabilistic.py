@@ -182,6 +182,45 @@ def enforce_weight_monotonicity(
     return out, adjusted
 
 
+def _training_config_manifest(mk: MatchkeyConfig) -> dict:
+    """Canonical comparison semantics that a persisted model was trained for."""
+    return {
+        "fields": [
+            {
+                "field": f.resolved_field,
+                "scorer": f.scorer,
+                "transforms": list(f.transforms),
+                "model": f.model,
+                "columns": list(f.columns) if f.columns is not None else None,
+                "column_weights": f.column_weights,
+                "levels": f.levels,
+                "partial_threshold": f.partial_threshold,
+                "level_thresholds": (
+                    list(f.level_thresholds)
+                    if f.level_thresholds is not None
+                    else None
+                ),
+                "tf_adjustment": f.tf_adjustment,
+                "tf_freqs": f.tf_freqs,
+            }
+            for f in mk.fields
+        ],
+        "negative_evidence": [
+            {
+                "field": ne.field,
+                "scorer": ne.scorer,
+                "transforms": list(ne.transforms),
+                "threshold": ne.threshold,
+                "penalty_bits": ne.penalty_bits,
+                "derive_from": (
+                    list(ne.derive_from) if ne.derive_from is not None else None
+                ),
+            }
+            for ne in (mk.negative_evidence or [])
+        ],
+    }
+
+
 @dataclass
 class EMResult:
     """Result of EM training for Fellegi-Sunter model."""
@@ -198,9 +237,13 @@ class EMResult:
     # collision rate; the baseline an agreement is adjusted against).
     tf_freqs: dict[str, dict[str, float]] | None = None
     tf_collision: dict[str, float] | None = None
+    training_config: dict | None = None
+    # Non-serialized marker distinguishing a loaded schema-v1 model from an
+    # in-memory result constructed before manifests existed.
+    _source_schema_version: int | None = None
 
     # Bumped when the serialized shape changes incompatibly.
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def to_dict(self) -> dict:
         """JSON-serializable snapshot of the trained model.
@@ -209,9 +252,10 @@ class EMResult:
         so this is a plain projection plus a version/type marker for
         forward-compatible loading.
         """
-        return {
+        version = 2 if self.training_config is not None else 1
+        data = {
             "__type__": "goldenmatch.EMResult",
-            "__version__": EMResult.SCHEMA_VERSION,
+            "__version__": version,
             "m_probs": self.m_probs,
             "u_probs": self.u_probs,
             "match_weights": self.match_weights,
@@ -221,6 +265,9 @@ class EMResult:
             "tf_freqs": self.tf_freqs,
             "tf_collision": self.tf_collision,
         }
+        if self.training_config is not None:
+            data["training_config"] = self.training_config
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> EMResult:
@@ -232,6 +279,8 @@ class EMResult:
                 f"goldenmatch supports ({cls.SCHEMA_VERSION}); upgrade goldenmatch."
             )
         try:
+            if version >= 2 and "training_config" not in data:
+                raise KeyError("training_config")
             return cls(
                 m_probs=data["m_probs"],
                 u_probs=data["u_probs"],
@@ -241,6 +290,8 @@ class EMResult:
                 proportion_matched=data["proportion_matched"],
                 tf_freqs=data.get("tf_freqs"),
                 tf_collision=data.get("tf_collision"),
+                training_config=data.get("training_config"),
+                _source_schema_version=version,
             )
         except KeyError as exc:
             raise ValueError(f"FS model dict is missing required key: {exc}") from exc
@@ -271,12 +322,11 @@ class EMResult:
             return cls.from_dict(json.load(fh))
 
     def validate_for(self, mk: MatchkeyConfig) -> None:
-        """Raise if this model can't score ``mk`` (field / level mismatch).
+        """Raise if this model can't score ``mk`` safely.
 
-        A persisted model is only reusable against the same matchkey shape:
-        every field must have a match-weight vector whose length equals the
-        field's level count. Mismatch means the config changed since training,
-        so fail loudly rather than silently scoring with a stale model.
+        Schema-v2 models bind weights to a canonical comparison-semantics
+        manifest in addition to field/level shape. Schema-v1 files can still
+        be deserialized, but cannot be reused because they carry no manifest.
         """
         for f in mk.fields:
             weights = self.match_weights.get(f.field)
@@ -312,6 +362,21 @@ class EMResult:
                     f"NE weights must be a 2-element [fired, not_fired] list. "
                     f"Retrain or clear the model_path."
                 )
+        if self.training_config is None:
+            if self._source_schema_version == 1:
+                raise FSModelMismatchError(
+                    "Persisted FS model uses schema v1, which has no training "
+                    "configuration manifest and cannot be safely reused. Retrain "
+                    "the model to write schema v2, or clear the model_path."
+                )
+            return
+        if self.training_config != _training_config_manifest(mk):
+            raise FSModelMismatchError(
+                "Persisted FS model training configuration does not match the "
+                "current probabilistic matchkey. A comparison field's scorer, "
+                "transforms, thresholds, TF settings, or order changed; retrain "
+                "or clear the model_path."
+            )
 
 
 class FSModelMismatchError(ValueError):
@@ -1119,6 +1184,7 @@ def train_em(
         proportion_matched=p_match,
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
+        training_config=_training_config_manifest(mk),
     )
 
 
@@ -1149,8 +1215,9 @@ def load_or_train_em(
     """Return a trained EMResult, reusing ``mk.model_path`` when present.
 
     Splink-style train-once -> reuse: when ``mk.model_path`` is set and the
-    file exists, the persisted model is loaded, validated against ``mk`` (field
-    / level shape), and EM is skipped. When the path is set but absent, EM runs
+    file exists, the persisted model is loaded, validated against ``mk``
+    (field/level shape and comparison semantics), and EM is skipped. When the
+    path is set but absent, EM runs
     and the trained model is saved there for next time. With no ``model_path``
     this is exactly ``train_em``. The single seam all three pipeline call sites
     (core pipeline x2, TUI engine) share.
@@ -1355,6 +1422,7 @@ def estimate_m_from_labels(
         proportion_matched=proportion_matched if proportion_matched is not None else 0.02,
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
+        training_config=_training_config_manifest(mk),
     )
 
 
@@ -1704,6 +1772,7 @@ def _fallback_result(mk: MatchkeyConfig) -> EMResult:
     return EMResult(
         m_probs=m_probs, u_probs=u_probs, match_weights=match_weights,
         converged=False, iterations=0, proportion_matched=0.05,
+        training_config=_training_config_manifest(mk),
     )
 
 

@@ -3,6 +3,7 @@ import {
   emResultToJson,
   emResultFromJson,
   validateEmResultFor,
+  trainingConfigManifest,
   FSModelMismatchError,
   type EMResult,
   makeMatchkeyConfig,
@@ -14,6 +15,28 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("emResultToJson / emResultFromJson: round-trip", () => {
+  it("writes schema v2 when a training manifest is present", () => {
+    const mk = makeMatchkeyConfig({
+      name: "mk",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+    const em: EMResult = {
+      m: { name: [0.1, 0.9] },
+      u: { name: [0.9, 0.1] },
+      matchWeights: { name: [-3, 3] },
+      converged: true,
+      iterations: 2,
+      proportionMatched: 0.01,
+      trainingConfig: trainingConfigManifest(mk),
+    };
+
+    const json = emResultToJson(em);
+    expect(json["__version__"]).toBe(2);
+    expect(json["training_config"]).toEqual(em.trainingConfig);
+    expect(() => validateEmResultFor(emResultFromJson(json), mk)).not.toThrow();
+  });
+
   it("round-trips without tf fields", () => {
     const em: EMResult = {
       m: { first_name: [0.05, 0.1, 0.25, 0.6], postcode: [0.1, 0.9] },
@@ -129,7 +152,7 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
   it("rejects a schema version newer than supported", () => {
     const data = {
       __type__: "goldenmatch.EMResult",
-      __version__: 2,
+      __version__: 3,
       m_probs: {},
       u_probs: {},
       match_weights: {},
@@ -138,7 +161,7 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
       proportion_matched: 0.0,
     };
     expect(() => emResultFromJson(data)).toThrow(
-      /schema version 2 is newer than this goldenmatch supports \(1\)/,
+      /schema version 3 is newer than this goldenmatch supports \(2\)/,
     );
   });
 
@@ -161,6 +184,90 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateEmResultFor", () => {
+  it.each([
+    ["scorer", { scorer: "token_sort" }],
+    ["transforms", { transforms: ["lowercase"] }],
+    ["threshold", { partialThreshold: 0.9 }],
+    ["custom thresholds", { levelThresholds: [1.0, 0.9] }],
+    ["tf", { tfAdjustment: true }],
+  ])("rejects a persisted model after a %s change", (_name, fieldChange) => {
+    const original = makeMatchkeyConfig({
+      name: "mk",
+      type: "probabilistic",
+      fields: [
+        makeMatchkeyField({
+          field: "first_name",
+          scorer: "jaro_winkler",
+          levels: 3,
+          partialThreshold: 0.8,
+        }),
+      ],
+    });
+    const changed = makeMatchkeyConfig({
+      name: "mk",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({
+        field: "first_name",
+        scorer: "jaro_winkler",
+        levels: 3,
+        partialThreshold: 0.8,
+        ...fieldChange,
+      })],
+    });
+    const em: EMResult = {
+      m: { first_name: [0.05, 0.15, 0.8] },
+      u: { first_name: [0.8, 0.15, 0.05] },
+      matchWeights: { first_name: [-4, 0, 4] },
+      converged: true,
+      iterations: 3,
+      proportionMatched: 0.01,
+      trainingConfig: trainingConfigManifest(original),
+    };
+
+    expect(() => validateEmResultFor(em, changed)).toThrow(/training configuration/);
+  });
+
+  it("rejects a persisted model after field order changes", () => {
+    const first = makeMatchkeyField({ field: "first_name", scorer: "exact" });
+    const last = makeMatchkeyField({ field: "last_name", scorer: "exact" });
+    const original = makeMatchkeyConfig({
+      name: "mk", type: "probabilistic", fields: [first, last],
+    });
+    const changed = makeMatchkeyConfig({
+      name: "mk", type: "probabilistic", fields: [last, first],
+    });
+    const em: EMResult = {
+      m: { first_name: [0.1, 0.9], last_name: [0.1, 0.9] },
+      u: { first_name: [0.9, 0.1], last_name: [0.9, 0.1] },
+      matchWeights: { first_name: [-3, 3], last_name: [-3, 3] },
+      converged: true,
+      iterations: 3,
+      proportionMatched: 0.01,
+      trainingConfig: trainingConfigManifest(original),
+    };
+
+    expect(() => validateEmResultFor(em, changed)).toThrow(/training configuration/);
+  });
+
+  it("requires schema-v1 persisted models to be retrained before reuse", () => {
+    const legacy = emResultFromJson({
+      __version__: 1,
+      m_probs: { name: [0.1, 0.9] },
+      u_probs: { name: [0.9, 0.1] },
+      match_weights: { name: [-3, 3] },
+      converged: true,
+      iterations: 2,
+      proportion_matched: 0.01,
+    });
+    const mk = makeMatchkeyConfig({
+      name: "mk",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+
+    expect(() => validateEmResultFor(legacy, mk)).toThrow(/schema v1.*Retrain/);
+  });
+
   it("passes when a 4-level levelThresholds field matches", () => {
     const mk = makeMatchkeyConfig({
       name: "mk",
