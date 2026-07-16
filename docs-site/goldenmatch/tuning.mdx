@@ -558,6 +558,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_STANDARDIZE_STAGED` | `0` | Staged standardization (experimental, may slow). |
 | `GOLDENMATCH_BUCKET_VEC_MIN` / `_MAX` | `32` / `2000` | Block-size band for the vectorized float64 NxN cdist path in bucket scoring. |
 | `GOLDENMATCH_FS_BATCH_ROWS` | `256` | Row cap per batched Fellegi-Sunter block-scoring call. |
+| `GOLDENMATCH_FS_DEFAULT_BUCKET` | `1` (on) | Probabilistic matchkeys score via the memory-bounded bucket route by default. `0` = legacy batched scorer (eager `build_blocks` -- memory grows with dataset size; logs a warning). Escape hatch only. |
 | `GOLDENMATCH_BENCH_DUMP_PAIRS` | unset | Dump per-stage pairs for benchmarking. |
 | `GOLDENMATCH_SKIP_MATCH_LOG` / `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS` | — | Streaming match-log controls. |
 

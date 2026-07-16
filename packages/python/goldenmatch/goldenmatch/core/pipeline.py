@@ -194,10 +194,12 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
       - an EXPLICIT scale backend (ray / duckdb / datafusion / chunked) keeps
         its own routing; ``polars-direct`` is the planner's in-band choice and
         keeps the default (same band semantics as ``_use_bucket_scorer``);
-      - ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` escape hatch (legacy batched);
-      - ``GOLDENMATCH_COLUMNAR_PIPELINE`` opt-in wins;
+      - ``GOLDENMATCH_FS_DEFAULT_BUCKET=0`` escape hatch (legacy batched --
+        memory-unbounded; a warning is logged when it fires);
       - active profile emitter: auto-config reads the legacy block-size
-        signals during sample runs (the final committed dedupe gets bucket);
+        signals during sample runs ONLY -- emitters are opened exclusively by
+        the controller/optimizer around sample probes, so a user's committed
+        dedupe/match run always gets bucket;
       - blocking strategies bucket cannot replicate (non static/multi_pass --
         lsh / ann / learned / canopy / sorted_neighborhood candidates are not
         field-hash reproducible).
@@ -211,9 +213,19 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
         in _BUCKET_DEFAULT_OPT_OUT
     ):
+        logger.warning(
+            "GOLDENMATCH_FS_DEFAULT_BUCKET=0: probabilistic matchkey %r routed "
+            "to the legacy batched scorer (eager build_blocks -- memory grows "
+            "with dataset size). Unset the variable to restore the "
+            "memory-bounded bucket route.",
+            getattr(mk, "name", mk),
+        )
         return False
-    if _columnar_pipeline_enabled():
-        return False
+    # NOTE: GOLDENMATCH_COLUMNAR_PIPELINE deliberately does NOT exclude FS.
+    # The columnar branch is structurally weighted-only (_is_columnar_eligible
+    # requires a single weighted matchkey), so a probabilistic matchkey never
+    # enters it -- excluding FS here only demoted FS to the batched path for
+    # users who happened to have the columnar opt-in set.
     _blk = getattr(config, "blocking", None)
     if _blk is not None and getattr(_blk, "strategy", None) not in (
         None, "static", "multi_pass",

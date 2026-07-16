@@ -231,10 +231,12 @@ def _prob_config(backend=None) -> GoldenMatchConfig:
     )
 
 
-def test_fs_bucket_route_decision(monkeypatch):
+def test_fs_bucket_route_decision(monkeypatch, caplog):
     """#1803 item 3: bucket is the FS route by default -- NO native-kernel
     requirement, NO row cap. Exclusions: explicit scale backends, the
     escape hatch, non-field blocking strategies, active profile emitter."""
+    import logging
+
     from goldenmatch.core.pipeline import _fs_use_bucket_route
 
     mk = _mk()
@@ -257,10 +259,22 @@ def test_fs_bucket_route_decision(monkeypatch):
     for be in ("ray", "duckdb", "datafusion"):
         assert _fs_use_bucket_route(_prob_config(backend=be), mk) is False
 
-    # Escape hatch always wins.
+    # Escape hatch always wins -- and warns (the batched fallback is the
+    # memory-unbounded #1798 path; opting out should be loud).
     monkeypatch.setenv("GOLDENMATCH_FS_DEFAULT_BUCKET", "0")
-    assert _fs_use_bucket_route(cfg, mk) is False
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.core.pipeline"):
+        assert _fs_use_bucket_route(cfg, mk) is False
+    assert any(
+        "GOLDENMATCH_FS_DEFAULT_BUCKET=0" in r.getMessage() for r in caplog.records
+    )
     monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
+
+    # The columnar opt-in does NOT demote FS: the columnar branch is
+    # structurally weighted-only (_is_columnar_eligible), so a probabilistic
+    # matchkey keeps the bucket route even with the experiment enabled.
+    monkeypatch.setenv("GOLDENMATCH_COLUMNAR_PIPELINE", "1")
+    assert _fs_use_bucket_route(cfg, mk) is True
+    monkeypatch.delenv("GOLDENMATCH_COLUMNAR_PIPELINE", raising=False)
 
     # Blocking strategies bucket can't replicate stay legacy.
     lsh_cfg = _prob_config(backend=None)
