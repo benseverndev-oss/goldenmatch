@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.0] - 2026-07-16
+
+- Suite minor train: floors raised to `goldenmatch[polars]>=3.4` (FS scoring in
+  the distributed/chunked lanes, memory-bounded strategy-blocking scorer,
+  columnar routing fix, missing-values-as-unobserved FS math),
+  `goldencheck[polars]>=3.2`, `goldenpipe[golden-suite]>=1.4` (compiler
+  SP1-SP3 + in-process moves), `infermap>=0.6` (Rust kernels on MCP servers +
+  pattern_type cutover), `goldenanalysis>=0.4`, `goldencheck-types>=0.2`
+  (16 domain packs), `goldenmatch-native>=0.1.17` (FS exclude-set Arc handle +
+  zero-copy arrow FS entry), `goldensuite-mcp>=0.5`.
+
 ## [0.2.5] - 2026-07-14
 
 - Floor bump: `goldenmatch[polars]>=3.3` (FS negative evidence on probabilistic

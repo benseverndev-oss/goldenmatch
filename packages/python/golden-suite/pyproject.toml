@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.2.5"
+version = "0.3.0"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -36,15 +36,15 @@ classifiers = [
 # it; `golden-suite optimize` repairs it.
 dependencies = [
     # --- suite (floors track the current majors) ---
-    "goldenpipe[golden-suite]>=1.3",    # orchestrator + check/flow/match/analysis
-    "goldenmatch[polars]>=3.3",         # entity resolution: dedupe, match, golden records (>=3.3: FS negative evidence + Splink migration upgrade pass w/ fan-out lever; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
-    "goldencheck[polars]>=3.0.0",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
+    "goldenpipe[golden-suite]>=1.4",    # orchestrator + check/flow/match/analysis
+    "goldenmatch[polars]>=3.4",         # entity resolution: dedupe, match, golden records (>=3.4: FS in distributed/chunked lanes + bounded strategy-blocking scorer; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
+    "goldencheck[polars]>=3.2",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
     "goldenflow>=2.1.0",                 # transform / standardize / normalize (>=2.1.0 = owned auto-detect profile kernel; native floor >=0.27.0)
-    "infermap>=0.5.1",                  # GoldenSchema: inference-driven schema mapping
-    "goldenanalysis>=0.3",              # read-only cross-cutting metrics + reporting
-    "goldencheck-types>=0.1",           # shared canonical field-type contracts
+    "infermap>=0.6",                  # GoldenSchema: inference-driven schema mapping
+    "goldenanalysis>=0.4",              # read-only cross-cutting metrics + reporting
+    "goldencheck-types>=0.2",           # shared canonical field-type contracts
     # --- native acceleration (on by default; see note above) ---
-    "goldenmatch-native>=0.1.15",       # >=0.1.15 carries native FS negative evidence + fused N-level (FS_SUPPORTS_NE)
+    "goldenmatch-native>=0.1.17",       # >=0.1.17 carries the FS exclude-set Arc handle + zero-copy arrow FS entry + unobserved-evidence math
     "goldencheck-native>=0.1",
     "goldenflow-native>=0.26.0",        # >=0.26.0 = the full columnar surface (format_f64 + AsFloat numeric-input); now a BASE dep of goldenflow 2.0
     "goldenanalysis-native>=0.1",
@@ -55,9 +55,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # One MCP server exposing every tool — the agent front door.
-mcp = ["goldensuite-mcp>=0.3"]
+mcp = ["goldensuite-mcp>=0.5"]
 # GoldenPipe serving surfaces (A2A + async transports + TUI + REST).
-agent = ["goldenpipe[tui,api,agent]>=1.3"]
+agent = ["goldenpipe[tui,api,agent]>=1.4"]
 # Everything: full suite + native + MCP + serving.
 all = ["golden-suite[mcp,agent]"]
 dev = ["pytest>=8", "ruff>=0.6"]

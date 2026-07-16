@@ -2,9 +2,9 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.benseverndev-oss/goldenpipe",
   "title": "GoldenPipe",
-  "description": "One command to validate, transform, and deduplicate — chain GoldenCheck + Flow + Match.",
+  "description": "One command to validate, transform, and deduplicate \u2014 chain GoldenCheck + Flow + Match.",
   "websiteUrl": "https://benseverndev-oss.github.io/goldenpipe/",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "repository": {
     "url": "https://github.com/benseverndev-oss/goldenpipe",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldenpipe",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

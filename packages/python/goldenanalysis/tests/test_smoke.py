@@ -6,4 +6,4 @@ from __future__ import annotations
 def test_import_and_version() -> None:
     import goldenanalysis
 
-    assert goldenanalysis.__version__ == "0.3.0"
+    assert goldenanalysis.__version__ == "0.4.0"

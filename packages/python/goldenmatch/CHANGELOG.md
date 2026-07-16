@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-07-16
+
 <!-- README-callout
 **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
 `record_embedding` field scorers now train (EM) and score end-to-end on the
@@ -30,11 +32,35 @@ the same native/vectorized selector.
 - **Term-frequency (`tf_adjustment`) now applies on the scalar FS path**, matching
   the vectorized path — the same config no longer scores differently depending on
   route (a model-backed scorer or `GOLDENMATCH_FS_VECTORIZED=0` forces scalar).
-- **Distributed and chunked lanes fail loudly on probabilistic matchkeys.** An FS
-  matchkey routed through the distributed (`GOLDENMATCH_DISTRIBUTED_PIPELINE`) or
-  chunked lane previously contributed zero pairs silently; it now raises
-  `NotImplementedError` at lane entry. Run FS configs single-box (in-memory /
-  bucket backend).
+- **Distributed and chunked lanes score probabilistic matchkeys.** They
+  previously dropped FS pairs silently, then (mid-cycle) failed loudly. Both
+  lanes now score FS against ONE shared `EMResult`: the distributed driver
+  trains once before dispatch (or loads `mk.model_path` driver-side;
+  `GOLDENMATCH_DISTRIBUTED_FS_TRAIN_ROWS` bounds the training sample), and the
+  chunked lane trains once on the first chunk. The loud
+  `NotImplementedError` remains only for the bare scoring kernel invoked with
+  no model source.
+- **Memory-bounded FS scoring for strategy-generated blocks.** Probabilistic
+  matchkeys with `lsh` / `ann` / `learned` / `canopy` / `sorted_neighborhood`
+  blocking now score through `score_probabilistic_external_blocks` (one block
+  resident at a time, exclude-set Arc handle built once, oversized auto-split,
+  native/vectorized selection) instead of the batched scorer's all-units
+  accumulation. `GOLDENMATCH_FS_DEFAULT_BUCKET=0` still selects the legacy
+  batched scorer and now logs a warning (documented in tuning).
+- **The columnar opt-in no longer demotes FS to the batched path.** The
+  columnar branch is structurally weighted-only, so probabilistic matchkeys
+  keep the memory-bounded bucket route under `GOLDENMATCH_COLUMNAR_PIPELINE=1`.
+- **FS bucket lane auto-splits oversized blocks** (default
+  `skip_oversized=False` path) instead of scoring them whole, and the
+  vectorized scorer refuses impossible dense allocations with an actionable
+  error (`GOLDENMATCH_FS_VEC_MAX_ELEMS`).
+- **Missing values are unobserved evidence in FS scoring** (null field values
+  carry no likelihood contribution instead of folding into total disagreement);
+  persisted v1 models without a training manifest are rejected on reuse.
+- **Multi-pass EM conditions per pair and blocking fields keep the fixed
+  prior** (repairs a recall collapse on near-unique blocking fields).
+- **Per-field blocking transform chains** (`BlockingKeyConfig.field_transforms`);
+  the Splink converter maps mixed SUBSTR blocking rules exactly.
 
 ## [3.3.1] - 2026-07-15
 

@@ -20,7 +20,7 @@ from goldencheck_types.types import (
     unmapped_cols,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "DetectionResult",
     "DomainPack",

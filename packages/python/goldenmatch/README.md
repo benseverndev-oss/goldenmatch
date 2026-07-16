@@ -57,7 +57,7 @@ npm install goldenmatch
 > core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
-> **Unreleased** — **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
+> **v3.4.0** — **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
 `record_embedding` field scorers now train (EM) and score end-to-end on the
 probabilistic path via the vectorized matrix — previously they raised
 `Unknown scorer` on both training and scoring. They are matrix-only, so a

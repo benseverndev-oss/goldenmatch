@@ -1,6 +1,6 @@
 """infermap — inference-driven schema mapping engine."""
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 from infermap.config import from_config
 from infermap.detect import detect_domain, detect_domain_detailed
