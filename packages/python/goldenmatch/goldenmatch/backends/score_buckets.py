@@ -1104,6 +1104,48 @@ def score_buckets(
         if not size_list:
             return [], 0
 
+        def _split_oversized(block_df, size: int) -> list:
+            """Auto-split an oversized block -- #1790 parity on the bucket
+            lane (#1826: a 388K-row block through the vectorized scorer is a
+            1.1 TiB dense-matrix allocation; through the native kernel it is
+            ~75G pair comparisons). Returns the block frames to score:
+            useful sub-blocks when the split works; [] when it fails and
+            skip_oversized=True (polars-direct skips too); [block_df] when it
+            fails and skip_oversized=False (the blocker.py opt-in "process
+            anyway" semantics, ERROR-logged -- the vectorized scorer's dense
+            guard still refuses truly impossible sizes)."""
+            from goldenmatch.core.blocker import _auto_split_block
+
+            try:
+                subs = _auto_split_block(
+                    block_df, max_block_size, "__bucket_oversized__"
+                )
+            except Exception:
+                logger.error(
+                    "bucket auto-split failed for an oversized block (%d rows).",
+                    size, exc_info=True,
+                )
+                subs = []
+            useful = []
+            for b in subs:
+                try:
+                    n_sub = b.n_rows()
+                except Exception:
+                    n_sub = size + 1
+                if 2 <= n_sub < size:
+                    useful.append(b.materialize().native)
+            if useful:
+                return useful
+            if skip_oversized:
+                return []
+            logger.error(
+                "Oversized block (%d rows > max_block_size=%d, ~%s pairs) "
+                "could not be auto-split; scoring whole because "
+                "skip_oversized=False. See #1826.",
+                size, max_block_size, f"{size * (size - 1) // 2:,}",
+            )
+            return [block_df]
+
         # Batched native FS: hand the WHOLE block-sorted bucket + its per-block
         # run-length sizes to the kernel in ONE call (the FS analog of
         # _score_one_bucket_fast's single score_block_pairs_arrow call). The
@@ -1114,10 +1156,10 @@ def score_buckets(
         # per-block loop. GOLDENMATCH_FS_BUCKET_NATIVE=0 -> fs_bucket_native False
         # -> the per-block prob_scorer loop below (parity escape hatch).
         if fs_bucket_native:
-            keep = [
-                (s >= 2) and not (skip_oversized and s > max_block_size)
-                for s in size_list
-            ]
+            # Oversized blocks are ALWAYS excluded from the batched call and
+            # handled by _split_oversized below (score sub-blocks; skip or
+            # score-whole per skip_oversized) -- #1790 parity on this lane.
+            keep = [2 <= s <= max_block_size for s in size_list]
             fs_sorted_df = sorted_df
             kept_size_list = size_list
             if not all(keep):
@@ -1133,16 +1175,35 @@ def score_buckets(
 
                     fs_sorted_df = sorted_df.filter(_pa.array(row_mask))
                 kept_size_list = [s for s, k in zip(size_list, keep) if k]
-                if not kept_size_list:
-                    return [], 0
             from goldenmatch.core.probabilistic import (
                 score_probabilistic_bucket_native,
             )
 
-            pairs = score_probabilistic_bucket_native(
-                fs_sorted_df, kept_size_list, mk, em_result, frozen_exclude,
-                exclude_handle=fs_exclude_handle,
-            )
+            pairs: list[tuple[int, int, float]] = []
+            local_blocks = 0
+            if kept_size_list:
+                pairs = score_probabilistic_bucket_native(
+                    fs_sorted_df, kept_size_list, mk, em_result, frozen_exclude,
+                    exclude_handle=fs_exclude_handle,
+                )
+                local_blocks = sum(1 for s in kept_size_list if s >= 2)
+            # Oversized blocks: auto-split, then score each resolved frame in
+            # its own single-block native call (same kernel, size_list=[n], so
+            # the emitted cells match a per-block run exactly).
+            offset = 0
+            for s in size_list:
+                if s > max_block_size:
+                    for sub in _split_oversized(sorted_df.slice(offset, s), s):
+                        pairs.extend(
+                            score_probabilistic_bucket_native(
+                                sub, [len(sub)], mk, em_result, frozen_exclude,
+                                exclude_handle=fs_exclude_handle,
+                            )
+                        )
+                        local_blocks += 1
+                offset += s
+            if not pairs and local_blocks == 0:
+                return [], 0
             # Same post-filters as the per-block loop below (the native kernel
             # doesn't know about source_lookup / target_ids).
             if across_files_only and source_lookup:
@@ -1155,58 +1216,70 @@ def score_buckets(
                     (a, b, s) for a, b, s in pairs
                     if (a in target_ids) != (b in target_ids)
                 ]
-            local_blocks = sum(1 for s in kept_size_list if s >= 2)
             return pairs, local_blocks
+
+        def _score_block_frame(block_df) -> list[tuple[int, int, float]] | None:
+            """Score ONE block frame via the per-block scorer + the
+            across_files / target post-filters (shared by normal blocks and
+            auto-split sub-blocks). None = block pre-filtered out."""
+            if across_files_only and source_lookup:
+                sources_in_block = block_df["__source__"].unique().to_list()
+                if len(sources_in_block) < 2:
+                    return None
+            if prob_scorer is not None:
+                pairs = prob_scorer(block_df, frozen_exclude)
+            else:
+                # find_fuzzy_matches (the fallback the slow path uses for
+                # scorers the fast path can't resolve -- ensemble / embedding /
+                # etc.) is polars-only; on the arrow lane give it a polars
+                # block so it does not AttributeError on `.to_dicts()`. Then
+                # every scorer + the NE penalty math run exactly as in the
+                # legacy per-block path (bucket-vs-legacy parity).
+                _fm_block = (
+                    block_df
+                    if isinstance(block_df, pl.DataFrame)
+                    else pl.from_arrow(block_df)
+                )
+                pairs = find_fuzzy_matches(
+                    _fm_block, mk,
+                    exclude_pairs=frozen_exclude,
+                    pre_scored_pairs=None,
+                )
+            if across_files_only and source_lookup:
+                pairs = [
+                    (a, b, s) for a, b, s in pairs
+                    if source_lookup.get(a) != source_lookup.get(b)
+                ]
+            if target_ids is not None:
+                pairs = [
+                    (a, b, s) for a, b, s in pairs
+                    if (a in target_ids) != (b in target_ids)
+                ]
+            return pairs
 
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
         for size in size_list:
             if size >= 2:
-                # Skip oversized blocks, matching polars-direct's build_blocks
-                # (core/blocker.py): when skip_oversized is set and a block
-                # exceeds max_block_size, polars skips it (the common case when
-                # _auto_split_block can't recover). FOLLOW-UP: replicate polars'
-                # auto-split recovery here for parity on splittable hot blocks;
-                # out of scope for this fix.
-                if skip_oversized and size > max_block_size:
+                if size > max_block_size:
+                    # Oversized: auto-split (#1790 parity, #1826) and score
+                    # the resolved frames; _split_oversized already applied
+                    # the skip_oversized / score-whole fallback semantics.
+                    for sub in _split_oversized(
+                        sorted_df.slice(offset, size), size
+                    ):
+                        pairs = _score_block_frame(sub)
+                        if pairs is None:
+                            continue
+                        local_pairs.extend(pairs)
+                        local_blocks += 1
                     offset += size
                     continue
-                block_df = sorted_df.slice(offset, size)
-                if across_files_only and source_lookup:
-                    sources_in_block = block_df["__source__"].unique().to_list()
-                    if len(sources_in_block) < 2:
-                        offset += size
-                        continue
-                if prob_scorer is not None:
-                    pairs = prob_scorer(block_df, frozen_exclude)
-                else:
-                    # find_fuzzy_matches (the fallback the slow path uses for
-                    # scorers the fast path can't resolve -- ensemble / embedding /
-                    # etc.) is polars-only; on the arrow lane give it a polars
-                    # block so it does not AttributeError on `.to_dicts()`. Then
-                    # every scorer + the NE penalty math run exactly as in the
-                    # legacy per-block path (bucket-vs-legacy parity).
-                    _fm_block = (
-                        block_df
-                        if isinstance(block_df, pl.DataFrame)
-                        else pl.from_arrow(block_df)
-                    )
-                    pairs = find_fuzzy_matches(
-                        _fm_block, mk,
-                        exclude_pairs=frozen_exclude,
-                        pre_scored_pairs=None,
-                    )
-                if across_files_only and source_lookup:
-                    pairs = [
-                        (a, b, s) for a, b, s in pairs
-                        if source_lookup.get(a) != source_lookup.get(b)
-                    ]
-                if target_ids is not None:
-                    pairs = [
-                        (a, b, s) for a, b, s in pairs
-                        if (a in target_ids) != (b in target_ids)
-                    ]
+                pairs = _score_block_frame(sorted_df.slice(offset, size))
+                if pairs is None:
+                    offset += size
+                    continue
                 local_pairs.extend(pairs)
                 local_blocks += 1
             offset += size

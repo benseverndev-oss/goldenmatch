@@ -1995,6 +1995,35 @@ def _fs_vectorized_supported(mk: MatchkeyConfig) -> bool:
     )
 
 
+def _fs_vec_max_elems() -> int:
+    """Dense-matrix guard for the vectorized FS scorers (#1826).
+
+    Maximum elements a single NxN (or coalesced SxS) float64 matrix may hold
+    before the scorer REFUSES with an actionable error instead of handing the
+    allocator an impossible request (a 388K-row block is a 1.1 TiB ask).
+    Default 2e9 elements (~16 GB per matrix, n~44.7K) -- above that no
+    realistic node survives the multi-matrix composition anyway.
+    ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` overrides; ``0`` disables the guard.
+    """
+    try:
+        return int(os.environ.get("GOLDENMATCH_FS_VEC_MAX_ELEMS", "2000000000"))
+    except ValueError:
+        return 2_000_000_000
+
+
+def _fs_vec_guard(n: int, fn_name: str) -> None:
+    cap = _fs_vec_max_elems()
+    if cap and n * n > cap:
+        raise ValueError(
+            f"{fn_name}: block of {n:,} rows needs a dense {n:,}x{n:,} float64 "
+            f"matrix (~{n * n * 8 / 1e9:.1f} GB per field) -- refusing instead "
+            "of an allocator OOM (#1826). Remedies: let blocking auto-split the "
+            "oversized block (default on the bucket route), refine the blocking "
+            "key, set blocking.skip_oversized=true, or raise/disable this guard "
+            "via GOLDENMATCH_FS_VEC_MAX_ELEMS (0 disables)."
+        )
+
+
 def score_probabilistic_vectorized(
     block_df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -2026,6 +2055,7 @@ def score_probabilistic_vectorized(
     n = len(row_ids)
     if n < 2:
         return []
+    _fs_vec_guard(n, "score_probabilistic_vectorized")
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
@@ -2142,6 +2172,7 @@ def score_probabilistic_vectorized_batch(
     S = len(row_ids)
     if S < 2:
         return []
+    _fs_vec_guard(S, "score_probabilistic_vectorized_batch")
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0

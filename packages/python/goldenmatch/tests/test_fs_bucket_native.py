@@ -297,6 +297,134 @@ def test_fs_bucket_route_nonnative_e2e(monkeypatch):
     assert calls["bucket"] >= 1
 
 
+def _splittable_oversized_df() -> pl.DataFrame:
+    """One oversized block by ``zip`` (6 rows > max_block_size=3) that
+    auto-split can recover, plus a small control block. First names REPEAT
+    across last names so whole-block scoring emits cross-sub-block pairs
+    that split scoring cannot -- the discriminator between "scored whole"
+    (the #1826 dense-NxN behavior) and "auto-split" (#1790 parity)."""
+    rows = []
+    rid = 1
+    for ln in ("Beta", "Gamma"):
+        for nm in ("Brenda", "Brendaa", "Brendax"):
+            rows.append(
+                {"__row_id__": rid, "first_name": nm, "last_name": ln, "zip": "A"}
+            )
+            rid += 1
+    for nm in ["Carl", "Karl"]:
+        rows.append({"__row_id__": rid, "first_name": nm, "last_name": "Ctrl", "zip": "C"})
+        rid += 1
+    return pl.DataFrame(rows)
+
+
+class TestBucketOversizedAutoSplit:
+    """#1803 item 6 / #1826: oversized blocks on the bucket lane must be
+    auto-split (parity with build_blocks' #1790 default-path recovery)
+    instead of scored whole (vectorized dense NxN = the 1.1 TiB alloc) or
+    silently kept."""
+
+    def _blocking(self, skip_oversized=False):
+        return BlockingConfig(
+            strategy="static",
+            keys=[BlockingKeyConfig(fields=["zip"])],
+            max_block_size=3,
+            skip_oversized=skip_oversized,
+        )
+
+    def _fixture(self):
+        df = _splittable_oversized_df()
+        mk = _mk()
+        em = train_em(df, mk, n_sample_pairs=200)
+        return df, mk, em
+
+    def _run(self, monkeypatch, df, mk, em, native: bool):
+        from goldenmatch.backends.score_buckets import score_buckets
+
+        monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_NATIVE", "1" if native else "0")
+        return _pairset(
+            score_buckets(df, self._blocking(), mk, set(), em_result=em)
+        )
+
+    def _expected(self, df, mk, em):
+        """The #1790 contract: score _auto_split_block's sub-blocks of the
+        oversized block + the control block, nothing else."""
+        from goldenmatch.core.blocker import _auto_split_block
+        from goldenmatch.core.probabilistic import probabilistic_block_scorer
+
+        scorer = probabilistic_block_scorer(mk, em)
+        pairs: list[tuple[int, int, float]] = []
+        big = df.filter(pl.col("zip") == "A")
+        for b in _auto_split_block(big, 3, "A"):
+            pairs.extend(scorer(b.materialize().native, set()))
+        pairs.extend(scorer(df.filter(pl.col("zip") == "C"), set()))
+        expected = _pairset(pairs)
+        # Discriminator sanity: whole-block scoring emits at least one pair
+        # the split output lacks (else this test cannot detect scored-whole).
+        whole = _pairset(scorer(big, set()))
+        assert set(whole) - set(expected), "fixture no longer discriminates"
+        return expected
+
+    @native_required
+    def test_native_lane_splits_oversized(self, monkeypatch):
+        df, mk, em = self._fixture()
+        assert self._run(monkeypatch, df, mk, em, native=True) == self._expected(
+            df, mk, em
+        )
+
+    def test_perblock_lane_splits_oversized(self, monkeypatch):
+        df, mk, em = self._fixture()
+        assert self._run(monkeypatch, df, mk, em, native=False) == self._expected(
+            df, mk, em
+        )
+
+    @native_required
+    def test_native_and_perblock_lanes_agree(self, monkeypatch):
+        df, mk, em = self._fixture()
+        assert self._run(monkeypatch, df, mk, em, native=True) == self._run(
+            monkeypatch, df, mk, em, native=False
+        )
+
+    def test_bucket_route_matches_legacy_route_e2e(self, monkeypatch):
+        # Bucket (default) vs legacy batched (build_blocks auto-splits per
+        # #1790): identical multi-member clusters on the oversized fixture.
+        import goldenmatch as gm
+
+        def _parts(res):
+            return sorted(
+                tuple(sorted(c["members"]))
+                for c in res.clusters.values() if len(c.get("members", [])) > 1
+            )
+
+        df = _splittable_oversized_df().drop("__row_id__")
+        cfg = GoldenMatchConfig(
+            matchkeys=[_mk(model_path=None)],
+            blocking=self._blocking(),
+        )
+        monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
+        bucket = gm.dedupe_df(df, config=cfg)
+        monkeypatch.setenv("GOLDENMATCH_FS_DEFAULT_BUCKET", "0")
+        legacy = gm.dedupe_df(df, config=cfg)
+        assert _parts(bucket) == _parts(legacy)
+
+
+def test_vectorized_dense_alloc_guard(monkeypatch):
+    """#1826: score_probabilistic_vectorized must refuse a dense NxN it cannot
+    afford with an actionable error instead of an allocator OOM. Cap is
+    env-tunable; 0 disables."""
+    from goldenmatch.core.probabilistic import score_probabilistic_vectorized
+
+    df = _multiblock_df()
+    mk = _mk()
+    em = train_em(df, mk, n_sample_pairs=200)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", "10")  # 10 rows -> 100 > 10
+    with pytest.raises(ValueError, match="dense"):
+        score_probabilistic_vectorized(df, mk, em)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", "0")  # disabled
+    assert isinstance(score_probabilistic_vectorized(df, mk, em), list)
+
+
 @native_required
 def test_score_buckets_exclude_handle_parity(monkeypatch):
     """#1803 item 1: score_buckets with a non-empty exclude set must produce
