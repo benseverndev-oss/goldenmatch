@@ -407,6 +407,33 @@ class TestBucketOversizedAutoSplit:
         assert _parts(bucket) == _parts(legacy)
 
 
+def test_skip_oversized_true_still_skips_splittable_blocks(monkeypatch):
+    """Regression for the #1829 autoconfig OOM: with skip_oversized=True the
+    bucket lane must keep its historical SKIP even when the oversized block
+    IS splittable -- autoconfig's probe passes are calibrated against the
+    skip, and splitting a degenerate constant-key probe block detonated 18M
+    pairs in autoconfig verify. Auto-split engages only on the DEFAULT
+    skip_oversized=False path (#1826)."""
+    from goldenmatch.backends.score_buckets import score_buckets
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+
+    df = _splittable_oversized_df()
+    mk = _mk()
+    em = train_em(df, mk, n_sample_pairs=200)
+    blocking = BlockingConfig(
+        strategy="static",
+        keys=[BlockingKeyConfig(fields=["zip"])],
+        max_block_size=3,
+        skip_oversized=True,
+    )
+    for native in ("1", "0"):
+        monkeypatch.setenv("GOLDENMATCH_FS_BUCKET_NATIVE", native)
+        pairs = _pairset(score_buckets(df, blocking, mk, set(), em_result=em))
+        # Only the control block (rows 7, 8) may emit; the splittable
+        # oversized zip=A block (rows 1-6) is skipped whole.
+        assert set(pairs) == {(7, 8)}, f"native={native}: {sorted(pairs)}"
+
+
 def test_vectorized_dense_alloc_guard(monkeypatch):
     """#1826: score_probabilistic_vectorized must refuse a dense NxN it cannot
     afford with an actionable error instead of an allocator OOM. Cap is

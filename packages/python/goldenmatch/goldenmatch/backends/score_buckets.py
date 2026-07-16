@@ -1116,6 +1116,16 @@ def score_buckets(
             guard still refuses truly impossible sizes)."""
             from goldenmatch.core.blocker import _auto_split_block
 
+            if skip_oversized:
+                # skip_oversized=True keeps the bucket lane's historical SKIP.
+                # polars-direct's build_blocks hot-splits here too -- that
+                # True-side divergence is the documented pre-existing gap
+                # (consumers like autoconfig's probe passes are calibrated
+                # against the bucket skip; splitting a degenerate constant-key
+                # probe block detonated 18M pairs in autoconfig verify).
+                # The #1826 fix below targets the DEFAULT skip_oversized=False
+                # path, where the alternative was scoring the mega-block whole.
+                return []
             try:
                 subs = _auto_split_block(
                     block_df, max_block_size, "__bucket_oversized__"
@@ -1136,8 +1146,6 @@ def score_buckets(
                     useful.append(b.materialize().native)
             if useful:
                 return useful
-            if skip_oversized:
-                return []
             logger.error(
                 "Oversized block (%d rows > max_block_size=%d, ~%s pairs) "
                 "could not be auto-split; scoring whole because "
