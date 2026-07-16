@@ -7,6 +7,13 @@
 # HERE + the matching `changes.outputs.*` line + the job's `if:` gate in ci.yml.
 ci_workflow:
   - '.github/workflows/ci.yml'
+  # #1846: workflow_lint validates path-filter COVERAGE, so an edit to the
+  # filters themselves (or to the checker) must run it. Without this, the one
+  # file the coverage check exists to validate was the one file that couldn't
+  # trigger it -- the same "a filter can't catch what it doesn't list" hole,
+  # one level up.
+  - '.github/filters.yml'
+  - 'scripts/check_filter_coverage.py'
 python_root:
   - 'pyproject.toml'
   - 'uv.lock'
@@ -307,6 +314,29 @@ benchmark_runner:
 # anchor_person_match F1 floor. Re-run whenever the decision kernel
 # (rust core or Python autoconfig/blocking surfaces) or the harness
 # itself changes, and on ci.yml edits (keeps the gate under test).
+#
+# #1846: this list used to cover only the CONFIG-DECISION surfaces, but the
+# scorecard also pins F1 and F1_PROBABILISTIC -- so every surface that moves
+# those numbers has to trigger it too. It didn't, and the gate went silent on
+# exactly the PRs most able to break quality:
+#
+#   #1829  backends/score_buckets.py + core/probabilistic.py  -> SKIPPED
+#   #1834  core/probabilistic.py + core/fused_match.py        -> SKIPPED
+#   #1836  core/probabilistic.py                              -> SKIPPED
+#   #1840  core/learned_blocking.py                           -> SKIPPED
+#
+# The gate MEASURED f1_probabilistic while not WATCHING probabilistic.py.
+# historical_50k f1_probabilistic then fell 0.83 -> 0.33 on the native path
+# and only surfaced later, on unrelated PRs that happened to touch a listed
+# path -- which reads as "those PRs broke it" and burns a day on attribution.
+#
+# This is the same failure #435 fixed for `benchmark_runner` above ("changes
+# to the library being benchmarked must also trigger the smoke"); the quality
+# gate never got the same treatment. Keep the two lists in sync.
+#
+# RULE: if a file can move a number the scorecard pins, it belongs here. A
+# quality gate that doesn't run is not a gate. Over-running costs ~22min of
+# CI; under-running costs a silent recall regression on the reference path.
 quality_gate:
   - 'scripts/autoconfig_quality/**'
   - 'packages/rust/extensions/autoconfig-core/**'
@@ -314,7 +344,30 @@ quality_gate:
   - 'packages/python/goldenmatch/goldenmatch/core/blocker.py'
   - 'packages/python/goldenmatch/goldenmatch/core/blocking_candidates.py'
   - 'packages/python/goldenmatch/goldenmatch/core/matchkey.py'
+  # --- #1846: surfaces that move the scorecard's F1 / F1_PROBABILISTIC ---
+  # Fellegi-Sunter: f1_probabilistic is a pinned column.
+  - 'packages/python/goldenmatch/goldenmatch/core/probabilistic*.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/fused_match.py'
+  # Blocking: learned_blocking is a sibling of blocker.py, not covered by it.
+  - 'packages/python/goldenmatch/goldenmatch/core/learned_blocking.py'
+  # Scoring + clustering decide the pairs the F1 columns are computed from.
+  - 'packages/python/goldenmatch/goldenmatch/core/scorer*.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+  # Routing: pipeline picks WHICH scorer runs (bucket vs legacy), so it can
+  # change the numbers without any kernel changing.
+  - 'packages/python/goldenmatch/goldenmatch/core/pipeline.py'
+  # The backends ARE the scorers the planner routes to. The gate runs native
+  # on purpose because native-on makes the planner pick `bucket` -- so a
+  # bucket-lane change moves the gate's own reference path (#1829).
+  - 'packages/python/goldenmatch/goldenmatch/backends/**'
+  # The gate builds the native ext and the baseline is blessed native-on, so
+  # the kernel is part of the measured path, not an implementation detail.
+  - 'packages/rust/extensions/native/**'
   - '.github/workflows/ci.yml'
+  # Self-test: an edit to THIS file must re-run the gate, same rule ci.yml
+  # already follows -- otherwise a filter change can't be validated by the
+  # thing it gates.
+  - '.github/filters.yml'
 # Cross-language API-parity gate: the goldenmatch MCP+CLI surface must
 # not drift between the Python and TypeScript ports. Re-run the gate
 # when either port, the parity manifest, or the emitter/checker tooling
