@@ -243,6 +243,10 @@ class EMResult:
     _source_schema_version: int | None = None
 
     # Bumped when the serialized shape changes incompatibly.
+    # v2 changes missing regular-field comparisons from disagreement/level 0
+    # to unobserved evidence (#1819) AND carries per-pair multi-pass
+    # conditioning (#1835). v1 probabilities were trained with nulls folded
+    # into level 0 and are therefore not calibration-compatible with v2.
     SCHEMA_VERSION = 2
 
     def to_dict(self) -> dict:
@@ -278,6 +282,10 @@ class EMResult:
                 f"FS model schema version {version} is newer than this "
                 f"goldenmatch supports ({cls.SCHEMA_VERSION}); upgrade goldenmatch."
             )
+        # v1 models LOAD (inspection stays possible) but carry the source
+        # version marker; validate_for rejects reuse -- v1 was trained with
+        # legacy missing-value semantics (#1819) and has no training-config
+        # manifest (#1835).
         try:
             if version >= 2 and "training_config" not in data:
                 raise KeyError("training_config")
@@ -365,9 +373,11 @@ class EMResult:
         if self.training_config is None:
             if self._source_schema_version == 1:
                 raise FSModelMismatchError(
-                    "Persisted FS model uses schema v1, which has no training "
-                    "configuration manifest and cannot be safely reused. Retrain "
-                    "the model to write schema v2, or clear the model_path."
+                    "Persisted FS model uses schema v1, which was trained with "
+                    "legacy missing-value semantics (nulls folded into level 0) "
+                    "and has no training configuration manifest; it cannot be "
+                    "safely reused. Retrain the model to write schema v2, or "
+                    "clear the model_path."
                 )
             return
         if self.training_config != _training_config_manifest(mk):
@@ -391,7 +401,8 @@ def comparison_vector(
 ) -> list[int]:
     """Compute comparison vector for a pair of records.
 
-    Returns a list of level indices, one per field.
+    Returns a list of level indices, one per field. ``-1`` means the
+    comparison is unobserved because either operand is missing.
     For 2-level fields: 0=disagree, 1=agree
     For 3-level fields: 0=disagree, 1=partial, 2=agree
 
@@ -428,7 +439,7 @@ def comparison_vector(
             s = score_field(val_a, val_b, f.scorer)
 
         if s is None:
-            levels.append(0)  # treat nulls as disagree
+            levels.append(-1)
         elif f.level_thresholds is not None:
             level = 0
             for t in f.level_thresholds:
@@ -465,7 +476,8 @@ def continuous_scores(
     """Compute continuous field scores for a pair (Winkler extension).
 
     Returns raw scorer output per field (0.0-1.0), preserving the
-    full continuous signal instead of discretizing into levels.
+    full continuous signal instead of discretizing into levels. Missing
+    comparisons are represented by ``NaN`` and contribute no evidence.
     """
     from goldenmatch.utils.transforms import apply_transforms
 
@@ -477,7 +489,7 @@ def continuous_scores(
             val_a = apply_transforms(val_a, f.transforms)
             val_b = apply_transforms(val_b, f.transforms)
         s = score_field(val_a, val_b, f.scorer)
-        scores.append(s if s is not None else 0.0)
+        scores.append(s if s is not None else math.nan)
     return scores
 
 
@@ -703,8 +715,7 @@ def _ne_fired(row_a: dict, row_b: dict, ne_field: NegativeEvidenceField) -> bool
     scorer similarity is STRICTLY below ``ne_field.threshold`` — matching the
     weighted-NE firing rule (``core/scorer.py:292``,
     ``backends/score_buckets.py:942``). Any missing/empty value on either
-    side (including nulls, which is the deliberate NE null-handling that
-    differs from regular FS fields where null -> disagree/level-0) means the
+    side (including nulls) means the
     dimension does NOT fire — negative evidence never boosts a pair, so an
     inconclusive comparison must not count against a match either.
     """
@@ -1047,7 +1058,8 @@ def train_em(
         counts = [0.0] * n_levels
         for level in range(n_levels):
             counts[level] = float((random_matrix[:, j] == level).sum())
-        total = sum(counts) + n_levels * 1e-6
+        observed = float((random_matrix[:, j] >= 0).sum())
+        total = observed + n_levels * 1e-6
         u_probs[f.field] = [(c + 1e-6) / total for c in counts]
 
     conditioned_mask = np.asarray(
@@ -1150,9 +1162,12 @@ def train_em(
         log_u = np.zeros(n_pairs)
         for j, f in enumerate(mk.fields):
             levels_j = comp_matrix[:, j]
+            observed = levels_j >= 0
             m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
             u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
-            eligible = ~conditioned_mask[:, j]
+            # Compose #1819 (unobserved: level -1 carries no evidence) with
+            # #1835 (pass-conditioned pairs carry no evidence for this field).
+            eligible = observed & ~conditioned_mask[:, j]
             log_m[eligible] += m_table[levels_j[eligible]]
             log_u[eligible] += u_table[levels_j[eligible]]
 
@@ -1182,9 +1197,13 @@ def train_em(
             if f.field in always_conditioned:
                 continue  # skip blocked fields
             n_levels = f.levels
-            new_m = [0.0] * n_levels
-            eligible = ~conditioned_mask[:, j]
+            # Compose #1819 + #1835: a pair contributes to this field's m
+            # only when the comparison was OBSERVED (level >= 0) and the pair
+            # is not conditioned out of this field for its pass.
+            observed = comp_matrix[:, j] >= 0
+            eligible = observed & ~conditioned_mask[:, j]
             eligible_match = posteriors[eligible].sum()
+            new_m = [0.0] * n_levels
             for level in range(n_levels):
                 mask = eligible & (comp_matrix[:, j] == level)
                 new_m[level] = (posteriors[mask].sum() + 1e-6) / (
@@ -1698,8 +1717,11 @@ def train_em_continuous(
     field_medians = {}
     for j, f in enumerate(mk.fields):
         if f.field not in always_conditioned:
+            # #1835 pass-conditioning composed with #1819 NaN-as-unobserved.
             col = score_matrix[~conditioned_mask[:, j], j]
-            field_medians[f.field] = float(np.median(col))
+            observed = col[~np.isnan(col)]
+            if observed.size:
+                field_medians[f.field] = float(np.median(observed))
 
     m_mean = {f.field: 0.90 for f in mk.fields}  # matches should score very high
     m_var = {f.field: 0.01 for f in mk.fields}    # tight distribution
@@ -1731,9 +1753,12 @@ def train_em_continuous(
         for j in active_j:
             f = mk.fields[j]
             s = score_matrix[:, j]
+            observed = ~np.isnan(s)
+            if not observed.any():
+                continue
             var_m = max(m_var[f.field], 1e-6)
             var_u = max(u_var[f.field], 1e-6)
-            eligible = ~conditioned_mask[:, j]
+            eligible = observed & ~conditioned_mask[:, j]
             log_m[eligible] += (
                 -0.5 * ((s[eligible] - m_mean[f.field]) ** 2) / var_m
                 - 0.5 * math.log(var_m)
@@ -1755,7 +1780,11 @@ def train_em_continuous(
         for j, f in enumerate(mk.fields):
             if f.field in always_conditioned:
                 continue
-            eligible = ~conditioned_mask[:, j]
+            # Compose #1819 (NaN score = unobserved) with #1835 (pass-
+            # conditioned pairs carry no evidence for this field).
+            eligible = ~conditioned_mask[:, j] & ~np.isnan(score_matrix[:, j])
+            if not eligible.any():
+                continue
             scores = score_matrix[eligible, j]
             field_posteriors = posteriors[eligible]
             field_match = field_posteriors.sum()
@@ -1837,16 +1866,14 @@ def score_probabilistic_continuous(
     for f in mk.fields:
         vals = _field_values_for_block(block_df, f, n)
         sim = np.asarray(_field_score_matrix(vals, f.scorer), dtype=np.float64)
-        # continuous_scores maps null -> 0.0 (score_field returns None -> 0.0).
+        # A missing operand is unobserved evidence, not similarity 0.0.
         null_mask = np.array([v is None for v in vals], dtype=bool)
-        if null_mask.any():
-            either_null = null_mask[:, None] | null_mask[None, :]
-            sim = np.where(either_null, 0.0, sim)
+        either_null = null_mask[:, None] | null_mask[None, :]
         var_m = max(em.m_var[f.field], 1e-6)
         var_u = max(em.u_var[f.field], 1e-6)
         log_m = -0.5 * ((sim - em.m_mean[f.field]) ** 2) / var_m - 0.5 * math.log(var_m)
         log_u = -0.5 * ((sim - em.u_mean[f.field]) ** 2) / var_u - 0.5 * math.log(var_u)
-        log_ratio += log_m - log_u
+        log_ratio += np.where(either_null, 0.0, log_m - log_u)
 
     # Convert the likelihood ratio to a posterior by adding the learned prior
     # log-odds before the sigmoid. Clamp the prior away from {0, 1} so malformed
@@ -1948,12 +1975,18 @@ def fs_weight_range(em: EMResult, mk: MatchkeyConfig) -> tuple[float, float]:
         enforces model/matchkey shape parity) is defensively skipped --
         contributes ``(0.0, 0.0)`` rather than raising.
     """
-    min_weight = 0.0
-    max_weight = 0.0
+    min_weight, max_weight = _fs_ne_weight_range(em, mk)
     for f in mk.fields:
         weights = em.match_weights[f.field]
         min_weight += min(weights)
         max_weight += max(weights)
+    return min_weight, max_weight
+
+
+def _fs_ne_weight_range(em: EMResult, mk: MatchkeyConfig) -> tuple[float, float]:
+    """Weight envelope contributed independently of regular-field presence."""
+    min_weight = 0.0
+    max_weight = 0.0
     for ne in (mk.negative_evidence or []):
         if ne.penalty_bits is not None:
             min_weight += -abs(ne.penalty_bits)
@@ -2115,9 +2148,7 @@ def score_probabilistic(
 
     row_ids = _to_frame_d5(block_df).column("__row_id__").to_list()
 
-    # Compute weight range for normalization
-    min_weight, max_weight = fs_weight_range(em_result, mk)
-    weight_range = max_weight - min_weight
+    ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
@@ -2158,8 +2189,17 @@ def score_probabilistic(
 
             # Sum match weights (+ Winkler TF adjustment where opted in).
             total_weight = 0.0
+            pair_min_weight = ne_min_weight
+            pair_max_weight = ne_max_weight
+            has_regular_evidence = False
             for k, f in enumerate(mk.fields):
-                total_weight += em_result.match_weights[f.field][vec[k]]
+                if vec[k] < 0:
+                    continue
+                has_regular_evidence = True
+                weights = em_result.match_weights[f.field]
+                total_weight += weights[vec[k]]
+                pair_min_weight += min(weights)
+                pair_max_weight += max(weights)
                 per_row = tf_row_vals.get(f.field)
                 if per_row is not None:
                     total_weight += _scalar_tf_contribution(
@@ -2170,11 +2210,15 @@ def score_probabilistic(
 
             if calibrated:
                 normalized = posterior_from_weight(total_weight, prior_w)
-            elif weight_range > 0:
+            elif not has_regular_evidence and total_weight == 0.0:
+                normalized = 0.5
+            elif pair_max_weight > pair_min_weight:
                 # Clip into [0, 1]: TF (and NE) can push the summed weight
                 # past the per-level max/min, matching the vectorized path's
                 # np.clip so the two routes score identically (#1801).
-                normalized = min(1.0, max(0.0, (total_weight - min_weight) / weight_range))
+                normalized = min(1.0, max(0.0, (
+                    total_weight - pair_min_weight
+                ) / (pair_max_weight - pair_min_weight)))
             else:
                 normalized = 0.5
 
@@ -2188,7 +2232,7 @@ def _field_values_from_list(raw: list | None, f, n: int) -> list[str | None]:
     """Transformed per-field values from an already-extracted value list,
     matching comparison_vector: str()-coerce non-null values then apply the
     field transforms, once per column instead of once per (pair, field).
-    ``raw is None`` = missing column -> all-null (slow path: level 0).
+    ``raw is None`` = missing column -> all-null (unobserved evidence).
     Backend-neutral (W2a): the fused FS prep feeds it from either Frame
     backend's ``utf8_values``; ``_field_values_for_block`` feeds it from the
     classic Polars block frame."""
@@ -2210,7 +2254,7 @@ def _field_values_from_list(raw: list | None, f, n: int) -> list[str | None]:
 
 def _field_values_for_block(block_df: pl.DataFrame, f, n: int) -> list[str | None]:
     """Transformed per-field values for a block, matching comparison_vector.
-    Missing column -> all-null (slow path: level 0)."""
+    Missing column -> all-null (unobserved evidence)."""
     from goldenmatch.core.frame import to_frame as _to_frame_d5
 
     _bf = _to_frame_d5(block_df)
@@ -2463,8 +2507,8 @@ def score_probabilistic_vectorized(
 
     Falls back to the scalar path semantics for any field whose scorer cannot
     be expressed as an NxN matrix (handled by ``_fuzzy_score_matrix``'s own
-    fallbacks). Null values are forced to level 0 (disagree) to match
-    ``comparison_vector``.
+    fallbacks). Null values contribute no evidence, matching
+    ``comparison_vector``'s ``-1`` sentinel.
     """
     if exclude_pairs is None:
         exclude_pairs = set()
@@ -2479,8 +2523,7 @@ def score_probabilistic_vectorized(
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
 
-    min_weight, max_weight = fs_weight_range(em_result, mk)
-    weight_range = max_weight - min_weight
+    ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
 
     if mk.link_threshold is not None:
         link_threshold = mk.link_threshold
@@ -2489,6 +2532,9 @@ def score_probabilistic_vectorized(
 
     # Accumulate the total match-weight matrix field by field.
     total_weight = np.zeros((n, n), dtype=np.float64)
+    has_regular_evidence = np.zeros((n, n), dtype=bool)
+    pair_min_weight = np.full((n, n), ne_min_weight, dtype=np.float64)
+    pair_max_weight = np.full((n, n), ne_max_weight, dtype=np.float64)
     for f in mk.fields:
         if f.scorer == "record_embedding":
             # Record-level embedding: one cosine matrix over the concatenated
@@ -2508,6 +2554,9 @@ def score_probabilistic_vectorized(
                 level_thresholds=f.level_thresholds,
             )
             total_weight += weights[lvl]
+            has_regular_evidence[:] = True
+            pair_min_weight += float(weights.min())
+            pair_max_weight += float(weights.max())
             continue
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
@@ -2515,12 +2564,12 @@ def score_probabilistic_vectorized(
         lvl = _levels_from_similarity(
             sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
         )
-        # Null on either side -> level 0 (disagree), matching comparison_vector.
         null_mask = np.array([v is None for v in vals], dtype=bool)
-        if null_mask.any():
-            either_null = null_mask[:, None] | null_mask[None, :]
-            lvl = np.where(either_null, 0, lvl)
-        total_weight += weights[lvl]
+        observed = ~(null_mask[:, None] | null_mask[None, :])
+        has_regular_evidence |= observed
+        total_weight += np.where(observed, weights[lvl], 0.0)
+        pair_min_weight += np.where(observed, float(weights.min()), 0.0)
+        pair_max_weight += np.where(observed, float(weights.max()), 0.0)
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n)
 
     for ne in (mk.negative_evidence or []):
@@ -2531,12 +2580,21 @@ def score_probabilistic_vectorized(
         logodds = prior_w + total_weight
         with np.errstate(over="ignore"):
             normalized = 1.0 / (1.0 + np.power(2.0, -np.clip(logodds, -60.0, 60.0)))
-    elif weight_range > 0:
+    else:
         # TF adjustment can push the summed weight past the per-level max, so
         # clip into [0, 1] to preserve the score contract.
-        normalized = np.clip((total_weight - min_weight) / weight_range, 0.0, 1.0)
-    else:
+        pair_range = pair_max_weight - pair_min_weight
         normalized = np.full((n, n), 0.5, dtype=np.float64)
+        np.divide(
+            total_weight - pair_min_weight,
+            pair_range,
+            out=normalized,
+            where=pair_range > 0,
+        )
+        normalized = np.clip(normalized, 0.0, 1.0)
+        normalized = np.where(
+            ~has_regular_evidence & (total_weight == 0.0), 0.5, normalized
+        )
 
     # Emit upper-triangle pairs at/above threshold.
     iu, ju = np.triu_indices(n, k=1)
@@ -2613,14 +2671,16 @@ def score_probabilistic_vectorized_batch(
 
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
-    min_weight, max_weight = fs_weight_range(em_result, mk)
-    weight_range = max_weight - min_weight
+    ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
     if mk.link_threshold is not None:
         link_threshold = mk.link_threshold
     else:
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
     total_weight = np.zeros((S, S), dtype=np.float64)
+    has_regular_evidence = np.zeros((S, S), dtype=bool)
+    pair_min_weight = np.full((S, S), ne_min_weight, dtype=np.float64)
+    pair_max_weight = np.full((S, S), ne_max_weight, dtype=np.float64)
     for f in mk.fields:
         vals: list[str | None] = []
         for bdf, (s, e) in zip(block_dfs, spans):
@@ -2631,10 +2691,11 @@ def score_probabilistic_vectorized_batch(
             sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
         )
         null_mask = np.array([v is None for v in vals], dtype=bool)
-        if null_mask.any():
-            either_null = null_mask[:, None] | null_mask[None, :]
-            lvl = np.where(either_null, 0, lvl)
-        total_weight += weights[lvl]
+        observed = ~(null_mask[:, None] | null_mask[None, :])
+        has_regular_evidence |= observed
+        total_weight += np.where(observed, weights[lvl], 0.0)
+        pair_min_weight += np.where(observed, float(weights.min()), 0.0)
+        pair_max_weight += np.where(observed, float(weights.max()), 0.0)
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, S)
 
     for ne in (mk.negative_evidence or []):
@@ -2647,10 +2708,19 @@ def score_probabilistic_vectorized_batch(
         logodds = prior_w + total_weight
         with np.errstate(over="ignore"):
             normalized = 1.0 / (1.0 + np.power(2.0, -np.clip(logodds, -60.0, 60.0)))
-    elif weight_range > 0:
-        normalized = np.clip((total_weight - min_weight) / weight_range, 0.0, 1.0)
     else:
         normalized = np.full((S, S), 0.5, dtype=np.float64)
+        pair_range = pair_max_weight - pair_min_weight
+        np.divide(
+            total_weight - pair_min_weight,
+            pair_range,
+            out=normalized,
+            where=pair_range > 0,
+        )
+        normalized = np.clip(normalized, 0.0, 1.0)
+        normalized = np.where(
+            ~has_regular_evidence & (total_weight == 0.0), 0.5, normalized
+        )
 
     ids = np.asarray(row_ids)
     results: list[tuple[int, int, float]] = []
@@ -2895,6 +2965,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         mod = native_module()
         if not hasattr(mod, "score_block_pairs_fs"):
             return False
+        if not getattr(mod, "FS_SUPPORTS_MISSING_NEUTRAL", False):
+            return False  # old wheel: nulls are incorrectly scored as level 0
         if needs_level_thresholds and not getattr(
             mod, "FS_SUPPORTS_LEVEL_THRESHOLDS", False
         ):
@@ -3188,12 +3260,18 @@ def score_pair_probabilistic(
     """Score a single pair using Fellegi-Sunter weights. For match_one."""
     vec = comparison_vector(row_a, row_b, mk)
 
-    min_weight, max_weight = fs_weight_range(em_result, mk)
-    weight_range = max_weight - min_weight
+    pair_min_weight, pair_max_weight = _fs_ne_weight_range(em_result, mk)
 
     total_weight = 0.0
+    has_regular_evidence = False
     for k, f in enumerate(mk.fields):
-        total_weight += em_result.match_weights[f.field][vec[k]]
+        if vec[k] < 0:
+            continue
+        has_regular_evidence = True
+        weights = em_result.match_weights[f.field]
+        total_weight += weights[vec[k]]
+        pair_min_weight += min(weights)
+        pair_max_weight += max(weights)
         if getattr(f, "tf_adjustment", False):
             total_weight += _scalar_tf_contribution(
                 _transform_field_value(row_a.get(f.field), f),
@@ -3205,9 +3283,13 @@ def score_pair_probabilistic(
 
     if _fs_calibration_mode() == "posterior":
         return posterior_from_weight(total_weight, prior_weight(em_result.proportion_matched))
-    if weight_range > 0:
+    if not has_regular_evidence and total_weight == 0.0:
+        return 0.5
+    if pair_max_weight > pair_min_weight:
         # Clip into [0, 1] so a TF/NE overshoot can't leave the score contract.
-        return min(1.0, max(0.0, (total_weight - min_weight) / weight_range))
+        return min(1.0, max(0.0, (
+            total_weight - pair_min_weight
+        ) / (pair_max_weight - pair_min_weight)))
     return 0.5
 
 
@@ -3222,7 +3304,7 @@ class FSFieldContribution:
     scorer: str
     value_a: str | None
     value_b: str | None
-    level: int            # comparison level (0=disagree .. n_levels-1=exact)
+    level: int            # -1=unobserved; else 0=disagree .. n_levels-1=exact
     n_levels: int
     m: float              # P(level | match)
     u: float              # P(level | non-match)
@@ -3267,11 +3349,12 @@ def explain_pair_fs(
     for k, f in enumerate(mk.fields):
         level = vec[k]
         weights = em_result.match_weights.get(f.field, [])
-        wbits = float(weights[level]) if level < len(weights) else 0.0
+        observed = level >= 0
+        wbits = float(weights[level]) if observed and level < len(weights) else 0.0
         m_list = em_result.m_probs.get(f.field, [])
         u_list = em_result.u_probs.get(f.field, [])
-        m = float(m_list[level]) if level < len(m_list) else float("nan")
-        u = float(u_list[level]) if level < len(u_list) else float("nan")
+        m = float(m_list[level]) if observed and level < len(m_list) else float("nan")
+        u = float(u_list[level]) if observed and level < len(u_list) else float("nan")
         va = row_a.get(f.field)
         vb = row_b.get(f.field)
         contribs.append(FSFieldContribution(

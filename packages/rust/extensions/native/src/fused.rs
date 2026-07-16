@@ -220,7 +220,7 @@ pub fn match_fused(
 /// Fused Fellegi-Sunter match: block -> probabilistic score -> dedup -> cluster,
 /// one call. Scoring is byte-identical to `score_block_pairs_fs` (shares
 /// `fs_level_from_sim` + `fs_normalize`): per pair, per field map the similarity
-/// to a comparison `level` (null on either side -> level 0), sum
+/// to a comparison `level` (null on either side -> no evidence), sum
 /// `match_weights[f][level]`, normalize (calibrated posterior or linear), emit
 /// `(min,max, normalized)` when `normalized >= threshold`. `levels` /
 /// `partial_thresholds` / `match_weights` / `calibrated` / `prior_w` /
@@ -377,6 +377,16 @@ pub fn match_fused_fs(
     let ne_thresholds_v: Vec<f64> = ne_thresholds.unwrap_or_default();
     let ne_weights_v: Vec<f64> = ne_weights.unwrap_or_default();
     let n_ne = ne_cols.len();
+    let field_mins: Vec<f64> = match_weights
+        .iter()
+        .map(|w| w.iter().copied().fold(f64::INFINITY, f64::min))
+        .collect();
+    let field_maxs: Vec<f64> = match_weights
+        .iter()
+        .map(|w| w.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+        .collect();
+    let base_min = min_weight - field_mins.iter().sum::<f64>();
+    let base_max = min_weight + weight_range - field_maxs.iter().sum::<f64>();
 
     Ok(py.detach(|| {
         let (rid_sorted, vals, ne_vals, spans) =
@@ -390,20 +400,23 @@ pub fn match_fused_fs(
                     let rj = rid_sorted[j];
                     let (a_id, b_id) = if ri < rj { (ri, rj) } else { (rj, ri) };
                     let mut total_w = 0.0_f64;
+                    let mut pair_min = base_min;
+                    let mut pair_max = base_max;
+                    let mut has_regular_evidence = false;
                     for f in 0..n_fields {
-                        let level = match (vals[f][i], vals[f][j]) {
-                            (Some(a), Some(b)) => {
-                                let sim = score_one(scorer_ids[f], a, b);
-                                fs_level_from_sim(
-                                    sim,
-                                    levels[f],
-                                    partial_thresholds[f],
-                                    field_thresholds[f],
-                                )
-                            }
-                            _ => 0, // null on either side -> disagree (level 0)
-                        };
-                        total_w += match_weights[f][level];
+                        if let (Some(a), Some(b)) = (vals[f][i], vals[f][j]) {
+                            has_regular_evidence = true;
+                            let sim = score_one(scorer_ids[f], a, b);
+                            let level = fs_level_from_sim(
+                                sim,
+                                levels[f],
+                                partial_thresholds[f],
+                                field_thresholds[f],
+                            );
+                            total_w += match_weights[f][level];
+                            pair_min += field_mins[f];
+                            pair_max += field_maxs[f];
+                        }
                     }
                     // Negative evidence: exact `_ne_fired` semantics
                     // (core/probabilistic.py:466) — fires iff both values
@@ -421,8 +434,11 @@ pub fn match_fused_fs(
                             }
                         }
                     }
-                    let normalized =
-                        fs_normalize(total_w, calibrated, prior_w, min_weight, weight_range);
+                    let normalized = if !calibrated && !has_regular_evidence && total_w == 0.0 {
+                        0.5
+                    } else {
+                        fs_normalize(total_w, calibrated, prior_w, pair_min, pair_max - pair_min)
+                    };
                     if normalized >= threshold {
                         local.push((a_id, b_id, normalized));
                     }

@@ -207,6 +207,10 @@ export function emResultFromJson(data: unknown): EMResult {
         `supports (${EM_RESULT_SCHEMA_VERSION}); upgrade goldenmatch.`,
     );
   }
+  // v1 models LOAD (inspection stays possible) but carry sourceSchemaVersion;
+  // validateEmResultFor rejects reuse -- v1 was trained with legacy
+  // missing-value semantics (#1819) and has no training-config manifest
+  // (#1835). Mirrors Python EMResult.from_dict.
 
   const requiredKeys = [
     "m_probs",
@@ -318,7 +322,8 @@ export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
   if (em.trainingConfig == null) {
     if (em.sourceSchemaVersion === 1) {
       throw new FSModelMismatchError(
-        "Persisted FS model uses schema v1, which has no training configuration " +
+        "Persisted FS model uses schema v1, which was trained with legacy " +
+          "missing-value semantics (nulls folded into level 0) and has no training configuration " +
           "manifest and cannot be safely reused. Retrain the model to write " +
           "schema v2, or clear the model_path.",
       );
@@ -372,6 +377,7 @@ function fieldPartialThreshold(f: MatchkeyField): number {
  *   levels=N: evenly spaced thresholds k/N for k in 1..N-1
  *   levelThresholds set: custom descending cutoffs; level = count satisfied
  *   (takes priority over the levels-based legacy banding above).
+ *   -1: unobserved because either operand is missing.
  */
 export function buildComparisonVector(
   rowA: Row,
@@ -391,7 +397,7 @@ export function buildComparisonVector(
     const partial = fieldPartialThreshold(f);
 
     if (s === null) {
-      levels.push(0);
+      levels.push(-1);
       continue;
     }
 
@@ -426,8 +432,7 @@ export function buildComparisonVector(
  * Mirrors Python `_ne_fired` (core/probabilistic.py): fires when BOTH values
  * are present (post-transform, non-empty) AND the scorer similarity is
  * STRICTLY below `ne.threshold`. Any missing/empty value on either side
- * (including nulls — the deliberate NE null-handling that differs from
- * regular FS fields, where null -> disagree/level-0) means the dimension does
+ * (including nulls) means the dimension does
  * NOT fire: negative evidence never boosts a pair, so an inconclusive
  * comparison must not count against a match either.
  *
@@ -568,7 +573,7 @@ function buildComparisonMatrix(
 /**
  * Continuous (Winkler-extension) field scores for a pair: raw scorer output
  * per field in [0,1], preserving the continuous signal instead of
- * discretizing into levels. Null scores become 0.0. Mirrors Python
+ * discretizing into levels. Null scores become NaN (unobserved). Mirrors Python
  * ``probabilistic.continuous_scores``.
  */
 export function continuousScores(
@@ -585,7 +590,7 @@ export function continuousScores(
       valB = applyTransforms(valB, f.transforms);
     }
     const s = scoreField(valA, valB, f.scorer);
-    out.push(s ?? 0.0);
+    out.push(s ?? Number.NaN);
   }
   return out;
 }
@@ -712,8 +717,8 @@ export function trainEMContinuous(
   const uVar: Record<string, number> = {};
   for (let j = 0; j < fields.length; j++) {
     const f = fields[j]!;
-    const col = scoreMatrix.map((row) => row[j]!);
-    const med = blockingFields.has(f.field) ? 0.3 : median(col);
+    const col = scoreMatrix.map((row) => row[j]!).filter(Number.isFinite);
+    const med = blockingFields.has(f.field) || col.length === 0 ? 0.3 : median(col);
     mMean[f.field] = 0.9;
     mVar[f.field] = 0.01;
     uMean[f.field] = med;
@@ -745,6 +750,7 @@ export function trainEMContinuous(
         const f = fields[j]!;
         if (blockingFields.has(f.field)) continue;
         const s = scoreMatrix[i]![j]!;
+        if (!Number.isFinite(s)) continue;
         const varM = Math.max(mVar[f.field]!, 1e-6);
         const varU = Math.max(uVar[f.field]!, 1e-6);
         logM +=
@@ -761,22 +767,24 @@ export function trainEMContinuous(
     // M-step.
     let totalMatch = 0;
     for (let i = 0; i < nPairs; i++) totalMatch += posteriors[i]!;
-    const totalNonmatch = nPairs - totalMatch;
     pMatch = Math.max(totalMatch / nPairs, 1e-6);
 
     for (let j = 0; j < fields.length; j++) {
       const f = fields[j]!;
       if (blockingFields.has(f.field)) continue;
-      const scores = scoreMatrix.map((row) => row[j]!);
-      if (totalMatch > 1e-6) {
-        const wMatch = Array.from(posteriors);
+      const observed = scoreMatrix
+        .map((row, i) => ({ score: row[j]!, posterior: posteriors[i]! }))
+        .filter(({ score }) => Number.isFinite(score));
+      const scores = observed.map(({ score }) => score);
+      const wMatch = observed.map(({ posterior }) => posterior);
+      if (wMatch.reduce((a, b) => a + b, 0) > 1e-6) {
         const mm = weightedAverage(scores, wMatch);
         mMean[f.field] = mm;
         const sqDiff = scores.map((s) => (s - mm) ** 2);
         mVar[f.field] = weightedAverage(sqDiff, wMatch) + 1e-6;
       }
-      if (totalNonmatch > 1e-6) {
-        const wNon = Array.from(posteriors, (p) => 1 - p);
+      const wNon = observed.map(({ posterior }) => 1 - posterior);
+      if (wNon.reduce((a, b) => a + b, 0) > 1e-6) {
         const um = weightedAverage(scores, wNon);
         uMean[f.field] = um;
         const sqDiff = scores.map((s) => (s - um) ** 2);
@@ -853,6 +861,7 @@ export function scoreProbabilisticContinuous(
       for (let k = 0; k < fields.length; k++) {
         const f = fields[k]!;
         const s = scores[k]!;
+        if (!Number.isFinite(s)) continue;
         const varM = Math.max(em.mVar[f.field]!, 1e-6);
         const varU = Math.max(em.uVar[f.field]!, 1e-6);
         const logM =
@@ -1015,6 +1024,7 @@ export function trainEM(
       for (let j = 0; j < fields.length; j++) {
         const f = fields[j]!;
         const level = compMatrix[i]![j]!;
+        if (level < 0) continue;
         const mProb = Math.max(m[f.field]![level] ?? 1e-10, 1e-10);
         const uProb = Math.max(u[f.field]![level] ?? 1e-10, 1e-10);
         logM += Math.log(mProb);
@@ -1042,11 +1052,15 @@ export function trainEM(
       if (blockingFields.has(f.field)) continue;
       const n = fieldLevels(f);
       const newM = new Array<number>(n).fill(0);
+      let observedMatch = 0;
       for (let i = 0; i < nPairs; i++) {
         const level = compMatrix[i]![j]!;
-        if (level >= 0 && level < n) newM[level]! += posteriors[i]!;
+        if (level >= 0 && level < n) {
+          newM[level]! += posteriors[i]!;
+          observedMatch += posteriors[i]!;
+        }
       }
-      const denom = totalMatch + n * 1e-6;
+      const denom = observedMatch + n * 1e-6;
       for (let k = 0; k < n; k++) {
         newM[k] = (newM[k]! + 1e-6) / denom;
       }
@@ -1163,14 +1177,22 @@ export function fsWeightRange(
   em: EMResult,
   mk: MatchkeyConfig,
 ): { minWeight: number; maxWeight: number } {
-  let minWeight = 0;
-  let maxWeight = 0;
+  let { minWeight, maxWeight } = fsNeWeightRange(em, mk);
   for (const f of mk.fields) {
     const w = em.matchWeights[f.field];
     if (!w || w.length === 0) continue;
     maxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
     minWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
   }
+  return { minWeight, maxWeight };
+}
+
+function fsNeWeightRange(
+  em: EMResult,
+  mk: MatchkeyConfig,
+): { minWeight: number; maxWeight: number } {
+  let minWeight = 0;
+  let maxWeight = 0;
   for (const ne of mk.negativeEvidence ?? []) {
     if (ne.penaltyBits !== undefined) {
       minWeight += -Math.abs(ne.penaltyBits);
@@ -1213,8 +1235,7 @@ export function scoreProbabilistic(
   const threshold = options?.threshold ?? linkThreshold ?? 0.5;
 
   // Min/max possible weight totals for normalization (NE-aware envelope).
-  const { minWeight, maxWeight } = fsWeightRange(em, mk);
-  const weightRange = maxWeight - minWeight;
+  const neRange = fsNeWeightRange(em, mk);
 
   // NE fields + their `__ne__` lookup keys, hoisted outside the pair loop.
   const neFields =
@@ -1242,12 +1263,19 @@ export function scoreProbabilistic(
       const vec = buildComparisonVector(rowLookup[i]!, rowLookup[j]!, fields);
 
       let total = 0;
+      let pairMinWeight = neRange.minWeight;
+      let pairMaxWeight = neRange.maxWeight;
+      let hasRegularEvidence = false;
       for (let k = 0; k < fields.length; k++) {
         const f = fields[k]!;
         const level = vec[k]!;
+        if (level < 0) continue;
+        hasRegularEvidence = true;
         const w = em.matchWeights[f.field];
         if (!w) continue;
         total += w[level] ?? 0;
+        pairMinWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
+        pairMaxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
       }
       for (let k = 0; k < neFields.length; k++) {
         total += neContribution(
@@ -1259,8 +1287,10 @@ export function scoreProbabilistic(
         );
       }
 
-      const normalized =
-        weightRange > 0 ? (total - minWeight) / weightRange : 0.5;
+      const pairRange = pairMaxWeight - pairMinWeight;
+      const normalized = !hasRegularEvidence && total === 0
+        ? 0.5
+        : pairRange > 0 ? (total - pairMinWeight) / pairRange : 0.5;
 
       if (normalized >= threshold) {
         results.push(
@@ -1285,18 +1315,23 @@ export function scoreProbabilisticPair(
   const fields = mk.fields;
   if (fields.length === 0) return 0.5;
 
-  const { minWeight, maxWeight } = fsWeightRange(em, mk);
-  const weightRange = maxWeight - minWeight;
-  if (weightRange <= 0) return 0.5;
+  const neRange = fsNeWeightRange(em, mk);
 
   const vec = buildComparisonVector(rowA, rowB, fields);
   let total = 0;
+  let pairMinWeight = neRange.minWeight;
+  let pairMaxWeight = neRange.maxWeight;
+  let hasRegularEvidence = false;
   for (let k = 0; k < fields.length; k++) {
     const f = fields[k]!;
     const level = vec[k]!;
+    if (level < 0) continue;
+    hasRegularEvidence = true;
     const w = em.matchWeights[f.field];
     if (!w) continue;
     total += w[level] ?? 0;
+    pairMinWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
+    pairMaxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
   }
   const neFields =
     mk.type === "probabilistic" ? (mk.negativeEvidence ?? []) : [];
@@ -1305,7 +1340,9 @@ export function scoreProbabilisticPair(
   }
   // NOTE: raw float on purpose -- the round-4 output convention applies to
   // scoreProbabilistic only, on both surfaces (Python parity).
-  return (total - minWeight) / weightRange;
+  const pairRange = pairMaxWeight - pairMinWeight;
+  if (!hasRegularEvidence && total === 0) return 0.5;
+  return pairRange > 0 ? (total - pairMinWeight) / pairRange : 0.5;
 }
 
 // ---------------------------------------------------------------------------

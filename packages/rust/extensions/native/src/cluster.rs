@@ -40,10 +40,7 @@ fn find(parent: &mut HashMap<i64, i64>, x: i64) -> i64 {
 /// yields the identical grouping the Python union-by-rank produces. Component
 /// and member order is irrelevant: `build_clusters` re-sorts by `min(member)`.
 #[pyfunction]
-pub fn connected_components(
-    edges: Vec<(i64, i64, f64)>,
-    all_ids: Vec<i64>,
-) -> Vec<Vec<i64>> {
+pub fn connected_components(edges: Vec<(i64, i64, f64)>, all_ids: Vec<i64>) -> Vec<Vec<i64>> {
     goldenmatch_graph_core::connected_components(&edges, &all_ids)
 }
 
@@ -60,16 +57,11 @@ pub fn connected_components(
 /// the Python union-by-rank grouping. Returns `[]` when the MST is empty
 /// (caller treats that as "unsplittable", same as Python's `if not mst`).
 #[pyfunction]
-pub fn mst_split_components(
-    members: Vec<i64>,
-    edges: Vec<(i64, i64, f64)>,
-) -> Vec<Vec<i64>> {
+pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> Vec<Vec<i64>> {
     // Kruskal over a max-weight ordering. Vec::sort_by is stable, so equal
     // scores keep pair_scores insertion order -- matching Python's stable sort.
     let mut sorted = edges;
-    sorted.sort_by(|a, b| {
-        b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sorted.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let need = members.len().saturating_sub(1);
     let mut parent: HashMap<i64, i64> = HashMap::with_capacity(members.len());
@@ -132,8 +124,7 @@ pub fn mst_split_components(
 /// `pair_scores` keys as `(a, b, score)` (score unused).
 #[pyfunction]
 pub fn severe_bridge_count(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> usize {
-    let mut adj: HashMap<i64, Vec<i64>> =
-        members.iter().map(|&m| (m, Vec::new())).collect();
+    let mut adj: HashMap<i64, Vec<i64>> = members.iter().map(|&m| (m, Vec::new())).collect();
     let mut edge_list: Vec<(i64, i64)> = Vec::with_capacity(edges.len());
     for (a, b, _s) in &edges {
         if adj.contains_key(a) && adj.contains_key(b) {
@@ -201,7 +192,13 @@ pub fn cluster_confidence(edges: Vec<(i64, i64, f64)>, size: usize) -> Confidenc
         0.0
     };
     let confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity;
-    (Some(min_edge), Some(avg_edge), connectivity, bottleneck, confidence)
+    (
+        Some(min_edge),
+        Some(avg_edge),
+        connectivity,
+        bottleneck,
+        confidence,
+    )
 }
 
 // =============================================================================
@@ -246,9 +243,7 @@ pub fn build_clusters_native<'py>(
     max_cluster_size: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
     // ---- 1. Union-Find (reuse the find() logic from connected_components). --
-    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(
-        all_ids.len() + pairs.len() * 2,
-    );
+    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(all_ids.len() + pairs.len() * 2);
     for id in &all_ids {
         parent.entry(*id).or_insert(*id);
     }
@@ -277,8 +272,7 @@ pub fn build_clusters_native<'py>(
     clusters.sort_by_key(|c| *c.iter().min().expect("non-empty by construction"));
 
     // member_to_cid: node -> 1-based cluster_id.
-    let mut member_to_cid: HashMap<i64, i64> =
-        HashMap::with_capacity(parent.len());
+    let mut member_to_cid: HashMap<i64, i64> = HashMap::with_capacity(parent.len());
     for (idx, members) in clusters.iter().enumerate() {
         let cid = (idx + 1) as i64;
         for &m in members {
@@ -291,8 +285,7 @@ pub fn build_clusters_native<'py>(
     // order edges appear in `pairs`. This is the invariant cluster_confidence
     // relies on for the bottleneck-pair tie-break.
     let n_clusters = clusters.len();
-    let mut per_cluster_edges: Vec<Vec<(i64, i64, f64)>> =
-        vec![Vec::new(); n_clusters];
+    let mut per_cluster_edges: Vec<Vec<(i64, i64, f64)>> = vec![Vec::new(); n_clusters];
     for (a, b, s) in pairs {
         if let Some(&cid) = member_to_cid.get(&a) {
             // cid is 1-based; per_cluster_edges is 0-indexed.
@@ -404,14 +397,14 @@ pub fn build_clusters_arrow(
         return Err(PyValueError::new_err(format!(
             "build_clusters_arrow: pair-stream column lengths differ -- \
              id_a={}, id_b={}, score={}",
-            n_pairs, id_b.len(), score.len(),
+            n_pairs,
+            id_b.len(),
+            score.len(),
         )));
     }
 
     // ---- Union-Find on Arrow ids (same algorithm as build_clusters_native). -
-    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(
-        all_ids.len() + n_pairs * 2,
-    );
+    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(all_ids.len() + n_pairs * 2);
     for i in 0..all_ids.len() {
         if !all_ids.is_null(i) {
             let id = all_ids.value(i);
@@ -444,8 +437,7 @@ pub fn build_clusters_arrow(
     let mut clusters: Vec<Vec<i64>> = root_to_members.into_values().collect();
     clusters.sort_by_key(|c| *c.iter().min().expect("non-empty by construction"));
 
-    let mut member_to_cid: HashMap<i64, i64> =
-        HashMap::with_capacity(parent.len());
+    let mut member_to_cid: HashMap<i64, i64> = HashMap::with_capacity(parent.len());
     for (idx, members) in clusters.iter().enumerate() {
         let cid = (idx + 1) as i64;
         for &m in members {
@@ -566,9 +558,8 @@ pub fn connected_components_arrow(
     score: PyArrowType<ArrayData>,
     all_ids: PyArrowType<ArrayData>,
 ) -> PyResult<PyArrowType<ArrayData>> {
-    let out = goldenmatch_graph_core::connected_components_arrow_data(
-        id_a.0, id_b.0, score.0, all_ids.0,
-    )
-    .map_err(PyValueError::new_err)?;
+    let out =
+        goldenmatch_graph_core::connected_components_arrow_data(id_a.0, id_b.0, score.0, all_ids.0)
+            .map_err(PyValueError::new_err)?;
     Ok(PyArrowType(out))
 }

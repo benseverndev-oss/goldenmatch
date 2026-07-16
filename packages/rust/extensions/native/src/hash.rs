@@ -203,9 +203,8 @@ pub fn record_fingerprints_batch_arrow(
             })
             .collect();
         let hexes = hexes?;
-        let out = LargeStringArray::from(
-            hexes.iter().map(|s| Some(s.as_str())).collect::<Vec<_>>(),
-        );
+        let out =
+            LargeStringArray::from(hexes.iter().map(|s| Some(s.as_str())).collect::<Vec<_>>());
         Ok(PyArrowType(out.to_data()))
     })
 }
@@ -306,7 +305,9 @@ pub extern "C" fn gm_record_fingerprint(json_utf8: *const c_char, out_hex: *mut 
         if json_utf8.is_null() || out_hex.is_null() {
             return Err(());
         }
-        let s = unsafe { CStr::from_ptr(json_utf8) }.to_str().map_err(|_| ())?;
+        let s = unsafe { CStr::from_ptr(json_utf8) }
+            .to_str()
+            .map_err(|_| ())?;
         let hex = fingerprint_json(s).map_err(|_| ())?;
         debug_assert_eq!(hex.len(), 64);
         unsafe {

@@ -65,10 +65,11 @@ def _mk_plain():
 def _fake_native_module_supporting():
     """A kernel advertising every PRE-NE capability (mirrors
     test_nlevel_banding.py's supporting fake) -- i.e. an OLD WHEEL: it has the
-    FS kernel + FS_SUPPORTS_LEVEL_THRESHOLDS but lacks FS_SUPPORTS_NE, so an
+    FS kernel + current regular-field capabilities but lacks FS_SUPPORTS_NE, so an
     NE-bearing matchkey must decline (NE never crosses an old wheel's FFI)."""
     class _Fake:
         FS_SUPPORTS_LEVEL_THRESHOLDS = True
+        FS_SUPPORTS_MISSING_NEUTRAL = True
 
         def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover - not invoked
             raise NotImplementedError
@@ -119,8 +120,11 @@ def test_fs_native_eligible_accepts_ne_real_kernel(monkeypatch):
 
     from goldenmatch.core import _native_loader
     supports_ne = getattr(_native_loader.native_module(), "FS_SUPPORTS_NE", False)
-    assert _fs_native_eligible(_mk_ne()) is bool(supports_ne)
-    assert _fs_native_eligible(_mk_plain()) is True
+    supports_missing = getattr(
+        _native_loader.native_module(), "FS_SUPPORTS_MISSING_NEUTRAL", False
+    )
+    assert _fs_native_eligible(_mk_ne()) is bool(supports_ne and supports_missing)
+    assert _fs_native_eligible(_mk_plain()) is bool(supports_missing)
 
 
 # ── 3. Router: probabilistic_block_scorer selects the non-native scorer ────
@@ -284,6 +288,7 @@ def test_match_fused_fs_ready_tracks_ne_capability(monkeypatch):
     # NE-capable kernel: the same config is now ready.
     class _NeCapable:
         FS_SUPPORTS_NE = True
+        FS_SUPPORTS_MISSING_NEUTRAL = True
 
         def match_fused_fs(self, *a, **kw):  # pragma: no cover - not invoked
             raise NotImplementedError
@@ -300,11 +305,16 @@ def test_match_fused_fs_ready_ne_real_kernel():
     from goldenmatch.core import _native_loader
 
     supports_ne = getattr(_native_loader.native_module(), "FS_SUPPORTS_NE", False)
+    supports_missing = getattr(
+        _native_loader.native_module(), "FS_SUPPORTS_MISSING_NEUTRAL", False
+    )
     ne_config = _fused_config(negative_evidence=[
         NegativeEvidenceField(field="phone", scorer="exact", threshold=1.0, penalty_bits=20.0),
     ])
-    assert fused_match.match_fused_fs_ready(ne_config) is bool(supports_ne)
-    assert fused_match.match_fused_fs_ready(_fused_config()) is True
+    assert fused_match.match_fused_fs_ready(ne_config) is bool(
+        supports_ne and supports_missing
+    )
+    assert fused_match.match_fused_fs_ready(_fused_config()) is bool(supports_missing)
 
 
 # ── 5. _resolve_probabilistic_fast_path declines NE ─────────────────────────

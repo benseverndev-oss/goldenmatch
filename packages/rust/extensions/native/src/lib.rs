@@ -33,6 +33,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // matchkeys on this (old wheels never see the ne_* kwargs). One const is
     // accurate: both kernels' NE landed in the same 0.1.15 wheel.
     m.add("FS_SUPPORTS_NE", true)?;
+    // Regular-field nulls are unobserved evidence (schema v2), not level 0.
+    // Python declines older wheels so their legacy scorer cannot silently run.
+    m.add("FS_SUPPORTS_MISSING_NEUTRAL", true)?;
     // Wheel-skew capability flag: Python's `match_fused_fs_ready` gates custom
     // level_thresholds on this (old wheels never see the kwarg).
     m.add("FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS", true)?;

@@ -1,12 +1,12 @@
 //! Thin PyO3 shims over goldenmatch-autoconfig-core (JSON in / JSON out).
 //! The structured contract lives in the core crate; Python serializes the
 //! input dict to JSON, this deserializes -> calls the core -> serializes back.
-use pyo3::prelude::*;
-use pyo3::exceptions::PyValueError;
 use goldenmatch_autoconfig_core::{
     classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
     sparse_match_floor, ColumnStats, ExtrapolationInput, PlannerInput,
 };
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 
 #[pyfunction]
 pub fn autoconfig_decide_plan(input_json: &str) -> PyResult<String> {

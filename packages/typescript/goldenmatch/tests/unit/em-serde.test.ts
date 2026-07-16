@@ -268,6 +268,27 @@ describe("validateEmResultFor", () => {
     expect(() => validateEmResultFor(legacy, mk)).toThrow(/schema v1.*Retrain/);
   });
 
+  it("v1 reuse rejection names the legacy missing-value semantics (#1819)", () => {
+    // Deferred contract (mirrors Python): v1 LOADS for inspection;
+    // validateEmResultFor rejects reuse and names the #1819 semantics.
+    const v1 = emResultFromJson({
+      __version__: 1,
+      m_probs: { name: [0.1, 0.9] },
+      u_probs: { name: [0.9, 0.1] },
+      match_weights: { name: [-3, 3] },
+      converged: true, iterations: 1, proportion_matched: 0.1,
+    });
+    expect(v1.sourceSchemaVersion).toBe(1);
+    const mk = makeMatchkeyConfig({
+      name: "mk",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+    expect(() => validateEmResultFor(v1, mk)).toThrow(
+      /legacy missing-value semantics/,
+    );
+  });
+
   it("passes when a 4-level levelThresholds field matches", () => {
     const mk = makeMatchkeyConfig({
       name: "mk",

@@ -6,7 +6,7 @@ import {
   scoreProbabilistic,
   scoreProbabilisticPair,
 } from "../../src/core/probabilistic.js";
-import type { ContinuousEMResult } from "../../src/core/probabilistic.js";
+import type { ContinuousEMResult, EMResult } from "../../src/core/probabilistic.js";
 import { makeMatchkeyConfig, makeMatchkeyField } from "../../src/core/index.js";
 import type { Row } from "../../src/core/index.js";
 
@@ -53,6 +53,23 @@ function buildMatchkey() {
 }
 
 describe("continuous FS posterior scoring", () => {
+  it("returns the learned prior when every comparison is missing", () => {
+    const mk = makeMatchkeyConfig({
+      name: "continuous-missing",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+    const em: ContinuousEMResult = {
+      mMean: { name: 0.9 }, mVar: { name: 0.01 },
+      uMean: { name: 0.1 }, uVar: { name: 0.01 },
+      converged: true, iterations: 1, proportionMatched: 0.2,
+    };
+    expect(scoreProbabilisticContinuous(
+      [{ __row_id__: 1, name: null }, { __row_id__: 2, name: "Ada" }],
+      mk, em, { threshold: 0 },
+    )).toEqual([{ idA: 1, idB: 2, score: 0.2 }]);
+  });
+
   it("returns the learned prior when evidence is neutral", () => {
     const mk = makeMatchkeyConfig({
       name: "continuous-prior",
@@ -106,25 +123,24 @@ describe("buildComparisonVector", () => {
     expect(buildComparisonVector(rowA, rowC, fields)).toEqual([0]);
   });
 
-  it("levels=2: null inputs treated as disagree", () => {
+  it("levels=2: null inputs are unobserved", () => {
     const rowA: Row = { name: "John Smith" };
     const rowB: Row = { name: null };
     const fields = [
       makeMatchkeyField({ field: "name", scorer: "jaro_winkler", levels: 2 }),
     ];
     const vec = buildComparisonVector(rowA, rowB, fields);
-    expect(vec).toEqual([0]);
+    expect(vec).toEqual([-1]);
   });
 
-  it("levels=2: missing field keys treated as disagree", () => {
+  it("levels=2: missing field keys are unobserved", () => {
     const rowA: Row = {};
     const rowB: Row = {};
     const fields = [
       makeMatchkeyField({ field: "name", scorer: "jaro_winkler", levels: 2 }),
     ];
     const vec = buildComparisonVector(rowA, rowB, fields);
-    // Two empty strings -> scoreField likely returns null; falls through to 0.
-    expect(vec[0]).toBe(0);
+    expect(vec[0]).toBe(-1);
   });
 
   it("levels=3: distinct levels for exact/partial/disagree", () => {
@@ -193,6 +209,19 @@ describe("buildComparisonVector", () => {
 // ---------------------------------------------------------------------------
 
 describe("trainEM", () => {
+  it("excludes sparse missing pairs from regular-field level counts", () => {
+    const mk = makeMatchkeyConfig({
+      name: "sparse",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+    const rows: Row[] = Array.from({ length: 10 }, (_, i) => ({
+      __row_id__: i,
+      name: i < 5 ? "Ada" : null,
+    }));
+    expect(trainEM(rows, mk, { maxIterations: 1 }).u.name![1]).toBeGreaterThan(0.999);
+  });
+
   it("learns m/u on constructed near-dup dataset and converges", () => {
     resetIds();
     // 10 near-duplicate pairs (small typos) — 20 rows total that cluster.
@@ -499,6 +528,29 @@ describe("scoreProbabilistic", () => {
 // ---------------------------------------------------------------------------
 
 describe("scoreProbabilisticPair", () => {
+  it("treats missing fields as neutral under linear normalization", () => {
+    const mk = makeMatchkeyConfig({
+      name: "missing-neutral",
+      type: "probabilistic",
+      fields: [
+        makeMatchkeyField({ field: "name", scorer: "exact" }),
+        makeMatchkeyField({ field: "email", scorer: "exact" }),
+      ],
+    });
+    const em: EMResult = {
+      m: { name: [0.1, 0.9], email: [0.1, 0.9] },
+      u: { name: [0.9, 0.1], email: [0.9, 0.1] },
+      matchWeights: { name: [-3, 3], email: [-3, 3] },
+      proportionMatched: 0.1, iterations: 1, converged: true,
+    };
+    expect(scoreProbabilisticPair(
+      { name: "Ada", email: null },
+      { name: "Ada", email: "different@example.com" },
+      mk, em,
+    )).toBe(1);
+    expect(scoreProbabilisticPair({}, {}, mk, em)).toBe(0.5);
+  });
+
   it("returns a [0,1] score for a trained EMResult", () => {
     resetIds();
     const trainRows: Row[] = [];
