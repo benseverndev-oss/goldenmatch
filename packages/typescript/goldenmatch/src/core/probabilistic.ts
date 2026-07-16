@@ -53,12 +53,16 @@ export interface EMResult {
   readonly tfFreqs?: Readonly<Record<string, Readonly<Record<string, number>>>> | null;
   /** field -> sum(freq(v)^2) (expected exact-match collision rate baseline). */
   readonly tfCollision?: Readonly<Record<string, number>> | null;
+  /** Canonical schema-v2 comparison semantics used to train this model. */
+  readonly trainingConfig?: Readonly<Record<string, unknown>> | null;
+  /** Source wire version, populated only by emResultFromJson. */
+  readonly sourceSchemaVersion?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Public: EMResult JSON (de)serialization — byte-compatible with Python's
-// EMResult.to_dict()/from_dict() (goldenmatch/core/probabilistic.py, schema
-// v1). A trained-model JSON file must be loadable by either surface, so the
+// EMResult.to_dict()/from_dict() (goldenmatch/core/probabilistic.py, schemas
+// v1/v2). A trained-model JSON file must be loadable by either surface, so the
 // wire shape (snake_case keys, __type__/__version__ markers) is authoritative
 // on the Python side; this is a faithful mirror, not a TS-native shape.
 // ---------------------------------------------------------------------------
@@ -66,6 +70,45 @@ export interface EMResult {
 /** Current EMResult JSON schema version. Bumped when the wire shape changes
  *  incompatibly (mirrors Python `EMResult.SCHEMA_VERSION`). */
 export const EM_RESULT_SCHEMA_VERSION = 2;
+
+/** Canonical cross-runtime manifest of every comparison-vector-affecting setting. */
+export function trainingConfigManifest(mk: MatchkeyConfig): Readonly<Record<string, unknown>> {
+  return {
+    fields: mk.fields.map((f) => ({
+      field: f.field,
+      scorer: f.scorer,
+      transforms: [...f.transforms],
+      model: f.model ?? null,
+      columns: f.columns === undefined ? null : [...f.columns],
+      column_weights: f.columnWeights ?? null,
+      levels: f.levels ?? 2,
+      partial_threshold: f.partialThreshold ?? 0.8,
+      level_thresholds: f.levelThresholds === undefined ? null : [...f.levelThresholds],
+      tf_adjustment: f.tfAdjustment ?? false,
+      tf_freqs: f.tfFreqs ?? null,
+    })),
+    negative_evidence: (mk.negativeEvidence ?? []).map((ne) => ({
+      field: ne.field,
+      scorer: ne.scorer,
+      transforms: [...ne.transforms],
+      threshold: ne.threshold,
+      penalty_bits: ne.penaltyBits ?? null,
+      derive_from: null,
+    })),
+  };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(obj[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 /**
  * A persisted FS model is incompatible with the matchkey being scored, or
@@ -122,9 +165,10 @@ function assertNoNegativeEvidence(mk: MatchkeyConfig, path: string): void {
  * dataclass default of `None` surviving `json.dump`).
  */
 export function emResultToJson(em: EMResult): Record<string, unknown> {
-  return {
+  const version = em.trainingConfig == null ? 1 : 2;
+  const data: Record<string, unknown> = {
     __type__: "goldenmatch.EMResult",
-    __version__: EM_RESULT_SCHEMA_VERSION,
+    __version__: version,
     m_probs: em.m,
     u_probs: em.u,
     match_weights: em.matchWeights,
@@ -134,6 +178,8 @@ export function emResultToJson(em: EMResult): Record<string, unknown> {
     tf_freqs: em.tfFreqs ?? null,
     tf_collision: em.tfCollision ?? null,
   };
+  if (em.trainingConfig != null) data["training_config"] = em.trainingConfig;
+  return data;
 }
 
 /**
@@ -184,8 +230,11 @@ export function emResultFromJson(data: unknown): EMResult {
 
   const tfFreqsRaw = obj["tf_freqs"];
   const tfCollisionRaw = obj["tf_collision"];
+  if (version >= 2 && !("training_config" in obj)) {
+    throw new FSModelMismatchError("FS model dict is missing required key: 'training_config'");
+  }
 
-  return {
+  const result: EMResult = {
     m: obj["m_probs"] as Readonly<Record<string, readonly number[]>>,
     u: obj["u_probs"] as Readonly<Record<string, readonly number[]>>,
     matchWeights: obj["match_weights"] as Readonly<Record<string, readonly number[]>>,
@@ -200,7 +249,17 @@ export function emResultFromJson(data: unknown): EMResult {
       tfCollisionRaw === null || tfCollisionRaw === undefined
         ? (tfCollisionRaw as null | undefined) ?? null
         : (tfCollisionRaw as Readonly<Record<string, number>>),
+    ...(obj["training_config"] === undefined
+      ? {}
+      : {
+          trainingConfig: obj["training_config"] as Readonly<Record<string, unknown>>,
+        }),
   };
+  Object.defineProperty(result, "sourceSchemaVersion", {
+    value: version,
+    enumerable: false,
+  });
+  return result;
 }
 
 /**
@@ -261,6 +320,23 @@ export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
           `model_path.`,
       );
     }
+  }
+  if (em.trainingConfig == null) {
+    if (em.sourceSchemaVersion === 1) {
+      throw new FSModelMismatchError(
+        "Persisted FS model uses schema v1, which has no training configuration " +
+          "manifest and cannot be safely reused. Retrain the model to write " +
+          "schema v2, or clear the model_path.",
+      );
+    }
+    return;
+  }
+  if (canonicalJson(em.trainingConfig) !== canonicalJson(trainingConfigManifest(mk))) {
+    throw new FSModelMismatchError(
+      "Persisted FS model training configuration does not match the current " +
+        "probabilistic matchkey. A comparison field's scorer, transforms, " +
+        "thresholds, TF settings, or order changed; retrain or clear the model_path.",
+    );
   }
 }
 
@@ -1070,6 +1146,7 @@ export function trainEM(
     proportionMatched: pMatch,
     iterations,
     converged,
+    trainingConfig: trainingConfigManifest(mk),
   };
 }
 
@@ -1324,5 +1401,6 @@ export function fallbackResult(mk: MatchkeyConfig): EMResult {
     proportionMatched: 0.05,
     iterations: 0,
     converged: false,
+    trainingConfig: trainingConfigManifest(mk),
   };
 }

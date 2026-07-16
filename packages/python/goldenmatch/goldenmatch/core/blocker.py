@@ -262,6 +262,10 @@ class BlockResult:
     depth: int = 0
     parent_key: str | None = None
     pre_scored_pairs: list[tuple[int, int, float]] | None = None
+    # Fields whose equality created this block. EM uses this provenance to
+    # condition only the sampled pairs from this pass, rather than globally
+    # neutralizing the union of every multi-pass blocking field.
+    blocking_fields: tuple[str, ...] = ()
 
     def materialize(self):
         """The block's rows as a seam Frame (collects a legacy LazyFrame once)."""
@@ -445,6 +449,8 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
                             config.ann_model, config.max_block_size, key_str,
                         )
                         if ann_sub:
+                            for sub_block in ann_sub:
+                                sub_block.blocking_fields = tuple(key_config.fields)
                             results.extend(ann_sub)
                     except Exception:
                         logger.error(
@@ -461,7 +467,10 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
                     # which we then skip (preserves prior behavior).
                     try:
                         sub_blocks = _auto_split_block(
-                            group_df, config.max_block_size, key_str,
+                            group_df,
+                            config.max_block_size,
+                            key_str,
+                            tuple(key_config.fields),
                         )
                     except Exception:
                         logger.error(
@@ -524,7 +533,10 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
                     # anyway".
                     try:
                         sub_blocks = _auto_split_block(
-                            group_df, config.max_block_size, key_str,
+                            group_df,
+                            config.max_block_size,
+                            key_str,
+                            tuple(key_config.fields),
                         )
                     except Exception:
                         logger.error(
@@ -564,6 +576,7 @@ def _build_static_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
             results.append(BlockResult(
                 block_key=key_str,
                 df=group_df,  # D5b: eager (was group_df.lazy() -- a re-wrap)
+                blocking_fields=tuple(key_config.fields),
             ))
 
     if hot_blocks_split or hot_blocks_skipped:
@@ -767,6 +780,7 @@ def _auto_split_block(
     block_df: Any,  # pl.DataFrame | pa.Table | seam Frame -- normalized via to_frame
     max_block_size: int,
     parent_key: str,
+    blocking_fields: tuple[str, ...] = (),
 ) -> list[BlockResult]:
     """Auto-split an oversized block using the highest-cardinality column.
 
@@ -787,7 +801,14 @@ def _auto_split_block(
             "Auto-split of %r: no non-internal columns available. Processing as-is.",
             parent_key,
         )
-        return [BlockResult(block_key=parent_key, df=bframe.native, strategy="adaptive", depth=1, parent_key=parent_key)]
+        return [BlockResult(
+            block_key=parent_key,
+            df=bframe.native,
+            strategy="adaptive",
+            depth=1,
+            parent_key=parent_key,
+            blocking_fields=blocking_fields,
+        )]
 
     # Pick column whose cardinality best splits blocks near max_block_size.
     # Ideal: each group has ~max_block_size records.
@@ -836,13 +857,21 @@ def _auto_split_block(
             strategy="adaptive",
             depth=1,
             parent_key=parent_key,
+            blocking_fields=tuple(dict.fromkeys((*blocking_fields, best_col))),
         ))
 
     logger.info(
         "Auto-split %r (%d records) into %d sub-blocks using column %r (cardinality=%d)",
         parent_key, bframe.height, len(results), best_col, best_nunique,
     )
-    return results if results else [BlockResult(block_key=parent_key, df=bframe.native, strategy="adaptive", depth=1, parent_key=parent_key)]
+    return results if results else [BlockResult(
+        block_key=parent_key,
+        df=bframe.native,
+        strategy="adaptive",
+        depth=1,
+        parent_key=parent_key,
+        blocking_fields=blocking_fields,
+    )]
 
 
 def _build_sorted_neighborhood_blocks(

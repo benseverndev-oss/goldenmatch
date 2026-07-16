@@ -300,6 +300,7 @@ export {
   emResultToJson,
   emResultFromJson,
   validateEmResultFor,
+  trainingConfigManifest,
   FSModelMismatchError,
   NegativeEvidenceUnsupportedError,
   EM_RESULT_SCHEMA_VERSION,

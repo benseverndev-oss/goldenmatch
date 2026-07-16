@@ -275,6 +275,9 @@ mod tests {
         let nf = 8usize;
         let w = vec![1.0f32; nf * dim];
         let out = project_one("   ", &w, nf, dim, 2, 3, true, "#", &SEED);
-        assert!(out.iter().all(|&v| v == 0.0), "expected zero vector, got {out:?}");
+        assert!(
+            out.iter().all(|&v| v == 0.0),
+            "expected zero vector, got {out:?}"
+        );
     }
 }

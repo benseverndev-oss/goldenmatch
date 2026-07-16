@@ -825,6 +825,105 @@ class TestEMWithBlockingFields:
         result = train_em(df, mk, n_sample_pairs=100, blocking_fields=["zip"])
         assert result.u_probs["zip"] == [0.50, 0.50]
 
+    def test_multi_pass_conditions_fields_per_pass_and_is_order_stable(self):
+        """A field used by one pass remains evidence in another pass."""
+        from goldenmatch.core.blocker import build_blocks
+
+        df = pl.DataFrame({
+            "__row_id__": list(range(12)),
+            "zip": [f"Z{i // 4}" for i in range(12)],
+            "last_name": [f"L{i % 4}" for i in range(12)],
+        })
+        mk = MatchkeyConfig(
+            name="multi_pass_fs",
+            type="probabilistic",
+            fields=[
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+                MatchkeyField(field="last_name", scorer="exact", levels=2),
+            ],
+        )
+        zip_pass = BlockingKeyConfig(fields=["zip"])
+        name_pass = BlockingKeyConfig(fields=["last_name"])
+
+        def train(passes):
+            blocks = build_blocks(
+                df.lazy(),
+                BlockingConfig(strategy="multi_pass", passes=passes),
+            )
+            assert {b.blocking_fields for b in blocks} == {
+                ("zip",),
+                ("last_name",),
+            }
+            return train_em(
+                df,
+                mk,
+                n_sample_pairs=100,
+                max_iterations=10,
+                blocks=blocks,
+                blocking_fields=["zip", "last_name"],
+            )
+
+        forward = train([zip_pass, name_pass])
+        reversed_plan = train([name_pass, zip_pass])
+
+        # The old global-union behavior fixed both fields to [-3, 3]. Each is
+        # now learned from candidate pairs emitted by the other pass.
+        assert forward.match_weights["zip"] != [-3.0, 3.0]
+        assert forward.match_weights["last_name"] != [-3.0, 3.0]
+        assert reversed_plan.m_probs == forward.m_probs
+        assert reversed_plan.match_weights == forward.match_weights
+
+        rows = df.to_dicts()
+        forward_scores = [
+            score_pair_probabilistic(rows[i], rows[j], mk, forward)
+            for i in range(len(rows))
+            for j in range(i + 1, len(rows))
+        ]
+        reversed_scores = [
+            score_pair_probabilistic(rows[i], rows[j], mk, reversed_plan)
+            for i in range(len(rows))
+            for j in range(i + 1, len(rows))
+        ]
+        assert reversed_scores == forward_scores
+
+    def test_continuous_multi_pass_conditions_fields_per_pass(self):
+        from goldenmatch.core.blocker import build_blocks
+
+        df = pl.DataFrame({
+            "__row_id__": list(range(12)),
+            "zip": [f"Z{i // 4}" for i in range(12)],
+            "last_name": [f"L{i % 4}" for i in range(12)],
+        })
+        mk = MatchkeyConfig(
+            name="multi_pass_continuous",
+            type="probabilistic",
+            fields=[
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+                MatchkeyField(field="last_name", scorer="exact", levels=2),
+            ],
+        )
+        blocks = build_blocks(
+            df.lazy(),
+            BlockingConfig(
+                strategy="multi_pass",
+                passes=[
+                    BlockingKeyConfig(fields=["zip"]),
+                    BlockingKeyConfig(fields=["last_name"]),
+                ],
+            ),
+        )
+        result = train_em_continuous(
+            df,
+            mk,
+            n_sample_pairs=100,
+            max_iterations=10,
+            blocks=blocks,
+            blocking_fields=["zip", "last_name"],
+        )
+
+        assert result.m_mean["zip"] != 0.99
+        assert result.m_mean["last_name"] != 0.99
+
 
 # ── Weight monotonicity guard (Phase 0) ────────────────────────────────────
 
@@ -932,12 +1031,20 @@ class TestModelPersistence:
         d = em.to_dict()
         assert d["__type__"] == "goldenmatch.EMResult"
         assert d["__version__"] == 2
+        assert d["training_config"]["fields"][0]["field"] == "first_name"
 
-    def test_from_dict_rejects_legacy_missing_semantics(self):
+    def test_v1_model_loads_but_reuse_names_legacy_semantics(self):
+        # Deferred contract (#1835): v1 LOADS for inspection; validate_for
+        # rejects reuse and names the #1819 legacy missing-value semantics.
+        from goldenmatch.core.probabilistic import FSModelMismatchError
         d = self._trained().to_dict()
         d["__version__"] = 1
-        with pytest.raises(ValueError, match="legacy missing-value semantics"):
-            EMResult.from_dict(d)
+        d.pop("training_config", None)
+        loaded = EMResult.from_dict(d)
+        with pytest.raises(
+            FSModelMismatchError, match="legacy missing-value semantics"
+        ):
+            loaded.validate_for(_make_probabilistic_mk())
 
     def test_from_dict_rejects_future_version(self):
         from goldenmatch.core.probabilistic import EMResult
@@ -964,6 +1071,95 @@ class TestModelPersistence:
         ])
         with pytest.raises(FSModelMismatchError, match="levels"):
             em.validate_for(mk)
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            [
+                MatchkeyField(field="first_name", scorer="token_sort", levels=3),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+            [
+                MatchkeyField(
+                    field="first_name",
+                    scorer="jaro_winkler",
+                    transforms=["lowercase"],
+                    levels=3,
+                ),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+            [
+                MatchkeyField(
+                    field="first_name",
+                    scorer="jaro_winkler",
+                    levels=3,
+                    partial_threshold=0.9,
+                ),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+            [
+                MatchkeyField(
+                    field="first_name",
+                    scorer="jaro_winkler",
+                    levels=3,
+                    level_thresholds=[1.0, 0.9],
+                ),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+            [
+                MatchkeyField(
+                    field="first_name",
+                    scorer="jaro_winkler",
+                    levels=3,
+                    partial_threshold=0.8,
+                    tf_adjustment=True,
+                ),
+                MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+            [
+                MatchkeyField(field="last_name", scorer="jaro_winkler", levels=2),
+                MatchkeyField(
+                    field="first_name",
+                    scorer="jaro_winkler",
+                    levels=3,
+                    partial_threshold=0.8,
+                ),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+        ],
+        ids=[
+            "scorer",
+            "transforms",
+            "partial-threshold",
+            "custom-thresholds",
+            "tf",
+            "field-order",
+        ],
+    )
+    def test_validate_for_detects_comparison_semantics_change(self, fields):
+        from goldenmatch.core.probabilistic import FSModelMismatchError
+
+        em = self._trained()
+        changed = _make_probabilistic_mk(fields=fields)
+
+        with pytest.raises(FSModelMismatchError, match="training configuration"):
+            em.validate_for(changed)
+
+    def test_schema_v1_model_requires_retraining_before_reuse(self):
+        from goldenmatch.core.probabilistic import EMResult, FSModelMismatchError
+
+        legacy = self._trained().to_dict()
+        legacy["__version__"] = 1
+        legacy.pop("training_config")
+        loaded = EMResult.from_dict(legacy)
+
+        with pytest.raises(FSModelMismatchError, match="(?i)schema v1.*retrain"):
+            loaded.validate_for(_make_probabilistic_mk())
 
     def test_load_or_train_saves_then_loads(self, tmp_path):
         # First call (cache miss): trains and writes the file.
@@ -1031,6 +1227,85 @@ class TestDedupeWithPersistedModel:
             )
         assert _parts(first) == _parts(baseline)
         assert _parts(second) == _parts(baseline)
+
+
+class TestProbabilisticReviewCandidates:
+    @staticmethod
+    def _config(*, link_threshold=None, review_threshold=None):
+        return GoldenMatchConfig(
+            matchkeys=[MatchkeyConfig(
+                name="fs_review",
+                type="probabilistic",
+                fields=[MatchkeyField(
+                    field="name",
+                    scorer="jaro_winkler",
+                    levels=3,
+                    partial_threshold=0.8,
+                )],
+                link_threshold=link_threshold,
+                review_threshold=review_threshold,
+            )],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+        )
+
+    @staticmethod
+    def _rows():
+        return pl.DataFrame({
+            "name": ["John", "Jon", "John"],
+            "zip": ["x", "x", "x"],
+        })
+
+    def test_explicit_review_band_is_attached_without_merging(self):
+        from goldenmatch import dedupe_df
+
+        result = dedupe_df(
+            self._rows(),
+            config=self._config(link_threshold=0.9, review_threshold=0.4),
+        )
+
+        assert result.review_pairs
+        assert all(0.4 <= score < 0.9 for _, _, score in result.review_pairs)
+        assert all(score >= 0.9 for _, _, score in result.scored_pairs)
+
+    def test_absent_review_threshold_uses_calibrated_review_cut(self):
+        from goldenmatch import dedupe_df
+
+        result = dedupe_df(
+            self._rows(),
+            config=self._config(link_threshold=0.9),
+        )
+
+        assert result.review_pairs
+        assert all(0.35 <= score < 0.9 for _, _, score in result.review_pairs)
+
+    def test_absent_link_and_review_thresholds_use_calibration(self, monkeypatch):
+        from goldenmatch import dedupe_df
+        from goldenmatch.core import probabilistic
+
+        monkeypatch.setattr(
+            probabilistic,
+            "compute_thresholds",
+            lambda *_args, **_kwargs: (0.9, 0.4),
+        )
+        result = dedupe_df(self._rows(), config=self._config())
+
+        assert result.review_pairs
+        assert all(0.4 <= score < 0.9 for _, _, score in result.review_pairs)
+
+    def test_match_result_attaches_review_candidates_without_matching(self):
+        from goldenmatch import match_df
+
+        target = pl.DataFrame({"name": ["Jon"], "zip": ["x"]})
+        reference = pl.DataFrame({"name": ["John"], "zip": ["x"]})
+        result = match_df(
+            target,
+            reference,
+            config=self._config(link_threshold=0.9, review_threshold=0.4),
+        )
+
+        assert result.review_pairs
+        assert result.matched is None
+        assert result.unmatched.num_rows == 1
 
 
 class TestModelReuseSkipsBuildBlocks:

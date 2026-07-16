@@ -104,12 +104,14 @@ function scoreProbabilisticBlocks(
     readonly acrossFilesOnly: boolean;
     readonly sourceLookup: ReadonlyMap<number, string>;
   },
-): ScoredPair[] {
+): { linked: ScoredPair[]; review: ScoredPair[] } {
   const em = trainEM(rows, mk, {
     blockingFields: collectBlockingFields(blockingConfig),
   });
-  const threshold = mk.linkThreshold ?? mk.threshold ?? 0.5;
-  const allPairs: ScoredPair[] = [];
+  const linkThreshold = mk.linkThreshold ?? mk.threshold ?? 0.5;
+  const reviewThreshold = Math.min(mk.reviewThreshold ?? 0.35, linkThreshold);
+  const linked: ScoredPair[] = [];
+  const review: ScoredPair[] = [];
 
   for (const block of blocks) {
     if (options.acrossFilesOnly) {
@@ -124,7 +126,7 @@ function scoreProbabilisticBlocks(
 
     let pairs = scoreProbabilistic(block.rows, mk, em, {
       excludePairs: matchedPairs,
-      threshold,
+      threshold: reviewThreshold,
     });
     if (options.acrossFilesOnly) {
       pairs = pairs.filter(
@@ -136,11 +138,30 @@ function scoreProbabilisticBlocks(
     for (const pair of pairs) {
       const key = pairKey(pair.idA, pair.idB);
       if (matchedPairs.has(key)) continue;
-      matchedPairs.add(key);
-      allPairs.push(pair);
+      if (pair.score >= linkThreshold) {
+        matchedPairs.add(key);
+        linked.push(pair);
+      } else {
+        review.push(pair);
+      }
     }
   }
-  return allPairs;
+  return { linked, review };
+}
+
+function finalizeReviewCandidates(
+  review: readonly ScoredPair[],
+  linked: readonly ScoredPair[],
+): ScoredPair[] {
+  const linkedKeys = new Set(linked.map((pair) => pairKey(pair.idA, pair.idB)));
+  const best = new Map<PairKey, ScoredPair>();
+  for (const pair of review) {
+    const key = pairKey(pair.idA, pair.idB);
+    if (linkedKeys.has(key)) continue;
+    const previous = best.get(key);
+    if (previous === undefined || pair.score > previous.score) best.set(key, pair);
+  }
+  return [...best.values()].sort((a, b) => a.idA - b.idA || a.idB - b.idB);
 }
 
 /** Collect all row IDs from rows. */
@@ -399,6 +420,7 @@ export async function runDedupePipeline(
 
   // ---- Step 4 & 5: Score exact + fuzzy matchkeys ----
   const allPairs: ScoredPair[] = [];
+  const reviewCandidates: ScoredPair[] = [];
   const matchedPairKeys = new Set<PairKey>();
   const sourceLookup = buildSourceLookup(processed);
 
@@ -444,16 +466,16 @@ export async function runDedupePipeline(
     } else {
       // Phase 2b: genuine Fellegi-Sunter training + blocked scoring.
       const blocks = buildBlocks(processed, blockingConfig);
-      allPairs.push(
-        ...scoreProbabilisticBlocks(
-          processed,
-          blocks,
-          mk,
-          matchedPairKeys,
-          blockingConfig,
-          { acrossFilesOnly, sourceLookup },
-        ),
+      const probabilistic = scoreProbabilisticBlocks(
+        processed,
+        blocks,
+        mk,
+        matchedPairKeys,
+        blockingConfig,
+        { acrossFilesOnly, sourceLookup },
       );
+      allPairs.push(...probabilistic.linked);
+      reviewCandidates.push(...probabilistic.review);
     }
   }
 
@@ -560,6 +582,7 @@ export async function runDedupePipeline(
     unique,
     stats,
     scoredPairs: finalPairs,
+    reviewCandidates: finalizeReviewCandidates(reviewCandidates, finalPairs),
     config,
     ...(postflightReport !== undefined ? { postflightReport } : {}),
     memoryStats,
@@ -595,6 +618,7 @@ export async function runMatchPipeline(
         unmatchedCount: targetRows.length,
         matchRate: 0,
       },
+      reviewCandidates: [],
     };
   }
 
@@ -656,6 +680,7 @@ export async function runMatchPipeline(
       ? { postflightReport: result.postflightReport }
       : {}),
     memoryStats: result.memoryStats ?? null,
+    reviewCandidates: result.reviewCandidates ?? [],
   };
 }
 
@@ -677,6 +702,7 @@ function _emptyDedupeResult(config: GoldenMatchConfig): DedupeResult {
       uniqueRecords: 0,
     },
     scoredPairs: [],
+    reviewCandidates: [],
     config,
     suggestions: [],
   };

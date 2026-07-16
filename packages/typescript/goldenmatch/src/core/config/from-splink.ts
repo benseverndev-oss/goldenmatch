@@ -19,7 +19,7 @@ import type {
 } from "../types.js";
 import { makeMatchkeyField, makeBlockingConfig } from "../types.js";
 import { parseConfig } from "./loader.js";
-import type { EMResult } from "../probabilistic.js";
+import { trainingConfigManifest, type EMResult } from "../probabilistic.js";
 
 export type Severity = "info" | "warning" | "error";
 
@@ -855,6 +855,11 @@ export function importEm(
     proportionMatched,
     tfFreqs: null,
     tfCollision: null,
+    trainingConfig: trainingConfigManifest({
+      name: "splink_import",
+      type: "probabilistic",
+      fields: comparisons.map((comparison) => comparison.field),
+    }),
   };
 }
 

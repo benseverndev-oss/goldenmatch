@@ -3,6 +3,52 @@ import { runDedupePipeline, runMatchPipeline, makeConfig, makeBlockingConfig } f
 import type { MatchkeyConfig, Row } from "../../src/core/index.js";
 
 describe("runDedupePipeline", () => {
+  it.each([
+    ["explicit", 0.9, 0.4],
+    ["absent review", 0.9, undefined],
+    ["calibrated defaults", undefined, undefined],
+  ])("attaches probabilistic review candidates with %s thresholds", async (
+    _case,
+    linkThreshold,
+    reviewThreshold,
+  ) => {
+    const rows: Row[] = [
+      { name: "John", zip: "x" },
+      { name: "Jon", zip: "x" },
+      { name: "John", zip: "x" },
+    ];
+    const mk: MatchkeyConfig = {
+      name: "fs_review",
+      type: "probabilistic",
+      fields: [{
+        field: "name",
+        transforms: [],
+        scorer: "jaro_winkler",
+        weight: 1,
+        levels: 3,
+        partialThreshold: 0.8,
+      }],
+      ...(linkThreshold === undefined ? {} : { linkThreshold }),
+      ...(reviewThreshold === undefined ? {} : { reviewThreshold }),
+    };
+    const config = makeConfig({
+      matchkeys: [mk],
+      blocking: makeBlockingConfig({
+        strategy: "static",
+        keys: [{ fields: ["zip"], transforms: [] }],
+      }),
+    });
+
+    const result = await runDedupePipeline(rows, config);
+
+    const reviewCandidates = result.reviewCandidates ?? [];
+    expect(result.reviewCandidates).toBeDefined();
+    if (linkThreshold === 0.9) {
+      expect(reviewCandidates.length).toBeGreaterThan(0);
+      expect(result.scoredPairs.every((pair) => pair.score >= 0.9)).toBe(true);
+    }
+  });
+
   it("with exact matchkey catches identical emails", async () => {
     const rows: Row[] = [
       { id: 1, email: "a@x.com", name: "Alice" },
@@ -79,6 +125,40 @@ describe("runDedupePipeline", () => {
 });
 
 describe("runMatchPipeline", () => {
+  it("attaches probabilistic review candidates without marking targets matched", async () => {
+    const mk: MatchkeyConfig = {
+      name: "fs_review",
+      type: "probabilistic",
+      fields: [{
+        field: "name",
+        transforms: [],
+        scorer: "jaro_winkler",
+        weight: 1,
+        levels: 3,
+        partialThreshold: 0.8,
+      }],
+      linkThreshold: 0.9,
+      reviewThreshold: 0.4,
+    };
+    const config = makeConfig({
+      matchkeys: [mk],
+      blocking: makeBlockingConfig({
+        strategy: "static",
+        keys: [{ fields: ["zip"], transforms: [] }],
+      }),
+    });
+
+    const result = await runMatchPipeline(
+      [{ name: "Jon", zip: "x" }],
+      [{ name: "John", zip: "x" }],
+      config,
+    );
+
+    expect(result.reviewCandidates?.length).toBeGreaterThan(0);
+    expect(result.matched).toHaveLength(0);
+    expect(result.unmatched).toHaveLength(1);
+  });
+
   it("finds cross-dataset matches", async () => {
     const target: Row[] = [{ id: 1, email: "a@x.com" }];
     const reference: Row[] = [

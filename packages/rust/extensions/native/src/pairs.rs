@@ -68,7 +68,11 @@ pub fn dedup_pairs_arrow(
     id_a: PyArrowType<ArrayData>,
     id_b: PyArrowType<ArrayData>,
     score: PyArrowType<ArrayData>,
-) -> PyResult<(PyArrowType<ArrayData>, PyArrowType<ArrayData>, PyArrowType<ArrayData>)> {
+) -> PyResult<(
+    PyArrowType<ArrayData>,
+    PyArrowType<ArrayData>,
+    PyArrowType<ArrayData>,
+)> {
     let (a, b, s) = goldenmatch_graph_core::dedup_pairs_arrow_data(id_a.0, id_b.0, score.0)
         .map_err(PyValueError::new_err)?;
     Ok((PyArrowType(a), PyArrowType(b), PyArrowType(s)))
