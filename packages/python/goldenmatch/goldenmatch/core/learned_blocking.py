@@ -288,6 +288,13 @@ def apply_learned_blocks(
 
     df = lf.collect()
     all_blocks: list = []
+    # Rules overlap, so the same member set can be produced by more than one rule.
+    # Dedup on the POSITIONS we already have rather than collecting each block to
+    # read back its __row_id__ values: __row_id__ is a with_row_index() column, so
+    # position <-> row_id is a bijection and frozenset(positions) is an equivalent
+    # set-identity key. Deduping here (not after the loop) also skips building the
+    # duplicate LazyFrame at all. Same blocks, same first-wins order, no collects.
+    seen: set[frozenset[int]] = set()
 
     for rule in rules[:3]:  # limit to top 3 rules
         rows = df.select(
@@ -309,6 +316,10 @@ def apply_learned_blocks(
                 continue
             if len(member_positions) > max_block_size:
                 continue
+            members = frozenset(member_positions)
+            if members in seen:
+                continue
+            seen.add(members)
             block_lf = df[sorted(member_positions)].lazy()
             all_blocks.append(BlockResult(
                 block_key=f"learned:{rule.key()}:{block_key}",
@@ -316,18 +327,8 @@ def apply_learned_blocks(
                 strategy="learned",
             ))
 
-    # Deduplicate blocks by member set
-    seen: set[frozenset[int]] = set()
-    deduped: list = []
-    for block in all_blocks:
-        block_df = block.materialize().native
-        members = frozenset(block_df["__row_id__"].to_list())
-        if members not in seen:
-            seen.add(members)
-            deduped.append(block)
-
-    logger.info("Learned blocking produced %d blocks from %d rules", len(deduped), min(len(rules), 3))
-    return deduped
+    logger.info("Learned blocking produced %d blocks from %d rules", len(all_blocks), min(len(rules), 3))
+    return all_blocks
 
 
 # ── Cache ─────────────────────────────────────────────────────────────────
