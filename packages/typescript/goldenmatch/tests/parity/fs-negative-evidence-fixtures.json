@@ -569,7 +569,55 @@
       },
       "em_model": {
         "__type__": "goldenmatch.EMResult",
-        "__version__": 1,
+        "__version__": 2,
+        "training_config": {
+          "fields": [
+            {
+              "column_weights": null,
+              "columns": null,
+              "field": "given_name",
+              "level_thresholds": null,
+              "levels": 2,
+              "model": null,
+              "partial_threshold": 0.8,
+              "scorer": "jaro_winkler",
+              "tf_adjustment": false,
+              "tf_freqs": null,
+              "transforms": [
+                "lowercase",
+                "strip"
+              ]
+            },
+            {
+              "column_weights": null,
+              "columns": null,
+              "field": "city",
+              "level_thresholds": null,
+              "levels": 2,
+              "model": null,
+              "partial_threshold": 0.8,
+              "scorer": "exact",
+              "tf_adjustment": false,
+              "tf_freqs": null,
+              "transforms": [
+                "lowercase",
+                "strip"
+              ]
+            }
+          ],
+          "negative_evidence": [
+            {
+              "derive_from": null,
+              "field": "phone",
+              "penalty_bits": null,
+              "scorer": "exact",
+              "threshold": 1.0,
+              "transforms": [
+                "digits_only"
+              ]
+            }
+          ]
+        },
         "converged": true,
         "iterations": 5,
         "m_probs": {
@@ -756,7 +804,55 @@
       },
       "em_model": {
         "__type__": "goldenmatch.EMResult",
-        "__version__": 1,
+        "__version__": 2,
+        "training_config": {
+          "fields": [
+            {
+              "column_weights": null,
+              "columns": null,
+              "field": "given_name",
+              "level_thresholds": null,
+              "levels": 2,
+              "model": null,
+              "partial_threshold": 0.8,
+              "scorer": "jaro_winkler",
+              "tf_adjustment": false,
+              "tf_freqs": null,
+              "transforms": [
+                "lowercase",
+                "strip"
+              ]
+            },
+            {
+              "column_weights": null,
+              "columns": null,
+              "field": "city",
+              "level_thresholds": null,
+              "levels": 2,
+              "model": null,
+              "partial_threshold": 0.8,
+              "scorer": "exact",
+              "tf_adjustment": false,
+              "tf_freqs": null,
+              "transforms": [
+                "lowercase",
+                "strip"
+              ]
+            }
+          ],
+          "negative_evidence": [
+            {
+              "derive_from": null,
+              "field": "phone",
+              "penalty_bits": 6.0,
+              "scorer": "exact",
+              "threshold": 1.0,
+              "transforms": [
+                "digits_only"
+              ]
+            }
+          ]
+        },
         "converged": true,
         "iterations": 5,
         "m_probs": {

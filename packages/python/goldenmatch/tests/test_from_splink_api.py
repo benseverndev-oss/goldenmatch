@@ -169,6 +169,8 @@ def test_trained_settings_produce_em_model():
 
     assert conversion.em_model is not None
     assert "first_name" in conversion.em_model.m_probs
+    assert conversion.em_model.to_dict()["__version__"] == 2
+    conversion.em_model.validate_for(conversion.config.get_matchkeys()[0])
 
 
 def test_bare_settings_em_model_is_none():
