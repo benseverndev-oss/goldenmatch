@@ -385,6 +385,49 @@ class TestLoadConfig:
         with pytest.raises(ValueError):
             load_config(path)
 
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"fields": []}, "at least one comparison field"),
+            (
+                {
+                    "fields": [
+                        {"field": "name", "scorer": "exact"},
+                        {"field": "name", "scorer": "jaro_winkler"},
+                    ]
+                },
+                "duplicate comparison fields.*name",
+            ),
+            ({"em_iterations": 0}, "em_iterations"),
+            (
+                {"link_threshold": 0.7, "review_threshold": 0.8},
+                "review_threshold.*less than or equal to.*link_threshold",
+            ),
+        ],
+    )
+    def test_load_rejects_invalid_probabilistic_config(
+        self, tmp_path, overrides, message
+    ):
+        matchkey = {
+            "name": "fs",
+            "type": "probabilistic",
+            "fields": [{"field": "name", "scorer": "exact"}],
+            **overrides,
+        }
+        path = tmp_path / "invalid-probabilistic.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "match_settings": {"matchkeys": [matchkey]},
+                    "blocking": {"keys": [{"fields": ["name"]}]},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match=message):
+            load_config(path)
+
 
 def test_golden_rules_cluster_quality_defaults():
     """New cluster quality config fields have correct defaults."""
