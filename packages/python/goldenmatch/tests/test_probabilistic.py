@@ -984,6 +984,85 @@ class TestDedupeWithPersistedModel:
         assert _parts(second) == _parts(baseline)
 
 
+class TestProbabilisticReviewCandidates:
+    @staticmethod
+    def _config(*, link_threshold=None, review_threshold=None):
+        return GoldenMatchConfig(
+            matchkeys=[MatchkeyConfig(
+                name="fs_review",
+                type="probabilistic",
+                fields=[MatchkeyField(
+                    field="name",
+                    scorer="jaro_winkler",
+                    levels=3,
+                    partial_threshold=0.8,
+                )],
+                link_threshold=link_threshold,
+                review_threshold=review_threshold,
+            )],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+        )
+
+    @staticmethod
+    def _rows():
+        return pl.DataFrame({
+            "name": ["John", "Jon", "John"],
+            "zip": ["x", "x", "x"],
+        })
+
+    def test_explicit_review_band_is_attached_without_merging(self):
+        from goldenmatch import dedupe_df
+
+        result = dedupe_df(
+            self._rows(),
+            config=self._config(link_threshold=0.9, review_threshold=0.4),
+        )
+
+        assert result.review_pairs
+        assert all(0.4 <= score < 0.9 for _, _, score in result.review_pairs)
+        assert all(score >= 0.9 for _, _, score in result.scored_pairs)
+
+    def test_absent_review_threshold_uses_calibrated_review_cut(self):
+        from goldenmatch import dedupe_df
+
+        result = dedupe_df(
+            self._rows(),
+            config=self._config(link_threshold=0.9),
+        )
+
+        assert result.review_pairs
+        assert all(0.35 <= score < 0.9 for _, _, score in result.review_pairs)
+
+    def test_absent_link_and_review_thresholds_use_calibration(self, monkeypatch):
+        from goldenmatch import dedupe_df
+        from goldenmatch.core import probabilistic
+
+        monkeypatch.setattr(
+            probabilistic,
+            "compute_thresholds",
+            lambda *_args, **_kwargs: (0.9, 0.4),
+        )
+        result = dedupe_df(self._rows(), config=self._config())
+
+        assert result.review_pairs
+        assert all(0.4 <= score < 0.9 for _, _, score in result.review_pairs)
+
+    def test_match_result_attaches_review_candidates_without_matching(self):
+        from goldenmatch import match_df
+
+        target = pl.DataFrame({"name": ["Jon"], "zip": ["x"]})
+        reference = pl.DataFrame({"name": ["John"], "zip": ["x"]})
+        result = match_df(
+            target,
+            reference,
+            config=self._config(link_threshold=0.9, review_threshold=0.4),
+        )
+
+        assert result.review_pairs
+        assert result.matched is None
+        assert result.unmatched.num_rows == 1
+
+
 class TestModelReuseSkipsBuildBlocks:
     """Issue #1798: preloaded FS model + bucket route must skip build_blocks.
 

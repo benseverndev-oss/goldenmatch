@@ -213,6 +213,9 @@ class DedupeResult:
     unique: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
     scored_pairs: list[tuple[int, int, float]] = field(default_factory=list)
+    # Probabilistic pairs in [review_threshold, link_threshold). They are
+    # attached for stewardship and never participate in clustering.
+    review_pairs: list[tuple[int, int, float]] = field(default_factory=list)
     config: Any = None
     postflight_report: PostflightReport | None = None
     # Note: memory_stats is also attached to postflight_report.memory_stats by
@@ -350,6 +353,7 @@ class MatchResult:
     matched: Any | None = None  # pa.Table (v3.0.0)
     unmatched: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
+    review_pairs: list[tuple[int, int, float]] = field(default_factory=list)
     postflight_report: PostflightReport | None = None
     # See DedupeResult.memory_stats note — same intentional duplication.
     memory_stats: CorrectionStats | None = None
@@ -513,6 +517,7 @@ def dedupe(
         unique=_to_result_table(result.get("unique")),
         stats=_extract_stats(result),
         scored_pairs=result.get("scored_pairs", []),
+        review_pairs=result.get("review_pairs", []),
         config=cfg,
         postflight_report=_attach_memory_to_postflight(
             result.get("postflight_report"), _mem
@@ -774,6 +779,7 @@ def dedupe_df(
         unique=_to_result_table(result.get("unique")),
         stats=_extract_stats(result),
         scored_pairs=result.get("scored_pairs", []),
+        review_pairs=result.get("review_pairs", []),
         config=config,
         postflight_report=pf,
         memory_stats=_mem,
@@ -979,6 +985,7 @@ def match_df(
         matched=_to_result_table(result.get("matched")),
         unmatched=_to_result_table(result.get("unmatched")),
         stats=_extract_stats(result),
+        review_pairs=result.get("review_pairs", []),
         postflight_report=pf,
         memory_stats=_mem,
         lint_findings=_lint_findings,
@@ -1171,6 +1178,7 @@ def match(
         matched=_to_result_table(result.get("matched")),
         unmatched=_to_result_table(result.get("unmatched")),
         stats=_extract_stats(result),
+        review_pairs=result.get("review_pairs", []),
         postflight_report=_attach_memory_to_postflight(
             result.get("postflight_report"), _mem
         ),

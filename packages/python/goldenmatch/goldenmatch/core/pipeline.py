@@ -83,6 +83,38 @@ def _unwrap_llm_pairs(
     return result
 
 
+def _prepare_probabilistic_review_scoring(mk: Any, em_result: Any) -> tuple[Any, float]:
+    """Score down to the review cut while preserving the real link cutoff."""
+    from goldenmatch.core.probabilistic import resolve_thresholds
+
+    link_threshold, review_threshold = resolve_thresholds(mk, em_result)
+    scoring_mk = mk.model_copy(update={"link_threshold": review_threshold})
+    return scoring_mk, link_threshold
+
+
+def _split_probabilistic_pairs(
+    pairs: list[tuple[int, int, float]], link_threshold: float
+) -> tuple[list[tuple[int, int, float]], list[tuple[int, int, float]]]:
+    linked = [pair for pair in pairs if pair[2] >= link_threshold]
+    review = [pair for pair in pairs if pair[2] < link_threshold]
+    return linked, review
+
+
+def _finalize_review_pairs(
+    review_pairs: list[tuple[int, int, float]],
+    linked_pairs: list[tuple[int, int, float]],
+) -> list[tuple[int, int, float]]:
+    """Max-dedupe candidates and remove anything linked by another rule."""
+    from goldenmatch.core.pairs import dedup_pairs_max_score
+
+    linked_keys = {(min(a, b), max(a, b)) for a, b, _ in linked_pairs}
+    return [
+        pair
+        for pair in dedup_pairs_max_score(review_pairs)
+        if (pair[0], pair[1]) not in linked_keys
+    ]
+
+
 # Bucket is the DEFAULT fuzzy scorer within a memory-safe row band. It scores all
 # blocks in one batched pass (block-key + bucket assignment off the collected frame,
 # no per-block LazyFrame), where the legacy per-block ``score_blocks_parallel`` spins
@@ -2248,6 +2280,7 @@ def _run_dedupe_pipeline(
 
     # ── Step 3: BLOCK + COMPARE (cascading: exact first, then fuzzy) ──
     all_pairs: list[tuple[int, int, float]] = []
+    review_pairs: list[tuple[int, int, float]] = []
     matched_pairs: set[tuple[int, int]] = set()
 
     # Arrow roadmap Phase A: when GOLDENMATCH_COLUMNAR_PIPELINE=1 and the config
@@ -2624,6 +2657,9 @@ def _run_dedupe_pipeline(
                 blocks=blocks,
                 blocking_fields=blocking_fields,
             )
+            scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
+                mk, em_result
+            )
             logger.info(
                 "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
                 em_result.converged, em_result.iterations, em_result.proportion_matched,
@@ -2645,13 +2681,17 @@ def _run_dedupe_pipeline(
                 pairs = score_buckets(
                     collected_df,
                     config.blocking,
-                    mk,
+                    scoring_mk,
                     matched_pairs,
                     n_buckets=config.n_buckets,
                     across_files_only=across_files_only,
                     source_lookup=source_lookup if across_files_only else None,
                     em_result=em_result,
                 )
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
                 for a, b, _s in pairs:
@@ -2680,7 +2720,7 @@ def _run_dedupe_pipeline(
             if _bench_dump_dir:
                 # Bench path stays per-block so candidate/emitted pair accounting
                 # is exact (the batched path doesn't expose per-block candidates).
-                block_scorer = probabilistic_block_scorer(mk, em_result)
+                block_scorer = probabilistic_block_scorer(scoring_mk, em_result)
                 for block in blocks:
                     block_df = block.materialize().native
                     _accumulate_block_candidate_pairs(
@@ -2692,6 +2732,10 @@ def _run_dedupe_pipeline(
                             (a, b, s) for a, b, s in pairs
                             if source_lookup.get(a) != source_lookup.get(b)
                         ]
+                    pairs, candidates = _split_probabilistic_pairs(
+                        pairs, link_threshold
+                    )
+                    review_pairs.extend(candidates)
                     all_pairs.extend(pairs)
                     for a, b, _s in pairs:
                         matched_pairs.add((min(a, b), max(a, b)))
@@ -2707,13 +2751,17 @@ def _run_dedupe_pipeline(
                     score_probabilistic_blocks_batched,
                 )
                 pairs = score_probabilistic_blocks_batched(
-                    blocks, mk, em_result, matched_pairs
+                    blocks, scoring_mk, em_result, matched_pairs
                 )
                 if across_files_only:
                     pairs = [
                         (a, b, s) for a, b, s in pairs
                         if source_lookup.get(a) != source_lookup.get(b)
                     ]
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
@@ -3685,6 +3733,7 @@ def _run_dedupe_pipeline(
         "memory_stats": memory_stats,
         "identity_summary": identity_summary,
         "scored_pairs": scored_pairs,
+        "review_pairs": _finalize_review_pairs(review_pairs, scored_pairs),
         "llm_cost": llm_budget_summary,
         "throughput_posture": _throughput_posture,
         "golden_fused_used": golden_fused_used,
@@ -4062,6 +4111,7 @@ def _run_match_pipeline(
 
     # ── Step 4: Find matches (cascading: exact first, then fuzzy) ──
     all_pairs: list[tuple[int, int, float]] = []
+    review_pairs: list[tuple[int, int, float]] = []
     matched_pairs: set[tuple[int, int]] = set()
 
     # Phase 1: Exact matchkeys (fast)
@@ -4125,6 +4175,9 @@ def _run_match_pipeline(
                 blocking_fields=blocking_fields,
                 target_ids=target_ids,
             )
+            scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
+                mk, em_result
+            )
             # Default-route FS to the memory-bounded bucket scorer when the
             # native FS kernel is available (issue #1792) or backend='bucket'
             # is explicit; else the per-block batched scorer (legacy default).
@@ -4135,12 +4188,16 @@ def _run_match_pipeline(
                 pairs = score_buckets(
                     combined_df,
                     config.blocking,
-                    mk,
+                    scoring_mk,
                     matched_pairs,
                     n_buckets=config.n_buckets,
                     target_ids=target_ids,
                     em_result=em_result,
                 )
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
@@ -4148,9 +4205,11 @@ def _run_match_pipeline(
             # Blocks scored in parallel across cores (GIL-releasing FS kernels).
             # Does not mutate matched_pairs; fold the returned pairs in below.
             pairs = score_probabilistic_blocks_batched(
-                blocks, mk, em_result, matched_pairs,
+                blocks, scoring_mk, em_result, matched_pairs,
                 target_ids=target_ids,
             )
+            pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+            review_pairs.extend(candidates)
             all_pairs.extend(pairs)
             for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
@@ -4272,6 +4331,7 @@ def _run_match_pipeline(
         "quarantine": quarantine_df_match,
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
+        "review_pairs": _finalize_review_pairs(review_pairs, all_pairs),
     }
 
 
@@ -4304,6 +4364,7 @@ def _run_match_scoring_and_output(
     combined_native = combined_frame.native  # pa.Table
 
     all_pairs: list[tuple[int, int, float]] = []
+    review_pairs: list[tuple[int, int, float]] = []
     matched_pairs: set[tuple[int, int]] = set()
 
     # Phase 1: exact matchkeys
@@ -4365,6 +4426,9 @@ def _run_match_scoring_and_output(
                 blocking_fields=blocking_fields,
                 target_ids=target_ids,
             )
+            scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
+                mk, em_result
+            )
             # Default-route FS to the memory-bounded bucket scorer when the
             # native FS kernel is available (issue #1792) or backend='bucket'
             # is explicit; else the per-block batched scorer (legacy default).
@@ -4376,20 +4440,26 @@ def _run_match_scoring_and_output(
                 pairs = score_buckets(
                     combined_native,
                     config.blocking,
-                    mk,
+                    scoring_mk,
                     matched_pairs,
                     n_buckets=config.n_buckets,
                     target_ids=target_ids,
                     em_result=em_result,
                 )
+                pairs, candidates = _split_probabilistic_pairs(
+                    pairs, link_threshold
+                )
+                review_pairs.extend(candidates)
                 all_pairs.extend(pairs)
                 for a, b, _s in pairs:
                     matched_pairs.add((min(a, b), max(a, b)))
                 continue
             pairs = score_probabilistic_blocks_batched(
-                blocks, mk, em_result, matched_pairs,
+                blocks, scoring_mk, em_result, matched_pairs,
                 target_ids=target_ids,
             )
+            pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+            review_pairs.extend(candidates)
             all_pairs.extend(pairs)
             for a, b, _s in pairs:
                 matched_pairs.add((min(a, b), max(a, b)))
@@ -4502,6 +4572,7 @@ def _run_match_scoring_and_output(
         "quarantine": quarantine_df_match,
         "postflight_report": postflight_report,
         "memory_stats": memory_stats,
+        "review_pairs": _finalize_review_pairs(review_pairs, all_pairs),
     }
 
 
