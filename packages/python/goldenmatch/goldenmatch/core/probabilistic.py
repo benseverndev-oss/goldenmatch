@@ -793,13 +793,13 @@ def _warn_ne_blocking_overlap(ne_fields: list, blocking_fields: list[str]) -> No
             )
 
 
-def _sample_blocked_pairs(
+def _sample_blocked_pairs_with_fields(
     blocks: list,
     n_pairs: int = 10000,
     seed: int = 42,
     target_ids: set[int] | None = None,
-) -> list[tuple[int, int]]:
-    """Sample within-block pairs for EM training.
+) -> tuple[list[tuple[int, int]], list[frozenset[str]]]:
+    """Sample within-block pairs plus the fields conditioning each pair.
 
     Within-block pairs have a far higher true-match rate than random pairs, so
     they're what EM needs to estimate m. We only need ``n_pairs`` of them. The
@@ -819,15 +819,30 @@ def _sample_blocked_pairs(
     # is a string attribute set at construction). Ties (rare cross-pass key
     # collisions) fall back to the original index, adjacent same-key blocks being
     # near-equivalent anyway.
-    order = sorted(range(len(blocks)), key=lambda i: (str(getattr(blocks[i], "block_key", "")), i))
+    order = sorted(
+        range(len(blocks)),
+        key=lambda i: (
+            str(getattr(blocks[i], "block_key", "")),
+            tuple(getattr(blocks[i], "blocking_fields", ()) or ()),
+            i,
+        ),
+    )
     rng.shuffle(order)
     # Headroom over n_pairs so the post-dedup downsample still has enough to
     # draw from even when blocks overlap or are tiny.
     target = n_pairs * 3
     all_block_pairs: list[tuple[int, int]] = []
+    all_block_fields: list[frozenset[str]] = []
+    required_conditioning = {
+        frozenset(getattr(block, "blocking_fields", ()) or ())
+        for block in blocks
+    }
+    seen_conditioning: set[frozenset[str]] = set()
 
     for bi in order:
         block = blocks[bi]
+        conditioned = frozenset(getattr(block, "blocking_fields", ()) or ())
+        before_block = len(all_block_pairs)
         row_ids = sorted(
             block.materialize().column("__row_id__").to_list()
         )  # canonical order before the seeded sample
@@ -836,6 +851,7 @@ def _sample_blocked_pairs(
         # Limit per-block pairs for large blocks. In linkage mode preserve both
         # sides even on highly imbalanced blocks instead of sampling 100 ids
         # from the combined population and potentially missing the small side.
+        sampled_ids: list[int] = []
         if target_ids is not None:
             target_rows = [row_id for row_id in row_ids if row_id in target_ids]
             reference_rows = [row_id for row_id in row_ids if row_id not in target_ids]
@@ -853,9 +869,8 @@ def _sample_blocked_pairs(
                 reference_rows = rng.sample(reference_rows, n_reference)
             for target in target_rows:
                 for reference in reference_rows:
-                    all_block_pairs.append(
-                        (min(target, reference), max(target, reference))
-                    )
+                    all_block_pairs.append((min(target, reference), max(target, reference)))
+                    all_block_fields.append(conditioned)
         elif len(row_ids) > 100:
             sampled_ids = rng.sample(row_ids, 100)
         else:
@@ -865,18 +880,71 @@ def _sample_blocked_pairs(
                 for j in range(i + 1, len(sampled_ids)):
                     all_block_pairs.append((min(sampled_ids[i], sampled_ids[j]),
                                             max(sampled_ids[i], sampled_ids[j])))
-        if len(all_block_pairs) >= target:
+                    all_block_fields.append(conditioned)
+        if len(all_block_pairs) > before_block:
+            seen_conditioning.add(conditioned)
+        if (
+            len(all_block_pairs) >= target
+            and required_conditioning.issubset(seen_conditioning)
+        ):
             break
 
     # Deduplicate and sample down if too many
-    unique_pairs = set(all_block_pairs)
+    # A pair reached through multiple passes is conditioned only on fields
+    # common to EVERY route that emitted it. A field used by just one route is
+    # still discriminative under the union-of-passes candidate mechanism.
+    pair_fields: dict[tuple[int, int], set[str]] = {}
+    for pair, fields in zip(all_block_pairs, all_block_fields):
+        if pair in pair_fields:
+            pair_fields[pair].intersection_update(fields)
+        else:
+            pair_fields[pair] = set(fields)
+    unique_pairs = set(pair_fields)
     all_block_pairs = (
         sorted(unique_pairs) if target_ids is not None else list(unique_pairs)
     )
     if len(all_block_pairs) > n_pairs:
         all_block_pairs = rng.sample(all_block_pairs, n_pairs)
 
-    return all_block_pairs
+    return all_block_pairs, [frozenset(pair_fields[p]) for p in all_block_pairs]
+
+
+def _sample_blocked_pairs(
+    blocks: list,
+    n_pairs: int = 10000,
+    seed: int = 42,
+    target_ids: set[int] | None = None,
+) -> list[tuple[int, int]]:
+    """Backward-compatible pair-only view of the provenance-aware sampler."""
+    pairs, _ = _sample_blocked_pairs_with_fields(
+        blocks, n_pairs, seed, target_ids=target_ids
+    )
+    return pairs
+
+
+def _training_pair_conditioning(
+    blocks: list | None,
+    fallback_pairs: list[tuple[int, int]],
+    blocking_fields: list[str],
+    n_pairs: int,
+    seed: int,
+    target_ids: set[int] | None = None,
+) -> tuple[list[tuple[int, int]], list[frozenset[str]]]:
+    """Return EM pairs and the blocking fields conditioning each pair.
+
+    Old/custom ``BlockResult`` producers do not carry pass provenance. For
+    those callers, retain the legacy interpretation that every configured
+    blocking field conditioned every training pair.
+    """
+    if blocks:
+        pairs, conditioning = _sample_blocked_pairs_with_fields(
+            blocks, n_pairs, seed, target_ids=target_ids
+        )
+        if not any(conditioning):
+            conditioning = [frozenset(blocking_fields)] * len(pairs)
+        return pairs, conditioning
+
+    return fallback_pairs, [frozenset(blocking_fields)] * len(fallback_pairs)
 
 
 def train_em(
@@ -896,9 +964,10 @@ def train_em(
     This produces much better m/u estimates because blocked pairs have
     a higher true match rate than random pairs from the full dataset.
 
-    IMPORTANT: Fields used for blocking are always "agree" within blocks,
-    so they provide no discrimination for EM. If blocking_fields is provided,
-    those fields get fixed high-confidence priors instead of EM-estimated values.
+    Blocking is conditioned at the sampled-pair/pass level. A field contributes
+    no likelihood for pairs emitted by a pass that blocks on it, but remains
+    learnable from pairs emitted by other passes. Fields that condition every
+    sampled pair retain the legacy fixed-prior treatment.
 
     Args:
         df: DataFrame with __row_id__ and field columns.
@@ -908,7 +977,8 @@ def train_em(
         convergence: Stop when max change in any probability < this.
         seed: Random seed for pair sampling.
         blocks: Optional list of BlockResult for within-block sampling.
-        blocking_fields: Fields used for blocking (excluded from EM training).
+        blocking_fields: Union of configured blocking fields. Used as a legacy
+            fallback when blocks do not carry per-pass provenance.
         target_ids: Target-side row ids for two-table linkage training. When
             provided, random and blocked samples contain only target-reference
             pairs.
@@ -960,15 +1030,14 @@ def train_em(
     # the dominant training-memory cost at 10M+ rows). Sampling reads only
     # ``__row_id__`` / the blocks, never the lookup, so the sampled pairs — and
     # the trained model — are unchanged by this reordering.
-    if blocks:
-        blocked_pairs = _sample_blocked_pairs(
-            blocks,
-            n_sample_pairs,
-            seed,
-            target_ids=target_ids,
-        )
-    else:
-        blocked_pairs = random_pairs
+    blocked_pairs, pair_conditioning = _training_pair_conditioning(
+        blocks,
+        random_pairs,
+        blocking_fields,
+        n_sample_pairs,
+        seed,
+        target_ids=target_ids,
+    )
     row_lookup = _row_lookup_for_pairs(df, cols, [random_pairs, blocked_pairs])
 
     random_matrix = _build_comparison_matrix(random_pairs, row_lookup, mk)
@@ -981,9 +1050,34 @@ def train_em(
         total = sum(counts) + n_levels * 1e-6
         u_probs[f.field] = [(c + 1e-6) / total for c in counts]
 
-    # Override blocking fields with neutral u (since random pairs give biased u for blocked fields)
+    conditioned_mask = np.asarray(
+        [
+            [field.field in conditioned for field in mk.fields]
+            for conditioned in pair_conditioning
+        ],
+        dtype=bool,
+    )
+    always_conditioned = {
+        field.field
+        for j, field in enumerate(mk.fields)
+        if len(conditioned_mask) and bool(conditioned_mask[:, j].all())
+    }
+    ne_conditioned_mask = np.zeros(
+        (len(pair_conditioning), len(ne_fields_em)), dtype=bool
+    )
+    for i, conditioned in enumerate(pair_conditioning):
+        for j, ne in enumerate(ne_fields_em):
+            ne_conditioned_mask[i, j] = ne.field in conditioned
+    always_conditioned_ne = {
+        ne.field
+        for j, ne in enumerate(ne_fields_em)
+        if len(ne_conditioned_mask) and bool(ne_conditioned_mask[:, j].all())
+    }
+
+    # A field that conditions every training pair has no unbiased sample from
+    # which EM can learn it, so retain the legacy neutral-u/fixed-weight prior.
     for f in mk.fields:
-        if f.field in blocking_fields:
+        if f.field in always_conditioned:
             if f.levels == 2:
                 u_probs[f.field] = [0.50, 0.50]  # neutral
             elif f.levels == 3:
@@ -1048,8 +1142,9 @@ def train_em(
             levels_j = comp_matrix[:, j]
             m_table = np.log(np.maximum(np.asarray(m_probs[f.field], dtype=np.float64), 1e-10))
             u_table = np.log(np.maximum(np.asarray(u_probs[f.field], dtype=np.float64), 1e-10))
-            log_m += m_table[levels_j]
-            log_u += u_table[levels_j]
+            eligible = ~conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
 
         # NE dims: same E-step accumulation, 2-entry [fired, not_fired]
         # lookup tables indexed by the NE matrix's {0, 1} columns.
@@ -1057,8 +1152,9 @@ def train_em(
             levels_j = ne_matrix[:, j]
             m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
             u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
-            log_m += m_table[levels_j]
-            log_u += u_table[levels_j]
+            eligible = ~ne_conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
 
         log_match = math.log(max(p_match, 1e-10)) + log_m
         log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
@@ -1073,32 +1169,44 @@ def train_em(
         p_match = max(total_match / n_pairs, 1e-6)
 
         for j, f in enumerate(mk.fields):
-            if f.field in blocking_fields:
+            if f.field in always_conditioned:
                 continue  # skip blocked fields
             n_levels = f.levels
             new_m = [0.0] * n_levels
+            eligible = ~conditioned_mask[:, j]
+            eligible_match = posteriors[eligible].sum()
             for level in range(n_levels):
-                mask = comp_matrix[:, j] == level
-                new_m[level] = (posteriors[mask].sum() + 1e-6) / (total_match + n_levels * 1e-6)
+                mask = eligible & (comp_matrix[:, j] == level)
+                new_m[level] = (posteriors[mask].sum() + 1e-6) / (
+                    eligible_match + n_levels * 1e-6
+                )
             m_probs[f.field] = new_m
 
-        # NE dims: same M-step update. Blocking-field neutralization does NOT
-        # apply here — an NE dimension is never a blocking key.
+        # NE dimensions use the same pair-level conditioning. A field that
+        # blocks one pass can still learn its veto from the other passes.
         for j, ne in enumerate(ne_fields_em):
+            if ne.field in always_conditioned_ne:
+                continue
             new_m_ne = [0.0, 0.0]
+            eligible = ~ne_conditioned_mask[:, j]
+            eligible_match = posteriors[eligible].sum()
             for level in range(2):
-                mask = ne_matrix[:, j] == level
-                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (total_match + 2 * 1e-6)
+                mask = eligible & (ne_matrix[:, j] == level)
+                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (
+                    eligible_match + 2 * 1e-6
+                )
             m_probs_ne[ne.field] = new_m_ne
 
         # Check convergence (only m changes)
         max_delta = 0.0
         for f in mk.fields:
-            if f.field in blocking_fields:
+            if f.field in always_conditioned:
                 continue
             for k in range(f.levels):
                 max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
         for ne in ne_fields_em:
+            if ne.field in always_conditioned_ne:
+                continue
             for k in range(2):
                 max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
 
@@ -1115,7 +1223,7 @@ def train_em(
     # fields that are always "agree" within blocks
     match_weights = {}
     for f in mk.fields:
-        if f.field in blocking_fields:
+        if f.field in always_conditioned:
             # Fixed weights: linearly increasing from -3 to +3
             n = f.levels
             match_weights[f.field] = [
@@ -1155,7 +1263,7 @@ def train_em(
     if _mono_mode != "off":
         _ne_skip = {k for k in match_weights if k.startswith("__ne__")}
         repaired, adjusted = enforce_weight_monotonicity(
-            match_weights, skip_fields=list(blocking_fields) + list(_ne_skip),
+            match_weights, skip_fields=list(always_conditioned) + list(_ne_skip),
         )
         if adjusted and _mono_mode == "enforce":
             match_weights = repaired
@@ -1533,11 +1641,12 @@ def train_em_continuous(
 
 
     cols = [f.field for f in mk.fields if f.field != "__record__"]
+    fallback_pairs = [] if blocks else _sample_pairs(df, n_sample_pairs, seed)
+    pairs, pair_conditioning = _training_pair_conditioning(
+        blocks, fallback_pairs, blocking_fields, n_sample_pairs, seed
+    )
     if blocks:
-        pairs = _sample_blocked_pairs(blocks, n_sample_pairs, seed)
         logger.info("Continuous EM training on %d within-block pairs", len(pairs))
-    else:
-        pairs = _sample_pairs(df, n_sample_pairs, seed)
     # Row dicts for ONLY the sampled ids (#1803 item 4).
     row_lookup = _row_lookup_for_pairs(df, cols, [pairs])
 
@@ -1555,6 +1664,18 @@ def train_em_continuous(
     score_matrix = _build_continuous_matrix(pairs, row_lookup, mk)
     n_pairs = len(pairs)
     _n_fields = len(mk.fields)
+    conditioned_mask = np.asarray(
+        [
+            [field.field in conditioned for field in mk.fields]
+            for conditioned in pair_conditioning
+        ],
+        dtype=bool,
+    )
+    always_conditioned = {
+        field.field
+        for j, field in enumerate(mk.fields)
+        if bool(conditioned_mask[:, j].all())
+    }
 
     # Initialize with strong priors — matches score high, non-matches score low.
     # Use the actual score distribution to set non-match priors at the median.
@@ -1563,8 +1684,8 @@ def train_em_continuous(
     # Compute actual score statistics for better initialization
     field_medians = {}
     for j, f in enumerate(mk.fields):
-        if f.field not in blocking_fields:
-            col = score_matrix[:, j]
+        if f.field not in always_conditioned:
+            col = score_matrix[~conditioned_mask[:, j], j]
             field_medians[f.field] = float(np.median(col))
 
     m_mean = {f.field: 0.90 for f in mk.fields}  # matches should score very high
@@ -1574,7 +1695,7 @@ def train_em_continuous(
 
     # Override blocking fields
     for f in mk.fields:
-        if f.field in blocking_fields:
+        if f.field in always_conditioned:
             m_mean[f.field] = 0.99
             m_var[f.field] = 0.001
             u_mean[f.field] = 0.99  # always agree in blocks
@@ -1582,7 +1703,7 @@ def train_em_continuous(
 
     converged = False
     # Active (non-blocking) field column indices, fixed across iterations.
-    active_j = [j for j, f in enumerate(mk.fields) if f.field not in blocking_fields]
+    active_j = [j for j, f in enumerate(mk.fields) if f.field not in always_conditioned]
     for iteration in range(max_iterations):
         old_m_mean = dict(m_mean)
         old_u_mean = dict(u_mean)
@@ -1599,8 +1720,15 @@ def train_em_continuous(
             s = score_matrix[:, j]
             var_m = max(m_var[f.field], 1e-6)
             var_u = max(u_var[f.field], 1e-6)
-            log_m += -0.5 * ((s - m_mean[f.field]) ** 2) / var_m - 0.5 * math.log(var_m)
-            log_u += -0.5 * ((s - u_mean[f.field]) ** 2) / var_u - 0.5 * math.log(var_u)
+            eligible = ~conditioned_mask[:, j]
+            log_m[eligible] += (
+                -0.5 * ((s[eligible] - m_mean[f.field]) ** 2) / var_m
+                - 0.5 * math.log(var_m)
+            )
+            log_u[eligible] += (
+                -0.5 * ((s[eligible] - u_mean[f.field]) ** 2) / var_u
+                - 0.5 * math.log(var_u)
+            )
 
         max_log = np.maximum(log_m, log_u)
         e_m = np.exp(log_m - max_log)
@@ -1609,27 +1737,35 @@ def train_em_continuous(
 
         # M-step
         total_match = posteriors.sum()
-        total_nonmatch = n_pairs - total_match
         p_match = max(total_match / n_pairs, 1e-6)
 
         for j, f in enumerate(mk.fields):
-            if f.field in blocking_fields:
+            if f.field in always_conditioned:
                 continue
-            scores = score_matrix[:, j]
+            eligible = ~conditioned_mask[:, j]
+            scores = score_matrix[eligible, j]
+            field_posteriors = posteriors[eligible]
+            field_match = field_posteriors.sum()
             # Weighted mean and variance for matches
-            if total_match > 1e-6:
-                m_mean[f.field] = float(np.average(scores, weights=posteriors))
-                m_var[f.field] = float(np.average((scores - m_mean[f.field]) ** 2, weights=posteriors)) + 1e-6
+            if field_match > 1e-6:
+                m_mean[f.field] = float(np.average(scores, weights=field_posteriors))
+                m_var[f.field] = float(
+                    np.average(
+                        (scores - m_mean[f.field]) ** 2,
+                        weights=field_posteriors,
+                    )
+                ) + 1e-6
             # Weighted mean and variance for non-matches
-            w_nonmatch = 1 - posteriors
-            if total_nonmatch > 1e-6:
+            w_nonmatch = 1 - field_posteriors
+            field_nonmatch = w_nonmatch.sum()
+            if field_nonmatch > 1e-6:
                 u_mean[f.field] = float(np.average(scores, weights=w_nonmatch))
                 u_var[f.field] = float(np.average((scores - u_mean[f.field]) ** 2, weights=w_nonmatch)) + 1e-6
 
         # Convergence check
         max_delta = 0.0
         for f in mk.fields:
-            if f.field in blocking_fields:
+            if f.field in always_conditioned:
                 continue
             max_delta = max(max_delta, abs(m_mean[f.field] - old_m_mean[f.field]))
             max_delta = max(max_delta, abs(u_mean[f.field] - old_u_mean[f.field]))

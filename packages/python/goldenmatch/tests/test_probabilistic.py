@@ -782,6 +782,105 @@ class TestEMWithBlockingFields:
         result = train_em(df, mk, n_sample_pairs=100, blocking_fields=["zip"])
         assert result.u_probs["zip"] == [0.50, 0.50]
 
+    def test_multi_pass_conditions_fields_per_pass_and_is_order_stable(self):
+        """A field used by one pass remains evidence in another pass."""
+        from goldenmatch.core.blocker import build_blocks
+
+        df = pl.DataFrame({
+            "__row_id__": list(range(12)),
+            "zip": [f"Z{i // 4}" for i in range(12)],
+            "last_name": [f"L{i % 4}" for i in range(12)],
+        })
+        mk = MatchkeyConfig(
+            name="multi_pass_fs",
+            type="probabilistic",
+            fields=[
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+                MatchkeyField(field="last_name", scorer="exact", levels=2),
+            ],
+        )
+        zip_pass = BlockingKeyConfig(fields=["zip"])
+        name_pass = BlockingKeyConfig(fields=["last_name"])
+
+        def train(passes):
+            blocks = build_blocks(
+                df.lazy(),
+                BlockingConfig(strategy="multi_pass", passes=passes),
+            )
+            assert {b.blocking_fields for b in blocks} == {
+                ("zip",),
+                ("last_name",),
+            }
+            return train_em(
+                df,
+                mk,
+                n_sample_pairs=100,
+                max_iterations=10,
+                blocks=blocks,
+                blocking_fields=["zip", "last_name"],
+            )
+
+        forward = train([zip_pass, name_pass])
+        reversed_plan = train([name_pass, zip_pass])
+
+        # The old global-union behavior fixed both fields to [-3, 3]. Each is
+        # now learned from candidate pairs emitted by the other pass.
+        assert forward.match_weights["zip"] != [-3.0, 3.0]
+        assert forward.match_weights["last_name"] != [-3.0, 3.0]
+        assert reversed_plan.m_probs == forward.m_probs
+        assert reversed_plan.match_weights == forward.match_weights
+
+        rows = df.to_dicts()
+        forward_scores = [
+            score_pair_probabilistic(rows[i], rows[j], mk, forward)
+            for i in range(len(rows))
+            for j in range(i + 1, len(rows))
+        ]
+        reversed_scores = [
+            score_pair_probabilistic(rows[i], rows[j], mk, reversed_plan)
+            for i in range(len(rows))
+            for j in range(i + 1, len(rows))
+        ]
+        assert reversed_scores == forward_scores
+
+    def test_continuous_multi_pass_conditions_fields_per_pass(self):
+        from goldenmatch.core.blocker import build_blocks
+
+        df = pl.DataFrame({
+            "__row_id__": list(range(12)),
+            "zip": [f"Z{i // 4}" for i in range(12)],
+            "last_name": [f"L{i % 4}" for i in range(12)],
+        })
+        mk = MatchkeyConfig(
+            name="multi_pass_continuous",
+            type="probabilistic",
+            fields=[
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+                MatchkeyField(field="last_name", scorer="exact", levels=2),
+            ],
+        )
+        blocks = build_blocks(
+            df.lazy(),
+            BlockingConfig(
+                strategy="multi_pass",
+                passes=[
+                    BlockingKeyConfig(fields=["zip"]),
+                    BlockingKeyConfig(fields=["last_name"]),
+                ],
+            ),
+        )
+        result = train_em_continuous(
+            df,
+            mk,
+            n_sample_pairs=100,
+            max_iterations=10,
+            blocks=blocks,
+            blocking_fields=["zip", "last_name"],
+        )
+
+        assert result.m_mean["zip"] != 0.99
+        assert result.m_mean["last_name"] != 0.99
+
 
 # ── Weight monotonicity guard (Phase 0) ────────────────────────────────────
 
