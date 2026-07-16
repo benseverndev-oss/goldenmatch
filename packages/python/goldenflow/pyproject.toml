@@ -53,7 +53,7 @@ excel = ["openpyxl>=3.1"]
 # Polars-free Parquet read (pyarrow only, no polars) for transform("<path>.parquet").
 parquet = ["pyarrow>=10"]
 db = ["connectorx>=0.3"]
-mcp = ["mcp>=1.0"]
+mcp = ["mcp>=1.28.1"]
 llm = ["anthropic>=0.30", "openai>=1.30"]
 s3 = ["boto3>=1.34"]
 gcs = ["google-cloud-storage>=2.14"]

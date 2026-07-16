@@ -99,7 +99,7 @@ postgres = [
     "alembic>=1.13",
 ]
 mcp = [
-    "mcp>=1.0",
+    "mcp>=1.28.1",
 ]
 # mp-spdz is a research crypto library not published to PyPI; users who need
 # the pprl extra must install mp-spdz separately (see docs/pprl.md).

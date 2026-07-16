@@ -36,7 +36,7 @@ suite = ["goldenanalysis[match,check,flow,pipe]"]
 # the path source land in LOCKSTEP (see packages/python/CLAUDE.md, the
 # goldenmatch[native] uv-sync bite).
 native = ["goldenanalysis-native>=0.1.0"]
-mcp = ["mcp>=1.0"]
+mcp = ["mcp>=1.28.1"]
 api = ["fastapi>=0.110", "uvicorn>=0.30"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
 
