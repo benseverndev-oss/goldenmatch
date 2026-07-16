@@ -782,8 +782,20 @@ class TestEMWithBlockingFields:
         result = train_em(df, mk, n_sample_pairs=100, blocking_fields=["zip"])
         assert result.u_probs["zip"] == [0.50, 0.50]
 
-    def test_multi_pass_conditions_fields_per_pass_and_is_order_stable(self):
-        """A field used by one pass remains evidence in another pass."""
+    def test_multi_pass_blocking_fields_fixed_and_order_stable(self):
+        """Configured blocking fields take the fixed-weight prior and the result
+        is stable under pass order.
+
+        #1835 tried to LEARN blocking-field weights per pass, but that regressed
+        real corrupted-PII data badly (historical_50k quality gate F1 0.83 ->
+        0.57): a near-unique blocking key's ``u`` collapses to the smoothing
+        floor and its agreement weight explodes (~28 bits), dominating the score
+        and collapsing recall. The disagreement penalty + bounded agreement of
+        the fixed prior are what EM cannot recover from random pairs, so blocking
+        fields keep the fixed prior. The per-pass conditioning scaffolding still
+        governs the training sample (order stability below), just not the
+        blocking-field weights.
+        """
         from goldenmatch.core.blocker import build_blocks
 
         df = pl.DataFrame({
@@ -823,10 +835,11 @@ class TestEMWithBlockingFields:
         forward = train([zip_pass, name_pass])
         reversed_plan = train([name_pass, zip_pass])
 
-        # The old global-union behavior fixed both fields to [-3, 3]. Each is
-        # now learned from candidate pairs emitted by the other pass.
-        assert forward.match_weights["zip"] != [-3.0, 3.0]
-        assert forward.match_weights["last_name"] != [-3.0, 3.0]
+        # Blocking fields take the fixed prior [-3, 3] (recall/precision-safe;
+        # EM cannot recover the disagreement penalty from random pairs).
+        assert forward.match_weights["zip"] == [-3.0, 3.0]
+        assert forward.match_weights["last_name"] == [-3.0, 3.0]
+        # Still order-stable regardless of pass order.
         assert reversed_plan.m_probs == forward.m_probs
         assert reversed_plan.match_weights == forward.match_weights
 
@@ -842,6 +855,48 @@ class TestEMWithBlockingFields:
             for j in range(i + 1, len(rows))
         ]
         assert reversed_scores == forward_scores
+
+    def test_near_unique_blocking_field_does_not_explode(self):
+        """Regression for the #1835 -> historical_50k quality-gate collapse.
+
+        A near-unique blocking key (like historical_50k's ``postcode_fake``)
+        never agrees among random pairs, so its ``u`` hits the smoothing floor
+        and a learned ``log2(m/u)`` explodes (~28 bits), dominating the score
+        and collapsing recall (F1 0.83 -> 0.57). It must take the bounded fixed
+        prior instead.
+        """
+        from goldenmatch.core.blocker import build_blocks
+
+        # postcode near-unique (two dup pairs so the postcode pass emits pairs);
+        # name moderate so the name pass carries the training sample.
+        codes = [f"P{i}" for i in range(30)]
+        codes[1], codes[3] = codes[0], codes[2]
+        df = pl.DataFrame({
+            "__row_id__": list(range(30)),
+            "postcode": codes,
+            "name": [f"N{i % 5}" for i in range(30)],
+        })
+        mk = MatchkeyConfig(
+            name="fs", type="probabilistic",
+            fields=[
+                MatchkeyField(field="postcode", scorer="exact", levels=2),
+                MatchkeyField(field="name", scorer="exact", levels=2),
+            ],
+        )
+        blocks = build_blocks(
+            df.lazy(),
+            BlockingConfig(strategy="multi_pass", passes=[
+                BlockingKeyConfig(fields=["postcode"]),
+                BlockingKeyConfig(fields=["name"]),
+            ]),
+        )
+        em = train_em(
+            df, mk, n_sample_pairs=200, max_iterations=10,
+            blocks=blocks, blocking_fields=["postcode", "name"],
+        )
+        # Bounded fixed prior, not an exploded learned weight.
+        assert em.match_weights["postcode"] == [-3.0, 3.0]
+        assert max(abs(w) for w in em.match_weights["postcode"]) <= 3.0
 
     def test_continuous_multi_pass_conditions_fields_per_pass(self):
         from goldenmatch.core.blocker import build_blocks
@@ -878,8 +933,11 @@ class TestEMWithBlockingFields:
             blocking_fields=["zip", "last_name"],
         )
 
-        assert result.m_mean["zip"] != 0.99
-        assert result.m_mean["last_name"] != 0.99
+        # Blocking fields take the fixed prior (m_mean 0.99), same as the
+        # discrete path -- learning them per-pass regressed real data (see
+        # train_em / test_multi_pass_blocking_fields_fixed_and_order_stable).
+        assert result.m_mean["zip"] == 0.99
+        assert result.m_mean["last_name"] == 0.99
 
 
 # ── Weight monotonicity guard (Phase 0) ────────────────────────────────────
