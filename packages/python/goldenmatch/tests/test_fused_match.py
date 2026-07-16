@@ -256,7 +256,10 @@ def test_fs_ready_level_thresholds_tracks_kernel_capability(monkeypatch):
     assert fused_match.match_fused_fs_ready(config) is False
     monkeypatch.setattr(
         "goldenmatch.core._native_loader.native_module",
-        lambda: _stub_kernel(FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True),
+        lambda: _stub_kernel(
+            FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True,
+            FS_SUPPORTS_MISSING_NEUTRAL=True,
+        ),
     )
     assert fused_match.match_fused_fs_ready(config) is True
     # A plain matchkey is pure-config either way.
@@ -312,6 +315,7 @@ def _supporting_stub():
         FS_SUPPORTS_NE=True,
         FS_SUPPORTS_LEVEL_THRESHOLDS=True,
         FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True,
+        FS_SUPPORTS_MISSING_NEUTRAL=True,
     )
 
 
@@ -365,13 +369,13 @@ def test_fs_ready_level_thresholds_true_on_real_kernel():
 
 def test_fs_ready_ne_declines_on_old_wheel(monkeypatch):
     # Old wheel: has the fused FS kernel but no FS_SUPPORTS_NE -> NE-bearing
-    # configs decline (NE never crosses its FFI); the SAME stub still accepts
-    # a no-NE config (the decline is NE-specific).
+    # configs decline. The same wheel also predates missing-as-unobserved, so
+    # even a plain FS config must decline rather than silently mis-score nulls.
     monkeypatch.setattr(
         "goldenmatch.core._native_loader.native_module", lambda: _stub_kernel()
     )
     assert fused_match.match_fused_fs_ready(_ne_config()) is False
-    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
+    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is False
 
 
 def test_fs_ready_declines_derive_from_ne_even_when_kernel_supports_ne(monkeypatch):
@@ -409,28 +413,32 @@ def test_fs_ready_per_feature_capability_independence(monkeypatch):
     # NE-only wheel: NE configs ready, level_thresholds configs declined.
     monkeypatch.setattr(
         "goldenmatch.core._native_loader.native_module",
-        lambda: _stub_kernel(FS_SUPPORTS_NE=True),
+        lambda: _stub_kernel(
+            FS_SUPPORTS_NE=True, FS_SUPPORTS_MISSING_NEUTRAL=True,
+        ),
     )
     assert fused_match.match_fused_fs_ready(_ne_config()) is True
     assert fused_match.match_fused_fs_ready(_lt_config()) is False
     # level_thresholds-only wheel: the reverse.
     monkeypatch.setattr(
         "goldenmatch.core._native_loader.native_module",
-        lambda: _stub_kernel(FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True),
+        lambda: _stub_kernel(
+            FUSED_FS_SUPPORTS_LEVEL_THRESHOLDS=True,
+            FS_SUPPORTS_MISSING_NEUTRAL=True,
+        ),
     )
     assert fused_match.match_fused_fs_ready(_ne_config()) is False
     assert fused_match.match_fused_fs_ready(_lt_config()) is True
 
 
-def test_fs_ready_pure_config_without_gated_features(monkeypatch):
-    # A config using NEITHER gated feature must never probe the native module
-    # (the gate stays pure-config); feature-bearing configs decline gracefully
-    # when the loader raises, rather than propagating.
+def test_fs_ready_all_configs_require_missing_semantics_capability(monkeypatch):
+    # Missing-as-unobserved affects every regular FS field, so every config
+    # probes the native module and declines gracefully when loading fails.
     def _boom():
-        raise AssertionError("gate must not probe the native module")
+        raise RuntimeError("unavailable")
 
     monkeypatch.setattr("goldenmatch.core._native_loader.native_module", _boom)
-    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is True
+    assert fused_match.match_fused_fs_ready(_probabilistic_config()) is False
     assert fused_match.match_fused_fs_ready(_ne_config()) is False
     assert fused_match.match_fused_fs_ready(_lt_config()) is False
 

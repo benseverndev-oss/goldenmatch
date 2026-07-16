@@ -228,14 +228,14 @@ class TestComparisonVector:
         assert vec[1] == 0  # disagree
         assert vec[2] == 0  # disagree
 
-    def test_null_values_disagree(self):
+    def test_null_values_are_unobserved(self):
         mk = _make_probabilistic_mk()
         vec = comparison_vector(
             {"first_name": None, "last_name": "Smith", "zip": "90210"},
             {"first_name": "John", "last_name": "Smith", "zip": "90210"},
             mk,
         )
-        assert vec[0] == 0  # null -> disagree
+        assert vec[0] == -1
 
 
 class TestEMTraining:
@@ -396,6 +396,35 @@ class TestPipelineIntegration:
 
 
 class TestScorePairProbabilistic:
+    def test_missing_field_contributes_neutral_evidence(self):
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="name", scorer="exact", levels=2),
+            MatchkeyField(field="email", scorer="exact", levels=2),
+        ])
+        em = EMResult(
+            m_probs={"name": [0.1, 0.9], "email": [0.1, 0.9]},
+            u_probs={"name": [0.9, 0.1], "email": [0.9, 0.1]},
+            match_weights={"name": [-3.0, 3.0], "email": [-3.0, 3.0]},
+            converged=True, iterations=1, proportion_matched=0.1,
+        )
+        assert score_pair_probabilistic(
+            {"name": "Ada", "email": None},
+            {"name": "Ada", "email": "different@example.com"},
+            mk, em,
+        ) == 1.0
+        assert score_pair_probabilistic({}, {}, mk, em) == 0.5
+
+    def test_sparse_training_excludes_missing_pairs_from_level_counts(self):
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="name", scorer="exact", levels=2),
+        ])
+        df = pl.DataFrame({
+            "__row_id__": list(range(10)),
+            "name": ["Ada"] * 5 + [None] * 5,
+        })
+        em = train_em(df, mk, n_sample_pairs=100, max_iterations=1)
+        assert em.u_probs["name"][1] > 0.999
+
     def test_single_pair_scoring(self):
         mk = _make_probabilistic_mk()
         df = _make_dedupe_df()
@@ -458,17 +487,31 @@ class TestContinuousScores:
         assert scores[0] < 0.5  # Alice vs Tom
         assert scores[2] == 0.0  # zip exact mismatch
 
-    def test_null_value_returns_zero(self):
+    def test_null_value_returns_nan_unobserved(self):
         mk = _make_probabilistic_mk()
         scores = continuous_scores(
             {"first_name": None, "last_name": "Smith", "zip": "90210"},
             {"first_name": "John", "last_name": "Smith", "zip": "90210"},
             mk,
         )
-        # None -> score_field returns None -> 0.0
-        assert scores[0] == 0.0
+        # Missing first_name is unobserved; the other fields still agree.
+        assert scores[0] != scores[0]
         assert scores[1] == 1.0
         assert scores[2] == 1.0
+
+    def test_missing_pair_scores_at_learned_prior(self):
+        mk = _make_probabilistic_mk(fields=[
+            MatchkeyField(field="name", scorer="exact", levels=2),
+        ])
+        em = ContinuousEMResult(
+            m_mean={"name": 0.9}, m_var={"name": 0.01},
+            u_mean={"name": 0.1}, u_var={"name": 0.01},
+            converged=True, iterations=1, proportion_matched=0.2,
+        )
+        df = pl.DataFrame({"__row_id__": [1, 2], "name": [None, "Ada"]})
+        assert score_probabilistic_continuous(df, mk, em, threshold=0.0) == [
+            (1, 2, 0.2)
+        ]
 
 
 class TestTrainEMContinuous:
@@ -669,7 +712,7 @@ class TestComparisonVectorEdgeCases:
             mk,
         )
         # All nulls -> all disagree
-        assert vec == [0, 0, 0]
+        assert vec == [-1, -1, -1]
 
 
 class TestSamplePairs:
@@ -888,7 +931,13 @@ class TestModelPersistence:
         em = self._trained()
         d = em.to_dict()
         assert d["__type__"] == "goldenmatch.EMResult"
-        assert d["__version__"] == 1
+        assert d["__version__"] == 2
+
+    def test_from_dict_rejects_legacy_missing_semantics(self):
+        d = self._trained().to_dict()
+        d["__version__"] = 1
+        with pytest.raises(ValueError, match="legacy missing-value semantics"):
+            EMResult.from_dict(d)
 
     def test_from_dict_rejects_future_version(self):
         from goldenmatch.core.probabilistic import EMResult
@@ -1456,6 +1505,23 @@ class TestNativeFSParity:
         numpy_pairs = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
         native_pairs = sorted(p.score_probabilistic_native(df, mk, em, set()))
         assert native_pairs == numpy_pairs
+
+    def test_native_matches_numpy_with_missing_values(self, monkeypatch):
+        from goldenmatch.core import probabilistic as p
+        monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+        df = pl.DataFrame({
+            "__row_id__": [1, 2, 3],
+            "first_name": ["Ada", "Ada", None],
+            "last_name": [None, "Byron", None],
+            "zip": ["10001", "10001", None],
+        })
+        mk = _make_probabilistic_mk(link_threshold=0.0)
+        em = _fallback_result(mk)
+        numpy_pairs = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
+        native_pairs = sorted(p.score_probabilistic_native(df, mk, em, set()))
+        assert native_pairs == numpy_pairs
+        assert dict(((a, b), s) for a, b, s in native_pairs)[(1, 2)] == 1.0
+        assert dict(((a, b), s) for a, b, s in native_pairs)[(2, 3)] == 0.5
 
     def test_block_scorer_picks_native_when_opted_in(self, monkeypatch):
         from goldenmatch.core import probabilistic as p

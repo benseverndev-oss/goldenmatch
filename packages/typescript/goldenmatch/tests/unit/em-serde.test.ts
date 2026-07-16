@@ -29,7 +29,7 @@ describe("emResultToJson / emResultFromJson: round-trip", () => {
     const json = emResultToJson(em);
     expect(json).toMatchObject({
       __type__: "goldenmatch.EMResult",
-      __version__: 1,
+      __version__: 2,
       m_probs: em.m,
       u_probs: em.u,
       match_weights: em.matchWeights,
@@ -76,13 +76,13 @@ describe("emResultToJson / emResultFromJson: round-trip", () => {
 
 // ---------------------------------------------------------------------------
 // Cross-surface fixture: exact shape Python's EMResult.to_dict()/save_json
-// produces (goldenmatch/core/probabilistic.py, SCHEMA_VERSION=1).
+// produces (goldenmatch/core/probabilistic.py, SCHEMA_VERSION=2).
 // ---------------------------------------------------------------------------
 
 describe("emResultFromJson: cross-surface Python fixture", () => {
   const pythonFixture = {
     __type__: "goldenmatch.EMResult",
-    __version__: 1,
+    __version__: 2,
     m_probs: {
       first_name: [0.05, 0.1, 0.25, 0.6],
       postcode: [0.1, 0.9],
@@ -129,7 +129,7 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
   it("rejects a schema version newer than supported", () => {
     const data = {
       __type__: "goldenmatch.EMResult",
-      __version__: 2,
+      __version__: 999,
       m_probs: {},
       u_probs: {},
       match_weights: {},
@@ -138,13 +138,21 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
       proportion_matched: 0.0,
     };
     expect(() => emResultFromJson(data)).toThrow(
-      /schema version 2 is newer than this goldenmatch supports \(1\)/,
+      /schema version 999 is newer than this goldenmatch supports \(2\)/,
     );
+  });
+
+  it("rejects v1 models trained with legacy missing-value semantics", () => {
+    expect(() => emResultFromJson({
+      __version__: 1,
+      m_probs: {}, u_probs: {}, match_weights: {},
+      converged: true, iterations: 1, proportion_matched: 0.1,
+    })).toThrow(/legacy missing-value semantics/);
   });
 
   it("rejects a dict missing a required key", () => {
     const data = {
-      __version__: 1,
+      __version__: 2,
       m_probs: {},
       u_probs: {},
       match_weights: {},

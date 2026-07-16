@@ -569,7 +569,7 @@
       },
       "em_model": {
         "__type__": "goldenmatch.EMResult",
-        "__version__": 1,
+        "__version__": 2,
         "converged": true,
         "iterations": 5,
         "m_probs": {
@@ -756,7 +756,7 @@
       },
       "em_model": {
         "__type__": "goldenmatch.EMResult",
-        "__version__": 1,
+        "__version__": 2,
         "converged": true,
         "iterations": 5,
         "m_probs": {

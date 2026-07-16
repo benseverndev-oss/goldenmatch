@@ -303,7 +303,9 @@ def match_fused_fs_ready(config: Any) -> bool:
     for ne in ne_fields:
         if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.derive_from:
             return False
-    if ne_fields or uses_level_thresholds:
+    # Missing-as-unobserved changes every FS matchkey, so always capability-
+    # probe; older wheels silently map nulls to disagreement/level 0.
+    if mk.fields:
         # Capability probe ONLY when a gated feature is in play — the gate is
         # pure-config otherwise. Local import (not the module-level binding)
         # so the loaded module is resolved at call time.
@@ -314,6 +316,8 @@ def match_fused_fs_ready(config: Any) -> bool:
         except Exception:
             return False
         if mod is None:
+            return False
+        if not getattr(mod, "FS_SUPPORTS_MISSING_NEUTRAL", False):
             return False
         if ne_fields and not getattr(mod, "FS_SUPPORTS_NE", False):
             return False

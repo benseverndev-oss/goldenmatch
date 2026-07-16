@@ -247,8 +247,9 @@ pub(crate) fn fs_level_from_sim(
 ///   linear:                 clamp((W - min_weight) / weight_range, 0, 1)
 ///
 /// `field_values[f][r]` is the already-transform-applied value of field `f` for
-/// row `r`, block-sorted. A null on EITHER side maps to level 0 (disagree),
-/// matching `comparison_vector`. `match_weights[f]` has one weight per level.
+/// row `r`, block-sorted. A null on EITHER side contributes no evidence,
+/// matching `comparison_vector`'s unobserved sentinel. `match_weights[f]` has
+/// one weight per level.
 /// Scorers are score_one ids 0..=3 (jaro_winkler/levenshtein/token_sort/exact);
 /// soundex/embedding fields aren't native-eligible (caller falls back to numpy).
 ///
@@ -403,6 +404,18 @@ pub fn score_block_pairs_fs(
     let ne_thresholds_v: &[f64] = ne_thresholds.as_deref().unwrap_or(&[]);
     let ne_weights_v: &[f64] = ne_weights.as_deref().unwrap_or(&[]);
     let n_ne = ne_vals.len();
+    let field_mins: Vec<f64> = match_weights
+        .iter()
+        .map(|w| w.iter().copied().fold(f64::INFINITY, f64::min))
+        .collect();
+    let field_maxs: Vec<f64> = match_weights
+        .iter()
+        .map(|w| w.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+        .collect();
+    let regular_min: f64 = field_mins.iter().sum();
+    let regular_max: f64 = field_maxs.iter().sum();
+    let base_min = min_weight - regular_min;
+    let base_max = min_weight + weight_range - regular_max;
 
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
     let mut offset = 0usize;
@@ -427,21 +440,25 @@ pub fn score_block_pairs_fs(
                                 continue;
                             }
                             let mut total_weight = 0.0_f64;
+                            let mut pair_min = base_min;
+                            let mut pair_max = base_max;
+                            let mut has_regular_evidence = false;
                             for f in 0..n_fields {
-                                let level = match (&field_values[f][i], &field_values[f][j]) {
-                                    (Some(a), Some(b)) => {
-                                        let sim = score_one(scorer_ids[f], a, b);
-                                        fs_level_from_sim(
-                                            sim,
-                                            levels[f],
-                                            partial_thresholds[f],
-                                            field_thresholds[f],
-                                        )
-                                    }
-                                    // Null on either side -> disagree (level 0).
-                                    _ => 0,
-                                };
-                                total_weight += match_weights[f][level];
+                                if let (Some(a), Some(b)) =
+                                    (&field_values[f][i], &field_values[f][j])
+                                {
+                                    has_regular_evidence = true;
+                                    let sim = score_one(scorer_ids[f], a, b);
+                                    let level = fs_level_from_sim(
+                                        sim,
+                                        levels[f],
+                                        partial_thresholds[f],
+                                        field_thresholds[f],
+                                    );
+                                    total_weight += match_weights[f][level];
+                                    pair_min += field_mins[f];
+                                    pair_max += field_maxs[f];
+                                }
                             }
                             // Negative evidence: exact `_ne_fired` semantics
                             // (core/probabilistic.py:466) — fires iff both
@@ -458,13 +475,18 @@ pub fn score_block_pairs_fs(
                                     }
                                 }
                             }
-                            let normalized = fs_normalize(
-                                total_weight,
-                                calibrated,
-                                prior_w,
-                                min_weight,
-                                weight_range,
-                            );
+                            let normalized =
+                                if !calibrated && !has_regular_evidence && total_weight == 0.0 {
+                                    0.5
+                                } else {
+                                    fs_normalize(
+                                        total_weight,
+                                        calibrated,
+                                        prior_w,
+                                        pair_min,
+                                        pair_max - pair_min,
+                                    )
+                                };
                             if normalized >= threshold {
                                 local.push((pair_key.0, pair_key.1, normalized));
                             }
@@ -844,6 +866,19 @@ pub fn score_block_pairs_fs_arrow(
         offset += size;
     }
 
+    let field_mins: Vec<f64> = match_weights
+        .iter()
+        .map(|w| w.iter().copied().fold(f64::INFINITY, f64::min))
+        .collect();
+    let field_maxs: Vec<f64> = match_weights
+        .iter()
+        .map(|w| w.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+        .collect();
+    let regular_min: f64 = field_mins.iter().sum();
+    let regular_max: f64 = field_maxs.iter().sum();
+    let base_min = min_weight - regular_min;
+    let base_max = min_weight + weight_range - regular_max;
+
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors
     // score_block_pairs_arrow's score_span; FS math verbatim from
     // score_block_pairs_fs, including the `_ne_fired` strict-< semantics).
@@ -860,21 +895,23 @@ pub fn score_block_pairs_fs_arrow(
                         continue;
                     }
                     let mut total_weight = 0.0_f64;
+                    let mut pair_min = base_min;
+                    let mut pair_max = base_max;
+                    let mut has_regular_evidence = false;
                     for f in 0..n_fields {
-                        let level = match (fields[f].get(i), fields[f].get(j)) {
-                            (Some(a), Some(b)) => {
-                                let sim = score_one(scorer_ids[f], a, b);
-                                fs_level_from_sim(
-                                    sim,
-                                    levels[f],
-                                    partial_thresholds[f],
-                                    field_thresholds[f],
-                                )
-                            }
-                            // Null on either side -> disagree (level 0).
-                            _ => 0,
-                        };
-                        total_weight += match_weights[f][level];
+                        if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
+                            has_regular_evidence = true;
+                            let sim = score_one(scorer_ids[f], a, b);
+                            let level = fs_level_from_sim(
+                                sim,
+                                levels[f],
+                                partial_thresholds[f],
+                                field_thresholds[f],
+                            );
+                            total_weight += match_weights[f][level];
+                            pair_min += field_mins[f];
+                            pair_max += field_maxs[f];
+                        }
                     }
                     for k in 0..n_ne {
                         if let (Some(a), Some(b)) = (ne_cols[k].get(i), ne_cols[k].get(j)) {
@@ -886,8 +923,18 @@ pub fn score_block_pairs_fs_arrow(
                             }
                         }
                     }
-                    let normalized =
-                        fs_normalize(total_weight, calibrated, prior_w, min_weight, weight_range);
+                    let normalized = if !calibrated && !has_regular_evidence && total_weight == 0.0
+                    {
+                        0.5
+                    } else {
+                        fs_normalize(
+                            total_weight,
+                            calibrated,
+                            prior_w,
+                            pair_min,
+                            pair_max - pair_min,
+                        )
+                    };
                     if normalized >= threshold {
                         local.push((pair_key.0, pair_key.1, normalized));
                     }
