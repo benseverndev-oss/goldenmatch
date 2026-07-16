@@ -2,6 +2,19 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [3.2.0] - 2026-07-16
+
+### Fixed
+
+- **`EncodingDetectionProfiler` regex was silently dead on every column** (the
+  detection pattern never matched); mojibake/encoding-artifact detection now
+  fires.
+
+### Docs
+
+- 3.0.1-3.1.3 performance arc documented, `GOLDENCHECK_SCAN_THREADS` knob, and
+  the stale pure-Polars claim removed.
+
 ## [3.1.3] - 2026-07-12
 
 ### Performance

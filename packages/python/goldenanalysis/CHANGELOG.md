@@ -4,6 +4,21 @@ All notable changes to GoldenAnalysis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.4.0] - 2026-07-16
+
+### Added
+
+- **Rust cutover Waves 2-3**: numeric reductions (mean/min/max) and the
+  cluster-size histogram run on the shared Rust core (anti-drift,
+  cross-surface parity fixtures for `quality_rollup`).
+- **Reference-mode gate** for the goldencheck + goldenanalysis native kernels.
+
+### Fixed
+
+- `_mean_pure` is Python-version-independent (naive sum).
+- Native `null_ratio` correct on all-null (Null dtype) columns.
+- TS frame kernels distinguish NaN from null (locked cross-surface).
+
 ## [0.3.0] - 2026-06-24
 
 The Rust accelerator goes live and GoldenAnalysis becomes an MCP server. (First published release since 0.1.0 — the 0.2.0 section below was staged but never tagged/published; its features ship here.)

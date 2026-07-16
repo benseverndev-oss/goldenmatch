@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.4.0 (2026-07-16)
+
+### Added
+
+- **In-process moves**: pipeline stages scan the loaded frame and a one-run
+  `clean_and_dedupe` (no re-read of the source path mid-pipeline).
+- **Compiler SP1-SP3**: IR walking skeleton, field-level provenance from the
+  IR, and end-to-end field lineage.
+- **`run_pipeline` as an orchestration tool**: full result + inline input.
+- **`FusedDedupeStage`**: opt-in Arrow-native match stage (fused-match
+  increment 4).
+
 ### Fixed
 
 - **The `goldencheck.scan` stage now scans the in-memory frame** (`ctx.df` via
