@@ -888,7 +888,9 @@ jobs:
         shell: bash
         env:
           GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
-        run: uv run python scripts/diag_1846.py || true
+        run: |
+          uv run python scripts/diag_1846.py || true
+          uv run python scripts/diag_1846_em.py || true
       - name: Run auto-config quality gate
         shell: bash
         env:
