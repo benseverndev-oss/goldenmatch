@@ -1839,6 +1839,7 @@ def _run_fused_match_short_circuit(
         "memory_stats": None,
         "identity_summary": None,
         "scored_pairs": [],
+        "review_pairs": [],
         "llm_cost": None,
         "throughput_posture": None,
         "golden_fused_used": golden_fused_used,
