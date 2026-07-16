@@ -997,6 +997,17 @@ def train_em(
         for j, field in enumerate(mk.fields)
         if len(conditioned_mask) and bool(conditioned_mask[:, j].all())
     }
+    ne_conditioned_mask = np.zeros(
+        (len(pair_conditioning), len(ne_fields_em)), dtype=bool
+    )
+    for i, conditioned in enumerate(pair_conditioning):
+        for j, ne in enumerate(ne_fields_em):
+            ne_conditioned_mask[i, j] = ne.field in conditioned
+    always_conditioned_ne = {
+        ne.field
+        for j, ne in enumerate(ne_fields_em)
+        if len(ne_conditioned_mask) and bool(ne_conditioned_mask[:, j].all())
+    }
 
     # A field that conditions every training pair has no unbiased sample from
     # which EM can learn it, so retain the legacy neutral-u/fixed-weight prior.
@@ -1076,8 +1087,9 @@ def train_em(
             levels_j = ne_matrix[:, j]
             m_table = np.log(np.maximum(np.asarray(m_probs_ne[ne.field], dtype=np.float64), 1e-10))
             u_table = np.log(np.maximum(np.asarray(u_probs_ne[ne.field], dtype=np.float64), 1e-10))
-            log_m += m_table[levels_j]
-            log_u += u_table[levels_j]
+            eligible = ~ne_conditioned_mask[:, j]
+            log_m[eligible] += m_table[levels_j[eligible]]
+            log_u[eligible] += u_table[levels_j[eligible]]
 
         log_match = math.log(max(p_match, 1e-10)) + log_m
         log_nonmatch = math.log(max(1 - p_match, 1e-10)) + log_u
@@ -1105,13 +1117,19 @@ def train_em(
                 )
             m_probs[f.field] = new_m
 
-        # NE dims: same M-step update. Blocking-field neutralization does NOT
-        # apply here — an NE dimension is never a blocking key.
+        # NE dimensions use the same pair-level conditioning. A field that
+        # blocks one pass can still learn its veto from the other passes.
         for j, ne in enumerate(ne_fields_em):
+            if ne.field in always_conditioned_ne:
+                continue
             new_m_ne = [0.0, 0.0]
+            eligible = ~ne_conditioned_mask[:, j]
+            eligible_match = posteriors[eligible].sum()
             for level in range(2):
-                mask = ne_matrix[:, j] == level
-                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (total_match + 2 * 1e-6)
+                mask = eligible & (ne_matrix[:, j] == level)
+                new_m_ne[level] = (posteriors[mask].sum() + 1e-6) / (
+                    eligible_match + 2 * 1e-6
+                )
             m_probs_ne[ne.field] = new_m_ne
 
         # Check convergence (only m changes)
@@ -1122,6 +1140,8 @@ def train_em(
             for k in range(f.levels):
                 max_delta = max(max_delta, abs(m_probs[f.field][k] - old_m[f.field][k]))
         for ne in ne_fields_em:
+            if ne.field in always_conditioned_ne:
+                continue
             for k in range(2):
                 max_delta = max(max_delta, abs(m_probs_ne[ne.field][k] - old_m_ne[ne.field][k]))
 
