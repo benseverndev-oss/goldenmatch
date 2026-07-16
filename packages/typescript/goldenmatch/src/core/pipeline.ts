@@ -27,7 +27,7 @@ import {
   scoreBlocksSequential,
 } from "./scorer.js";
 import { applyNegativeEvidenceToExactPairs } from "./autoconfigNegativeEvidence.js";
-import { NegativeEvidenceUnsupportedError } from "./probabilistic.js";
+import { scoreProbabilistic, trainEM } from "./probabilistic.js";
 import { buildClusters, pairKey } from "./cluster.js";
 import { buildGoldenRecord } from "./golden.js";
 import { postflight } from "./autoconfigVerify.js";
@@ -75,31 +75,72 @@ function buildSourceLookup(rows: readonly Row[]): Map<number, string> {
 }
 
 /**
- * Loud decline: the pipeline cannot honor FS negative evidence on
- * probabilistic matchkeys. The pipeline's fuzzy phase scores probabilistic
- * matchkeys through `findFuzzyMatches` (a simplified weighted-style
- * averaging, a pre-existing TS scope gap — no EM training, no FS log-odds),
- * and that path has no NE veto. Rather than silently scoring WITHOUT the
- * veto, throw before any scoring work. Exact and weighted matchkeys honor
- * NE in the pipeline (Path Y / scorer penalty) and pass through untouched.
+ * Collect comparison fields constrained by the configured blocker.
  */
-function assertPipelineSupportsNegativeEvidence(
-  matchkeys: readonly MatchkeyConfig[],
-): void {
-  for (const mk of matchkeys) {
-    if (mk.type !== "probabilistic") continue;
-    const ne = mk.negativeEvidence;
-    if (ne !== undefined && ne.length > 0) {
-      const names = ne.map((n) => n.field).join(", ");
-      throw new NegativeEvidenceUnsupportedError(
-        `matchkey '${mk.name}': the TS pipeline scores probabilistic ` +
-          `matchkeys with simplified (weighted-style) scoring that cannot ` +
-          `honor negative evidence (${names}) -- use the FS API directly ` +
-          `(trainEM + scoreProbabilistic), or remove negativeEvidence ` +
-          `from this matchkey`,
+function collectBlockingFields(
+  config: ReturnType<typeof makeBlockingConfig>,
+): string[] {
+  const fields = new Set<string>();
+  for (const key of config.keys) {
+    for (const field of key.fields) fields.add(field);
+  }
+  for (const key of config.passes ?? []) {
+    for (const field of key.fields) fields.add(field);
+  }
+  for (const key of config.subBlockKeys ?? []) {
+    for (const field of key.fields) fields.add(field);
+  }
+  for (const field of config.sortKey ?? []) fields.add(field.column);
+  return [...fields];
+}
+
+function scoreProbabilisticBlocks(
+  rows: readonly Row[],
+  blocks: ReturnType<typeof buildBlocks>,
+  mk: Extract<MatchkeyConfig, { type: "probabilistic" }>,
+  matchedPairs: Set<PairKey>,
+  blockingConfig: ReturnType<typeof makeBlockingConfig>,
+  options: {
+    readonly acrossFilesOnly: boolean;
+    readonly sourceLookup: ReadonlyMap<number, string>;
+  },
+): ScoredPair[] {
+  const em = trainEM(rows, mk, {
+    blockingFields: collectBlockingFields(blockingConfig),
+  });
+  const threshold = mk.linkThreshold ?? mk.threshold ?? 0.5;
+  const allPairs: ScoredPair[] = [];
+
+  for (const block of blocks) {
+    if (options.acrossFilesOnly) {
+      const sources = new Set(
+        block.rows.map((row) =>
+          options.sourceLookup.get(row.__row_id__ as number),
+        ),
+      );
+      sources.delete(undefined);
+      if (sources.size < 2) continue;
+    }
+
+    let pairs = scoreProbabilistic(block.rows, mk, em, {
+      excludePairs: matchedPairs,
+      threshold,
+    });
+    if (options.acrossFilesOnly) {
+      pairs = pairs.filter(
+        (pair) =>
+          options.sourceLookup.get(pair.idA) !==
+          options.sourceLookup.get(pair.idB),
       );
     }
+    for (const pair of pairs) {
+      const key = pairKey(pair.idA, pair.idB);
+      if (matchedPairs.has(key)) continue;
+      matchedPairs.add(key);
+      allPairs.push(pair);
+    }
   }
+  return allPairs;
 }
 
 /** Collect all row IDs from rows. */
@@ -325,10 +366,6 @@ export async function runDedupePipeline(
   config: GoldenMatchConfig,
   options?: DedupeOptions,
 ): Promise<DedupeResult> {
-  // Loud decline BEFORE any work (even on empty input): probabilistic+NE
-  // configs must never reach the simplified fuzzy scorer silently.
-  assertPipelineSupportsNegativeEvidence(getMatchkeys(config));
-
   if (rows.length === 0) {
     return _emptyDedupeResult(config);
   }
@@ -392,8 +429,8 @@ export async function runDedupePipeline(
           allPairs.push(p);
         }
       }
-    } else {
-      // Phase 2: Fuzzy (weighted/probabilistic) — block then score
+    } else if (mk.type === "weighted") {
+      // Phase 2: weighted fuzzy matching — block then score
       const blocks = buildBlocks(processed, blockingConfig);
 
       const pairs = scoreBlocksSequential(blocks, mk, matchedPairKeys, {
@@ -404,6 +441,19 @@ export async function runDedupePipeline(
       for (const p of pairs) {
         allPairs.push(p);
       }
+    } else {
+      // Phase 2b: genuine Fellegi-Sunter training + blocked scoring.
+      const blocks = buildBlocks(processed, blockingConfig);
+      allPairs.push(
+        ...scoreProbabilisticBlocks(
+          processed,
+          blocks,
+          mk,
+          matchedPairKeys,
+          blockingConfig,
+          { acrossFilesOnly, sourceLookup },
+        ),
+      );
     }
   }
 
@@ -534,10 +584,6 @@ export async function runMatchPipeline(
   config: GoldenMatchConfig,
   options?: DedupeOptions,
 ): Promise<MatchResult> {
-  // Same loud decline as runDedupePipeline — fires here too so an empty
-  // target/reference early-return can't skip it.
-  assertPipelineSupportsNegativeEvidence(getMatchkeys(config));
-
   if (targetRows.length === 0 || referenceRows.length === 0) {
     return {
       matched: [],
