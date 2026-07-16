@@ -1846,6 +1846,24 @@ def compute_thresholds(
     return 0.50, 0.35
 
 
+def resolve_thresholds(
+    mk: MatchkeyConfig, em_result: EMResult
+) -> tuple[float, float]:
+    """Resolve configured or calibrated ``(link, review)`` score cutoffs.
+
+    The review cutoff is clamped to the link cutoff so an explicit low link
+    threshold cannot accidentally turn linked pairs into review candidates.
+    """
+    computed_link, computed_review = compute_thresholds(em_result)
+    link = float(mk.link_threshold) if mk.link_threshold is not None else computed_link
+    review = (
+        float(mk.review_threshold)
+        if mk.review_threshold is not None
+        else computed_review
+    )
+    return link, min(review, link)
+
+
 def score_probabilistic(
     block_df: pl.DataFrame,
     mk: MatchkeyConfig,

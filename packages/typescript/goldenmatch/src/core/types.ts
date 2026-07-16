@@ -428,6 +428,8 @@ export interface DedupeResult {
   readonly unique: readonly Row[];
   readonly stats: DedupeStats;
   readonly scoredPairs: readonly ScoredPair[];
+  /** Probabilistic pairs in [reviewThreshold, linkThreshold); never clustered. */
+  readonly reviewCandidates?: readonly ScoredPair[];
   readonly config: GoldenMatchConfig;
   readonly postflightReport?: PostflightReport;
   /** Learning Memory outcome for this run. Null when memory was disabled
@@ -446,6 +448,7 @@ export interface MatchResult {
   readonly matched: readonly Row[];
   readonly unmatched: readonly Row[];
   readonly stats: Readonly<Record<string, unknown>>;
+  readonly reviewCandidates?: readonly ScoredPair[];
   readonly postflightReport?: PostflightReport;
   /** Learning Memory outcome for this run. See `DedupeResult.memoryStats`. */
   readonly memoryStats?: CorrectionStats | null;
