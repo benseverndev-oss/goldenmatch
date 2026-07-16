@@ -1198,8 +1198,8 @@ export function scoreProbabilistic(
         const w = em.matchWeights[f.field];
         if (!w) continue;
         total += w[level] ?? 0;
-        pairMinWeight += Math.min(...w);
-        pairMaxWeight += Math.max(...w);
+        pairMinWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
+        pairMaxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
       }
       for (let k = 0; k < neFields.length; k++) {
         total += neContribution(
@@ -1254,8 +1254,8 @@ export function scoreProbabilisticPair(
     const w = em.matchWeights[f.field];
     if (!w) continue;
     total += w[level] ?? 0;
-    pairMinWeight += Math.min(...w);
-    pairMaxWeight += Math.max(...w);
+    pairMinWeight += w.reduce((m, v) => (v < m ? v : m), Infinity);
+    pairMaxWeight += w.reduce((m, v) => (v > m ? v : m), -Infinity);
   }
   const neFields =
     mk.type === "probabilistic" ? (mk.negativeEvidence ?? []) : [];
