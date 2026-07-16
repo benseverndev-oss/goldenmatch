@@ -93,8 +93,10 @@ def test_fallback_2_and_3_level_literals_unchanged():
 
 
 def _fake_native_module_old_wheel():
-    """A kernel WITHOUT FS_SUPPORTS_LEVEL_THRESHOLDS (pre-0.1.14 wheel)."""
+    """A kernel with missing-neutral support but no custom-level support."""
     class _Fake:
+        FS_SUPPORTS_MISSING_NEUTRAL = True
+
         def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover - not invoked
             raise NotImplementedError
 
@@ -102,9 +104,10 @@ def _fake_native_module_old_wheel():
 
 
 def _fake_native_module_supporting():
-    """A kernel advertising level_thresholds support (goldenmatch-native >= 0.1.14)."""
+    """A kernel advertising missing-neutral and level-threshold support."""
     class _Fake:
         FS_SUPPORTS_LEVEL_THRESHOLDS = True
+        FS_SUPPORTS_MISSING_NEUTRAL = True
 
         def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover - not invoked
             raise NotImplementedError

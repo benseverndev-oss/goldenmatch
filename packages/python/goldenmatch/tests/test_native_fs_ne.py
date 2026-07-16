@@ -362,6 +362,7 @@ class TestFsNativeEligibleNE:
             """Has the FS kernel + level_thresholds capability, lacks FS_SUPPORTS_NE."""
 
             FS_SUPPORTS_LEVEL_THRESHOLDS = True
+            FS_SUPPORTS_MISSING_NEUTRAL = True
 
             @staticmethod
             def score_block_pairs_fs(*args, **kwargs):

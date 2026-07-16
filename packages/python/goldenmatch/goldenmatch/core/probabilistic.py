@@ -2323,6 +2323,9 @@ def score_probabilistic_vectorized(
                 level_thresholds=f.level_thresholds,
             )
             total_weight += weights[lvl]
+            has_regular_evidence[:] = True
+            pair_min_weight += float(weights.min())
+            pair_max_weight += float(weights.max())
             continue
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
