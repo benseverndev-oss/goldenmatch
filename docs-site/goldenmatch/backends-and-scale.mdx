@@ -15,6 +15,15 @@ GoldenMatch runs the same pipeline across four backends. The default is in-memor
 | `duckdb` | 500K – 50M rows | Out-of-core pair store via DuckDB. Spills to disk, so RAM is not the ceiling. |
 | `ray` | ≥ 50M rows, distributed | Per-block remote tasks; matchkey config and exclude-pairs set shared zero-copy via the Ray object store. |
 
+<Note>
+**Probabilistic (Fellegi-Sunter) matchkeys are single-box only.** The chunked
+and distributed (Ray) lanes score exact and weighted matchkeys per chunk /
+partition; a `type: probabilistic` matchkey routed through them raises
+`NotImplementedError` at lane entry (it would otherwise contribute zero pairs
+silently). Run FS configs on the in-memory / `bucket` path, which scales to tens
+of millions of rows on one node — see [Scoring → Scale-out](/goldenmatch/scoring).
+</Note>
+
 ## Measured scale
 
 Quoted from the repository. Re-measure for your own hardware.

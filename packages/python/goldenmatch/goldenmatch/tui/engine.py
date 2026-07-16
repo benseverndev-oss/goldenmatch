@@ -248,7 +248,10 @@ class MatchEngine:
             if mk.type == "probabilistic":
                 if config.blocking is None:
                     continue
-                from goldenmatch.core.probabilistic import load_or_train_em, score_probabilistic
+                from goldenmatch.core.probabilistic import (
+                    load_or_train_em,
+                    probabilistic_block_scorer,
+                )
                 blocks = build_blocks(combined_lf, config.blocking)
                 blocking_fields = []
                 if config.blocking and config.blocking.keys:
@@ -261,9 +264,14 @@ class MatchEngine:
                     blocking_fields=blocking_fields,
                 )
                 em_results[mk.name] = em_result
+                # Route through the block-scorer selector (native -> vectorized
+                # -> scalar) instead of calling the scalar scorer directly, so
+                # the TUI gets native/vectorized FS and model-backed scorers
+                # (embedding / record_embedding) work here too (#1806).
+                fs_scorer = probabilistic_block_scorer(mk, em_result)
                 for block in blocks:
                     block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
-                    pairs = score_probabilistic(block_df, mk, em_result, exclude_pairs=matched_pairs)
+                    pairs = fs_scorer(block_df, exclude_pairs=matched_pairs)
                     all_pairs.extend(pairs)
                     for a, b, s in pairs:
                         matched_pairs.add((min(a, b), max(a, b)))

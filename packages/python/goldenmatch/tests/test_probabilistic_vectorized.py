@@ -261,8 +261,11 @@ class TestBlockScorerSelection:
         fn = probabilistic_block_scorer(mk, em)
         assert _pairset(fn(_df())) == _pairset(score_probabilistic(_df(), mk, em))
 
-    def test_embedding_scorer_not_vectorizable(self):
+    def test_embedding_scorers_are_vectorizable(self):
+        # #1806: embedding / record_embedding are now first-class on the
+        # vectorized FS path (they were matrix-only and previously excluded,
+        # which forced the crashing scalar path).
         assert vectorized_scorer_supported("jaro_winkler")
         assert vectorized_scorer_supported("exact")
-        assert not vectorized_scorer_supported("embedding")
-        assert not vectorized_scorer_supported("record_embedding")
+        assert vectorized_scorer_supported("embedding")
+        assert vectorized_scorer_supported("record_embedding")

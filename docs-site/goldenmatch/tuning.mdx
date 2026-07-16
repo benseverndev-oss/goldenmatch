@@ -589,7 +589,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `GOLDENMATCH_FS_AUTOCONFIG_V2` | `1` (on) | FS auto-config v2 comparison-set + blocking curation. `0` = legacy. |
-| `GOLDENMATCH_FS_VECTORIZED` | on | Vectorized FS block scoring (~9x). `0` = scalar. |
+| `GOLDENMATCH_FS_VECTORIZED` | on | Vectorized FS block scoring (~9x). `0` = scalar. Only affects string scorers — `embedding` / `record_embedding` are matrix-only and always run vectorized. |
 | `GOLDENMATCH_FS_CALIBRATED` | `linear` | `posterior` = true-probability calibration (frontier-neutral). |
 | `GOLDENMATCH_FS_MONOTONIC` | on | Enforce monotonic EM weights. |
 | `GOLDENMATCH_FS_NATIVE` | on | Native FS kernel when available. NE-bearing matchkeys score natively when the wheel advertises `FS_SUPPORTS_NE` (`goldenmatch-native` >= 0.1.15); else pure-Python fallback. |

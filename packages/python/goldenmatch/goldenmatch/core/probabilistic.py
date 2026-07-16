@@ -322,24 +322,45 @@ def comparison_vector(
     row_a: dict,
     row_b: dict,
     mk: MatchkeyConfig,
+    field_sims: dict[int, float] | None = None,
 ) -> list[int]:
     """Compute comparison vector for a pair of records.
 
     Returns a list of level indices, one per field.
     For 2-level fields: 0=disagree, 1=agree
     For 3-level fields: 0=disagree, 1=partial, 2=agree
+
+    ``field_sims`` supplies precomputed similarities for model-backed
+    (``embedding`` / ``record_embedding``) fields keyed by field index — those
+    scorers can't run through ``score_field``, so the EM E-step
+    (:func:`_build_comparison_matrix`) computes their cosine similarity in bulk
+    and passes it here. The supplied similarity flows through the SAME level
+    thresholds as every other scorer, so training and scoring assign levels
+    identically.
     """
     from goldenmatch.utils.transforms import apply_transforms
 
     levels = []
-    for f in mk.fields:
-        val_a = str(row_a.get(f.field, "")) if row_a.get(f.field) is not None else None
-        val_b = str(row_b.get(f.field, "")) if row_b.get(f.field) is not None else None
-        # Apply field transforms before scoring (e.g. lowercase, strip)
-        if f.transforms:
-            val_a = apply_transforms(val_a, f.transforms)
-            val_b = apply_transforms(val_b, f.transforms)
-        s = score_field(val_a, val_b, f.scorer)
+    for idx, f in enumerate(mk.fields):
+        if field_sims is not None and idx in field_sims:
+            # Model-backed field: similarity precomputed upstream.
+            # A per-field ``embedding`` still treats a null on either side as
+            # disagree (level 0), matching the vectorized scorer's null-mask;
+            # ``record_embedding`` is record-level and has no single-field null.
+            if f.scorer != "record_embedding" and (
+                row_a.get(f.field) is None or row_b.get(f.field) is None
+            ):
+                levels.append(0)
+                continue
+            s = field_sims[idx]
+        else:
+            val_a = str(row_a.get(f.field, "")) if row_a.get(f.field) is not None else None
+            val_b = str(row_b.get(f.field, "")) if row_b.get(f.field) is not None else None
+            # Apply field transforms before scoring (e.g. lowercase, strip)
+            if f.transforms:
+                val_a = apply_transforms(val_a, f.transforms)
+                val_b = apply_transforms(val_b, f.transforms)
+            s = score_field(val_a, val_b, f.scorer)
 
         if s is None:
             levels.append(0)  # treat nulls as disagree
@@ -501,21 +522,111 @@ def _sample_pairs(
     return list(pairs)
 
 
+def _record_concat_value(row: dict, columns, column_weights) -> str:
+    """Concatenate a row's ``record_embedding`` columns into one string.
+
+    Byte-identical to the concat in ``_record_embedding_score_matrix`` so the
+    EM E-step and the scoring path embed the SAME text (and therefore agree on
+    similarity + level)."""
+    parts: list[str] = []
+    for col in (columns or []):
+        if column_weights is not None:
+            w = column_weights.get(col, 1.0)
+            if w <= 0:
+                continue
+            val = row.get(col)
+            if val is not None:
+                part = f"{col}: {val}"
+                repeats = round(w) if w > 1.0 else 1
+                parts.extend([part] * repeats)
+        else:
+            val = row.get(col)
+            if val is not None:
+                parts.append(f"{col}: {val}")
+    return " | ".join(parts) if parts else ""
+
+
+def _embedding_pair_sims(
+    pairs: list[tuple[int, int]],
+    row_lookup: dict[int, dict],
+    emb_cols: dict,
+    mk: MatchkeyConfig,
+) -> dict[int, np.ndarray]:
+    """Cosine similarity per pair for each model-backed field column.
+
+    Embeds each referenced row ONCE per field (O(rows) model calls, not
+    O(pairs)), then reads pair cosines by index. Returns ``{field_index:
+    np.ndarray(len(pairs))}``. The embedder produces L2-normalized vectors, so
+    cosine is a dot product — the same value the scoring path derives from
+    ``_fuzzy_score_matrix`` / ``_record_embedding_score_matrix``.
+    """
+    from goldenmatch.core.embedder import get_embedder
+    from goldenmatch.utils.transforms import apply_transforms
+
+    rids = sorted({rid for pair in pairs for rid in pair})
+    pos = {rid: i for i, rid in enumerate(rids)}
+    out: dict[int, np.ndarray] = {}
+
+    for idx, f in emb_cols.items():
+        if f.scorer == "record_embedding":
+            values = [
+                _record_concat_value(row_lookup.get(rid, {}), f.columns, f.column_weights)
+                for rid in rids
+            ]
+        else:
+            values = []
+            for rid in rids:
+                raw = row_lookup.get(rid, {}).get(f.field)
+                if raw is None:
+                    values.append(None)
+                    continue
+                s = str(raw)
+                if f.transforms:
+                    s = apply_transforms(s, f.transforms)
+                values.append(s)
+        embedder = get_embedder(f.model or "all-MiniLM-L6-v2")
+        vecs = np.asarray(
+            embedder.embed_column(values, cache_key=f"_em_estep_{idx}_{id(pairs)}"),
+            dtype=np.float64,
+        )
+        out[idx] = np.array(
+            [float(vecs[pos[a]] @ vecs[pos[b]]) for a, b in pairs],
+            dtype=np.float64,
+        )
+    return out
+
+
 def _build_comparison_matrix(
     pairs: list[tuple[int, int]],
     row_lookup: dict[int, dict],
     mk: MatchkeyConfig,
 ) -> np.ndarray:
-    """Build NxF comparison matrix where N=pairs, F=fields."""
+    """Build NxF comparison matrix where N=pairs, F=fields.
+
+    Model-backed (embedding / record_embedding) fields can't run through the
+    per-pair ``score_field``; their cosine similarity is precomputed in bulk and
+    fed to ``comparison_vector`` via ``field_sims`` so the level logic stays
+    single-sourced.
+    """
     n_pairs = len(pairs)
     n_fields = len(mk.fields)
     matrix = np.zeros((n_pairs, n_fields), dtype=np.int8)
 
+    emb_cols = {
+        idx: f for idx, f in enumerate(mk.fields)
+        if f.scorer in _MODEL_BACKED_SCORERS
+    }
+    sims_by_col = (
+        _embedding_pair_sims(pairs, row_lookup, emb_cols, mk) if emb_cols else {}
+    )
+
     for i, (a, b) in enumerate(pairs):
         row_a = row_lookup.get(a, {})
         row_b = row_lookup.get(b, {})
-        vec = comparison_vector(row_a, row_b, mk)
-        matrix[i] = vec
+        field_sims = (
+            {idx: sims_by_col[idx][i] for idx in emb_cols} if emb_cols else None
+        )
+        matrix[i] = comparison_vector(row_a, row_b, mk, field_sims=field_sims)
 
     return matrix
 
@@ -747,7 +858,16 @@ def train_em(
     ne_fields_em = _em_ne_fields(mk)
     _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
 
-    cols = [f.field for f in mk.fields if f.field != "__record__"]
+    cols = [f.field for f in mk.fields
+            if f.field != "__record__" and f.scorer != "record_embedding"]
+    # record_embedding fields carry their real columns in ``columns`` (their
+    # ``field`` is a placeholder like "__record__"); project those so the
+    # E-step can rebuild the concatenated record from row_lookup.
+    for f in mk.fields:
+        if f.scorer == "record_embedding":
+            for c in (f.columns or []):
+                if c not in cols:
+                    cols.append(c)
     # Extend with NE field names (incl. derive_from-synthesized columns,
     # which are materialized under the NE field's own name by
     # precompute_matchkey_transforms before train_em ever sees the frame) —
@@ -2039,34 +2159,52 @@ def _scalar_tf_contribution(va, vb, level: int, f, em_result) -> float:
     return float(np.clip(math.log2(collision / fv), -_TF_CLAMP, _TF_CLAMP))
 
 
-def vectorized_scorer_supported(scorer: str) -> bool:
-    """Whether a field scorer can be expressed as an NxN matrix here.
+#: Scorers that CANNOT run through the scalar per-pair ``score_field`` (they are
+#: matrix-only by nature) — model-backed embedding scorers. The FS path handles
+#: them exclusively on the vectorized matrix (EM E-step + block scoring); they
+#: never reach ``score_field``, which would raise ``Unknown scorer``.
+_MODEL_BACKED_SCORERS = ("embedding", "record_embedding")
 
-    Model-backed scorers (embedding / record_embedding) need per-block model
-    bootstrap and are intentionally excluded — callers fall back to the scalar
-    ``score_probabilistic`` path for matchkeys containing them.
+
+def vectorized_scorer_supported(scorer: str) -> bool:
+    """Whether a REGULAR field scorer can be expressed on the NxN matrix.
+
+    Every regular-field scorer qualifies: string scorers via
+    ``_fuzzy_score_matrix`` (rapidfuzz cdist / native kernel), per-field
+    ``embedding`` via the same, and record-level ``record_embedding`` via the
+    dedicated branch in ``score_probabilistic_vectorized``. The model-backed
+    scorers are matrix-ONLY (scalar ``score_field`` can't run them), so
+    ``probabilistic_block_scorer`` forces the vectorized path for any matchkey
+    carrying them and trains them via the vectorized EM E-step (#1806).
     """
-    return scorer not in ("embedding", "record_embedding")
+    return True
+
+
+def _ne_scorer_vectorizable(scorer: str) -> bool:
+    """Whether a NEGATIVE-EVIDENCE field scorer runs on the NE matrix path.
+
+    NE routes through ``_add_ne_matrix_contribution`` ->
+    ``_field_score_matrix_dedup``, which does NOT special-case the model-backed
+    scorers (record_embedding has no NE branch; the record-level un-gate in
+    #1806 covers regular fields only). So a model-backed NE scorer still forces
+    the scalar path — unchanged from before #1806. Expanding NE to model-backed
+    scorers is a separate follow-up.
+    """
+    return scorer not in _MODEL_BACKED_SCORERS
 
 
 def _fs_vectorized_supported(mk: MatchkeyConfig) -> bool:
-    """Whether every scorer the matchkey needs (regular fields +
-    negative-evidence fields) is expressible on the vectorized NxN matrix
-    path.
+    """Whether the matchkey can be scored on the vectorized NxN matrix path.
 
-    Covers BOTH regular fields and NE fields: NE routes through the same
-    matrix machinery (``_add_ne_matrix_contribution`` ->
-    ``_field_score_matrix_dedup``), so an NE scorer the matrix path can't
-    express (embedding / record_embedding) must force the scalar path too,
-    mirroring how an unsupported REGULAR field scorer already does. The ONE
-    shared gate for every use_vec decision -- a per-site copy that checks
-    only ``mk.fields`` crashes in ``_field_score_matrix_dedup`` as soon as
-    an NE field carries a model-backed scorer.
+    Regular fields: every scorer is matrix-expressible (see
+    ``vectorized_scorer_supported``). NE fields: every scorer except the
+    model-backed ones (see ``_ne_scorer_vectorizable``) — an NE field carrying a
+    model-backed scorer forces the scalar path, exactly as before #1806.
     """
     return all(
         vectorized_scorer_supported(f.scorer) for f in mk.fields
     ) and all(
-        vectorized_scorer_supported(ne.scorer) for ne in (mk.negative_evidence or [])
+        _ne_scorer_vectorizable(ne.scorer) for ne in (mk.negative_evidence or [])
     )
 
 
@@ -2116,6 +2254,25 @@ def score_probabilistic_vectorized(
     # Accumulate the total match-weight matrix field by field.
     total_weight = np.zeros((n, n), dtype=np.float64)
     for f in mk.fields:
+        if f.scorer == "record_embedding":
+            # Record-level embedding: one cosine matrix over the concatenated
+            # record columns. No single-field value, so no per-field null-mask
+            # and no TF adjustment (mirrors the weighted find_fuzzy_matches
+            # branch). The EM E-step embeds the SAME concatenation, so levels
+            # agree between train and score.
+            from goldenmatch.core.scorer import _record_embedding_score_matrix
+            weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
+            sim = _record_embedding_score_matrix(
+                block_df, f.columns or [],
+                model_name=f.model or "all-MiniLM-L6-v2",
+                column_weights=f.column_weights,
+            )
+            lvl = _levels_from_similarity(
+                sim, int(f.levels), float(f.partial_threshold),
+                level_thresholds=f.level_thresholds,
+            )
+            total_weight += weights[lvl]
+            continue
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
         sim = _field_score_matrix_dedup(vals, f.scorer)
@@ -2768,7 +2925,14 @@ def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
             return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
         return _native
 
-    use_vec = _fs_vectorized_enabled() and _fs_vectorized_supported(mk)
+    # Model-backed scorers can ONLY run on the vectorized matrix (scalar
+    # ``score_field`` raises ``Unknown scorer``), so they force the vectorized
+    # path regardless of the ``GOLDENMATCH_FS_VECTORIZED=0`` debug knob — the
+    # knob only downgrades scalar-capable configs.
+    requires_vec = any(f.scorer in _MODEL_BACKED_SCORERS for f in mk.fields)
+    use_vec = _fs_vectorized_supported(mk) and (
+        _fs_vectorized_enabled() or requires_vec
+    )
     if use_vec:
         def _scorer(block_df, exclude_pairs=None):
             return score_probabilistic_vectorized(block_df, mk, em_result, exclude_pairs)

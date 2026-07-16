@@ -2,6 +2,25 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-15 -- Embeddings first-class on Fellegi-Sunter (ADR 0040)
+- FS-audit batch (#1800/#1801/#1806). `embedding` / `record_embedding` did not
+  work on the probabilistic path -- they CRASHED (`score_field` has no embedding
+  branch, so both EM training and scalar scoring raised `Unknown scorer`); the
+  vectorized path could build embedding matrices but was gated off.
+- Fix (#1806): vectorized EM E-step (`comparison_vector(field_sims=...)` +
+  `_build_comparison_matrix` precompute via `_embedding_pair_sims`, train<->score
+  level parity), un-gate `vectorized_scorer_supported`, `record_embedding`
+  branch in `score_probabilistic_vectorized`, `probabilistic_block_scorer`
+  forces vectorized for model-backed scorers regardless of
+  `GOLDENMATCH_FS_VECTORIZED=0`, and the TUI routes FS through the block-scorer
+  selector. `score_field` untouched (embeddings never reach it). NE +
+  model-backed still forces scalar (deferred).
+- Sibling fixes on the same batch: #1801 (TF `tf_adjustment` now applies on the
+  scalar FS path — route parity), #1800 (distributed + chunked lanes raise
+  `NotImplementedError` on FS matchkeys instead of silently dropping them).
+- Docs: scoring.mdx (embedding-on-FS note), tuning.mdx (`GOLDENMATCH_FS_VECTORIZED`
+  scope), backends-and-scale.mdx (FS is single-box only), CHANGELOG `[Unreleased]`.
+
 ## 2026-07-15 -- GoldenMatch precision-anchor threshold raise + commit demotion (ADR 0039)
 - New default auto-config rule `rule_precision_anchor_threshold_raise`: raises
   the weighted threshold to 0.9 on the precision-collapse shape
