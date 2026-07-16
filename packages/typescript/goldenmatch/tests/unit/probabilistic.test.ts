@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   buildComparisonVector,
   trainEM,
+  scoreProbabilisticContinuous,
   scoreProbabilistic,
   scoreProbabilisticPair,
 } from "../../src/core/probabilistic.js";
+import type { ContinuousEMResult } from "../../src/core/probabilistic.js";
 import { makeMatchkeyConfig, makeMatchkeyField } from "../../src/core/index.js";
 import type { Row } from "../../src/core/index.js";
 
@@ -49,6 +51,38 @@ function buildMatchkey() {
     ],
   });
 }
+
+describe("continuous FS posterior scoring", () => {
+  it("returns the learned prior when evidence is neutral", () => {
+    const mk = makeMatchkeyConfig({
+      name: "continuous-prior",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+    const rows: Row[] = [
+      { __row_id__: 1, name: "Alice" },
+      { __row_id__: 2, name: "Alice" },
+    ];
+
+    for (const prior of [1e-8, 0.2, 0.8, 1 - 1e-8]) {
+      const em: ContinuousEMResult = {
+        mMean: { name: 0.5 },
+        mVar: { name: 0.25 },
+        uMean: { name: 0.5 },
+        uVar: { name: 0.25 },
+        converged: true,
+        iterations: 1,
+        proportionMatched: prior,
+      };
+
+      const pairs = scoreProbabilisticContinuous(rows, mk, em, { threshold: 0 });
+
+      expect(pairs).toEqual([
+        { idA: 1, idB: 2, score: Math.round(prior * 10000) / 10000 },
+      ]);
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // buildComparisonVector

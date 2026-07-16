@@ -478,6 +478,32 @@ class TestTrainEMContinuous:
 
 
 class TestScoreProbabilisticContinuous:
+    def test_neutral_evidence_returns_learned_prior(self):
+        mk = MatchkeyConfig(
+            name="continuous-prior",
+            type="probabilistic",
+            fields=[MatchkeyField(field="name", scorer="exact")],
+        )
+        block = pl.DataFrame({
+            "__row_id__": [1, 2],
+            "name": ["Alice", "Alice"],
+        })
+
+        for prior in (1e-8, 0.2, 0.8, 1.0 - 1e-8):
+            em = ContinuousEMResult(
+                m_mean={"name": 0.5},
+                m_var={"name": 0.25},
+                u_mean={"name": 0.5},
+                u_var={"name": 0.25},
+                converged=True,
+                iterations=1,
+                proportion_matched=prior,
+            )
+
+            pairs = score_probabilistic_continuous(block, mk, em, threshold=0.0)
+
+            assert pairs == [(1, 2, round(prior, 4))]
+
     def test_scores_obvious_matches(self):
         df = _make_dedupe_df()
         mk = _make_probabilistic_mk()
