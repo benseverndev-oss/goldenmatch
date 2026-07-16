@@ -93,7 +93,9 @@ class MatchkeyField(BaseModel):
     columns: list[str] | None = None  # for record_embedding scorer
     column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
     levels: int = Field(default=2, ge=2)  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
-    partial_threshold: float = 0.8  # score >= this = partial agree (when levels=3)
+    partial_threshold: float = Field(
+        default=0.8, ge=0.0, le=1.0
+    )  # score >= this = partial agree (when levels=3)
     # Probabilistic-only: term-frequency (Winkler) weight adjustment. When True,
     # an exact agreement on a *rare* value carries more match weight than on a
     # *common* one (matching on "Zelinski" is stronger evidence than on
@@ -118,7 +120,7 @@ class MatchkeyField(BaseModel):
     # `None` (not 20) is the default so `model_dump(exclude_none=True)` doesn't
     # leak the value into saved YAML for non-probabilistic matchkeys; the
     # workbench → engine translation in web/preview.py coerces None → 20.
-    em_iterations: int | None = None
+    em_iterations: int | None = Field(default=None, ge=1)
     # N-level custom banding (Splink-converter Stage 1). Descending similarity
     # cutoffs; level index = count of satisfied thresholds (0 = disagree,
     # levels-1 = top agree). None => legacy banding (partial_threshold for
@@ -348,10 +350,10 @@ class MatchkeyConfig(BaseModel):
     # ``docs/superpowers/specs/2026-07-14-fs-negative-evidence-design.md``.
     negative_evidence: list[NegativeEvidenceField] | None = None
     # Fellegi-Sunter EM parameters
-    em_iterations: int = 20
-    convergence_threshold: float = 0.001
-    link_threshold: float | None = None  # auto-computed if None
-    review_threshold: float | None = None  # auto-computed if None
+    em_iterations: int = Field(default=20, ge=1)
+    convergence_threshold: float = Field(default=0.001, gt=0.0)
+    link_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    review_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     # Probabilistic-only: persisted EM model (Splink-style train-once -> reuse).
     # When set and the file exists, the trained EMResult is loaded and EM is
     # skipped; when set and absent, EM runs and the result is saved there.
@@ -381,6 +383,27 @@ class MatchkeyConfig(BaseModel):
                         f"Field '{f.field}' is missing one or both."
                     )
         elif self.type == "probabilistic":
+            if not self.fields:
+                raise ValueError(
+                    "Probabilistic matchkeys require at least one comparison field."
+                )
+            field_names = [f.resolved_field for f in self.fields]
+            duplicates = sorted(
+                name for name in set(field_names) if field_names.count(name) > 1
+            )
+            if duplicates:
+                raise ValueError(
+                    "Probabilistic matchkeys cannot contain duplicate comparison "
+                    f"fields: {', '.join(duplicates)}."
+                )
+            if (
+                self.link_threshold is not None
+                and self.review_threshold is not None
+                and self.review_threshold > self.link_threshold
+            ):
+                raise ValueError(
+                    "review_threshold must be less than or equal to link_threshold."
+                )
             for f in self.fields:
                 if f.scorer is None:
                     raise ValueError(

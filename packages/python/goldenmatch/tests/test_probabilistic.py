@@ -92,6 +92,59 @@ class TestProbabilisticSchema:
         assert mk.link_threshold is None
         assert mk.review_threshold is None
 
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"fields": []}, "at least one comparison field"),
+            (
+                {
+                    "fields": [
+                        MatchkeyField(field="name", scorer="exact"),
+                        MatchkeyField(field="name", scorer="jaro_winkler"),
+                    ]
+                },
+                "duplicate comparison fields.*name",
+            ),
+            ({"em_iterations": 0}, "em_iterations"),
+            ({"em_iterations": -1}, "em_iterations"),
+            ({"convergence_threshold": 0}, "convergence_threshold"),
+            ({"convergence_threshold": -0.1}, "convergence_threshold"),
+            ({"link_threshold": -0.1}, "link_threshold"),
+            ({"link_threshold": 1.1}, "link_threshold"),
+            ({"review_threshold": -0.1}, "review_threshold"),
+            ({"review_threshold": 1.1}, "review_threshold"),
+            (
+                {"link_threshold": 0.8, "review_threshold": 0.9},
+                "review_threshold.*less than or equal to.*link_threshold",
+            ),
+        ],
+    )
+    def test_invalid_probabilistic_controls_are_rejected(self, kwargs, message):
+        values = {
+            "name": "fs_test",
+            "type": "probabilistic",
+            "fields": [MatchkeyField(field="name", scorer="exact")],
+            **kwargs,
+        }
+
+        with pytest.raises(ValueError, match=message):
+            MatchkeyConfig(**values)
+
+    @pytest.mark.parametrize("partial_threshold", [-0.1, 1.1])
+    def test_partial_threshold_must_be_probability(self, partial_threshold):
+        with pytest.raises(ValueError, match="partial_threshold"):
+            MatchkeyField(
+                field="name",
+                scorer="jaro_winkler",
+                levels=3,
+                partial_threshold=partial_threshold,
+            )
+
+    @pytest.mark.parametrize("em_iterations", [0, -1])
+    def test_workbench_em_iterations_must_be_positive(self, em_iterations):
+        with pytest.raises(ValueError, match="em_iterations"):
+            MatchkeyField(field="name", scorer="exact", em_iterations=em_iterations)
+
 
 # ── EM Core Tests ─────────────────────────────────────────────────────────
 
