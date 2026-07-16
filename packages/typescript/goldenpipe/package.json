@@ -1,6 +1,6 @@
 {
   "name": "goldenpipe",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Golden Suite orchestrator — chains GoldenCheck, GoldenFlow, and GoldenMatch into one adaptive pipeline. TypeScript port of the goldenpipe Python library.",
   "keywords": [
     "pipeline",

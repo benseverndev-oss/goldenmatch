@@ -1,6 +1,6 @@
 {
   "name": "goldencheck-types",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared TypeScript types and domain schemas for the goldencheck data-quality toolkit",
   "type": "module",
   "main": "./dist/index.cjs",

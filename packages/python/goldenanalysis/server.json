@@ -4,7 +4,7 @@
   "title": "GoldenAnalysis",
   "description": "Read-only cross-cutting analysis, metrics, and reporting across the Golden Suite.",
   "websiteUrl": "https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldenanalysis#readme",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "repository": {
     "url": "https://github.com/benseverndev-oss/goldenmatch",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "goldenanalysis",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

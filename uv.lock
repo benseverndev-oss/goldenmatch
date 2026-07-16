@@ -599,37 +599,37 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cublas" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-runtime" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cufft" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufile" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-cupti" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-curand" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusolver" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusparse" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-nvrtc" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvtx" },
 ]
 
 [[package]]
@@ -908,7 +908,7 @@ wheels = [
 
 [[package]]
 name = "goldenanalysis"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "packages/python/goldenanalysis" }
 dependencies = [
     { name = "polars" },
@@ -982,12 +982,12 @@ source = { directory = "packages/rust/extensions/analysis-native" }
 
 [[package]]
 name = "goldencheck"
-version = "1.4.1"
+version = "3.2.0"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
     { name = "goldencheck-types" },
     { name = "openpyxl" },
-    { name = "polars" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rapidfuzz" },
@@ -1002,6 +1002,7 @@ agent = [
 ]
 baseline = [
     { name = "numpy" },
+    { name = "polars" },
     { name = "scipy" },
 ]
 db = [
@@ -1023,6 +1024,12 @@ native = [
     { name = "goldencheck-native" },
     { name = "pyarrow" },
 ]
+parquet = [
+    { name = "pyarrow" },
+]
+polars = [
+    { name = "polars" },
+]
 semantic = [
     { name = "sentence-transformers" },
 ]
@@ -1038,8 +1045,11 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'baseline'", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30" },
     { name = "openpyxl", specifier = ">=3.1" },
-    { name = "polars", specifier = ">=1.0" },
+    { name = "polars", marker = "extra == 'baseline'", specifier = ">=1.0" },
+    { name = "polars", marker = "extra == 'polars'", specifier = ">=1.0" },
+    { name = "pyarrow", specifier = ">=14" },
     { name = "pyarrow", marker = "extra == 'native'", specifier = ">=14" },
+    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
@@ -1052,7 +1062,7 @@ requires-dist = [
     { name = "textual", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["dev", "llm", "db", "mcp", "agent", "baseline", "native", "semantic"]
+provides-extras = ["dev", "llm", "db", "mcp", "agent", "baseline", "native", "semantic", "parquet", "polars"]
 
 [[package]]
 name = "goldencheck-native"
@@ -1061,7 +1071,7 @@ source = { directory = "packages/rust/extensions/goldencheck-native" }
 
 [[package]]
 name = "goldencheck-types"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/python/goldencheck-types" }
 dependencies = [
     { name = "pyyaml" },
@@ -1081,12 +1091,12 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "goldenflow"
-version = "1.16.0"
+version = "2.1.0"
 source = { editable = "packages/python/goldenflow" }
 dependencies = [
     { name = "fastapi" },
+    { name = "goldenflow-native" },
     { name = "phonenumbers" },
-    { name = "polars" },
     { name = "pydantic" },
     { name = "python-dateutil" },
     { name = "python-multipart" },
@@ -1110,6 +1120,8 @@ all = [
     { name = "google-cloud-storage" },
     { name = "mcp" },
     { name = "openpyxl" },
+    { name = "polars" },
+    { name = "pyarrow" },
 ]
 check = [
     { name = "goldencheck" },
@@ -1138,8 +1150,13 @@ mcp = [
     { name = "mcp" },
 ]
 native = [
-    { name = "goldenflow-native" },
     { name = "pyarrow" },
+]
+parquet = [
+    { name = "pyarrow" },
+]
+polars = [
+    { name = "polars" },
 ]
 s3 = [
     { name = "boto3" },
@@ -1153,16 +1170,17 @@ requires-dist = [
     { name = "connectorx", marker = "extra == 'db'", specifier = ">=0.3" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "goldencheck", marker = "extra == 'check'", editable = "packages/python/goldencheck" },
-    { name = "goldenflow", extras = ["check", "excel", "db", "mcp", "agent", "s3", "gcs"], marker = "extra == 'all'", editable = "packages/python/goldenflow" },
-    { name = "goldenflow-native", marker = "extra == 'native'", directory = "packages/rust/extensions/native-flow" },
+    { name = "goldenflow", extras = ["check", "excel", "db", "mcp", "agent", "s3", "gcs", "polars", "parquet", "native"], marker = "extra == 'all'", editable = "packages/python/goldenflow" },
+    { name = "goldenflow-native", directory = "packages/rust/extensions/native-flow" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.14" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30" },
     { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1" },
     { name = "phonenumbers", specifier = ">=8.13" },
-    { name = "polars", specifier = ">=1.0" },
+    { name = "polars", marker = "extra == 'polars'", specifier = ">=1.0" },
     { name = "pyarrow", marker = "extra == 'native'", specifier = ">=10" },
+    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=10" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
@@ -1177,11 +1195,11 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["dev", "check", "excel", "db", "mcp", "llm", "s3", "gcs", "agent", "native", "all"]
+provides-extras = ["dev", "check", "polars", "excel", "parquet", "db", "mcp", "llm", "s3", "gcs", "agent", "native", "all"]
 
 [[package]]
 name = "goldenflow-native"
-version = "0.15.0"
+version = "0.27.0"
 source = { directory = "packages/rust/extensions/native-flow" }
 dependencies = [
     { name = "pyarrow" },
@@ -1192,7 +1210,7 @@ requires-dist = [{ name = "pyarrow", specifier = ">=10" }]
 
 [[package]]
 name = "goldenmatch"
-version = "2.8.0"
+version = "3.4.0"
 source = { editable = "packages/python/goldenmatch" }
 dependencies = [
     { name = "diptest" },
@@ -1201,7 +1219,6 @@ dependencies = [
     { name = "jellyfish" },
     { name = "numpy" },
     { name = "openpyxl" },
-    { name = "polars" },
     { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -1221,14 +1238,16 @@ all = [
     { name = "anthropic" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
-    { name = "goldencheck" },
+    { name = "goldencheck", extra = ["polars"] },
     { name = "goldenflow" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "openai" },
     { name = "pillow" },
+    { name = "polars" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
+    { name = "python-multipart" },
     { name = "sentence-transformers" },
     { name = "soundfile" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1301,13 +1320,16 @@ pgvector = [
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
 ]
+polars = [
+    { name = "polars" },
+]
 postgres = [
     { name = "alembic" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
 ]
 quality = [
-    { name = "goldencheck" },
+    { name = "goldencheck", extra = ["polars"] },
 ]
 ray = [
     { name = "ray" },
@@ -1340,6 +1362,7 @@ vision = [
 web = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1358,9 +1381,9 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
     { name = "faiss-cpu", marker = "extra == 'embeddings'", specifier = ">=1.7" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
-    { name = "goldencheck", marker = "extra == 'quality'", editable = "packages/python/goldencheck" },
+    { name = "goldencheck", extras = ["polars"], marker = "extra == 'quality'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", marker = "extra == 'transform'", editable = "packages/python/goldenflow" },
-    { name = "goldenmatch", extras = ["embeddings", "llm", "postgres", "mcp", "quality", "transform", "web", "vision", "audio"], marker = "extra == 'all'", editable = "packages/python/goldenmatch" },
+    { name = "goldenmatch", extras = ["embeddings", "llm", "postgres", "mcp", "polars", "quality", "transform", "web", "vision", "audio"], marker = "extra == 'all'", editable = "packages/python/goldenmatch" },
     { name = "goldenmatch-native", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'", directory = "packages/rust/extensions/native" },
     { name = "goldenmatch-native", marker = "extra == 'native'", directory = "packages/rust/extensions/native" },
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.0" },
@@ -1378,7 +1401,7 @@ requires-dist = [
     { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.3" },
     { name = "pillow", marker = "extra == 'documents'", specifier = ">=10.0" },
     { name = "pillow", marker = "extra == 'vision'", specifier = ">=10.0" },
-    { name = "polars", specifier = ">=1.0" },
+    { name = "polars", marker = "extra == 'polars'", specifier = ">=1.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'pgvector'", specifier = ">=3.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1" },
@@ -1395,6 +1418,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = ">=2.0" },
@@ -1410,7 +1434,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.29" },
 ]
-provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "sail", "agent", "quality", "transform", "native", "lance", "llama", "web", "bench", "all"]
+provides-extras = ["dev", "embeddings", "vision", "documents", "audio", "inhouse-embeddings", "llm", "postgres", "mcp", "pprl", "snowflake", "bigquery", "databricks", "salesforce", "redshift", "s3", "gcs", "azure-blob", "sqlserver", "mysql", "duckdb", "pgvector", "ray", "datafusion", "sail", "agent", "polars", "quality", "transform", "native", "lance", "llama", "web", "bench", "all"]
 
 [[package]]
 name = "goldenmatch-monorepo"
@@ -1447,12 +1471,12 @@ dev = [
 
 [[package]]
 name = "goldenmatch-native"
-version = "0.1.12"
+version = "0.1.17"
 source = { directory = "packages/rust/extensions/native" }
 
 [[package]]
 name = "goldenpipe"
-version = "1.3.0"
+version = "1.4.0"
 source = { editable = "packages/python/goldenpipe" }
 dependencies = [
     { name = "goldencheck-types" },
@@ -1550,7 +1574,7 @@ provides-extras = ["check", "flow", "match", "analysis", "golden-suite", "tui", 
 
 [[package]]
 name = "goldensuite-mcp"
-version = "0.3.0"
+version = "0.5.0"
 source = { editable = "packages/python/goldensuite-mcp" }
 dependencies = [
     { name = "goldenanalysis", extra = ["mcp"] },
@@ -1972,7 +1996,7 @@ wheels = [
 
 [[package]]
 name = "infermap"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "packages/python/infermap" }
 dependencies = [
     { name = "goldencheck-types" },
