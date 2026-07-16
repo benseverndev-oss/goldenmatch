@@ -52,7 +52,7 @@ describe("emResultToJson / emResultFromJson: round-trip", () => {
     const json = emResultToJson(em);
     expect(json).toMatchObject({
       __type__: "goldenmatch.EMResult",
-      __version__: 2,
+      __version__: 1,
       m_probs: em.m,
       u_probs: em.u,
       match_weights: em.matchWeights,
@@ -99,13 +99,13 @@ describe("emResultToJson / emResultFromJson: round-trip", () => {
 
 // ---------------------------------------------------------------------------
 // Cross-surface fixture: exact shape Python's EMResult.to_dict()/save_json
-// produces (goldenmatch/core/probabilistic.py, SCHEMA_VERSION=2).
+// produces (goldenmatch/core/probabilistic.py, SCHEMA_VERSION=1).
 // ---------------------------------------------------------------------------
 
 describe("emResultFromJson: cross-surface Python fixture", () => {
   const pythonFixture = {
     __type__: "goldenmatch.EMResult",
-    __version__: 2,
+    __version__: 1,
     m_probs: {
       first_name: [0.05, 0.1, 0.25, 0.6],
       postcode: [0.1, 0.9],
@@ -152,7 +152,7 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
   it("rejects a schema version newer than supported", () => {
     const data = {
       __type__: "goldenmatch.EMResult",
-      __version__: 999,
+      __version__: 3,
       m_probs: {},
       u_probs: {},
       match_weights: {},
@@ -161,21 +161,13 @@ describe("emResultFromJson: forward-compat + validation errors", () => {
       proportion_matched: 0.0,
     };
     expect(() => emResultFromJson(data)).toThrow(
-      /schema version 999 is newer than this goldenmatch supports \(2\)/,
+      /schema version 3 is newer than this goldenmatch supports \(2\)/,
     );
-  });
-
-  it("rejects v1 models trained with legacy missing-value semantics", () => {
-    expect(() => emResultFromJson({
-      __version__: 1,
-      m_probs: {}, u_probs: {}, match_weights: {},
-      converged: true, iterations: 1, proportion_matched: 0.1,
-    })).toThrow(/legacy missing-value semantics/);
   });
 
   it("rejects a dict missing a required key", () => {
     const data = {
-      __version__: 2,
+      __version__: 1,
       m_probs: {},
       u_probs: {},
       match_weights: {},
@@ -274,6 +266,27 @@ describe("validateEmResultFor", () => {
     });
 
     expect(() => validateEmResultFor(legacy, mk)).toThrow(/schema v1.*Retrain/);
+  });
+
+  it("v1 reuse rejection names the legacy missing-value semantics (#1819)", () => {
+    // Deferred contract (mirrors Python): v1 LOADS for inspection;
+    // validateEmResultFor rejects reuse and names the #1819 semantics.
+    const v1 = emResultFromJson({
+      __version__: 1,
+      m_probs: { name: [0.1, 0.9] },
+      u_probs: { name: [0.9, 0.1] },
+      match_weights: { name: [-3, 3] },
+      converged: true, iterations: 1, proportion_matched: 0.1,
+    });
+    expect(v1.sourceSchemaVersion).toBe(1);
+    const mk = makeMatchkeyConfig({
+      name: "mk",
+      type: "probabilistic",
+      fields: [makeMatchkeyField({ field: "name", scorer: "exact" })],
+    });
+    expect(() => validateEmResultFor(v1, mk)).toThrow(
+      /legacy missing-value semantics/,
+    );
   });
 
   it("passes when a 4-level levelThresholds field matches", () => {

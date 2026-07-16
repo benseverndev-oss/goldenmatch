@@ -201,18 +201,16 @@ export function emResultFromJson(data: unknown): EMResult {
   const obj = data as Record<string, unknown>;
 
   const version = typeof obj["__version__"] === "number" ? obj["__version__"] : 1;
-  if (version !== EM_RESULT_SCHEMA_VERSION) {
-    if (version < EM_RESULT_SCHEMA_VERSION) {
-      throw new FSModelMismatchError(
-        `FS model schema version ${version} uses legacy missing-value semantics; ` +
-          `retrain with schema version ${EM_RESULT_SCHEMA_VERSION}.`,
-      );
-    }
+  if (version > EM_RESULT_SCHEMA_VERSION) {
     throw new FSModelMismatchError(
       `FS model schema version ${version} is newer than this goldenmatch ` +
         `supports (${EM_RESULT_SCHEMA_VERSION}); upgrade goldenmatch.`,
     );
   }
+  // v1 models LOAD (inspection stays possible) but carry sourceSchemaVersion;
+  // validateEmResultFor rejects reuse -- v1 was trained with legacy
+  // missing-value semantics (#1819) and has no training-config manifest
+  // (#1835). Mirrors Python EMResult.from_dict.
 
   const requiredKeys = [
     "m_probs",
@@ -324,7 +322,8 @@ export function validateEmResultFor(em: EMResult, mk: MatchkeyConfig): void {
   if (em.trainingConfig == null) {
     if (em.sourceSchemaVersion === 1) {
       throw new FSModelMismatchError(
-        "Persisted FS model uses schema v1, which has no training configuration " +
+        "Persisted FS model uses schema v1, which was trained with legacy " +
+          "missing-value semantics (nulls folded into level 0) and has no training configuration " +
           "manifest and cannot be safely reused. Retrain the model to write " +
           "schema v2, or clear the model_path.",
       );
