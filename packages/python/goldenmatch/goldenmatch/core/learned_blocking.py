@@ -22,8 +22,12 @@ import logging
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from goldenmatch._polars_lazy import pl
+
+if TYPE_CHECKING:
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +333,105 @@ def apply_learned_blocks(
 
     logger.info("Learned blocking produced %d blocks from %d rules", len(all_blocks), min(len(rules), 3))
     return all_blocks
+
+
+# ── Lowering to a bucket-eligible config (#1839) ──────────────────────────
+#
+# WHY: `_use_bucket_scorer` refuses `strategy="learned"`, so every zero-config
+# run >= 50K rows forfeits the bucket scorer and pays the legacy per-block path.
+# That is NOT a semantic parity gap -- it is a REPRESENTATION gap. Bucket derives
+# block keys from `blocking.passes/keys`, and a learned config carries neither,
+# so bucket has nothing to bucket on. (Which is also why "just relax the gate"
+# is not a fix: bucket would have no keys at all.)
+#
+# A learned rule is a conjunction of (field, transform) predicates -- exactly the
+# shape `BlockingKeyConfig.field_transforms` expresses (#1826, built to map mixed
+# Splink rules per-field instead of widening every field). Lowering learned rules
+# into multi_pass passes closes the gap using machinery that already exists;
+# `score_buckets.py` already honors `field_transforms`.
+#
+# NOTHING HERE IS WIRED UP YET. This is the compiler + a differential harness to
+# ANSWER the gating question with data, not to flip any default. See
+# `scripts/learned_lowering_diff.py`.
+
+# Each learned transform -> a registry chain that is value-identical to the
+# learned lambda (pinned across edge cases in test_learned_lowering_parity.py).
+# 4 of 6 are natively vectorizable, so a lowered config additionally escapes
+# map_elements for those -- a second, independent win.
+_LOWERED_CHAIN: dict[str, list[str]] = {
+    "exact": ["strip", "lowercase"],
+    "first_3": ["strip", "lowercase", "substring:0:3"],
+    "first_5": ["strip", "lowercase", "substring:0:5"],
+    "first_token": ["strip", "lowercase", "first_token"],
+    "soundex": ["soundex"],
+    "digits_only": ["digits_only"],
+}
+
+
+class LoweringUnsupportedError(ValueError):
+    """A learned rule has no exact multi_pass equivalent.
+
+    Raised rather than lowering approximately. An approximate lowering would
+    silently change which pairs are generated -- the exact failure mode (silent,
+    recall-only, precision stays 1.0) that #1800 / #1837 / #1839 all were.
+    """
+
+
+def lower_rule_to_key(rule: BlockingRule) -> BlockingKeyConfig:
+    """Lower ONE learned rule to a BlockingKeyConfig pass.
+
+    Raises LoweringUnsupportedError when the rule cannot be expressed exactly:
+
+    * an unknown transform (no registry chain), or
+    * two predicates on the SAME field (e.g. ``last:exact AND last:soundex``).
+      ``field_transforms`` is keyed by field, so it cannot hold two chains for
+      one field. `learn_blocking_rules` CAN generate these: its dedup guard is
+      ``p1.key() == p2.key()``, which compares field+transform, not field alone.
+      Collapsing them would widen the key and mega-block it (the #1826 footgun).
+    """
+    from goldenmatch.config.schemas import BlockingKeyConfig
+
+    fields = [p.field for p in rule.predicates]
+    dupes = {f for f in fields if fields.count(f) > 1}
+    if dupes:
+        raise LoweringUnsupportedError(
+            f"rule {rule.key()!r} has multiple predicates on field(s) {sorted(dupes)}; "
+            f"field_transforms cannot express two chains for one field"
+        )
+    unknown = [p.transform for p in rule.predicates if p.transform not in _LOWERED_CHAIN]
+    if unknown:
+        raise LoweringUnsupportedError(
+            f"rule {rule.key()!r} uses transform(s) {unknown} with no registry chain"
+        )
+    return BlockingKeyConfig(
+        fields=fields,
+        field_transforms={p.field: list(_LOWERED_CHAIN[p.transform]) for p in rule.predicates},
+    )
+
+
+def lower_rules_to_blocking_config(
+    rules: list[BlockingRule],
+    *,
+    max_block_size: int = 5000,
+    skip_oversized: bool = True,
+) -> BlockingConfig:
+    """Lower learned rules to a multi_pass BlockingConfig that bucket accepts.
+
+    Mirrors ``apply_learned_blocks``: same ``rules[:3]`` cap, union semantics.
+    Raises LoweringUnsupportedError if ANY of those rules cannot be lowered
+    exactly -- a partial lowering would silently drop that rule's candidates.
+    """
+    from goldenmatch.config.schemas import BlockingConfig
+
+    if not rules:
+        raise LoweringUnsupportedError("no rules to lower")
+    return BlockingConfig(
+        strategy="multi_pass",
+        passes=[lower_rule_to_key(r) for r in rules[:3]],
+        union_mode=True,
+        max_block_size=max_block_size,
+        skip_oversized=skip_oversized,
+    )
 
 
 # ── Cache ─────────────────────────────────────────────────────────────────
