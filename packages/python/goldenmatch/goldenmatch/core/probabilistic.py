@@ -835,9 +835,10 @@ def _sample_blocked_pairs_with_fields(
         else:
             pair_fields[pair] = set(fields)
     unique_pairs = set(pair_fields)
-    all_block_pairs = (
-        sorted(unique_pairs) if target_ids is not None else list(unique_pairs)
-    )
+    # Canonicalize before seeded downsampling. Iterating a set made the EM
+    # sample depend on PYTHONHASHSEED/platform, which could move calibrated
+    # weights and quality-gate F1 despite an identical blocking plan.
+    all_block_pairs = sorted(unique_pairs)
     if len(all_block_pairs) > n_pairs:
         all_block_pairs = rng.sample(all_block_pairs, n_pairs)
 
