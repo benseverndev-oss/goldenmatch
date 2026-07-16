@@ -1062,6 +1062,16 @@ def train_em(
         for j, field in enumerate(mk.fields)
         if len(conditioned_mask) and bool(conditioned_mask[:, j].all())
     }
+    # A configured blocking field carries a deliberate fixed prior that EM
+    # cannot recover from random pairs: a disagreement PENALTY (drives
+    # precision) and a BOUNDED agreement weight (preserves recall). Learning it
+    # per-pass (#1835) loses both -- a near-unique key's `u` collapses to the
+    # smoothing floor, exploding the agreement weight (e.g. 28 bits on
+    # historical_50k) and dominating the score, which collapsed recall
+    # (F1 0.83 -> 0.57). So blocking fields always take the fixed-weight prior.
+    # The per-pass conditioning of the E/M sample still applies to non-blocking
+    # fields; only the final weight/skip treatment is forced here.
+    always_conditioned |= set(blocking_fields or [])
     ne_conditioned_mask = np.zeros(
         (len(pair_conditioning), len(ne_fields_em)), dtype=bool
     )
@@ -1676,6 +1686,9 @@ def train_em_continuous(
         for j, field in enumerate(mk.fields)
         if bool(conditioned_mask[:, j].all())
     }
+    # Blocking fields take the fixed prior, same as the discrete path -- learning
+    # them per-pass regresses recall on near-unique keys (see train_em).
+    always_conditioned |= set(blocking_fields or [])
 
     # Initialize with strong priors — matches score high, non-matches score low.
     # Use the actual score distribution to set non-match priors at the median.
