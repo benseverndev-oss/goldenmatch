@@ -522,7 +522,7 @@ def _record_concat_value(row: dict, columns, column_weights) -> str:
 def _embedding_pair_sims(
     pairs: list[tuple[int, int]],
     row_lookup: dict[int, dict],
-    emb_cols: dict[int, "MatchkeyField"],
+    emb_cols: dict,
     mk: MatchkeyConfig,
 ) -> dict[int, np.ndarray]:
     """Cosine similarity per pair for each model-backed field column.

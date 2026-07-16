@@ -114,7 +114,8 @@ def test_block_scorer_vectorized_for_embedding_even_with_killswitch(fake_embedde
 def test_vectorized_embedding_scores_duplicates_high(fake_embedder):
     """Same-bio pairs (identical embedding, cosine 1.0) outscore different-bio."""
     from goldenmatch.core.probabilistic import (
-        score_probabilistic_vectorized, train_em,
+        score_probabilistic_vectorized,
+        train_em,
     )
     df, mk = _emb_df(), _emb_mk()
     em = train_em(df, mk, n_sample_pairs=10, max_iterations=3)
@@ -145,7 +146,8 @@ def _rec_mk() -> MatchkeyConfig:
 
 def test_record_embedding_trains_and_scores(fake_embedder):
     from goldenmatch.core.probabilistic import (
-        score_probabilistic_vectorized, train_em,
+        score_probabilistic_vectorized,
+        train_em,
     )
     df, mk = _rec_df(), _rec_mk()
     em = train_em(df, mk, n_sample_pairs=8, max_iterations=3)
