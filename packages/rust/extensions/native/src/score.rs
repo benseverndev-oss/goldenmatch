@@ -123,6 +123,13 @@ pub fn score_block_pairs(
     threshold: f64,
     exclude: Vec<(i64, i64)>,
 ) -> Vec<(i64, i64, f64)> {
+    // #weighted-null: `total_weight` is now unused -- scores renormalize by the
+    // OBSERVED weight (weight_sum) instead. The parameter is KEPT so the
+    // #[pyfunction] signature is unchanged: the Python caller passes it
+    // positionally, and a published goldenmatch-native wheel would skew against a
+    // changed signature (the #688 wheel/caller class). Drop it only in a change
+    // that republishes the wheel and updates the caller together.
+    let _ = total_weight;
     let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
     let n_fields = scorer_ids.len();
 
@@ -161,7 +168,8 @@ pub fn score_block_pairs(
                                 }
                             }
                             if weight_sum > 0.0 {
-                                let combined = score_sum / total_weight;
+                                // #weighted-null: a null field is ABSENCE of evidence, not disagreement: renormalize by the OBSERVED weight (weight_sum), matching core/scorer.py::score_pair. Dividing by total_weight made any null field score as a disagreement, so an absolute threshold became unreachable (0.3/0.4/0.3 fields @0.85: a null dob caps the pair at 0.70 -- unmatchable however perfectly the names agree).
+                                let combined = score_sum / weight_sum;
                                 if combined >= threshold {
                                     local.push((pair_key.0, pair_key.1, combined));
                                 }
@@ -565,6 +573,9 @@ pub fn score_block_pairs_arrow(
     exclude: Option<Vec<(i64, i64)>>,
     exclude_set: Option<PyRef<'_, ExcludeSet>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
+    // #weighted-null: unused -- scores renormalize by weight_sum. Param KEPT so
+    // the #[pyfunction] signature (and any published wheel) is unchanged.
+    let _ = total_weight;
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
         return Err(PyValueError::new_err(format!(
@@ -642,7 +653,8 @@ pub fn score_block_pairs_arrow(
                         }
                     }
                     if weight_sum > 0.0 {
-                        let combined = score_sum / total_weight;
+                        // #weighted-null: renormalize by OBSERVED weight (see above).
+                        let combined = score_sum / weight_sum;
                         if combined >= threshold {
                             local.push((pair_key.0, pair_key.1, combined));
                         }

@@ -169,7 +169,12 @@ def test_score_block_pairs_kernel_parity():
                             ss += fns[f](va, vb) * weights[f]
                             ws += weights[f]
                         if ws > 0:
-                            c = ss / total_weight
+                            # #1856: renormalize by the OBSERVED weight (ws), not
+                            # total_weight -- a null field is absence of evidence,
+                            # not disagreement. The kernel this mirrors was fixed
+                            # to divide by weight_sum; this reference must match or
+                            # it pins the kernel to the pre-#1856 bug.
+                            c = ss / ws
                             if c >= threshold:
                                 out.append((pk[0], pk[1], float(c)))
             offset += size
