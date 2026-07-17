@@ -910,8 +910,18 @@ def _build_sorted_neighborhood_blocks(
     else:
         sort_key_expr = pl.concat_str(sort_field_exprs, separator="||").alias("__sort_key__")
 
-    # Collect and sort
-    df = lf.with_columns(sort_key_expr).collect().sort("__sort_key__")
+    # Collect and sort. Drop rows whose sort key is missing FIRST: a null (or
+    # nan/null/none sentinel) sort key means "this row cannot be ordered", not
+    # "it neighbors every other unorderable row". Without this, null-key rows
+    # sort adjacent and window together into spurious candidate blocks (#1859).
+    # filter_valid_key is the blocker's guard verbatim -- it keeps "" (#390).
+    from goldenmatch.core.frame import to_frame as _tf
+
+    df = (
+        _tf(lf.with_columns(sort_key_expr).collect())
+        .filter_valid_key("__sort_key__")
+        .native.sort("__sort_key__")
+    )
     n = len(df)
     window_size = config.window_size
 
