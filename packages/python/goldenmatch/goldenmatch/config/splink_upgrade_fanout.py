@@ -155,6 +155,7 @@ def _suggest_negative_evidence(ctx: _LeverContext) -> None:
         _ne_fired,
         _sample_blocked_pairs,
         comparison_vector,
+        fs_regular_weight_sum,
         posterior_from_weight,
         prior_weight,
     )
@@ -266,8 +267,10 @@ def _suggest_negative_evidence(ctx: _LeverContext) -> None:
     total_weights: list[float] = []
     for a, b in pairs:
         vec = comparison_vector(row_lookup.get(a, {}), row_lookup.get(b, {}), mk)
+        # #1859: guard the unobserved (-1) sentinel -- a missing field must not
+        # index weights[-1] (the highest-agreement weight).
         total_weights.append(
-            sum(em.match_weights[name][vec[k]] for k, name in indexed_fields)
+            fs_regular_weight_sum(em.match_weights, vec, indexed_fields)
         )
 
     # Per-pair posterior under the shared within-block prior re-estimate.
