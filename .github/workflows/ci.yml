@@ -204,6 +204,14 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 -c "import sys,glob,yaml; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('all workflow YAML parses')"
+      # #1846: parsing is not meaning. A path filter that lists too few paths
+      # makes its job go SILENT on exactly the changes it exists to catch --
+      # quality_gate pinned f1_probabilistic while not watching
+      # probabilistic.py, and a 0.83 -> 0.33 collapse landed unseen. This
+      # asserts each gated filter still covers the surfaces it claims to gate.
+      - name: Validate CI path-filter coverage
+        shell: bash
+        run: python3 scripts/check_filter_coverage.py
 
   python:
     needs: changes
