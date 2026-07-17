@@ -1,0 +1,72 @@
+{
+  "_comment": "AUTHORED by the Python native score_block_pairs_fs (the oracle). fs-wasm calls the SAME fs-core::score_fs_pair -> byte-identical. Regenerate: python scripts/emit_fs_wasm_fixture.py",
+  "field_values": [
+    [
+      "robert",
+      "robert",
+      "william",
+      "willyam",
+      "bob",
+      "xyzzy"
+    ],
+    [
+      "smith",
+      "smith",
+      "jones",
+      "jones",
+      "brown",
+      "zzz"
+    ]
+  ],
+  "row_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "block_sizes": [
+    6
+  ],
+  "scorer_ids": [
+    0,
+    3
+  ],
+  "levels": [
+    3,
+    2
+  ],
+  "partial_thresholds": [
+    0.8,
+    0.9
+  ],
+  "match_weights": [
+    [
+      -2.0,
+      0.5,
+      3.0
+    ],
+    [
+      -1.5,
+      2.5
+    ]
+  ],
+  "calibrated": false,
+  "prior_w": 0.0,
+  "min_weight": -3.5,
+  "weight_range": 9.0,
+  "threshold": 0.4,
+  "expected_pairs": [
+    [
+      0,
+      1,
+      1.0
+    ],
+    [
+      2,
+      3,
+      0.722222
+    ]
+  ]
+}

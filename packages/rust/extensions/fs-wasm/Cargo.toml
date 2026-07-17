@@ -1,0 +1,36 @@
+# Standalone workspace so this wasm-bindgen wrapper can path-depend on the
+# pyo3-free `fs-core` WITHOUT either crate's workspace claiming it — same
+# isolation rationale as `score-wasm`/`fs-core`. NO rust-toolchain.toml: inherits
+# the caller's toolchain. This crate is the TS analogue of `native` (pyo3): it
+# wraps the SAME `fs-core::score_fs_pair`, so Fellegi-Sunter block scoring is
+# byte-identical across Python-native and TS-WASM by construction.
+[workspace]
+
+[package]
+name = "goldenmatch-fs-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "wasm-bindgen wrapper over goldenmatch-fs-core (Fellegi-Sunter block scoring) for the goldenmatch TS WASM backend"
+
+[lib]
+name = "goldenmatch_fs_wasm"
+crate-type = ["cdylib", "rlib"] # cdylib for wasm; rlib so host unit tests link
+
+[dependencies]
+goldenmatch-fs-core = { path = "../fs-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# wasm-opt (binaryen) is an extra size pass wasm-pack runs post-build; it
+# downloads a binaryen release at build time, unavailable in network-restricted
+# CI sandboxes. opt-level="s"+lto already give a small wasm; disable the pass so
+# the build is hermetic (no network fetch). Same rationale as goldenhnsw-wasm.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

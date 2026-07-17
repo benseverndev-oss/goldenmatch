@@ -120,6 +120,23 @@ jobs:
       - name: Install DuckDB (used by the engine-agnostic accuracy evaluator)
         run: uv pip install duckdb
 
+      # Resume across a preempted runner. The large-new-64GB runners are
+      # occasionally reclaimed mid-sweep ("runner has received a shutdown
+      # signal"); orchestrate.py flushes bench_results.json after every datapoint
+      # and skips datapoints already recorded, so restoring .bench_er lets a
+      # re-run continue instead of recomputing from zero. Unique primary key per
+      # (shape, tag, run, attempt) => the post-job save always writes; the
+      # prefix restore-keys pick up the most recent partial for this shape+tag
+      # (previous attempt first, then any earlier dispatch with the same tag).
+      - name: Restore partial sweep progress
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: .bench_er
+          key: er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-${{ github.run_id }}-
+            er-h2h-${{ matrix.shape }}-${{ inputs.run_tag }}-
+
       - name: Run head-to-head sweep
         run: |
           uv run python scripts/bench_er_headtohead/orchestrate.py \

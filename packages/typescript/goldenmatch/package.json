@@ -15,6 +15,7 @@
     "./core/graph-wasm": { "types": "./dist/core/graphWasm.d.ts", "import": "./dist/core/graphWasm.js", "require": "./dist/core/graphWasm.cjs" },
     "./core/fingerprint-wasm": { "types": "./dist/core/fingerprintWasm.d.ts", "import": "./dist/core/fingerprintWasm.js", "require": "./dist/core/fingerprintWasm.cjs" },
     "./core/goldenembed-wasm": { "types": "./dist/core/goldenembedWasm.d.ts", "import": "./dist/core/goldenembedWasm.js", "require": "./dist/core/goldenembedWasm.cjs" },
+    "./core/fs-wasm": { "types": "./dist/core/fsWasm.d.ts", "import": "./dist/core/fsWasm.js", "require": "./dist/core/fsWasm.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
   "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },

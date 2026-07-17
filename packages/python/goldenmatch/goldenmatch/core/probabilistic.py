@@ -2541,19 +2541,29 @@ def _fs_vectorized_supported(mk: MatchkeyConfig) -> bool:
 
 
 def _fs_vec_max_elems() -> int:
-    """Dense-matrix guard for the vectorized FS scorers (#1826).
+    """Dense-matrix guard for the vectorized FS scorers (#1826, retightened #1857).
 
     Maximum elements a single NxN (or coalesced SxS) float64 matrix may hold
-    before the scorer REFUSES with an actionable error instead of handing the
-    allocator an impossible request (a 388K-row block is a 1.1 TiB ask).
-    Default 2e9 elements (~16 GB per matrix, n~44.7K) -- above that no
-    realistic node survives the multi-matrix composition anyway.
-    ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` overrides; ``0`` disables the guard.
+    before the scorer REFUSES with an actionable error instead of OOMing.
+
+    Default 5e7 elements (n~7,071). The original 2e9 (~16 GB for ONE matrix,
+    n~44.7K) only bounded a single allocation, but ``score_probabilistic_vectorized``
+    holds ~6 dense float64 matrices per block simultaneously (total_weight,
+    pair_min/max_weight, normalized, the per-field sim + level arrays), and
+    ``score_probabilistic_blocks_batched`` scores up to ``_fs_scoring_workers()``
+    (<=16) blocks IN PARALLEL. So a block well under the old cap still composes
+    tens of GB across the thread pool and takes the host down -- exactly the
+    #1857 failure: a ~15K-row birth-year block at 1M rows (auto-config
+    diversification) OOM'd a 64 GB runner mid-sweep. At 5e7 a single block's peak
+    (~6 x n^2 x 8 bytes ~2.4 GB) x 16 workers stays ~40 GB, and any larger block
+    refuses cleanly (a recorded error) instead of crashing the process.
+    ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` overrides (raise it on a big box, ``0``
+    disables the guard); FS-quality-bench blocks (<=~1,550 rows) are far below it.
     """
     try:
-        return int(os.environ.get("GOLDENMATCH_FS_VEC_MAX_ELEMS", "2000000000"))
+        return int(os.environ.get("GOLDENMATCH_FS_VEC_MAX_ELEMS", "50000000"))
     except ValueError:
-        return 2_000_000_000
+        return 50_000_000
 
 
 def _fs_vec_guard(n: int, fn_name: str) -> None:
@@ -2985,12 +2995,72 @@ def _fs_vectorized_enabled() -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "disabled")
 
 
-# Scorer-name -> native kernel id for the FS kernel (score_one ids 0..=3).
+# Scorer-name -> native kernel id for the FS kernel. 0..=3 are score-core's
+# score_one ids; 4/5 are the FS-kernel reserved reference-data name scorers
+# (goldenmatch-fs-core FS_SCORER_NAME_FREQ_WEIGHTED / FS_SCORER_GIVEN_NAME_ALIASED),
+# dispatched to the process-registered census / alias tables inside score_fs_pair.
 # soundex/embedding/record_embedding are absent on purpose — those fields force
 # the numpy fallback (the kernel's score_one doesn't implement them).
 _NATIVE_FS_SCORER_IDS: dict[str, int] = {
     "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+    "name_freq_weighted_jw": 4, "given_name_aliased_jw": 5, "ensemble": 6,
 }
+# The reference-data name scorers (kernel ids 4/5). A field carrying one is
+# native only when the wheel advertises FS_SUPPORTS_NAME_SCORERS AND the relevant
+# refdata pack is loaded (so the injected table matches the numpy path). NE fields
+# may NOT use these (the kernel's NE path is score_one 0..=3 only).
+_NAME_SCORER_IDS: frozenset[str] = frozenset(
+    {"name_freq_weighted_jw", "given_name_aliased_jw"}
+)
+# The FUSED match kernel (`match_fused_fs`) scores via `score_one` directly
+# (ids 0..=3), NOT `score_fs_pair`, so it does NOT dispatch the reference-data
+# name scorers (4/5) or ensemble (6). The fused readiness gate + marshaling use
+# THIS base set; a field/NE using a 4/5/6 scorer declines the fused path and
+# falls back to the classic `score_block_pairs_fs` path (which DOES dispatch
+# them). Do NOT widen this to `_NATIVE_FS_SCORER_IDS` — that would route ids the
+# fused kernel scores as 0.0.
+_FUSED_FS_SCORER_IDS: dict[str, int] = {
+    "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+}
+
+
+def _fs_name_refdata_available(scorers: set[str]) -> bool:
+    """Whether the refdata pack backing each needed name scorer is loaded:
+    ``name_freq_weighted_jw`` -> surnames census, ``given_name_aliased_jw`` ->
+    given-name aliases. Fail-closed (any import/error -> not available)."""
+    try:
+        if "name_freq_weighted_jw" in scorers:
+            from goldenmatch.refdata.surnames import is_available as _surn_avail
+            if not _surn_avail():
+                return False
+        if "given_name_aliased_jw" in scorers:
+            from goldenmatch.refdata.given_names import is_available as _given_avail
+            if not _given_avail():
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_fs_name_refdata(mod) -> None:
+    """Register the census / alias tables into the native kernel ONCE per process
+    (the design's "build the index once, inject a handle" contract). Idempotent:
+    skips when the kernel already carries the tables. Fail-open — a registration
+    error leaves the kernel with no tables, so name-scorer fields degrade to plain
+    JW (and `_fs_native_eligible` already declined the matchkey if the pack that
+    feeds the table was absent)."""
+    try:
+        if getattr(mod, "has_name_reference_data", None) is None:
+            return
+        if mod.has_name_reference_data():
+            return
+        from goldenmatch.refdata.given_names import export_alias_forms
+        from goldenmatch.refdata.surnames import export_counts
+        surname_counts = [(n, float(c)) for n, c in export_counts()]
+        alias_forms = export_alias_forms()
+        mod.set_name_reference_data(surname_counts, alias_forms)
+    except Exception:
+        logger.debug("FS name refdata registration skipped", exc_info=True)
 
 
 def _fs_native_enabled() -> bool:
@@ -3045,18 +3115,36 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
     if not mk.fields:
         return False
+    needs_ensemble = False
     ne_fields = mk.negative_evidence or []
     for ne in ne_fields:
-        if ne.scorer not in _NATIVE_FS_SCORER_IDS:
+        # NE goes through field_similarity (score_one 0..=3 + ensemble id 6); the
+        # reference-data name scorers (4/5) are NOT valid NE scorers.
+        if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.scorer in _NAME_SCORER_IDS:
             return False
+        if ne.scorer == "ensemble":
+            needs_ensemble = True
     needs_level_thresholds = False
+    needs_tf = False
+    name_scorers_needed: set[str] = set()
     for f in mk.fields:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
             return False
         if getattr(f, "tf_adjustment", False):
-            return False
+            needs_tf = True
         if getattr(f, "level_thresholds", None) is not None:
             needs_level_thresholds = True
+        if f.scorer in _NAME_SCORER_IDS:
+            name_scorers_needed.add(f.scorer)
+        if f.scorer == "ensemble":
+            needs_ensemble = True
+    if name_scorers_needed and not _fs_name_refdata_available(name_scorers_needed):
+        # The pack that would supply the injected table isn't loaded, so the
+        # kernel would degrade to plain JW — diverging from the numpy path (which
+        # ALSO degrades, but only via its own is_available gate). Decline to the
+        # numpy path so the two never disagree on an unloaded pack.
+        return False
+    needs_name_scorers = bool(name_scorers_needed)
     try:
         from goldenmatch.core._native_loader import native_module
         mod = native_module()
@@ -3070,6 +3158,12 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False  # old wheel: level_thresholds never crosses its FFI
         if ne_fields and not getattr(mod, "FS_SUPPORTS_NE", False):
             return False  # old wheel: NE never crosses its FFI
+        if needs_name_scorers and not getattr(mod, "FS_SUPPORTS_NAME_SCORERS", False):
+            return False  # old wheel: name scorers never cross their FFI
+        if needs_tf and not getattr(mod, "FS_SUPPORTS_TF_ADJUSTMENT", False):
+            return False  # old wheel: tf_freqs/tf_collision never cross their FFI
+        if needs_ensemble and not getattr(mod, "FS_SUPPORTS_ENSEMBLE", False):
+            return False  # old wheel: scores ensemble (id 6) as 0.0 (catch-all)
         return True
     except Exception:
         return False
@@ -3156,6 +3250,11 @@ def _score_fs_native_frame(
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
     mod = native_module()
+    # Register the census / alias tables once per process when a name scorer is in
+    # play (kernel ids 4/5). Cheap no-op once registered; `_fs_native_eligible`
+    # already gated on the pack being loaded + FS_SUPPORTS_NAME_SCORERS.
+    if any(f.scorer in _NAME_SCORER_IDS for f in mk.fields):
+        _ensure_fs_name_refdata(mod)
     # Zero-copy arrow entry (#1803 item 2): route to score_block_pairs_fs_arrow
     # when the wheel carries it; old wheels keep the Vec entry byte-identically.
     use_arrow = bool(getattr(mod, "FS_SUPPORTS_ARROW", False))
@@ -3217,6 +3316,31 @@ def _score_fs_native_frame(
             else float(em_result.match_weights[f"__ne__{ne.field}"][0])
             for ne in ne_fields
         ]
+
+    # Winkler TF adjustment: per-field frequency tables (kernel applies the
+    # log2(collision/freq) bump on exact-equal top-level agreements). Passed only
+    # when a field opted in AND EM produced the table (mirrors the numpy path's
+    # own `em_result.tf_freqs` gate). Field values reach the kernel already
+    # transformed, matching the transformed-value keys of tf_freqs.
+    if em_result.tf_freqs and any(
+        getattr(f, "tf_adjustment", False) for f in mk.fields
+    ):
+        tf_freqs_list: list[dict[str, float] | None] = []
+        tf_collision_list: list[float | None] = []
+        for f in mk.fields:
+            freqs = em_result.tf_freqs.get(f.field) if getattr(
+                f, "tf_adjustment", False
+            ) else None
+            if freqs:
+                tf_freqs_list.append(dict(freqs))
+                tf_collision_list.append(
+                    float((em_result.tf_collision or {}).get(f.field, 0.0))
+                )
+            else:
+                tf_freqs_list.append(None)
+                tf_collision_list.append(None)
+        opt_kwargs["tf_freqs"] = tf_freqs_list
+        opt_kwargs["tf_collision"] = tf_collision_list
 
     if use_arrow:
         import pyarrow as _pa

@@ -41,6 +41,10 @@ goldenmatch-fingerprint-core = { path = "../fingerprint-core" }
 # identically by construction. The #[pyfunction] scorers below are thin shims
 # over this crate; score_one is re-imported verbatim.
 goldenmatch-score-core = { path = "../score-core" }
+# Canonical Fellegi-Sunter block-scoring math (level banding + weight
+# normalization), pyo3-free, shared with the WASM/TS surface so FS scoring is
+# parity-by-construction across surfaces (see the 2026-07-17 fs-core design).
+goldenmatch-fs-core = { path = "../fs-core" }
 # Pyo3-free graph kernels (dedup + connected components, columnar + scalar).
 # The #[pyfunction] graph shims below delegate here so DuckDB/DataFusion and
 # this extension module share one behavior-exact path.

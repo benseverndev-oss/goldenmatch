@@ -165,3 +165,14 @@ def surname_idf(name: str | None) -> float | None:
     if denominator <= 0:
         return 0.0
     return max(0.0, min(1.0, numerator / denominator))
+
+
+def export_counts() -> list[tuple[str, int]]:
+    """Native-kernel seam: the raw ``(normalized_name, count)`` census pairs, for
+    handing across pyo3 to ``goldenmatch-native``'s ``set_name_reference_data``
+    (which recomputes the idf via the identical formula, single-sourcing the
+    frequency math on the Rust side). Empty when the table is unavailable."""
+    _load()
+    if _state is None:
+        return []
+    return list(_state.counts.items())

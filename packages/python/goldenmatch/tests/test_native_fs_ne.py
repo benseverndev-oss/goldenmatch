@@ -380,11 +380,30 @@ class TestFsNativeEligibleNE:
         )
         assert _fs_native_eligible(plain_mk) is True
 
-    def test_fs_native_eligible_ensemble_ne_declines(self, monkeypatch):
+    def test_fs_native_eligible_ensemble_ne_old_wheel_declines(self, monkeypatch):
+        # An old wheel (no FS_SUPPORTS_ENSEMBLE) declines an ensemble NE field —
+        # it would score id 6 as 0.0. A new wheel (increment 6) accepts it.
         monkeypatch.delenv("GOLDENMATCH_FS_NATIVE", raising=False)
         monkeypatch.delenv("GOLDENMATCH_NATIVE", raising=False)
         mk = _ne_mk([NegativeEvidenceField(field="phone", scorer="ensemble", threshold=0.5)])
+
+        class _OldWheel:
+            FS_SUPPORTS_LEVEL_THRESHOLDS = True
+            FS_SUPPORTS_MISSING_NEUTRAL = True
+            FS_SUPPORTS_NE = True  # NE supported, but NOT ensemble
+
+            @staticmethod
+            def score_block_pairs_fs(*args, **kwargs):
+                return []
+
+        monkeypatch.setattr(_native_loader, "native_module", lambda: _OldWheel())
         assert _fs_native_eligible(mk) is False
+
+        class _NewWheel(_OldWheel):
+            FS_SUPPORTS_ENSEMBLE = True
+
+        monkeypatch.setattr(_native_loader, "native_module", lambda: _NewWheel())
+        assert _fs_native_eligible(mk) is True
 
 
 def test_native_kwargs_not_sent_without_ne(monkeypatch):

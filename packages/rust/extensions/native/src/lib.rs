@@ -47,6 +47,24 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // entry exists. Python's `_score_fs_native_frame` routes to it when set;
     // old wheels keep the Vec entry (#1803).
     m.add("FS_SUPPORTS_ARROW", true)?;
+    // Wheel-skew capability flag: both FS entries dispatch the reference-data
+    // name scorers (`name_freq_weighted_jw` id 4 / `given_name_aliased_jw` id 5)
+    // to the process-registered census / alias tables. Python's
+    // `_fs_native_eligible` admits those scorers only when this flag is present
+    // AND `set_name_reference_data` has been called; old wheels lack the flag
+    // and keep the numpy path for name-scorer matchkeys.
+    m.add("FS_SUPPORTS_NAME_SCORERS", true)?;
+    // Wheel-skew capability flag: both FS entries accept the per-field Winkler
+    // `tf_freqs`/`tf_collision` kwargs and apply the term-frequency adjustment on
+    // exact-equal top-level agreements. Python's `_fs_native_eligible` admits a
+    // tf_adjustment field only when this flag is present; old wheels keep numpy.
+    m.add("FS_SUPPORTS_TF_ADJUSTMENT", true)?;
+    // Wheel-skew capability flag: both FS entries dispatch the `ensemble` scorer
+    // (id 6 = max(jaro_winkler, token_sort, soundex*0.8)) as a regular AND a
+    // negative-evidence scorer. Python's `_fs_native_eligible` admits ensemble
+    // only when this flag is present; old wheels score id 6 as 0.0 (score_one's
+    // catch-all), so they must keep the numpy path for ensemble matchkeys.
+    m.add("FS_SUPPORTS_ENSEMBLE", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
@@ -75,6 +93,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::score_field_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_pairwise, m)?)?;
     m.add_function(wrap_pyfunction!(score::build_exclude_set, m)?)?;
+    m.add_function(wrap_pyfunction!(score::set_name_reference_data, m)?)?;
+    m.add_function(wrap_pyfunction!(score::has_name_reference_data, m)?)?;
     m.add_class::<score::ExcludeSet>()?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch, m)?)?;

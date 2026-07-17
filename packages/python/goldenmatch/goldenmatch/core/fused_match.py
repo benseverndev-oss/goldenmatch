@@ -259,7 +259,7 @@ def match_fused_fs_ready(config: Any) -> bool:
     """Covered boundary for the fused Fellegi-Sunter (probabilistic) path.
 
     Covered: `static` single-key blocking + exactly one `probabilistic` matchkey
-    whose fields all use an FS-native scorer (`_NATIVE_FS_SCORER_IDS`).
+    whose fields all use an FS-native scorer (`_FUSED_FS_SCORER_IDS`).
     Transforms covered (derived host-side). `run_match_fused_fs_arrow` takes a
     PRE-TRAINED `EMResult` — training is the caller's O(n) model fit, unchanged.
 
@@ -294,17 +294,17 @@ def match_fused_fs_ready(config: Any) -> bool:
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
         return False
-    from goldenmatch.core.probabilistic import _NATIVE_FS_SCORER_IDS
+    from goldenmatch.core.probabilistic import _FUSED_FS_SCORER_IDS
 
     mk = mks[0]
     ne_fields = getattr(mk, "negative_evidence", None) or []
     uses_level_thresholds = any(
         getattr(f, "level_thresholds", None) is not None for f in mk.fields
     )
-    if not all(f.field and f.scorer in _NATIVE_FS_SCORER_IDS for f in mk.fields):
+    if not all(f.field and f.scorer in _FUSED_FS_SCORER_IDS for f in mk.fields):
         return False
     for ne in ne_fields:
-        if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.derive_from:
+        if ne.scorer not in _FUSED_FS_SCORER_IDS or ne.derive_from:
             return False
     # Missing-as-unobserved changes every FS matchkey, so always capability-
     # probe; older wheels silently map nulls to disagreement/level 0.
@@ -356,7 +356,7 @@ def run_match_fused_fs_arrow(
     absent.
     """
     from goldenmatch.core.probabilistic import (
-        _NATIVE_FS_SCORER_IDS,
+        _FUSED_FS_SCORER_IDS,
         _field_values_from_list,
         _fs_calibration_mode,
         compute_thresholds,
@@ -404,7 +404,7 @@ def run_match_fused_fs_arrow(
         link_threshold = float(mk.link_threshold)
     else:
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
-    scorer_ids = [_NATIVE_FS_SCORER_IDS[f.scorer] for f in mk.fields]
+    scorer_ids = [_FUSED_FS_SCORER_IDS[f.scorer] for f in mk.fields]
     levels = [int(f.levels) for f in mk.fields]
     partials = [float(f.partial_threshold) for f in mk.fields]
     weights = [[float(w) for w in em_result.match_weights[f.field]] for f in mk.fields]
@@ -450,7 +450,7 @@ def run_match_fused_fs_arrow(
             )
         opt_kwargs["ne_fields"] = ne_arrs
         opt_kwargs["ne_scorer_ids"] = [
-            _NATIVE_FS_SCORER_IDS[ne.scorer] for ne in ne_fields
+            _FUSED_FS_SCORER_IDS[ne.scorer] for ne in ne_fields
         ]
         opt_kwargs["ne_thresholds"] = [float(ne.threshold) for ne in ne_fields]
         opt_kwargs["ne_weights"] = [

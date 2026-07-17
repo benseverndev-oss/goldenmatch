@@ -12,13 +12,111 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
+use goldenmatch_fs_core::{AliasTable, NameAliases, SurnameFreq, SurnameIdfTable, TfTable};
 use goldenmatch_score_core::score_one;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
+
+/// Process-level reference-data tables for the FS name scorers
+/// (`name_freq_weighted_jw` / `given_name_aliased_jw`). Built ONCE per process
+/// from the Python `refdata` state via [`set_name_reference_data`] and read by
+/// both FS entry points — the design's "build the index once, inject a handle,
+/// reuse across every block-scoring call" contract, so the ~10K census table is
+/// NOT marshaled per bucket call. Mirrors the goldenembed model-dir cache.
+pub struct NameRefData {
+    pub surnames: SurnameIdfTable,
+    pub aliases: AliasTable,
+}
+
+static NAME_REFDATA: OnceLock<RwLock<Option<Arc<NameRefData>>>> = OnceLock::new();
+
+fn name_refdata_cell() -> &'static RwLock<Option<Arc<NameRefData>>> {
+    NAME_REFDATA.get_or_init(|| RwLock::new(None))
+}
+
+/// Snapshot the registered name reference data (a cheap `Arc` clone), or `None`
+/// if the host never registered it — in which case name-scorer fields degrade
+/// to plain Jaro-Winkler.
+fn current_name_refdata() -> Option<Arc<NameRefData>> {
+    name_refdata_cell().read().ok().and_then(|g| g.clone())
+}
+
+/// Register the FS name-scorer reference tables for this process.
+///
+/// `surname_counts` = `(name, count)` census pairs — the idf is computed in Rust
+/// via the exact `surnames.surname_idf` formula, single-sourcing the frequency
+/// math. `alias_forms` = `(form, [canonical_ids])` from the given-name alias
+/// classes (`given_names._state.canonicals`). The latest registration wins via
+/// an atomic pointer swap; concurrent readers keep the prior snapshot.
+#[pyfunction]
+pub fn set_name_reference_data(
+    surname_counts: Vec<(String, f64)>,
+    alias_forms: Vec<(String, Vec<String>)>,
+) -> PyResult<()> {
+    let data = Arc::new(NameRefData {
+        surnames: SurnameIdfTable::from_counts(surname_counts),
+        aliases: AliasTable::from_forms(alias_forms),
+    });
+    if let Ok(mut g) = name_refdata_cell().write() {
+        *g = Some(data);
+    }
+    Ok(())
+}
+
+/// Whether this process has FS name reference data registered (test/debug aid).
+#[pyfunction]
+pub fn has_name_reference_data() -> bool {
+    current_name_refdata().is_some()
+}
+
+/// Build the per-field Winkler TF tables from the marshaled kwargs. `tf_freqs`
+/// and `tf_collision` are per-field (indexed like `scorer_ids`); a field opts in
+/// only when BOTH its `tf_freqs[f]` and `tf_collision[f]` are present. Absent /
+/// `None` everywhere -> an empty Vec, so `score_fs_pair` does no TF work.
+fn build_tf_tables(
+    tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
+    tf_collision: Option<Vec<Option<f64>>>,
+    n_fields: usize,
+) -> Vec<Option<TfTable>> {
+    let (freqs, coll) = match (tf_freqs, tf_collision) {
+        (Some(f), Some(c)) => (f, c),
+        _ => return Vec::new(),
+    };
+    let mut out: Vec<Option<TfTable>> = Vec::with_capacity(n_fields);
+    for f in 0..n_fields {
+        let table = match (
+            freqs.get(f).and_then(|o| o.as_ref()),
+            coll.get(f).and_then(|o| *o),
+        ) {
+            (Some(fq), Some(c)) => Some(TfTable {
+                freqs: fq.clone(),
+                collision: c,
+            }),
+            _ => None,
+        };
+        out.push(table);
+    }
+    out
+}
+
+/// Resolve the injected provider handles for a scoring call. Borrows live as
+/// long as the caller keeps the returned `Arc` alive.
+#[inline]
+fn name_providers(
+    refdata: &Option<Arc<NameRefData>>,
+) -> (
+    Option<&(dyn SurnameFreq + Sync)>,
+    Option<&(dyn NameAliases + Sync)>,
+) {
+    match refdata {
+        Some(d) => (Some(&d.surnames), Some(&d.aliases)),
+        None => (None, None),
+    }
+}
 
 /// Shared exclude index for the bucket scorer. The Python caller used to pass
 /// the exclude set as a fresh `Vec<(i64, i64)>` on EVERY native call -- at 10M
@@ -110,7 +208,7 @@ pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
 /// scores match the Python path to within float tolerance, not bit-for-bit; the
 /// emitted pair set could differ only for a pair whose weighted score sits
 /// within that tolerance of `threshold`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 pub fn score_block_pairs(
     py: Python<'_>,
@@ -183,68 +281,12 @@ pub fn score_block_pairs(
     })
 }
 
-/// Normalize a summed Fellegi-Sunter match weight to a [0,1] score. Shared by
-/// `score_block_pairs_fs` and the fused `match_fused_fs` so the two cannot drift.
-/// `calibrated` = posterior probability `1/(1+2^-(prior_w+w))`; else linear
-/// min-max over the observed weight range (0.5 when the range is degenerate).
-pub(crate) fn fs_normalize(
-    total_weight: f64,
-    calibrated: bool,
-    prior_w: f64,
-    min_weight: f64,
-    weight_range: f64,
-) -> f64 {
-    if calibrated {
-        let logodds = (prior_w + total_weight).clamp(-60.0, 60.0);
-        1.0 / (1.0 + 2.0_f64.powf(-logodds))
-    } else if weight_range > 0.0 {
-        ((total_weight - min_weight) / weight_range).clamp(0.0, 1.0)
-    } else {
-        0.5
-    }
-}
-
-/// Map a per-field similarity to a comparison level, matching
-/// `core/probabilistic._levels_from_similarity`:
-///   custom `level_thresholds`: level = count of thresholds t with sim >= t
-///     (inclusive, order-independent — mirrors the Python custom branch
-///     byte-for-byte; len(thresholds)+1 levels total)
-///   2 levels: 1 if sim >= partial_threshold else 0
-///   3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
-///   N levels: count of k in 1..N with sim >= k/N (even spacing)
-#[inline]
-pub(crate) fn fs_level_from_sim(
-    sim: f64,
-    n_levels: u8,
-    partial_threshold: f64,
-    level_thresholds: Option<&[f64]>,
-) -> usize {
-    if let Some(ts) = level_thresholds {
-        return ts.iter().filter(|&&t| sim >= t).count();
-    }
-    match n_levels {
-        2 => usize::from(sim >= partial_threshold),
-        3 => {
-            if sim >= 0.95 {
-                2
-            } else if sim >= partial_threshold {
-                1
-            } else {
-                0
-            }
-        }
-        n => {
-            let n = n as usize;
-            let mut lvl = 0usize;
-            for k in 1..n {
-                if sim >= (k as f64) / (n as f64) {
-                    lvl += 1;
-                }
-            }
-            lvl
-        }
-    }
-}
+// Fellegi-Sunter leaf math (weight normalization + level banding) now lives in
+// the pyo3-free `goldenmatch-fs-core` crate — the single source of truth shared
+// with the WASM/TS surface (see the 2026-07-17 fs-core design). Re-exported here
+// so `score_block_pairs_fs`, the fused `match_fused_fs`, and this module's tests
+// keep their existing `fs_normalize` / `fs_level_from_sim` call sites unchanged.
+pub(crate) use goldenmatch_fs_core::{fs_level_from_sim, fs_normalize};
 
 /// Fellegi-Sunter sibling of [`score_block_pairs`]: instead of a weighted average
 /// of raw similarities, each field's similarity is mapped to a comparison LEVEL
@@ -285,7 +327,7 @@ pub(crate) fn fs_level_from_sim(
 /// Parity with the numpy path is within rapidfuzz tolerance (same as the
 /// weighted kernel) — a pair could differ only if its normalized score sits
 /// within that tolerance of `threshold`. Asserted in tests/test_native_parity.py.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, block_sizes, field_values, scorer_ids, levels, partial_thresholds,
@@ -293,6 +335,7 @@ pub(crate) fn fs_level_from_sim(
     exclude, level_thresholds=None,
     ne_values=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
     exclude_set=None,
+    tf_freqs=None, tf_collision=None,
 ))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
@@ -315,6 +358,8 @@ pub fn score_block_pairs_fs(
     ne_thresholds: Option<Vec<f64>>,
     ne_weights: Option<Vec<f64>>,
     exclude_set: Option<PyRef<'_, ExcludeSet>>,
+    tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
+    tf_collision: Option<Vec<Option<f64>>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     // FS_SUPPORTS_EXCLUDE_SET: prefer the shared Arc handle (built once per
     // score_buckets call via `build_exclude_set`), fall back to the legacy
@@ -398,9 +443,9 @@ pub fn score_block_pairs_fs(
             }
         }
         for (k, &sid) in ns.iter().enumerate() {
-            if sid > 3 {
+            if sid > 3 && sid != goldenmatch_fs_core::FS_SCORER_ENSEMBLE {
                 return Err(PyValueError::new_err(format!(
-                    "score_block_pairs_fs: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3)"
+                    "score_block_pairs_fs: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3 or 6=ensemble)"
                 )));
             }
         }
@@ -411,7 +456,6 @@ pub fn score_block_pairs_fs(
     let ne_scorer_ids_v: &[u8] = ne_scorer_ids.as_deref().unwrap_or(&[]);
     let ne_thresholds_v: &[f64] = ne_thresholds.as_deref().unwrap_or(&[]);
     let ne_weights_v: &[f64] = ne_weights.as_deref().unwrap_or(&[]);
-    let n_ne = ne_vals.len();
     let field_mins: Vec<f64> = match_weights
         .iter()
         .map(|w| w.iter().copied().fold(f64::INFINITY, f64::min))
@@ -432,6 +476,38 @@ pub fn score_block_pairs_fs(
         offset += size;
     }
 
+    // Process-level name reference data (census idf + given-name aliases),
+    // registered once via `set_name_reference_data`. Snapshot the Arc so the
+    // borrows below outlive the rayon closure; None -> name-scorer fields degrade
+    // to plain JW.
+    let tf_tables = build_tf_tables(tf_freqs, tf_collision, scorer_ids.len());
+    let name_refdata = current_name_refdata();
+    let (surname_freq, name_aliases) = name_providers(&name_refdata);
+
+    // Per-matchkey scoring constants, borrowed once and reused per pair. The
+    // per-pair FS math itself lives in `goldenmatch-fs-core::score_fs_pair` (the
+    // single cross-surface source of truth); this entry point owns only the
+    // Vec-of-`String` field access, span iteration, and GIL release.
+    let fs_params = goldenmatch_fs_core::FsPairParams {
+        scorer_ids: &scorer_ids,
+        levels: &levels,
+        partial_thresholds: &partial_thresholds,
+        field_thresholds: &field_thresholds,
+        match_weights: &match_weights,
+        field_mins: &field_mins,
+        field_maxs: &field_maxs,
+        base_min,
+        base_max,
+        ne_scorer_ids: ne_scorer_ids_v,
+        ne_thresholds: ne_thresholds_v,
+        ne_weights: ne_weights_v,
+        calibrated,
+        prior_w,
+        surname_freq,
+        name_aliases,
+        tf_tables: &tf_tables,
+    };
+
     let result = py.detach(|| {
         spans
             .par_iter()
@@ -447,54 +523,13 @@ pub fn score_block_pairs_fs(
                             if exclude.contains(&pair_key) {
                                 continue;
                             }
-                            let mut total_weight = 0.0_f64;
-                            let mut pair_min = base_min;
-                            let mut pair_max = base_max;
-                            let mut has_regular_evidence = false;
-                            for f in 0..n_fields {
-                                if let (Some(a), Some(b)) =
-                                    (&field_values[f][i], &field_values[f][j])
-                                {
-                                    has_regular_evidence = true;
-                                    let sim = score_one(scorer_ids[f], a, b);
-                                    let level = fs_level_from_sim(
-                                        sim,
-                                        levels[f],
-                                        partial_thresholds[f],
-                                        field_thresholds[f],
-                                    );
-                                    total_weight += match_weights[f][level];
-                                    pair_min += field_mins[f];
-                                    pair_max += field_maxs[f];
-                                }
-                            }
-                            // Negative evidence: exact `_ne_fired` semantics
-                            // (core/probabilistic.py:466) — fires iff both
-                            // values present AND non-empty AND similarity
-                            // STRICTLY below the threshold; contributes
-                            // exactly 0 otherwise.
-                            for k in 0..n_ne {
-                                if let (Some(a), Some(b)) = (&ne_vals[k][i], &ne_vals[k][j]) {
-                                    if !a.is_empty()
-                                        && !b.is_empty()
-                                        && score_one(ne_scorer_ids_v[k], a, b) < ne_thresholds_v[k]
-                                    {
-                                        total_weight += ne_weights_v[k];
-                                    }
-                                }
-                            }
-                            let normalized =
-                                if !calibrated && !has_regular_evidence && total_weight == 0.0 {
-                                    0.5
-                                } else {
-                                    fs_normalize(
-                                        total_weight,
-                                        calibrated,
-                                        prior_w,
-                                        pair_min,
-                                        pair_max - pair_min,
-                                    )
-                                };
+                            let normalized = goldenmatch_fs_core::score_fs_pair(
+                                i,
+                                j,
+                                &fs_params,
+                                |f, row| field_values[f][row].as_deref(),
+                                |k, row| ne_vals[k][row].as_deref(),
+                            );
                             if normalized >= threshold {
                                 local.push((pair_key.0, pair_key.1, normalized));
                             }
@@ -555,7 +590,7 @@ impl StrCol {
 /// (None values skipped), same canonical (min,max) emission in block order — so
 /// the two are diffed in tests/test_native_parity.py. `block_sizes` are the
 /// consecutive block lengths in the (same) block-sorted row order.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, field_arrays, block_sizes, scorer_ids, weights,
@@ -722,13 +757,14 @@ pub fn score_block_pairs_arrow(
 /// sequential-vs-rayon dispatch gate, both of which the Vec entry historically
 /// lacked. Byte-identical output to the Vec entry for the same inputs (parity
 /// asserted in tests/test_native_fs_ne.py).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, field_arrays, block_sizes, scorer_ids, levels, partial_thresholds,
     match_weights, calibrated, prior_w, min_weight, weight_range, threshold,
     exclude=None, exclude_set=None, level_thresholds=None,
     ne_arrays=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
+    tf_freqs=None, tf_collision=None,
 ))]
 pub fn score_block_pairs_fs_arrow(
     py: Python<'_>,
@@ -751,6 +787,8 @@ pub fn score_block_pairs_fs_arrow(
     ne_scorer_ids: Option<Vec<u8>>,
     ne_thresholds: Option<Vec<f64>>,
     ne_weights: Option<Vec<f64>>,
+    tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
+    tf_collision: Option<Vec<Option<f64>>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
@@ -849,9 +887,9 @@ pub fn score_block_pairs_fs_arrow(
         }
     }
     for (k, &sid) in ne_scorer_ids_v.iter().enumerate() {
-        if sid > 3 {
+        if sid > 3 && sid != goldenmatch_fs_core::FS_SCORER_ENSEMBLE {
             return Err(PyValueError::new_err(format!(
-                "score_block_pairs_fs_arrow: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3)"
+                "score_block_pairs_fs_arrow: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3 or 6=ensemble)"
             )));
         }
     }
@@ -891,9 +929,38 @@ pub fn score_block_pairs_fs_arrow(
     let base_min = min_weight - regular_min;
     let base_max = min_weight + weight_range - regular_max;
 
+    // Process-level name reference data (see the Vec entry). Snapshot the Arc so
+    // the borrows outlive the rayon closure below.
+    let tf_tables = build_tf_tables(tf_freqs, tf_collision, scorer_ids.len());
+    let name_refdata = current_name_refdata();
+    let (surname_freq, name_aliases) = name_providers(&name_refdata);
+
+    // Per-matchkey scoring constants, borrowed once and reused per pair. The
+    // per-pair FS math is `goldenmatch-fs-core::score_fs_pair` — identical to the
+    // Vec entry point; this arrow entry differs only in the zero-copy field
+    // access, span iteration, and #688 rayon dispatch below.
+    let fs_params = goldenmatch_fs_core::FsPairParams {
+        scorer_ids: &scorer_ids,
+        levels: &levels,
+        partial_thresholds: &partial_thresholds,
+        field_thresholds: &field_thresholds,
+        match_weights: &match_weights,
+        field_mins: &field_mins,
+        field_maxs: &field_maxs,
+        base_min,
+        base_max,
+        ne_scorer_ids: ne_scorer_ids_v,
+        ne_thresholds: ne_thresholds_v,
+        ne_weights: ne_weights_v,
+        calibrated,
+        prior_w,
+        surname_freq,
+        name_aliases,
+        tf_tables: &tf_tables,
+    };
+
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors
-    // score_block_pairs_arrow's score_span; FS math verbatim from
-    // score_block_pairs_fs, including the `_ne_fired` strict-< semantics).
+    // score_block_pairs_arrow's score_span).
     let score_span = |offset: usize, size: usize| -> Vec<(i64, i64, f64)> {
         let mut local: Vec<(i64, i64, f64)> = Vec::new();
         if size >= 2 {
@@ -906,47 +973,13 @@ pub fn score_block_pairs_fs_arrow(
                     if exclude_ref.contains(&pair_key) {
                         continue;
                     }
-                    let mut total_weight = 0.0_f64;
-                    let mut pair_min = base_min;
-                    let mut pair_max = base_max;
-                    let mut has_regular_evidence = false;
-                    for f in 0..n_fields {
-                        if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
-                            has_regular_evidence = true;
-                            let sim = score_one(scorer_ids[f], a, b);
-                            let level = fs_level_from_sim(
-                                sim,
-                                levels[f],
-                                partial_thresholds[f],
-                                field_thresholds[f],
-                            );
-                            total_weight += match_weights[f][level];
-                            pair_min += field_mins[f];
-                            pair_max += field_maxs[f];
-                        }
-                    }
-                    for k in 0..n_ne {
-                        if let (Some(a), Some(b)) = (ne_cols[k].get(i), ne_cols[k].get(j)) {
-                            if !a.is_empty()
-                                && !b.is_empty()
-                                && score_one(ne_scorer_ids_v[k], a, b) < ne_thresholds_v[k]
-                            {
-                                total_weight += ne_weights_v[k];
-                            }
-                        }
-                    }
-                    let normalized = if !calibrated && !has_regular_evidence && total_weight == 0.0
-                    {
-                        0.5
-                    } else {
-                        fs_normalize(
-                            total_weight,
-                            calibrated,
-                            prior_w,
-                            pair_min,
-                            pair_max - pair_min,
-                        )
-                    };
+                    let normalized = goldenmatch_fs_core::score_fs_pair(
+                        i,
+                        j,
+                        &fs_params,
+                        |f, row| fields[f].get(row),
+                        |k, row| ne_cols[k].get(row),
+                    );
                     if normalized >= threshold {
                         local.push((pair_key.0, pair_key.1, normalized));
                     }

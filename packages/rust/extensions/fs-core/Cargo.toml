@@ -1,0 +1,25 @@
+# Standalone workspace so this pyo3-free Fellegi-Sunter core can be a path
+# dependency of the `native` crate (its own extension-module workspace) — and,
+# in later increments, of an `fs-wasm` binding — without either workspace
+# claiming it. Same isolation rationale as the sibling `score-core` /
+# `fingerprint-core` crates. NO rust-toolchain.toml here on purpose: the crate
+# inherits each parent crate's toolchain when built as a path dep.
+[workspace]
+
+[package]
+name = "goldenmatch-fs-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Canonical Fellegi-Sunter block-scoring math (level banding + weight normalization, no pyo3) shared across the native ext and the WASM/TS surface"
+
+[lib]
+name = "goldenmatch_fs_core"
+
+# Per-string similarity comes from `goldenmatch-score-core` (the same crate the
+# native ext and the FFI UDFs share, so `score_one` is byte-identical across
+# surfaces). Reference data (census / aliases) is injected by the host, never
+# bundled here (see the 2026-07-17 fs-core design).
+[dependencies]
+goldenmatch-score-core = { path = "../score-core" }
