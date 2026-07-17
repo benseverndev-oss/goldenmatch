@@ -15,7 +15,22 @@ subpath `goldenmatch/core/fs-wasm`, and `tests/parity/fs-wasm.parity.test.ts`
 asserts fs-wasm reproduces the Python-native `score_block_pairs_fs` oracle
 (fixture authored by `scripts/emit_fs_wasm_fixture.py`) — the TS scoring-path
 reroute stays a deliberate follow-up (kernel + parity shipped first, like
-hnsw-wasm). Remaining: 7 (delete the numpy/scalar production paths).
+hnsw-wasm). **7a (embedding → native) landed**: `embedding` AND `record_embedding`
+now score on the native kernel (scorer id 7 = cosine/dot of host-precomputed
+L2-normalized vectors), so the native kernel covers **100 % of FS comparison
+scorers** — the last two that forced the whole matchkey onto numpy. `fs-core`
+gained `FS_SCORER_EMBEDDING_COSINE` + `embedding_cosine` + `FsPairParams.emb_*`;
+native marshals per-field vectors (`emb_vectors`/`emb_dims`, `FS_SUPPORTS_EMBEDDING`);
+`probabilistic.py` embeds host-side (same embedder + values as the numpy path) and
+admits both scorers. New native == numpy parity tests (`test_fs_embedding_native.py`).
+**7b (native-required deletion) RECONCILED with the 2026-07-01 reference-mode
+roadmap:** native is the AUTHORITATIVE FS path (default-on, and now 100 % capable),
+but the pure-Python numpy/scalar path is RETAINED as the documented *lossy fallback*
+(`GOLDENMATCH_FS_NATIVE=0` / no-native install), matching how every other kernel in
+the repo degrades — the original note's "delete numpy + raise when native absent"
+would remove FS from `pip install goldenmatch` (no `[native]`), a base-install
+capability, so that irreversible deletion is deferred pending explicit product
+sign-off.
 **Owner:** benchmark-failure follow-up (`claude/benchmark-failure-gh-vbtusq`)
 
 ## Problem: Fellegi-Sunter is the repo's parity orphan
@@ -169,10 +184,25 @@ scorers, so this is explicit-config only.
 5. **Port `tf_adjustment`** (EM freq/collision tables across the seam).
 6. **Port `ensemble` NE** (explicit-config only; probabilistic auto-config emits
    no NE).
-7. **Delete the Python numpy + scalar *production* paths, the `_fs_vec_guard`,
-   and the `GOLDENMATCH_FS_NATIVE` / `GOLDENMATCH_FS_VECTORIZED` knobs.** Keep a
-   minimal scalar reference in **test scope** as the parity oracle. Bump the
-   `goldenmatch-native` floor and delete the `FS_SUPPORTS_*` old-wheel branches.
+7. **7a — Port `embedding` / `record_embedding` to native (LANDED).** The last
+   two FS scorers with no native id: the host embeds the field (per-field column
+   for `embedding`; the record-concat for `record_embedding`, byte-for-byte the
+   `_record_embedding_score_matrix` join) with the SAME embedder the numpy path
+   uses, and marshals the L2-normalized vectors; `fs-core::score_fs_pair` scores
+   an id-7 field as `dot(row_i, row_j)` (= cosine), gated by `FS_SUPPORTS_EMBEDDING`.
+   Native now covers 100 % of FS scorers, `native == numpy` (abs 1e-6) proven.
+7. **7b — "make native required": RECONCILED, aggressive deletion DEFERRED.**
+   The original plan (delete the numpy/scalar *production* paths + the
+   `GOLDENMATCH_FS_NATIVE` / `GOLDENMATCH_FS_VECTORIZED` knobs + `_fs_vec_guard`,
+   raise when native is absent) conflicts with the 2026-07-01 reference-mode
+   roadmap, which keeps the pure-Python path as a *lossy fallback* (`=0` forces it;
+   no-`[native]` installs still run). Deleting it removes probabilistic FS from the
+   base `pip install goldenmatch`. So: native is the authoritative + default path
+   (already true, now 100 %-capable), the numpy/scalar path STAYS as the documented
+   reference-mode fallback + parity oracle, and the base-install-breaking deletion
+   is deferred pending explicit product sign-off. (The `FS_SUPPORTS_*` capability
+   consts also stay — they are exactly the graceful-degradation gate the roadmap
+   wants, not old-wheel cruft to delete while a fallback exists.)
 
 ## Notes
 

@@ -344,6 +344,32 @@ pub struct FsPairParams<'a> {
     /// [`TfTable`] and the field loop in [`score_fs_pair`]. Indexed like
     /// `scorer_ids`; a shorter/empty slice means "no TF for any field".
     pub tf_tables: &'a [Option<TfTable>],
+    /// Per-field embedding vectors for `embedding` / `record_embedding`
+    /// (scorer id [`FS_SCORER_EMBEDDING_COSINE`]) fields. `emb_vectors[f]` is
+    /// `Some(flat)` — the ROW-MAJOR `n_rows * dim` already-L2-normalized vectors
+    /// the host computed (the model stays host-side) — only for an embedding
+    /// field; `None` for every string-scorer field. Row `r`'s vector is
+    /// `flat[r*dim .. (r+1)*dim]` with `dim = emb_dims[f]`. Cosine of two
+    /// L2-normalized vectors IS their dot product, so [`score_fs_pair`] scores an
+    /// embedding field as `dot(row_i, row_j)` — byte-comparable to the numpy
+    /// `vecs @ vecs.T` reference within f64 tolerance. Null-ness is still carried
+    /// by `get_field` (the host passes the raw value column, or a never-null
+    /// synthetic column for `record_embedding`), so the existing observed / TF /
+    /// missing-mode machinery is unchanged. `[]` / all-`None` = no embedding.
+    pub emb_vectors: &'a [Option<&'a [f64]>],
+    /// Per-field embedding dimensionality, indexed like `scorer_ids`. Read only
+    /// where `emb_vectors[f]` is `Some`; `0` elsewhere.
+    pub emb_dims: &'a [usize],
+}
+
+/// Dot product of two equal-length f64 slices — the cosine of two L2-normalized
+/// embedding vectors (the `embedding` / `record_embedding` FS scorer). Naive
+/// summation mirrors the numpy reference closely enough for the FS f64 tolerance
+/// (embedding parity is cosine-tolerance, never byte-exact — f32/BLAS reorder the
+/// same accumulation on the numpy side too).
+#[inline]
+pub fn embedding_cosine(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 /// Winkler term-frequency adjustment table for one field (EM-trained; the host
@@ -390,6 +416,11 @@ pub const FS_SCORER_GIVEN_NAME_ALIASED: u8 = 5;
 /// packs aren't installed, so this is a regular-field scorer (and a valid NE
 /// scorer), not name-specific.
 pub const FS_SCORER_ENSEMBLE: u8 = 6;
+/// Reserved FS-kernel scorer id for `embedding` / `record_embedding`. The field's
+/// value is a dense vector (not a string); [`score_fs_pair`] reads the row vectors
+/// from [`FsPairParams::emb_vectors`] and scores the pair as their cosine
+/// ([`embedding_cosine`]). `score_one` does NOT implement it.
+pub const FS_SCORER_EMBEDDING_COSINE: u8 = 7;
 
 /// American Soundex, byte-compatible with `jellyfish.soundex` on ASCII input.
 ///
@@ -525,7 +556,26 @@ where
     for f in 0..p.scorer_ids.len() {
         if let (Some(a), Some(b)) = (get_field(f, i), get_field(f, j)) {
             has_regular_evidence = true;
-            let sim = field_similarity(p.scorer_ids[f], a, b, p.surname_freq, p.name_aliases);
+            // An `embedding` / `record_embedding` field carries its similarity in
+            // the row vectors, not the string value — `get_field` above still
+            // gates observed-ness (raw value column, or a never-null synthetic
+            // column for record_embedding), so nulls flow through the SAME path.
+            let sim = if p.scorer_ids[f] == FS_SCORER_EMBEDDING_COSINE {
+                match p.emb_vectors.get(f).copied().flatten() {
+                    Some(flat) => {
+                        let dim = p.emb_dims[f];
+                        embedding_cosine(
+                            &flat[i * dim..i * dim + dim],
+                            &flat[j * dim..j * dim + dim],
+                        )
+                    }
+                    // No vectors supplied for an id-7 field is a caller bug; degrade
+                    // to "fully disagree" rather than panic in the hot loop.
+                    None => 0.0,
+                }
+            } else {
+                field_similarity(p.scorer_ids[f], a, b, p.surname_freq, p.name_aliases)
+            };
             let level = fs_level_from_sim(
                 sim,
                 p.levels[f],
@@ -538,10 +588,13 @@ where
             // Winkler TF adjustment: on an exact-equal TOP-level agreement, bump
             // the weight by the value's rarity. `a == b` mirrors the numpy
             // `equal & (lvl == top)` mask (equal transformed values → top level).
-            if let Some(Some(tf)) = p.tf_tables.get(f) {
-                let top = (p.levels[f] as usize).saturating_sub(1);
-                if level == top && a == b {
-                    total_weight += tf.adjustment(a);
+            // Embedding fields never carry a TF table (no exact-value semantics).
+            if p.scorer_ids[f] != FS_SCORER_EMBEDDING_COSINE {
+                if let Some(Some(tf)) = p.tf_tables.get(f) {
+                    let top = (p.levels[f] as usize).saturating_sub(1);
+                    if level == top && a == b {
+                        total_weight += tf.adjustment(a);
+                    }
                 }
             }
         }
@@ -631,6 +684,8 @@ mod tests {
             surname_freq: None,
             name_aliases: None,
             tf_tables: &[],
+            emb_vectors: &[],
+            emb_dims: &[],
         };
         let rows = [["alice", "smith"], ["alice", "jones"], ["bob", "brown"]];
         let get = |f: usize, r: usize| Some(rows[r][f]);
@@ -680,6 +735,8 @@ mod tests {
             surname_freq: None,
             name_aliases: None,
             tf_tables: &[],
+            emb_vectors: &[],
+            emb_dims: &[],
         };
         // field 1 is null for row 1 -> only field 0 observed; agree -> 1.0 of the
         // single-field observed range.
@@ -732,6 +789,8 @@ mod tests {
             surname_freq: None,
             name_aliases: Some(&aliases),
             tf_tables: &[],
+            emb_vectors: &[],
+            emb_dims: &[],
         };
         let rows = ["William", "Bill"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -841,6 +900,8 @@ mod tests {
             surname_freq: None,
             name_aliases: None,
             tf_tables: &[],
+            emb_vectors: &[],
+            emb_dims: &[],
         };
         let rows = ["Robert", "Rupert"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -851,6 +912,69 @@ mod tests {
             s > 0.5,
             "phonetic agreement clears the partial threshold, got {s}"
         );
+    }
+
+    #[test]
+    fn score_fs_pair_embedding_cosine_bands_by_dot_product() {
+        // A single embedding-cosine field (id 7). Row vectors are L2-normalized;
+        // the pair score is their dot product = cosine, banded by the level
+        // thresholds. get_field carries only null-ness (raw value column), the
+        // vectors carry the similarity — the numpy `vecs @ vecs.T` reference.
+        let mw = vec![vec![-2.0_f64, 3.0]];
+        let field_mins = [-2.0_f64];
+        let field_maxs = [3.0_f64];
+        let regular_min = -2.0;
+        let regular_max = 3.0;
+        // 3 rows, dim 2: r0=r1=[1,0] (identical), r2=[0,1] (orthogonal to r0).
+        let flat: Vec<f64> = vec![1.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let emb_vectors: Vec<Option<&[f64]>> = vec![Some(flat.as_slice())];
+        let emb_dims = [2usize];
+        let p = FsPairParams {
+            scorer_ids: &[FS_SCORER_EMBEDDING_COSINE],
+            levels: &[2],
+            partial_thresholds: &[0.9],
+            field_thresholds: &[None],
+            match_weights: &mw,
+            field_mins: &field_mins,
+            field_maxs: &field_maxs,
+            base_min: regular_min - regular_min, // min_weight = regular_min
+            base_max: regular_min + (regular_max - regular_min) - regular_max,
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: false,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
+            tf_tables: &[],
+            emb_vectors: &emb_vectors,
+            emb_dims: &emb_dims,
+        };
+        // All rows present (non-null) — a synthetic never-null value column.
+        let rows = ["x", "x", "x"];
+        let get = |_f: usize, r: usize| Some(rows[r]);
+        let noop_ne = |_: usize, _: usize| None;
+        // Identical vectors -> cosine 1.0 >= 0.9 -> agree (weight 3) -> normalized 1.0.
+        let s_same = score_fs_pair(0, 1, &p, get, noop_ne);
+        assert!(
+            (s_same - 1.0).abs() < 1e-9,
+            "cosine 1.0 -> top -> 1.0, got {s_same}"
+        );
+        // Orthogonal vectors -> cosine 0.0 < 0.9 -> disagree (weight -2) -> 0.0.
+        let s_orth = score_fs_pair(0, 2, &p, get, noop_ne);
+        assert!(
+            (s_orth - 0.0).abs() < 1e-9,
+            "cosine 0.0 -> disagree -> 0.0, got {s_orth}"
+        );
+        assert!(s_orth < s_same);
+    }
+
+    #[test]
+    fn embedding_cosine_matches_manual_dot() {
+        let a = [0.6_f64, 0.8];
+        let b = [0.8_f64, 0.6];
+        // 0.6*0.8 + 0.8*0.6 = 0.96
+        assert!((embedding_cosine(&a, &b) - 0.96).abs() < 1e-12);
     }
 
     #[test]
@@ -906,6 +1030,8 @@ mod tests {
             surname_freq: None,
             name_aliases: None,
             tf_tables: &tf_tables,
+            emb_vectors: &[],
+            emb_dims: &[],
         };
         let rows = ["smith", "smith", "rare", "rare", "jones"];
         let get = |_f: usize, r: usize| Some(rows[r]);

@@ -3004,7 +3004,18 @@ def _fs_vectorized_enabled() -> bool:
 _NATIVE_FS_SCORER_IDS: dict[str, int] = {
     "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
     "name_freq_weighted_jw": 4, "given_name_aliased_jw": 5, "ensemble": 6,
+    # Model-backed embedding scorers (kernel id 7). The field's value is a dense
+    # vector, not a string: the host embeds the column and marshals the
+    # already-L2-normalized vectors; the kernel scores the pair as their cosine
+    # (dot). Native only when the wheel advertises FS_SUPPORTS_EMBEDDING. NOT a
+    # valid NE scorer (the kernel's NE path is score_one 0..=3 + ensemble only).
+    "embedding": 7, "record_embedding": 7,
 }
+# The model-backed embedding scorers (kernel id 7). A field carrying one is native
+# only when the wheel advertises FS_SUPPORTS_EMBEDDING; the host marshals the
+# precomputed vectors. Same members as `_MODEL_BACKED_SCORERS` (the numpy-path
+# name), kept here as a frozenset for the eligibility gates.
+_EMBEDDING_SCORER_IDS: frozenset[str] = frozenset({"embedding", "record_embedding"})
 # The reference-data name scorers (kernel ids 4/5). A field carrying one is
 # native only when the wheel advertises FS_SUPPORTS_NAME_SCORERS AND the relevant
 # refdata pack is loaded (so the injected table matches the numpy path). NE fields
@@ -3119,13 +3130,19 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
     ne_fields = mk.negative_evidence or []
     for ne in ne_fields:
         # NE goes through field_similarity (score_one 0..=3 + ensemble id 6); the
-        # reference-data name scorers (4/5) are NOT valid NE scorers.
-        if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.scorer in _NAME_SCORER_IDS:
+        # reference-data name scorers (4/5) and embedding (7) are NOT valid NE
+        # scorers (the kernel's NE path has no vector access).
+        if (
+            ne.scorer not in _NATIVE_FS_SCORER_IDS
+            or ne.scorer in _NAME_SCORER_IDS
+            or ne.scorer in _EMBEDDING_SCORER_IDS
+        ):
             return False
         if ne.scorer == "ensemble":
             needs_ensemble = True
     needs_level_thresholds = False
     needs_tf = False
+    needs_embedding = False
     name_scorers_needed: set[str] = set()
     for f in mk.fields:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
@@ -3138,6 +3155,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             name_scorers_needed.add(f.scorer)
         if f.scorer == "ensemble":
             needs_ensemble = True
+        if f.scorer in _EMBEDDING_SCORER_IDS:
+            needs_embedding = True
     if name_scorers_needed and not _fs_name_refdata_available(name_scorers_needed):
         # The pack that would supply the injected table isn't loaded, so the
         # kernel would degrade to plain JW — diverging from the numpy path (which
@@ -3164,6 +3183,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False  # old wheel: tf_freqs/tf_collision never cross their FFI
         if needs_ensemble and not getattr(mod, "FS_SUPPORTS_ENSEMBLE", False):
             return False  # old wheel: scores ensemble (id 6) as 0.0 (catch-all)
+        if needs_embedding and not getattr(mod, "FS_SUPPORTS_EMBEDDING", False):
+            return False  # old wheel: no emb_vectors kwarg / scores id 7 as 0.0
         return True
     except Exception:
         return False
@@ -3198,6 +3219,78 @@ def _fs_arrow_column(native_df, f, n: int):
         return arr
     vals = _field_values_from_list(_bf.column(f.field).to_list(), f, n)
     return _pa.array(vals, type=_pa.large_string())
+
+
+def _record_concat_values(frame, f, n: int) -> list[str]:
+    """Per-row concatenated text for a ``record_embedding`` field — a byte-for-byte
+    copy of the concat in ``core/scorer._record_embedding_score_matrix`` (``col:
+    val`` parts joined by `` | ``, ``column_weights`` repeats, ``""`` when empty),
+    so native embeds the SAME strings the numpy path does. Built via column lists
+    (works for both polars + arrow frames), never ``iter_rows``."""
+    from goldenmatch.core.frame import to_frame as _tf_rc
+
+    bf = _tf_rc(frame)
+    cols = list(f.columns or [])
+    weights = f.column_weights
+    data: dict[str, list] = {
+        c: bf.column(c).to_list() for c in cols if c in bf.columns
+    }
+    out: list[str] = []
+    for r in range(n):
+        parts: list[str] = []
+        for c in cols:
+            val = data.get(c, [None] * n)[r]
+            if weights is not None:
+                w = weights.get(c, 1.0)
+                if w <= 0:
+                    continue
+                if val is not None:
+                    part = f"{c}: {val}"
+                    repeats = round(w) if w > 1.0 else 1
+                    parts.extend([part] * repeats)
+            elif val is not None:
+                parts.append(f"{c}: {val}")
+        out.append(" | ".join(parts) if parts else "")
+    return out
+
+
+def _fs_embedding_vectors(frame, mk: MatchkeyConfig, n: int):
+    """Per-field embedding vectors for the native FS kernel (scorer id 7).
+
+    Returns ``(emb_vectors, emb_dims)`` — lists indexed like ``mk.fields``:
+    ``None``/``0`` for a non-embedding field, else the ROW-MAJOR ``n*dim`` f64
+    buffer + its ``dim``. Each field is embedded with the SAME embedder + SAME
+    values the numpy path feeds: an ``embedding`` field uses the transformed
+    column (``_field_values_for_block`` -> ``_fuzzy_score_matrix(vals,
+    "embedding")``); a ``record_embedding`` field uses the concatenated record
+    text (``_record_concat_values`` -> ``_record_embedding_score_matrix``). So
+    native's per-pair ``dot(row_i, row_j)`` equals the numpy ``embeddings @
+    embeddings.T`` cosine within f64 tolerance (embeddings are L2-normalized).
+    """
+    import numpy as _np
+
+    from goldenmatch.core.embedder import get_embedder
+
+    emb_vectors: list[list[float] | None] = []
+    emb_dims: list[int] = []
+    for f in mk.fields:
+        if f.scorer not in _EMBEDDING_SCORER_IDS:
+            emb_vectors.append(None)
+            emb_dims.append(0)
+            continue
+        if f.scorer == "record_embedding":
+            vals: list = _record_concat_values(frame, f, n)
+        else:
+            vals = _field_values_for_block(frame, f, n)
+        embedder = get_embedder(f.model or "all-MiniLM-L6-v2")
+        vecs = _np.asarray(
+            embedder.embed_column(vals, cache_key=f"_fsnat_{id(vals)}"),
+            dtype=_np.float64,
+        )
+        dim = int(vecs.shape[1]) if vecs.ndim == 2 and vecs.shape[0] == n else 0
+        emb_vectors.append([float(x) for x in vecs.reshape(-1)] if dim else None)
+        emb_dims.append(dim)
+    return emb_vectors, emb_dims
 
 
 def _score_fs_native_frame(
@@ -3342,6 +3435,17 @@ def _score_fs_native_frame(
         opt_kwargs["tf_freqs"] = tf_freqs_list
         opt_kwargs["tf_collision"] = tf_collision_list
 
+    # Embedding scorers (goldenmatch-native FS_SUPPORTS_EMBEDDING). The host
+    # embeds each `embedding` / `record_embedding` field and marshals the
+    # L2-normalized vectors; the kernel scores the pair as their cosine (dot).
+    # Sent only when the matchkey carries an embedding field (an old wheel must
+    # never see the kwarg — `_fs_native_eligible` already gated on the capability).
+    has_embedding = any(f.scorer in _EMBEDDING_SCORER_IDS for f in mk.fields)
+    if has_embedding:
+        emb_vectors, emb_dims = _fs_embedding_vectors(frame, mk, n)
+        opt_kwargs["emb_vectors"] = emb_vectors
+        opt_kwargs["emb_dims"] = emb_dims
+
     if use_arrow:
         import pyarrow as _pa
 
@@ -3357,6 +3461,14 @@ def _score_fs_native_frame(
                 native_df.column("__row_id__").combine_chunks(), _pa.int64()
             )
         field_arrays = [_fs_arrow_column(frame, f, n) for f in mk.fields]
+        # record_embedding has no single value column (`f.field` isn't in the
+        # frame), so _fs_arrow_column returns all-null -> the kernel would treat it
+        # as unobserved. A record embedding is ALWAYS observed (the concat is ""
+        # for empty, never null), so pin its value column to a never-null sentinel;
+        # the actual similarity rides in emb_vectors.
+        for _i, _f in enumerate(mk.fields):
+            if _f.scorer == "record_embedding":
+                field_arrays[_i] = _pa.array([""] * n, type=_pa.large_string())
         if use_handle:
             opt_kwargs["exclude_set"] = exclude_handle
         pairs = mod.score_block_pairs_fs_arrow(
@@ -3369,6 +3481,11 @@ def _score_fs_native_frame(
         return [(a, b, round(float(s), 4)) for a, b, s in pairs]
 
     field_values = [_field_values_for_block(frame, f, n) for f in mk.fields]
+    # record_embedding is always observed (see the arrow branch above) — pin its
+    # value column to a never-null sentinel so the kernel scores it, not skips it.
+    for _i, _f in enumerate(mk.fields):
+        if _f.scorer == "record_embedding":
+            field_values[_i] = [""] * n
     if use_handle:
         opt_kwargs["exclude_set"] = exclude_handle
     pairs = mod.score_block_pairs_fs(
