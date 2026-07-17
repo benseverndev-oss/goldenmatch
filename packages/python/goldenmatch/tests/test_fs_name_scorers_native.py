@@ -36,28 +36,50 @@ def test_name_scorers_have_reserved_kernel_ids():
 
 class _FakeKernel:
     """A kernel advertising the pre-name-scorer capabilities. Toggle
-    ``FS_SUPPORTS_NAME_SCORERS`` to simulate old vs new wheels."""
+    ``FS_SUPPORTS_NAME_SCORERS`` / ``FS_SUPPORTS_TF_ADJUSTMENT`` to simulate old
+    vs new wheels."""
 
     FS_SUPPORTS_MISSING_NEUTRAL = True
     FS_SUPPORTS_LEVEL_THRESHOLDS = True
 
-    def __init__(self, name_scorers: bool):
+    def __init__(self, name_scorers: bool, tf: bool = False):
         if name_scorers:
             self.FS_SUPPORTS_NAME_SCORERS = True
+        if tf:
+            self.FS_SUPPORTS_TF_ADJUSTMENT = True
 
     def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover - not invoked
         raise NotImplementedError
 
 
-def _patch(monkeypatch, *, kernel_name_scorers, pack_available):
+def _patch(monkeypatch, *, kernel_name_scorers, pack_available, kernel_tf=False):
     from goldenmatch.core import probabilistic as p
 
     monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
     monkeypatch.setattr(
         "goldenmatch.core._native_loader.native_module",
-        lambda: _FakeKernel(kernel_name_scorers),
+        lambda: _FakeKernel(kernel_name_scorers, tf=kernel_tf),
     )
     monkeypatch.setattr(p, "_fs_name_refdata_available", lambda scorers: pack_available)
+
+
+def _mk_tf():
+    return MatchkeyConfig(
+        name="t",
+        type="probabilistic",
+        fields=[MatchkeyField(field="city", scorer="exact", levels=2, tf_adjustment=True)],
+    )
+
+
+def test_tf_field_declines_on_old_wheel(monkeypatch):
+    # tf_adjustment field, wheel lacks FS_SUPPORTS_TF_ADJUSTMENT -> numpy path.
+    _patch(monkeypatch, kernel_name_scorers=False, pack_available=True, kernel_tf=False)
+    assert _fs_native_eligible(_mk_tf()) is False
+
+
+def test_tf_field_native_on_new_wheel(monkeypatch):
+    _patch(monkeypatch, kernel_name_scorers=False, pack_available=True, kernel_tf=True)
+    assert _fs_native_eligible(_mk_tf()) is True
 
 
 def test_old_wheel_without_flag_declines_name_scorer(monkeypatch):

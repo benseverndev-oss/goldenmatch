@@ -338,6 +338,43 @@ pub struct FsPairParams<'a> {
     /// (scorer id [`FS_SCORER_GIVEN_NAME_ALIASED`]) fields. `None` = degrade to
     /// plain Jaro-Winkler. One table serves every given-name field.
     pub name_aliases: Option<&'a (dyn NameAliases + Sync)>,
+    /// Per-field Winkler term-frequency tables. `tf_tables[f]` is `Some` only for
+    /// a field that opted into `tf_adjustment`; `[]` / all-`None` = no TF (the
+    /// common case). Applied on an exact-equal TOP-level agreement — see
+    /// [`TfTable`] and the field loop in [`score_fs_pair`]. Indexed like
+    /// `scorer_ids`; a shorter/empty slice means "no TF for any field".
+    pub tf_tables: &'a [Option<TfTable>],
+}
+
+/// Winkler term-frequency adjustment table for one field (EM-trained; the host
+/// builds it from `EMResult.tf_freqs`/`tf_collision`). On an exact-equal
+/// top-level agreement, a rare value earns a positive weight bump and a common
+/// one a penalty: `clamp(log2(collision / freq(value)), ±10)` — mirroring
+/// `core/probabilistic._scalar_tf_contribution`. `freqs` maps the transformed
+/// value to its relative frequency; `collision` is `Σ freq(v)²`.
+pub struct TfTable {
+    pub freqs: HashMap<String, f64>,
+    pub collision: f64,
+}
+
+/// The `±10` bit clamp on the TF adjustment (`_TF_CLAMP` in probabilistic.py).
+const FS_TF_CLAMP: f64 = 10.0;
+
+impl TfTable {
+    /// The adjustment for an exact agreement on `value`: `0.0` when the value is
+    /// out-of-table or its frequency / the collision rate is non-positive.
+    #[inline]
+    pub fn adjustment(&self, value: &str) -> f64 {
+        if self.collision <= 0.0 {
+            return 0.0;
+        }
+        match self.freqs.get(value) {
+            Some(&fv) if fv > 0.0 => (self.collision / fv)
+                .log2()
+                .clamp(-FS_TF_CLAMP, FS_TF_CLAMP),
+            _ => 0.0,
+        }
+    }
 }
 
 /// Reserved FS-kernel scorer id for `name_freq_weighted_jw` (beyond score-core's
@@ -416,6 +453,15 @@ where
             total_weight += p.match_weights[f][level];
             pair_min += p.field_mins[f];
             pair_max += p.field_maxs[f];
+            // Winkler TF adjustment: on an exact-equal TOP-level agreement, bump
+            // the weight by the value's rarity. `a == b` mirrors the numpy
+            // `equal & (lvl == top)` mask (equal transformed values → top level).
+            if let Some(Some(tf)) = p.tf_tables.get(f) {
+                let top = (p.levels[f] as usize).saturating_sub(1);
+                if level == top && a == b {
+                    total_weight += tf.adjustment(a);
+                }
+            }
         }
     }
     // Negative evidence: exact `_ne_fired` semantics — fires iff both values are
@@ -502,6 +548,7 @@ mod tests {
             prior_w: 0.0,
             surname_freq: None,
             name_aliases: None,
+            tf_tables: &[],
         };
         let rows = [["alice", "smith"], ["alice", "jones"], ["bob", "brown"]];
         let get = |f: usize, r: usize| Some(rows[r][f]);
@@ -550,6 +597,7 @@ mod tests {
             prior_w: 0.0,
             surname_freq: None,
             name_aliases: None,
+            tf_tables: &[],
         };
         // field 1 is null for row 1 -> only field 0 observed; agree -> 1.0 of the
         // single-field observed range.
@@ -601,6 +649,7 @@ mod tests {
             prior_w: 0.0,
             surname_freq: None,
             name_aliases: Some(&aliases),
+            tf_tables: &[],
         };
         let rows = ["William", "Bill"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -622,6 +671,80 @@ mod tests {
             (s_no - 0.0).abs() < 1e-12,
             "no alias table -> plain JW disagreement = 0.0, got {s_no}"
         );
+    }
+
+    #[test]
+    fn tf_table_adjustment_matches_reference() {
+        let freqs: HashMap<String, f64> = [("smith".to_string(), 0.5), ("rare".to_string(), 0.001)]
+            .into_iter()
+            .collect();
+        let collision = 0.5 * 0.5 + 0.001 * 0.001; // Σ freq²
+        let tf = TfTable { freqs, collision };
+        // Common value -> penalty (log2(collision/0.5) < 0).
+        assert!((tf.adjustment("smith") - (collision / 0.5).log2()).abs() < 1e-12);
+        assert!(tf.adjustment("smith") < 0.0);
+        // Rare value -> positive bump.
+        assert!(tf.adjustment("rare") > 0.0);
+        // OOV -> 0.
+        assert_eq!(tf.adjustment("missing"), 0.0);
+        // ±10 clamp on an extreme frequency.
+        let extreme = TfTable {
+            freqs: [("x".to_string(), 1e-40)].into_iter().collect(),
+            collision: 1.0,
+        };
+        assert_eq!(extreme.adjustment("x"), 10.0);
+    }
+
+    #[test]
+    fn score_fs_pair_tf_favors_rare_exact_agreement() {
+        // One exact field (id 3), 2 levels. Calibrated (posterior) so the score is
+        // monotonic in the summed weight with NO min-max clamp — the only way the
+        // TF bump is observable on the normalized score.
+        let mw = vec![vec![-2.0_f64, 3.0]];
+        let field_mins = [-2.0_f64];
+        let field_maxs = [3.0_f64];
+        let freqs: HashMap<String, f64> = [("smith".to_string(), 0.5), ("rare".to_string(), 0.001)]
+            .into_iter()
+            .collect();
+        let collision = 0.5 * 0.5 + 0.001 * 0.001;
+        let tf_tables = vec![Some(TfTable { freqs, collision })];
+        let p = FsPairParams {
+            scorer_ids: &[3],
+            levels: &[2],
+            partial_thresholds: &[0.9],
+            field_thresholds: &[None],
+            match_weights: &mw,
+            field_mins: &field_mins,
+            field_maxs: &field_maxs,
+            base_min: 0.0,
+            base_max: 0.0,
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: true,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
+            tf_tables: &tf_tables,
+        };
+        let rows = ["smith", "smith", "rare", "rare", "jones"];
+        let get = |_f: usize, r: usize| Some(rows[r]);
+        let noop_ne = |_: usize, _: usize| None;
+        let common = score_fs_pair(0, 1, &p, get, noop_ne); // smith==smith
+        let rare = score_fs_pair(2, 3, &p, get, noop_ne); // rare==rare
+        let disagree = score_fs_pair(0, 4, &p, get, noop_ne); // smith vs jones
+        assert!(
+            rare > common && common > disagree,
+            "rare {rare} > common {common} > disagree {disagree}"
+        );
+        // Sanity: with NO tf table, the two exact agreements are identical.
+        let p_no = FsPairParams {
+            tf_tables: &[],
+            ..p
+        };
+        let a = score_fs_pair(0, 1, &p_no, get, noop_ne);
+        let b = score_fs_pair(2, 3, &p_no, get, noop_ne);
+        assert!((a - b).abs() < 1e-12, "no tf -> identical exact agreements");
     }
 
     #[test]

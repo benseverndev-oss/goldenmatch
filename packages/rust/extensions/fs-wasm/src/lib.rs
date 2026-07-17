@@ -87,6 +87,7 @@ pub fn score_block_pairs_fs_impl(
         // native pyo3 side. None here degrades those fields to plain JW.
         surname_freq: None,
         name_aliases: None,
+        tf_tables: &[],
     };
 
     let mut out: Vec<(i64, i64, f64)> = Vec::new();

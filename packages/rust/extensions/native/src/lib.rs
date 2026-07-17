@@ -54,6 +54,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // AND `set_name_reference_data` has been called; old wheels lack the flag
     // and keep the numpy path for name-scorer matchkeys.
     m.add("FS_SUPPORTS_NAME_SCORERS", true)?;
+    // Wheel-skew capability flag: both FS entries accept the per-field Winkler
+    // `tf_freqs`/`tf_collision` kwargs and apply the term-frequency adjustment on
+    // exact-equal top-level agreements. Python's `_fs_native_eligible` admits a
+    // tf_adjustment field only when this flag is present; old wheels keep numpy.
+    m.add("FS_SUPPORTS_TF_ADJUSTMENT", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;

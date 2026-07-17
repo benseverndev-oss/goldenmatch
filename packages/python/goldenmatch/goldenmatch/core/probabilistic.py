@@ -3088,12 +3088,13 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.scorer in _NAME_SCORER_IDS:
             return False
     needs_level_thresholds = False
+    needs_tf = False
     name_scorers_needed: set[str] = set()
     for f in mk.fields:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
             return False
         if getattr(f, "tf_adjustment", False):
-            return False
+            needs_tf = True
         if getattr(f, "level_thresholds", None) is not None:
             needs_level_thresholds = True
         if f.scorer in _NAME_SCORER_IDS:
@@ -3120,6 +3121,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False  # old wheel: NE never crosses its FFI
         if needs_name_scorers and not getattr(mod, "FS_SUPPORTS_NAME_SCORERS", False):
             return False  # old wheel: name scorers never cross their FFI
+        if needs_tf and not getattr(mod, "FS_SUPPORTS_TF_ADJUSTMENT", False):
+            return False  # old wheel: tf_freqs/tf_collision never cross their FFI
         return True
     except Exception:
         return False
@@ -3272,6 +3275,31 @@ def _score_fs_native_frame(
             else float(em_result.match_weights[f"__ne__{ne.field}"][0])
             for ne in ne_fields
         ]
+
+    # Winkler TF adjustment: per-field frequency tables (kernel applies the
+    # log2(collision/freq) bump on exact-equal top-level agreements). Passed only
+    # when a field opted in AND EM produced the table (mirrors the numpy path's
+    # own `em_result.tf_freqs` gate). Field values reach the kernel already
+    # transformed, matching the transformed-value keys of tf_freqs.
+    if em_result.tf_freqs and any(
+        getattr(f, "tf_adjustment", False) for f in mk.fields
+    ):
+        tf_freqs_list: list[dict[str, float] | None] = []
+        tf_collision_list: list[float | None] = []
+        for f in mk.fields:
+            freqs = em_result.tf_freqs.get(f.field) if getattr(
+                f, "tf_adjustment", False
+            ) else None
+            if freqs:
+                tf_freqs_list.append(dict(freqs))
+                tf_collision_list.append(
+                    float((em_result.tf_collision or {}).get(f.field, 0.0))
+                )
+            else:
+                tf_freqs_list.append(None)
+                tf_collision_list.append(None)
+        opt_kwargs["tf_freqs"] = tf_freqs_list
+        opt_kwargs["tf_collision"] = tf_collision_list
 
     if use_arrow:
         import pyarrow as _pa

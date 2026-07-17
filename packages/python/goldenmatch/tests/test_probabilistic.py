@@ -1809,7 +1809,7 @@ class TestNativeFSGating:
         assert p._fs_native_enabled() is False
         assert p._fs_native_eligible(_make_probabilistic_mk()) is False
 
-    def test_declines_soundex_and_tf(self, monkeypatch):
+    def test_soundex_declines_tf_now_native(self, monkeypatch):
         from goldenmatch.core import probabilistic as p
         monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
         if not _native_fs_available():
@@ -1819,11 +1819,17 @@ class TestNativeFSGating:
             MatchkeyField(field="first_name", scorer="soundex_match", levels=2),
         ])
         assert p._fs_native_eligible(mk_sx) is False
-        # tf_adjustment field -> ineligible (kernel has no TF tables).
+        # tf_adjustment field -> NOW native (increment 5): the kernel accepts the
+        # tf_freqs/tf_collision kwargs and applies the Winkler bump. Eligibility
+        # tracks the built kernel's FS_SUPPORTS_TF_ADJUSTMENT capability.
+        from goldenmatch.core import _native_loader
+        supports_tf = getattr(
+            _native_loader.native_module(), "FS_SUPPORTS_TF_ADJUSTMENT", False
+        )
         mk_tf = _make_probabilistic_mk(fields=[
             MatchkeyField(field="first_name", scorer="exact", levels=2, tf_adjustment=True),
         ])
-        assert p._fs_native_eligible(mk_tf) is False
+        assert p._fs_native_eligible(mk_tf) is bool(supports_tf)
 
 
 @pytest.mark.skipif(not _native_fs_available(), reason="native FS kernel not built")

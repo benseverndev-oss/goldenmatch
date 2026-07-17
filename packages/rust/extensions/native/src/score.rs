@@ -12,7 +12,7 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
-use goldenmatch_fs_core::{AliasTable, NameAliases, SurnameFreq, SurnameIdfTable};
+use goldenmatch_fs_core::{AliasTable, NameAliases, SurnameFreq, SurnameIdfTable, TfTable};
 use goldenmatch_score_core::score_one;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -71,6 +71,36 @@ pub fn set_name_reference_data(
 #[pyfunction]
 pub fn has_name_reference_data() -> bool {
     current_name_refdata().is_some()
+}
+
+/// Build the per-field Winkler TF tables from the marshaled kwargs. `tf_freqs`
+/// and `tf_collision` are per-field (indexed like `scorer_ids`); a field opts in
+/// only when BOTH its `tf_freqs[f]` and `tf_collision[f]` are present. Absent /
+/// `None` everywhere -> an empty Vec, so `score_fs_pair` does no TF work.
+fn build_tf_tables(
+    tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
+    tf_collision: Option<Vec<Option<f64>>>,
+    n_fields: usize,
+) -> Vec<Option<TfTable>> {
+    let (freqs, coll) = match (tf_freqs, tf_collision) {
+        (Some(f), Some(c)) => (f, c),
+        _ => return Vec::new(),
+    };
+    let mut out: Vec<Option<TfTable>> = Vec::with_capacity(n_fields);
+    for f in 0..n_fields {
+        let table = match (
+            freqs.get(f).and_then(|o| o.as_ref()),
+            coll.get(f).and_then(|o| *o),
+        ) {
+            (Some(fq), Some(c)) => Some(TfTable {
+                freqs: fq.clone(),
+                collision: c,
+            }),
+            _ => None,
+        };
+        out.push(table);
+    }
+    out
 }
 
 /// Resolve the injected provider handles for a scoring call. Borrows live as
@@ -297,6 +327,7 @@ pub(crate) use goldenmatch_fs_core::{fs_level_from_sim, fs_normalize};
     exclude, level_thresholds=None,
     ne_values=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
     exclude_set=None,
+    tf_freqs=None, tf_collision=None,
 ))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
@@ -319,6 +350,8 @@ pub fn score_block_pairs_fs(
     ne_thresholds: Option<Vec<f64>>,
     ne_weights: Option<Vec<f64>>,
     exclude_set: Option<PyRef<'_, ExcludeSet>>,
+    tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
+    tf_collision: Option<Vec<Option<f64>>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     // FS_SUPPORTS_EXCLUDE_SET: prefer the shared Arc handle (built once per
     // score_buckets call via `build_exclude_set`), fall back to the legacy
@@ -439,6 +472,7 @@ pub fn score_block_pairs_fs(
     // registered once via `set_name_reference_data`. Snapshot the Arc so the
     // borrows below outlive the rayon closure; None -> name-scorer fields degrade
     // to plain JW.
+    let tf_tables = build_tf_tables(tf_freqs, tf_collision, scorer_ids.len());
     let name_refdata = current_name_refdata();
     let (surname_freq, name_aliases) = name_providers(&name_refdata);
 
@@ -463,6 +497,7 @@ pub fn score_block_pairs_fs(
         prior_w,
         surname_freq,
         name_aliases,
+        tf_tables: &tf_tables,
     };
 
     let result = py.detach(|| {
@@ -717,6 +752,7 @@ pub fn score_block_pairs_arrow(
     match_weights, calibrated, prior_w, min_weight, weight_range, threshold,
     exclude=None, exclude_set=None, level_thresholds=None,
     ne_arrays=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
+    tf_freqs=None, tf_collision=None,
 ))]
 pub fn score_block_pairs_fs_arrow(
     py: Python<'_>,
@@ -739,6 +775,8 @@ pub fn score_block_pairs_fs_arrow(
     ne_scorer_ids: Option<Vec<u8>>,
     ne_thresholds: Option<Vec<f64>>,
     ne_weights: Option<Vec<f64>>,
+    tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
+    tf_collision: Option<Vec<Option<f64>>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
@@ -881,6 +919,7 @@ pub fn score_block_pairs_fs_arrow(
 
     // Process-level name reference data (see the Vec entry). Snapshot the Arc so
     // the borrows outlive the rayon closure below.
+    let tf_tables = build_tf_tables(tf_freqs, tf_collision, scorer_ids.len());
     let name_refdata = current_name_refdata();
     let (surname_freq, name_aliases) = name_providers(&name_refdata);
 
@@ -905,6 +944,7 @@ pub fn score_block_pairs_fs_arrow(
         prior_w,
         surname_freq,
         name_aliases,
+        tf_tables: &tf_tables,
     };
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors
