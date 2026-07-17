@@ -194,3 +194,14 @@ def are_equivalent(a: str | None, b: str | None) -> bool:
     if not canons_a or not canons_b:
         return False
     return not canons_a.isdisjoint(canons_b)
+
+
+def export_alias_forms() -> list[tuple[str, list[str]]]:
+    """Native-kernel seam: ``(form, [canonical_ids])`` pairs (the ``canonicals``
+    map), for handing across pyo3 to ``goldenmatch-native``'s
+    ``set_name_reference_data``. ``AliasTable.are_equivalent`` there mirrors this
+    module's canonical-set-intersection semantics. Empty when unavailable."""
+    _load()
+    if _state is None:
+        return []
+    return [(form, sorted(canons)) for form, canons in _state.canonicals.items()]

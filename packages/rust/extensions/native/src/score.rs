@@ -12,13 +12,81 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
+use goldenmatch_fs_core::{AliasTable, NameAliases, SurnameFreq, SurnameIdfTable};
 use goldenmatch_score_core::score_one;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
+
+/// Process-level reference-data tables for the FS name scorers
+/// (`name_freq_weighted_jw` / `given_name_aliased_jw`). Built ONCE per process
+/// from the Python `refdata` state via [`set_name_reference_data`] and read by
+/// both FS entry points — the design's "build the index once, inject a handle,
+/// reuse across every block-scoring call" contract, so the ~10K census table is
+/// NOT marshaled per bucket call. Mirrors the goldenembed model-dir cache.
+pub struct NameRefData {
+    pub surnames: SurnameIdfTable,
+    pub aliases: AliasTable,
+}
+
+static NAME_REFDATA: OnceLock<RwLock<Option<Arc<NameRefData>>>> = OnceLock::new();
+
+fn name_refdata_cell() -> &'static RwLock<Option<Arc<NameRefData>>> {
+    NAME_REFDATA.get_or_init(|| RwLock::new(None))
+}
+
+/// Snapshot the registered name reference data (a cheap `Arc` clone), or `None`
+/// if the host never registered it — in which case name-scorer fields degrade
+/// to plain Jaro-Winkler.
+fn current_name_refdata() -> Option<Arc<NameRefData>> {
+    name_refdata_cell().read().ok().and_then(|g| g.clone())
+}
+
+/// Register the FS name-scorer reference tables for this process.
+///
+/// `surname_counts` = `(name, count)` census pairs — the idf is computed in Rust
+/// via the exact `surnames.surname_idf` formula, single-sourcing the frequency
+/// math. `alias_forms` = `(form, [canonical_ids])` from the given-name alias
+/// classes (`given_names._state.canonicals`). The latest registration wins via
+/// an atomic pointer swap; concurrent readers keep the prior snapshot.
+#[pyfunction]
+pub fn set_name_reference_data(
+    surname_counts: Vec<(String, f64)>,
+    alias_forms: Vec<(String, Vec<String>)>,
+) -> PyResult<()> {
+    let data = Arc::new(NameRefData {
+        surnames: SurnameIdfTable::from_counts(surname_counts),
+        aliases: AliasTable::from_forms(alias_forms),
+    });
+    if let Ok(mut g) = name_refdata_cell().write() {
+        *g = Some(data);
+    }
+    Ok(())
+}
+
+/// Whether this process has FS name reference data registered (test/debug aid).
+#[pyfunction]
+pub fn has_name_reference_data() -> bool {
+    current_name_refdata().is_some()
+}
+
+/// Resolve the injected provider handles for a scoring call. Borrows live as
+/// long as the caller keeps the returned `Arc` alive.
+#[inline]
+fn name_providers(
+    refdata: &Option<Arc<NameRefData>>,
+) -> (
+    Option<&(dyn SurnameFreq + Sync)>,
+    Option<&(dyn NameAliases + Sync)>,
+) {
+    match refdata {
+        Some(d) => (Some(&d.surnames), Some(&d.aliases)),
+        None => (None, None),
+    }
+}
 
 /// Shared exclude index for the bucket scorer. The Python caller used to pass
 /// the exclude set as a fresh `Vec<(i64, i64)>` on EVERY native call -- at 10M
@@ -367,6 +435,13 @@ pub fn score_block_pairs_fs(
         offset += size;
     }
 
+    // Process-level name reference data (census idf + given-name aliases),
+    // registered once via `set_name_reference_data`. Snapshot the Arc so the
+    // borrows below outlive the rayon closure; None -> name-scorer fields degrade
+    // to plain JW.
+    let name_refdata = current_name_refdata();
+    let (surname_freq, name_aliases) = name_providers(&name_refdata);
+
     // Per-matchkey scoring constants, borrowed once and reused per pair. The
     // per-pair FS math itself lives in `goldenmatch-fs-core::score_fs_pair` (the
     // single cross-surface source of truth); this entry point owns only the
@@ -386,11 +461,8 @@ pub fn score_block_pairs_fs(
         ne_weights: ne_weights_v,
         calibrated,
         prior_w,
-        // 4c wires the injected census / alias providers here; None for
-        // now degrades name-scorer fields to plain JW (unreachable today —
-        // _fs_native_eligible declines a matchkey carrying those scorers).
-        surname_freq: None,
-        name_aliases: None,
+        surname_freq,
+        name_aliases,
     };
 
     let result = py.detach(|| {
@@ -807,6 +879,11 @@ pub fn score_block_pairs_fs_arrow(
     let base_min = min_weight - regular_min;
     let base_max = min_weight + weight_range - regular_max;
 
+    // Process-level name reference data (see the Vec entry). Snapshot the Arc so
+    // the borrows outlive the rayon closure below.
+    let name_refdata = current_name_refdata();
+    let (surname_freq, name_aliases) = name_providers(&name_refdata);
+
     // Per-matchkey scoring constants, borrowed once and reused per pair. The
     // per-pair FS math is `goldenmatch-fs-core::score_fs_pair` — identical to the
     // Vec entry point; this arrow entry differs only in the zero-copy field
@@ -826,11 +903,8 @@ pub fn score_block_pairs_fs_arrow(
         ne_weights: ne_weights_v,
         calibrated,
         prior_w,
-        // 4c wires the injected census / alias providers here; None for
-        // now degrades name-scorer fields to plain JW (unreachable today —
-        // _fs_native_eligible declines a matchkey carrying those scorers).
-        surname_freq: None,
-        name_aliases: None,
+        surname_freq,
+        name_aliases,
     };
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors

@@ -2971,12 +2971,62 @@ def _fs_vectorized_enabled() -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "disabled")
 
 
-# Scorer-name -> native kernel id for the FS kernel (score_one ids 0..=3).
+# Scorer-name -> native kernel id for the FS kernel. 0..=3 are score-core's
+# score_one ids; 4/5 are the FS-kernel reserved reference-data name scorers
+# (goldenmatch-fs-core FS_SCORER_NAME_FREQ_WEIGHTED / FS_SCORER_GIVEN_NAME_ALIASED),
+# dispatched to the process-registered census / alias tables inside score_fs_pair.
 # soundex/embedding/record_embedding are absent on purpose — those fields force
 # the numpy fallback (the kernel's score_one doesn't implement them).
 _NATIVE_FS_SCORER_IDS: dict[str, int] = {
     "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+    "name_freq_weighted_jw": 4, "given_name_aliased_jw": 5,
 }
+# The reference-data name scorers (kernel ids 4/5). A field carrying one is
+# native only when the wheel advertises FS_SUPPORTS_NAME_SCORERS AND the relevant
+# refdata pack is loaded (so the injected table matches the numpy path). NE fields
+# may NOT use these (the kernel's NE path is score_one 0..=3 only).
+_NAME_SCORER_IDS: frozenset[str] = frozenset(
+    {"name_freq_weighted_jw", "given_name_aliased_jw"}
+)
+
+
+def _fs_name_refdata_available(scorers: set[str]) -> bool:
+    """Whether the refdata pack backing each needed name scorer is loaded:
+    ``name_freq_weighted_jw`` -> surnames census, ``given_name_aliased_jw`` ->
+    given-name aliases. Fail-closed (any import/error -> not available)."""
+    try:
+        if "name_freq_weighted_jw" in scorers:
+            from goldenmatch.refdata.surnames import is_available as _surn_avail
+            if not _surn_avail():
+                return False
+        if "given_name_aliased_jw" in scorers:
+            from goldenmatch.refdata.given_names import is_available as _given_avail
+            if not _given_avail():
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_fs_name_refdata(mod) -> None:
+    """Register the census / alias tables into the native kernel ONCE per process
+    (the design's "build the index once, inject a handle" contract). Idempotent:
+    skips when the kernel already carries the tables. Fail-open — a registration
+    error leaves the kernel with no tables, so name-scorer fields degrade to plain
+    JW (and `_fs_native_eligible` already declined the matchkey if the pack that
+    feeds the table was absent)."""
+    try:
+        if getattr(mod, "has_name_reference_data", None) is None:
+            return
+        if mod.has_name_reference_data():
+            return
+        from goldenmatch.refdata.given_names import export_alias_forms
+        from goldenmatch.refdata.surnames import export_counts
+        surname_counts = [(n, float(c)) for n, c in export_counts()]
+        alias_forms = export_alias_forms()
+        mod.set_name_reference_data(surname_counts, alias_forms)
+    except Exception:
+        logger.debug("FS name refdata registration skipped", exc_info=True)
 
 
 def _fs_native_enabled() -> bool:
@@ -3033,9 +3083,12 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
     ne_fields = mk.negative_evidence or []
     for ne in ne_fields:
-        if ne.scorer not in _NATIVE_FS_SCORER_IDS:
+        # NE fields go through the kernel's score_one path (ids 0..=3 only) — the
+        # reference-data name scorers are NOT valid NE scorers.
+        if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.scorer in _NAME_SCORER_IDS:
             return False
     needs_level_thresholds = False
+    name_scorers_needed: set[str] = set()
     for f in mk.fields:
         if f.scorer not in _NATIVE_FS_SCORER_IDS:
             return False
@@ -3043,6 +3096,15 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False
         if getattr(f, "level_thresholds", None) is not None:
             needs_level_thresholds = True
+        if f.scorer in _NAME_SCORER_IDS:
+            name_scorers_needed.add(f.scorer)
+    if name_scorers_needed and not _fs_name_refdata_available(name_scorers_needed):
+        # The pack that would supply the injected table isn't loaded, so the
+        # kernel would degrade to plain JW — diverging from the numpy path (which
+        # ALSO degrades, but only via its own is_available gate). Decline to the
+        # numpy path so the two never disagree on an unloaded pack.
+        return False
+    needs_name_scorers = bool(name_scorers_needed)
     try:
         from goldenmatch.core._native_loader import native_module
         mod = native_module()
@@ -3056,6 +3118,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False  # old wheel: level_thresholds never crosses its FFI
         if ne_fields and not getattr(mod, "FS_SUPPORTS_NE", False):
             return False  # old wheel: NE never crosses its FFI
+        if needs_name_scorers and not getattr(mod, "FS_SUPPORTS_NAME_SCORERS", False):
+            return False  # old wheel: name scorers never cross their FFI
         return True
     except Exception:
         return False
@@ -3142,6 +3206,11 @@ def _score_fs_native_frame(
         link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
 
     mod = native_module()
+    # Register the census / alias tables once per process when a name scorer is in
+    # play (kernel ids 4/5). Cheap no-op once registered; `_fs_native_eligible`
+    # already gated on the pack being loaded + FS_SUPPORTS_NAME_SCORERS.
+    if any(f.scorer in _NAME_SCORER_IDS for f in mk.fields):
+        _ensure_fs_name_refdata(mod)
     # Zero-copy arrow entry (#1803 item 2): route to score_block_pairs_fs_arrow
     # when the wheel carries it; old wheels keep the Vec entry byte-identically.
     use_arrow = bool(getattr(mod, "FS_SUPPORTS_ARROW", False))
