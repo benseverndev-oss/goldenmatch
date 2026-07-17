@@ -173,11 +173,24 @@ def _score_block_vec(
 
     n = end - offset
     num = None
+    wsum = None
     for f_idx, name in enumerate(scorer_names):
-        m = _vec_field_matrix(field_arrays[f_idx][offset:end], name)
+        vals = field_arrays[f_idx][offset:end]
+        m = _vec_field_matrix(vals, name)
         contrib = m * weights[f_idx]
         num = contrib if num is None else num + contrib
-    combined = num / total_weight
+        # #weighted-null: a null field is ABSENCE of evidence, not disagreement,
+        # so it must leave the DENOMINATOR too -- otherwise an absolute threshold
+        # becomes unreachable (0.3/0.4/0.3 fields @0.85: a null dob caps the pair
+        # at 0.70 however perfectly the names agree). _vec_field_matrix collapses
+        # a null pair to 0.0 -- indistinguishable from a genuine 0.0 score -- so
+        # the mask is rebuilt from the raw values here. Mirrors
+        # native/src/score.rs and core/scorer.py::score_pair.
+        null = np.array([v is None for v in vals], dtype=bool)
+        obs = (~(null[:, None] | null[None, :])) * weights[f_idx]
+        wsum = obs if wsum is None else wsum + obs
+    with np.errstate(invalid="ignore", divide="ignore"):
+        combined = np.where(wsum > 0.0, num / np.where(wsum > 0.0, wsum, 1.0), 0.0)
     iu0, iu1 = np.triu_indices(n, k=1)
     flat = combined[iu0, iu1]
     sel = flat >= threshold
@@ -1196,7 +1209,9 @@ def score_buckets(
                             weight_sum += weights[f_idx]
                         if weight_sum <= 0:
                             continue
-                        combined = score_sum / total_weight
+                        # #weighted-null: renormalize by OBSERVED weight -- mirrors
+                        # native/src/score.rs and core/scorer.py::score_pair.
+                        combined = score_sum / weight_sum
                         # NE penalty math (mirrors core/scorer.py
                         # _apply_negative_evidence): subtract penalty when an
                         # NE field's similarity is below its threshold. Clamp
