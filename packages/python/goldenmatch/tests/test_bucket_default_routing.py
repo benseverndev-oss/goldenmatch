@@ -25,6 +25,30 @@ from goldenmatch.config.schemas import (
 from goldenmatch.core.pipeline import _BUCKET_DEFAULT_MAX_ROWS, _use_bucket_scorer
 
 
+@pytest.fixture(autouse=True)
+def _isolate_routing_globals(monkeypatch):
+    """Pin the process-global routing state _use_bucket_scorer reads.
+
+    _use_bucket_scorer consults three ambient globals -- the
+    GOLDENMATCH_COLUMNAR_PIPELINE and GOLDENMATCH_BUCKET_DEFAULT env vars and the
+    profile-emitter stack (has_active_emitter). A co-located test in the same
+    xdist worker that leaves any of them set flips the routing decision, so these
+    tests (which assert the decision for specific inputs) were shard-membership
+    dependent. Surfaced when the duration-based pytest-split (PR #1865)
+    reshuffled which tests share a shard with these. Reset to a clean baseline so
+    the assertions test the function, not the ambient state.
+    """
+    monkeypatch.delenv("GOLDENMATCH_COLUMNAR_PIPELINE", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_BUCKET_DEFAULT", raising=False)
+    from goldenmatch.core import profile_emitter as _pe
+
+    token = _pe._emitter_stack.set(())
+    try:
+        yield
+    finally:
+        _pe._emitter_stack.reset(token)
+
+
 def _tbl(n: int) -> pa.Table:
     return pa.table({"a": [str(i % 7) for i in range(n)]})
 
