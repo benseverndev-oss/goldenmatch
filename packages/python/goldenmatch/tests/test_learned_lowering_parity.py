@@ -227,13 +227,24 @@ class TestKnownDivergences:
         assert learned == {(3, 4)}
         assert lowered == {(0, 1), (0, 2), (1, 2), (3, 4)}
 
-    def test_empty_key_depth2_both_keep_it(self):
-        """The truthiness accident: at depth 2 an all-empty key is "||", which is
-        truthy, so learned keeps the same block it drops at depth 1.
-        learned_predicate_depth DEFAULTS to 2, so the default path keeps it."""
+    def test_empty_key_depth2_learned_drops_lowered_keeps(self):
+        """UPDATED (fix/blocking-null-key-filter, #1859): the depth-2 "||"
+        truthiness leak is fixed at the source -- ``_compute_block_key`` now
+        returns "" when every predicate is empty, so learned DROPS the all-empty
+        block at depth 2, matching depth 1.
+
+        This creates a divergence with the LOWERED path: ``filter_valid_key``
+        keeps "" (the explicit-empty-cell value, #390), so lowered still blocks
+        the all-empty rows. learned cannot tell "" from null (its transforms map
+        both to ""), the lowered path can -- so on genuinely-"" data they now
+        differ. Recorded, not resolved: settling the ""-vs-null policy uniformly
+        is the #1859 umbrella item. The lowering compiler is currently inert
+        (its auto-config wiring #1845 was closed as invalid), so no live path
+        depends on this equivalence."""
         learned, lowered = _both(self.EMPTIES, [_rule(_p("last", "exact"), _p("city", "exact"))])
-        assert learned == lowered
-        assert (0, 1) in learned
+        assert learned == {(3, 4)}  # all-empty rows 0,1,2 dropped
+        assert (0, 1) in lowered    # lowered keeps "" per #390
+        assert learned != lowered   # the new, tracked divergence
 
     def test_nulls_agree_by_coincidence(self):
         """Both paths drop NULLs, via DIFFERENT mechanisms: static filters

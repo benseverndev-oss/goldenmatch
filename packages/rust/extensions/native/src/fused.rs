@@ -167,6 +167,9 @@ pub fn match_fused(
     total_weight: f64,
     threshold: f64,
 ) -> PyResult<Vec<Vec<i64>>> {
+    // #weighted-null: unused -- scores renormalize by weight_sum. Param KEPT so
+    // the #[pyfunction] signature (and any published wheel) is unchanged.
+    let _ = total_weight;
     if weights.len() != scorer_ids.len() {
         return Err(PyValueError::new_err(
             "match_fused: weights must match scorer_ids",
@@ -203,7 +206,8 @@ pub fn match_fused(
                         }
                     }
                     if weight_sum > 0.0 {
-                        let combined = score_sum / total_weight;
+                        // #weighted-null: renormalize by OBSERVED weight (see score.rs).
+                        let combined = score_sum / weight_sum;
                         if combined >= threshold {
                             local.push((a_id, b_id, combined));
                         }

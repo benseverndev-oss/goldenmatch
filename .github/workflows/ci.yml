@@ -26,6 +26,15 @@ concurrency:
   group: ci-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+# uv download-cache keying: every setup-uv step below uses
+# `cache-dependency-glob: uv.lock` (NOT `**/pyproject.toml`). uv.lock is the
+# deterministic, fully-resolved source of truth for what `uv sync` installs, so
+# it is a correct and sufficient key. Globbing `**/pyproject.toml` additionally
+# busted the cache on EVERY version bump / tool-config edit across the 15+
+# package manifests -- deps unchanged, but the key churned -> a near-permanent
+# miss ("Prepared 83 packages in 3m20s" cold on each of ~20 jobs). Keying on
+# uv.lock alone keeps the cache warm across those no-op manifest edits and cuts
+# the distinct-cache count (less eviction pressure under the repo's 10GB cap).
 jobs:
   # Path-filter: compute which areas of the monorepo changed so downstream
   # jobs only run when relevant. Doc-only PRs (README, wiki references,
@@ -204,6 +213,14 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 -c "import sys,glob,yaml; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('all workflow YAML parses')"
+      # #1846: parsing is not meaning. A path filter that lists too few paths
+      # makes its job go SILENT on exactly the changes it exists to catch --
+      # quality_gate pinned f1_probabilistic while not watching
+      # probabilistic.py, and a 0.83 -> 0.33 collapse landed unseen. This
+      # asserts each gated filter still covers the surfaces it claims to gate.
+      - name: Validate CI path-filter coverage
+        shell: bash
+        run: python3 scripts/check_filter_coverage.py
 
   python:
     needs: changes
@@ -219,9 +236,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # GoldenAnalysis's suite adapters consume goldenmatch/goldencheck/goldenflow/
       # goldenpipe outputs. uv sync --all-packages installs those workspace members,
@@ -313,9 +328,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
       # optional `datafusion` extra; install it so the parity tests RUN rather
@@ -376,17 +389,25 @@ jobs:
       - name: Build native ext (reference mode -> native is the default test path)
         run: uv run python scripts/build_native.py
       # Shard the suite with pytest-split (deterministic collection -> stable,
-      # disjoint groups). The OOM-prone heavy files run in python_goldenmatch_heavy
-      # and are --ignored here so they're neither double-run nor split. The
-      # standing goldenmatch --ignore list (no-DB / no-GPU / flaky-on-Linux /
-      # gitignored-dataset tests) is preserved verbatim. Coverage data only
-      # (combined + floor-checked in python_goldenmatch_coverage).
+      # disjoint groups). Split by MEASURED duration via the committed
+      # packages/python/goldenmatch/.test_durations (--durations-path, absolute so
+      # pytest-split's plain open() resolves it regardless of CWD/rootdir). Without
+      # it pytest-split falls back to splitting by test COUNT, which skewed the
+      # shards badly (483s / 223s / 262s wall for equal counts); duration-based
+      # splitting balances them. Refresh the file by re-running the store+harvest
+      # step (git history of this job) when the suite's timing profile drifts.
+      # The OOM-prone heavy files run in python_goldenmatch_heavy and are --ignored
+      # here so they're neither double-run nor split. The standing goldenmatch
+      # --ignore list (no-DB / no-GPU / flaky-on-Linux / gitignored-dataset tests)
+      # is preserved verbatim. Coverage data only (combined + floor-checked in
+      # python_goldenmatch_coverage).
       - name: pytest (shard ${{ matrix.shard }} of ${{ env.GM_SPLITS }})
         env:
           COVERAGE_FILE: coverage_shard${{ matrix.shard }}.dat
         run: |
           uv run --with pytest-split pytest packages/python/goldenmatch \
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
+            --durations-path "${GITHUB_WORKSPACE}/packages/python/goldenmatch/.test_durations" \
             --timeout=120 --timeout-method=thread --durations=20 \
             --cov=goldenmatch --cov-report= \
             --ignore=packages/python/goldenmatch/benchmarks \
@@ -440,9 +461,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: pytest (heavy, serial)
         env:
@@ -475,9 +494,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
@@ -510,9 +527,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: pytest (pure-Python fallback -- core behavior slice, GOLDENMATCH_NATIVE=0)
         # -k excludes tests that ASSERT native dispatch (e.g. TestNativeFSParity's
@@ -552,9 +567,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: pytest (pure-Python fallback -- transform slice, GOLDENFLOW_NATIVE=0)
         # -k excludes tests that ASSERT native dispatch: the job-level
@@ -597,9 +610,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Run ${{ matrix.lane.name }} lane
         shell: bash
@@ -692,9 +703,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Run Postgres-backed tests
         shell: bash
@@ -723,9 +732,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Run synthetic benchmarks
         shell: bash
@@ -772,9 +779,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # `recordlinkage` ships the Febrl3 dataset bundled — installing it
       # lets the smoke run actually exercise the febrl3 helper end-to-end
@@ -848,9 +853,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # FEBRL3's loader needs recordlinkage (ships the dataset bundled); it is not
       # a declared dep. pyarrow backs pl.from_pandas in the febrl3/ncvr loaders
@@ -921,9 +924,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
         # Reads version from root package.json `packageManager` field.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
@@ -1839,9 +1840,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Diagnostics (toolchain + dep versions)
         run: |
@@ -1943,9 +1942,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: clippy + test (goldencheck-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/goldencheck-core
@@ -2000,9 +1997,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: clippy + test (analysis-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/analysis-core
@@ -2041,9 +2036,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: clippy + test (infermap-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/infermap-core
@@ -2089,9 +2082,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: clippy + test (goldengraph-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/goldengraph-core
@@ -2129,9 +2120,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       # Frontend only (pure-Python goldenmatch); NO build_native.py, so
       # `goldenmatch._native` is absent and the loader must use the wheel.
       - run: uv sync --all-packages
@@ -2175,9 +2164,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: clippy + fmt (native-flow crate)
         working-directory: packages/rust/extensions/native-flow
@@ -2238,9 +2225,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Build native in-memory core into the package
         run: uv run python packages/python/goldenflow/scripts/build_native.py
@@ -2277,9 +2262,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Build goldencheck native (regex kernel, so hard-op checks run covered not skipped)
         # No --offline: same idiom as the goldencheck_native lane. Mirrors goldenflow_nopolars'
@@ -2317,9 +2300,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Frame-backend differential (polars vs arrow)
         run: uv run python scripts/diff_frame_backends.py
@@ -2347,9 +2328,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: fmt + clippy (goldenpipe-core + goldenpipe-native)
         run: |
@@ -2386,9 +2365,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       # Frontend only (pure-Python goldenflow); NO build_native.py, so
       # `goldenflow._native` is absent and the loader must use the wheel.
       - run: uv sync --all-packages
@@ -2474,9 +2451,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Build the goldenmatch-embed wheel (maturin, pyo3)
         run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/embed-py/Cargo.toml --out dist
@@ -2549,9 +2524,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Build the goldenmatch-hnsw wheel (maturin, pyo3)
         run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/hnsw-py/Cargo.toml --out dist
@@ -2610,9 +2583,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # ray is an optional extra; install it into the uv venv so the ray-gated
       # tests/test_distributed_*.py actually run (they skip everywhere else via
@@ -2656,9 +2627,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
@@ -2690,9 +2659,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
@@ -2719,9 +2686,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # Sail (Spark Connect) optional stack. NO Java: pyspark[connect] is a
       # pure-gRPC client (no py4j/JVM launch) and the Sail server is Rust.
@@ -3214,9 +3179,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - run: uv run pyright
 
@@ -3298,9 +3261,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       # Regenerate every committed TS parity fixture from the Python emitters,
       # then assert the working tree still matches HEAD within a 4-decimal float
@@ -3355,9 +3316,7 @@ jobs:
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
         with:
           enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            **/pyproject.toml
+          cache-dependency-glob: uv.lock
       - run: uv sync --all-packages
       - run: uv pip install -e packages/python/goldenmatch
       - run: uv pip install duckdb

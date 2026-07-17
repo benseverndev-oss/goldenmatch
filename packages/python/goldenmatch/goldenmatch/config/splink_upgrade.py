@@ -504,6 +504,7 @@ def _lever_calibration(ctx: _LeverContext) -> None:
         _sample_blocked_pairs,
         comparison_vector,
         compute_thresholds,
+        fs_regular_weight_sum,
         fs_weight_range,
     )
 
@@ -621,7 +622,9 @@ def _lever_calibration(ctx: _LeverContext) -> None:
         row_b = row_lookup.get(b, {})
         vec = comparison_vector(row_a, row_b, mk)
         total_weights.append(
-            sum(em.match_weights[name][vec[k]] for k, name in indexed_fields)
+            # #1859: guard the unobserved (-1) sentinel -- a missing field must
+            # not index weights[-1] (the highest-agreement weight).
+            fs_regular_weight_sum(em.match_weights, vec, indexed_fields)
             # NE contributions: 0.0 unless the field FIRES (core scalar
             # helper -- penalty_bits override or the EM-learned `__ne__`
             # fired-weight), matching runtime FS scoring.

@@ -496,6 +496,30 @@ def comparison_vector(
     return levels
 
 
+def fs_regular_weight_sum(
+    match_weights: dict[str, list[float]],
+    vec: list[int],
+    indexed_fields: list[tuple[int, str]],
+) -> float:
+    """Sum the FS match-weight bits for the OBSERVED regular fields of one pair.
+
+    ``comparison_vector`` returns ``-1`` for a field that is unobserved on either
+    side (the ``missing="unobserved"`` sentinel). Indexing ``weights[-1]`` picks
+    the LAST element -- the highest-agreement weight -- so a MISSING field would
+    contribute maximal positive evidence FOR a match. Guard it: an unobserved
+    field carries no evidence and is skipped, matching every runtime FS scorer
+    (``score_pair_probabilistic`` etc., which all ``continue`` on ``vec[k] < 0``).
+
+    ``indexed_fields`` is ``[(k, field_name), ...]`` for the regular comparison
+    fields (NE / record fields excluded by the caller).
+    """
+    return sum(
+        match_weights[name][vec[k]]
+        for k, name in indexed_fields
+        if vec[k] >= 0
+    )
+
+
 def continuous_scores(
     row_a: dict,
     row_b: dict,
