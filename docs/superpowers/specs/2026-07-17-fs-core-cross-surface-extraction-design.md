@@ -8,8 +8,14 @@ pyo3 marshaling via a process-level census/alias registry + `probabilistic.py`
 gating)**, **5 (Winkler `tf_adjustment` end-to-end)**, **6 (`ensemble` scorer +
 a jellyfish-compatible `soundex`)**. Every FS comparison scorer the probabilistic
 path can emit now runs on the native kernel; a new end-to-end test asserts
-native == numpy (abs 1e-6) across name/ensemble/tf. Remaining: 3b (TS-wasm
-rewiring — wasm-toolchain gated) and 7 (delete the numpy/scalar production paths).
+native == numpy (abs 1e-6) across name/ensemble/tf. **3b (TS-wasm) landed**: the
+`fs-wasm` embed is built + committed (`scripts/build_fs_wasm.mjs`), the sync
+`initSync` loader `src/core/fsWasm.ts` exposes `scoreBlockPairsFs` at the opt-in
+subpath `goldenmatch/core/fs-wasm`, and `tests/parity/fs-wasm.parity.test.ts`
+asserts fs-wasm reproduces the Python-native `score_block_pairs_fs` oracle
+(fixture authored by `scripts/emit_fs_wasm_fixture.py`) — the TS scoring-path
+reroute stays a deliberate follow-up (kernel + parity shipped first, like
+hnsw-wasm). Remaining: 7 (delete the numpy/scalar production paths).
 **Owner:** benchmark-failure follow-up (`claude/benchmark-failure-gh-vbtusq`)
 
 ## Problem: Fellegi-Sunter is the repo's parity orphan
@@ -111,12 +117,18 @@ scorers, so this is explicit-config only.
      initial entry covers the zero-config FS shape (no NE / custom banding /
      cross-batch exclude — the `auto_configure_probabilistic_df` shape); `_impl`
      already supports the full shape for the harness to grow into.
-   - **3b (deferred — wasm-toolchain + CI gated, NOT done here):** build the wasm
-     artifact (`wasm-pack`/the repo's `build_*_wasm.mjs` idiom — no wasm target
-     in this env), swap `probabilistic.ts`'s scoring loop to call `fs-wasm`
-     (keeping TS `trainEM` + the transform step host-side, exactly as EM/transforms
-     stay Python-side), and repoint the TS parity harness from the hand-mirrored
-     fixture to the shared core. These need the wasm build + `node`/vitest CI
+   - **3b (LANDED):** the wasm artifact is built + committed via
+     `scripts/build_fs_wasm.mjs` (the repo's `build_*_wasm.mjs` idiom), the sync
+     `initSync` loader `src/core/fsWasm.ts` exposes `scoreBlockPairsFs` at the
+     opt-in subpath `goldenmatch/core/fs-wasm`, and `tests/parity/
+     fs-wasm.parity.test.ts` asserts fs-wasm reproduces the Python-native oracle
+     (fixture authored by `scripts/emit_fs_wasm_fixture.py`). **Swapping
+     `probabilistic.ts`'s scoring loop to call `fs-wasm` stays a deliberate
+     follow-up** (kernel + parity shipped first, mirroring how hnsw-wasm landed as
+     an alternative surface before any reroute); keeping TS `trainEM` + the
+     transform step host-side, exactly as EM/transforms stay Python-side. The
+     reroute + repointing the hand-mirrored `probabilistic` fixture needs the
+     full-pipeline TS integration and `node`/vitest CI
      lanes to verify, so they are left for a CI-backed follow-up rather than
      shipping an unbuildable blob or an unverified 1,400-line TS rewrite.
 4. **Port the name scorers** (`given_name_aliased_jw`, `name_freq_weighted_jw`)

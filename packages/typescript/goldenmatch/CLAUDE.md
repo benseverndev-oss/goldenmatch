@@ -171,6 +171,39 @@ index.js`).
   project_parity.rs`); the `typescript` lane's goldenembed drift guard (gated on
   `goldenembed_wasm`) rebuilds + diffs it; `fixture_drift` auto-covers it.
 
+## Fellegi-Sunter block scoring via wasm (`goldenmatch/core/fs-wasm`)
+FS block scoring — the per-pair level-band → EM match-weight → normalize kernel —
+running the SAME `goldenmatch-fs-core::score_fs_pair` as the Python native wheel
+and the native pyo3 crate. This is the TS half of the 2026-07-17 fs-core
+cross-surface extraction: FS scoring was the parity orphan (numpy + scalar +
+native + hand-written TS, synced by hand); the shared pyo3-free core makes
+Python-native == TS-WASM byte-identical by construction. Loader
+`src/core/fsWasm.ts`; opt-in subpath (~187 KB inlined wasm, separate tsup entry —
+verified no leak into `dist/core/index.js`).
+- **`scoreBlockPairsFs(input)`** takes a pre-trained, pre-transformed block (the
+  JSON-boundary shape the native `score_block_pairs_fs` kernel takes:
+  `fieldValues[field][row]` with `null` = unobserved, per-field scorer/level/
+  weight arrays, calibration + normalization scalars) and returns `[a,b,score]`
+  triples `a<b` at/above `threshold`. EM training + transforms stay host-side
+  (exactly as they stay Python-side). This entry covers the zero-config FS shape
+  (no NE, no custom banding, no cross-batch exclude — what
+  `auto_configure_probabilistic_df` emits); NE / custom `level_thresholds` grow
+  from here, like the native kernel. **The FS scoring path reroute (making the TS
+  probabilistic scorer call this) is a deliberate follow-up** — this ships the
+  kernel + parity, mirroring how hnsw-wasm shipped as an alternative surface first.
+- **Same synchronous inlined-wasm pattern** as hnsw-wasm/autoconfig-wasm (`initSync`
+  over a committed base64 wasm under `src/core/_wasm/`; `tsc`/`vitest`/`tsup` need
+  no rust toolchain). Regenerate the embed (after any `fs-core`/`fs-wasm` change):
+  `node scripts/build_fs_wasm.mjs` (needs wasm-pack + the wasm32 target).
+- **Cross-surface parity gate:** `tests/parity/fs-wasm.parity.test.ts` feeds the
+  SAME inputs the Python NATIVE kernel scored — the fixture
+  `tests/parity/fixtures/fs/fs_block_scoring.json` is AUTHORED by the native
+  `score_block_pairs_fs` (the oracle,
+  `packages/python/goldenmatch/scripts/emit_fs_wasm_fixture.py`), NOT copied by the
+  build script — and asserts identical pairs (scores pinned to the fixture's 6dp).
+  `fixture_drift` auto-covers the build script; the fs-core + fs-wasm crates run
+  `cargo test`/`clippy` in the `rust` lane.
+
 ## Wave history
 | npm | Python parity | Headline |
 |-----|---------------|----------|

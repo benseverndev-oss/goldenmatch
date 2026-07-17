@@ -43,6 +43,11 @@ export default defineConfig({
     // the `ort`-linked native runtime can't compile to wasm). ~80 KB inlined
     // base64 as a separate subpath (`goldenmatch/core/goldenembed-wasm`).
     "core/goldenembedWasm": "src/core/goldenembedWasm.ts",
+    // Opt-in entry: the Fellegi-Sunter block-scoring kernel (fs-core) compiled to
+    // wasm, so the FS scoring path runs the SAME kernel as the Python native
+    // wheel. ~187 KB inlined base64 as a separate subpath
+    // (`goldenmatch/core/fs-wasm`), out of the default core bundle.
+    "core/fsWasm": "src/core/fsWasm.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     "node/a2a/server": "src/node/a2a/server.ts",
