@@ -175,68 +175,12 @@ pub fn score_block_pairs(
     })
 }
 
-/// Normalize a summed Fellegi-Sunter match weight to a [0,1] score. Shared by
-/// `score_block_pairs_fs` and the fused `match_fused_fs` so the two cannot drift.
-/// `calibrated` = posterior probability `1/(1+2^-(prior_w+w))`; else linear
-/// min-max over the observed weight range (0.5 when the range is degenerate).
-pub(crate) fn fs_normalize(
-    total_weight: f64,
-    calibrated: bool,
-    prior_w: f64,
-    min_weight: f64,
-    weight_range: f64,
-) -> f64 {
-    if calibrated {
-        let logodds = (prior_w + total_weight).clamp(-60.0, 60.0);
-        1.0 / (1.0 + 2.0_f64.powf(-logodds))
-    } else if weight_range > 0.0 {
-        ((total_weight - min_weight) / weight_range).clamp(0.0, 1.0)
-    } else {
-        0.5
-    }
-}
-
-/// Map a per-field similarity to a comparison level, matching
-/// `core/probabilistic._levels_from_similarity`:
-///   custom `level_thresholds`: level = count of thresholds t with sim >= t
-///     (inclusive, order-independent — mirrors the Python custom branch
-///     byte-for-byte; len(thresholds)+1 levels total)
-///   2 levels: 1 if sim >= partial_threshold else 0
-///   3 levels: 2 if sim >= 0.95, elif sim >= partial_threshold -> 1, else 0
-///   N levels: count of k in 1..N with sim >= k/N (even spacing)
-#[inline]
-pub(crate) fn fs_level_from_sim(
-    sim: f64,
-    n_levels: u8,
-    partial_threshold: f64,
-    level_thresholds: Option<&[f64]>,
-) -> usize {
-    if let Some(ts) = level_thresholds {
-        return ts.iter().filter(|&&t| sim >= t).count();
-    }
-    match n_levels {
-        2 => usize::from(sim >= partial_threshold),
-        3 => {
-            if sim >= 0.95 {
-                2
-            } else if sim >= partial_threshold {
-                1
-            } else {
-                0
-            }
-        }
-        n => {
-            let n = n as usize;
-            let mut lvl = 0usize;
-            for k in 1..n {
-                if sim >= (k as f64) / (n as f64) {
-                    lvl += 1;
-                }
-            }
-            lvl
-        }
-    }
-}
+// Fellegi-Sunter leaf math (weight normalization + level banding) now lives in
+// the pyo3-free `goldenmatch-fs-core` crate — the single source of truth shared
+// with the WASM/TS surface (see the 2026-07-17 fs-core design). Re-exported here
+// so `score_block_pairs_fs`, the fused `match_fused_fs`, and this module's tests
+// keep their existing `fs_normalize` / `fs_level_from_sim` call sites unchanged.
+pub(crate) use goldenmatch_fs_core::{fs_level_from_sim, fs_normalize};
 
 /// Fellegi-Sunter sibling of [`score_block_pairs`]: instead of a weighted average
 /// of raw similarities, each field's similarity is mapped to a comparison LEVEL

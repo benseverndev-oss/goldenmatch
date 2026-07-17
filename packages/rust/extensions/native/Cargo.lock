@@ -557,6 +557,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenmatch-fs-core"
+version = "0.1.0"
+
+[[package]]
 name = "goldenmatch-graph-core"
 version = "0.1.0"
 dependencies = [
@@ -572,6 +576,7 @@ dependencies = [
  "goldenmatch-autoconfig-core",
  "goldenmatch-documents-core",
  "goldenmatch-fingerprint-core",
+ "goldenmatch-fs-core",
  "goldenmatch-graph-core",
  "goldenmatch-perceptual-core",
  "goldenmatch-score-core",
