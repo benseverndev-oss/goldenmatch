@@ -237,7 +237,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages ${{ matrix.pkg != 'goldenpipe' && '--no-install-package goldenmatch-native --no-install-package goldenflow-native' || '' }}
       # GoldenAnalysis's suite adapters consume goldenmatch/goldencheck/goldenflow/
       # goldenpipe outputs. uv sync --all-packages installs those workspace members,
       # but install the [match,check,flow,pipe] extras explicitly so the real-producer
@@ -329,7 +329,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # Scale-mode DataFusion edge stream (cluster_edges_df.py) lives behind the
       # optional `datafusion` extra; install it so the parity tests RUN rather
       # than importorskip-SKIP (a false green). Cheap (wheel download).
@@ -462,7 +462,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: pytest (heavy, serial)
         env:
           COVERAGE_FILE: coverage_heavy.dat
@@ -495,7 +495,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           pattern: gm-cov-*
@@ -528,7 +528,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: pytest (pure-Python fallback -- core behavior slice, GOLDENMATCH_NATIVE=0)
         # -k excludes tests that ASSERT native dispatch (e.g. TestNativeFSParity's
         # opt-in-picks-native): the job-level GOLDENMATCH_NATIVE=0 force-disables
@@ -568,7 +568,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: pytest (pure-Python fallback -- transform slice, GOLDENFLOW_NATIVE=0)
         # -k excludes tests that ASSERT native dispatch: the job-level
         # GOLDENFLOW_NATIVE=0 force-disables native, so those tests can't hold
@@ -611,7 +611,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Run ${{ matrix.lane.name }} lane
         shell: bash
         env:
@@ -704,7 +704,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Run Postgres-backed tests
         shell: bash
         run: |
@@ -733,7 +733,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Run synthetic benchmarks
         shell: bash
         run: |
@@ -780,7 +780,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # `recordlinkage` ships the Febrl3 dataset bundled — installing it
       # lets the smoke run actually exercise the febrl3 helper end-to-end
       # without needing any gitignored dataset. The other three datasets
@@ -854,7 +854,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # FEBRL3's loader needs recordlinkage (ships the dataset bundled); it is not
       # a declared dep. pyarrow backs pl.from_pandas in the febrl3/ncvr loaders
       # (mirrors the benchmark_runner_smoke precedent). synthetic-NCVR +
@@ -935,7 +935,7 @@ jobs:
         # Every package's [mcp] extra is just the shared `mcp` SDK, so one install provisions
         # the Python MCP surface for all six packages.
         run: |
-          uv sync --all-packages
+          uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
           # mcp: the MCP-tool surface; aiohttp: the a2a servers (the a2a_skills
           # emitter imports <pkg>.a2a.server, which needs the [a2a] extra). Without
           # aiohttp the a2a emitter exits 3 (env-gap) and the a2a surface is silently
@@ -1841,7 +1841,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Diagnostics (toolchain + dep versions)
         run: |
           (cd packages/rust/extensions/native && rustc --version && cargo clippy --version)
@@ -1943,7 +1943,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: clippy + test (goldencheck-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/goldencheck-core
         run: |
@@ -1998,7 +1998,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: clippy + test (analysis-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/analysis-core
         run: |
@@ -2037,7 +2037,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: clippy + test (infermap-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/infermap-core
         run: |
@@ -2083,7 +2083,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: clippy + test (goldengraph-core, pyo3-free kernels)
         working-directory: packages/rust/extensions/goldengraph-core
         run: |
@@ -2123,7 +2123,7 @@ jobs:
           cache-dependency-glob: uv.lock
       # Frontend only (pure-Python goldenmatch); NO build_native.py, so
       # `goldenmatch._native` is absent and the loader must use the wheel.
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Build the goldenmatch-native wheel (maturin, abi3)
         run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/native/Cargo.toml --out dist
       - name: Install the wheel + smoke-test the split
@@ -2165,7 +2165,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: clippy + fmt (native-flow crate)
         working-directory: packages/rust/extensions/native-flow
         run: |
@@ -2226,7 +2226,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Build native in-memory core into the package
         run: uv run python packages/python/goldenflow/scripts/build_native.py
       - name: Uninstall polars (simulate the 2.0 base-deps flip)
@@ -2263,7 +2263,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Build goldencheck native (regex kernel, so hard-op checks run covered not skipped)
         # No --offline: same idiom as the goldencheck_native lane. Mirrors goldenflow_nopolars'
         # build-before-uninstall ordering. If this ever fails, the nopolars tests still pass --
@@ -2329,7 +2329,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: fmt + clippy (goldenpipe-core + goldenpipe-native)
         run: |
           cargo fmt --check --manifest-path packages/rust/extensions/goldenpipe-core/Cargo.toml
@@ -2368,7 +2368,7 @@ jobs:
           cache-dependency-glob: uv.lock
       # Frontend only (pure-Python goldenflow); NO build_native.py, so
       # `goldenflow._native` is absent and the loader must use the wheel.
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Build the goldenflow-native wheel (maturin, abi3)
         run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/native-flow/Cargo.toml --out dist
       - name: Install the wheel + smoke-test the split
@@ -2452,7 +2452,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Build the goldenmatch-embed wheel (maturin, pyo3)
         run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/embed-py/Cargo.toml --out dist
       - name: Install the wheel + smoke-test load/embed
@@ -2525,7 +2525,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Build the goldenmatch-hnsw wheel (maturin, pyo3)
         run: uv run --with maturin maturin build --release --manifest-path packages/rust/extensions/hnsw-py/Cargo.toml --out dist
       - name: Install the wheel + standalone smoke
@@ -2584,7 +2584,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # ray is an optional extra; install it into the uv venv so the ray-gated
       # tests/test_distributed_*.py actually run (they skip everywhere else via
       # pytest.importorskip). pandas<3 because ray pins pandas<3.
@@ -2628,7 +2628,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Randomized-contraction WCC ray gate (blocking)
@@ -2660,7 +2660,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Install ray extra
         run: uv pip install 'ray[default]>=2.0' 'pandas<3'
       - name: Distributed broad coverage (non-blocking)
@@ -2687,7 +2687,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # Sail (Spark Connect) optional stack. NO Java: pyspark[connect] is a
       # pure-gRPC client (no py4j/JVM launch) and the Sail server is Rust.
       # Install VIA THE EXTRA so the pyproject [sail] entry is exercised.
@@ -3180,7 +3180,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - run: uv run pyright
 
   # Enforce per-package version lockstep across every file that declares it
@@ -3262,7 +3262,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       # Regenerate every committed TS parity fixture from the Python emitters,
       # then assert the working tree still matches HEAD within a 4-decimal float
       # tolerance. Closes the silent-drift hole (#856): a pure-Python behaviour
@@ -3317,7 +3317,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - run: uv pip install -e packages/python/goldenmatch
       - run: uv pip install duckdb
       - name: Bench harness unit tests
