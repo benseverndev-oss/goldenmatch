@@ -31,7 +31,9 @@ use goldenmatch_fs_core::{score_fs_pair, FsPairParams};
 /// `field_values[field][row]` / `ne_values[ne][row]` are the already-transformed
 /// values (`None` = null). `field_thresholds[field]` is the optional custom
 /// level-threshold list for that field.
-#[allow(clippy::too_many_arguments)]
+// `i`/`j` index row_ids AND are the positional args to score_fs_pair's field
+// accessor, so the span walk is genuinely index-based (not an iterator map).
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 pub fn score_block_pairs_fs_impl(
     row_ids: &[i64],
     block_sizes: &[usize],

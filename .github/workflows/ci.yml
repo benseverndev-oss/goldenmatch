@@ -1670,6 +1670,17 @@ jobs:
       - run: cargo clippy --manifest-path graph-wasm/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path score-core/Cargo.toml
       - run: cargo clippy --manifest-path score-core/Cargo.toml -- -D warnings
+      # fs-core (2026-07-17) is the pyo3-free single source of truth for the
+      # Fellegi-Sunter block-scoring math (name/ensemble/tf scorers + normalize),
+      # its own [workspace] path-dep of `native`. Exercised indirectly by the
+      # native FS parity tests, but its own unit tests + clippy need an explicit
+      # run. fs-wasm is the wasm-bindgen wrapper (TS-WASM analogue of `native`);
+      # host `cargo test`/clippy validate its rlib logic (the wasm32 build runs in
+      # the typescript lane's drift guard).
+      - run: cargo test --manifest-path fs-core/Cargo.toml
+      - run: cargo clippy --manifest-path fs-core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path fs-wasm/Cargo.toml
+      - run: cargo clippy --manifest-path fs-wasm/Cargo.toml --all-targets -- -D warnings
       # goldenflow-core (owned checksummed-identifier kernels, Wave 0b) is its own
       # [workspace] pyo3-free sibling too — excluded from the bridge workspace, so
       # `cargo clippy --workspace` above never touches it and its clippy was DEAD in
