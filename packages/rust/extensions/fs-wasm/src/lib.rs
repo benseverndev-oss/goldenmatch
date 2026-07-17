@@ -90,6 +90,11 @@ pub fn score_block_pairs_fs_impl(
         surname_freq: None,
         name_aliases: None,
         tf_tables: &[],
+        // Embedding scorers marshal precomputed vectors from the host — a later
+        // TS increment (the native pyo3 side lands first). None here degrades an
+        // id-7 field to "fully disagree", but the wasm entry never emits id 7.
+        emb_vectors: &[],
+        emb_dims: &[],
     };
 
     let mut out: Vec<(i64, i64, f64)> = Vec::new();

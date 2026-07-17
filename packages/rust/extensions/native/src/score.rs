@@ -103,6 +103,44 @@ fn build_tf_tables(
     out
 }
 
+/// Validate + own the per-field embedding vectors for `FS_SCORER_EMBEDDING_COSINE`
+/// (id 7) fields. `emb_vectors[f]` (when the host supplies it) is the ROW-MAJOR
+/// `n_rows * emb_dims[f]` already-L2-normalized buffer for field `f`; `None` for
+/// every non-embedding field. Returns owned buffers (kept alive by the caller,
+/// which then hands `score_fs_pair` a borrowed `Vec<Option<&[f64]>>`) plus an
+/// `emb_dims` padded to `n_fields`. Absent everywhere -> empty Vecs, so the kernel
+/// does no embedding work. Every id-7 field MUST carry a correctly-sized vector
+/// block (a caller bug otherwise, surfaced as a `ValueError`, never a hot-loop
+/// panic).
+fn build_emb_vectors(
+    emb_vectors: Option<Vec<Option<Vec<f64>>>>,
+    emb_dims: Option<Vec<usize>>,
+    scorer_ids: &[u8],
+    n_rows: usize,
+) -> PyResult<(Vec<Option<Vec<f64>>>, Vec<usize>)> {
+    let n_fields = scorer_ids.len();
+    let mut owned = emb_vectors.unwrap_or_default();
+    let mut dims = emb_dims.unwrap_or_default();
+    owned.resize_with(n_fields, || None);
+    dims.resize(n_fields, 0);
+    for f in 0..n_fields {
+        if scorer_ids[f] == goldenmatch_fs_core::FS_SCORER_EMBEDDING_COSINE {
+            let dim = dims[f];
+            let ok = dim > 0
+                && owned[f]
+                    .as_ref()
+                    .is_some_and(|v| v.len() == n_rows * dim);
+            if !ok {
+                return Err(PyValueError::new_err(format!(
+                    "score_block_pairs_fs: field {f} is embedding-cosine (id 7) but \
+                     emb_vectors[{f}] is missing or not n_rows*dim ({n_rows}*{dim})"
+                )));
+            }
+        }
+    }
+    Ok((owned, dims))
+}
+
 /// Resolve the injected provider handles for a scoring call. Borrows live as
 /// long as the caller keeps the returned `Arc` alive.
 #[inline]
@@ -336,6 +374,7 @@ pub(crate) use goldenmatch_fs_core::{fs_level_from_sim, fs_normalize};
     ne_values=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
     exclude_set=None,
     tf_freqs=None, tf_collision=None,
+    emb_vectors=None, emb_dims=None,
 ))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
@@ -360,6 +399,8 @@ pub fn score_block_pairs_fs(
     exclude_set: Option<PyRef<'_, ExcludeSet>>,
     tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
     tf_collision: Option<Vec<Option<f64>>>,
+    emb_vectors: Option<Vec<Option<Vec<f64>>>>,
+    emb_dims: Option<Vec<usize>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     // FS_SUPPORTS_EXCLUDE_SET: prefer the shared Arc handle (built once per
     // score_buckets call via `build_exclude_set`), fall back to the legacy
@@ -484,6 +525,13 @@ pub fn score_block_pairs_fs(
     let name_refdata = current_name_refdata();
     let (surname_freq, name_aliases) = name_providers(&name_refdata);
 
+    // Embedding vectors for FS_SCORER_EMBEDDING_COSINE fields: row-major
+    // n_rows*dim, already L2-normalized host-side (the model stays host-side).
+    // `emb_owned` keeps the buffers alive; `emb_vectors` borrows into it.
+    let (emb_owned, emb_dims) =
+        build_emb_vectors(emb_vectors, emb_dims, &scorer_ids, n_rows)?;
+    let emb_vectors: Vec<Option<&[f64]>> = emb_owned.iter().map(|o| o.as_deref()).collect();
+
     // Per-matchkey scoring constants, borrowed once and reused per pair. The
     // per-pair FS math itself lives in `goldenmatch-fs-core::score_fs_pair` (the
     // single cross-surface source of truth); this entry point owns only the
@@ -506,6 +554,8 @@ pub fn score_block_pairs_fs(
         surname_freq,
         name_aliases,
         tf_tables: &tf_tables,
+        emb_vectors: &emb_vectors,
+        emb_dims: &emb_dims,
     };
 
     let result = py.detach(|| {
@@ -765,6 +815,7 @@ pub fn score_block_pairs_arrow(
     exclude=None, exclude_set=None, level_thresholds=None,
     ne_arrays=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
     tf_freqs=None, tf_collision=None,
+    emb_vectors=None, emb_dims=None,
 ))]
 pub fn score_block_pairs_fs_arrow(
     py: Python<'_>,
@@ -789,6 +840,8 @@ pub fn score_block_pairs_fs_arrow(
     ne_weights: Option<Vec<f64>>,
     tf_freqs: Option<Vec<Option<std::collections::HashMap<String, f64>>>>,
     tf_collision: Option<Vec<Option<f64>>>,
+    emb_vectors: Option<Vec<Option<Vec<f64>>>>,
+    emb_dims: Option<Vec<usize>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
@@ -935,6 +988,11 @@ pub fn score_block_pairs_fs_arrow(
     let name_refdata = current_name_refdata();
     let (surname_freq, name_aliases) = name_providers(&name_refdata);
 
+    // Embedding vectors (id 7) — same host-marshaled buffers as the Vec entry.
+    let (emb_owned, emb_dims) =
+        build_emb_vectors(emb_vectors, emb_dims, &scorer_ids, n_rows)?;
+    let emb_vectors: Vec<Option<&[f64]>> = emb_owned.iter().map(|o| o.as_deref()).collect();
+
     // Per-matchkey scoring constants, borrowed once and reused per pair. The
     // per-pair FS math is `goldenmatch-fs-core::score_fs_pair` — identical to the
     // Vec entry point; this arrow entry differs only in the zero-copy field
@@ -957,6 +1015,8 @@ pub fn score_block_pairs_fs_arrow(
         surname_freq,
         name_aliases,
         tf_tables: &tf_tables,
+        emb_vectors: &emb_vectors,
+        emb_dims: &emb_dims,
     };
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors

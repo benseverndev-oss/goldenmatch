@@ -65,6 +65,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // only when this flag is present; old wheels score id 6 as 0.0 (score_one's
     // catch-all), so they must keep the numpy path for ensemble matchkeys.
     m.add("FS_SUPPORTS_ENSEMBLE", true)?;
+    // Wheel-skew capability flag: both FS entries accept the per-field
+    // `emb_vectors`/`emb_dims` kwargs and score an `embedding` / `record_embedding`
+    // field (id 7) as the cosine (dot) of the two rows' host-precomputed
+    // L2-normalized vectors. Python's `_fs_native_eligible` admits an embedding
+    // field only when this flag is present; old wheels keep the numpy path.
+    m.add("FS_SUPPORTS_EMBEDDING", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
