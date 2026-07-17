@@ -92,11 +92,19 @@ def _apply_predicate(value: object, predicate: BlockingPredicate) -> str:
 
 
 def _compute_block_key(row: dict, predicates: list[BlockingPredicate]) -> str:
-    """Compute a block key from multiple predicates (conjunction)."""
-    parts = []
-    for p in predicates:
-        val = row.get(p.field)
-        parts.append(_apply_predicate(val, p))
+    """Compute a block key from multiple predicates (conjunction).
+
+    Returns "" (a falsy, dropped-by-the-caller key) when EVERY predicate is
+    missing. A missing conjunction is "this row cannot be blocked", not "this row
+    blocks with every other all-missing row". The caller's ``if key:`` guard
+    already drops the single-predicate case (an empty part IS ""), but a 2+
+    predicate all-missing row produced "||" -- truthy -- so those rows collapsed
+    into one shared block (#1859). A PARTIALLY populated key ("smith||") stays
+    truthy and is kept: its real parts still carry blocking signal (#390).
+    """
+    parts = [_apply_predicate(row.get(p.field), p) for p in predicates]
+    if not any(parts):
+        return ""
     return "||".join(parts)
 
 
