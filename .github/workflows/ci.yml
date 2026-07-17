@@ -392,7 +392,7 @@ jobs:
         run: |
           uv run --with pytest-split pytest packages/python/goldenmatch \
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
-            --durations-path packages/python/goldenmatch/.test_durations \
+            --durations-path "${GITHUB_WORKSPACE}/durations_shard${{ matrix.shard }}.json" \
             --store-durations \
             --timeout=120 --timeout-method=thread --durations=20 \
             --cov=goldenmatch --cov-report= \
@@ -438,7 +438,12 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-durations-shard-${{ matrix.shard }}
-          path: packages/python/goldenmatch/.test_durations
+          # pytest-split writes --store-durations to the path verbatim via a
+          # plain open() (CWD-relative for a relative path); an ABSOLUTE path
+          # ($GITHUB_WORKSPACE) is unambiguous. A relative path here silently
+          # missed the upload (landed off the expected dir under the pytest
+          # rootdir seam). Upload from the repo-root basename.
+          path: durations_shard${{ matrix.shard }}.json
           retention-days: 1
           if-no-files-found: error
 
