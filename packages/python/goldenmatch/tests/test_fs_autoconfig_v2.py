@@ -233,6 +233,42 @@ def test_lever3_no_duplicate_passes(monkeypatch):
     assert len(pc) == 1
 
 
+def test_lever3_drops_oversized_low_cardinality_pass_at_scale(monkeypatch):
+    # #1857: a birth-YEAR pass is fine at small N but becomes a ~15K-row-block
+    # memory bomb at scale. When df is supplied, a single-field pass whose
+    # projected max block exceeds the FS scorer row cap is dropped; the same
+    # pass on the same profile is KEPT when the cap is high enough.
+    monkeypatch.setenv(ON, "1")
+    # 30 rows, birth-year column with ONE dominant year (26 rows) -> max block 26.
+    df = pl.DataFrame({
+        "dob": ["1980-01-01"] * 26 + ["1981-02-02", "1982-03-03", "1983-04-04", "1984-05-05"],
+        "postcode": [f"{i:05d}" for i in range(30)],
+    })
+    profs = [_p("dob", "date", card=0.6, null=0.0), _p("postcode", "zip", card=0.9)]
+
+    # Cap the FS block scorer at 100 elements -> row cap 10; the 26-row year
+    # block exceeds it and the pass is dropped.
+    monkeypatch.setenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", "100")
+    out = _diversify_probabilistic_blocking(_base_blocking(), profs, df)
+    sigs = {(tuple(p.fields), tuple(p.transforms or [])) for p in (out.passes or [])}
+    assert (("dob",), ("substring:0:4",)) not in sigs   # oversized -> dropped
+    assert (("postcode",), ("strip",)) in sigs          # small -> kept
+
+    # With a generous cap the same year pass is kept (small-N behavior preserved).
+    monkeypatch.setenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", "50000000")
+    out2 = _diversify_probabilistic_blocking(_base_blocking(), profs, df)
+    sigs2 = {(tuple(p.fields), tuple(p.transforms or [])) for p in (out2.passes or [])}
+    assert (("dob",), ("substring:0:4",)) in sigs2
+
+
+def test_lever3_no_df_is_backward_compatible(monkeypatch):
+    # Older callers pass no df -> the scale guard is a no-op (pass still added).
+    monkeypatch.setenv(ON, "1")
+    out = _diversify_probabilistic_blocking(_base_blocking(), _person_profiles())
+    sigs = {(tuple(p.fields), tuple(p.transforms or [])) for p in (out.passes or [])}
+    assert (("dob",), ("substring:0:4",)) in sigs
+
+
 # ── end-to-end: v2 config trains + scores ─────────────────────────────────────
 
 def test_v2_config_runs_end_to_end(monkeypatch):

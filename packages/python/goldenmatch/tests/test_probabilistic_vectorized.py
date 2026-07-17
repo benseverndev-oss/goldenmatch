@@ -17,6 +17,8 @@ import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.probabilistic import (
     EMResult,
+    _fs_vec_guard,
+    _fs_vec_max_elems,
     posterior_from_weight,
     prior_weight,
     probabilistic_block_scorer,
@@ -25,6 +27,33 @@ from goldenmatch.core.probabilistic import (
     train_em,
     vectorized_scorer_supported,
 )
+
+
+class TestVecMatrixGuard:
+    """#1826/#1857: the dense-matrix guard must refuse an oversized block BEFORE
+    the multi-matrix, parallel composition OOMs the host."""
+
+    def test_default_is_scale_realistic(self, monkeypatch):
+        monkeypatch.delenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", raising=False)
+        # Tightened from 2e9 to 5e7 (n~7,071) to account for ~6 matrices/block
+        # scored across a <=16-thread pool.
+        assert _fs_vec_max_elems() == 50_000_000
+
+    def test_guard_refuses_oversized_block(self, monkeypatch):
+        monkeypatch.delenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", raising=False)
+        # ~11K-row block (the surname-soundex shape at 1M) exceeds the cap.
+        with pytest.raises(ValueError, match="refusing"):
+            _fs_vec_guard(11_000, "score_probabilistic_vectorized")
+        # A block under the cap is allowed (no raise).
+        _fs_vec_guard(5_000, "score_probabilistic_vectorized")
+
+    def test_env_override_and_disable(self, monkeypatch):
+        monkeypatch.setenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", "100")
+        assert _fs_vec_max_elems() == 100
+        with pytest.raises(ValueError):
+            _fs_vec_guard(11, "x")  # 11*11=121 > 100
+        monkeypatch.setenv("GOLDENMATCH_FS_VEC_MAX_ELEMS", "0")  # disabled
+        _fs_vec_guard(10_000_000, "x")  # no raise
 
 
 def _df():

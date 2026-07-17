@@ -2517,19 +2517,29 @@ def _fs_vectorized_supported(mk: MatchkeyConfig) -> bool:
 
 
 def _fs_vec_max_elems() -> int:
-    """Dense-matrix guard for the vectorized FS scorers (#1826).
+    """Dense-matrix guard for the vectorized FS scorers (#1826, retightened #1857).
 
     Maximum elements a single NxN (or coalesced SxS) float64 matrix may hold
-    before the scorer REFUSES with an actionable error instead of handing the
-    allocator an impossible request (a 388K-row block is a 1.1 TiB ask).
-    Default 2e9 elements (~16 GB per matrix, n~44.7K) -- above that no
-    realistic node survives the multi-matrix composition anyway.
-    ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` overrides; ``0`` disables the guard.
+    before the scorer REFUSES with an actionable error instead of OOMing.
+
+    Default 5e7 elements (n~7,071). The original 2e9 (~16 GB for ONE matrix,
+    n~44.7K) only bounded a single allocation, but ``score_probabilistic_vectorized``
+    holds ~6 dense float64 matrices per block simultaneously (total_weight,
+    pair_min/max_weight, normalized, the per-field sim + level arrays), and
+    ``score_probabilistic_blocks_batched`` scores up to ``_fs_scoring_workers()``
+    (<=16) blocks IN PARALLEL. So a block well under the old cap still composes
+    tens of GB across the thread pool and takes the host down -- exactly the
+    #1857 failure: a ~15K-row birth-year block at 1M rows (auto-config
+    diversification) OOM'd a 64 GB runner mid-sweep. At 5e7 a single block's peak
+    (~6 x n^2 x 8 bytes ~2.4 GB) x 16 workers stays ~40 GB, and any larger block
+    refuses cleanly (a recorded error) instead of crashing the process.
+    ``GOLDENMATCH_FS_VEC_MAX_ELEMS`` overrides (raise it on a big box, ``0``
+    disables the guard); FS-quality-bench blocks (<=~1,550 rows) are far below it.
     """
     try:
-        return int(os.environ.get("GOLDENMATCH_FS_VEC_MAX_ELEMS", "2000000000"))
+        return int(os.environ.get("GOLDENMATCH_FS_VEC_MAX_ELEMS", "50000000"))
     except ValueError:
-        return 2_000_000_000
+        return 50_000_000
 
 
 def _fs_vec_guard(n: int, fn_name: str) -> None:

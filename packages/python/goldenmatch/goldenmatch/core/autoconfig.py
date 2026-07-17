@@ -4807,7 +4807,7 @@ def auto_configure_probabilistic_df(
     # Lever #3: diversify onto orthogonal stable keys (date-year, postcode/zip,
     # identifier) so the FS candidate set isn't gated entirely on (corrupted)
     # name keys. Purely additive — recall ceiling can only rise.
-    blocking = _diversify_probabilistic_blocking(blocking, profiles)
+    blocking = _diversify_probabilistic_blocking(blocking, profiles, df)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,
@@ -4817,7 +4817,9 @@ def auto_configure_probabilistic_df(
 
 
 def _diversify_probabilistic_blocking(
-    blocking: BlockingConfig | None, profiles: list[ColumnProfile]
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+    df: Any = None,
 ) -> BlockingConfig | None:
     """Add orthogonal stable-key blocking passes for the probabilistic path.
 
@@ -4830,6 +4832,18 @@ def _diversify_probabilistic_blocking(
     additive (recall can only rise; scoring still decides precision). Skips
     high-null and perfectly-unique columns, and any (field, transforms) signature
     already present. Default ON; ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` disables it.
+
+    SCALE GUARD (#1857): a low-cardinality anchor becomes a memory bomb at scale.
+    Birth YEAR (``substring:0:4``) has ~70 distinct values, so at 1M rows it makes
+    ~15K-row blocks (14.4B candidate pairs); the vectorized FS scorer then holds
+    several dense NxN float64 matrices per block across a thread pool and OOMs the
+    host. So when ``df`` is supplied we measure each candidate single-field pass's
+    ACTUAL max block size (exact, post-transform) and DROP the pass if it exceeds
+    the FS scorer's per-block row cap (``sqrt(GOLDENMATCH_FS_VEC_MAX_ELEMS)``) —
+    the same bound the scorer would otherwise refuse on. The pass stays at the
+    scales where it helps (a birth-year block is ~1.5K rows at 100K) and is
+    dropped only where it would be pathological. Without ``df`` (older callers)
+    the guard is a no-op, preserving prior behavior.
     """
     if blocking is None or not _fs_autoconfig_v2_enabled():
         return blocking
@@ -4838,13 +4852,57 @@ def _diversify_probabilistic_blocking(
     for k in list(blocking.keys or []) + list(blocking.passes or []):
         existing.add((tuple(k.fields), tuple(k.transforms or [])))
 
+    # Row cap above which the FS block scorer refuses (see probabilistic
+    # ``_fs_vec_max_elems``): don't ADD a pass that would only be refused later.
+    row_cap = 7071
+    try:
+        from goldenmatch.core.probabilistic import _fs_vec_max_elems
+
+        cap = _fs_vec_max_elems()
+        if cap > 0:
+            row_cap = int(cap**0.5)
+    except Exception:
+        pass
+
+    def _projected_max_block(field: str, transforms: list[str]) -> int:
+        """Exact max block size this single-field pass would produce (0 if
+        unknown / uncomputable — treated as safe so the pass is kept)."""
+        if df is None:
+            return 0
+        try:
+            col = pl.col(field).cast(pl.Utf8)
+            if transforms and transforms[0].startswith("substring:"):
+                _, start, length = transforms[0].split(":")
+                col = col.str.slice(int(start), int(length))
+            sizes = (
+                df.select(col.alias("__k__"))
+                .drop_nulls()
+                .group_by("__k__")
+                .len()
+                .get_column("len")
+            )
+            return int(sizes.max()) if sizes.len() else 0
+        except Exception:
+            return 0
+
     new_passes: list[BlockingKeyConfig] = []
 
     def _add(fields: list[str], transforms: list[str]) -> None:
         sig = (tuple(fields), tuple(transforms))
-        if sig not in existing:
-            new_passes.append(BlockingKeyConfig(fields=fields, transforms=transforms))
-            existing.add(sig)
+        if sig in existing:
+            return
+        if len(fields) == 1:
+            projected = _projected_max_block(fields[0], transforms)
+            if projected > row_cap:
+                logger.debug(
+                    "probabilistic diversify: dropping oversized pass %s%s "
+                    "(projected max block %d rows > FS row cap %d) — would OOM "
+                    "the block scorer at this scale (#1857)",
+                    fields, transforms, projected, row_cap,
+                )
+                return
+        new_passes.append(BlockingKeyConfig(fields=fields, transforms=transforms))
+        existing.add(sig)
 
     for p in profiles:
         # Additive passes tolerate higher null rates than a primary key: the
