@@ -3,8 +3,11 @@
 **Date:** 2026-07-17
 **Status:** in progress (increments 1–2 landed: leaf math + per-pair scoring in
 `fs-core`; increment 3a landed: `fs-wasm` crate with host-tested block scoring
-over `fs-core`. The TS rewiring / wasm-artifact regen / parity-harness migration
-of increment 3 are wasm-toolchain + CI gated — see the increment-3 note below.)
+over `fs-core`; increment 4a landed: the two reference-data name-scorer leaf
+functions + injected-provider seam in `fs-core`. The TS rewiring / wasm-artifact
+regen / parity-harness migration of increment 3, and the `score_fs_pair`
+dispatch + pyo3 marshaling of increment 4, are wasm-toolchain / pyo3-build /
+CI gated — see the per-increment notes below.)
 **Owner:** benchmark-failure follow-up (`claude/benchmark-failure-gh-vbtusq`)
 
 ## Problem: Fellegi-Sunter is the repo's parity orphan
@@ -117,6 +120,38 @@ scorers, so this is explicit-config only.
 4. **Port the name scorers** (`given_name_aliased_jw`, `name_freq_weighted_jw`)
    with reference tables injected (§ Reference data), + a `FrequencyProvider` /
    `AliasProvider` seam.
+   - **Why it matters:** `build_probabilistic_matchkeys` routes name fields
+     through `refdata.autoconfig_hooks.refine_matchkey_field`, which swaps in
+     `name_freq_weighted_jw` (family) / `given_name_aliased_jw` (given) when the
+     refdata packs are present. Neither is in `_NATIVE_FS_SCORER_IDS` (only
+     `score_one` ids 0–3), so a person-name probabilistic matchkey declines the
+     WHOLE matchkey to numpy — this is the concrete reason zero-config person
+     dedupe still needs numpy.
+   - **4a (landed):** the two scorer *leaf functions* in `fs-core` +
+     the injected-provider seam, host-unit-tested (11 fs-core tests, clippy +
+     fmt clean). `SurnameFreq { idf(value) -> Option<f64> }` (`None` = OOV, the
+     exact `surname_rank is None` gate) and `NameAliases { are_equivalent(a,b) }`
+     traits carry ZERO data — the host injects the census / alias tables.
+     `name_freq_weighted_sim` mirrors the STATIC-census branch of
+     `NameFreqWeightedJW.score_pair` (the branch the FS path takes; it never
+     populates `tf_freqs`, and TF fields decline native anyway); the borderline
+     band `[0.70, 0.95)`, the `0.6` common-name floor, and the surname-idf
+     formula are single-sourced here. `given_name_aliased_sim` mirrors
+     `GivenNameAliasedJW.score_pair` (alias → `1.0`, else JW), including the
+     reflexive `normalize(a)==normalize(b)` shortcut. Base similarity is
+     score-core's Jaro-Winkler (id 0) — Rust is the reference. Concrete
+     `SurnameIdfTable` (`from_counts` / `from_idf_pairs`) + `AliasTable`
+     (`from_forms`) impls back the traits for tests and the future marshaling;
+     `normalize_name` single-sources the refdata `_normalize` (ASCII-scoped).
+   - **4b/4c (deferred — pyo3-build + CI gated, NOT done here):** route
+     name-scorer fields through the injected providers inside `score_fs_pair`
+     (extend `FsPairParams` to carry the per-field provider handles), add
+     `name_freq_weighted_jw` / `given_name_aliased_jw` to `_NATIVE_FS_SCORER_IDS`
+     with a `FS_SUPPORTS_NAME_SCORERS` wheel-const gate, and marshal the census /
+     alias tables across pyo3 once per call (host builds the provider from the
+     already-loaded `refdata` state). These need the maturin/pyo3 build + the
+     `native` CI lane to verify byte-for-byte against the numpy scorer, so they
+     are left for a CI-backed follow-up.
 5. **Port `tf_adjustment`** (EM freq/collision tables across the seam).
 6. **Port `ensemble` NE** (explicit-config only; probabilistic auto-config emits
    no NE).

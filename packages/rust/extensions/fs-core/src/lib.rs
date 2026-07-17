@@ -14,7 +14,230 @@
 //! and Arrow/Vec marshaling stay in `native` while the scoring *math* is single-
 //! sourced here. Parity holds by construction (same computation, relocated).
 
+use std::collections::{HashMap, HashSet};
+
 use goldenmatch_score_core::score_one;
+
+// ---------------------------------------------------------------------------
+// Reference-data-aware name scorers (`name_freq_weighted_jw` /
+// `given_name_aliased_jw`).
+//
+// These are the two flagship person-name FS comparison scorers. Today the
+// native FS kernel handles only `score_one` ids 0..=3, so a probabilistic
+// matchkey whose name field carries one of these scorers declines to the numpy
+// fallback (`_NATIVE_FS_SCORER_IDS` in `core/probabilistic.py` lists neither) —
+// the direct reason zero-config person dedupe still needs numpy. Porting the
+// *math* here (with the census / alias tables INJECTED by the host, never
+// bundled — see the design's § Reference data) is what lets the native kernel
+// own the person-name path.
+//
+// Under "Rust is the reference" the base similarity is score-core's
+// Jaro-Winkler (`score_one(0, ..)`, rapidfuzz-rs), NOT rapidfuzz-py — so the
+// native result IS the answer and the numpy path is the lossy fallback, exactly
+// as for the rest of the FS math.
+// ---------------------------------------------------------------------------
+
+/// Normalize a name the way the Python refdata modules do before every lookup
+/// (`surnames._normalize` / `given_names._normalize`):
+/// `"".join(ch for ch in name if ch.isalpha()).lower()`.
+///
+/// ASCII-scoped: Rust `char::is_alphabetic` + `to_lowercase` match Python
+/// `str.isalpha` / `str.lower` on ASCII; non-ASCII is a documented cross-language
+/// parity edge (the same one `infermap-core` carries — see the extensions
+/// CLAUDE.md). Name fields are ASCII in every gated dataset.
+#[inline]
+pub fn normalize_name(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphabetic())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// Injected surname-frequency reference data for [`name_freq_weighted_sim`].
+///
+/// The host builds this from the US Census surname table (or any frequency
+/// source) and hands a borrow across every scoring call — `fs-core` bundles NO
+/// data. `idf(value)` returns the IDF weight in `[0, 1]` for an IN-VOCAB value,
+/// or `None` when the value is out-of-vocabulary. `None` is the exact
+/// `surname_rank(v) is None` OOV gate the Python scorer uses to fall back to
+/// plain Jaro-Winkler (a name present in the table always has both a rank and an
+/// idf; OOV has neither).
+pub trait SurnameFreq {
+    fn idf(&self, value: &str) -> Option<f64>;
+}
+
+/// Injected given-name alias equivalence for [`given_name_aliased_sim`].
+///
+/// `are_equivalent(a, b)` is true iff `a` and `b` are known forms of the same
+/// canonical given name (William ↔ Bill). Built by the host from the alias
+/// table; `fs-core` bundles no data.
+pub trait NameAliases {
+    fn are_equivalent(&self, a: &str, b: &str) -> bool;
+}
+
+// Borderline re-weight zone + common-name floor — the exact constants from
+// `refdata/scorer.py` (`_BORDERLINE_LOW/HIGH`, `_COMMON_NAME_FLOOR`).
+const NFW_BORDERLINE_LOW: f64 = 0.70;
+const NFW_BORDERLINE_HIGH: f64 = 0.95;
+const NFW_COMMON_NAME_FLOOR: f64 = 0.6;
+
+/// `name_freq_weighted_jw`: Jaro-Winkler down-weighted by surname frequency in
+/// the borderline zone. Mirrors `refdata.scorer.NameFreqWeightedJW.score_pair`'s
+/// STATIC-census branch (the branch the probabilistic path takes — it never
+/// populates the per-dataset `tf_freqs` table, and TF-adjustment fields decline
+/// native anyway):
+///
+/// ```text
+/// jw = JaroWinkler(a, b)
+/// if jw >= 0.95 or jw < 0.70:            return jw   # confident — no re-weight
+/// if a or b is OOV in the table:         return jw   # can't classify frequency
+/// idf = mean(idf(a), idf(b))
+/// weight = 0.6 + 0.4 * idf
+/// return jw * weight
+/// ```
+///
+/// Common surnames (Smith/Smyth) carry a low idf → their borderline JW is scaled
+/// down toward the `0.6` floor; rare surnames keep ~full JW. OOV on either side
+/// falls back to plain JW so a typo of a common name isn't credited by rarity.
+#[inline]
+pub fn name_freq_weighted_sim(a: &str, b: &str, freq: &dyn SurnameFreq) -> f64 {
+    let jw = score_one(0, a, b);
+    // Outside the borderline band [LOW, HIGH) we trust JW directly (confident
+    // match above, non-match below) — no frequency re-weighting.
+    if !(NFW_BORDERLINE_LOW..NFW_BORDERLINE_HIGH).contains(&jw) {
+        return jw;
+    }
+    let (idf_a, idf_b) = match (freq.idf(a), freq.idf(b)) {
+        (Some(x), Some(y)) => (x, y),
+        _ => return jw, // OOV on either side
+    };
+    let idf = (idf_a + idf_b) / 2.0;
+    let weight = NFW_COMMON_NAME_FLOOR + (1.0 - NFW_COMMON_NAME_FLOOR) * idf;
+    jw * weight
+}
+
+/// `given_name_aliased_jw`: Jaro-Winkler with an alias-aware exact bonus.
+/// Mirrors `refdata.scorer.GivenNameAliasedJW.score_pair`:
+///
+/// ```text
+/// if a and b are known aliases of one canonical name:   return 1.0
+/// else:                                                 return JaroWinkler(a, b)
+/// ```
+///
+/// Never LOWERS a JW score — only promotes known aliases (William↔Bill, which
+/// plain JW scores ~0.55) to `1.0`.
+#[inline]
+pub fn given_name_aliased_sim(a: &str, b: &str, aliases: &dyn NameAliases) -> f64 {
+    if aliases.are_equivalent(a, b) {
+        1.0
+    } else {
+        score_one(0, a, b)
+    }
+}
+
+/// A host-populated surname IDF table — the default [`SurnameFreq`] impl, keyed
+/// on the [`normalize_name`]-normalized surname. The eventual pyo3 marshaling
+/// builds one of these from the census `counts`; tests build one directly.
+pub struct SurnameIdfTable {
+    idf: HashMap<String, f64>,
+}
+
+impl SurnameIdfTable {
+    /// Build directly from `(raw_name, idf)` pairs (keys normalized). Use when
+    /// the host already carries per-name idf values.
+    pub fn from_idf_pairs(pairs: impl IntoIterator<Item = (String, f64)>) -> Self {
+        Self {
+            idf: pairs
+                .into_iter()
+                .map(|(k, v)| (normalize_name(&k), v))
+                .collect(),
+        }
+    }
+
+    /// Build from raw `(raw_name, count)` census pairs, computing the idf with
+    /// the exact `surnames.surname_idf` formula so the frequency weighting is
+    /// single-sourced here too:
+    /// `idf = clamp(log(total / count) / log(total / min_count), 0, 1)`
+    /// (`count >= total → 0.0`, degenerate denominator → 0.0). OOV names are
+    /// simply absent from the map → `idf()` returns `None` (the reference
+    /// scorer's rank-based OOV gate; note Python's `surname_idf` returns `1.0`
+    /// for OOV but the SCORER never reaches it — it gates on `surname_rank`
+    /// first, which is `None` for OOV).
+    pub fn from_counts(pairs: impl IntoIterator<Item = (String, f64)>) -> Self {
+        let counts: Vec<(String, f64)> = pairs
+            .into_iter()
+            .map(|(k, c)| (normalize_name(&k), c))
+            .collect();
+        let total: f64 = counts.iter().map(|(_, c)| *c).sum();
+        let min_count = counts.iter().map(|(_, c)| *c).fold(f64::INFINITY, f64::min);
+        let denom = (total / min_count).ln();
+        if total <= 0.0 || min_count <= 0.0 || denom <= 0.0 {
+            // Degenerate table (Python `surname_idf` returns None here) -> empty
+            // map, so every lookup is OOV and the scorer falls back to plain JW.
+            return Self {
+                idf: HashMap::new(),
+            };
+        }
+        let mut idf = HashMap::with_capacity(counts.len());
+        for (name, c) in counts {
+            let v = if c >= total {
+                0.0
+            } else {
+                ((total / c).ln() / denom).clamp(0.0, 1.0)
+            };
+            idf.insert(name, v);
+        }
+        Self { idf }
+    }
+}
+
+impl SurnameFreq for SurnameIdfTable {
+    #[inline]
+    fn idf(&self, value: &str) -> Option<f64> {
+        self.idf.get(&normalize_name(value)).copied()
+    }
+}
+
+/// A host-populated given-name alias table — the default [`NameAliases`] impl.
+/// `canonicals[form]` is the set of canonical ids `form` belongs to (most forms
+/// have one; ambiguous short forms like "kate" have several); two forms are
+/// equivalent iff their canonical-id sets intersect — mirroring
+/// `given_names.are_equivalent` (including the reflexive
+/// `normalize(a) == normalize(b) → true` shortcut, which also promotes an OOV
+/// pair whose normalized forms collide).
+pub struct AliasTable {
+    canonicals: HashMap<String, HashSet<String>>,
+}
+
+impl AliasTable {
+    /// Build from `(form, canonical_ids)` pairs (form keys normalized; canonical
+    /// ids taken as-is, since the host already normalizes them at table-build).
+    pub fn from_forms(pairs: impl IntoIterator<Item = (String, Vec<String>)>) -> Self {
+        Self {
+            canonicals: pairs
+                .into_iter()
+                .map(|(form, canons)| (normalize_name(&form), canons.into_iter().collect()))
+                .collect(),
+        }
+    }
+}
+
+impl NameAliases for AliasTable {
+    #[inline]
+    fn are_equivalent(&self, a: &str, b: &str) -> bool {
+        let (na, nb) = (normalize_name(a), normalize_name(b));
+        if na.is_empty() || nb.is_empty() {
+            return false;
+        }
+        if na == nb {
+            return true; // reflexive shortcut (matches given_names.are_equivalent)
+        }
+        match (self.canonicals.get(&na), self.canonicals.get(&nb)) {
+            (Some(ca), Some(cb)) => !ca.is_disjoint(cb),
+            _ => false,
+        }
+    }
+}
 
 /// Normalize a summed Fellegi-Sunter match weight to a `[0, 1]` score.
 ///
@@ -294,6 +517,118 @@ mod tests {
             (s - 1.0).abs() < 1e-12,
             "observed-only agreement = 1.0, got {s}"
         );
+    }
+
+    #[test]
+    fn normalize_name_strips_nonalpha_and_lowercases() {
+        assert_eq!(normalize_name("O'Brien"), "obrien");
+        assert_eq!(normalize_name("Smith-Jones"), "smithjones");
+        assert_eq!(normalize_name("  Bob! "), "bob");
+        assert_eq!(normalize_name("123"), "");
+    }
+
+    #[test]
+    fn given_name_alias_promotes_to_one() {
+        // William <-> Bill both map to canonical "william".
+        let aliases = AliasTable::from_forms([
+            ("William".into(), vec!["william".into()]),
+            ("Bill".into(), vec!["william".into()]),
+            ("Robert".into(), vec!["robert".into()]),
+        ]);
+        // Alias pair -> 1.0 despite low JW.
+        assert_eq!(given_name_aliased_sim("William", "Bill", &aliases), 1.0);
+        // Reflexive shortcut: same normalized form (OOV) still 1.0.
+        assert_eq!(given_name_aliased_sim("Bob", "bob!", &aliases), 1.0);
+        // Unrelated names -> plain JW (never promoted, and < 1.0).
+        let s = given_name_aliased_sim("William", "Robert", &aliases);
+        assert!(s < 1.0, "unrelated names keep plain JW, got {s}");
+        assert!((s - score_one(0, "William", "Robert")).abs() < 1e-12);
+    }
+
+    #[test]
+    fn name_freq_weight_downweights_common_in_zone() {
+        // A borderline-JW pair (Smith~Smyth) on a COMMON surname (idf ~0) gets
+        // scaled toward the 0.6 floor; on a RARE surname (idf ~1) keeps ~full JW.
+        struct Freq;
+        impl SurnameFreq for Freq {
+            fn idf(&self, value: &str) -> Option<f64> {
+                match normalize_name(value).as_str() {
+                    // pretend both spellings are equally common / rare
+                    "smith" | "smyth" => Some(0.0),   // common
+                    "qwerty" | "qwertz" => Some(1.0), // rare
+                    _ => None,                        // OOV
+                }
+            }
+        }
+        let f = Freq;
+        let jw_common = score_one(0, "smith", "smyth");
+        // Only exercise the branch if JW is actually in the borderline band.
+        assert!(
+            (NFW_BORDERLINE_LOW..NFW_BORDERLINE_HIGH).contains(&jw_common),
+            "test fixture assumes smith~smyth is borderline, got {jw_common}"
+        );
+        let common = name_freq_weighted_sim("smith", "smyth", &f);
+        // idf 0 -> weight = 0.6 -> score = jw * 0.6.
+        assert!((common - jw_common * 0.6).abs() < 1e-12, "got {common}");
+
+        // Rare surname pair with the SAME jw shape -> idf 1 -> weight 1 -> full jw.
+        let jw_rare = score_one(0, "qwerty", "qwertz");
+        if (NFW_BORDERLINE_LOW..NFW_BORDERLINE_HIGH).contains(&jw_rare) {
+            let rare = name_freq_weighted_sim("qwerty", "qwertz", &f);
+            assert!(
+                (rare - jw_rare).abs() < 1e-12,
+                "rare keeps full jw, got {rare}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_freq_weight_oov_and_confident_are_plain_jw() {
+        struct Freq;
+        impl SurnameFreq for Freq {
+            fn idf(&self, _value: &str) -> Option<f64> {
+                None // everything OOV
+            }
+        }
+        let f = Freq;
+        // OOV in the borderline zone -> plain jw (no re-weight).
+        let jw = score_one(0, "smith", "smyth");
+        if (NFW_BORDERLINE_LOW..NFW_BORDERLINE_HIGH).contains(&jw) {
+            assert!((name_freq_weighted_sim("smith", "smyth", &f) - jw).abs() < 1e-12);
+        }
+        // Confident agreement (jw >= 0.95) -> plain jw regardless of table.
+        struct Common;
+        impl SurnameFreq for Common {
+            fn idf(&self, _v: &str) -> Option<f64> {
+                Some(0.0)
+            }
+        }
+        let identical = name_freq_weighted_sim("anderson", "anderson", &Common);
+        assert_eq!(identical, 1.0, "exact agreement stays 1.0, not floored");
+        // Below the low bound -> plain jw (no point re-weighting a non-match).
+        let low = name_freq_weighted_sim("abc", "xyz", &Common);
+        assert!((low - score_one(0, "abc", "xyz")).abs() < 1e-12);
+    }
+
+    #[test]
+    fn surname_idf_table_from_counts_matches_formula() {
+        // total = 100, min_count = 1. Smith count 60, Rare count 1.
+        let t = SurnameIdfTable::from_counts([
+            ("Smith".into(), 60.0),
+            ("Johnson".into(), 39.0),
+            ("Rare".into(), 1.0),
+        ]);
+        let total = 100.0_f64;
+        let min_count = 1.0_f64;
+        let denom = (total / min_count).ln();
+        let want_smith = ((total / 60.0_f64).ln() / denom).clamp(0.0, 1.0);
+        let want_rare = ((total / 1.0_f64).ln() / denom).clamp(0.0, 1.0);
+        assert!((t.idf("Smith").unwrap() - want_smith).abs() < 1e-12);
+        assert!((t.idf("Rare").unwrap() - want_rare).abs() < 1e-12);
+        assert!(want_smith < want_rare, "common < rare idf");
+        // The rarest (count == min) -> idf 1.0; OOV -> None.
+        assert!((t.idf("Rare").unwrap() - 1.0).abs() < 1e-12);
+        assert_eq!(t.idf("NotInTable"), None);
     }
 
     #[test]
