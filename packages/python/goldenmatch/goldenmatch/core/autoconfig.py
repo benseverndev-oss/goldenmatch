@@ -4716,7 +4716,52 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         name="probabilistic_auto",
         type="probabilistic",
         fields=fields,
+        missing=_pick_missing_semantics(profiles, fields),
     )]
+
+
+#: A comparison field at or above this null rate makes missingness a strong
+#: enough signal to model as disagreement rather than absence of evidence.
+#: Calibrated against the quality corpora, not derived: historical_50k's FS
+#: fields run 8.9-50% null and need "disagree" (0.83 vs 0.33 f1_probabilistic);
+#: febrl3 / ncvr_synthetic are near-complete and score the same either way, so
+#: the cut only has to separate those two populations. 0.20 sits in the gap.
+_FS_MISSING_DISAGREE_NULL_RATE = 0.20
+
+
+def _pick_missing_semantics(
+    profiles: list[ColumnProfile], fields: list[MatchkeyField]
+) -> str:
+    """Choose FS missing-value semantics from the profiled null rates (#1846).
+
+    Textbook Fellegi-Sunter treats a missing value as UNOBSERVED -- absence of
+    evidence, contributing nothing (#1819/#1834). That is correct when data is
+    missing at random. It is wrong when missingness is INFORMATIVE: if records
+    lacking a DOB are systematically unlike records that have one, "no evidence"
+    lets a pair agreeing on its one populated field look like a certain match,
+    and null-heavy data mass-merges (historical_50k: 0.83 -> 0.33).
+
+    We cannot test informativeness directly -- that needs labels auto-config does
+    not have. Null rate is a PROXY: heavily-null columns in real-world PII are
+    usually missing-not-at-random. This can therefore pick wrong on a null-heavy
+    but genuinely-random dataset; ``GOLDENMATCH_FS_MISSING`` and the explicit
+    ``MatchkeyConfig.missing`` are the escape hatches.
+    """
+    by_name = {p.name: p for p in profiles}
+    rates = [
+        by_name[f.field].null_rate
+        for f in fields
+        if f.field in by_name and by_name[f.field].null_rate is not None
+    ]
+    if not rates:
+        return "unobserved"
+    worst = max(rates)
+    mode = "disagree" if worst >= _FS_MISSING_DISAGREE_NULL_RATE else "unobserved"
+    logger.info(
+        "FS missing-value semantics: %s (max comparison-field null rate %.1f%%, "
+        "cut %.0f%%)", mode, worst * 100, _FS_MISSING_DISAGREE_NULL_RATE * 100,
+    )
+    return mode
 
 
 def auto_configure_probabilistic_df(

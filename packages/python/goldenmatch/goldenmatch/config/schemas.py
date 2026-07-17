@@ -360,6 +360,25 @@ class MatchkeyConfig(BaseModel):
     # Ignored for non-probabilistic matchkeys. See core/probabilistic.py
     # load_or_train_em.
     model_path: str | None = None
+    # Probabilistic-only: how a missing value on either side of a comparison is
+    # treated (#1846).
+    #
+    #   "unobserved" (default, #1819/#1834) -- textbook Fellegi-Sunter: a missing
+    #       value is absence of evidence and contributes nothing either way.
+    #   "disagree" -- a missing value is evidence AGAINST a match (level 0), the
+    #       pre-#1834 behavior.
+    #
+    # Neither is universally right; it depends on whether missingness is
+    # INFORMATIVE in the data. When missing-not-at-random (a record lacking a DOB
+    # is systematically unlike one that has it), "disagree" is the better model
+    # and "unobserved" over-merges: measured on historical_50k (8.9-50% nulls
+    # across FS fields), "unobserved" costs f1_probabilistic 0.83 -> 0.33.
+    # On clean data (febrl3, ncvr_synthetic) the two are indistinguishable.
+    #
+    # auto_configure_probabilistic_df picks this from the profiled null rates;
+    # GOLDENMATCH_FS_MISSING overrides globally. Ignored for non-probabilistic
+    # matchkeys.
+    missing: Literal["unobserved", "disagree"] | None = None
 
     @model_validator(mode="after")
     def _validate_weighted(self) -> MatchkeyConfig:

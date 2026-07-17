@@ -75,6 +75,33 @@ def _fs_calibration_mode() -> str:
     return _FS_CALIBRATION_DEFAULT
 
 
+_FS_MISSING_DEFAULT = "unobserved"
+
+
+def fs_missing_mode(mk: MatchkeyConfig | None = None) -> str:
+    """Resolve missing-value semantics: 'unobserved' or 'disagree' (#1846).
+
+    Precedence: GOLDENMATCH_FS_MISSING env > mk.missing > default.
+
+    'unobserved' (#1819/#1834) is textbook Fellegi-Sunter -- a missing value is
+    absence of evidence. 'disagree' (pre-#1834) treats it as evidence against a
+    match. Which is correct depends on whether missingness is INFORMATIVE in the
+    data, so auto-config picks per-dataset from the profiled null rates rather
+    than the library imposing one globally. See MatchkeyConfig.missing.
+    """
+    val = os.environ.get("GOLDENMATCH_FS_MISSING")
+    if val is not None:
+        v = val.strip().lower()
+        if v in ("disagree", "level0", "0"):
+            return "disagree"
+        if v in ("unobserved", "skip", "1"):
+            return "unobserved"
+    cfg = getattr(mk, "missing", None) if mk is not None else None
+    if cfg in ("unobserved", "disagree"):
+        return cfg
+    return _FS_MISSING_DEFAULT
+
+
 def prior_weight(proportion_matched: float) -> float:
     """log2 prior odds of a match: log2(λ / (1-λ)).
 
@@ -439,7 +466,8 @@ def comparison_vector(
             s = score_field(val_a, val_b, f.scorer)
 
         if s is None:
-            levels.append(-1)
+            # #1846: -1 (unobserved, no evidence) or 0 (disagree) per mk.missing.
+            levels.append(-1 if fs_missing_mode(mk) == "unobserved" else 0)
         elif f.level_thresholds is not None:
             level = 0
             for t in f.level_thresholds:
@@ -2551,6 +2579,7 @@ def score_probabilistic_vectorized(
     _fs_vec_guard(n, "score_probabilistic_vectorized")
 
     calibrated = _fs_calibration_mode() == "posterior"
+    _missing_mode = fs_missing_mode(mk)  # #1846
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
 
     ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
@@ -2595,7 +2624,13 @@ def score_probabilistic_vectorized(
             sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
         )
         null_mask = np.array([v is None for v in vals], dtype=bool)
+        # #1846: under "disagree", a missing value is evidence AGAINST a match
+        # (level 0) rather than absence of evidence, so it stays "observed" and
+        # `lvl` is forced to 0 -- the pre-#1834 semantics, selected per-dataset.
         observed = ~(null_mask[:, None] | null_mask[None, :])
+        if _missing_mode == "disagree":
+            lvl = np.where(observed, lvl, 0)
+            observed = np.ones_like(observed, dtype=bool)
         has_regular_evidence |= observed
         total_weight += np.where(observed, weights[lvl], 0.0)
         pair_min_weight += np.where(observed, float(weights.min()), 0.0)
@@ -2701,6 +2736,7 @@ def score_probabilistic_vectorized_batch(
     _fs_vec_guard(S, "score_probabilistic_vectorized_batch")
 
     calibrated = _fs_calibration_mode() == "posterior"
+    _missing_mode = fs_missing_mode(mk)  # #1846
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
     ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
     if mk.link_threshold is not None:
@@ -2722,7 +2758,13 @@ def score_probabilistic_vectorized_batch(
             sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
         )
         null_mask = np.array([v is None for v in vals], dtype=bool)
+        # #1846: under "disagree", a missing value is evidence AGAINST a match
+        # (level 0) rather than absence of evidence, so it stays "observed" and
+        # `lvl` is forced to 0 -- the pre-#1834 semantics, selected per-dataset.
         observed = ~(null_mask[:, None] | null_mask[None, :])
+        if _missing_mode == "disagree":
+            lvl = np.where(observed, lvl, 0)
+            observed = np.ones_like(observed, dtype=bool)
         has_regular_evidence |= observed
         total_weight += np.where(observed, weights[lvl], 0.0)
         pair_min_weight += np.where(observed, float(weights.min()), 0.0)
