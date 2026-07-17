@@ -467,7 +467,16 @@ def test_frame_lane_file_outputs_and_lineage(tmp_path, monkeypatch):
     for lane, envval in (("frame", None), ("classic", "0")):
         d = tmp_path / lane
         cfg = GoldenMatchConfig(
-            **cfg_kw, output=OutputConfig(directory=str(d), format="csv")
+            # Pin run_name: without it the pipeline names outputs
+            # `datetime.now().strftime("%Y%m%d_%H%M%S")` (pipeline.py ~3723).
+            # This test runs the two lanes SEQUENTIALLY and then compares
+            # filenames -- so whenever the two runs straddle a second boundary
+            # the names differ and `set(outs["frame"]) == set(outs["classic"])`
+            # fails. A race against the wall clock, so it fires at a rate set by
+            # runner load (seen on CI; passes locally where both lanes land in
+            # the same second). run_name is the built-in override; the lanes
+            # write to separate directories so a shared name is unambiguous.
+            **cfg_kw, output=OutputConfig(directory=str(d), format="csv", run_name="lane")
         )
         if envval is not None:
             monkeypatch.setenv("GOLDENMATCH_FRAME_LANE", envval)
