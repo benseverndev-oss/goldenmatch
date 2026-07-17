@@ -11,7 +11,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from goldenmatch._polars_lazy import pl
 
@@ -4731,7 +4731,7 @@ _FS_MISSING_DISAGREE_NULL_RATE = 0.20
 
 def _pick_missing_semantics(
     profiles: list[ColumnProfile], fields: list[MatchkeyField]
-) -> str:
+) -> Literal["unobserved", "disagree"]:
     """Choose FS missing-value semantics from the profiled null rates (#1846).
 
     Textbook Fellegi-Sunter treats a missing value as UNOBSERVED -- absence of
@@ -4756,7 +4756,9 @@ def _pick_missing_semantics(
     if not rates:
         return "unobserved"
     worst = max(rates)
-    mode = "disagree" if worst >= _FS_MISSING_DISAGREE_NULL_RATE else "unobserved"
+    mode: Literal["unobserved", "disagree"] = (
+        "disagree" if worst >= _FS_MISSING_DISAGREE_NULL_RATE else "unobserved"
+    )
     logger.info(
         "FS missing-value semantics: %s (max comparison-field null rate %.1f%%, "
         "cut %.0f%%)", mode, worst * 100, _FS_MISSING_DISAGREE_NULL_RATE * 100,
