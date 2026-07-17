@@ -112,3 +112,69 @@ class TestLiveWeightedPathMatchesScorePair:
         assert (0, 1) not in self._cluster_pairs(df, backend), (
             f"{backend}: renormalization must not make DISAGREEMENT free"
         )
+
+
+class TestAllNullColumnDoesNotZeroEveryPair:
+    """#1864: a 0%-populated field in a weighted matchkey must not zero EVERY
+    pair. Distinct from the one-side-null case above: here the whole column is
+    null on BOTH sides of every pair (the diagonal-union shape -- one pooled
+    source contributes a column the others lack). Same observed-weight
+    renormalization (#1856) covers it -- an all-null field leaves both the
+    numerator AND the denominator -- but the one-side-null tests never exercise
+    a field that is null across the entire block, so this pins that shape.
+
+    Reported on 3.3.1 (pre-#1856) as ``scored_pairs = 0`` with the field in the
+    key vs thousands of merges without it. Fixed on main; this guards it.
+    """
+
+    @staticmethod
+    def _add_matchkey(with_name: bool):
+        fields = [
+            MatchkeyField(field="first_name", scorer="jaro_winkler", weight=1.0),
+            MatchkeyField(field="last_name", scorer="jaro_winkler", weight=1.0),
+            MatchkeyField(field="email", scorer="exact", weight=2.0),
+        ]
+        if with_name:
+            # The 0%-populated field, highest-signal scorer -- the one that
+            # dragged every pair under threshold on 3.3.1.
+            fields.append(MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0))
+        return MatchkeyConfig(name="person", type="weighted", threshold=0.88, fields=fields)
+
+    def _cluster_pairs(self, df: pl.DataFrame, backend: str, with_name: bool) -> set[tuple[int, int]]:
+        import itertools
+
+        import goldenmatch
+        from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
+
+        cfg = GoldenMatchConfig(
+            matchkeys=[self._add_matchkey(with_name)],
+            blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["last_name"])]),
+        )
+        object.__setattr__(cfg, "backend", backend)
+        res = goldenmatch.dedupe_df(df, config=cfg)
+        clusters = res.clusters if hasattr(res, "clusters") else res
+        out: set[tuple[int, int]] = set()
+        for _cid, c in clusters.items():
+            members = c["members"] if isinstance(c, dict) else c.members
+            for pr in itertools.combinations(sorted(members), 2):
+                out.add(pr)
+        return out
+
+    # Both null representations the pooling produces: None (a source lacking the
+    # column) and "" (an empty cell). Both must be neutral, not disqualifying.
+    @pytest.mark.parametrize("null_value", [None, ""], ids=["none", "empty"])
+    @pytest.mark.parametrize("backend", ["bucket", "polars-direct"])
+    def test_all_null_field_does_not_suppress_the_match(self, backend, null_value):
+        rows = [
+            {"record_id": 0, "first_name": "john", "last_name": "smith", "email": "j@x.com", "name": null_value},
+            {"record_id": 1, "first_name": "john", "last_name": "smith", "email": "j@x.com", "name": null_value},
+            {"record_id": 2, "first_name": "mary", "last_name": "jones", "email": "m@y.com", "name": null_value},
+        ]
+        df = pl.DataFrame(rows)
+        without_name = (0, 1) in self._cluster_pairs(df, backend, with_name=False)
+        assert without_name, f"{backend}: control pair must match without the null field"
+        with_name = (0, 1) in self._cluster_pairs(df, backend, with_name=True)
+        assert with_name, (
+            f"{backend}/{null_value!r}: an all-null weighted field must not zero the "
+            f"pair -- the other fields agree exactly (#1864)"
+        )
