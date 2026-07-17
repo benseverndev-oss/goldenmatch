@@ -286,6 +286,40 @@ def test_sweep_person_two_lanes_smoke(tmp_path):
     assert all(r.get("shape") and r.get("lane") for r in agg["results"])
 
 
+def test_resume_skips_recorded_datapoints_and_reuses_header(tmp_path, monkeypatch):
+    # A restored partial aggregate (as after a preempted runner) must be RESUMED:
+    # datapoints already recorded are skipped (not recomputed), the prior header is
+    # kept, and only the pending lane actually runs an engine subprocess.
+    orch = _load("orchestrate")
+    (tmp_path / "bench_results.json").write_text(json.dumps({
+        "header": {"run_timestamp": 111.0, "run_tag": "prior", "splink_version": "x",
+                   "goldenmatch_version": None, "splink": None},
+        "results": [{"shape": "person", "lane": "gm_hand_built", "rows_requested": 1500,
+                     "status": "ok", "sentinel": "kept"}],
+    }))
+
+    ran = []
+    def _fake_run_engine(lane, shape, fixture, rows, results_dir, threshold, **kw):
+        ran.append(lane.name)
+        return ({"shape": shape, "lane": lane.name, "rows_requested": rows,
+                 "status": "ok"}, tmp_path / "nope.pred.parquet")
+    monkeypatch.setattr(orch, "run_engine", _fake_run_engine)
+    monkeypatch.setattr(orch, "generate", lambda *a, **k: tmp_path / "f.parquet")
+    monkeypatch.setattr(orch, "evaluate_datapoint", lambda *a, **k: None)
+
+    agg = orch.run_sweep(scales=[1500], shapes=["person"],
+        lanes=["gm_hand_built", "gm_probabilistic"], workdir=tmp_path,
+        dupe_rate=0.3, threshold=0.85, allow_pure_python=True, seed=42)
+
+    # Only the pending lane ran an engine; the recorded one was skipped.
+    assert ran == ["gm_probabilistic"]
+    assert agg["header"]["run_timestamp"] == 111.0        # prior header reused
+    by_lane = {r["lane"]: r for r in agg["results"]}
+    assert by_lane["gm_hand_built"].get("sentinel") == "kept"  # not overwritten
+    assert by_lane["gm_probabilistic"]["status"] == "ok"       # newly computed
+    assert len(agg["results"]) == 2                            # no duplicate
+
+
 def test_timeout_ladder_fits_cap():
     orch = _load("orchestrate")
     # 25M + 100M for ONE lane must fit under ~560 min (spec 7.3)

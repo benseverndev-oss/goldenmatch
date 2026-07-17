@@ -372,13 +372,49 @@ def _build_header(*, dupe_rate: float, threshold: float, seed: int, run_tag: str
     }
 
 
+def _datapoint_key(r: dict) -> tuple:
+    """The stable (shape, lane, scale) identity of a datapoint."""
+    return (r.get("shape"), r.get("lane"), r.get("rows_requested"))
+
+
+def _load_resume_state(agg_path: Path) -> tuple[dict | None, list[dict], set[tuple]]:
+    """Load a prior flushed aggregate for RESUME: returns (header, results,
+    done_keys).
+
+    Every datapoint already in the aggregate is a completed, orchestrator-observed
+    outcome (ok / OOM / timeout / killed / fixture_failed) -- re-running it wastes a
+    runner, and an expected-OOM ceiling tier would just OOM again -- so we treat each
+    recorded (shape, lane, rows) triple as done and skip it. The prior header is
+    reused so run_timestamp (the merge-results tiebreak) and any resolved
+    splink_version stay stable across the resumed attempt.
+
+    This is what lets a preempted job continue instead of recomputing from zero:
+    the workflow restores the workdir across runner attempts/dispatches (the cache
+    step in bench-er-headtohead.yml), and the per-datapoint flush below means we
+    resume from the last datapoint that completed before the runner was reclaimed.
+    A corrupt/half-written aggregate is treated as no prior state (start clean)."""
+    if not agg_path.exists():
+        return None, [], set()
+    try:
+        obj = json.loads(agg_path.read_text())
+    except Exception:
+        return None, [], set()
+    results = [r for r in (obj.get("results") or [])
+               if _datapoint_key(r) != (None, None, None)]
+    done = {_datapoint_key(r) for r in results}
+    return obj.get("header"), results, done
+
+
 def run_sweep(*, scales, shapes, lanes, workdir, dupe_rate, threshold,
               allow_pure_python: bool = False, seed: int = 42,
               run_tag: str = "local") -> dict:
     """Sweep lanes x shapes x scales, one isolated subprocess per datapoint.
-    Flushes the {header, results} object after EVERY datapoint. Does NOT render
-    markdown (that is main()/merge's job -- the renderer keys on fields this
-    stamps but is decoupled from the flush). Returns the aggregate object."""
+    Flushes the {header, results} object after EVERY datapoint. RESUMABLE: if the
+    workdir already holds a flushed aggregate (restored across a preempted runner
+    attempt), datapoints recorded there are skipped so the sweep continues instead
+    of recomputing from zero. Does NOT render markdown (that is main()/merge's job
+    -- the renderer keys on fields this stamps but is decoupled from the flush).
+    Returns the aggregate object."""
     workdir = Path(workdir)
     fixtures = workdir / "fixtures"
     results_dir = workdir / "results"
@@ -386,29 +422,38 @@ def run_sweep(*, scales, shapes, lanes, workdir, dupe_rate, threshold,
     results_dir.mkdir(parents=True, exist_ok=True)
 
     lane_objs = [LANES[name] for name in lanes]
-    header = _build_header(dupe_rate=dupe_rate, threshold=threshold,
-                           seed=seed, run_tag=run_tag)
-    all_results: list[dict] = []
     agg_path = workdir / "bench_results.json"
+
+    # Resume from any prior partial aggregate restored into the workdir.
+    prior_header, all_results, done = _load_resume_state(agg_path)
+    header = prior_header or _build_header(dupe_rate=dupe_rate, threshold=threshold,
+                                           seed=seed, run_tag=run_tag)
+    if done:
+        print(f"[orchestrate] resume: {len(done)} datapoint(s) already recorded, skipping them")
 
     def _flush() -> None:
         agg_path.write_text(json.dumps({"header": header, "results": all_results}, indent=2))
 
-    _flush()  # persist the header even before the first datapoint
+    _flush()  # persist the header (new or resumed) even before the first datapoint
     for shape in shapes:
         for rows in scales:
             _, truth = _fixture_paths(fixtures, shape, rows)
+            pending = [ln for ln in lane_objs if (shape, ln.name, rows) not in done]
+            if not pending:
+                print(f"[orchestrate] resume: {shape} {rows:,} fully done, skipping")
+                continue
             try:
                 fixture = generate(shape, rows, dupe_rate, fixtures, seed=seed)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                for lane in lane_objs:
+                for lane in pending:
                     all_results.append({"shape": shape, "lane": lane.name,
                                         "rows_requested": rows,
                                         "status": "fixture_failed", "error": str(e)})
+                    done.add((shape, lane.name, rows))
                     _flush()
                 continue
 
-            for lane in lane_objs:
+            for lane in pending:
                 print(f"[orchestrate] === {lane.name} @ {shape} {rows:,} rows ===")
                 res, pred = run_engine(lane, shape, fixture, rows, results_dir,
                                        threshold, allow_pure_python=allow_pure_python)
@@ -422,6 +467,7 @@ def run_sweep(*, scales, shapes, lanes, workdir, dupe_rate, threshold,
                         and not header["splink_version"]):
                     header["splink_version"] = res["splink_version"]
                 all_results.append(res)
+                done.add((shape, lane.name, rows))
                 _flush()  # after EVERY datapoint so a later OOM can't lose earlier points
 
             # Clean this (shape, scale) fixture before the next -- bound disk.
