@@ -347,7 +347,6 @@ pub fn score_block_pairs_fs(
     let ne_scorer_ids_v: &[u8] = ne_scorer_ids.as_deref().unwrap_or(&[]);
     let ne_thresholds_v: &[f64] = ne_thresholds.as_deref().unwrap_or(&[]);
     let ne_weights_v: &[f64] = ne_weights.as_deref().unwrap_or(&[]);
-    let n_ne = ne_vals.len();
     let field_mins: Vec<f64> = match_weights
         .iter()
         .map(|w| w.iter().copied().fold(f64::INFINITY, f64::min))
@@ -368,6 +367,27 @@ pub fn score_block_pairs_fs(
         offset += size;
     }
 
+    // Per-matchkey scoring constants, borrowed once and reused per pair. The
+    // per-pair FS math itself lives in `goldenmatch-fs-core::score_fs_pair` (the
+    // single cross-surface source of truth); this entry point owns only the
+    // Vec-of-`String` field access, span iteration, and GIL release.
+    let fs_params = goldenmatch_fs_core::FsPairParams {
+        scorer_ids: &scorer_ids,
+        levels: &levels,
+        partial_thresholds: &partial_thresholds,
+        field_thresholds: &field_thresholds,
+        match_weights: &match_weights,
+        field_mins: &field_mins,
+        field_maxs: &field_maxs,
+        base_min,
+        base_max,
+        ne_scorer_ids: ne_scorer_ids_v,
+        ne_thresholds: ne_thresholds_v,
+        ne_weights: ne_weights_v,
+        calibrated,
+        prior_w,
+    };
+
     let result = py.detach(|| {
         spans
             .par_iter()
@@ -383,54 +403,13 @@ pub fn score_block_pairs_fs(
                             if exclude.contains(&pair_key) {
                                 continue;
                             }
-                            let mut total_weight = 0.0_f64;
-                            let mut pair_min = base_min;
-                            let mut pair_max = base_max;
-                            let mut has_regular_evidence = false;
-                            for f in 0..n_fields {
-                                if let (Some(a), Some(b)) =
-                                    (&field_values[f][i], &field_values[f][j])
-                                {
-                                    has_regular_evidence = true;
-                                    let sim = score_one(scorer_ids[f], a, b);
-                                    let level = fs_level_from_sim(
-                                        sim,
-                                        levels[f],
-                                        partial_thresholds[f],
-                                        field_thresholds[f],
-                                    );
-                                    total_weight += match_weights[f][level];
-                                    pair_min += field_mins[f];
-                                    pair_max += field_maxs[f];
-                                }
-                            }
-                            // Negative evidence: exact `_ne_fired` semantics
-                            // (core/probabilistic.py:466) — fires iff both
-                            // values present AND non-empty AND similarity
-                            // STRICTLY below the threshold; contributes
-                            // exactly 0 otherwise.
-                            for k in 0..n_ne {
-                                if let (Some(a), Some(b)) = (&ne_vals[k][i], &ne_vals[k][j]) {
-                                    if !a.is_empty()
-                                        && !b.is_empty()
-                                        && score_one(ne_scorer_ids_v[k], a, b) < ne_thresholds_v[k]
-                                    {
-                                        total_weight += ne_weights_v[k];
-                                    }
-                                }
-                            }
-                            let normalized =
-                                if !calibrated && !has_regular_evidence && total_weight == 0.0 {
-                                    0.5
-                                } else {
-                                    fs_normalize(
-                                        total_weight,
-                                        calibrated,
-                                        prior_w,
-                                        pair_min,
-                                        pair_max - pair_min,
-                                    )
-                                };
+                            let normalized = goldenmatch_fs_core::score_fs_pair(
+                                i,
+                                j,
+                                &fs_params,
+                                |f, row| field_values[f][row].as_deref(),
+                                |k, row| ne_vals[k][row].as_deref(),
+                            );
                             if normalized >= threshold {
                                 local.push((pair_key.0, pair_key.1, normalized));
                             }
@@ -823,9 +802,29 @@ pub fn score_block_pairs_fs_arrow(
     let base_min = min_weight - regular_min;
     let base_max = min_weight + weight_range - regular_max;
 
+    // Per-matchkey scoring constants, borrowed once and reused per pair. The
+    // per-pair FS math is `goldenmatch-fs-core::score_fs_pair` — identical to the
+    // Vec entry point; this arrow entry differs only in the zero-copy field
+    // access, span iteration, and #688 rayon dispatch below.
+    let fs_params = goldenmatch_fs_core::FsPairParams {
+        scorer_ids: &scorer_ids,
+        levels: &levels,
+        partial_thresholds: &partial_thresholds,
+        field_thresholds: &field_thresholds,
+        match_weights: &match_weights,
+        field_mins: &field_mins,
+        field_maxs: &field_maxs,
+        base_min,
+        base_max,
+        ne_scorer_ids: ne_scorer_ids_v,
+        ne_thresholds: ne_thresholds_v,
+        ne_weights: ne_weights_v,
+        calibrated,
+        prior_w,
+    };
+
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors
-    // score_block_pairs_arrow's score_span; FS math verbatim from
-    // score_block_pairs_fs, including the `_ne_fired` strict-< semantics).
+    // score_block_pairs_arrow's score_span).
     let score_span = |offset: usize, size: usize| -> Vec<(i64, i64, f64)> {
         let mut local: Vec<(i64, i64, f64)> = Vec::new();
         if size >= 2 {
@@ -838,47 +837,13 @@ pub fn score_block_pairs_fs_arrow(
                     if exclude_ref.contains(&pair_key) {
                         continue;
                     }
-                    let mut total_weight = 0.0_f64;
-                    let mut pair_min = base_min;
-                    let mut pair_max = base_max;
-                    let mut has_regular_evidence = false;
-                    for f in 0..n_fields {
-                        if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
-                            has_regular_evidence = true;
-                            let sim = score_one(scorer_ids[f], a, b);
-                            let level = fs_level_from_sim(
-                                sim,
-                                levels[f],
-                                partial_thresholds[f],
-                                field_thresholds[f],
-                            );
-                            total_weight += match_weights[f][level];
-                            pair_min += field_mins[f];
-                            pair_max += field_maxs[f];
-                        }
-                    }
-                    for k in 0..n_ne {
-                        if let (Some(a), Some(b)) = (ne_cols[k].get(i), ne_cols[k].get(j)) {
-                            if !a.is_empty()
-                                && !b.is_empty()
-                                && score_one(ne_scorer_ids_v[k], a, b) < ne_thresholds_v[k]
-                            {
-                                total_weight += ne_weights_v[k];
-                            }
-                        }
-                    }
-                    let normalized = if !calibrated && !has_regular_evidence && total_weight == 0.0
-                    {
-                        0.5
-                    } else {
-                        fs_normalize(
-                            total_weight,
-                            calibrated,
-                            prior_w,
-                            pair_min,
-                            pair_max - pair_min,
-                        )
-                    };
+                    let normalized = goldenmatch_fs_core::score_fs_pair(
+                        i,
+                        j,
+                        &fs_params,
+                        |f, row| fields[f].get(row),
+                        |k, row| ne_cols[k].get(row),
+                    );
                     if normalized >= threshold {
                         local.push((pair_key.0, pair_key.1, normalized));
                     }

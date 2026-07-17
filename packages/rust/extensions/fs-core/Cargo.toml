@@ -17,7 +17,9 @@ description = "Canonical Fellegi-Sunter block-scoring math (level banding + weig
 [lib]
 name = "goldenmatch_fs_core"
 
-# Zero dependencies on purpose: this is pure f64 math. Per-string similarity
-# lives in `goldenmatch-score-core`; reference data (census / aliases) is
-# injected by the host, never bundled here (see the 2026-07-17 fs-core design).
+# Per-string similarity comes from `goldenmatch-score-core` (the same crate the
+# native ext and the FFI UDFs share, so `score_one` is byte-identical across
+# surfaces). Reference data (census / aliases) is injected by the host, never
+# bundled here (see the 2026-07-17 fs-core design).
 [dependencies]
+goldenmatch-score-core = { path = "../score-core" }

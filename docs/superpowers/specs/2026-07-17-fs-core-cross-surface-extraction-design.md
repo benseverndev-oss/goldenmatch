@@ -1,7 +1,7 @@
 # FS scoring as a shared `fs-core` — cross-surface source of truth
 
 **Date:** 2026-07-17
-**Status:** in progress (increment 1: leaf extraction)
+**Status:** in progress (increments 1–2 landed: leaf math + per-pair scoring in `fs-core`)
 **Owner:** benchmark-failure follow-up (`claude/benchmark-failure-gh-vbtusq`)
 
 ## Problem: Fellegi-Sunter is the repo's parity orphan

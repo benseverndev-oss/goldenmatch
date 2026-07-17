@@ -559,6 +559,9 @@ dependencies = [
 [[package]]
 name = "goldenmatch-fs-core"
 version = "0.1.0"
+dependencies = [
+ "goldenmatch-score-core",
+]
 
 [[package]]
 name = "goldenmatch-graph-core"
