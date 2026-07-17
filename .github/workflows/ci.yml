@@ -237,7 +237,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - run: uv sync --all-packages ${{ matrix.pkg != 'goldenpipe' && '--no-install-package goldenmatch-native --no-install-package goldenflow-native' || '' }}
       # GoldenAnalysis's suite adapters consume goldenmatch/goldencheck/goldenflow/
       # goldenpipe outputs. uv sync --all-packages installs those workspace members,
       # but install the [match,check,flow,pipe] extras explicitly so the real-producer
@@ -2290,7 +2290,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - run: uv sync --all-packages
       - name: Frame-backend differential (polars vs arrow)
         run: uv run python scripts/diff_frame_backends.py
 
