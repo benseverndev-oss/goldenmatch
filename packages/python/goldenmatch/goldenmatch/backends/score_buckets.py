@@ -1447,13 +1447,41 @@ def score_buckets(
             from goldenmatch.core.frame import to_frame as _tf
 
             _slim_frame = _tf(slim_df)
-            keyed = _slim_frame.with_column(
-                "__block_key__",
-                _slim_frame.derive_block_key(
-                    key.fields, key.transforms or [],
-                    field_transforms=getattr(key, "field_transforms", None),
-                ),
-            ).native
+            keyed = (
+                _slim_frame.with_column(
+                    "__block_key__",
+                    _slim_frame.derive_block_key(
+                        key.fields, key.transforms or [],
+                        field_transforms=getattr(key, "field_transforms", None),
+                    ),
+                )
+                # A null block key means "this row CANNOT be blocked" -- NOT "this
+                # row blocks with every other unblockable row". Without this, every
+                # null-key row hashes into ONE bucket and is scored against every
+                # other: on the ER person shape at 1M that is 9,846 rows -> 48.5M
+                # comparisons, while the largest LEGITIMATE postcode block is 25.
+                #
+                # Measured cost of NOT filtering (1M person):
+                #   wall 31.81s -> 21.44s; FP 8,682 -> 111 (precision .9626 -> .9995)
+                #   recall .9319 -> .9315 (the null block gave +81 TP / +8,571 FP)
+                # One kernel call took 20.482s of 22.669s: 256 buckets across 12
+                # workers all serialized behind that single straggler.
+                #
+                # This is build_blocks' own guard -- it filters the derived key the
+                # same way: drop null + the nan/null/none stringified-missing
+                # sentinels, keep "" (#390).
+                #
+                # KNOWN GAP (pre-existing, not introduced here): an empty-string key
+                # arrives here ALREADY NULL (something upstream in prepare nulls
+                # ""), so filter_valid_key's keep-"" branch is unreachable on this
+                # path and ""-keyed rows drop with the true nulls. Before this filter
+                # they matched via the null mega-block -- #390's intent met by
+                # accident, at the cost of the FP/perf blowup above. Preserving
+                # ""-vs-null through prepare is a separate fix; pinned as an
+                # xfail(strict) in tests/test_bucket_null_block_key.py.
+                .filter_valid_key("__block_key__")
+                .native
+            )
             if _bkt_debug_on():
                 print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: keyed (with_columns key_expr) in {time.perf_counter()-_ta:.2f}s", flush=True)
 
