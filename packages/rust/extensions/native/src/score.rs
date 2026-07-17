@@ -208,7 +208,7 @@ pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
 /// scores match the Python path to within float tolerance, not bit-for-bit; the
 /// emitted pair set could differ only for a pair whose weighted score sits
 /// within that tolerance of `threshold`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 pub fn score_block_pairs(
     py: Python<'_>,
@@ -319,7 +319,7 @@ pub(crate) use goldenmatch_fs_core::{fs_level_from_sim, fs_normalize};
 /// Parity with the numpy path is within rapidfuzz tolerance (same as the
 /// weighted kernel) — a pair could differ only if its normalized score sits
 /// within that tolerance of `threshold`. Asserted in tests/test_native_parity.py.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, block_sizes, field_values, scorer_ids, levels, partial_thresholds,
@@ -582,7 +582,7 @@ impl StrCol {
 /// (None values skipped), same canonical (min,max) emission in block order — so
 /// the two are diffed in tests/test_native_parity.py. `block_sizes` are the
 /// consecutive block lengths in the (same) block-sorted row order.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, field_arrays, block_sizes, scorer_ids, weights,
@@ -745,7 +745,7 @@ pub fn score_block_pairs_arrow(
 /// sequential-vs-rayon dispatch gate, both of which the Vec entry historically
 /// lacked. Byte-identical output to the Vec entry for the same inputs (parity
 /// asserted in tests/test_native_fs_ne.py).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, field_arrays, block_sizes, scorer_ids, levels, partial_thresholds,
