@@ -63,20 +63,20 @@ def test_embedding_eligible_only_with_capability(fake_embedder):
 
     fE = MatchkeyField(field="name", scorer="embedding", levels=2, partial_threshold=0.9)
     mk = MatchkeyConfig(name="m", type="probabilistic", fields=[fE], link_threshold=0.0)
-    # record_embedding stays on numpy (declined).
     fR = MatchkeyField(field="name", scorer="record_embedding", levels=2,
                        partial_threshold=0.9, columns=["name"])
     mk_rec = MatchkeyConfig(name="r", type="probabilistic", fields=[fR],
                             link_threshold=0.0)
     assert P._NATIVE_FS_SCORER_IDS["embedding"] == 7
+    assert P._NATIVE_FS_SCORER_IDS["record_embedding"] == 7
     if _new_kernel_available():
-        # embedding admitted; record_embedding declined by design.
+        # Both embedding + record_embedding admitted (native id 7).
         import os
 
         os.environ["GOLDENMATCH_FS_NATIVE"] = "1"
         try:
             assert P._fs_native_eligible(mk) is True
-            assert P._fs_native_eligible(mk_rec) is False
+            assert P._fs_native_eligible(mk_rec) is True
         finally:
             os.environ.pop("GOLDENMATCH_FS_NATIVE", None)
 
@@ -100,6 +100,44 @@ def test_native_numpy_parity_embedding(monkeypatch, fake_embedder):
     df = pl.DataFrame({
         "__row_id__": list(range(len(name))),
         "name": name, "zip": zipc,
+    })
+    em = P.train_em(df, mk, n_sample_pairs=2000)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
+    assert P._fs_native_eligible(mk) is False
+    numpy_pairs = P.score_probabilistic_vectorized(df, mk, em)
+    monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+    assert P._fs_native_eligible(mk) is True
+    native_pairs = P.score_probabilistic_native(df, mk, em)
+
+    n0 = {(a, b): s for a, b, s in numpy_pairs}
+    n1 = {(a, b): s for a, b, s in native_pairs}
+    assert n0.keys() == n1.keys() and len(n0) > 0
+    for pair, s in n0.items():
+        assert n1[pair] == pytest.approx(s, abs=1e-6)
+
+
+@pytest.mark.skipif(
+    not _new_kernel_available(),
+    reason="native kernel without FS_SUPPORTS_EMBEDDING",
+)
+def test_native_numpy_parity_record_embedding(monkeypatch, fake_embedder):
+    """record_embedding (record-level concat) scores IDENTICALLY on native and
+    numpy: the host concatenates + embeds the SAME string both paths use, and the
+    kernel scores its cosine (record fields are always observed)."""
+    from goldenmatch.core import probabilistic as P
+
+    first = ["alpha", "alpha", "bravo", "bravo", "carol", "zzzz"]
+    last = ["one", "one", "two", "two", "three", "nine"]
+    fR = MatchkeyField(field="__record__", scorer="record_embedding", levels=2,
+                       partial_threshold=0.9, columns=["first", "last"])
+    fZ = MatchkeyField(field="zip", scorer="exact", levels=2, partial_threshold=0.9)
+    mk = MatchkeyConfig(name="m", type="probabilistic", fields=[fR, fZ],
+                        link_threshold=0.0)
+    df = pl.DataFrame({
+        "__row_id__": list(range(len(first))),
+        "first": first, "last": last,
+        "zip": ["1", "1", "2", "2", "3", "9"],
     })
     em = P.train_em(df, mk, n_sample_pairs=2000)
 
