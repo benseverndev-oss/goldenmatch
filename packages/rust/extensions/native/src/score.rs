@@ -126,10 +126,7 @@ fn build_emb_vectors(
     for f in 0..n_fields {
         if scorer_ids[f] == goldenmatch_fs_core::FS_SCORER_EMBEDDING_COSINE {
             let dim = dims[f];
-            let ok = dim > 0
-                && owned[f]
-                    .as_ref()
-                    .is_some_and(|v| v.len() == n_rows * dim);
+            let ok = dim > 0 && owned[f].as_ref().is_some_and(|v| v.len() == n_rows * dim);
             if !ok {
                 return Err(PyValueError::new_err(format!(
                     "score_block_pairs_fs: field {f} is embedding-cosine (id 7) but \
@@ -528,8 +525,7 @@ pub fn score_block_pairs_fs(
     // Embedding vectors for FS_SCORER_EMBEDDING_COSINE fields: row-major
     // n_rows*dim, already L2-normalized host-side (the model stays host-side).
     // `emb_owned` keeps the buffers alive; `emb_vectors` borrows into it.
-    let (emb_owned, emb_dims) =
-        build_emb_vectors(emb_vectors, emb_dims, &scorer_ids, n_rows)?;
+    let (emb_owned, emb_dims) = build_emb_vectors(emb_vectors, emb_dims, &scorer_ids, n_rows)?;
     let emb_vectors: Vec<Option<&[f64]>> = emb_owned.iter().map(|o| o.as_deref()).collect();
 
     // Per-matchkey scoring constants, borrowed once and reused per pair. The
@@ -989,8 +985,7 @@ pub fn score_block_pairs_fs_arrow(
     let (surname_freq, name_aliases) = name_providers(&name_refdata);
 
     // Embedding vectors (id 7) — same host-marshaled buffers as the Vec entry.
-    let (emb_owned, emb_dims) =
-        build_emb_vectors(emb_vectors, emb_dims, &scorer_ids, n_rows)?;
+    let (emb_owned, emb_dims) = build_emb_vectors(emb_vectors, emb_dims, &scorer_ids, n_rows)?;
     let emb_vectors: Vec<Option<&[f64]>> = emb_owned.iter().map(|o| o.as_deref()).collect();
 
     // Per-matchkey scoring constants, borrowed once and reused per pair. The

@@ -956,10 +956,16 @@ mod tests {
         let noop_ne = |_: usize, _: usize| None;
         // Identical vectors -> cosine 1.0 >= 0.9 -> agree (weight 3) -> normalized 1.0.
         let s_same = score_fs_pair(0, 1, &p, get, noop_ne);
-        assert!((s_same - 1.0).abs() < 1e-9, "cosine 1.0 -> top -> 1.0, got {s_same}");
+        assert!(
+            (s_same - 1.0).abs() < 1e-9,
+            "cosine 1.0 -> top -> 1.0, got {s_same}"
+        );
         // Orthogonal vectors -> cosine 0.0 < 0.9 -> disagree (weight -2) -> 0.0.
         let s_orth = score_fs_pair(0, 2, &p, get, noop_ne);
-        assert!((s_orth - 0.0).abs() < 1e-9, "cosine 0.0 -> disagree -> 0.0, got {s_orth}");
+        assert!(
+            (s_orth - 0.0).abs() < 1e-9,
+            "cosine 0.0 -> disagree -> 0.0, got {s_orth}"
+        );
         assert!(s_orth < s_same);
     }
 
