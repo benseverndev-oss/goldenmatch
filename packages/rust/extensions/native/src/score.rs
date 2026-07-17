@@ -112,6 +112,10 @@ fn build_tf_tables(
 /// does no embedding work. Every id-7 field MUST carry a correctly-sized vector
 /// block (a caller bug otherwise, surfaced as a `ValueError`, never a hot-loop
 /// panic).
+// The `(Vec<Option<Vec<f64>>>, Vec<usize>)` return mirrors the pyo3 kwarg shapes
+// (per-field optional flat vectors + per-field dims); a type alias would obscure
+// more than it clarifies here.
+#[allow(clippy::type_complexity)]
 fn build_emb_vectors(
     emb_vectors: Option<Vec<Option<Vec<f64>>>>,
     emb_dims: Option<Vec<usize>>,
