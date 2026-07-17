@@ -386,6 +386,11 @@ pub fn score_block_pairs_fs(
         ne_weights: ne_weights_v,
         calibrated,
         prior_w,
+        // 4c wires the injected census / alias providers here; None for
+        // now degrades name-scorer fields to plain JW (unreachable today —
+        // _fs_native_eligible declines a matchkey carrying those scorers).
+        surname_freq: None,
+        name_aliases: None,
     };
 
     let result = py.detach(|| {
@@ -821,6 +826,11 @@ pub fn score_block_pairs_fs_arrow(
         ne_weights: ne_weights_v,
         calibrated,
         prior_w,
+        // 4c wires the injected census / alias providers here; None for
+        // now degrades name-scorer fields to plain JW (unreachable today —
+        // _fs_native_eligible declines a matchkey carrying those scorers).
+        surname_freq: None,
+        name_aliases: None,
     };
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors

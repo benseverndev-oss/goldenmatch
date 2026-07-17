@@ -82,6 +82,11 @@ pub fn score_block_pairs_fs_impl(
         ne_weights,
         calibrated,
         prior_w,
+        // Reference-data name scorers (census / alias tables) are a later TS
+        // increment — the TS caller would inject them via wasm-bindgen, like the
+        // native pyo3 side. None here degrades those fields to plain JW.
+        surname_freq: None,
+        name_aliases: None,
     };
 
     let mut out: Vec<(i64, i64, f64)> = Vec::new();

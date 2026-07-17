@@ -327,6 +327,49 @@ pub struct FsPairParams<'a> {
     pub ne_weights: &'a [f64],
     pub calibrated: bool,
     pub prior_w: f64,
+    /// Injected surname-frequency table for `name_freq_weighted_jw`
+    /// (scorer id [`FS_SCORER_NAME_FREQ_WEIGHTED`]) fields. `None` = no table
+    /// available → those fields degrade to plain Jaro-Winkler (Python
+    /// `is_available() == False`). One table serves every family-name field.
+    /// `+ Sync` so a `&FsPairParams` can cross rayon worker threads in the
+    /// native Arrow entry (the table is read-only shared state).
+    pub surname_freq: Option<&'a (dyn SurnameFreq + Sync)>,
+    /// Injected given-name alias table for `given_name_aliased_jw`
+    /// (scorer id [`FS_SCORER_GIVEN_NAME_ALIASED`]) fields. `None` = degrade to
+    /// plain Jaro-Winkler. One table serves every given-name field.
+    pub name_aliases: Option<&'a (dyn NameAliases + Sync)>,
+}
+
+/// Reserved FS-kernel scorer id for `name_freq_weighted_jw` (beyond score-core's
+/// `score_one` ids 0..=3). Intercepted by [`score_fs_pair`] and routed to the
+/// injected [`SurnameFreq`] table; `score_one` does NOT implement it.
+pub const FS_SCORER_NAME_FREQ_WEIGHTED: u8 = 4;
+/// Reserved FS-kernel scorer id for `given_name_aliased_jw`. Intercepted by
+/// [`score_fs_pair`] and routed to the injected [`NameAliases`] table.
+pub const FS_SCORER_GIVEN_NAME_ALIASED: u8 = 5;
+
+/// Per-field similarity dispatch for the FS kernel: the reserved name-scorer ids
+/// route to the injected reference-data tables (degrading to plain JW when the
+/// table is absent), everything else goes to score-core's `score_one`.
+#[inline]
+fn field_similarity(
+    scorer_id: u8,
+    a: &str,
+    b: &str,
+    surname_freq: Option<&(dyn SurnameFreq + Sync)>,
+    name_aliases: Option<&(dyn NameAliases + Sync)>,
+) -> f64 {
+    match scorer_id {
+        FS_SCORER_NAME_FREQ_WEIGHTED => match surname_freq {
+            Some(fq) => name_freq_weighted_sim(a, b, fq),
+            None => score_one(0, a, b),
+        },
+        FS_SCORER_GIVEN_NAME_ALIASED => match name_aliases {
+            Some(al) => given_name_aliased_sim(a, b, al),
+            None => score_one(0, a, b),
+        },
+        id => score_one(id, a, b),
+    }
 }
 
 /// Score one within-block pair `(i, j)` and return its normalized `[0, 1]` score.
@@ -363,7 +406,7 @@ where
     for f in 0..p.scorer_ids.len() {
         if let (Some(a), Some(b)) = (get_field(f, i), get_field(f, j)) {
             has_regular_evidence = true;
-            let sim = score_one(p.scorer_ids[f], a, b);
+            let sim = field_similarity(p.scorer_ids[f], a, b, p.surname_freq, p.name_aliases);
             let level = fs_level_from_sim(
                 sim,
                 p.levels[f],
@@ -381,7 +424,8 @@ where
         if let (Some(a), Some(b)) = (get_ne(k, i), get_ne(k, j)) {
             if !a.is_empty()
                 && !b.is_empty()
-                && score_one(p.ne_scorer_ids[k], a, b) < p.ne_thresholds[k]
+                && field_similarity(p.ne_scorer_ids[k], a, b, p.surname_freq, p.name_aliases)
+                    < p.ne_thresholds[k]
             {
                 total_weight += p.ne_weights[k];
             }
@@ -456,6 +500,8 @@ mod tests {
             ne_weights: &[],
             calibrated: false,
             prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
         };
         let rows = [["alice", "smith"], ["alice", "jones"], ["bob", "brown"]];
         let get = |f: usize, r: usize| Some(rows[r][f]);
@@ -502,6 +548,8 @@ mod tests {
             ne_weights: &[],
             calibrated: false,
             prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
         };
         // field 1 is null for row 1 -> only field 0 observed; agree -> 1.0 of the
         // single-field observed range.
@@ -516,6 +564,63 @@ mod tests {
         assert!(
             (s - 1.0).abs() < 1e-12,
             "observed-only agreement = 1.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn score_fs_pair_routes_name_scorer_through_provider() {
+        // A single given-name field with scorer id FS_SCORER_GIVEN_NAME_ALIASED.
+        // William<->Bill are aliases -> given_name_aliased_sim returns 1.0, so the
+        // pair lands at the TOP of the observed (2-level) weight range = 1.0.
+        // Plain JW would score ~0.55 -> a mid/low level -> NOT 1.0. This proves
+        // the dispatch actually consulted the injected alias table.
+        let aliases = AliasTable::from_forms([
+            ("William".into(), vec!["william".into()]),
+            ("Bill".into(), vec!["william".into()]),
+        ]);
+        let mw = vec![vec![-2.0_f64, 3.0]];
+        let field_mins = [-2.0_f64];
+        let field_maxs = [3.0_f64];
+        let regular_min: f64 = field_mins.iter().sum();
+        let regular_max: f64 = field_maxs.iter().sum();
+        let (min_weight, weight_range) = (regular_min, regular_max - regular_min);
+        let p = FsPairParams {
+            scorer_ids: &[FS_SCORER_GIVEN_NAME_ALIASED],
+            levels: &[2],
+            partial_thresholds: &[0.9],
+            field_thresholds: &[None],
+            match_weights: &mw,
+            field_mins: &field_mins,
+            field_maxs: &field_maxs,
+            base_min: min_weight - regular_min,
+            base_max: min_weight + weight_range - regular_max,
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: false,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: Some(&aliases),
+        };
+        let rows = ["William", "Bill"];
+        let get = |_f: usize, r: usize| Some(rows[r]);
+        let noop_ne = |_: usize, _: usize| None;
+        let s = score_fs_pair(0, 1, &p, get, noop_ne);
+        assert!(
+            (s - 1.0).abs() < 1e-12,
+            "alias promotion should top the range (1.0), got {s}"
+        );
+
+        // Same field with NO alias table injected -> plain JW -> William~Bill is
+        // a DISAGREEMENT at the 0.9 partial threshold (level 0) -> bottom = 0.0.
+        let p_no = FsPairParams {
+            name_aliases: None,
+            ..p
+        };
+        let s_no = score_fs_pair(0, 1, &p_no, get, noop_ne);
+        assert!(
+            (s_no - 0.0).abs() < 1e-12,
+            "no alias table -> plain JW disagreement = 0.0, got {s_no}"
         );
     }
 
