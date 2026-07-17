@@ -1343,6 +1343,7 @@ s3 = [
 sail = [
     { name = "pysail" },
     { name = "pyspark", extra = ["connect"] },
+    { name = "setuptools", marker = "python_full_version >= '3.12'" },
 ]
 salesforce = [
     { name = "simple-salesforce" },
@@ -1426,6 +1427,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "sentence-transformers", marker = "extra == 'embeddings'", specifier = ">=2.2" },
+    { name = "setuptools", marker = "python_full_version >= '3.12' and extra == 'sail'", specifier = ">=68" },
     { name = "simple-salesforce", marker = "extra == 'salesforce'", specifier = ">=1.12" },
     { name = "snowflake-connector-python", marker = "extra == 'snowflake'", specifier = ">=3.0" },
     { name = "soundfile", marker = "extra == 'audio'", specifier = ">=0.12" },

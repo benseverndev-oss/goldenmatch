@@ -167,6 +167,13 @@ datafusion = [
 sail = [
     "pysail>=0.6",
     "pyspark[connect]>=3.5,<4",
+    # pyspark 3.5.x imports the stdlib `distutils`, which Python 3.12 REMOVED.
+    # setuptools ships the `distutils` shim (activated by its
+    # distutils-precedence .pth), so importing it restores `import distutils`
+    # on 3.12 -- the sail lane runs on 3.12 and otherwise dies at Spark Connect
+    # session setup with `ModuleNotFoundError: No module named 'distutils'`.
+    # Drop when pyspark >= 4 (Spark-4-Connect) is usable and no longer needs it.
+    "setuptools>=68; python_version >= '3.12'",
 ]
 agent = [
     "aiohttp>=3.14.0",
