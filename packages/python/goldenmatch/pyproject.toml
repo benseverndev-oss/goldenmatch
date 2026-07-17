@@ -156,11 +156,17 @@ datafusion = [
 ]
 # Sail tier (distributed, Spark Connect). Spec: docs/superpowers/specs/
 # 2026-06-03-sail-tier-design.md. Sail is programmed via PySpark/Spark
-# Connect (NOT datafusion-python). pyspark may need pinning to pysail's
-# targeted Spark Connect protocol version -- see the S1 plan.
+# Connect (NOT datafusion-python).
+#
+# pyspark PINNED < 4: pysail 0.6.x targets the Spark 3.5 Connect protocol, and
+# the unbounded `>=3.5` resolved to pyspark 4.2.0, whose Spark Connect client
+# does `int(local_relation_size_limit)` on a size-suffixed config ("3GB") and
+# raises ValueError -- breaking the whole sail lane (test_sail_score_parity).
+# This is the pinning the comment above always anticipated. Revisit the upper
+# bound when pysail ships a Spark-4-Connect-compatible release.
 sail = [
     "pysail>=0.6",
-    "pyspark[connect]>=3.5",
+    "pyspark[connect]>=3.5,<4",
 ]
 agent = [
     "aiohttp>=3.14.0",
