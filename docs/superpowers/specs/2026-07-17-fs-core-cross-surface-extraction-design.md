@@ -1,7 +1,10 @@
 # FS scoring as a shared `fs-core` — cross-surface source of truth
 
 **Date:** 2026-07-17
-**Status:** in progress (increments 1–2 landed: leaf math + per-pair scoring in `fs-core`)
+**Status:** in progress (increments 1–2 landed: leaf math + per-pair scoring in
+`fs-core`; increment 3a landed: `fs-wasm` crate with host-tested block scoring
+over `fs-core`. The TS rewiring / wasm-artifact regen / parity-harness migration
+of increment 3 are wasm-toolchain + CI gated — see the increment-3 note below.)
 **Owner:** benchmark-failure follow-up (`claude/benchmark-failure-gh-vbtusq`)
 
 ## Problem: Fellegi-Sunter is the repo's parity orphan
@@ -92,6 +95,25 @@ scorers, so this is explicit-config only.
 3. **`fs-wasm` + retire `probabilistic.ts`.** wasm-bindgen binding over `fs-core`;
    TS FS becomes `fs-wasm == native` by construction; migrate the TS parity
    harness from fixture-mirror to shared-core.
+   - **3a (landed):** the `fs-wasm` crate — standalone `[workspace]`, path-deps
+     `fs-core`, mirrors `score-wasm`'s split: a `pub` host-testable
+     `score_block_pairs_fs_impl` (a sequential mirror of native's Vec
+     `score_block_pairs_fs`, delegating per-pair to `fs_core::score_fs_pair`, so
+     it is byte-identical to native by construction) linked via `rlib` +
+     unit-tested under `cargo test`, plus a `#[cfg(target_arch="wasm32")]`
+     `#[wasm_bindgen]` shim crossing the JS↔WASM boundary once per block (flat
+     column-major arrays in, one JSON `[[a,b,s],…]` string out). The shim's
+     initial entry covers the zero-config FS shape (no NE / custom banding /
+     cross-batch exclude — the `auto_configure_probabilistic_df` shape); `_impl`
+     already supports the full shape for the harness to grow into.
+   - **3b (deferred — wasm-toolchain + CI gated, NOT done here):** build the wasm
+     artifact (`wasm-pack`/the repo's `build_*_wasm.mjs` idiom — no wasm target
+     in this env), swap `probabilistic.ts`'s scoring loop to call `fs-wasm`
+     (keeping TS `trainEM` + the transform step host-side, exactly as EM/transforms
+     stay Python-side), and repoint the TS parity harness from the hand-mirrored
+     fixture to the shared core. These need the wasm build + `node`/vitest CI
+     lanes to verify, so they are left for a CI-backed follow-up rather than
+     shipping an unbuildable blob or an unverified 1,400-line TS rewrite.
 4. **Port the name scorers** (`given_name_aliased_jw`, `name_freq_weighted_jw`)
    with reference tables injected (§ Reference data), + a `FrequencyProvider` /
    `AliasProvider` seam.
