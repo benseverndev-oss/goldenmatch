@@ -1,13 +1,15 @@
 # FS scoring as a shared `fs-core` — cross-surface source of truth
 
 **Date:** 2026-07-17
-**Status:** in progress (increments 1–2 landed: leaf math + per-pair scoring in
-`fs-core`; increment 3a landed: `fs-wasm` crate with host-tested block scoring
-over `fs-core`; increment 4a landed: the two reference-data name-scorer leaf
-functions + injected-provider seam in `fs-core`. The TS rewiring / wasm-artifact
-regen / parity-harness migration of increment 3, and the `score_fs_pair`
-dispatch + pyo3 marshaling of increment 4, are wasm-toolchain / pyo3-build /
-CI gated — see the per-increment notes below.)
+**Status:** in progress. Landed + verified (against a locally rebuilt native
+`.so`): increments 1–2 (leaf math + per-pair scoring in `fs-core`), 3a (`fs-wasm`
+crate), **4 (name scorers: fs-core leaf fns + `score_fs_pair` dispatch + native
+pyo3 marshaling via a process-level census/alias registry + `probabilistic.py`
+gating)**, **5 (Winkler `tf_adjustment` end-to-end)**, **6 (`ensemble` scorer +
+a jellyfish-compatible `soundex`)**. Every FS comparison scorer the probabilistic
+path can emit now runs on the native kernel; a new end-to-end test asserts
+native == numpy (abs 1e-6) across name/ensemble/tf. Remaining: 3b (TS-wasm
+rewiring — wasm-toolchain gated) and 7 (delete the numpy/scalar production paths).
 **Owner:** benchmark-failure follow-up (`claude/benchmark-failure-gh-vbtusq`)
 
 ## Problem: Fellegi-Sunter is the repo's parity orphan
