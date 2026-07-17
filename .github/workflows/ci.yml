@@ -381,19 +381,25 @@ jobs:
       - name: Build native ext (reference mode -> native is the default test path)
         run: uv run python scripts/build_native.py
       # Shard the suite with pytest-split (deterministic collection -> stable,
-      # disjoint groups). The OOM-prone heavy files run in python_goldenmatch_heavy
-      # and are --ignored here so they're neither double-run nor split. The
-      # standing goldenmatch --ignore list (no-DB / no-GPU / flaky-on-Linux /
-      # gitignored-dataset tests) is preserved verbatim. Coverage data only
-      # (combined + floor-checked in python_goldenmatch_coverage).
+      # disjoint groups). Split by MEASURED duration via the committed
+      # packages/python/goldenmatch/.test_durations (--durations-path, absolute so
+      # pytest-split's plain open() resolves it regardless of CWD/rootdir). Without
+      # it pytest-split falls back to splitting by test COUNT, which skewed the
+      # shards badly (483s / 223s / 262s wall for equal counts); duration-based
+      # splitting balances them. Refresh the file by re-running the store+harvest
+      # step (git history of this job) when the suite's timing profile drifts.
+      # The OOM-prone heavy files run in python_goldenmatch_heavy and are --ignored
+      # here so they're neither double-run nor split. The standing goldenmatch
+      # --ignore list (no-DB / no-GPU / flaky-on-Linux / gitignored-dataset tests)
+      # is preserved verbatim. Coverage data only (combined + floor-checked in
+      # python_goldenmatch_coverage).
       - name: pytest (shard ${{ matrix.shard }} of ${{ env.GM_SPLITS }})
         env:
           COVERAGE_FILE: coverage_shard${{ matrix.shard }}.dat
         run: |
           uv run --with pytest-split pytest packages/python/goldenmatch \
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
-            --durations-path "${GITHUB_WORKSPACE}/durations_shard${{ matrix.shard }}.json" \
-            --store-durations \
+            --durations-path "${GITHUB_WORKSPACE}/packages/python/goldenmatch/.test_durations" \
             --timeout=120 --timeout-method=thread --durations=20 \
             --cov=goldenmatch --cov-report= \
             --ignore=packages/python/goldenmatch/benchmarks \
@@ -428,22 +434,6 @@ jobs:
         with:
           name: gm-cov-shard-${{ matrix.shard }}
           path: coverage_shard${{ matrix.shard }}.dat
-          retention-days: 1
-          if-no-files-found: error
-      # HARVEST (temporary): each shard's pytest-split --store-durations writes
-      # this group's per-test timings. Uploaded so they can be merged into a
-      # single committed .test_durations; once committed, --store-durations and
-      # this upload are removed and the step reads the committed file to split by
-      # measured duration instead of by test count (removes the 483s/223s skew).
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
-        with:
-          name: gm-durations-shard-${{ matrix.shard }}
-          # pytest-split writes --store-durations to the path verbatim via a
-          # plain open() (CWD-relative for a relative path); an ABSOLUTE path
-          # ($GITHUB_WORKSPACE) is unambiguous. A relative path here silently
-          # missed the upload (landed off the expected dir under the pytest
-          # rootdir seam). Upload from the repo-root basename.
-          path: durations_shard${{ matrix.shard }}.json
           retention-days: 1
           if-no-files-found: error
 
