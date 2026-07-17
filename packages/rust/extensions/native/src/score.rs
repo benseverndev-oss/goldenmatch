@@ -435,9 +435,9 @@ pub fn score_block_pairs_fs(
             }
         }
         for (k, &sid) in ns.iter().enumerate() {
-            if sid > 3 {
+            if sid > 3 && sid != goldenmatch_fs_core::FS_SCORER_ENSEMBLE {
                 return Err(PyValueError::new_err(format!(
-                    "score_block_pairs_fs: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3)"
+                    "score_block_pairs_fs: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3 or 6=ensemble)"
                 )));
             }
         }
@@ -875,9 +875,9 @@ pub fn score_block_pairs_fs_arrow(
         }
     }
     for (k, &sid) in ne_scorer_ids_v.iter().enumerate() {
-        if sid > 3 {
+        if sid > 3 && sid != goldenmatch_fs_core::FS_SCORER_ENSEMBLE {
             return Err(PyValueError::new_err(format!(
-                "score_block_pairs_fs_arrow: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3)"
+                "score_block_pairs_fs_arrow: ne_scorer_ids[{k}]={sid} out of range (valid: 0..=3 or 6=ensemble)"
             )));
         }
     }

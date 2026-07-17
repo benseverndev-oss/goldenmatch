@@ -42,25 +42,71 @@ class _FakeKernel:
     FS_SUPPORTS_MISSING_NEUTRAL = True
     FS_SUPPORTS_LEVEL_THRESHOLDS = True
 
-    def __init__(self, name_scorers: bool, tf: bool = False):
+    def __init__(self, name_scorers: bool, tf: bool = False, ensemble: bool = False):
         if name_scorers:
             self.FS_SUPPORTS_NAME_SCORERS = True
         if tf:
             self.FS_SUPPORTS_TF_ADJUSTMENT = True
+        if ensemble:
+            self.FS_SUPPORTS_ENSEMBLE = True
 
     def score_block_pairs_fs(self, *a, **kw):  # pragma: no cover - not invoked
         raise NotImplementedError
 
 
-def _patch(monkeypatch, *, kernel_name_scorers, pack_available, kernel_tf=False):
+def _patch(monkeypatch, *, kernel_name_scorers, pack_available, kernel_tf=False,
+           kernel_ensemble=False):
     from goldenmatch.core import probabilistic as p
 
     monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
     monkeypatch.setattr(
         "goldenmatch.core._native_loader.native_module",
-        lambda: _FakeKernel(kernel_name_scorers, tf=kernel_tf),
+        lambda: _FakeKernel(kernel_name_scorers, tf=kernel_tf, ensemble=kernel_ensemble),
     )
     monkeypatch.setattr(p, "_fs_name_refdata_available", lambda scorers: pack_available)
+
+
+def _mk_ensemble(field="name", as_ne=False):
+    from goldenmatch.config.schemas import NegativeEvidenceField
+    if as_ne:
+        return MatchkeyConfig(
+            name="t", type="probabilistic",
+            fields=[MatchkeyField(field="a", scorer="exact", levels=2)],
+            negative_evidence=[
+                NegativeEvidenceField(field=field, scorer="ensemble", threshold=0.9, penalty_bits=10.0),
+            ],
+        )
+    return MatchkeyConfig(
+        name="t", type="probabilistic",
+        fields=[MatchkeyField(field=field, scorer="ensemble", levels=3, partial_threshold=0.8)],
+    )
+
+
+def test_ensemble_regular_field_declines_on_old_wheel(monkeypatch):
+    _patch(monkeypatch, kernel_name_scorers=False, pack_available=True, kernel_ensemble=False)
+    assert _fs_native_eligible(_mk_ensemble()) is False
+
+
+def test_ensemble_regular_field_native_on_new_wheel(monkeypatch):
+    _patch(monkeypatch, kernel_name_scorers=False, pack_available=True, kernel_ensemble=True)
+    assert _fs_native_eligible(_mk_ensemble()) is True
+
+
+def test_ensemble_negative_evidence_native_on_new_wheel(monkeypatch):
+    # ensemble IS a valid NE scorer (unlike the name scorers). Requires both
+    # FS_SUPPORTS_NE and FS_SUPPORTS_ENSEMBLE.
+    from goldenmatch.core import probabilistic as p
+
+    monkeypatch.setattr(p, "_fs_native_enabled", lambda: True)
+
+    class _K(_FakeKernel):
+        FS_SUPPORTS_NE = True
+
+    monkeypatch.setattr(
+        "goldenmatch.core._native_loader.native_module",
+        lambda: _K(name_scorers=False, ensemble=True),
+    )
+    assert _fs_native_eligible(_mk_ensemble(as_ne=True)) is True
 
 
 def _mk_tf():
@@ -125,3 +171,75 @@ def test_refdata_export_seam_non_empty():
     assert all(isinstance(n, str) and isinstance(c, int) for n, c in counts[:5])
     assert len(forms) > 100
     assert all(isinstance(f, str) and isinstance(cs, list) for f, cs in forms[:5])
+
+
+# ── End-to-end native-vs-numpy parity for the three ported scorers ───────────
+# Runs only when the built kernel advertises all three new capabilities (the
+# native lane / a local rebuild); skips on an old/absent wheel.
+import os  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def _new_kernel_available() -> bool:
+    if os.environ.get("GOLDENMATCH_NATIVE", "").strip().lower() in (
+        "0", "false", "no", "off", "disabled"
+    ):
+        return False
+    try:
+        from goldenmatch.core import _native_loader as nl
+        if not nl.native_available():
+            return False
+        m = nl.native_module()
+        return all(
+            getattr(m, f, False)
+            for f in ("FS_SUPPORTS_NAME_SCORERS", "FS_SUPPORTS_TF_ADJUSTMENT",
+                      "FS_SUPPORTS_ENSEMBLE")
+        )
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(
+    not _new_kernel_available(),
+    reason="native kernel without the ported-scorer capabilities",
+)
+def test_native_numpy_parity_name_ensemble_tf(monkeypatch):
+    """A probabilistic matchkey using all three ported scorers
+    (name_freq_weighted_jw / ensemble / tf_adjustment) scores IDENTICALLY on the
+    native kernel and the numpy path, on CLEAN data (identical vs very-different
+    values, so no pair sits near a comparison-level boundary where rapidfuzz-rs
+    vs rapidfuzz-py could flip a level)."""
+    import polars as pl
+    from goldenmatch.core import probabilistic as P
+
+    first = ["Robert", "Robert", "William", "William", "Bob", "xzqw"]
+    last = ["Smith", "Smith", "Jones", "Jones", "Brown", "zzzz"]
+    city = ["London", "London", "Leeds", "Leeds", "York", "qqqq"]
+    fF = MatchkeyField(field="first_name", scorer="ensemble", levels=3,
+                       partial_threshold=0.8, transforms=["lowercase", "strip"])
+    fL = MatchkeyField(field="last_name", scorer="name_freq_weighted_jw", levels=3,
+                       partial_threshold=0.8, transforms=["lowercase", "strip"])
+    fC = MatchkeyField(field="city", scorer="exact", levels=2, partial_threshold=0.9,
+                       tf_adjustment=True, transforms=["lowercase", "strip"])
+    mk = MatchkeyConfig(name="m", type="probabilistic", fields=[fF, fL, fC],
+                        link_threshold=0.0)
+    df = pl.DataFrame({
+        "__row_id__": list(range(len(first))),
+        "first_name": first, "last_name": last, "city": city,
+    })
+    em = P.train_em(df, mk, n_sample_pairs=2000)
+    assert "city" in (em.tf_freqs or {})  # tf field opted in
+
+    monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "0")
+    assert P._fs_native_eligible(mk) is False
+    numpy_pairs = P.score_probabilistic_vectorized(df, mk, em)
+    monkeypatch.setenv("GOLDENMATCH_FS_NATIVE", "1")
+    assert P._fs_native_eligible(mk) is True
+    native_pairs = P.score_probabilistic_native(df, mk, em)
+
+    n0 = {(a, b): s for a, b, s in numpy_pairs}
+    n1 = {(a, b): s for a, b, s in native_pairs}
+    assert n0.keys() == n1.keys() and len(n0) > 0
+    for pair, s in n0.items():
+        assert native_pairs and n1[pair] == pytest.approx(s, abs=1e-6)

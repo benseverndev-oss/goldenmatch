@@ -2979,7 +2979,7 @@ def _fs_vectorized_enabled() -> bool:
 # the numpy fallback (the kernel's score_one doesn't implement them).
 _NATIVE_FS_SCORER_IDS: dict[str, int] = {
     "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
-    "name_freq_weighted_jw": 4, "given_name_aliased_jw": 5,
+    "name_freq_weighted_jw": 4, "given_name_aliased_jw": 5, "ensemble": 6,
 }
 # The reference-data name scorers (kernel ids 4/5). A field carrying one is
 # native only when the wheel advertises FS_SUPPORTS_NAME_SCORERS AND the relevant
@@ -3081,12 +3081,15 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
     if not mk.fields:
         return False
+    needs_ensemble = False
     ne_fields = mk.negative_evidence or []
     for ne in ne_fields:
-        # NE fields go through the kernel's score_one path (ids 0..=3 only) — the
-        # reference-data name scorers are NOT valid NE scorers.
+        # NE goes through field_similarity (score_one 0..=3 + ensemble id 6); the
+        # reference-data name scorers (4/5) are NOT valid NE scorers.
         if ne.scorer not in _NATIVE_FS_SCORER_IDS or ne.scorer in _NAME_SCORER_IDS:
             return False
+        if ne.scorer == "ensemble":
+            needs_ensemble = True
     needs_level_thresholds = False
     needs_tf = False
     name_scorers_needed: set[str] = set()
@@ -3099,6 +3102,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             needs_level_thresholds = True
         if f.scorer in _NAME_SCORER_IDS:
             name_scorers_needed.add(f.scorer)
+        if f.scorer == "ensemble":
+            needs_ensemble = True
     if name_scorers_needed and not _fs_name_refdata_available(name_scorers_needed):
         # The pack that would supply the injected table isn't loaded, so the
         # kernel would degrade to plain JW — diverging from the numpy path (which
@@ -3123,6 +3128,8 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False  # old wheel: name scorers never cross their FFI
         if needs_tf and not getattr(mod, "FS_SUPPORTS_TF_ADJUSTMENT", False):
             return False  # old wheel: tf_freqs/tf_collision never cross their FFI
+        if needs_ensemble and not getattr(mod, "FS_SUPPORTS_ENSEMBLE", False):
+            return False  # old wheel: scores ensemble (id 6) as 0.0 (catch-all)
         return True
     except Exception:
         return False

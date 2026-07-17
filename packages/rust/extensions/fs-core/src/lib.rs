@@ -384,10 +384,91 @@ pub const FS_SCORER_NAME_FREQ_WEIGHTED: u8 = 4;
 /// Reserved FS-kernel scorer id for `given_name_aliased_jw`. Intercepted by
 /// [`score_fs_pair`] and routed to the injected [`NameAliases`] table.
 pub const FS_SCORER_GIVEN_NAME_ALIASED: u8 = 5;
+/// Reserved FS-kernel scorer id for the `ensemble` scorer (beyond `score_one`
+/// 0..=3). Intercepted by [`score_fs_pair`]; see [`ensemble_sim`]. The
+/// probabilistic auto-config's default scorer for `name` columns when the refdata
+/// packs aren't installed, so this is a regular-field scorer (and a valid NE
+/// scorer), not name-specific.
+pub const FS_SCORER_ENSEMBLE: u8 = 6;
+
+/// American Soundex, byte-compatible with `jellyfish.soundex` on ASCII input.
+///
+/// Algorithm (jellyfish's classic Python impl): keep `s[0]` verbatim (uppercased),
+/// then for each subsequent char map coded consonants to a digit
+/// (`BFPV`→1 `CGJKQSXZ`→2 `DT`→3 `L`→4 `MN`→5 `R`→6), appending it only when it
+/// differs from the previous code; `H`/`W` are transparent (leave the previous
+/// code intact); every other char (vowel, digit, punctuation) resets the previous
+/// code to "none". Stop at 4 chars; right-pad with `0`. Empty input → empty.
+///
+/// ASCII-scoped: jellyfish NFKD-normalizes first, so an accented CONSONANT
+/// (e.g. `ç`) codes its base letter there but is treated as non-coded here — a
+/// documented cross-language parity edge (the same ASCII scope `infermap-core`
+/// carries). Names are ASCII in the gated datasets, and under "Rust is the
+/// reference" the native result is authoritative regardless.
+pub fn soundex(s: &str) -> String {
+    fn code(c: char) -> Option<u8> {
+        match c {
+            'B' | 'F' | 'P' | 'V' => Some(1),
+            'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some(2),
+            'D' | 'T' => Some(3),
+            'L' => Some(4),
+            'M' | 'N' => Some(5),
+            'R' => Some(6),
+            _ => None,
+        }
+    }
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c.to_ascii_uppercase(),
+        None => return String::new(),
+    };
+    let mut out = String::with_capacity(4);
+    out.push(first);
+    let mut count = 1usize;
+    let mut last = code(first);
+    for ch in chars {
+        if count == 4 {
+            break;
+        }
+        let u = ch.to_ascii_uppercase();
+        match code(u) {
+            Some(d) => {
+                if Some(d) != last {
+                    out.push((b'0' + d) as char);
+                    count += 1;
+                }
+                last = Some(d);
+            }
+            None => {
+                if u != 'H' && u != 'W' {
+                    last = None;
+                }
+            }
+        }
+    }
+    while count < 4 {
+        out.push('0');
+        count += 1;
+    }
+    out
+}
+
+/// `ensemble`: element-wise `max` of Jaro-Winkler, the TS-parity token-sort ratio,
+/// and a `0.8` phonetic bonus when [`soundex`] agrees — mirroring
+/// `core/scorer.score_field`'s `ensemble` branch (`max(jw, ts, sx)` with
+/// `sx = 0.8 if soundex(a)==soundex(b) else 0.0`).
+#[inline]
+pub fn ensemble_sim(a: &str, b: &str) -> f64 {
+    let jw = score_one(0, a, b);
+    let ts = score_one(2, a, b);
+    let sx = if soundex(a) == soundex(b) { 0.8 } else { 0.0 };
+    jw.max(ts).max(sx)
+}
 
 /// Per-field similarity dispatch for the FS kernel: the reserved name-scorer ids
 /// route to the injected reference-data tables (degrading to plain JW when the
-/// table is absent), everything else goes to score-core's `score_one`.
+/// table is absent), `ensemble` (id 6) to [`ensemble_sim`], everything else to
+/// score-core's `score_one`.
 #[inline]
 fn field_similarity(
     scorer_id: u8,
@@ -405,6 +486,7 @@ fn field_similarity(
             Some(al) => given_name_aliased_sim(a, b, al),
             None => score_one(0, a, b),
         },
+        FS_SCORER_ENSEMBLE => ensemble_sim(a, b),
         id => score_one(id, a, b),
     }
 }
@@ -670,6 +752,104 @@ mod tests {
         assert!(
             (s_no - 0.0).abs() < 1e-12,
             "no alias table -> plain JW disagreement = 0.0, got {s_no}"
+        );
+    }
+
+    #[test]
+    fn soundex_matches_jellyfish_vectors() {
+        // Pinned against jellyfish.soundex (ASCII inputs).
+        let cases = [
+            ("Robert", "R163"),
+            ("Rupert", "R163"),
+            ("Rubin", "R150"),
+            ("Ashcraft", "A261"),
+            ("Ashcroft", "A261"),
+            ("Tymczak", "T522"),
+            ("Pfister", "P236"),
+            ("Honeyman", "H555"),
+            ("Jackson", "J250"),
+            ("Washington", "W252"),
+            ("Lee", "L000"),
+            ("Gutierrez", "G362"),
+            ("VanDeusen", "V532"),
+            ("Deusen", "D250"),
+            ("H", "H000"),
+            ("HW", "H000"),
+            ("Hh", "H000"),
+            ("Wa", "W000"),
+            ("Bb", "B000"),
+            ("aeiou", "A000"),
+            ("McDonald", "M235"),
+            ("O'Brien", "O165"),
+            ("Smith", "S530"),
+            ("Smyth", "S530"),
+            ("Schmidt", "S530"),
+            ("a", "A000"),
+            ("Z", "Z000"),
+            ("123abc", "1120"),
+            ("", ""),
+        ];
+        for (input, want) in cases {
+            assert_eq!(soundex(input), want, "soundex({input:?})");
+        }
+    }
+
+    #[test]
+    fn ensemble_is_max_of_components() {
+        // Perfect string match -> 1.0 (jw dominates).
+        assert!((ensemble_sim("robert", "robert") - 1.0).abs() < 1e-12);
+        // Phonetic-only agreement (Robert/Rupert both R163) with lowish jw/ts:
+        // the 0.8 soundex bonus floors the ensemble at >= 0.8.
+        let s = ensemble_sim("Robert", "Rupert");
+        assert!(s >= 0.8 - 1e-12, "soundex bonus floors ensemble, got {s}");
+        // Total mismatch (different soundex, low jw/ts) -> well below 0.8.
+        let low = ensemble_sim("Robert", "Xyzzy");
+        assert!(
+            low < 0.8,
+            "unrelated pair below the phonetic floor, got {low}"
+        );
+        // ensemble >= each component (it's their max).
+        let a = "Ashcraft";
+        let b = "Ashcroft";
+        assert!(ensemble_sim(a, b) >= score_one(0, a, b) - 1e-12);
+        assert!(ensemble_sim(a, b) >= score_one(2, a, b) - 1e-12);
+    }
+
+    #[test]
+    fn score_fs_pair_dispatches_ensemble() {
+        // A single ensemble field (id 6): Robert vs Rupert are phonetically equal
+        // (both R163) so the pair clears a top-level (>=0.8 partial) agreement even
+        // though plain JW would not — proving the dispatch routed to ensemble_sim.
+        let mw = vec![vec![-2.0_f64, 3.0]];
+        let field_mins = [-2.0_f64];
+        let field_maxs = [3.0_f64];
+        let p = FsPairParams {
+            scorer_ids: &[FS_SCORER_ENSEMBLE],
+            levels: &[2],
+            partial_thresholds: &[0.8],
+            field_thresholds: &[None],
+            match_weights: &mw,
+            field_mins: &field_mins,
+            field_maxs: &field_maxs,
+            base_min: 0.0,
+            base_max: 0.0,
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: true,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
+            tf_tables: &[],
+        };
+        let rows = ["Robert", "Rupert"];
+        let get = |_f: usize, r: usize| Some(rows[r]);
+        let noop_ne = |_: usize, _: usize| None;
+        let s = score_fs_pair(0, 1, &p, get, noop_ne);
+        // sim 0.8 >= partial 0.8 -> top level (agree weight 3.0) -> posterior > 0.5.
+        assert!(
+            s > 0.5,
+            "phonetic agreement clears the partial threshold, got {s}"
         );
     }
 

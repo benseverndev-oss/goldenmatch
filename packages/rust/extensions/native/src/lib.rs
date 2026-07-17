@@ -59,6 +59,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // exact-equal top-level agreements. Python's `_fs_native_eligible` admits a
     // tf_adjustment field only when this flag is present; old wheels keep numpy.
     m.add("FS_SUPPORTS_TF_ADJUSTMENT", true)?;
+    // Wheel-skew capability flag: both FS entries dispatch the `ensemble` scorer
+    // (id 6 = max(jaro_winkler, token_sort, soundex*0.8)) as a regular AND a
+    // negative-evidence scorer. Python's `_fs_native_eligible` admits ensemble
+    // only when this flag is present; old wheels score id 6 as 0.0 (score_one's
+    // catch-all), so they must keep the numpy path for ensemble matchkeys.
+    m.add("FS_SUPPORTS_ENSEMBLE", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
