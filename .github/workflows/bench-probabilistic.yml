@@ -40,6 +40,10 @@ on:
         type: boolean
         required: false
         default: false
+      em_sample_rows:
+        description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -50,6 +54,11 @@ jobs:
     timeout-minutes: 120
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # EM-block-sample flag (empty = off). Set via the em_sample_rows dispatch
+      # input to validate that sampling EM's training blocks holds F1 on the
+      # panel datasets (historical_50k is the real regression risk) before the
+      # default flip. _fs_em_sample_rows() treats "" as off.
+      GOLDENMATCH_FS_EM_SAMPLE_ROWS: ${{ inputs.em_sample_rows }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
