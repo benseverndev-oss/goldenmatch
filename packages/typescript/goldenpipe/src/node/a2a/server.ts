@@ -45,7 +45,7 @@ export const AGENT_CARD: {
 } = {
   name: "GoldenPipe",
   description: "Pluggable pipeline framework for data quality workflows",
-  version: "1.0.0",
+  version: "0.3.0",
   provider: { organization: "Golden Suite" },
   url: "http://localhost:8250",
   skills: [

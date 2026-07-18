@@ -29,7 +29,7 @@ import { ReviewQueue, type ReviewItem } from "../../core/agent/review-queue.js";
 
 export const AGENT_CARD = {
   name: "goldencheck-agent",
-  version: "1.0.0",
+  version: "0.5.0",
   description: "Data validation agent that discovers rules from your data.",
   skills: [
     { id: "scan", description: "Scan a data file for quality issues" },
