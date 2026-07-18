@@ -97,14 +97,42 @@ def test_match_weights_are_log2_m_over_u():
         assert w[i] == pytest.approx(math.log2(m[i] / u[i]), abs=1e-9)
 
 
-def test_proportion_matched_from_settings():
+def test_random_pair_prior_discarded_for_within_block_default():
+    """#1802: Splink's `probability_two_random_records_match` is a RANDOM-PAIR
+    prior, orders of magnitude below the WITHIN-BLOCK match rate that
+    `EMResult.proportion_matched` (and prior_weight/compute_thresholds) assume.
+    Importing it raw collapsed recall (#1760: F1 0.482 -> 0.157). A data-free
+    import discards the mis-scaled value for the within-block default (0.05, the
+    same one an ABSENT setting uses) and warns; `import-splink --upgrade`
+    re-estimates it from data separately."""
     comp = _trained_jw_comparison()
-    settings = _trained_settings([comp])
+    settings = _trained_settings([comp])  # carries probability_two_random_records_match=0.0002
     report = ConversionReport()
     field = convert_comparison(comp, 0, report)
     em = import_em([(comp, 0, field)], settings, report)
 
-    assert em.proportion_matched == pytest.approx(0.0002)
+    # The tiny random-pair prior is NOT stored as the within-block rate.
+    assert em.proportion_matched == pytest.approx(0.05)
+    # And the discard is surfaced loudly (a warning, not silent).
+    assert any(
+        f.severity == "warning"
+        and f.splink_path == "probability_two_random_records_match"
+        and "random-pair prior" in f.message
+        for f in report.findings
+    ), "expected a warning that the random-pair prior was discarded"
+
+
+def test_absent_prior_uses_within_block_default():
+    """No `probability_two_random_records_match` -> the same within-block
+    default (0.05), so a present-but-random-pair prior behaves identically to
+    an absent one (#1802)."""
+    comp = _trained_jw_comparison()
+    settings = {"comparisons": [comp]}  # no probability_two_random_records_match
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+    em = import_em([(comp, 0, field)], settings, report)
+
+    assert em.proportion_matched == pytest.approx(0.05)
 
 
 def test_import_marks_converged_zero_iterations_no_tf():
