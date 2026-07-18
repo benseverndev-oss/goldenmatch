@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-07-18
+
+<!-- README-callout
+**New `date` scorer for date fields (#1858).** `jaro_winkler` scores unrelated
+ISO birthdays 0.80+ (the fixed `YYYY-MM-DD` shape + shared digit alphabet
+dominate), so it can't tell a typo from a different person. The `date` scorer
+compares dates by Damerau-Levenshtein over the canonical digits — a typo scores
+0.90, an unrelated date 0.00 — with a `levenshtein` fallback for non-ISO input.
+Cross-surface (Python, native kernel, TypeScript), and a preflight check warns
+when a name-oriented scorer sits on a date field.
+-->
+
 ### Fixed
 
 - **Postgres identity resolution no longer autocommits per record (#1886).** The
@@ -32,6 +44,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Added
 
+- **Date-aware `date` scorer (#1858).** A comparison scorer for date fields.
+  `jaro_winkler` on an ISO date scores unrelated birthdays 0.80+ (the fixed
+  `YYYY-MM-DD` shape, shared digit alphabet, and `19..`/`20..` prefix dominate),
+  so at any usable cutoff a typo is indistinguishable from a different person —
+  precision craters wherever blocking co-locates same-year records. `date`
+  parses both sides as ISO dates and scores by Damerau-Levenshtein over the eight
+  canonical digits (a swapped-digit typo is one edit): `d0→1.0 / d1→0.90 /
+  d2→0.75 / d≥3→0.0`, mirroring Splink's `DamerauLevenshtein<=2`. Non-ISO input
+  falls back to `levenshtein`. The canonical implementation lives in the Rust
+  `score-core` kernel and funnels to the native PyO3 extension, the pure-Python
+  fallback, and the TypeScript port (byte-identical, parity-tested). Not
+  auto-config-reachable (date columns are skipped as fuzzy fields), so it is for
+  hand-written / Splink-converted configs; a preflight check warns when a
+  name-oriented scorer (`jaro_winkler` / `token_sort` / ...) is placed on a date
+  field. Bumps `goldenmatch-native` to 0.1.18.
 - **Fused Fellegi-Sunter match now covers multi-pass blocking.** New
   `match_fused_fs_multipass_ready` / `run_match_fused_fs_multipass_arrow`
   (`core/fused_match.py`) expand the fused FS path from single-static-key
