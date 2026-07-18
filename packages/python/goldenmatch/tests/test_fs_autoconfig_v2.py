@@ -22,7 +22,7 @@ from goldenmatch.core.autoconfig import (
     ColumnProfile,
     _bound_probabilistic_blocking_pairs,
     _diversify_probabilistic_blocking,
-    _max_safe_candidate_pairs,
+    _fs_total_pair_budget,
     build_probabilistic_matchkeys,
 )
 
@@ -298,10 +298,16 @@ def _coarse_blocking(*fields):
     )
 
 
-def test_pair_budget_scales_with_rows():
-    # Linear in N (≈30 pairs/row) with a floor; the env override wins.
-    assert _max_safe_candidate_pairs(1_000_000) == 30_000_000
-    assert _max_safe_candidate_pairs(10) == 5_000_000  # floor
+def test_pair_budget_is_flat_global_total(monkeypatch):
+    # The budget is a flat memory-derived TOTAL across passes (not per-pass, not
+    # N-scaled): candidate pairs grow ~N² while memory is fixed, so a linear
+    # floor can't both keep a pass safe at 100K and bound it at 1M.
+    monkeypatch.delenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", raising=False)
+    assert _fs_total_pair_budget(1_000_000) == _fs_total_pair_budget(10)
+    assert _fs_total_pair_budget(50_000) == 300_000_000
+    # The env override wins and is read as an integer.
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    assert _fs_total_pair_budget(1_000_000) == 5
 
 
 def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):
@@ -370,8 +376,8 @@ def test_pair_gate_noop_without_df(monkeypatch):
 
 
 def test_pair_gate_default_budget_is_noop_at_unit_scale(monkeypatch):
-    # Without the override, the 5M floor means a 15-pair block never trips -> the
-    # gate is inert on small data (only large configs are bounded).
+    # Without the override, the 150M flat total means a 15-pair block never trips
+    # -> the gate is inert on small data (only large configs are bounded).
     monkeypatch.setenv(ON, "1")
     monkeypatch.delenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", raising=False)
     b = _coarse_blocking("city")

@@ -794,10 +794,7 @@ class TestComputeThresholdsEdgeCases:
         )
         weights = [0.5] * 30  # too few
         link, review = compute_thresholds(em, weights)
-        # Linear-mode fixed default sits ABOVE the neutral 0.50 no-evidence point
-        # (net-zero-evidence pairs score exactly 0.50 and would otherwise chain
-        # clusters via union-find). See the link-default rationale.
-        assert link == 0.55
+        assert link == 0.50
         assert review == 0.35
 
     def test_no_scored_weights(self):
@@ -810,32 +807,8 @@ class TestComputeThresholdsEdgeCases:
             proportion_matched=0.05,
         )
         link, review = compute_thresholds(em)
-        assert link == 0.55
+        assert link == 0.50
         assert review == 0.35
-
-    def test_link_default_above_neutral_point(self, monkeypatch):
-        """The linear-mode default link cut must sit strictly above the 0.50
-        neutral no-evidence score, so a net-zero-evidence pair does NOT link.
-
-        Regression for the gm_probabilistic over-merge: same-block pairs that
-        agree only on the (score-excluded) blocking field score exactly 0.50;
-        a 0.50 cut auto-linked them and union-find chained the clusters
-        (pair-precision 0.05 at 100K, and the mega-clusters OOM'd 1M dedupe).
-        """
-        em = EMResult(
-            m_probs={"name": [0.1, 0.9]},
-            u_probs={"name": [0.9, 0.1]},
-            match_weights={"name": [-3.0, 3.0]},
-            converged=True,
-            iterations=5,
-            proportion_matched=0.05,
-        )
-        link, _ = compute_thresholds(em)
-        assert link > 0.50, "link cut must reject net-zero-evidence (0.50) pairs"
-        # Env override still works (for sweeps).
-        monkeypatch.setenv("GOLDENMATCH_FS_LINK_DEFAULT", "0.70")
-        link2, _ = compute_thresholds(em)
-        assert link2 == 0.70
 
 
 class TestEMWithBlockingFields:

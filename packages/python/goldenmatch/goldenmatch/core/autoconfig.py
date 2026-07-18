@@ -5031,12 +5031,24 @@ def _project_pass_pairs(
     return (max_block, pairs)
 
 
-def _max_safe_candidate_pairs(n_rows: int) -> int:
-    """Per-pass candidate-pair ceiling. FS scoring memory scales with the pairs a
-    pass emits (the scored-pair stream) as well as its max block (the per-block
-    score matrix); this bounds the pair axis the row gate misses. Linear in N
-    (≈30 pairs/row) with a floor so small data keeps generous recall. Override
-    with ``GOLDENMATCH_FS_MAX_PASS_PAIRS``. At 1M → 30M pairs/pass.
+_FS_TOTAL_PAIR_BUDGET = 300_000_000
+
+
+def _fs_total_pair_budget(n_rows: int) -> int:
+    """GLOBAL candidate-pair budget across ALL blocking passes (not per-pass).
+
+    FS scoring memory scales with the TOTAL candidate pairs held across passes
+    (the scored-pair stream + the clustering edge set), and candidate pairs grow
+    ~N² while a per-pass *linear* floor cannot both keep a pass memory-safe at
+    100K and bound it at 1M (a 55M-pair surname pass is fine at 100K but the same
+    shape is 5.5B at 1M). So the ceiling is a FLAT, memory-derived total
+    (~150M pairs ≈ a few GB of transient ``(id, id, score)`` stream), NOT scaled
+    by N. Individual mega-BLOCK passes are still gated per-pass by
+    ``_compute_max_safe_block`` (the per-block score-matrix cost). Override with
+    ``GOLDENMATCH_FS_MAX_PASS_PAIRS``.
+
+    n_rows is accepted for signature stability / future tuning but the budget is
+    intentionally flat: the physical limit is memory, which does not grow with N.
     """
     override = os.environ.get("GOLDENMATCH_FS_MAX_PASS_PAIRS")
     if override:
@@ -5044,7 +5056,7 @@ def _max_safe_candidate_pairs(n_rows: int) -> int:
             return max(1, int(override))
         except ValueError:
             pass
-    return max(5_000_000, int(n_rows) * 30)
+    return _FS_TOTAL_PAIR_BUDGET
 
 
 def _bound_probabilistic_blocking_pairs(
@@ -5054,31 +5066,33 @@ def _bound_probabilistic_blocking_pairs(
     *,
     n_rows_full: int | None = None,
 ) -> BlockingConfig | None:
-    """Bound EVERY blocking pass by candidate PAIRS, not just block rows.
+    """Bound blocking by per-block ROWS **and** a GLOBAL candidate-PAIR budget.
 
     ``_diversify`` and ``_compute_max_safe_block`` gate on block ROW count, but FS
-    scoring memory scales with candidate PAIRS (``Σ C(block, 2)``): a 15k-row
-    birth-YEAR block clears a 25k-row ceiling yet is 110M pairs, and
-    ``build_blocking``'s single-field ``soundex`` passes (a 40k-row
-    first-name-soundex block = 825M pairs) are never row-gated at all. On the 1M
-    person auto-config these summed to ~12.9B candidate pairs and OOM-killed the
-    runner regardless of scoring route (no route can bound a 12.9B-pair *output*).
+    scoring memory also scales with the TOTAL candidate PAIRS across passes
+    (``Σ C(block, 2)``): a 15k-row birth-YEAR block clears a 25k-row ceiling yet
+    is 110M pairs, and ``build_blocking``'s single-field ``soundex`` passes are
+    never row-gated at all. On the 1M person auto-config these summed to ~12.9B
+    candidate pairs and OOM-killed the runner regardless of scoring route.
 
-    This post-step (runs after ``_diversify``, over the WHOLE pass list) measures
-    each pass's full-N pairs + max block and, for any over
-    ``_max_safe_candidate_pairs`` / ``_compute_max_safe_block``, replaces it with a
-    bounded compound (append the most selective discriminator initial — surname,
-    then first name, city, then zip/id prefix) when that lands under budget, else
-    DROPS it (recall falls back to the selective passes). Guarantees ≥1 surviving
-    pass — never strips blocking to nothing.
+    Two gates, in order (runs after ``_diversify``, over the WHOLE pass list):
+      1. **Per-pass max-block** — any pass whose max block exceeds
+         ``_compute_max_safe_block`` (the per-block score-matrix cost, a real
+         resident bomb at every scale) is bounded/dropped immediately.
+      2. **Global total-pairs** — if the surviving passes' pairs SUM over
+         ``_fs_total_pair_budget`` (a flat memory-derived total, NOT per-pass and
+         NOT N-scaled), the largest-pair pass is bounded (append the most
+         selective reducer initial — surname, first name, city, then zip/id
+         prefix) or DROPPED, repeatedly, until the total is under budget.
+
+    A flat total is why this no longer over-bounds at 50K–100K (a 55M-pair
+    surname pass is memory-safe there and now KEPT — restoring recall the old
+    per-pass 5M floor cost) while still crushing the 12.9B-pair 1M case. Always
+    leaves ≥1 pass.
 
     Default ON with ``_fs_autoconfig_v2_enabled``; needs ``df`` to measure (skips
     otherwise, same contract as ``_diversify``). ``GOLDENMATCH_FS_MAX_PASS_PAIRS``
-    overrides the ceiling; ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` disables it.
-
-    (Future: the projection is an arrow-native kernel candidate — pushing it into
-    ``score-core`` would make it a Rust group-count over interned columns. For now
-    it is a once-per-config pure-Python pass, not a hot path.)
+    overrides the total; ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` disables it.
     """
     if blocking is None or not _fs_autoconfig_v2_enabled() or df is None:
         return blocking
@@ -5094,7 +5108,7 @@ def _bound_probabilistic_blocking_pairs(
     max_block = _compute_max_safe_block(
         effective_n_full, _native_enabled("block_scoring")
     )
-    max_pairs = _max_safe_candidate_pairs(effective_n_full)
+    total_budget = _fs_total_pair_budget(effective_n_full)
 
     passes = list(blocking.passes or []) or list(blocking.keys or [])
     if not passes:
@@ -5124,58 +5138,86 @@ def _bound_probabilistic_blocking_pairs(
             bframe, specs, effective_n_full, sample_n, _col_cache, _tx_cache
         )
 
-    def _within(proj: tuple[int, int] | None) -> bool:
-        return proj is not None and proj[0] <= max_block and proj[1] <= max_pairs
-
-    kept: list[BlockingKeyConfig] = []
-    changed = False
-    for key in passes:
-        specs = _pass_specs(key)
-        proj = _proj(specs)
-        if proj is None or _within(proj):
-            kept.append(key)
-            continue
-        # Over budget on pairs and/or max block: try to bound with a reducer.
+    def _bound_one(
+        key: BlockingKeyConfig,
+        specs: list[tuple[str, tuple[str, ...]]],
+    ) -> tuple[BlockingKeyConfig, tuple[int, int]] | None:
+        """Append the first reducer that brings the pass under max-block AND the
+        total budget; None if no reducer helps (caller then drops the pass)."""
         pass_fields = set(key.fields)
-        bounded: BlockingKeyConfig | None = None
         for rf, rt in reducers:
             if rf in pass_fields:
                 continue
             cspecs = specs + [(rf, rt)]
             cproj = _proj(cspecs)
-            if _within(cproj):
+            if cproj is not None and cproj[0] <= max_block and cproj[1] <= total_budget:
                 ft = {f: list(t) for f, t in cspecs}
-                bounded = BlockingKeyConfig(
-                    fields=[f for f, _ in cspecs], field_transforms=ft
+                return (
+                    BlockingKeyConfig(
+                        fields=[f for f, _ in cspecs], field_transforms=ft
+                    ),
+                    cproj,
                 )
-                logger.info(
-                    "FS pair-gate: pass %s projects %d pairs / %d max-block "
-                    "(> %d pairs / %d rows at n=%d); bounded to compound +[%s %s] "
-                    "(%d pairs / %d max-block). See #1803.",
-                    [f for f, _ in specs], proj[1], proj[0], max_pairs, max_block,
-                    effective_n_full, rf, " ".join(rt), cproj[1], cproj[0],
-                )
-                break
+        return None
+
+    # `entries` carries (key, specs, proj) for every pass (proj None =
+    # unmeasurable, treated as selective / not counted). NB: there is NO
+    # standalone per-block gate here — a block over ``max_block`` is only a
+    # memory bomb because it is also over-budget on pairs (a b-row single block
+    # is C(b,2) pairs; at 1M a >25k-row block is >300M pairs), so the total-pairs
+    # gate below catches every real case, and its ``_bound_one`` reducer already
+    # requires the bounded result to respect ``max_block``. A standalone
+    # max-block gate would ALSO bound small memory-trivial blocks (a 3k-row block
+    # at 50k is a 13 MB matrix) and needlessly cost recall — measured
+    # historical_50k f1_probabilistic 0.826 -> 0.794 before this was dropped.
+    entries: list[tuple[BlockingKeyConfig, list, tuple[int, int] | None]] = [
+        (key, _pass_specs(key), _proj(_pass_specs(key))) for key in passes
+    ]
+    changed = False
+
+    # Global total-pairs budget. Bound the largest-pair pass until the
+    # sum is under budget. Bounding (append a reducer -> a compound) is always
+    # allowed since it PRESERVES the pass; only DROPPING (no reducer helps) is
+    # blocked once a single pass remains, so blocking is never stripped to
+    # nothing. Each step strictly shrinks or removes a pass, so this terminates.
+    def _pairs(e: tuple[BlockingKeyConfig, list, tuple[int, int] | None]) -> int:
+        return e[2][1] if e[2] is not None else 0
+
+    while sum(_pairs(e) for e in entries) > total_budget:
+        boundable = [i for i in range(len(entries)) if _pairs(entries[i]) > 0]
+        if not boundable:
+            break  # remaining passes are all selective; nothing worth bounding
+        idx = max(boundable, key=lambda i: _pairs(entries[i]))
+        key, specs, proj = entries[idx]
+        bounded = _bound_one(key, specs)
         if bounded is not None:
-            kept.append(bounded)
-        else:
+            bkey, bproj = bounded
+            entries[idx] = (bkey, _pass_specs(bkey), bproj)
+            changed = True
             logger.info(
-                "FS pair-gate: dropping pass %s — projects %d pairs / %d max-block "
-                "(> %d pairs / %d rows at n=%d), no reducer brought it under "
-                "budget. Recall falls back to the selective passes. See #1803.",
-                [f for f, _ in specs], proj[1], proj[0], max_pairs, max_block,
+                "FS pair-gate: total over budget; pass %s (%d pairs) bounded to "
+                "%s (%d pairs) at n=%d. See #1803.",
+                key.fields, proj[1] if proj else -1, bkey.fields, bproj[1],
                 effective_n_full,
             )
-        changed = True
+        elif len(entries) > 1:
+            entries.pop(idx)
+            changed = True
+            logger.info(
+                "FS pair-gate: total over budget; dropping pass %s (%d pairs) — no "
+                "reducer bounds it. Recall falls back to the selective passes at "
+                "n=%d. See #1803.",
+                key.fields, proj[1] if proj else -1, effective_n_full,
+            )
+        else:
+            break  # last pass, can't bound -> keep it rather than strip to none
 
     if not changed:
         return blocking
+    kept = [e[0] for e in entries]
     if not kept:
         # Never strip blocking to nothing: retain the single most selective pass.
-        best = min(
-            passes,
-            key=lambda k: (_proj(_pass_specs(k)) or (0, 1 << 62))[1],
-        )
+        best = min(passes, key=lambda k: (_proj(_pass_specs(k)) or (0, 1 << 62))[1])
         kept = [best]
         logger.warning(
             "FS pair-gate: every pass exceeded budget; retaining the most "

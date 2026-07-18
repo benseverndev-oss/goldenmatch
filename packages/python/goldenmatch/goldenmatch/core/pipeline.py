@@ -149,16 +149,18 @@ def _split_pair_stream(
     consumes. Same split as the list path (parity-gated)."""
     import pyarrow.compute as _pc
 
-    from goldenmatch.backends.score_buckets import pairs_to_pair_stream  # noqa: F401
-
-    link_mask = _pc.greater_equal(pair_table.column("score"), link_threshold)
+    link_mask = _pc.greater_equal(  # pyright: ignore[reportAttributeAccessIssue]
+        pair_table.column("score"), link_threshold
+    )
 
     def _rows(tbl: Any) -> list[tuple[int, int, float]]:
         d = tbl.to_pydict()
         return list(zip(d["id_a"], d["id_b"], d["score"]))
 
     linked = _rows(pair_table.filter(link_mask))
-    review = _rows(pair_table.filter(_pc.invert(link_mask)))
+    review = _rows(
+        pair_table.filter(_pc.invert(link_mask))  # pyright: ignore[reportAttributeAccessIssue]
+    )
     return linked, review
 
 
@@ -376,19 +378,19 @@ def _score_probabilistic_matchkey(
     mk: Any,
     config: GoldenMatchConfig,
     *,
-    block_frame,
-    score_frame,
+    block_frame: Any,
+    score_frame: Any,
     matched_pairs: set,
     all_pairs: list,
     review_pairs: list,
-    target_ids=None,
+    target_ids: Any = None,
     across_files_only: bool = False,
-    source_lookup=None,
-    bench_dump_dir=None,
-    bench_candidate_pairs=None,
-    bench_emitted_pairs=None,
+    source_lookup: dict | None = None,
+    bench_dump_dir: str | None = None,
+    bench_candidate_pairs: set[tuple[int, int]] | None = None,
+    bench_emitted_pairs: set[tuple[int, int]] | None = None,
     log_em: bool = False,
-    em_results=None,
+    em_results: dict | None = None,
 ) -> None:
     """Score one probabilistic (Fellegi-Sunter) matchkey, folding results into
     ``all_pairs`` / ``review_pairs`` and updating ``matched_pairs`` in place.
@@ -418,8 +420,15 @@ def _score_probabilistic_matchkey(
         score_probabilistic_blocks_batched,
     )
 
-    def _across_files_filter(pairs):
-        if not across_files_only:
+    # Callers guard `config.blocking is None` before dispatching here (a
+    # probabilistic matchkey needs blocking); narrow it once for the whole body.
+    if config.blocking is None:
+        return
+
+    def _across_files_filter(
+        pairs: list[tuple[int, int, float]],
+    ) -> list[tuple[int, int, float]]:
+        if not across_files_only or source_lookup is None:
             return pairs
         return [
             (a, b, s) for a, b, s in pairs
@@ -551,7 +560,10 @@ def _score_probabilistic_matchkey(
         if bench_dump_dir:
             # Candidate ceiling: enumerate within-block pairs from the SAME
             # blocks score_buckets consumes (blocking is backend-independent);
-            # `pairs` is already the emitted set.
+            # `pairs` is already the emitted set. The dedupe caller always passes
+            # the accumulator sets alongside bench_dump_dir.
+            assert bench_candidate_pairs is not None
+            assert bench_emitted_pairs is not None
             for block in blocks:
                 block_df = block.materialize().native
                 _accumulate_block_candidate_pairs(block_df, bench_candidate_pairs)
@@ -579,6 +591,8 @@ def _score_probabilistic_matchkey(
     # Bench-dump path: per-block scoring for exact candidate/emitted accounting
     # (the batched path doesn't expose per-block candidates).
     if bench_dump_dir:
+        assert bench_candidate_pairs is not None
+        assert bench_emitted_pairs is not None
         block_scorer = probabilistic_block_scorer(scoring_mk, em_result)
         for block in blocks:
             block_df = block.materialize().native
@@ -2321,6 +2335,8 @@ def _run_fused_fs_match_short_circuit(
 
     if not (match_fused_fs_ready(config) or match_fused_fs_multipass_ready(config)):
         return None
+    if config.blocking is None:
+        return None  # fused-FS readiness implies blocking; narrow for the body
 
     from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
     from goldenmatch.core.frame import to_frame as _tf_entry
