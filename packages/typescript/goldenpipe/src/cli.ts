@@ -22,7 +22,7 @@ import { startMcpServer } from "./node/mcp/server.js";
 import { startA2aServer } from "./node/a2a/server.js";
 import { runServer as runApiServer } from "./node/api/server.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 function printResult(result: PipeResult, verbose: boolean): void {
   process.stdout.write(`GoldenPipe: ${result.source}\n`);

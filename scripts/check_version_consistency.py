@@ -44,6 +44,35 @@ def _init_version(path: Path) -> str | None:
     return m.group(1) if m else None
 
 
+# TS package-version declarations we enforce against package.json:
+#   const VERSION = "x.y.z" / export const VERSION = ... (cli + api-server banners)
+#   .version("x.y.z")                                    (commander CLI)
+#   version: "x.y.z"                                     (A2A AgentCard + MCP serverInfo)
+# Restricted to THREE-part semver so it never matches MCP `protocolVersion`
+# ("2024-11-05"), two-part schema tags, or numeric wire-format versions.
+_TS_VERSION_RE = re.compile(
+    r"""(?:(?:export\s+)?const\s+VERSION\s*=\s*|\.version\(\s*|\bversion:\s*)["'](\d+\.\d+\.\d+)["']"""
+)
+
+
+def _package_json_version(path: Path) -> str | None:
+    return json.loads(path.read_text(encoding="utf-8")).get("version")
+
+
+def _ts_src_versions(src_dir: Path) -> list[tuple[str, str]]:
+    """Every enforced version literal under a TS package's src/, labelled by
+    file:line so a drift points at the exact spot to fix."""
+    found: list[tuple[str, str]] = []
+    for ts in sorted(src_dir.rglob("*.ts")):
+        if ts.name.endswith((".test.ts", ".spec.ts", ".d.ts")):
+            continue
+        for i, line in enumerate(ts.read_text(encoding="utf-8").splitlines(), 1):
+            m = _TS_VERSION_RE.search(line)
+            if m is not None:
+                found.append((f"{ts.relative_to(src_dir.parent)}:{i}", m.group(1)))
+    return found
+
+
 def _check(name: str, sources: list[tuple[str, str | None]], errors: list[str]) -> None:
     present = [(label, v) for label, v in sources if v is not None]
     distinct = {v for _, v in present}
@@ -91,6 +120,21 @@ def main() -> int:
             if v is not None:
                 sources.append((str(init.relative_to(crate_dir)), v))
         _check(f"native/{crate_dir.name}", sources, errors)
+        checked += 1
+
+    # --- TypeScript packages (package.json + src version literals) ---
+    # The Python/Rust gates above never saw TS, so cli.ts / api-server / A2A
+    # AgentCard / MCP serverInfo versions drifted from package.json unnoticed.
+    for pkgjson in sorted((ROOT / "packages" / "typescript").glob("*/package.json")):
+        pkg_dir = pkgjson.parent
+        pkg_v = _package_json_version(pkgjson)
+        if pkg_v is None:
+            continue
+        sources = [("package.json", pkg_v)]
+        src = pkg_dir / "src"
+        if src.is_dir():
+            sources.extend(_ts_src_versions(src))
+        _check(f"ts/{pkg_dir.name}", sources, errors)
         checked += 1
 
     if errors:
