@@ -147,6 +147,117 @@ pub fn cluster_size_histogram(sizes: &[f64]) -> Vec<i64> {
     buckets.to_vec()
 }
 
+// ── Arrow-free column interning (shared C-Data ABI, #1788) ──────────────────
+//
+// The frame kernels (`duplicate_row_ratio`, `distinct_count`) already take
+// pre-interned dense `u64` columns, so they are arrow-free. Interning -- turning
+// column values into dense value-ids -- was the ONLY arrow-coupled step, living
+// in `analysis-native::intern_column` over `arrow::ArrayData`. That coupling is
+// why the wasm frame kernels were deferred (Wave 1b): bridging needed either
+// arrow-rs in the wasm (heavy) or a SECOND intern impl in TS (a drift surface).
+//
+// Moving interning here -- over plain typed buffers, not Arrow -- lets every
+// surface intern through the SAME code: native adapts its Arrow arrays to these
+// buffers, a future wasm/JS surface writes typed arrays straight into linear
+// memory, a SQL surface passes flat arrays. Semantics match `intern_column`
+// EXACTLY: null -> id 0, non-null -> dense ids from 1, floats canonicalized so
+// `-0.0`/`+0.0` fold and every `NaN` collapses to one id (Polars equality). Only
+// the equality PARTITION matters to the kernels, never the specific id numbers,
+// so this is parity by construction, not a re-derived mirror.
+//
+// `validity`: one byte per row, 0 = null, non-zero = valid. (A packed Arrow
+// validity bitmap is the production refinement; byte-per-row keeps the ABI
+// trivial from JS -- just a `Uint8Array`.)
+//
+// Spike-validated on branch `spike/analysis-wasm-cdata-abi` (PR #1691); this
+// lands the shared interner + adversarial parity tests. Wiring `analysis-native`
+// to delegate here (retiring its Arrow `intern_column`) and a wasm/TS surface
+// are tracked follow-ups on #1788.
+
+/// Canonical f64 bit pattern: one id for all `NaN`, one for `-0.0`/`+0.0`.
+/// Mirrors `analysis-native::canon_f64_bits`.
+#[inline]
+pub fn canon_f64_bits(x: f64) -> u64 {
+    if x.is_nan() {
+        0x7ff8_0000_0000_0000 // one canonical NaN
+    } else if x == 0.0 {
+        0.0f64.to_bits() // -0.0 and +0.0 fold (x == 0.0 catches both)
+    } else {
+        x.to_bits()
+    }
+}
+
+#[inline]
+fn is_null(validity: &[u8], i: usize) -> bool {
+    validity.get(i).is_some_and(|&b| b == 0)
+}
+
+/// Intern an f64 column (canonicalizing NaN / signed-zero) to dense u64 ids.
+pub fn intern_f64(values: &[f64], validity: &[u8]) -> Vec<u64> {
+    let mut map: HashMap<u64, u64> = HashMap::new();
+    let mut ids = Vec::with_capacity(values.len());
+    let mut next: u64 = 1;
+    for (i, &v) in values.iter().enumerate() {
+        if is_null(validity, i) {
+            ids.push(0);
+            continue;
+        }
+        let id = *map.entry(canon_f64_bits(v)).or_insert_with(|| {
+            let n = next;
+            next += 1;
+            n
+        });
+        ids.push(id);
+    }
+    ids
+}
+
+/// Intern an i64 column to dense u64 ids. Signed/unsigned ints of any width and
+/// booleans reach this by promotion (a `u64` is bit-cast to `i64`, which is
+/// bijective, so the equality partition is preserved).
+pub fn intern_i64(values: &[i64], validity: &[u8]) -> Vec<u64> {
+    let mut map: HashMap<i64, u64> = HashMap::new();
+    let mut ids = Vec::with_capacity(values.len());
+    let mut next: u64 = 1;
+    for (i, &v) in values.iter().enumerate() {
+        if is_null(validity, i) {
+            ids.push(0);
+            continue;
+        }
+        let id = *map.entry(v).or_insert_with(|| {
+            let n = next;
+            next += 1;
+            n
+        });
+        ids.push(id);
+    }
+    ids
+}
+
+/// Intern a UTF-8 column to dense u64 ids. `offsets` has `n_rows + 1` entries
+/// (Arrow utf8 layout): value `i` is `bytes[offsets[i]..offsets[i+1]]`. An empty
+/// slice is a valid empty string (distinct from null, which is `validity[i]==0`).
+pub fn intern_str(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> Vec<u64> {
+    let n = offsets.len().saturating_sub(1);
+    let mut map: HashMap<&[u8], u64> = HashMap::new();
+    let mut ids = Vec::with_capacity(n);
+    let mut next: u64 = 1;
+    for i in 0..n {
+        if is_null(validity, i) {
+            ids.push(0);
+            continue;
+        }
+        let (lo, hi) = (offsets[i] as usize, offsets[i + 1] as usize);
+        let id = *map.entry(&bytes[lo..hi]).or_insert_with(|| {
+            let nn = next;
+            next += 1;
+            nn
+        });
+        ids.push(id);
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +379,65 @@ mod tests {
         assert_eq!(distinct_count(&[1, 1, 2, 0]), 3); // {1,2,0} — null id 0 counts
         assert_eq!(distinct_count(&[]), 0);
         assert_eq!(distinct_count(&[5, 5, 5]), 1);
+    }
+
+    // ── Intern-ABI parity vs frame_kernels_adversarial.json (#1788) ──────────
+    // The frames are built in code (JSON can't hold NaN/-0.0); the asserted
+    // dup_ratio / distinct values are the SAME numbers committed in
+    // packages/{python,typescript}/goldenanalysis/tests/fixtures/
+    // frame_kernels_adversarial.json. Proves this arrow-free interner produces
+    // the same equality partition as analysis-native's Arrow `intern_column`
+    // (and the Python/TS reference), so the kernels are surface-agnostic.
+    const NULL: u8 = 0;
+    const OK: u8 = 1;
+
+    #[test]
+    fn intern_float_nan_null_matches_fixture() {
+        let nan = f64::NAN;
+        // f = [-0.0, 0.0, NaN, NaN, null, 1.0, 1.0]
+        let f = intern_f64(
+            &[-0.0, 0.0, nan, nan, 0.0, 1.0, 1.0],
+            &[OK, OK, OK, OK, NULL, OK, OK],
+        );
+        assert_eq!(distinct_count(&f), 4); // {-0/+0, NaN, null, 1.0} (fixture distinct.f == 4)
+        assert!((duplicate_row_ratio(&[f], 7) - 6.0 / 7.0).abs() < 1e-12); // fixture dup_ratio == 6/7
+    }
+
+    #[test]
+    fn intern_typed_numeric_matches_fixture() {
+        // i = [5,5,3,null,5]   g = [5.0,5.0,3.0,null,5.0]
+        let i = intern_i64(&[5, 5, 3, 0, 5], &[OK, OK, OK, NULL, OK]);
+        let g = intern_f64(&[5.0, 5.0, 3.0, 0.0, 5.0], &[OK, OK, OK, NULL, OK]);
+        assert_eq!(distinct_count(&i), 3); // fixture: distinct.i == 3
+        assert_eq!(distinct_count(&g), 3); // fixture: distinct.g == 3
+        assert!((duplicate_row_ratio(&[i, g], 5) - 0.6).abs() < 1e-12); // fixture: dup_ratio == 0.6
+    }
+
+    #[test]
+    fn intern_string_empty_null_matches_fixture() {
+        // s = ["a","a","",null,"a","b",null]  -- empty-string is NOT null.
+        // bytes "aaab", offsets slice each row; the null rows (3,6) have empty spans.
+        let offsets = [0u32, 1, 2, 2, 2, 3, 4, 4];
+        let s = intern_str(&offsets, b"aaab", &[OK, OK, OK, NULL, OK, OK, NULL]);
+        assert_eq!(distinct_count(&s), 4); // {a, "", b, null}  (fixture: distinct.s == 4)
+        assert!((duplicate_row_ratio(&[s], 7) - 5.0 / 7.0).abs() < 1e-12); // fixture: dup_ratio == 5/7
+    }
+
+    #[test]
+    fn intern_mixed_frame_matches_fixture() {
+        let nan = f64::NAN;
+        let f = intern_f64(
+            &[-0.0, 0.0, nan, nan, 0.0, 1.0, 1.0],
+            &[OK, OK, OK, OK, NULL, OK, OK],
+        );
+        let i = intern_i64(&[5, 5, 3, 3, 0, 5, 5], &[OK, OK, OK, OK, NULL, OK, OK]);
+        let offsets = [0u32, 1, 2, 2, 2, 3, 4, 4];
+        let s = intern_str(&offsets, b"aaab", &[OK, OK, OK, NULL, OK, OK, NULL]);
+        // Fixture `mixed`: distinct f/i/s == 4/3/4; dup_ratio == 2/7 (only rows 0,1
+        // are identical across all three columns).
+        assert_eq!(distinct_count(&f), 4);
+        assert_eq!(distinct_count(&i), 3);
+        assert_eq!(distinct_count(&s), 4);
+        assert!((duplicate_row_ratio(&[f, i, s], 7) - 2.0 / 7.0).abs() < 1e-12);
     }
 }
