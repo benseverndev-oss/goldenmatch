@@ -3126,6 +3126,14 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
     if not mk.fields:
         return False
+    # The native kernel implements ONLY the "unobserved"/neutral missing semantics
+    # (a null field is skipped; FS_SUPPORTS_MISSING_NEUTRAL). Under the "disagree"
+    # mode (#1834/#1851: auto-config picks it per-dataset for null-heavy data like
+    # historical_50k) a null field must instead score as level 0 (evidence AGAINST),
+    # which the kernel cannot express -- scoring nulls as neutral over-matches and
+    # collapses precision. Decline to the numpy path, which honors both modes.
+    if fs_missing_mode(mk) == "disagree":
+        return False
     needs_ensemble = False
     ne_fields = mk.negative_evidence or []
     for ne in ne_fields:
