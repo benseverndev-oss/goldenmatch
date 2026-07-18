@@ -7,6 +7,11 @@ use pgrx::prelude::*;
 
 use crate::spi;
 
+/// Rows per batched `INSERT ... VALUES (...),(...)` when persisting `gm_run`
+/// results. Bounds each statement's size while turning the former one-round-trip
+/// -per-row writeback into `ceil(n / INSERT_CHUNK)` statements (#1883).
+const INSERT_CHUNK: usize = 1000;
+
 /// Configure a named job with a JSON config.
 #[pg_extern]
 pub fn gm_configure(job_name: String, config_json: String) -> String {
@@ -96,12 +101,20 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
         );
     });
 
-    // Store scored pairs
+    // Store scored pairs. Batched: one multi-row INSERT per chunk inside a
+    // single Spi::connect, instead of a Spi::connect + single-row INSERT PER
+    // pair (#1883). At scale that per-row SPI connect/exec was O(pairs) round
+    // trips; chunking bounds the statement size while collapsing them to
+    // O(pairs / CHUNK).
     if let Ok(pairs) = goldenmatch_bridge::api::dedupe_pairs(&rows_json, &config_json) {
-        for p in &pairs {
+        for chunk in pairs.chunks(INSERT_CHUNK) {
+            let values: Vec<String> = chunk
+                .iter()
+                .map(|p| format!("('{}', {}, {}, {})", escaped, p.id_a, p.id_b, p.score))
+                .collect();
             let insert = format!(
-                "INSERT INTO goldenmatch._pairs (job_name, id_a, id_b, score) VALUES ('{}', {}, {}, {})",
-                escaped, p.id_a, p.id_b, p.score
+                "INSERT INTO goldenmatch._pairs (job_name, id_a, id_b, score) VALUES {}",
+                values.join(",")
             );
             Spi::connect(|mut client| {
                 let _ = client.update(&insert, None, None);
@@ -109,12 +122,16 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
         }
     }
 
-    // Store cluster assignments
+    // Store cluster assignments (batched, same rationale as the pairs above).
     if let Ok(members) = goldenmatch_bridge::api::dedupe_clusters(&rows_json, &config_json) {
-        for m in &members {
+        for chunk in members.chunks(INSERT_CHUNK) {
+            let values: Vec<String> = chunk
+                .iter()
+                .map(|m| format!("('{}', {}, {})", escaped, m.cluster_id, m.record_id))
+                .collect();
             let insert = format!(
-                "INSERT INTO goldenmatch._clusters (job_name, cluster_id, record_id) VALUES ('{}', {}, {})",
-                escaped, m.cluster_id, m.record_id
+                "INSERT INTO goldenmatch._clusters (job_name, cluster_id, record_id) VALUES {}",
+                values.join(",")
             );
             Spi::connect(|mut client| {
                 let _ = client.update(&insert, None, None);
