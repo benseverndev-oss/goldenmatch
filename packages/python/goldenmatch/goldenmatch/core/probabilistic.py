@@ -796,6 +796,28 @@ def _em_ne_fields(mk: MatchkeyConfig) -> list:
     return [ne for ne in (mk.negative_evidence or []) if ne.penalty_bits is None]
 
 
+def _fs_ne_extend_cols(cols: list, mk: MatchkeyConfig) -> None:
+    """Append each negative-evidence field name to ``cols`` in place when not
+    already present, so NE-only fields (e.g. the canonical phone example, absent
+    from ``mk.fields``) are projected into row_lookup for ``_ne_fired`` to read.
+    The single NE-projection source shared by the EM trainers and the scalar
+    scorer (#1804 item 4)."""
+    for ne in (mk.negative_evidence or []):
+        if ne.field not in cols:
+            cols.append(ne.field)
+
+
+def _fs_projection_cols(mk: MatchkeyConfig) -> list:
+    """The scoring/label projection columns: every non-record matchkey field
+    plus the negative-evidence fields. Used by ``estimate_m_from_labels`` and the
+    scalar scorer; ``train_em`` additionally projects record_embedding columns,
+    so it builds the base list itself and calls ``_fs_ne_extend_cols`` (#1804
+    item 4)."""
+    cols = [f.field for f in mk.fields if f.field != "__record__"]
+    _fs_ne_extend_cols(cols, mk)
+    return cols
+
+
 def _build_ne_matrix(
     pairs: list[tuple[int, int]],
     row_lookup: dict[int, dict],
@@ -1072,9 +1094,7 @@ def train_em(
     # else NE-only fields (the canonical phone example) are absent from
     # row_lookup, read as missing/null, and NE never fires during EM
     # (degenerate m/u estimate).
-    for ne in (mk.negative_evidence or []):
-        if ne.field not in cols:
-            cols.append(ne.field)
+    _fs_ne_extend_cols(cols, mk)
     # ── Step 1: Estimate u from RANDOM pairs (Splink approach) ──
     # Random pairs are overwhelmingly non-matches, so the observed
     # level distribution approximates u directly. No EM needed for u.
@@ -1483,10 +1503,7 @@ def estimate_m_from_labels(
     ne_fields_em = _em_ne_fields(mk)
     _warn_ne_blocking_overlap(ne_fields_em, blocking_fields)
 
-    cols = [f.field for f in mk.fields if f.field != "__record__"]
-    for ne in (mk.negative_evidence or []):
-        if ne.field not in cols:
-            cols.append(ne.field)
+    cols = _fs_projection_cols(mk)
     # Keep only labels whose ids are present and distinct; canonicalize + dedup.
     # Membership rides the (cheap, ints-only) id column — the row dicts are
     # materialized below for ONLY the sampled/labeled ids (#1803 item 4).
@@ -1935,22 +1952,7 @@ def score_probabilistic_continuous(
     with np.errstate(over="ignore"):
         normalized = 1.0 / (1.0 + np.exp(-np.clip(log_ratio, -700.0, 700.0)))
 
-    iu, ju = np.triu_indices(n, k=1)
-    keep = normalized[iu, ju] >= threshold
-    if not keep.any():
-        return []
-    ids = np.asarray(row_ids)
-    a_ids = ids[iu[keep]]
-    b_ids = ids[ju[keep]]
-    scores = normalized[iu, ju][keep]
-
-    results: list[tuple[int, int, float]] = []
-    for a, b, s in zip(a_ids.tolist(), b_ids.tolist(), scores.tolist()):
-        pair_key = (a, b) if a < b else (b, a)
-        if pair_key in exclude_pairs:
-            continue
-        results.append((a, b, round(float(s), 4)))
-    return results
+    return _emit_triu_pairs(normalized, row_ids, threshold, exclude_pairs)
 
 
 def _fallback_result(mk: MatchkeyConfig) -> EMResult:
@@ -2167,6 +2169,46 @@ def resolve_thresholds(
     return link, min(review, link)
 
 
+def _fs_link_threshold(
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+) -> float:
+    """The FS link cutoff: configured ``mk.link_threshold`` when set, else the
+    calibration-aware value from ``compute_thresholds``. Extracted verbatim from
+    the scalar / vectorized / batched scorers (#1804 item 4) so they cannot
+    drift on how the cutoff is resolved."""
+    if mk.link_threshold is not None:
+        return mk.link_threshold
+    link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    return link_threshold
+
+
+def _emit_triu_pairs(
+    normalized: np.ndarray,
+    row_ids: list,
+    threshold: float,
+    exclude_pairs: set,
+) -> list[tuple[int, int, float]]:
+    """Emit upper-triangle (i<j) pairs whose ``normalized`` score is at/above
+    ``threshold``, dropping excluded pairs and rounding to 4 dp. Extracted
+    verbatim from the continuous / vectorized FS scorers (#1804 item 4)."""
+    n = len(row_ids)
+    iu, ju = np.triu_indices(n, k=1)
+    keep = normalized[iu, ju] >= threshold
+    if not keep.any():
+        return []
+    ids = np.asarray(row_ids)
+    a_ids = ids[iu[keep]]
+    b_ids = ids[ju[keep]]
+    scores = normalized[iu, ju][keep]
+    results: list[tuple[int, int, float]] = []
+    for a, b, s in zip(a_ids.tolist(), b_ids.tolist(), scores.tolist()):
+        pair_key = (a, b) if a < b else (b, a)
+        if pair_key in exclude_pairs:
+            continue
+        results.append((a, b, round(float(s), 4)))
+    return results
+
+
 def score_probabilistic(
     block_df: pl.DataFrame,
     mk: MatchkeyConfig,
@@ -2186,10 +2228,7 @@ def score_probabilistic(
     # precompute_matchkey_transforms) so an NE-only field (the canonical
     # phone example -- not in mk.fields) is present for _ne_fired to read,
     # mirroring train_em's row_lookup projection.
-    cols = [f.field for f in mk.fields if f.field != "__record__"]
-    for ne in (mk.negative_evidence or []):
-        if ne.field not in cols:
-            cols.append(ne.field)
+    cols = _fs_projection_cols(mk)
     row_lookup: dict[int, dict] = {}
     from goldenmatch.core.frame import to_frame as _tf_d5c
 
@@ -2205,11 +2244,7 @@ def score_probabilistic(
     calibrated = _fs_calibration_mode() == "posterior"
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
 
-    # Determine threshold
-    if mk.link_threshold is not None:
-        link_threshold = mk.link_threshold
-    else:
-        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    link_threshold = _fs_link_threshold(mk, em_result, calibrated)
 
     # Precompute per-row transformed values for TF-adjustment fields so the
     # per-pair loop can apply the same Winkler adjustment the vectorized path
@@ -2618,10 +2653,7 @@ def score_probabilistic_vectorized(
 
     ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
 
-    if mk.link_threshold is not None:
-        link_threshold = mk.link_threshold
-    else:
-        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    link_threshold = _fs_link_threshold(mk, em_result, calibrated)
 
     # Accumulate the total match-weight matrix field by field.
     total_weight = np.zeros((n, n), dtype=np.float64)
@@ -2696,22 +2728,7 @@ def score_probabilistic_vectorized(
         )
 
     # Emit upper-triangle pairs at/above threshold.
-    iu, ju = np.triu_indices(n, k=1)
-    keep = normalized[iu, ju] >= link_threshold
-    if not keep.any():
-        return []
-    ids = np.asarray(row_ids)
-    a_ids = ids[iu[keep]]
-    b_ids = ids[ju[keep]]
-    scores = normalized[iu, ju][keep]
-
-    results: list[tuple[int, int, float]] = []
-    for a, b, s in zip(a_ids.tolist(), b_ids.tolist(), scores.tolist()):
-        pair_key = (a, b) if a < b else (b, a)
-        if pair_key in exclude_pairs:
-            continue
-        results.append((a, b, round(float(s), 4)))
-    return results
+    return _emit_triu_pairs(normalized, row_ids, link_threshold, exclude_pairs)
 
 
 def _fs_batch_rows() -> int:
@@ -2773,10 +2790,7 @@ def score_probabilistic_vectorized_batch(
     _missing_mode = fs_missing_mode(mk)  # #1846
     prior_w = prior_weight(em_result.proportion_matched) if calibrated else 0.0
     ne_min_weight, ne_max_weight = _fs_ne_weight_range(em_result, mk)
-    if mk.link_threshold is not None:
-        link_threshold = mk.link_threshold
-    else:
-        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    link_threshold = _fs_link_threshold(mk, em_result, calibrated)
 
     total_weight = np.zeros((S, S), dtype=np.float64)
     has_regular_evidence = np.zeros((S, S), dtype=bool)
