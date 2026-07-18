@@ -1045,15 +1045,20 @@ def test_calibration_lever_reestimates_within_block_rate_from_tiny_prior():
 
     upgraded_mk = result.upgraded_config.get_matchkeys()[0]
     assert upgraded_mk.link_threshold is not None
-    # Raw 0.001 prior -> link_idx at the 99.8th percentile of 115 pairs, deep
-    # in the saturated exact-dupe top (normalized 1.0, clamped to 0.95). The
-    # E-step estimate (~0.5) pulls the cut down into the distribution body.
+    # The lever re-estimates the within-block rate (~0.5) from the model's own
+    # likelihood ratios and cuts in the distribution body, not at the saturated
+    # exact-dupe top. (#1802 now ALSO discards the raw random-pair prior at
+    # IMPORT, but the lever's scratch re-estimate is what's under test here and
+    # is computed independently of the stored proportion_matched.)
     assert upgraded_mk.link_threshold <= 0.5
-    # Copy-on-write: the shipped upgraded model keeps the imported prior.
+    # Copy-on-write: the lever does not mutate the shipped model's
+    # proportion_matched. #1802 makes import store the within-block default
+    # (0.05) rather than the raw 0.001 random-pair prior, and the lever leaves
+    # that untouched (it re-estimates into a scratch copy).
     assert result.em_model is not None
-    assert result.em_model.proportion_matched == pytest.approx(0.001)
+    assert result.em_model.proportion_matched == pytest.approx(0.05)
     assert conversion.em_model is not None
-    assert conversion.em_model.proportion_matched == pytest.approx(0.001)
+    assert conversion.em_model.proportion_matched == pytest.approx(0.05)
 
     findings = [
         f for f in result.report.findings

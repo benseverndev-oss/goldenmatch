@@ -824,14 +824,40 @@ def import_em(
         for f in m_probs
     }
 
-    if "probability_two_random_records_match" in settings:
-        proportion_matched = settings["probability_two_random_records_match"]
+    # #1802: Splink's `probability_two_random_records_match` is a RANDOM-PAIR
+    # prior -- P(match | two records drawn at random) -- orders of magnitude
+    # below the WITHIN-BLOCK match rate that `EMResult.proportion_matched`
+    # means and that `prior_weight` / `compute_thresholds` / posterior scoring
+    # all assume. GoldenMatch's own `train_em` estimates the within-block rate
+    # from blocked pairs; feeding the raw random-pair prior into the percentile
+    # cut pushes the link threshold into the extreme top of the blocked-pair
+    # distribution and collapses recall (#1760 dogfood: F1 0.482 -> 0.157).
+    # A DATA-FREE model import cannot re-estimate the within-block rate (that
+    # needs scored candidate pairs -- what `import-splink --upgrade` does via
+    # splink_upgrade._estimate_within_block_prior). So discard the mis-scaled
+    # random-pair prior and fall back to the same within-block default an
+    # ABSENT setting uses: a present-but-random-pair prior then behaves
+    # identically to no prior (the safe regime), while `--upgrade` still
+    # refines it from the user's data.
+    _WITHIN_BLOCK_PRIOR_DEFAULT = 0.05
+    raw_prior = settings.get("probability_two_random_records_match")
+    proportion_matched = _WITHIN_BLOCK_PRIOR_DEFAULT
+    if raw_prior is not None:
+        report.warn(
+            "probability_two_random_records_match",
+            f"probability_two_random_records_match={raw_prior} is a random-pair "
+            "prior, but GoldenMatch's proportion_matched is a WITHIN-BLOCK match "
+            f"rate; the raw value is discarded and defaulted to "
+            f"{_WITHIN_BLOCK_PRIOR_DEFAULT} to avoid a recall collapse "
+            "(#1802/#1760). Run `import-splink --upgrade` to re-estimate the "
+            "within-block prior from your data.",
+            mapped_to="em.proportion_matched",
+        )
     else:
-        proportion_matched = 0.05
         report.info(
             "probability_two_random_records_match",
             "probability_two_random_records_match absent from trained settings; "
-            "assumed default 0.05",
+            f"assumed within-block default {_WITHIN_BLOCK_PRIOR_DEFAULT}",
             mapped_to="em.proportion_matched",
         )
 
