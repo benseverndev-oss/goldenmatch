@@ -1660,7 +1660,7 @@ def _build_strong_identifier_union(
 
 def _build_compound_blocking(
     profiles: list[ColumnProfile],
-    df: pl.DataFrame,
+    df: pl.DataFrame | Any,  # #1852: also accepts pa.Table (routed via to_frame)
     max_safe_block: int,
     max_null_rate: float,
 ) -> BlockingConfig | None:
@@ -1672,23 +1672,29 @@ def _build_compound_blocking(
 
     Returns None if no compound pair brings blocks below max_safe_block.
     """
+    # #1852: route every column/group op through the backend-neutral Frame
+    # seam so this helper works on BOTH a polars ``pl.DataFrame`` and an Arrow
+    # ``pa.Table`` (the latter is the default input since the arrow-native
+    # autoconfig path, `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1`). The raw
+    # `df[col].null_count()` / `df.height` / `df.group_by(...)` polars idioms
+    # AttributeError'd on a `pa.Table`.
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+
     def _null_rate(col_name: str) -> float:
-        return df[col_name].null_count() / df.height if df.height > 0 else 0.0
+        return frame.column(col_name).null_count() / frame.height if frame.height > 0 else 0.0
 
     def _max_block_size(col_name: str) -> int:
         """Largest group size when blocking on this column (W3d: seam)."""
-        from goldenmatch.core.frame import to_frame
-
-        return int(to_frame(df).group_len([col_name]).column("len").max() or 0)
+        return int(frame.group_len([col_name]).column("len").max() or 0)
 
     def _nonnull_ratio(col_name: str) -> float:
         """Distinct/non-null ratio -- the TRUE per-record uniqueness, not the
         null-deflated ColumnProfile.cardinality_ratio. A near-1.0 value means a
         surrogate-key-like column (npi/phone/email) whose only big "block" is
         its null bucket -- useless as a blocking component."""
-        from goldenmatch.core.frame import to_frame
-
-        nn = to_frame(df).column(col_name).drop_nulls()
+        nn = frame.column(col_name).drop_nulls()
         n = len(nn)
         return (nn.n_unique() / n) if n > 0 else 1.0
 
@@ -1752,14 +1758,14 @@ def _build_compound_blocking(
         return None
 
     # Sort by cardinality descending — best single column first
-    candidates.sort(key=lambda p: df[p.name].n_unique(), reverse=True)
+    candidates.sort(key=lambda p: frame.column(p.name).n_unique(), reverse=True)
     best = candidates[0]
 
     # Test compound pairs: best + each other candidate (up to 5)
     pair_results: list[tuple[ColumnProfile, int]] = []
     for other in candidates[1:6]:
         try:
-            max_block = int(df.group_by([best.name, other.name]).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
+            max_block = int(frame.group_len([best.name, other.name]).column("len").max() or 0)
             pair_results.append((other, max_block))
             logger.debug(
                 "Compound pair [%s, %s]: max_block=%d",

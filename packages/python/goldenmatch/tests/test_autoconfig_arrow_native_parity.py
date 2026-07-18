@@ -156,6 +156,47 @@ def test_arrow_native_is_the_default():
     assert _dupe_count(res_default) == _dupe_count(res_pl)
 
 
+def _compound_shape():
+    """400 rows where every SINGLE column is oversized (4 blocks of 100) but the
+    compound (first, last) pair is bounded (16 blocks of 25) -- the shape that
+    routes ``build_blocking`` into ``_build_compound_blocking``."""
+    return {
+        "first": [f"n{i % 4}" for i in range(400)],
+        "last": [f"s{(i // 4) % 4}" for i in range(400)],
+    }
+
+
+def test_build_compound_blocking_accepts_arrow_table():
+    """#1852: ``_build_compound_blocking`` AttributeError'd on a ``pa.Table``
+    (``df[col].null_count()`` / ``df.height`` / ``df.group_by`` are polars-only)
+    -- live on 3.3.1/3.4.0 with GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE default-on.
+    It must now run on Arrow via the Frame seam and return the SAME config the
+    polars input yields (byte-value-equivalent on this deterministic shape)."""
+    from goldenmatch.core.autoconfig import ColumnProfile, _build_compound_blocking
+
+    data = _compound_shape()
+    profiles = [
+        ColumnProfile(name="first", dtype="str", col_type="string", confidence=1.0,
+                      cardinality_ratio=4 / 400),
+        ColumnProfile(name="last", dtype="str", col_type="string", confidence=1.0,
+                      cardinality_ratio=4 / 400),
+    ]
+
+    cfg_pa = _build_compound_blocking(profiles, pa.table(data), max_safe_block=50, max_null_rate=0.2)
+    cfg_pl = _build_compound_blocking(
+        profiles, pl.DataFrame(data), max_safe_block=50, max_null_rate=0.2
+    )
+
+    # Arrow no longer raises AttributeError and finds a bounded compound.
+    assert cfg_pa is not None
+    assert cfg_pa.strategy == "multi_pass"
+    # Cross-backend equivalence: same passes selected on the deterministic shape.
+    assert cfg_pl is not None
+    assert [(list(p.fields), list(p.transforms)) for p in cfg_pa.passes] == [
+        (list(p.fields), list(p.transforms)) for p in cfg_pl.passes
+    ]
+
+
 @pytest.mark.parametrize("shape", ["exact-id-plus-names", "shared-email-switchboard"])
 def test_arrow_native_config_matchkey_equivalence(shape):
     """On shapes without a near-tie blocking choice, the arrow-native config's
