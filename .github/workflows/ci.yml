@@ -3434,6 +3434,12 @@ jobs:
       - python_postgres
       - synthetic_benchmarks
       - benchmark_runner_smoke
+      # #1855: quality_gate is BLOCKING via ci-required (not just its own job).
+      # It is path-filtered (skipped -> counts as pass here) and its gate step is
+      # not continue-on-error, so a real red blocks the merge queue instead of
+      # surfacing as a mergeable UNSTABLE. #1834 (historical_50k f1_probabilistic
+      # 0.83 -> 0.33) merged precisely because this was absent.
+      - quality_gate
       - typescript
       - wasm_flow
       - web_ui_e2e
