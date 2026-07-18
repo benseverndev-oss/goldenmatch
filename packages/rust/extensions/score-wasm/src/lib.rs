@@ -3,9 +3,10 @@
 //! are byte-identical across Python, the FFI UDFs, and TS WASM.
 //!
 //! Covered scorer ids (must match the TS backend): 0=jaro_winkler,
-//! 1=levenshtein, 2=token_sort, 3=exact. id=2 routes through score-core's
+//! 1=levenshtein, 2=token_sort, 3=exact, 4=date. id=2 routes through score-core's
 //! `token_sort_normalized_ratio` (the TS-parity lowercase+strip normalize), NOT
-//! the un-normalized `score_one(2)` (which the FFI/native path depends on).
+//! the un-normalized `score_one(2)` (which the FFI/native path depends on); every
+//! other id (incl. 4=date, the #1858 date-aware scorer) delegates to `score_one`.
 //!
 //! Boundary design: the batch `score_matrix` entry crosses the JS<->WASM boundary
 //! ONCE per NxN block (values arrive as one separator-joined string), never per
@@ -58,6 +59,16 @@ mod tests {
         let m = score_matrix_impl(&vals, 3);
         assert_eq!(m[1], 1.0); // (0,1) a==a
         assert_eq!(m[2], 0.0); // (0,2) a!=b
+    }
+
+    #[test]
+    fn date_id4_separates_typo_from_unrelated() {
+        // #1858: id=4 delegates to score_one -> date_similarity. Unrelated ISO
+        // dates -> 0.0 (jaro_winkler would give 0.80+); a 1-digit typo stays high.
+        let vals = ["1980-01-01", "1980-01-02", "1975-11-30"];
+        let m = score_matrix_impl(&vals, 4);
+        assert!((m[1] - 0.90).abs() < 1e-9); // (0,1) typo
+        assert_eq!(m[2], 0.0); // (0,2) unrelated
     }
 
     #[test]

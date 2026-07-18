@@ -239,6 +239,74 @@ export function levenshteinSimilarity(a: string, b: string): number {
 }
 
 /**
+ * Damerau-Levenshtein edit distance (adjacent-transposition / OSA). A swapped
+ * pair of adjacent chars costs ONE edit, not two -- the mirror of Python/Rust
+ * rapidfuzz `DamerauLevenshtein` for the short digit strings the `date` scorer
+ * compares (score-core `date_similarity`). Three-row DP for the transposition
+ * lookback.
+ */
+export function damerauLevenshteinDistance(a: string, b: string): number {
+  const ca = Array.from(a);
+  const cb = Array.from(b);
+  const lenA = ca.length;
+  const lenB = cb.length;
+  if (lenA === 0) return lenB;
+  if (lenB === 0) return lenA;
+
+  let prevPrev = new Uint32Array(lenB + 1);
+  let prev = new Uint32Array(lenB + 1);
+  let curr = new Uint32Array(lenB + 1);
+  for (let j = 0; j <= lenB; j++) prev[j] = j;
+
+  for (let i = 1; i <= lenA; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= lenB; j++) {
+      const cost = ca[i - 1] === cb[j - 1] ? 0 : 1;
+      let v = Math.min(
+        prev[j]! + 1, // deletion
+        curr[j - 1]! + 1, // insertion
+        prev[j - 1]! + cost, // substitution
+      );
+      // Adjacent transposition: ca[i-1]==cb[j-2] && ca[i-2]==cb[j-1].
+      if (i > 1 && j > 1 && ca[i - 1] === cb[j - 2] && ca[i - 2] === cb[j - 1]) {
+        v = Math.min(v, prevPrev[j - 2]! + 1);
+      }
+      curr[j] = v;
+    }
+    [prevPrev, prev, curr] = [prev, curr, prevPrev];
+  }
+  return prev[lenB]!;
+}
+
+/** The 8 packed digits of an ISO-8601 `YYYY-MM-DD` string, or null. Mirror of
+ * score-core `iso_date_digits` (strict; ranges not validated). */
+function isoDateDigits(s: string): string | null {
+  if (s.length !== 10 || s[4] !== "-" || s[7] !== "-") return null;
+  const digits = s.slice(0, 4) + s.slice(5, 7) + s.slice(8, 10);
+  return /^\d{8}$/.test(digits) ? digits : null;
+}
+
+/**
+ * Date-aware similarity (#1858). `jaro_winkler` scores unrelated ISO birthdays
+ * 0.80+; this parses `YYYY-MM-DD` and uses Damerau-Levenshtein over the canonical
+ * digits so a typo (0.90) is far above an unrelated date (0.00). Mirrors
+ * score-core `date_similarity` / the Python `_date_similarity_py`. Non-ISO input
+ * degrades to `levenshtein`.
+ */
+export function dateSimilarity(a: string, b: string): number {
+  const da = isoDateDigits(a);
+  const db = isoDateDigits(b);
+  if (da !== null && db !== null) {
+    const d = damerauLevenshteinDistance(da, db);
+    if (d === 0) return 1.0;
+    if (d === 1) return 0.9;
+    if (d === 2) return 0.75;
+    return 0.0;
+  }
+  return levenshteinSimilarity(a, b);
+}
+
+/**
  * Indel (insertion+deletion) edit distance.
  *
  * Like Levenshtein but without substitutions — a substitution costs 2
@@ -464,6 +532,8 @@ export function scoreField(
       return jaroWinkler(valA, valB);
     case "levenshtein":
       return levenshteinSimilarity(valA, valB);
+    case "date":
+      return dateSimilarity(valA, valB);
     case "token_sort":
       return tokenSortRatio(valA, valB);
     case "soundex_match":
