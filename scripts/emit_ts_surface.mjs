@@ -58,6 +58,16 @@ async function emit(pkg) {
     descriptor.a2a_skills = a.AGENT_CARD.skills.map((s) => s.id).sort();
   }
 
+  // goldenmatch config surfaces: the scorer/transform name sets. Mirrors the
+  // Python emitter; intended cross-language deltas live in parity/goldenmatch.yaml.
+  if (pkg === "goldenmatch") {
+    const t = await load("dist/core/types.js");
+    if (!t.VALID_SCORERS || !t.VALID_TRANSFORMS)
+      throw new Error(`${pkg}: expected VALID_SCORERS + VALID_TRANSFORMS in dist/core/types.js`);
+    descriptor.scorers = [...t.VALID_SCORERS].sort();
+    descriptor.transforms = [...t.VALID_TRANSFORMS].sort();
+  }
+
   return descriptor;
 }
 

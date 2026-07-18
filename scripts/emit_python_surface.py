@@ -52,6 +52,19 @@ def _cli(cli_module: str):
     return fn
 
 
+def _scorers() -> list[str]:
+    # goldenmatch config surface: the accepted comparison-scorer names. Mirrors
+    # TS `VALID_SCORERS` (types.ts); intended cross-language deltas are declared
+    # in parity/goldenmatch.yaml (e.g. audio_fp/phash/radial are Python-only).
+    from goldenmatch.config.schemas import VALID_SCORERS
+    return sorted(VALID_SCORERS)
+
+
+def _transforms() -> list[str]:
+    from goldenmatch.config.schemas import VALID_SIMPLE_TRANSFORMS
+    return sorted(VALID_SIMPLE_TRANSFORMS)
+
+
 # The only per-package variance on the Python side is the CLI module path.
 _CLI_MODULE = {
     "goldenmatch": "goldenmatch.cli.main",
@@ -65,7 +78,12 @@ _CLI_MODULE = {
 # Each surface -> (callable returning list[str], extra-name for the env-gap message).
 REGISTRY = {
     pkg: {"mcp_tools": (_mcp(pkg), "mcp"), "cli_commands": (_cli(mod), None),
-          **({"a2a_skills": (_a2a(pkg), "a2a")} if pkg in _A2A_PACKAGES else {})}
+          **({"a2a_skills": (_a2a(pkg), "a2a")} if pkg in _A2A_PACKAGES else {}),
+          # Scorer/transform config surfaces are goldenmatch-only (no extra needed:
+          # config.schemas imports without the mcp/a2a stacks). Other packages
+          # never declare these surfaces, so they're skipped for them.
+          **({"scorers": (_scorers, None), "transforms": (_transforms, None)}
+             if pkg == "goldenmatch" else {})}
     for pkg, mod in _CLI_MODULE.items()
 }
 

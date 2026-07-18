@@ -380,6 +380,11 @@ api_parity:
   - 'packages/typescript/*/src/node/mcp/**'
   - 'packages/typescript/*/src/node/a2a/**'
   - 'packages/typescript/*/src/cli.ts'
+  # scorers/transforms surfaces: the VALID_SCORERS / VALID_SIMPLE_TRANSFORMS
+  # (Python) and VALID_SCORERS / VALID_TRANSFORMS (TS) declarations. Without
+  # these the gate can't see a scorer/transform added on one side only.
+  - 'packages/python/*/*/config/schemas.py'
+  - 'packages/typescript/*/src/core/types.ts'
   - 'parity/**'
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'
