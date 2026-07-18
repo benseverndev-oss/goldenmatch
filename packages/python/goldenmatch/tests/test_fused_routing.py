@@ -283,9 +283,11 @@ def _covered_match_config(n_fields: int = 1, threshold: float = 0.85) -> GoldenM
     )
 
 
-def _uncovered_match_config() -> GoldenMatchConfig:
-    """A probabilistic config -- OUT of the fused v1 boundary (no EMResult at
-    decision time), so not covered by match_fused_ready / _multipass_ready."""
+def _fs_covered_match_config() -> GoldenMatchConfig:
+    """A probabilistic config COVERED by the fused FS entry (static single-key +
+    one probabilistic matchkey with an FS-native scorer). The routing decision is
+    config-only + RSS-only here; the EM is fit inside the pipeline short-circuit
+    at run time, so a covered FS config routes just like a weighted one."""
     return GoldenMatchConfig(
         blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["blk"])]),
         matchkeys=[
@@ -293,6 +295,22 @@ def _uncovered_match_config() -> GoldenMatchConfig:
                 name="mk",
                 type="probabilistic",
                 fields=[MatchkeyField(field="c0", scorer="jaro_winkler")],
+            )
+        ],
+    )
+
+
+def _uncovered_match_config() -> GoldenMatchConfig:
+    """A probabilistic config OUTSIDE every fused entry: its scorer (`qgram`) is a
+    valid classic FS scorer but is NOT in the fused-FS scorer set, so neither the
+    weighted nor the FS gate covers it."""
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["blk"])]),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk",
+                type="probabilistic",
+                fields=[MatchkeyField(field="c0", scorer="qgram")],
             )
         ],
     )
@@ -322,9 +340,24 @@ def test_routes_when_covered_pressure_safe():
     )
 
 
+def test_routes_when_fs_covered_pressure():
+    # A covered Fellegi-Sunter config routes under pressure just like a weighted
+    # one -- the decision is config-only + RSS-only; the EM is fit at run time.
+    assert (
+        maybe_route_fused_match(
+            config=_fs_covered_match_config(),
+            profile=_profile(),
+            runtime=_runtime(1.0),
+            n_rows=10_000_000,
+            needs_artifacts=False,
+        )
+        is True
+    )
+
+
 def test_not_covered_declines():
-    # Probabilistic config -> not covered by the fused single/multi-pass entry ->
-    # declines even under extreme pressure.
+    # A probabilistic config on a non-fused-FS scorer (qgram) -> not covered by
+    # any fused entry -> declines even under extreme pressure.
     assert (
         maybe_route_fused_match(
             config=_uncovered_match_config(),
