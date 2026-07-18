@@ -162,6 +162,34 @@ def _split_pair_stream(
     return linked, review
 
 
+_FS_EM_SAMPLE_SEED = 42
+
+
+def _fs_em_sample_rows() -> int | None:
+    """``GOLDENMATCH_FS_EM_SAMPLE_ROWS`` (default OFF): cap the frame EM training
+    builds its within-block-pair sample from on the FS bucket route.
+
+    On the bucket route with a trained (not preloaded) EM, ``blocks`` feed ONLY
+    EM's ~10k within-block-pair sample -- ``score_buckets`` re-partitions
+    internally and never reads them. Yet ``build_blocks`` materializes EVERY
+    block on the FULL frame, which is the FS memory PEAK (measured: ~1.9 GB at
+    100k / ~11.7 GB at 1M on the native path, a spike BEFORE scoring, while
+    bucket scoring itself runs flat ~274 MB). Building blocks on a bounded random
+    sample instead keeps EM's pair sample representative while cutting that peak.
+
+    Default OFF -> byte-identical EM (full-frame blocks). EM is the repo's most
+    regression-prone code (#1835/#1836), so the default flip is gated on the
+    bench-probabilistic panel, never flipped blind."""
+    v = os.environ.get("GOLDENMATCH_FS_EM_SAMPLE_ROWS")
+    if not v:
+        return None
+    try:
+        n = int(v)
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
 def _finalize_review_pairs(
     review_pairs: list[tuple[int, int, float]],
     linked_pairs: list[tuple[int, int, float]],
@@ -394,9 +422,41 @@ def _score_probabilistic_matchkey(
     _fs_need_blocks = (
         bool(bench_dump_dir) or not _fs_use_bucket or not fs_model_preloaded(mk)
     )
-    blocks = (
-        build_blocks(block_frame, config.blocking) if _fs_need_blocks else []
+    # EM-only blocks (dedupe scope): bucket route + trained EM (no preloaded
+    # model) + no bench dump. Here `blocks` feed ONLY EM's within-block-pair
+    # sample; score_buckets re-partitions internally and never reads them, so a
+    # bounded random sample of the frame (GOLDENMATCH_FS_EM_SAMPLE_ROWS) keeps
+    # EM's pair sample representative while avoiding the full-frame build_blocks
+    # PEAK (the FS memory hog, a spike BEFORE scoring). Gated to target_ids is
+    # None -- the match lanes are out of the validated scope.
+    _em_only_blocks = (
+        target_ids is None
+        and _fs_use_bucket
+        and not bench_dump_dir
+        and not fs_model_preloaded(mk)
     )
+    _em_cap = _fs_em_sample_rows()
+    if _fs_need_blocks and _em_only_blocks and _em_cap is not None:
+        from goldenmatch.core.frame import to_frame as _tf_em
+
+        _em_src = _tf_em(score_frame)
+        if _em_src.height > _em_cap:
+            logger.info(
+                "FS EM-block sample: EM training blocks from a %d-row sample of "
+                "%d (GOLDENMATCH_FS_EM_SAMPLE_ROWS) -- avoids the full-frame "
+                "build_blocks peak; score_buckets ignores these blocks.",
+                _em_cap, _em_src.height,
+            )
+            blocks = build_blocks(
+                _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED).native,
+                config.blocking,
+            )
+        else:
+            blocks = build_blocks(block_frame, config.blocking)
+    elif _fs_need_blocks:
+        blocks = build_blocks(block_frame, config.blocking)
+    else:
+        blocks = []
     # Collect from keys AND passes (multi_pass puts keys in `.passes`).
     blocking_fields = (
         collect_blocking_fields(config.blocking) if config.blocking else []
