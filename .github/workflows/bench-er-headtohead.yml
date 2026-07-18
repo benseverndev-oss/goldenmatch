@@ -72,6 +72,13 @@ permissions:
 env:
   ARROW_DEFAULT_MEMORY_POOL: system
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+  # Force the memory-bounded per-block bucket scoring route for FS. The dense-
+  # matrix route (score_probabilistic_vectorized) allocates O(block^2) float64
+  # matrices and OOMs the 64 GB runner at 1M on the auto-config person shape;
+  # the bucket route dedupes 1.2M in ~2.9 GB even on the numpy path (proven by
+  # bench-fs-distributed run 29646390796). orchestrate.py's lane_env overlays
+  # this onto every lane subprocess via {**os.environ, **lane.env}.
+  GOLDENMATCH_FS_DEFAULT_BUCKET: "1"
 
 jobs:
   setup:
