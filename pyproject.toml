@@ -4,6 +4,22 @@ version = "0.0.0"
 description = "Golden Suite monorepo"
 requires-python = ">=3.11"
 
+[tool.uv]
+# goldenmatch[sail] and goldenmatch[inhouse-embeddings] cannot be resolved
+# TOGETHER on Python 3.13: [sail] pulls pyspark[connect] 3.5.x -> numpy<2, while
+# [inhouse-embeddings] pulls onnx>=1.22 -> ml-dtypes>=0.5.4 -> numpy>=2.1. Left
+# implicit, the workspace lock tries to satisfy both at once and is unsatisfiable
+# on 3.13 -- which broke the Dependabot security-update resolver for pyspark
+# (#1868). No CI lane installs both extras together (the sail lane installs
+# [sail]; the native lane pip-installs onnx/onnxruntime directly, not the extra),
+# so declaring them conflicting is free here and lets uv fork the resolution.
+conflicts = [
+    [
+        { package = "goldenmatch", extra = "sail" },
+        { package = "goldenmatch", extra = "inhouse-embeddings" },
+    ],
+]
+
 [tool.uv.workspace]
 members = ["packages/python/*"]
 # goldenmatch-kg is EXCLUDED from the workspace on purpose: its optional framework
