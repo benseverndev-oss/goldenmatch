@@ -253,13 +253,13 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 
 ## Fused kernel auto-routing
 
-The pipeline can route covered slow-path runs to the fused Arrow-native kernels, byte-identically, with no config change. There are two seams with very different maturity: **golden routing is a broad default-on win; match routing is a dormant capacity-survival scaffold that effectively never fires by default.**
+The pipeline can route covered slow-path runs to the fused Arrow-native kernels, byte-identically, with no config change. There are two seams with very different maturity: **golden routing is a broad default-on win; match routing is a narrow capacity-survival path that fires only under memory pressure.**
 
 | Variable | Default | Effect | When to change |
 |----------|---------|--------|----------------|
 | `GOLDENMATCH_GOLDEN_FUSED` | on | **Golden seam auto-routing (default-on, byte-identical).** Tries the fused Arrow-native golden kernel on every covered slow-path config, reaching golden output at ~2x lower peak RSS. Declines to the classic builder (unchanged output) when the config is uncovered, the native kernel is absent, full `ClusterProvenance` lineage is requested, or the run is fast-path-eligible. Surfaced on `DedupeResult.golden_fused_used`. | `0` / `false` / `off` is the kill-switch (forces the classic golden builder everywhere). |
-| `GOLDENMATCH_MATCH_FUSED` | on (but dormant) | **Match seam auto-routing - a narrow capacity-survival path, dormant by default.** A controller post-step can short-circuit the match stage to the fused match kernel, but only under a memory-pressure gate AND a narrow config profile (`auto_split=False`, no identity/adaptive/memory/llm_boost/confidence_majority/full-provenance, not across-files-only, a covered weighted matchkey). Zero-config auto-config commits `auto_split=True` and explicit configs bypass the controller, so it effectively **never fires by default**. When it does fire it is a capacity mode that sheds `scored_pairs` / cluster-confidence / lineage to survive; marked `DedupeResult.match_fused_capacity_mode` + telemetry `rule_name` `+fused_match_post_step`. | `0` / `false` / `off` is the kill-switch. Leave on; the wake-up path (a postflight threshold or explicit opt-in) is a follow-up. |
-| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | Fraction of available RAM the estimated classic-path peak RSS must exceed before match routing's pressure gate fires. Only relevant to the (dormant) match seam. | Lower to make the capacity path trip earlier; raise toward `1.0` to make it trip only under extreme pressure. |
+| `GOLDENMATCH_MATCH_FUSED` | on | **Match seam auto-routing — a narrow capacity-survival path.** A controller post-step short-circuits the whole match stage to the fused match kernel under a memory-pressure gate AND a narrow config profile: `auto_split=False`, no identity/adaptive/memory/llm_boost/confidence_majority/full-provenance, not across-files-only, and a covered matchkey — **weighted** (single-key or multi-pass) **or Fellegi-Sunter** (single-key or multi-pass; the FS path fits EM inside the short-circuit and was wired in #1892). Zero-config auto-config commits `auto_split=True` and explicit configs bypass the controller, so it stays dormant unless you configure that artifact-free profile and hit the RSS gate. When it fires it is a capacity mode that sheds `scored_pairs`/`review_pairs` + cluster-confidence/lineage to survive; cluster membership + golden stay byte-identical. Marked `DedupeResult.match_fused_capacity_mode` + telemetry `rule_name` `+fused_match_post_step`. Measured 2–19× leaner peak RSS on covered FS shapes. | `0` / `false` / `off` is the kill-switch. |
+| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | Fraction of available RAM the estimated classic-path peak RSS must exceed before match routing's pressure gate fires. Only relevant to the pressure-gated match seam. | Lower to make the capacity path trip earlier; raise toward `1.0` to make it trip only under extreme pressure. |
 | `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | Calibration coefficients for the est-peak-RSS model that drives the match pressure gate. Defaults are fit against measured runs. | Only when re-calibrating the est-RSS model against a new box/workload; leave alone otherwise. |
 
 ---
@@ -548,8 +548,8 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_BUCKET_SLIM_PROJECTION` | `1` (on) | Drop unneeded columns after bucket scoring. |
 | `GOLDENMATCH_GOLDEN_SLIM_MULTIDF` | `1` (on) | Slim internal columns before golden build. |
 | `GOLDENMATCH_GOLDEN_FUSED` | on | Golden-seam fused auto-routing (default-on, byte-identical, ~2x lower peak RSS). `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
-| `GOLDENMATCH_MATCH_FUSED` | on (dormant) | Match-seam fused auto-routing - a narrow capacity-survival path that effectively never fires by default. `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
-| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | RAM-fraction pressure gate for the (dormant) match-seam routing. |
+| `GOLDENMATCH_MATCH_FUSED` | on | Match-seam fused auto-routing (weighted + Fellegi-Sunter) - a narrow capacity-survival path that fires only under memory pressure on an artifact-free config. `0` kills it. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
+| `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | RAM-fraction pressure gate for the match-seam routing. |
 | `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | est-peak-RSS calibration coefficients for the match pressure gate. |
 | `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Batch no-PK identity hashing. |
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
@@ -557,8 +557,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |
 | `GOLDENMATCH_STANDARDIZE_STAGED` | `0` | Staged standardization (experimental, may slow). |
 | `GOLDENMATCH_BUCKET_VEC_MIN` / `_MAX` | `32` / `2000` | Block-size band for the vectorized float64 NxN cdist path in bucket scoring. |
-| `GOLDENMATCH_FS_BATCH_ROWS` | `256` | Row cap per batched Fellegi-Sunter block-scoring call. |
-| `GOLDENMATCH_FS_DEFAULT_BUCKET` | `1` (on) | Probabilistic matchkeys score via the memory-bounded bucket route by default. `0` = legacy batched scorer (eager `build_blocks` -- memory grows with dataset size; logs a warning). Escape hatch only. |
+| Fellegi-Sunter routing & scoring knobs (`GOLDENMATCH_FS_*`) | — | Have their own home: see [Probabilistic / Fellegi-Sunter](#probabilistic--fellegi-sunter-advanced) for the path-routing map + the complete `FS_*` table. |
 | `GOLDENMATCH_BENCH_DUMP_PAIRS` | unset | Dump per-stage pairs for benchmarking. |
 | `GOLDENMATCH_SKIP_MATCH_LOG` / `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS` | — | Streaming match-log controls. |
 
@@ -587,13 +586,49 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 
 ### Probabilistic / Fellegi-Sunter (advanced)
 
+A `type: probabilistic` matchkey trains EM once, then its candidate pairs are scored by **one of four paths, chosen automatically** — you rarely set these by hand, but this is the map when you need to:
+
+- **bucket** (default) — memory-bounded field-hash buckets; the #1798-safe route for `static`/`multi_pass` blocking on the default backend.
+- **external-blocks** — memory-bounded scorer for strategy-generated candidates (`lsh`/`ann`/`learned`/`canopy`/`sorted_neighborhood`) that buckets can't re-derive from field hashes.
+- **batched** — the legacy per-block path. Reached by `GOLDENMATCH_FS_DEFAULT_BUCKET=0` or an explicit non-default backend. Eager `build_blocks`, so memory grows with dataset size.
+- **fused** — a single Arrow-native FFI call (block + score + dedup + cluster) under est-RSS pressure on an artifact-free config; 2–19× leaner peak RSS. See [Fused kernel auto-routing](#fused-kernel-auto-routing).
+
+Within whichever path is chosen, the per-block math runs on the native Rust FS kernel by default (`GOLDENMATCH_FS_NATIVE`), falling back to the vectorized numpy scorer (`GOLDENMATCH_FS_VECTORIZED`) and then the scalar loop. Every knob below is an escape hatch or an advanced tuning lever — the defaults are the recommended path.
+
+**Path routing**
+
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `GOLDENMATCH_FS_AUTOCONFIG_V2` | `1` (on) | FS auto-config v2 comparison-set + blocking curation. `0` = legacy. |
-| `GOLDENMATCH_FS_VECTORIZED` | on | Vectorized FS block scoring (~9x). `0` = scalar. Only affects string scorers — `embedding` / `record_embedding` are matrix-only and always run vectorized. |
-| `GOLDENMATCH_FS_CALIBRATED` | `linear` | `posterior` = true-probability calibration (frontier-neutral). |
-| `GOLDENMATCH_FS_MONOTONIC` | on | Enforce monotonic EM weights. |
-| `GOLDENMATCH_FS_NATIVE` | on | Native FS kernel when available. NE-bearing matchkeys score natively when the wheel advertises `FS_SUPPORTS_NE` (`goldenmatch-native` >= 0.1.15); else pure-Python fallback. |
+| `GOLDENMATCH_FS_DEFAULT_BUCKET` | `1` (on) | Route `static`/`multi_pass` FS on the default backend to the memory-bounded **bucket** scorer (the #1798 OOM fix). `0` = legacy **batched** path (eager `build_blocks`, memory grows with N) — the literal "legacy" hatch; also disables the external-blocks route. |
+| `GOLDENMATCH_MATCH_FUSED` | on | Whole-stage **fused** match kernel (weighted **and** FS). A covered FS run routes here under est-RSS pressure on an artifact-free config. `0`/`false`/`off` kill-switch. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
+| `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC` | `0` | Route zero-config auto-config to the **probabilistic (FS)** matchkey builder instead of the weighted one. |
+
+**Scoring engine (native vs numpy vs scalar)**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_FS_NATIVE` | on (`auto`) | Native Rust FS block scorer — the reference/answer under `auto`. NE-bearing matchkeys score natively when the wheel advertises `FS_SUPPORTS_NE` (`goldenmatch-native` ≥ 0.1.15). `0`/`false`/`off` = the reproducible numpy fallback. |
+| `GOLDENMATCH_FS_BUCKET_NATIVE` | `1` (on) | Use the **batched** native scorer inside the bucket route. `0` = the per-block native loop (byte-identical parity hatch). Only gates the batched call; per-block nativeness still follows `GOLDENMATCH_FS_NATIVE`. |
+| `GOLDENMATCH_FS_VECTORIZED` | on | Vectorized (`rapidfuzz.cdist` N×N) block scoring (~9×). `0` = scalar per-pair loop. String scorers only — `embedding`/`record_embedding` are matrix-only and always run vectorized. |
+| `GOLDENMATCH_FS_BATCH_ROWS` | `256` | Small-block coalescing cap for the batched vectorized scorer (amortizes per-call FFI/marshal overhead). Sweep knee; raising past it stops helping. |
+| `GOLDENMATCH_FS_VEC_MAX_ELEMS` | `50000000` | Max N×N matrix elements before a block is split — the vectorized-scorer memory guard against a single mega-block. |
+| `GOLDENMATCH_FS_WORKERS` | `min(16, cpu)` | Thread-pool size for the batched FS scorer (both kernels release the GIL). `1` forces the deterministic sequential reference loop. |
+| `GOLDENMATCH_DISTRIBUTED_FS_TRAIN_ROWS` | `200000` | EM training-sample row cap on the distributed FS path. |
+
+**Model & math**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOLDENMATCH_FS_AUTOCONFIG_V2` | `1` (on) | FS auto-config v2 comparison-set + blocking curation. `0` = legacy field set. |
+| `GOLDENMATCH_FS_CALIBRATED` | `linear` | `posterior` = true match-probability calibration (frontier-neutral — ranks pairs identically, so it can't change F1; it makes the score a real probability with a meaningful 0.5 boundary). |
+| `GOLDENMATCH_FS_MONOTONIC` | `warn` | Non-monotonic EM-weight handling. `warn` (default) = detect + warn, **don't modify** (Splink posture). `enforce`/`1`/`on` = isotonic (PAV) repair. `0`/`off` = silent (no detection). |
+| `GOLDENMATCH_FS_MISSING` | per-dataset | Missing-value semantics (#1846). `unobserved` = textbook FS (a missing value is absence of evidence); `disagree` = evidence against a match. Env overrides `mk.missing`; by default auto-config picks per-dataset from profiled null rates. |
+| `GOLDENMATCH_TF_NAME_WEIGHTING` | `1` (on) | Data-driven term-frequency down-weighting for `name_freq_weighted_jw` fields (shared with the weighted path). `0` = static-census behavior. |
+
+**Other advanced (scorer / golden / cluster — not FS-specific)**
+
+| Variable | Default | Effect |
+|----------|---------|--------|
 | `GOLDENMATCH_NOISE_AWARE_SCORERS` | `1` (on) | Auto-upgrade `token_sort`→`jaro_winkler` on noisy text. `0` = legacy. |
 | `GOLDENMATCH_NOISE_AWARE_TARGET` | `jaro_winkler` | Override the noise-aware target scorer. |
 | `GOLDENMATCH_GOLDEN_STRATEGY_STRICT` | `0` | Strict golden survivorship. |
