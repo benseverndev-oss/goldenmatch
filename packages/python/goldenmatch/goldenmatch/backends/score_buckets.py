@@ -213,6 +213,14 @@ def _score_block_vec(
 # the Python per-pair loop for that bucket.
 _NATIVE_SCORER_IDS: dict[str, int] = {
     "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+    # id 4 = date (score-core score_one). Routing to native is GUARDED on the
+    # `date_similarity` capability symbol at the gating site below: a stale
+    # published wheel (pre-date) would hit score_one's catch-all and silently
+    # score every date pair 0.0, so absent the symbol, date declines to the
+    # pure-Python mirror. NOTE: distinct from _NATIVE_FIELD_SCORER_IDS (the
+    # score_field_matrix path), where id 4 is soundex_match -- different kernel,
+    # different namespace; date is not wired into that path.
+    "date": 4,
 }
 
 
@@ -274,6 +282,11 @@ def _resolve_score_pair_callable(
         # one call at a time instead of cdist-batched.
         import jellyfish as _jf
         return lambda a, b: 1.0 if _jf.soundex(a) == _jf.soundex(b) else 0.0
+    if scorer_name == "date":
+        # Date-aware scorer (#1858). Per-pair mirror of score-core::date_similarity
+        # (native id 4); byte-identical to the kernel (native-parity asserted).
+        from goldenmatch.core.scorer import _date_similarity_py
+        return _date_similarity_py
     if scorer_name == "dice":
         # Delegate to the existing per-pair implementation in core/scorer.py
         # (_dice_score_single, bigram set Dice coefficient). Matrix path is
@@ -945,7 +958,16 @@ def score_buckets(
         _, _, _field_specs, _ne_specs = fast_path_specs
         if not _ne_specs:
             ids = [_NATIVE_SCORER_IDS.get(spec[3]) for spec in _field_specs]
-            if all(i is not None for i in ids):
+            # Wheel-skew guard: the `date` scorer (id 4) exists only in kernels
+            # that also expose `date_similarity`. A stale published wheel would
+            # dispatch id 4 to score_one's catch-all and silently score every
+            # date pair 0.0 -- so if any field is `date` and the loaded kernel
+            # lacks the symbol, decline native entirely and let the pure-Python
+            # per-pair path (which mirrors the kernel) score the whole block.
+            _mod = native_module()
+            _date_ok = _mod is not None and hasattr(_mod, "date_similarity")
+            has_date = any(spec[3] == "date" for spec in _field_specs)
+            if all(i is not None for i in ids) and not (has_date and not _date_ok):
                 native_scorer_ids = ids  # type: ignore[assignment]
 
     # Track 1 Fix B: build the native ExcludeSet ONCE here, BEFORE the bucket
