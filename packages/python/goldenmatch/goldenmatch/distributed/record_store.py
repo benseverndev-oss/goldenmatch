@@ -37,10 +37,10 @@ from goldenmatch._polars_lazy import pl
 
 _TABLE_PREFIX = "prepared_"
 
-BUCKET_HASH_SEED = 0xC2B5C0BBE7ED5E5D
-"""Deterministic seed for Polars' xxHash-based bucket assignment.
-Changing this value reshuffles every bucket assignment; treat as a
-constant. See spec §Decisions log."""
+# Single source in core._hashing (re-exported here for back-compat). The bucket
+# scorer (backends.score_buckets) imports the SAME constant; changing it
+# reshuffles every bucket assignment on BOTH surfaces. See spec §Decisions log.
+from goldenmatch.core._hashing import BUCKET_HASH_SEED
 
 
 def _sanitize_signature(signature: str) -> str:

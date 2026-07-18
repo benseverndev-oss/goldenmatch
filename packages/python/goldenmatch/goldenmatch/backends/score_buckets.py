@@ -224,9 +224,11 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
 }
 
 
-BUCKET_HASH_SEED = 0xC2B5C0BBE7ED5E5D
-"""Same constant as goldenmatch.distributed.record_store. Deterministic
-xxHash seed so block_key -> bucket assignment is stable across runs."""
+# Single source in core._hashing (re-exported here for back-compat). The
+# distributed record store imports the SAME constant, so bucket assignment is
+# identical across the two surfaces. Was a duplicated literal; drift is now
+# gated by test_cross_surface_consistency.
+from goldenmatch.core._hashing import BUCKET_HASH_SEED  # noqa: E402
 
 
 def _default_n_buckets(height: int | None = None) -> int:

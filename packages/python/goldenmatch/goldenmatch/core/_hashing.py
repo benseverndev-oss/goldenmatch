@@ -29,6 +29,15 @@ from goldenmatch.core._native_loader import native_enabled, native_module
 _US = b"\x1f"  # unit separator: between a field name and its value
 _RS = b"\x1e"  # record separator: end of one field
 
+# Deterministic xxHash seed for block_key -> bucket assignment. SINGLE SOURCE:
+# the bucket scorer (backends.score_buckets) and the distributed record store
+# (distributed.record_store) both hash `__block_key__ % n_buckets` with THIS
+# seed, so a record's bucket must be identical across the two surfaces -- a drift
+# would silently misroute rows. Kept here (a low-level, dependency-light module
+# both import) instead of re-declared in each; test_cross_surface_consistency
+# pins that the importers agree.
+BUCKET_HASH_SEED = 0xC2B5C0BBE7ED5E5D
+
 
 def _value_bytes(name: str, value: Any) -> bytes:
     """TAG + value bytes for one value. Type-tagged so int ``1`` != str ``"1"``
