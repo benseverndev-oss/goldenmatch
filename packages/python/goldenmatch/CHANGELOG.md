@@ -19,8 +19,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   as a Rust `Vec` instead of a materialized Python pair list, so a covered FS
   dedupe stays flat on peak RSS where the pair-list route scales with emitted
   pairs (measured 2x leaner on realistic emission, up to ~19x on
-  high-candidate shapes). Coverage only for now; the pipeline wiring (routing a
-  covered FS run to the fused kernel under memory pressure) is a follow-up.
+  high-candidate shapes).
+- **Fused Fellegi-Sunter match is now wired into the pipeline.** The controller
+  fused-routing post-step (`maybe_route_fused_match`) routes a covered FS run
+  (single-key OR multi-pass) to the fused kernel under estimated-RSS pressure,
+  exactly like the weighted twin — the routing decision is config-only + RSS
+  estimate (both available at controller time), and the new
+  `_run_fused_fs_match_short_circuit` does the O(n) EM fit before the kernel
+  call (the piece a controller-time flag can't carry). Same capacity-survival
+  contract as the weighted path: `scored_pairs`/`review_pairs` + per-cluster
+  confidence are shed, but cluster membership + golden are byte-identical to the
+  classic FS path (same seeded EM → same kernel math → same connected
+  components; parity-tested single-key + multi-pass). Measured end-to-end
+  through the pipeline: 4.5x leaner peak RSS + 5x faster on a 120K all-merge FS
+  dedupe (442 MB vs 2004 MB). Off by default (fires only under memory pressure
+  on an artifact-free config); `GOLDENMATCH_MATCH_FUSED=0` is the kill-switch.
 
 ## [3.4.0] - 2026-07-16
 

@@ -1847,9 +1847,16 @@ def _golden_from_multi_df(
 
 def _fused_needed_src_cols(config: GoldenMatchConfig) -> list[str]:
     """Source columns the fused match kernel needs as Arrow arrays: the blocking
-    key field(s) (single-key or every multi-pass field) + the covered weighted
-    matchkey's comparison fields. Deduped, source-order preserved (mirrors
-    ``fused_match.run_match_fused_arrow``'s own ``src_cols`` derivation)."""
+    key field(s) (single-key or every multi-pass field) + the covered matchkey's
+    comparison fields + (FS only) its negative-evidence fields. Deduped,
+    source-order preserved (mirrors ``fused_match.run_match_fused_arrow`` /
+    ``run_match_fused_fs_arrow``'s own ``src_cols`` derivation).
+
+    NE fields matter only for the FS path -- a weighted-covered matchkey never
+    carries NE (``_covered_weighted_matchkey`` declines it), so collecting them
+    is a no-op there; for FS, omitting an NE column would leave it out of the
+    kernel's ``columns`` mapping and NE would silently never fire (divergence
+    from the classic FS path)."""
     fields: list[str] = []
     b = config.blocking
     if b is not None and getattr(b, "strategy", None) == "multi_pass":
@@ -1861,6 +1868,10 @@ def _fused_needed_src_cols(config: GoldenMatchConfig) -> list[str]:
             fields.extend(keys[0].fields)
     mk = config.get_matchkeys()[0]
     fields.extend(f.field for f in mk.fields if f.field is not None)
+    fields.extend(
+        ne.field for ne in (getattr(mk, "negative_evidence", None) or [])
+        if ne.field is not None
+    )
     return list(dict.fromkeys(fields))
 
 
@@ -1930,7 +1941,29 @@ def _run_fused_match_short_circuit(
     ) or run_match_fused_multipass_arrow(columns, config, n_rows=n_rows)
     if fused_tbl is None:
         return None
+    return _fused_result_from_clusters(
+        fused_tbl, collected_df, config,
+        quarantine_df=quarantine_df, output_report=output_report,
+    )
 
+
+def _fused_result_from_clusters(
+    fused_tbl: Any,
+    collected_df: pl.DataFrame,
+    config: GoldenMatchConfig,
+    *,
+    quarantine_df: pl.DataFrame | None,
+    output_report: bool,
+) -> dict:
+    """Assemble the fused-match result dict from a ``(__row_id__, __cluster_id__)``
+    kernel Table.
+
+    Shared by the weighted (``_run_fused_match_short_circuit``) and Fellegi-Sunter
+    (``_run_fused_fs_match_short_circuit``) fused short-circuits -- both kernels
+    emit the SAME connected-component Table shape, so the dupes/unique/golden/
+    clusters derivation + capacity-mode result dict is identical (only the way the
+    Table is PRODUCED -- weighted scorer vs FS EM kernel -- differs upstream).
+    """
     # (__row_id__, __cluster_id__), one row per input record. match_fused emits
     # every record incl singletons (own component). auto_split is excluded by
     # config_needs_artifacts, so oversized clusters are never SPLIT -- but the
@@ -2063,6 +2096,98 @@ def _run_fused_match_short_circuit(
         "golden_fused_used": golden_fused_used,
         "match_fused_capacity_mode": True,
     }
+
+
+def _run_fused_fs_match_short_circuit(
+    collected_df: pl.DataFrame,
+    config: GoldenMatchConfig,
+    *,
+    quarantine_df: pl.DataFrame | None,
+    output_report: bool,
+    across_files_only: bool,
+) -> dict | None:
+    """Fused Fellegi-Sunter whole-stage short-circuit -- the FS twin of
+    ``_run_fused_match_short_circuit``.
+
+    Trains EM (the caller's O(n) model fit, unchanged), then runs block + score +
+    dedup + cluster in ONE ``match_fused_fs`` FFI call (single-key OR multi-pass),
+    routing the connected components DIRECTLY to golden via the shared
+    ``_fused_result_from_clusters`` assembler. Returns a full result dict on
+    success, or None to fall through to the classic FS path (kill-switch /
+    uncovered / native absent / across-files / non-strict postflight).
+
+    Same capacity-survival contract + divergence guards as the weighted twin:
+    ``scored_pairs`` / ``review_pairs`` and per-cluster confidence/bottleneck are
+    shed, but cluster MEMBERSHIP + GOLDEN are byte-identical to the classic FS
+    path -- same EM -> same kernel FS math -> same link-threshold pairs -> same
+    connected components (FS review candidates never cluster, so shedding them
+    does not move membership). ``config_needs_artifacts`` (auto_split=False, no
+    identity/memory/llm_boost/confidence_majority/lineage) is re-checked by the
+    caller before entry.
+
+    Why the EM is trained HERE and not folded into the controller flag (unlike
+    the weighted path): the fused-routing DECISION is config-only + RSS-only (both
+    available at controller time), but the fused FS EXECUTION needs a trained
+    ``EMResult`` that only exists once the pipeline runs -- so the controller sets
+    the flag, and this short-circuit does the O(n) fit before the kernel call.
+    """
+    if os.environ.get("GOLDENMATCH_MATCH_FUSED", "").lower() in {"0", "false", "off"}:
+        return None
+    if across_files_only:
+        return None
+    _preflight = getattr(config, "_preflight_report", None)
+    if _preflight is not None and not getattr(config, "_strict_autoconfig", False):
+        return None
+
+    from goldenmatch.core.fused_match import (
+        match_fused_fs_multipass_ready,
+        match_fused_fs_ready,
+        run_match_fused_fs_arrow,
+        run_match_fused_fs_multipass_arrow,
+    )
+
+    if not (match_fused_fs_ready(config) or match_fused_fs_multipass_ready(config)):
+        return None
+
+    from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
+    from goldenmatch.core.frame import to_frame as _tf_entry
+    from goldenmatch.core.probabilistic import fs_model_preloaded, load_or_train_em
+
+    mk = config.get_matchkeys()[0]
+    _cf_entry = _tf_entry(collected_df)
+    n_rows = _cf_entry.height
+
+    # EM training mirrors _score_probabilistic_matchkey's preamble. Blocks feed
+    # ONLY the EM sample fit (skipped when a from_splink model is preloaded), then
+    # are freed before the fused kernel does its OWN Rust-internal blocking -- so
+    # the Python candidate-pair list is never materialized (the RSS win the whole
+    # short-circuit exists for).
+    _need_blocks = not fs_model_preloaded(mk)
+    blocks = (
+        list(build_blocks(collected_df.lazy(), config.blocking)) if _need_blocks else []
+    )
+    blocking_fields = (
+        collect_blocking_fields(config.blocking) if config.blocking else []
+    )
+    em_result = load_or_train_em(
+        collected_df, mk, blocks=blocks, blocking_fields=blocking_fields,
+    )
+    blocks = []  # free training blocks before the kernel allocates
+
+    columns = {
+        c: _cf_entry.column(c).to_arrow() for c in _fused_needed_src_cols(config)
+    }
+    fused_tbl = run_match_fused_fs_arrow(
+        columns, config, em_result, n_rows=n_rows
+    ) or run_match_fused_fs_multipass_arrow(
+        columns, config, em_result, n_rows=n_rows
+    )
+    if fused_tbl is None:
+        return None
+    return _fused_result_from_clusters(
+        fused_tbl, collected_df, config,
+        quarantine_df=quarantine_df, output_report=output_report,
+    )
 
 
 def _run_dedupe_pipeline(
@@ -2484,7 +2609,19 @@ def _run_dedupe_pipeline(
     # the flag via the _api.py hint (Task D.3), so they are not re-checked here
     # (out of pipeline scope). On decline (kill-switch / uncovered / native
     # absent) the helper returns None and the classic path runs unchanged.
+    #
+    # DISPATCH: the WEIGHTED twin (match_fused / _multipass) decides + runs from
+    # the config alone; the FELLEGI-SUNTER twin needs a trained EMResult, so its
+    # short-circuit does the O(n) fit before the kernel call (see
+    # _run_fused_fs_match_short_circuit). The controller flag + config_needs_
+    # artifacts gate both, but a run is covered by exactly one family, so we try
+    # weighted first then FS (each returns None when its family is uncovered).
     if getattr(config, "_use_fused_match", False) and not config_needs_artifacts(config):
+        from goldenmatch.core.fused_match import (
+            match_fused_fs_multipass_ready,
+            match_fused_fs_ready,
+        )
+
         _fused_result = _run_fused_match_short_circuit(
             collected_df,
             config,
@@ -2492,6 +2629,16 @@ def _run_dedupe_pipeline(
             output_report=output_report,
             across_files_only=across_files_only,
         )
+        if _fused_result is None and (
+            match_fused_fs_ready(config) or match_fused_fs_multipass_ready(config)
+        ):
+            _fused_result = _run_fused_fs_match_short_circuit(
+                collected_df,
+                config,
+                quarantine_df=quarantine_df,
+                output_report=output_report,
+                across_files_only=across_files_only,
+            )
         if _fused_result is not None:
             if memory_store is not None:
                 memory_store.close()

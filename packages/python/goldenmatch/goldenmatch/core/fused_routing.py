@@ -167,20 +167,30 @@ _DEFAULT_PRESSURE_FRACTION = 0.65
 
 
 def _count_score_cols(config) -> int:
-    """Number of matchkey comparison fields in the covered weighted matchkey.
+    """Number of matchkey comparison fields in the covered matchkey.
 
     Reads the SINGLE covered ``weighted`` matchkey via
     ``fused_match._covered_weighted_matchkey`` (the same gate the single-key and
     multi-pass fused entries use) and counts its comparison fields -- the columns
-    the classic scorer materializes. Floors to 1 (a matchkey always materializes
-    >=1 score column); callers only reach this after confirming coverage, so the
-    None branch is defensive.
+    the classic scorer materializes. For a covered Fellegi-Sunter run the weighted
+    lookup returns None, so fall back to the sole probabilistic matchkey's field
+    count. Floors to 1 (a matchkey always materializes >=1 score column); callers
+    only reach this after confirming coverage, so the None branch is defensive.
     """
     from goldenmatch.core.fused_match import _covered_weighted_matchkey
 
     mk = _covered_weighted_matchkey(config)
     fields = getattr(mk, "fields", None) if mk is not None else None
-    return len(fields) if fields else 1
+    if fields:
+        return len(fields)
+    # FS-covered: the weighted lookup declines a probabilistic matchkey.
+    get_mks = getattr(config, "get_matchkeys", None)
+    mks = get_mks() if callable(get_mks) else []
+    if len(mks) == 1:
+        fs_fields = getattr(mks[0], "fields", None)
+        if fs_fields:
+            return len(fs_fields)
+    return 1
 
 
 def maybe_route_fused_match(
@@ -198,10 +208,14 @@ def maybe_route_fused_match(
     - ``GOLDENMATCH_MATCH_FUSED`` is not the kill-switch (``0``/``false``/``off``);
     - ``needs_artifacts`` is False (no caller-intent / config-driven divergence --
       the controller folds the caller hint + ``config_needs_artifacts`` into it);
-    - the config is COVERED by the fused single-key OR multi-pass entry
-      (``match_fused_ready`` / ``match_fused_multipass_ready``). The
-      Fellegi-Sunter branch is deliberately OUT of v1 -- no trained ``EMResult``
-      exists at decision time -- so a probabilistic config is not covered here;
+    - the config is COVERED by a fused entry -- weighted single-key/multi-pass
+      (``match_fused_ready`` / ``match_fused_multipass_ready``) OR Fellegi-Sunter
+      single-key/multi-pass (``match_fused_fs_ready`` /
+      ``match_fused_fs_multipass_ready``). The routing DECISION is config-only +
+      RSS-only (both available here); the FS kernel additionally needs a trained
+      ``EMResult``, but that is fit inside the pipeline short-circuit at run time,
+      NOT at this decision point -- so a covered probabilistic config routes here
+      just like a weighted one;
     - the estimated CLASSIC peak RSS exceeds ``available_ram_gb * frac`` (memory
       pressure). Match routing is a capacity-survival escape hatch, not a broad
       default; below the pressure line the classic path runs unchanged.
@@ -216,10 +230,20 @@ def maybe_route_fused_match(
     if needs_artifacts:
         return False
 
-    from goldenmatch.core.fused_match import match_fused_multipass_ready, match_fused_ready
+    from goldenmatch.core.fused_match import (
+        match_fused_fs_multipass_ready,
+        match_fused_fs_ready,
+        match_fused_multipass_ready,
+        match_fused_ready,
+    )
 
-    if not (match_fused_ready(config) or match_fused_multipass_ready(config)):
-        return False  # FS branch out of v1 (no EMResult at decision time).
+    if not (
+        match_fused_ready(config)
+        or match_fused_multipass_ready(config)
+        or match_fused_fs_ready(config)
+        or match_fused_fs_multipass_ready(config)
+    ):
+        return False  # not covered by any fused entry (weighted or FS).
 
     frac = float(
         os.environ.get(
