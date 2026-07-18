@@ -2,6 +2,40 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-17 -- Context-network sweep: the FS scale + hardening wave (ADRs 0041-0045)
+- Swept the 2026-07-16..18 window (~40 PRs, shipped as **goldenmatch 3.4.0** +
+  the suite minor train #1849) that the network had not yet captured. Five new
+  ADRs, all Fellegi-Sunter-centric:
+  - **0041 -- FS missing-value semantics** (`unobserved` vs `disagree`,
+    per-dataset, library-does-not-impose). #1834 established `unobserved`
+    (missing = no evidence, EM excludes the field, normalize over observed);
+    it regressed historical_50k 0.83->0.33 because that data's missingness is
+    informative, so #1851 exposed both modes + `_pick_missing_semantics`
+    (auto-config picks `disagree` at >=20% max field null-rate) + env
+    `GOLDENMATCH_FS_MISSING`; #1872 declines the native kernel on `disagree`
+    (neutral-only). Ride-alongs #1856/#1861/#1835->#1836.
+  - **0042 -- Native kernel owns 100% FS coverage** (`fs-core` crate #1869,
+    embeddings-native #1871, `date` scorer #1876, exclude-Arc/Arrow #1808).
+    numpy retained as the reference-mode fallback + parity oracle; deletion
+    deferred. Confirms native IS the person default and no longer silently
+    falls to numpy on name scorers.
+  - **0043 -- Bucket is the default FS route** (#1810) + FS in
+    distributed/chunked/strategy lanes (#1843/#1844), one shared `EMResult`;
+    block-size safety #1784/#1790/#1829/#1857. person-1M `MemoryError` -> 139s.
+  - **0044 -- Learned-blocking compiler** lowers to `multi_pass` via per-field
+    transform chains (#1831/#1841/#1840/#1838). Compiler landed but INERT
+    (wiring #1845 closed invalid).
+  - **0045 -- quality_gate watches its own surfaces + is required** (#1847/#1877).
+    Root cause of the whole wave being painful: historical_50k f1_probabilistic
+    0.83->0.33 merged red on `main` because the gate skipped `probabilistic.py`
+    and was non-blocking.
+- Updated `architecture/fellegi-sunter-splink-parity.md`: native is no longer
+  "default OFF" (100% coverage, bucket-default route); the "Splink 3-19x faster"
+  caveat's re-bench is now in flight (`bench-er-headtohead.yml`, run 29628869394,
+  person 100k/1M native lane).
+- Not ADR'd (routine): dep bumps (#1850/#1862/#1866/#1873), CI perf
+  (#1865/#1870), timestamp-flake pins (#1853/#1867), the #1849 version train.
+
 ## 2026-07-15 -- Embeddings first-class on Fellegi-Sunter (ADR 0040)
 - FS-audit batch (#1800/#1801/#1806). `embedding` / `record_embedding` did not
   work on the probabilistic path -- they CRASHED (`score_field` has no embedding
