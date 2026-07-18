@@ -6,12 +6,13 @@ multi-process safety. Schema versioned via ``PRAGMA user_version``.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -465,6 +466,33 @@ class IdentityStore:
     # Single transaction per call. SQLite raises NotImplementedError -- the
     # SQLite path is single-process and the row-by-row upsert_* methods are
     # plenty fast for that scale.
+
+    @contextlib.contextmanager
+    def bulk_writes(self) -> Iterator[None]:
+        """Run a batch of writes inside ONE transaction (Postgres).
+
+        The Postgres connection is opened ``autocommit=True``, so on the
+        per-record resolve path every ``upsert_identity`` / ``emit_event`` /
+        ``upsert_record`` / ``add_edge`` commits on its own -- one COMMIT + a
+        network round-trip PER write. Against a remote DB (e.g. Cloud SQL) that
+        turns a ~20k-record resolve into minutes of latency even though the
+        compute is milliseconds (#1886). Wrapping the whole write body in a
+        single ``conn.transaction()`` collapses those N commits into one and lets
+        psycopg pipeline the statements.
+
+        No-op for SQLite (already local + WAL) and Mongo, so callers can wrap
+        unconditionally. Nesting is safe: the bulk COPY helpers open their own
+        ``conn.transaction()`` which becomes a savepoint under this outer one.
+        Errors roll the batch back (atomic per resolve run) instead of leaving a
+        partially-committed graph -- an improvement over the autocommit path,
+        which the caller already treats as all-or-nothing (it has no per-cluster
+        recovery).
+        """
+        if self._backend == "postgres":
+            with self._conn.transaction():
+                yield
+        else:
+            yield
 
     def bulk_upsert_identities(self, df: Any) -> None:
         if self._backend != "postgres":
