@@ -165,29 +165,41 @@ def _split_pair_stream(
 _FS_EM_SAMPLE_SEED = 42
 
 
+_FS_EM_SAMPLE_DEFAULT_ROWS = 100_000
+
+
 def _fs_em_sample_rows() -> int | None:
-    """``GOLDENMATCH_FS_EM_SAMPLE_ROWS`` (default OFF): cap the frame EM training
-    builds its within-block-pair sample from on the FS bucket route.
+    """Cap the frame EM training builds its within-block-pair sample from on the
+    FS bucket route. **DEFAULT ON at 100k rows** (``GOLDENMATCH_FS_EM_SAMPLE_ROWS``
+    override; ``0``/empty = off).
 
     On the bucket route with a trained (not preloaded) EM, ``blocks`` feed ONLY
     EM's ~10k within-block-pair sample -- ``score_buckets`` re-partitions
     internally and never reads them. Yet ``build_blocks`` materializes EVERY
-    block on the FULL frame, which is the FS memory PEAK (measured: ~1.9 GB at
-    100k / ~11.7 GB at 1M on the native path, a spike BEFORE scoring, while
-    bucket scoring itself runs flat ~274 MB). Building blocks on a bounded random
-    sample instead keeps EM's pair sample representative while cutting that peak.
+    block on the FULL frame, which is the FS memory PEAK (a spike BEFORE scoring,
+    while bucket scoring runs flat). Building blocks on a bounded random sample
+    keeps EM's pair sample representative while cutting that peak.
 
-    Default OFF -> byte-identical EM (full-frame blocks). EM is the repo's most
-    regression-prone code (#1835/#1836), so the default flip is gated on the
-    bench-probabilistic panel, never flipped blind."""
+    **Only samples when ``height > cap``**, so ≤100k-row datasets are byte-
+    identical (no sampling). Validated F1-neutral where it triggers: 1M person
+    native peak 11.7->5.7 GB with byte-identical F1 (0.970/0.967, same TP/FP/FN),
+    and error-heavy historical_50k at a 40% sample gave identical F1 (0.7935).
+    The ``bench-probabilistic`` panel (``em_sample_rows`` input) is the standing
+    regression gate. ``GOLDENMATCH_FS_EM_SAMPLE_ROWS=0`` restores full-frame EM.
+
+    Resolution: unset -> the 100k default (ON); explicit ``""``/``0``/negative ->
+    off (full frame); explicit positive -> that cap."""
     v = os.environ.get("GOLDENMATCH_FS_EM_SAMPLE_ROWS")
+    if v is None:
+        return _FS_EM_SAMPLE_DEFAULT_ROWS  # default ON
+    v = v.strip()
     if not v:
-        return None
+        return None  # explicit empty -> off (full-frame EM)
     try:
         n = int(v)
     except ValueError:
-        return None
-    return n if n > 0 else None
+        return _FS_EM_SAMPLE_DEFAULT_ROWS  # unparseable -> keep the default on
+    return n if n > 0 else None  # 0 / negative -> explicit off
 
 
 def _finalize_review_pairs(
