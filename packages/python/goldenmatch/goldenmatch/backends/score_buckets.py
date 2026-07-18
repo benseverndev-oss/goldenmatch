@@ -1618,10 +1618,26 @@ def score_buckets(
         if _bkt_debug_on():
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
+        # B2c: in arrow mode convert EACH bucket's tuples to Arrow the moment it
+        # returns and drop the Python list, so peak holds one bucket's tuples +
+        # the accumulated int64/float64 columns -- never a per-PASS list[tuple]
+        # (the remaining transient after B2a). List mode is byte-unchanged.
+        _arrow_mode = _emit == "arrow"
         pass_pairs: list[tuple[int, int, float]] = []
+        bucket_tables: list[Any] = []
+        pass_emitted = 0
         pass_blocks_scored = 0
         if n_non_empty_buckets == 0:
-            return pass_pairs, pass_blocks_scored, n_non_empty_buckets
+            empty: Any = pairs_to_pair_stream([]) if _arrow_mode else pass_pairs
+            return empty, pass_blocks_scored, n_non_empty_buckets
+
+        def _sink(bucket_pairs: list) -> None:
+            nonlocal pass_emitted
+            pass_emitted += len(bucket_pairs)
+            if _arrow_mode:
+                bucket_tables.append(pairs_to_pair_stream(bucket_pairs))
+            else:
+                pass_pairs.extend(bucket_pairs)
 
         with stage("bucket_score"):
             # rapidfuzz.cdist releases the GIL inside the scorer, so threads
@@ -1640,15 +1656,25 @@ def score_buckets(
             if max_workers <= 1 or n_non_empty_buckets <= 2:
                 for bucket_df in non_empty_buckets:
                     pairs, n = worker(bucket_df)
-                    pass_pairs.extend(pairs)
+                    _sink(pairs)
+                    del pairs
                     pass_blocks_scored += n
             else:
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     for pairs, n in pool.map(worker, non_empty_buckets):
-                        pass_pairs.extend(pairs)
+                        _sink(pairs)
+                        del pairs
                         pass_blocks_scored += n
         if _bkt_debug_on():
-            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {len(pass_pairs)} pairs", flush=True)
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {pass_emitted} pairs", flush=True)
+        if _arrow_mode:
+            import pyarrow as _pa
+
+            result: Any = (
+                _pa.concat_tables(bucket_tables) if bucket_tables
+                else pairs_to_pair_stream([])
+            )
+            return result, pass_blocks_scored, n_non_empty_buckets
         return pass_pairs, pass_blocks_scored, n_non_empty_buckets
 
     _arrow = _emit == "arrow"
@@ -1665,16 +1691,17 @@ def score_buckets(
                 key.fields, sorted(set(key.fields) - slim_cols),
             )
             continue
-        pass_pairs, blocks_scored, n_non_empty = _score_single_pass(key)
-        n_emitted += len(pass_pairs)
+        pass_result, blocks_scored, n_non_empty = _score_single_pass(key)
         if _arrow:
-            # Convert this pass to Arrow and DROP the Python list -- peak holds
-            # ONE pass's tuples + the accumulated int64/float64 columns, not the
-            # whole run's list[tuple]. See the PR-B design doc.
-            pass_tables.append(pairs_to_pair_stream(pass_pairs))
-            del pass_pairs
+            # _score_single_pass already returns a PAIR_STREAM_SCHEMA pa.Table
+            # (converted per BUCKET, B2c) -- accumulate it directly; no per-pass
+            # list ever exists. See the PR-B design doc.
+            n_emitted += pass_result.num_rows
+            pass_tables.append(pass_result)
+            del pass_result
         else:
-            all_pairs.extend(pass_pairs)
+            n_emitted += len(pass_result)
+            all_pairs.extend(pass_result)
         total_blocks_scored += blocks_scored
         total_non_empty += n_non_empty
     if not _arrow:
