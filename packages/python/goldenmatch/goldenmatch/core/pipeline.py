@@ -100,6 +100,68 @@ def _split_probabilistic_pairs(
     return linked, review
 
 
+def _fs_arrow_stream_enabled() -> bool:
+    """``GOLDENMATCH_FS_ARROW_STREAM`` (default OFF) opts the eligible FS bucket
+    dedupe path onto the Arrow pair stream — ``score_buckets_arrow`` (incremental
+    Arrow accumulation, no ``matched_pairs`` exclude set) instead of the
+    ``list[tuple]`` + set path. PR-B / B2b. Byte-identical clusters when on
+    (parity-gated); the win is peak RSS on the FS scoring phase (the 1M person
+    OOM's second cause)."""
+    return os.environ.get("GOLDENMATCH_FS_ARROW_STREAM", "0").strip().lower() in (
+        "1", "true", "yes",
+    )
+
+
+def _fs_arrow_stream_eligible(
+    config: GoldenMatchConfig,
+    matchkeys: list,
+    across_files_only: bool,
+    bench_dump: bool,
+) -> bool:
+    """The Arrow FS pair stream skips building the ``matched_pairs`` exclude set,
+    so it is safe only when NO later pass/matchkey consumes it and no post-scoring
+    step needs the source lookup / per-block candidate accounting:
+
+      - exactly ONE matchkey (the probabilistic one) — a second matchkey reads
+        ``matched_pairs`` as its cross-matchkey exclude;
+      - no semantic blocking (unions extra candidates via ``matched_pairs``);
+      - not ``across_files_only`` (the cross-source filter still needs the
+        per-pair source lookup — vectorizing it onto the table is a follow-up);
+      - not the bench-dump path (needs the per-block candidate ceiling).
+
+    Downstream (postflight / memory / clustering) is UNCHANGED — the linked pairs
+    are materialized to the same ``all_pairs`` list — so clusters are byte-
+    identical; B2b banks the exclude-set + scoring-accumulation memory only.
+    Threading Arrow through postflight + clustering is B2c."""
+    if across_files_only or bench_dump:
+        return False
+    if getattr(config, "semantic_blocking", None) is not None:
+        return False
+    return len(matchkeys) == 1
+
+
+def _split_pair_stream(
+    pair_table: Any, link_threshold: float
+) -> tuple[list[tuple[int, int, float]], list[tuple[int, int, float]]]:
+    """``_split_probabilistic_pairs`` on a ``PAIR_STREAM_SCHEMA`` ``pa.Table``:
+    partition rows by ``score >= link_threshold`` via an Arrow filter, then
+    materialize the (linked, review) tuple lists the existing downstream
+    consumes. Same split as the list path (parity-gated)."""
+    import pyarrow.compute as _pc
+
+    from goldenmatch.backends.score_buckets import pairs_to_pair_stream  # noqa: F401
+
+    link_mask = _pc.greater_equal(pair_table.column("score"), link_threshold)
+
+    def _rows(tbl: Any) -> list[tuple[int, int, float]]:
+        d = tbl.to_pydict()
+        return list(zip(d["id_a"], d["id_b"], d["score"]))
+
+    linked = _rows(pair_table.filter(link_mask))
+    review = _rows(pair_table.filter(_pc.invert(link_mask)))
+    return linked, review
+
+
 def _finalize_review_pairs(
     review_pairs: list[tuple[int, int, float]],
     linked_pairs: list[tuple[int, int, float]],
@@ -366,6 +428,38 @@ def _score_probabilistic_matchkey(
         # bench dump below is the only remaining reader).
         if not bench_dump_dir:
             blocks = []
+        # Arrow pair stream (PR-B / B2b, flagged): incremental Arrow
+        # accumulation, no matched_pairs exclude set built (eligibility
+        # guarantees no later consumer). Split link/review on the table, then
+        # materialize the SAME (linked, review) lists downstream consumes ->
+        # clusters byte-identical to the list path; the win is the exclude-set +
+        # scoring-accumulation peak RSS. Dedupe-scope only (target_ids is None) --
+        # the match lanes need per-target filtering the stream doesn't vectorize.
+        _use_arrow_stream = (
+            target_ids is None
+            and _fs_arrow_stream_enabled()
+            and _fs_arrow_stream_eligible(
+                config, [mk], across_files_only, bool(bench_dump_dir)
+            )
+        )
+        if _use_arrow_stream:
+            from goldenmatch.backends.score_buckets import score_buckets_arrow
+            _pair_table = score_buckets_arrow(
+                score_frame,
+                config.blocking,
+                scoring_mk,
+                matched_pairs,
+                n_buckets=config.n_buckets,
+                em_result=em_result,
+            )
+            pairs, candidates = _split_pair_stream(_pair_table, link_threshold)
+            del _pair_table
+            review_pairs.extend(candidates)
+            all_pairs.extend(pairs)
+            # matched_pairs intentionally NOT populated (single matchkey,
+            # eligibility guarantees no later exclude consumer) -- the peak this
+            # drops.
+            return
         pairs = score_buckets(
             score_frame,
             config.blocking,

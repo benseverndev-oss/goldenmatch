@@ -130,3 +130,65 @@ def test_score_buckets_arrow_skips_matched_pairs_by_design():
     mp_arrow: set = set()
     score_buckets_arrow(df, blocking, mk, mp_arrow, em_result=em)
     assert mp_arrow == set()  # arrow mode leaves it untouched (by design)
+
+
+# ── B2b: pipeline FS bucket path Arrow route (GOLDENMATCH_FS_ARROW_STREAM) ─────
+
+def _person_dupe_df() -> pl.DataFrame:
+    return pl.DataFrame({
+        "first_name": ["John", "Jon", "Mary", "Marie", "Robert", "Bob", "Linda", "Lynda"],
+        "surname": ["Smith", "Smith", "Jones", "Jones", "Brown", "Brown", "Davis", "Davis"],
+        "dob": ["1980-01-01", "1980-01-01", "1975-05-05", "1975-05-05",
+                "1990-09-09", "1990-09-09", "1985-03-03", "1985-03-03"],
+        "zip": ["11111", "11111", "22222", "22222", "33333", "33333", "44444", "44444"],
+    })
+
+
+def _memberships(res) -> list[tuple[int, ...]]:
+    return sorted(tuple(sorted(c["members"])) for c in res.clusters.values())
+
+
+def test_fs_arrow_stream_eligibility():
+    from goldenmatch.config.schemas import GoldenMatchConfig
+    from goldenmatch.core.pipeline import _fs_arrow_stream_eligible
+
+    cfg = GoldenMatchConfig(
+        matchkeys=[_mk()],
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["zip"])]),
+    )
+    one = [_mk()]
+    assert _fs_arrow_stream_eligible(cfg, one, across_files_only=False, bench_dump=False)
+    # ineligible: two matchkeys / across-files / bench-dump each disqualify.
+    assert not _fs_arrow_stream_eligible(cfg, [_mk(), _mk()], False, False)
+    assert not _fs_arrow_stream_eligible(cfg, one, True, False)
+    assert not _fs_arrow_stream_eligible(cfg, one, False, True)
+
+
+def test_fs_arrow_stream_pipeline_parity(monkeypatch):
+    # Clusters byte-identical (membership) with the Arrow route ON vs OFF, and a
+    # spy proves the Arrow path actually engaged (guards against a vacuous pass).
+    import goldenmatch.backends.score_buckets as sb_mod
+    from goldenmatch import dedupe_df
+    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
+    monkeypatch.setenv("GOLDENMATCH_FS_AUTOCONFIG_V2", "1")
+    df = _person_dupe_df()
+    cfg = auto_configure_probabilistic_df(df)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_ARROW_STREAM", "0")
+    off = dedupe_df(df, config=cfg, confidence_required=False)
+
+    calls = {"n": 0}
+    real_arrow = sb_mod.score_buckets_arrow
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return real_arrow(*a, **k)
+
+    monkeypatch.setattr(sb_mod, "score_buckets_arrow", _spy)
+    monkeypatch.setenv("GOLDENMATCH_FS_ARROW_STREAM", "1")
+    on = dedupe_df(df, config=cfg, confidence_required=False)
+
+    assert calls["n"] >= 1, "Arrow FS pair-stream path did not engage"
+    assert _memberships(on) == _memberships(off)
+    assert any(len(m) > 1 for m in _memberships(off)), "fixture must form a real cluster"
