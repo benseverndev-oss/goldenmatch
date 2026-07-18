@@ -1691,3 +1691,55 @@ def score_buckets(
                 flush=True,
             )
     return all_pairs
+
+
+def pairs_to_pair_stream(pairs: list[tuple[int, int, float]]) -> Any:
+    """``list[(id_a, id_b, score)]`` -> a ``PAIR_STREAM_SCHEMA_SPEC`` ``pa.Table``
+    (``id_a``/``id_b`` int64, ``score`` float64) — the Arrow pair-stream shape
+    ``cluster.build_clusters_arrow_native`` consumes.
+
+    B1 seam for the FS Arrow-native pair-stream cutover
+    (``docs/superpowers/specs/2026-07-18-fs-arrow-pair-stream-design.md``). Pair
+    ``(a, b)`` order and any cross-pass DUPLICATE pairs are preserved verbatim —
+    Union-Find collapses duplicate edges, so this is edge-faithful to the
+    ``list[tuple]`` form. Empty input yields a zero-row table with the schema.
+    """
+    import pyarrow as _pa
+
+    if not pairs:
+        return _pa.table({
+            "id_a": _pa.array([], _pa.int64()),
+            "id_b": _pa.array([], _pa.int64()),
+            "score": _pa.array([], _pa.float64()),
+        })
+    # Single left-to-right unzip (one temp list per column, dropped on return).
+    id_a = [p[0] for p in pairs]
+    id_b = [p[1] for p in pairs]
+    score = [p[2] for p in pairs]
+    return _pa.table({
+        "id_a": _pa.array(id_a, _pa.int64()),
+        "id_b": _pa.array(id_b, _pa.int64()),
+        "score": _pa.array(score, _pa.float64()),
+    })
+
+
+def score_buckets_arrow(*args: Any, **kwargs: Any) -> Any:
+    """Arrow pair-stream (``PAIR_STREAM_SCHEMA_SPEC`` ``pa.Table``) form of
+    :func:`score_buckets`.
+
+    B1 of the FS Arrow-native pair-stream cutover (design doc
+    ``2026-07-18-fs-arrow-pair-stream-design.md``). Same scoring, same
+    ``matched_pairs`` mutation, same cross-pass-duplicate semantics as
+    ``score_buckets`` — it delegates, so it is byte-faithful by construction —
+    but returns the emitted pairs as a ``pa.Table`` (``id_a``/``id_b`` int64,
+    ``score`` float64) so the FS clustering path can consume Arrow via
+    ``build_clusters_arrow_native`` instead of accumulating a
+    ``list[tuple]`` + a ``matched_pairs`` set (~16 GB at 66M pairs vs ~1.3 GB
+    Arrow — the 1M person OOM's second cause).
+
+    B1 establishes the seam + schema + parity; **the memory win lands in B2**,
+    when the FS dedupe caller consumes this table directly and stops building
+    the list/set. B3 inverts the delegation (Arrow primary, incremental
+    per-pass accumulation) and drops the list path.
+    """
+    return pairs_to_pair_stream(score_buckets(*args, **kwargs))
