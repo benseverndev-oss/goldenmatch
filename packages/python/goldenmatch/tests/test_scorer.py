@@ -13,6 +13,66 @@ from goldenmatch.core.scorer import (
 )
 
 
+class TestDateScorer:
+    """The `date` scorer (#1858): jaro_winkler scores unrelated ISO dates 0.80+
+    and can't tell a typo from a different person; `date` uses Damerau-Levenshtein
+    over the canonical digits so a typo stays high and an unrelated date -> 0."""
+
+    def test_same_date(self):
+        assert score_field("1980-01-01", "1980-01-01", "date") == 1.0
+
+    def test_single_digit_typo_clears_a_typical_cutoff(self):
+        # jaro_winkler=0.96 here too, but see the unrelated case below.
+        assert score_field("1980-01-01", "1980-01-02", "date") == pytest.approx(0.90)
+        assert score_field("1980-01-01", "1980-01-02", "date") >= 0.85
+
+    def test_transposition_is_one_edit(self):
+        # Swapped adjacent digits = ONE Damerau edit -> still a typo.
+        assert score_field("1980-12-01", "1980-21-01", "date") == pytest.approx(0.90)
+
+    def test_two_edits_are_weak(self):
+        assert score_field("1980-01-01", "1975-01-01", "date") == pytest.approx(0.75)
+
+    def test_unrelated_date_is_zero_not_0_80(self):
+        # The whole point: jaro_winkler gives this 0.802; date gives 0.0.
+        assert score_field("1980-01-01", "1975-11-30", "date") == 0.0
+        assert score_field("1980-01-01", "1975-11-30", "jaro_winkler") > 0.80
+
+    def test_non_iso_falls_back_to_levenshtein(self):
+        from rapidfuzz.distance import Levenshtein
+        assert score_field("abc", "abc", "date") == 1.0
+        assert score_field("Jan 1 1980", "Jan 2 1980", "date") == pytest.approx(
+            Levenshtein.normalized_similarity("Jan 1 1980", "Jan 2 1980")
+        )
+
+    def test_null_short_circuits(self):
+        assert score_field(None, "1980-01-01", "date") is None
+
+    def test_schema_accepts_date_scorer(self):
+        mk = MatchkeyConfig(
+            name="k", type="weighted", threshold=0.85,
+            fields=[MatchkeyField(field="dob", scorer="date", weight=1.0)],
+        )
+        assert mk.fields[0].scorer == "date"
+
+    def test_native_matches_pure_python(self):
+        """When the native kernel is built, score-core::date_similarity (id 4)
+        must equal the pure-Python mirror bit-for-bit."""
+        from goldenmatch.core._native_loader import native_module
+        from goldenmatch.core.scorer import _date_similarity_py
+
+        native = native_module()
+        if native is None or not hasattr(native, "date_similarity"):
+            pytest.skip("native kernel with date scorer not built")
+        for a, b in [
+            ("1980-01-01", "1980-01-01"), ("1980-01-01", "1980-01-02"),
+            ("1980-01-01", "1975-01-01"), ("1980-01-01", "1975-11-30"),
+            ("1980-12-01", "1980-21-01"), ("2020-02-29", "2020-03-01"),
+            ("abc", "abd"), ("", ""),
+        ]:
+            assert native.date_similarity(a, b) == pytest.approx(_date_similarity_py(a, b), abs=1e-12)
+
+
 class TestScoreField:
     """Tests for score_field."""
 

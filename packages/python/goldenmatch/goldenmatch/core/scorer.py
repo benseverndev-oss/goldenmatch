@@ -9,7 +9,7 @@ from typing import Any
 
 import jellyfish
 import numpy as np
-from rapidfuzz.distance import JaroWinkler, Levenshtein
+from rapidfuzz.distance import DamerauLevenshtein, JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
 from rapidfuzz.process import cdist
 
@@ -146,6 +146,31 @@ def _alias_match_single(val_a: str, val_b: str) -> float:
     return 0.0
 
 
+def _iso_date_digits(s: str) -> str | None:
+    """The 8 packed digits of an ISO-8601 ``YYYY-MM-DD`` string, or None if it
+    isn't that exact shape. Pure-Python mirror of score-core's ``iso_date_digits``
+    (strict: no locale parsing, month/day ranges not validated)."""
+    if len(s) != 10 or s[4] != "-" or s[7] != "-":
+        return None
+    digits = s[:4] + s[5:7] + s[8:10]
+    return digits if digits.isdigit() else None
+
+
+def _date_similarity_py(val_a: str, val_b: str) -> float:
+    """Pure-Python fallback mirror of score-core ``date_similarity`` (id 4).
+
+    Byte-identical to the Rust reference (asserted in the native-parity suite):
+    Damerau-Levenshtein over the 8 canonical ISO digits, mapped so a single-digit
+    typo stays above a typical 0.85 cutoff and an unrelated date cliffs to 0;
+    plain ``levenshtein`` fallback when either side isn't an ISO date. See #1858
+    (``jaro_winkler`` scores unrelated birthdays 0.80+)."""
+    da, db = _iso_date_digits(val_a), _iso_date_digits(val_b)
+    if da is not None and db is not None:
+        d = DamerauLevenshtein.distance(da, db)
+        return {0: 1.0, 1: 0.90, 2: 0.75}.get(d, 0.0)
+    return Levenshtein.normalized_similarity(val_a, val_b)
+
+
 def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | None:
     """Score two field values using the specified scorer.
 
@@ -156,6 +181,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
 
     if scorer == "exact":
         return 1.0 if val_a == val_b else 0.0
+    elif scorer == "date":
+        return _date_similarity_py(val_a, val_b)
     elif scorer == "jaro_winkler":
         return JaroWinkler.similarity(val_a, val_b)
     elif scorer == "levenshtein":
@@ -556,6 +583,19 @@ def _fuzzy_score_matrix(
             matrix = np.asarray(cdist(clean, clean, scorer=Levenshtein.normalized_similarity), dtype=np.float32)
         else:
             matrix = np.asarray(cdist(clean, clean, scorer=token_sort_ratio), dtype=np.float32) / 100.0
+    elif scorer_name == "date":
+        # Date-aware scorer (#1858). This find_fuzzy_matches / polars-direct path
+        # stays pure-Python: score_field_matrix's native id namespace already uses
+        # 4 for soundex_match, whereas the bucket path (score_one id 4) DOES route
+        # date through the kernel. Both agree by construction -- _date_similarity_py
+        # mirrors score-core::date_similarity (native-parity asserted). Dates land
+        # in small same-key blocks, so the O(n^2) Python loop is not a hot path.
+        n = len(clean)
+        matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                s = _date_similarity_py(clean[i], clean[j])
+                matrix[i, j] = matrix[j, i] = s
     elif scorer_name == "initialism_match":
         return _initialism_score_matrix(values)
     elif scorer_name == "alias_match":

@@ -90,6 +90,17 @@ const CASES: readonly Case[] = [
   ["name_freq_weighted_jw", "Taylor", "Tyler", 0.7111],  // borderline both-known -> reweighted
   ["name_freq_weighted_jw", "Moore", "More", 0.8484],    // borderline both-known -> reweighted
   ["name_freq_weighted_jw", "Taylor", "Tailor", 0.9111], // OOV gate (Tailor not in table) -> plain JW
+
+  // date (#1858) — Damerau-Levenshtein over the 8 canonical ISO digits, mapped
+  // d0->1.0 / d1->0.90 / d2->0.75 / d>=3->0.0. Mirror of score-core date_similarity
+  // and Python _date_similarity_py. The unrelated pair is the point: jaro_winkler
+  // scores it 0.80+, date gives 0.0.
+  ["date", "1980-01-01", "1980-01-01", 1.0], // same
+  ["date", "1980-01-01", "1980-01-02", 0.9], // 1-digit typo
+  ["date", "1980-01-01", "1975-01-01", 0.75], // 2 edits (year)
+  ["date", "1980-01-01", "1975-11-30", 0.0], // unrelated (>=3 edits)
+  ["date", "1980-12-01", "1980-21-01", 0.9], // adjacent transposition = 1 edit
+  ["date", "Jan 1 1980", "Jan 2 1980", 0.9], // non-ISO -> levenshtein fallback (1 - 1/10)
 ];
 
 describe("scorer Python parity (4-decimal tolerance)", () => {

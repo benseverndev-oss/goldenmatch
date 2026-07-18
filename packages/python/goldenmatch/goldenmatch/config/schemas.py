@@ -22,6 +22,12 @@ VALID_SCORERS = frozenset({
     "exact", "jaro_winkler", "levenshtein", "token_sort", "soundex_match",
     "embedding", "record_embedding", "ensemble",
     "dice", "jaccard", "qgram",
+    # Date-aware comparator (#1858): parses ISO YYYY-MM-DD and scores by
+    # Damerau-Levenshtein over the canonical digits, so a typo scores far above
+    # an unrelated date (jaro_winkler collapses both to 0.80+). Non-ISO input
+    # degrades to levenshtein. Use this for date columns instead of a name-
+    # oriented fuzzy scorer.
+    "date",
     # Hamming similarity over a hex perceptual hash (image pHash) -- the
     # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
     "phash",

@@ -113,6 +113,7 @@ PreflightCheckName = Literal[
     "weight_confidence",
     "no_matchkeys_remain",
     "remote_asset_matchkey_empty",
+    "date_scorer_mismatch",
 ]
 
 
@@ -918,6 +919,54 @@ def _check_weight_confidence(
                 report.config_was_modified = True
 
 
+_NAME_ORIENTED_FUZZY_SCORERS: frozenset[str] = frozenset({
+    "jaro_winkler", "token_sort", "ensemble",
+    "given_name_aliased_jw", "name_freq_weighted_jw",
+})
+
+
+def _check_date_scorer(
+    config: GoldenMatchConfig,
+    profiles: list[ColumnProfile] | None,
+    report: PreflightReport,
+) -> None:
+    """Check 7 (#1858): WARN when a name-oriented fuzzy scorer sits on a date
+    field. jaro_winkler/token_sort/etc. score unrelated ISO dates 0.80+ (the
+    fixed YYYY-MM-DD shape + shared digits dominate), so a typo is
+    indistinguishable from a different person and precision craters. Recommend
+    scorer='date'. Warning only -- auto-config already skips date columns as fuzzy
+    fields, so this fires on hand-written / Splink-converted configs; it does not
+    rewrite the config (the user's dtype knowledge may differ from the heuristic).
+    """
+    from goldenmatch.core.autoconfig import _classify_by_name
+
+    col_type_by_col = {p.name: getattr(p, "col_type", None) for p in (profiles or [])}
+    for mk in config.get_matchkeys():
+        for f in mk.fields:
+            if f.field is None or f.scorer not in _NAME_ORIENTED_FUZZY_SCORERS:
+                continue
+            # Profile col_type is authoritative when present; else fall back to
+            # the name heuristic (dob / _date / birth... -- autoconfig._DATE_PATTERNS).
+            is_date = col_type_by_col.get(f.field) == "date" or _classify_by_name(f.field) == "date"
+            if not is_date:
+                continue
+            report.findings.append(
+                PreflightFinding(
+                    check="date_scorer_mismatch",
+                    severity="warning",
+                    subject=f"{mk.name}.{f.field}",
+                    message=(
+                        f"field '{f.field}' looks like a date but scores with "
+                        f"'{f.scorer}', a name-oriented fuzzy scorer that rates "
+                        f"unrelated ISO dates 0.80+ (a typo is indistinguishable "
+                        f"from a different person). Use scorer='date' instead."
+                    ),
+                    repaired=False,
+                    repair_note=None,
+                )
+            )
+
+
 # ── Postflight helpers ──────────────────────────────────────────────────
 
 
@@ -1290,4 +1339,7 @@ def preflight(
     _check_remote_assets(config, report, allow_remote_assets=allow_remote_assets)
     if profiles is not None:
         _check_weight_confidence(config, profiles, report)
+    # #1858: warn on a name-oriented fuzzy scorer over a date field. Runs even
+    # without profiles (falls back to the field-name date heuristic).
+    _check_date_scorer(config, profiles, report)
     return report

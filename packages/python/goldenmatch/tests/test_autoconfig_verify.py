@@ -10,6 +10,48 @@ from goldenmatch.core.autoconfig_verify import (
 )
 
 
+def _date_lint_cfg(field: str, scorer: str):
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    return GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="k", type="weighted", threshold=0.85,
+            fields=[MatchkeyField(field=field, scorer=scorer, weight=1.0)],
+        )],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["name"])]),
+    )
+
+
+class TestDateScorerLint:
+    """#1858: warn when a name-oriented fuzzy scorer sits on a date field."""
+
+    _df = pl.DataFrame({"dob": ["1980-01-01", "1975-11-30"], "name": ["a", "b"]})
+
+    def _warnings(self, config):
+        from goldenmatch.core.autoconfig_verify import preflight
+        return [f for f in preflight(self._df, config).findings if f.check == "date_scorer_mismatch"]
+
+    @pytest.mark.parametrize("scorer", ["jaro_winkler", "token_sort", "ensemble", "name_freq_weighted_jw"])
+    def test_name_scorer_on_date_field_warns(self, scorer):
+        w = self._warnings(_date_lint_cfg("dob", scorer))
+        assert len(w) == 1
+        assert w[0].severity == "warning"
+        assert not w[0].repaired  # advisory only, never rewrites the config
+        assert "date" in w[0].message and scorer in w[0].message
+
+    def test_date_scorer_on_date_field_is_clean(self):
+        assert self._warnings(_date_lint_cfg("dob", "date")) == []
+
+    def test_name_scorer_on_non_date_field_is_clean(self):
+        assert self._warnings(_date_lint_cfg("name", "jaro_winkler")) == []
+
+
 def test_postflight_report_dataclass_shape():
     adj = PostflightAdjustment(
         field="threshold", from_value=0.7, to_value=0.5,

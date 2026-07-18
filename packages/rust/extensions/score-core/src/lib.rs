@@ -8,7 +8,7 @@
 //! `#[pyfunction]` shims that delegate here; the FFI UDFs call these `pub fn`s
 //! directly. All functions operate on Unicode chars (codepoints), matching
 //! rapidfuzz.
-use rapidfuzz::distance::{jaro_winkler, levenshtein};
+use rapidfuzz::distance::{damerau_levenshtein, jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
 
 /// `rapidfuzz.fuzz.token_sort_ratio` preprocessing: split on whitespace, sort
@@ -71,9 +71,66 @@ pub fn token_sort_normalized_ratio(a: &str, b: &str) -> f64 {
     fuzz::ratio(normalize(a).chars(), normalize(b).chars())
 }
 
+/// Canonicalize an ISO-8601 `YYYY-MM-DD` date to its 8 packed digits
+/// (`YYYYMMDD`), or `None` if the string isn't that exact shape. Deliberately
+/// strict (no locale parsing, no `YYYY/MM/DD`): the point is to recognize a real
+/// ISO date so a typo can be told apart from a different date; anything else
+/// falls back to plain edit distance. Month/day RANGES are not validated -- a
+/// malformed-but-ISO-shaped value still scores structurally, which is fine for a
+/// similarity (and avoids dragging a calendar into the kernel).
+fn iso_date_digits(s: &str) -> Option<[u8; 8]> {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let mut out = [0u8; 8];
+    let mut oi = 0;
+    for (i, &c) in b.iter().enumerate() {
+        if i == 4 || i == 7 {
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return None;
+        }
+        out[oi] = c;
+        oi += 1;
+    }
+    Some(out)
+}
+
+/// Date-aware similarity on [0, 1]. `jaro_winkler` on an ISO date scores
+/// unrelated birthdays 0.80+ (the fixed `YYYY-MM-DD` shape, shared digit
+/// alphabet, and common `19..`/`20..` prefix dominate) -- it cannot separate a
+/// typo from a different person (#1858). This parses both sides as ISO dates and
+/// uses the Damerau-Levenshtein edit distance over the 8 canonical digits
+/// (transposition-aware -- swapped digits are ONE edit), mapped so a single-digit
+/// typo stays above a typical 0.85 cutoff while an unrelated date cliffs to 0:
+///
+///   d == 0 -> 1.00 (same date)     d == 2 -> 0.75 (two edits -- weak)
+///   d == 1 -> 0.90 (one typo)      d >= 3 -> 0.00 (unrelated)
+///
+/// Mirrors Splink's `DamerauLevenshtein <= 2` date comparison. When EITHER side
+/// isn't an ISO date, degrades to `levenshtein` on the raw strings -- the
+/// like-for-like the issue recommends over `jaro_winkler`, never worse.
+pub fn date_similarity(a: &str, b: &str) -> f64 {
+    match (iso_date_digits(a), iso_date_digits(b)) {
+        (Some(da), Some(db)) => {
+            let d = damerau_levenshtein::distance(da.iter().copied(), db.iter().copied());
+            match d {
+                0 => 1.0,
+                1 => 0.90,
+                2 => 0.75,
+                _ => 0.0,
+            }
+        }
+        // Not both ISO dates: fall back to plain normalized edit distance.
+        _ => levenshtein::normalized_similarity(a.chars(), b.chars()),
+    }
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact.
+/// 2=token_sort, 3=exact, 4=date.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -93,6 +150,7 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // (clippy::collapsible-match under CI's stable toolchain); scorer_id==3
         // with a!=b falls through to the catch-all 0.0, same as every other id.
         3 if a == b => 1.0,
+        4 => date_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -117,6 +175,37 @@ mod tests {
     #[test]
     fn token_sort_is_order_invariant_on_0_100_scale() {
         assert_eq!(token_sort_ratio("a b", "b a"), 100.0);
+    }
+
+    #[test]
+    fn date_similarity_separates_typo_from_unrelated() {
+        // The #1858 cases: jaro_winkler scored the unrelated pair 0.80+; date must not.
+        assert_eq!(date_similarity("1980-01-01", "1980-01-01"), 1.0); // same
+        assert_eq!(date_similarity("1980-01-01", "1980-01-02"), 0.90); // 1-digit typo
+        assert_eq!(date_similarity("1980-01-01", "1975-11-30"), 0.0); // unrelated (>=3 edits)
+        // A single-digit typo must clear a typical 0.85 cutoff; unrelated must not.
+        assert!(date_similarity("1980-01-01", "1980-01-02") >= 0.85);
+        assert!(date_similarity("1980-01-01", "1975-01-01") < 0.85); // 2-edit year change
+    }
+
+    #[test]
+    fn date_similarity_transposition_is_one_edit() {
+        // Swapped adjacent digits = ONE Damerau edit (not two) -> stays a typo.
+        assert_eq!(date_similarity("1980-12-01", "1980-21-01"), 0.90);
+    }
+
+    #[test]
+    fn date_similarity_non_iso_falls_back_to_levenshtein() {
+        // Not both ISO -> plain normalized edit distance, never jaro_winkler.
+        assert_eq!(date_similarity("abc", "abc"), 1.0);
+        let s = date_similarity("1980-01-01", "Jan 1 1980");
+        assert!((s - levenshtein_similarity("1980-01-01", "Jan 1 1980")).abs() < 1e-12);
+    }
+
+    #[test]
+    fn score_one_id4_is_date() {
+        assert_eq!(score_one(4, "1980-01-01", "1980-01-01"), 1.0);
+        assert_eq!(score_one(4, "1980-01-01", "1975-11-30"), 0.0);
     }
 
     #[test]

@@ -224,6 +224,17 @@ pub fn levenshtein_similarity(a: &str, b: &str) -> f64 {
 }
 
 /// token_sort_ratio on the 0-100 scale (score_field divides by 100).
+/// Date-aware similarity (score-core id 4). Exposed as its own #[pyfunction] so
+/// the Python caller can `hasattr(_native, "date_similarity")` to detect whether
+/// the LOADED kernel understands the date scorer -- `score_one`/`score_block_*`
+/// dispatch id 4 too, but a stale published wheel (pre-date) would silently
+/// return 0.0 for id 4 (the catch-all), so the caller gates the native date
+/// route on this symbol and falls back to the pure-Python mirror otherwise.
+#[pyfunction]
+pub fn date_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::date_similarity(a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)
