@@ -286,15 +286,16 @@ def _score_probabilistic_matchkey(
     bench_candidate_pairs=None,
     bench_emitted_pairs=None,
     log_em: bool = False,
+    em_results=None,
 ) -> None:
     """Score one probabilistic (Fellegi-Sunter) matchkey, folding results into
     ``all_pairs`` / ``review_pairs`` and updating ``matched_pairs`` in place.
 
-    The single routing/scoring body shared by the dedupe pipeline and both match
-    lanes (``_run_match_pipeline`` / ``_run_match_scoring_and_output``) -- the
-    three were near-identical, so the #1798 bucket gate no longer has to be
-    maintained in three places (#1804 item 1). ``block_frame`` feeds
-    ``build_blocks``; ``score_frame`` feeds EM training + ``score_buckets``.
+    The single routing/scoring body shared by the dedupe pipeline, both match
+    lanes (``_run_match_pipeline`` / ``_run_match_scoring_and_output``) and the
+    TUI engine -- the four were near-identical, so the #1798 bucket gate no
+    longer has to be maintained in four places (#1804 items 1 + 3). ``block_frame``
+    feeds ``build_blocks``; ``score_frame`` feeds EM training + ``score_buckets``.
 
     Filtering is caller-shaped: the match lanes pass ``target_ids`` (each scorer
     filters internally); the dedupe across-files path passes ``across_files_only``
@@ -304,6 +305,8 @@ def _score_probabilistic_matchkey(
     ``bench_candidate_pairs`` / ``bench_emitted_pairs`` for exact candidate /
     emitted accounting; it is inert (no per-block work) when unset. ``log_em``
     emits the EM-convergence info line (dedupe only, preserving prior behavior).
+    ``em_results`` (the TUI engine's per-matchkey model waterfall) is populated
+    with the trained ``EMResult`` under ``mk.name`` when provided.
     """
     from goldenmatch.core.blocker import collect_blocking_fields
     from goldenmatch.core.probabilistic import (
@@ -346,6 +349,8 @@ def _score_probabilistic_matchkey(
     scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
         mk, em_result
     )
+    if em_results is not None:
+        em_results[mk.name] = em_result
     if log_em:
         logger.info(
             "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",

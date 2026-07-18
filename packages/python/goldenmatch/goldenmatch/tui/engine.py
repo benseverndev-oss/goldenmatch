@@ -248,33 +248,26 @@ class MatchEngine:
             if mk.type == "probabilistic":
                 if config.blocking is None:
                     continue
-                from goldenmatch.core.probabilistic import (
-                    load_or_train_em,
-                    probabilistic_block_scorer,
+                from goldenmatch.core.pipeline import (
+                    _score_probabilistic_matchkey,
                 )
-                blocks = build_blocks(combined_lf, config.blocking)
-                blocking_fields = []
-                if config.blocking and config.blocking.keys:
-                    for bk in config.blocking.keys:
-                        blocking_fields.extend(bk.fields)
-                # Reuses mk.model_path when set (train-once), else trains.
-                em_result = load_or_train_em(
-                    collected_df, mk,
-                    blocks=blocks,
-                    blocking_fields=blocking_fields,
+                # Route through the ONE shared FS scorer the dedupe / match
+                # pipelines use (#1804 item 3): memory-bounded bucket routing,
+                # multi_pass-correct blocking-field collection, and the #1798
+                # build_blocks skip -- replacing the TUI's stale per-block loop
+                # (eager build_blocks + the `block.df` accessor + a keys-only
+                # blocking_fields that missed multi_pass `.passes`). The trained
+                # model is stored in `em_results` for the waterfall; review-band
+                # pairs are discarded (the TUI shows the >= link cut, unchanged).
+                _score_probabilistic_matchkey(
+                    mk, config,
+                    block_frame=combined_lf,
+                    score_frame=collected_df,
+                    matched_pairs=matched_pairs,
+                    all_pairs=all_pairs,
+                    review_pairs=[],
+                    em_results=em_results,
                 )
-                em_results[mk.name] = em_result
-                # Route through the block-scorer selector (native -> vectorized
-                # -> scalar) instead of calling the scalar scorer directly, so
-                # the TUI gets native/vectorized FS and model-backed scorers
-                # (embedding / record_embedding) work here too (#1806).
-                fs_scorer = probabilistic_block_scorer(mk, em_result)
-                for block in blocks:
-                    block_df = block.df.collect() if hasattr(block.df, 'collect') else block.df
-                    pairs = fs_scorer(block_df, exclude_pairs=matched_pairs)
-                    all_pairs.extend(pairs)
-                    for a, b, s in pairs:
-                        matched_pairs.add((min(a, b), max(a, b)))
 
         # ── Rerank (optional) ──
         for mk in matchkeys:
