@@ -2,23 +2,38 @@
 
 Newest first. One entry per meaningful change to the network.
 
-## 2026-07-18 -- goldenmatch 3.5.0: `date` scorer + cross-surface consistency hardening
-- Cut **goldenmatch 3.5.0** (docs sweep + release). Headline: the `date` scorer
-  (#1858) -- `jaro_winkler` scores unrelated ISO birthdays 0.80+, so `date`
-  compares by Damerau-Levenshtein over the canonical digits (typo 0.90 /
-  unrelated 0.00), canonical impl in the Rust `score-core` kernel funneled to
-  native + pure-Python + TypeScript (byte-identical). No new ADR: it is an
-  instance of the established "Rust is the reference, mirror cross-surface"
-  scorer pattern, not a new architectural decision. Documented in
-  `docs-site/goldenmatch/scoring.mdx` (scorer table + "Date fields" section).
-- Also in the release train: fused FS multi-pass + pipeline routing, Postgres
-  identity-resolution single-transaction fix (#1886).
-- Consistency-hardening wave (post-release, not gating 3.5.0): NE fast/slow-path
-  parity (#1888), api_parity/native_symbols made blocking + scorer/transform
-  surfaces added (#1889), BUCKET_HASH_SEED single-sourced + native scorer-id
-  cross-surface gate (#1890), and the version_consistency gate extended to
-  TypeScript (#1885). Same through-line: gates that guarded a cross-surface
-  invariant while watching only one surface.
+## 2026-07-18 -- goldenmatch 3.5.0: ships the FS correctness/coverage wave + `date` scorer
+- Cut **goldenmatch 3.5.0** (docs sweep + release). This release ships the whole
+  unreleased delta since 3.4.0 (~46 PRs) to PyPI, not one feature. The
+  architectural decisions were already captured in ADRs 0041-0045 (swept
+  2026-07-17, #1879); 3.5.0 is where they reach users. Four threads:
+  - **FS missing-value correctness (ADR 0041).** Restores `historical_50k`
+    probabilistic F1 0.33 -> 0.83: missing-value semantics are a per-matchkey
+    toggle auto-selected per dataset (#1851), the native kernel declines
+    `disagree`-mode matchkeys to numpy (#1872), null fields no longer cap a pair
+    below threshold (#1856), unobserved fields stop adding max evidence in
+    splink-upgrade calibration (#1861), and null block keys stop forming false
+    mega-blocks across bucket / sorted_neighborhood / learned blocking
+    (#1857/#1860).
+  - **100% native FS coverage (ADR 0042).** New pyo3-free `goldenmatch-fs-core`
+    crate shared by the native kernel + TS/WASM; kernel now owns every FS
+    comparison scorer incl. ensemble/TF (#1869) and embeddings (#1871). Fused FS
+    covers multi-pass blocking + pipeline routing.
+  - **The `date` scorer (#1858)** -- the one net-new user-facing capability.
+    `jaro_winkler` scores unrelated ISO birthdays 0.80+, so `date` compares by
+    Damerau-Levenshtein over the canonical digits (typo 0.90 / unrelated 0.00),
+    canonical impl in the Rust `score-core` kernel funneled to native +
+    pure-Python + TypeScript. Documented in `docs-site/goldenmatch/scoring.mdx`.
+  - **Correctness fixes + hardening:** `from_splink` discards the random-pair
+    prior (#1878), autoconfig compound blocking survives Arrow input (#1875),
+    bucket NE fast/slow-path parity (#1888), Postgres single-transaction resolve
+    (#1886) + `gm_run` batch writes (#1883), `sail` dep pins (#1862/#1866/#1873),
+    and cross-surface gates (version_consistency covers TS #1885; BUCKET_HASH_SEED
+    single-sourced + native scorer-id gate #1890; api_parity/native_symbols
+    blocking #1889).
+- Siblings (goldencheck/goldenflow/goldenpipe/infermap) had only the transitive
+  `mcp` bump; goldenanalysis had an internal byte-identical interner refactor
+  (#1880/#1881) -- none release-worthy, so this is a goldenmatch-only cut.
 
 ## 2026-07-17 -- Context-network sweep: the FS scale + hardening wave (ADRs 0041-0045)
 - Swept the 2026-07-16..18 window (~40 PRs, shipped as **goldenmatch 3.4.0** +

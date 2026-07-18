@@ -32,6 +32,69 @@ when a name-oriented scorer sits on a date field.
   now wraps its whole write body in a single `IdentityStore.bulk_writes()`
   transaction -- N commits collapse to one and psycopg pipelines the statements.
   No-op for SQLite/Mongo; the resolve is now atomic per run.
+- **`historical_50k` probabilistic F1 restored 0.33 -> 0.83 (#1846, #1851, #1872).**
+  #1834 (from 3.4.0's train) made a missing FS field carry no evidence
+  (`unobserved` semantics) instead of counting as disagreement. Textbook
+  Fellegi-Sunter when data is missing-at-random, but wrong when missingness is
+  informative -- on null-heavy corpora a pair agreeing on its few populated
+  fields looked certain and the dataset mass-merged (F1 0.83 -> 0.33,
+  recall-only, no error or warning). Fixed in three parts: FS missing-value
+  semantics are now a per-matchkey toggle (`unobserved` vs `disagree`) and
+  auto-config picks the mode per dataset from its null profile (#1851); the
+  native FS kernel -- which only implements the neutral/`unobserved` mode --
+  now declines to `disagree`-mode matchkeys and routes them to the numpy path
+  that honors both (#1872); and a regression test pins the shape (#1867).
+- **Null fields no longer make a record unmatchable (#1856).** The live weighted
+  scorer accumulated `weight_sum` over the observed fields but then divided
+  `score_sum` by `total_weight`, so a pair with any null comparison field was
+  capped below the sum of the non-null weights -- e.g. a null `dob` capped the
+  pair at 0.70 under a 0.85 threshold, unmatchable however perfectly the names
+  agreed. The live path now renormalizes by the observed weight
+  (`score_sum / weight_sum`), matching what `core/scorer.py::score_pair` always
+  did.
+- **Null block keys no longer form a false mega-block (#1857, #1859, #1860).** A
+  null blocking key means "this row cannot be blocked", not "it blocks with
+  every other unblockable row". `build_blocks` filtered invalid keys but three
+  scoring/blocking paths did not: the bucket scorer (#1857 -- 9,846 null-postcode
+  rows collapsed into one 48.5M-comparison bucket at 1M rows, 8,571 of 8,682
+  false positives), `sorted_neighborhood` (a null sort key windowed adjacent
+  rows together), and `learned` multi-predicate blocking (an all-missing key
+  joined to a truthy `||` that leaked past the caller's guard) (#1860). All now
+  filter invalid keys the way `static`/`multi_pass` already did (keeping `""`
+  per #390). Bucket precision on the 1M person shape 0.96 -> 0.9995 at 0.04%
+  recall cost.
+- **Unobserved FS fields no longer add spurious match evidence in calibration
+  (#1859, #1861).** Two splink-upgrade calibration sites summed
+  `match_weights[name][vec[k]]` unguarded; for an unobserved field
+  `vec[k] == -1` indexed `weights[-1]`, the highest-agreement weight, so a null
+  field contributed the maximum evidence *for* a match (e.g. +6 bits for a null
+  `dob`) into the fan-out NE posteriors and the learned link/review thresholds.
+  Both now skip unobserved fields via a shared `fs_regular_weight_sum` helper,
+  matching every runtime FS scorer's existing `vec[k] < 0` guard.
+- **`auto_configure_df` no longer crashes on wide/sparse Arrow input (#1852,
+  #1875).** `_build_compound_blocking` still used three polars-only idioms
+  (`null_count()`, `n_unique()`, `group_by().len()`) that `AttributeError`'d on a
+  `pa.Table`; with Arrow-native auto-config default-on (2026-07-14) any input
+  reaching the compound-blocking fallback crashed (live on 3.3.1/3.4.0, hit by
+  the Golden Truth archive ingest). Routed through the backend-neutral `to_frame`
+  seam like its sibling helpers.
+- **`from_splink` import no longer collapses recall without `--upgrade` (#1802,
+  #1878).** `from_splink` imported Splink's random-pair
+  `probability_two_random_records_match` raw into `EMResult.proportion_matched`,
+  a field GoldenMatch's threshold/posterior math assumes is a within-block prior
+  (orders of magnitude higher). So a plain `from_splink()` pushed the link cut
+  into the extreme tail of the blocked-pair distribution (#1760 dogfood F1
+  0.482 -> 0.157). The random-pair prior is now discarded at import; the
+  within-block prior is estimated from the data (what `--upgrade` already did).
+- **Bucket fast path declines negative-evidence scorers it can't honor (#1888).**
+  The bucket scorer's fast path resolved negative-evidence specs to zero penalty
+  for scorers not in its direct set (ensemble, qgram, date), silently diverging
+  from the slow path's 0.5 penalty. It now declines the fast path when a
+  matchkey carries an NE scorer it can't score directly, so bucket and slow paths
+  agree.
+- **Postgres extension batches `gm_run` result writes (#1883).** The
+  `goldenmatch_pg` result-write path committed per row; it now batches the writes
+  and documents the JSON table handoff.
 
 ### Added
 
@@ -76,6 +139,45 @@ when a name-oriented scorer sits on a date field.
   through the pipeline: 4.5x leaner peak RSS + 5x faster on a 120K all-merge FS
   dedupe (442 MB vs 2004 MB). Off by default (fires only under memory pressure
   on an artifact-free config); `GOLDENMATCH_MATCH_FUSED=0` is the kill-switch.
+- **The native kernel now owns every Fellegi-Sunter comparison scorer (#1788,
+  #1869, #1871).** FS block scoring was the repo's parity orphan -- three
+  hand-synced implementations (Python numpy + scalar, the native pyo3 crate,
+  the TS port). The scoring math is extracted into a new pyo3-free
+  `goldenmatch-fs-core` crate consumed by both the native kernel and the TS/WASM
+  surface, so cross-surface parity is by construction. The kernel now covers
+  100% of FS comparison scorers -- the reference-data name scorers, the Winkler
+  TF adjustment, the ensemble scorer (#1869), and the model-backed `embedding` /
+  `record_embedding` scorers (#1871, scored as cosine over the L2-normalized
+  vectors, byte-comparable to the numpy reference). Previously any of these on a
+  matchkey forced the whole matchkey onto the numpy fallback; now the native
+  path is fully covered and numpy is the lossy fallback for the missing-value
+  modes it doesn't yet express.
+- **FS missing-value semantics are a per-matchkey toggle, auto-selected (#1846,
+  #1851).** A matchkey now carries whether a null field is `unobserved` (no
+  evidence, missing-at-random) or `disagree` (evidence against, informative
+  missingness); auto-config picks the mode per dataset from its null profile.
+  See the Fixed entry above for the `historical_50k` regression this closed.
+
+### Changed
+
+- **The three FS scoring sites are consolidated behind one entry point (#1804,
+  #1882, #1884, #1887).** The pipeline, the TUI, and the distributed path now all
+  score probabilistic matchkeys through `score_probabilistic_matchkey` instead of
+  three drifting copies -- no behavior change, but the FS routing/missing-value
+  fixes in this release land once instead of three times.
+- **Dependency pins for the `sail` extra (#1862, #1866, #1868, #1873).**
+  `pyspark[connect]` is pinned `>=3.5,<4` (pyspark 4's Spark Connect client
+  chokes on size-suffixed configs like `"3GB"`; pysail 0.6 targets the Spark 3.5
+  protocol), and `setuptools>=68` is required on Python 3.12 (pyspark 3.5 imports
+  the stdlib `distutils` that 3.12 removed). The `sail` and `inhouse-embeddings`
+  extras are declared mutually conflicting (#1868) so the resolver stops trying
+  to co-install their incompatible transitive pins.
+- Bumped `mcp` 1.27.0 -> 1.28.1 (#1850).
+- **Cross-surface consistency is now gated (#1885, #1888, #1890).**
+  `version_consistency` covers the TypeScript packages; the bucket-hash seed is
+  single-sourced and the native scorer-id maps are pinned canonically and
+  behaviorally, so a renumber or a value drift fails CI instead of silently
+  mis-dispatching.
 
 ## [3.4.0] - 2026-07-16
 
