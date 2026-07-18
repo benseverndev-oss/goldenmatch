@@ -79,10 +79,20 @@ def _bio_df():
 
 
 def test_routing_off_is_deterministic(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", raising=False)
+    # Kill-switch: explicit "0" keeps the deterministic exact+weighted path even
+    # for a probabilistic-shaped dataset (routing default flipped ON 2026-07-17).
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     cfg = auto_configure_df(_bio_df())
     assert all(mk.type != "probabilistic" for mk in (cfg.matchkeys or []))
+
+
+def test_routing_default_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch):
+    # Default (env unset) now routes a probabilistic-shaped dataset to FS.
+    monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    cfg = auto_configure_df(_bio_df())
+    assert any(mk.type == "probabilistic" for mk in (cfg.matchkeys or []))
 
 
 def test_routing_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch):

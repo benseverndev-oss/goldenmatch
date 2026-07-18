@@ -832,11 +832,16 @@ def _tf_name_weighting_enabled() -> bool:
 def _route_to_probabilistic_enabled() -> bool:
     """Auto-route a probabilistic-shaped dataset (no strong-identity exact matchkey
     + multiple weak fuzzy fields) to the Fellegi-Sunter path instead of the default
-    exact+weighted matchkeys. Default OFF (2026-06-23) -- a behavior change pending
-    the dual-strategy corpus proof. Enable:
-    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1 (or true/yes/on/enabled)."""
-    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0").lower() in (
-        "1", "true", "yes", "on", "enabled",
+    exact+weighted matchkeys. Default ON (2026-07-17) -- the dual-strategy corpus
+    proof came back green: routing lifts the default-strategy F1 on every routed
+    dataset (historical_50k 0.34->0.77, ncvr_synthetic 0.96->0.99, febrl3 flat) with
+    NO regression on the one det-wins anchor (anchor_person_match holds ~0.99, kept on
+    exact matching by its surviving email key -- see _is_probabilistic_shape). Only
+    no-strong-id + >=2-fuzzy-field shapes route; strong-id (email/phone/identifier)
+    shapes stay on exact matching. Kill-switch:
+    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=0 (or false/no/off/disabled)."""
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1").strip().lower() not in (
+        "0", "false", "no", "off", "disabled",
     )
 
 
