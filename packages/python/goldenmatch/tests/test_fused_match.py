@@ -742,3 +742,141 @@ def test_fused_arrow_backend_declines_uncovered(monkeypatch):
     c = _covered_config()
     c.matchkeys[0].fields[0].scorer = "soundex_match"
     assert fused_match.run_match_fused_arrow({"blk": pa.array(["a"]), "name": pa.array(["x"])}, c) is None
+
+
+# ---- Fellegi-Sunter fused path: MULTI-PASS blocking (#1804 item 2) --------
+#
+# Expands the fused FS coverage from single-static-key to the compound-union
+# blocking shape that OOM'd in #1798. No new native code: each pass runs the
+# SAME single-key FS kernel; per-pass clusters are union-find-merged host-side
+# (byte-parity with the classic multi-pass FS pipeline).
+
+def _fs_multipass_config():
+    return GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["blk1"])],
+            passes=[
+                BlockingKeyConfig(fields=["blk1"]),
+                BlockingKeyConfig(fields=["blk2"]),
+            ],
+        ),
+        matchkeys=[
+            MatchkeyConfig(
+                name="mk", type="probabilistic", link_threshold=0.5,
+                fields=[MatchkeyField(
+                    field="name", scorer="jaro_winkler", levels=3,
+                    partial_threshold=0.8,
+                )],
+            )
+        ],
+    )
+
+
+def test_fs_multipass_ready_true_false():
+    assert fused_match.match_fused_fs_multipass_ready(_fs_multipass_config()) is True
+    # static single-key FS config -> the single-key gate, not the multipass one.
+    assert fused_match.match_fused_fs_multipass_ready(_probabilistic_config()) is False
+    # weighted multipass -> the weighted twin, not this one (wrong matchkey type).
+    assert fused_match.match_fused_fs_multipass_ready(_multipass_config()) is False
+
+
+def test_fs_multipass_ready_declines_uncovered_matchkey():
+    # A non-FS-native scorer fails the shared _fused_fs_matchkey_covered check
+    # even with a valid multi_pass blocking shape.
+    cfg = _fs_multipass_config()
+    cfg.matchkeys[0].fields[0].scorer = "soundex_match"
+    assert fused_match.match_fused_fs_multipass_ready(cfg) is False
+    # empty passes -> declined.
+    cfg2 = _fs_multipass_config()
+    cfg2.blocking.passes = []
+    assert fused_match.match_fused_fs_multipass_ready(cfg2) is False
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused_fs not built")
+def test_fs_multipass_merges_across_passes():
+    import polars as pl
+
+    # pass1 blocks on blk1: {0,1}, {4,5}; pass2 on blk2: {0,2}, {3,4}. Identical
+    # names -> every intra-block pair scores above link_threshold; the union
+    # chains 0-1-2 (0-1 pass1, 0-2 pass2) and 3-4-5 (3-4 pass2, 4-5 pass1).
+    blk1 = ["a", "a", "x", "y", "z", "z"]
+    blk2 = ["p", "q", "p", "r", "r", "s"]
+    name = ["jonathan"] * 6
+    config = _fs_multipass_config()
+    em = _em()
+    columns = {"blk1": pa.array(blk1), "blk2": pa.array(blk2), "name": pa.array(name)}
+    tbl = fused_match.run_match_fused_fs_multipass_arrow(columns, config, em)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+    assert got == {frozenset({0, 1, 2}), frozenset({3, 4, 5})}
+
+    # Byte-parity with the classic multi-pass FS pipeline on the same data + EM.
+    df = (
+        pl.DataFrame({"blk1": blk1, "blk2": blk2, "name": name})
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    assert got == _classic_fs_clusters(df, config, em)
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused_fs not built")
+def test_fs_multipass_parity_partial_matches():
+    import polars as pl
+
+    # Realistic shape: near-dup names that only partially merge, spread across
+    # two orthogonal blocking keys -- exercises the union of link-pairs, not just
+    # all-identical blocks.
+    blk1 = ["a", "a", "a", "b", "b", "c"]
+    blk2 = ["p", "q", "p", "q", "q", "p"]
+    name = ["jonathan", "jonathon", "michael", "sarah", "sara", "solo"]
+    config = _fs_multipass_config()
+    em = _em()
+    columns = {"blk1": pa.array(blk1), "blk2": pa.array(blk2), "name": pa.array(name)}
+    tbl = fused_match.run_match_fused_fs_multipass_arrow(columns, config, em)
+    assert tbl is not None
+    got = _table_to_clusters(tbl)
+
+    df = (
+        pl.DataFrame({"blk1": blk1, "blk2": blk2, "name": name})
+        .with_row_index("__row_id__")
+        .with_columns(pl.col("__row_id__").cast(pl.Int64))
+    )
+    assert got == _classic_fs_clusters(df, config, em)
+
+
+@pytest.mark.skipif(not _HAS_FUSED, reason="goldenmatch-native match_fused_fs not built")
+def test_fs_multipass_equals_single_pass_when_one_pass():
+    # A one-pass multi_pass FS config must equal the single-key fused FS result.
+    blk = ["a", "a", "a", "b", "b", "c"]
+    name = ["jonathan", "jonathon", "michael", "sarah", "sara", "solo"]
+    em = _em()
+    columns = {"blk": pa.array(blk), "name": pa.array(name)}
+
+    single = _probabilistic_config()
+    mp = GoldenMatchConfig(
+        blocking=BlockingConfig(
+            strategy="multi_pass",
+            keys=[BlockingKeyConfig(fields=["blk"])],
+            passes=[BlockingKeyConfig(fields=["blk"])],
+        ),
+        matchkeys=single.matchkeys,
+    )
+    got_single = _table_to_clusters(
+        fused_match.run_match_fused_fs_arrow(columns, single, em)
+    )
+    got_mp = _table_to_clusters(
+        fused_match.run_match_fused_fs_multipass_arrow(columns, mp, em)
+    )
+    assert got_mp == got_single
+
+
+def test_fs_multipass_declines_uncovered_returns_none():
+    # Runner returns None (not raise) on an uncovered config -> caller falls back.
+    cfg = _fs_multipass_config()
+    cfg.matchkeys[0].fields[0].scorer = "soundex_match"
+    out = fused_match.run_match_fused_fs_multipass_arrow(
+        {"blk1": pa.array(["a"]), "blk2": pa.array(["p"]), "name": pa.array(["x"])},
+        cfg, _em(),
+    )
+    assert out is None

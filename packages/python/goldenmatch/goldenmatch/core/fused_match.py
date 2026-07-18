@@ -290,6 +290,17 @@ def match_fused_fs_ready(config: Any) -> bool:
     keys = getattr(b, "keys", None) or []
     if len(keys) != 1 or getattr(b, "ann_column", None):
         return False
+    return _fused_fs_matchkey_covered(config)
+
+
+def _fused_fs_matchkey_covered(config: Any) -> bool:
+    """Matchkey-coverage half of the fused FS gate (blocking-agnostic).
+
+    The single covered probabilistic matchkey must have every field named + on
+    an FS-native scorer, and the same NE / level_thresholds capability rules as
+    ``match_fused_fs_ready``. Extracted so the single-key AND multi-pass gates
+    share one coverage definition (the pass shape is the only thing that differs
+    -- both run the SAME per-block FS kernel)."""
     get_mks = getattr(config, "get_matchkeys", None)
     mks = get_mks() if callable(get_mks) else []
     if len(mks) != 1 or getattr(mks[0], "type", None) != "probabilistic" or not mks[0].fields:
@@ -329,6 +340,27 @@ def match_fused_fs_ready(config: Any) -> bool:
         ):
             return False
     return True
+
+
+def match_fused_fs_multipass_ready(config: Any) -> bool:
+    """Covered boundary for the fused FS MULTI-PASS blocking path.
+
+    Mirror of ``match_fused_multipass_ready`` (the weighted twin): ``multi_pass``
+    blocking with >=1 pass (each a real blocking key) + one covered probabilistic
+    matchkey. Each pass is run as a single-key fused FS match; their per-pass
+    clusters are union-find-merged (CC of the pass-pair union) -- so this covers
+    the compound-union blocking shape (#1798) that the single-key gate declines,
+    reusing the SAME single-key FS kernel with NO new native code.
+    """
+    b = getattr(config, "blocking", None)
+    if b is None or getattr(b, "strategy", None) != "multi_pass":
+        return False
+    if getattr(b, "ann_column", None):
+        return False
+    passes = getattr(b, "passes", None) or []
+    if not passes or any(not getattr(p, "fields", None) for p in passes):
+        return False
+    return _fused_fs_matchkey_covered(config)
 
 
 def _match_fused_fs_symbol() -> Any | None:
@@ -466,3 +498,65 @@ def run_match_fused_fs_arrow(
         **opt_kwargs,
     )
     return _clusters_to_table(clusters)
+
+
+def run_match_fused_fs_multipass_arrow(
+    columns: Mapping[str, Any],
+    config: Any,
+    em_result: Any,
+    n_rows: int | None = None,
+) -> Any | None:
+    """Fused FS multi-pass blocking: run each pass as a single-key fused FS match
+    (with the SAME pre-trained ``EMResult``), then union-find-merge the per-pass
+    clusters. Mirror of ``run_match_fused_multipass_arrow`` (the weighted twin).
+
+    Byte-parity with the pipeline's multi-pass FS path by the SAME argument the
+    weighted twin uses: the final partition is the connected components of the
+    union of all passes' emitted link-pairs, which equals merging each pass's
+    per-pass clusters. The FS score of a pair is pass-independent (one EM, same
+    fields), so a pair emitted in one pass would be emitted in any pass that
+    blocks it -- the CC of the union is invariant to which pass surfaced it.
+    Returns a ``(__row_id__, __cluster_id__)`` Table, or None if uncovered /
+    native absent.
+    """
+    from goldenmatch.config.schemas import BlockingConfig, GoldenMatchConfig
+
+    if _match_fused_fs_symbol() is None or not match_fused_fs_multipass_ready(config):
+        return None
+
+    n = n_rows if n_rows is not None else len(next(iter(columns.values())))
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    mks = config.get_matchkeys()
+    for pass_cfg in config.blocking.passes:
+        single = GoldenMatchConfig(
+            blocking=BlockingConfig(strategy="static", keys=[pass_cfg]),
+            matchkeys=mks,
+        )
+        tbl = run_match_fused_fs_arrow(columns, single, em_result, n_rows=n)
+        if tbl is None:
+            continue
+        groups: dict[int, list[int]] = {}
+        for r, c in zip(
+            tbl.column("__row_id__").to_pylist(), tbl.column("__cluster_id__").to_pylist()
+        ):
+            groups.setdefault(c, []).append(r)
+        for members in groups.values():
+            for m in members[1:]:
+                union(members[0], m)
+
+    comps: dict[int, list[int]] = {}
+    for i in range(n):
+        comps.setdefault(find(i), []).append(i)
+    return _clusters_to_table(list(comps.values()))
