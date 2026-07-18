@@ -270,6 +270,108 @@ def _fs_external_blocks_route(config: GoldenMatchConfig) -> bool:
     return not has_active_emitter()
 
 
+def _score_probabilistic_matchkey(
+    mk: Any,
+    config: GoldenMatchConfig,
+    *,
+    block_frame,
+    score_frame,
+    matched_pairs: set,
+    all_pairs: list,
+    review_pairs: list,
+    target_ids,
+) -> None:
+    """Score one probabilistic (Fellegi-Sunter) matchkey for the MATCH path,
+    folding results into ``all_pairs`` / ``review_pairs`` and updating
+    ``matched_pairs`` in place.
+
+    The single routing/scoring body shared by ``_run_match_pipeline`` and
+    ``_run_match_scoring_and_output`` -- the two lanes were byte-identical
+    except for the frame variable names (``block_frame`` feeds ``build_blocks``;
+    ``score_frame`` feeds EM training + ``score_buckets``), so the #1798 bucket
+    gate no longer has to be maintained in two places (#1804 item 1). The dedupe
+    site keeps its own copy for now: it additionally threads bench-dump
+    candidate accounting + across-files filtering.
+    """
+    from goldenmatch.core.blocker import collect_blocking_fields
+    from goldenmatch.core.probabilistic import (
+        fs_model_preloaded,
+        load_or_train_em,
+        score_probabilistic_blocks_batched,
+    )
+    # Bucket route + preloaded model -> blocks are never read (EM is skipped and
+    # score_buckets partitions internally); skip the full-frame block
+    # materialization that OOM'd at 14M (#1798).
+    _fs_use_bucket = _fs_use_bucket_route(config, mk)
+    blocks = (
+        []
+        if _fs_use_bucket and fs_model_preloaded(mk)
+        else build_blocks(block_frame, config.blocking)
+    )
+    # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+    blocking_fields = (
+        collect_blocking_fields(config.blocking) if config.blocking else []
+    )
+    # Reuses mk.model_path when set (Splink-style train-once), else trains.
+    em_result = load_or_train_em(
+        score_frame, mk,
+        blocks=blocks,
+        blocking_fields=blocking_fields,
+        target_ids=target_ids,
+    )
+    scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
+        mk, em_result
+    )
+    # Default-route FS to the memory-bounded bucket scorer when the native FS
+    # kernel is available (issue #1792) or backend='bucket' is explicit; else
+    # the per-block batched scorer (legacy default).
+    if _fs_use_bucket:
+        from goldenmatch.backends.score_buckets import score_buckets
+        # Free EM's training blocks before the bucket partition builds.
+        blocks = []
+        pairs = score_buckets(
+            score_frame,
+            config.blocking,
+            scoring_mk,
+            matched_pairs,
+            n_buckets=config.n_buckets,
+            target_ids=target_ids,
+            em_result=em_result,
+        )
+        pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+        review_pairs.extend(candidates)
+        all_pairs.extend(pairs)
+        for a, b, _s in pairs:
+            matched_pairs.add((min(a, b), max(a, b)))
+        return
+    # Strategy-generated candidates: memory-bounded external-blocks scorer
+    # (same refinement as the dedupe site).
+    if _fs_external_blocks_route(config):
+        from goldenmatch.backends.score_buckets import (
+            score_probabilistic_external_blocks,
+        )
+        pairs = score_probabilistic_external_blocks(
+            blocks, config.blocking, scoring_mk, matched_pairs,
+            em_result, target_ids=target_ids,
+        )
+        pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+        review_pairs.extend(candidates)
+        all_pairs.extend(pairs)
+        for a, b, _s in pairs:
+            matched_pairs.add((min(a, b), max(a, b)))
+        return
+    # Blocks scored in parallel across cores (GIL-releasing FS kernels).
+    pairs = score_probabilistic_blocks_batched(
+        blocks, scoring_mk, em_result, matched_pairs,
+        target_ids=target_ids,
+    )
+    pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+    review_pairs.extend(candidates)
+    all_pairs.extend(pairs)
+    for a, b, _s in pairs:
+        matched_pairs.add((min(a, b), max(a, b)))
+
+
 def _get_block_scorer(config: GoldenMatchConfig):
     """Return the block scoring function based on configured backend."""
     backend = getattr(config, "backend", None)
@@ -4227,86 +4329,15 @@ def _run_match_pipeline(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import (
-                fs_model_preloaded,
-                load_or_train_em,
-                score_probabilistic_blocks_batched,
-            )
-            # Bucket route + preloaded model -> blocks are never read (EM is
-            # skipped and score_buckets partitions internally); skip the
-            # full-frame block materialization that OOM'd at 14M (#1798).
-            _fs_use_bucket = _fs_use_bucket_route(config, mk)
-            blocks = (
-                []
-                if _fs_use_bucket and fs_model_preloaded(mk)
-                else build_blocks(combined_lf, config.blocking)
-            )
-            # Collect from keys AND passes (multi_pass puts keys in `.passes`).
-            blocking_fields = collect_blocking_fields(config.blocking) if config.blocking else []
-            # Reuses mk.model_path when set (Splink-style train-once), else trains.
-            em_result = load_or_train_em(
-                combined_df, mk,
-                blocks=blocks,
-                blocking_fields=blocking_fields,
+            _score_probabilistic_matchkey(
+                mk, config,
+                block_frame=combined_lf,
+                score_frame=combined_df,
+                matched_pairs=matched_pairs,
+                all_pairs=all_pairs,
+                review_pairs=review_pairs,
                 target_ids=target_ids,
             )
-            scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
-                mk, em_result
-            )
-            # Default-route FS to the memory-bounded bucket scorer when the
-            # native FS kernel is available (issue #1792) or backend='bucket'
-            # is explicit; else the per-block batched scorer (legacy default).
-            if _fs_use_bucket:
-                from goldenmatch.backends.score_buckets import score_buckets
-                # Free EM's training blocks before the bucket partition builds.
-                blocks = []
-                pairs = score_buckets(
-                    combined_df,
-                    config.blocking,
-                    scoring_mk,
-                    matched_pairs,
-                    n_buckets=config.n_buckets,
-                    target_ids=target_ids,
-                    em_result=em_result,
-                )
-                pairs, candidates = _split_probabilistic_pairs(
-                    pairs, link_threshold
-                )
-                review_pairs.extend(candidates)
-                all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-                continue
-            # Strategy-generated candidates: memory-bounded external-blocks
-            # scorer (same refinement as the dedupe site).
-            if _fs_external_blocks_route(config):
-                from goldenmatch.backends.score_buckets import (
-                    score_probabilistic_external_blocks,
-                )
-                pairs = score_probabilistic_external_blocks(
-                    blocks, config.blocking, scoring_mk, matched_pairs,
-                    em_result, target_ids=target_ids,
-                )
-                pairs, candidates = _split_probabilistic_pairs(
-                    pairs, link_threshold
-                )
-                review_pairs.extend(candidates)
-                all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-                continue
-            # Blocks scored in parallel across cores (GIL-releasing FS kernels).
-            # Does not mutate matched_pairs; fold the returned pairs in below.
-            pairs = score_probabilistic_blocks_batched(
-                blocks, scoring_mk, em_result, matched_pairs,
-                target_ids=target_ids,
-            )
-            pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
-            review_pairs.extend(candidates)
-            all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
 
     # ── Step 4.5: CROSS-ENCODER RERANKING (optional) ──
     for mk in matchkeys:
@@ -4495,86 +4526,15 @@ def _run_match_scoring_and_output(
         if mk.type == "probabilistic":
             if config.blocking is None:
                 continue
-            from goldenmatch.core.blocker import collect_blocking_fields
-            from goldenmatch.core.probabilistic import (
-                fs_model_preloaded,
-                load_or_train_em,
-                score_probabilistic_blocks_batched,
-            )
-            # Bucket route + preloaded model -> blocks are never read (EM is
-            # skipped and score_buckets partitions internally); skip the
-            # full-frame block materialization that OOM'd at 14M (#1798).
-            _fs_use_bucket = _fs_use_bucket_route(config, mk)
-            blocks = (
-                []
-                if _fs_use_bucket and fs_model_preloaded(mk)
-                else build_blocks(combined_frame, config.blocking)
-            )
-            blocking_fields = (
-                collect_blocking_fields(config.blocking) if config.blocking else []
-            )
-            em_result = load_or_train_em(
-                combined_native,
-                mk,
-                blocks=blocks,
-                blocking_fields=blocking_fields,
+            _score_probabilistic_matchkey(
+                mk, config,
+                block_frame=combined_frame,
+                score_frame=combined_native,
+                matched_pairs=matched_pairs,
+                all_pairs=all_pairs,
+                review_pairs=review_pairs,
                 target_ids=target_ids,
             )
-            scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
-                mk, em_result
-            )
-            # Default-route FS to the memory-bounded bucket scorer when the
-            # native FS kernel is available (issue #1792) or backend='bucket'
-            # is explicit; else the per-block batched scorer (legacy default).
-            # score_buckets is dual-rep -- the pa.Table native passes through.
-            if _fs_use_bucket:
-                from goldenmatch.backends.score_buckets import score_buckets
-                # Free EM's training blocks before the bucket partition builds.
-                blocks = []
-                pairs = score_buckets(
-                    combined_native,
-                    config.blocking,
-                    scoring_mk,
-                    matched_pairs,
-                    n_buckets=config.n_buckets,
-                    target_ids=target_ids,
-                    em_result=em_result,
-                )
-                pairs, candidates = _split_probabilistic_pairs(
-                    pairs, link_threshold
-                )
-                review_pairs.extend(candidates)
-                all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-                continue
-            # Strategy-generated candidates: memory-bounded external-blocks
-            # scorer (same refinement as the dedupe site).
-            if _fs_external_blocks_route(config):
-                from goldenmatch.backends.score_buckets import (
-                    score_probabilistic_external_blocks,
-                )
-                pairs = score_probabilistic_external_blocks(
-                    blocks, config.blocking, scoring_mk, matched_pairs,
-                    em_result, target_ids=target_ids,
-                )
-                pairs, candidates = _split_probabilistic_pairs(
-                    pairs, link_threshold
-                )
-                review_pairs.extend(candidates)
-                all_pairs.extend(pairs)
-                for a, b, _s in pairs:
-                    matched_pairs.add((min(a, b), max(a, b)))
-                continue
-            pairs = score_probabilistic_blocks_batched(
-                blocks, scoring_mk, em_result, matched_pairs,
-                target_ids=target_ids,
-            )
-            pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
-            review_pairs.extend(candidates)
-            all_pairs.extend(pairs)
-            for a, b, _s in pairs:
-                matched_pairs.add((min(a, b), max(a, b)))
 
     # Step 4.5: cross-encoder reranking (optional)
     for mk in matchkeys:
