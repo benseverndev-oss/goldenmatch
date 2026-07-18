@@ -114,16 +114,19 @@ def test_score_buckets_arrow_equals_list(blocking):
     assert arrow_tbl.column_names == list(PAIR_STREAM_SCHEMA_SPEC)
 
 
-def test_score_buckets_arrow_mutates_matched_pairs_like_list():
-    # score_buckets mutates matched_pairs in-place; the Arrow seam must keep that
-    # contract (later passes/semantic blocking read it as the exclude set).
+def test_score_buckets_arrow_skips_matched_pairs_by_design():
+    # The memory win: list mode mutates matched_pairs in place (~8 GB at 66M
+    # pairs); arrow mode SKIPS it (duplicate edges collapse in Union-Find, so the
+    # cross-pass exclude is a perf optimization, not correctness). The FS caller
+    # routes to arrow only when no later pass consumes the exclude set.
     df, mk = _df(), _mk()
     em = train_em(df, mk, n_sample_pairs=200)
     blocking = BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["zip"])])
 
     mp_list: set = set()
     score_buckets(df, blocking, mk, mp_list, em_result=em)
+    assert len(mp_list) > 0  # list mode populates the exclude set
+
     mp_arrow: set = set()
     score_buckets_arrow(df, blocking, mk, mp_arrow, em_result=em)
-
-    assert mp_arrow == mp_list and len(mp_arrow) > 0
+    assert mp_arrow == set()  # arrow mode leaves it untouched (by design)
