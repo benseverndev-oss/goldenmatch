@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **Fused Fellegi-Sunter match now covers multi-pass blocking.** New
+  `match_fused_fs_multipass_ready` / `run_match_fused_fs_multipass_arrow`
+  (`core/fused_match.py`) expand the fused FS path from single-static-key
+  blocking to `multi_pass` / compound-union blocking (the shape that OOM'd in
+  the FS-at-scale reports) — mirroring the weighted `match_fused_multipass`
+  twin. No new native code: each pass runs the SAME single-key FS kernel and
+  the per-pass clusters are union-find-merged host-side, byte-identical to the
+  classic multi-pass FS pipeline (parity-tested). The fused FS path holds pairs
+  as a Rust `Vec` instead of a materialized Python pair list, so a covered FS
+  dedupe stays flat on peak RSS where the pair-list route scales with emitted
+  pairs (measured 2x leaner on realistic emission, up to ~19x on
+  high-candidate shapes). Coverage only for now; the pipeline wiring (routing a
+  covered FS run to the fused kernel under memory pressure) is a follow-up.
+
 ## [3.4.0] - 2026-07-16
 
 <!-- README-callout
