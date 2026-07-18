@@ -1263,8 +1263,23 @@ def find_fuzzy_matches(
                         parts = [str(row.get(c, "") or "") for c in (f.columns or [])]
                         concat_values.append(" ".join(parts))
                     scores = _fuzzy_score_matrix(concat_values, "token_sort")
-                fuzzy_numerator += scores * _w(f)
-                fuzzy_denominator += _w(f)
+                # #1859: mask the record_embedding contribution like every other
+                # field. A row is unobserved on this field iff ALL its columns
+                # are null; a pair counts the field only when BOTH sides are
+                # observed. Without this, an unobserved record_embedding always
+                # added its full weight to the DENOMINATOR (diluting the score)
+                # -- the #1856 shape on a first-class weighted scorer. Clean data
+                # (no all-null emb rows) is unaffected: valid is then all-True.
+                emb_cols = f.columns or []
+                emb_row_null = np.ones(n, dtype=bool)
+                for c in emb_cols:
+                    col_vals = (
+                        block_df[c].to_list() if c in block_df.columns else [None] * n
+                    )
+                    emb_row_null &= np.array([v is None for v in col_vals])
+                emb_valid = ~(emb_row_null[:, None] | emb_row_null[None, :])
+                fuzzy_numerator += scores * _w(f) * emb_valid
+                fuzzy_denominator += _w(f) * emb_valid
             else:
                 values = _get_transformed_values(block_df, f)
                 null_mask = _build_null_mask(values)
