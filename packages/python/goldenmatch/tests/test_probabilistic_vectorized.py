@@ -298,3 +298,75 @@ class TestBlockScorerSelection:
         assert vectorized_scorer_supported("exact")
         assert vectorized_scorer_supported("embedding")
         assert vectorized_scorer_supported("record_embedding")
+
+
+class TestRequirePositiveEvidence:
+    """Net-zero-evidence filter (GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE):
+    a linear-mode pair whose summed match weight (LR) is <= 0 must NOT be emitted
+    when the flag is on, so the asymmetric min-max can't auto-link net-zero pairs
+    into mega-clusters. Positive-evidence pairs are unaffected. See the design
+    spec docs/superpowers/specs/2026-07-18-fs-net-zero-evidence-filter.md."""
+
+    def _em(self):
+        # Asymmetric weights (disagree -3.0, agree +1.0): a pair agreeing on ONE
+        # field and disagreeing on the other sums to -2.0 (<=0, net-negative
+        # evidence) yet the min-max range [-6, +2] maps -2.0 onto EXACTLY 0.50 --
+        # so it clears a 0.50 link cut. That is the over-merge the filter kills.
+        return EMResult(
+            m_probs={"name": [0.1, 0.9], "zip": [0.05, 0.95]},
+            u_probs={"name": [0.9, 0.1], "zip": [0.95, 0.05]},
+            match_weights={"name": [-3.0, 1.0], "zip": [-3.0, 1.0]},
+            converged=True, iterations=5, proportion_matched=0.1,
+        )
+
+    def _df(self):
+        # rows 0,1 share zip (block key) but disagree on name -> net-zero pair.
+        # rows 2,3 agree on BOTH name and zip -> strong positive evidence.
+        return pl.DataFrame({
+            "__row_id__": [0, 1, 2, 3],
+            "name": ["alice", "bob", "carol", "carol"],
+            "zip": ["10001", "10001", "20002", "20002"],
+        })
+
+    def _mk(self):
+        return MatchkeyConfig(
+            name="fs", type="probabilistic",
+            fields=[
+                MatchkeyField(field="name", scorer="jaro_winkler", levels=2, partial_threshold=0.85),
+                MatchkeyField(field="zip", scorer="exact", levels=2),
+            ],
+        )
+
+    def test_default_off_emits_net_zero_pair(self, monkeypatch):
+        monkeypatch.delenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", raising=False)
+        pairs = score_probabilistic_vectorized(self._df(), self._mk(), self._em())
+        keys = {(min(a, b), max(a, b)) for a, b, _ in pairs}
+        assert (0, 1) in keys  # net-zero pair emitted (legacy behavior)
+        assert (2, 3) in keys  # positive pair emitted
+
+    def test_on_drops_net_zero_keeps_positive(self, monkeypatch):
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "1")
+        pairs = score_probabilistic_vectorized(self._df(), self._mk(), self._em())
+        keys = {(min(a, b), max(a, b)) for a, b, _ in pairs}
+        assert (0, 1) not in keys  # net-zero pair filtered (the over-merge cause)
+        assert (2, 3) in keys      # positive evidence preserved (recall-safe)
+
+    def test_scalar_matches_vectorized_when_on(self, monkeypatch):
+        # The scalar and vectorized emit paths apply the filter identically.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "1")
+        df, mk, em = self._df(), self._mk(), self._em()
+        vec = {(min(a, b), max(a, b)) for a, b, _ in score_probabilistic_vectorized(df, mk, em)}
+        sca = {(min(a, b), max(a, b)) for a, b, _ in score_probabilistic(df, mk, em)}
+        assert vec == sca
+        assert (0, 1) not in vec
+
+    def test_posterior_unaffected(self, monkeypatch):
+        # Posterior calibration already handles the prior via the 0.99 Bayes cut;
+        # the filter is linear-only, so posterior output is unchanged by the flag.
+        monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+        df, mk, em = self._df(), self._mk(), self._em()
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
+        off = {(min(a, b), max(a, b)) for a, b, _ in score_probabilistic_vectorized(df, mk, em)}
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "1")
+        on = {(min(a, b), max(a, b)) for a, b, _ in score_probabilistic_vectorized(df, mk, em)}
+        assert off == on

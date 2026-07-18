@@ -75,6 +75,39 @@ def _fs_calibration_mode() -> str:
     return _FS_CALIBRATION_DEFAULT
 
 
+def _fs_require_positive_evidence() -> bool:
+    """Whether the linear FS scorer refuses to emit a NET-ZERO-EVIDENCE pair — one
+    whose summed match weight (log-likelihood ratio) is <= 0, i.e. the evidence
+    does NOT favor a match.
+
+    Such a pair agrees only on the (score-excluded) blocking field and disagrees /
+    is null on everything else, yet the linear min-max normalization can still map
+    its non-positive weight onto a score >= the 0.50 neutral point and AUTO-LINK
+    it — chaining true clusters into mega-clusters via union-find. Measured on the
+    synthetic person shape: pair-precision collapses 0.85 (5K) -> 0.25 (30K) and
+    worsens with N. Requiring strictly positive evidence (LR > 1) to link is the
+    Fellegi-Sunter-principled cut and — unlike raising the global link threshold
+    to 0.55 — does NOT cut real-but-weak partial matches (which carry positive
+    evidence in the 0.50-0.55 band, e.g. historical_50k's corrupted PII).
+
+    ``GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`` (default OFF for now; ``1``/``on``
+    enables). Applies to the LINEAR calibration only — the posterior path already
+    folds the prior into the log-odds and uses a 0.99 Bayes cut.
+
+    **Default OFF pending the native port.** This is the numpy/pure-Python
+    reference; the default FS route is the Rust ``fs-core`` kernel
+    (``score_fs_pair``), which does NOT yet carry the filter. Flipping the default
+    on before the kernel mirrors it would (a) leave native users unprotected and
+    (b) break the native==numpy parity gate. So it ships opt-in first (validated
+    numbers in ``docs/superpowers/specs``), and the default flips once the kernel
+    port lands (fs-core + the cross-surface constructors + fixture regen).
+    """
+    v = os.environ.get("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE")
+    if v is None:
+        return False
+    return v.strip().lower() in ("1", "true", "yes", "on", "enabled")
+
+
 _FS_MISSING_DEFAULT = "unobserved"
 
 
@@ -2309,6 +2342,10 @@ def score_probabilistic(
             else:
                 normalized = 0.5
 
+            if not calibrated and total_weight <= 0.0 and _fs_require_positive_evidence():
+                # Net-zero / net-negative evidence is a non-match (mirrors the
+                # vectorized path). See _fs_require_positive_evidence.
+                continue
             if normalized >= link_threshold:
                 results.append((a, b, round(normalized, 4)))
 
@@ -2726,6 +2763,11 @@ def score_probabilistic_vectorized(
         normalized = np.where(
             ~has_regular_evidence & (total_weight == 0.0), 0.5, normalized
         )
+        if _fs_require_positive_evidence():
+            # Net-zero / net-negative evidence (LR <= 1) is a Fellegi-Sunter
+            # non-match; force it below any cut so the asymmetric min-max can't
+            # auto-link it into a mega-cluster. See _fs_require_positive_evidence.
+            normalized = np.where(total_weight <= 0.0, -1.0, normalized)
 
     # Emit upper-triangle pairs at/above threshold.
     return _emit_triu_pairs(normalized, row_ids, link_threshold, exclude_pairs)
@@ -2842,6 +2884,10 @@ def score_probabilistic_vectorized_batch(
         normalized = np.where(
             ~has_regular_evidence & (total_weight == 0.0), 0.5, normalized
         )
+        if _fs_require_positive_evidence():
+            # Net-zero / net-negative evidence is a non-match; keep it below any
+            # cut (mirrors score_probabilistic_vectorized). See the helper.
+            normalized = np.where(total_weight <= 0.0, -1.0, normalized)
 
     ids = np.asarray(row_ids)
     results: list[tuple[int, int, float]] = []
