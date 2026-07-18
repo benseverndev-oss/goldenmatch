@@ -102,6 +102,9 @@ def _name_fields(cfg):
 
 def test_autoconfig_populates_tf_freqs_for_name_scorer(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_TF_NAME_WEIGHTING", "1")
+    # name_freq_weighted_jw is a deterministic weighted-path scorer; opt out of FS
+    # routing (default-on 2026-07-17) so this name shape keeps that matchkey.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     cfg = auto_configure_df(_common_vs_rare_name_df())
     nf = _name_fields(cfg)
     assert nf, "expected a name_freq_weighted_jw field on this person shape"

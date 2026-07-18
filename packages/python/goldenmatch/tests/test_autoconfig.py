@@ -1290,7 +1290,7 @@ class TestDataDrivenStrategy:
         assert config.blocking is not None
         assert config.blocking.strategy != "learned"
 
-    def test_reranking_enabled_three_plus_fields(self):
+    def test_reranking_enabled_three_plus_fields(self, monkeypatch: pytest.MonkeyPatch):
         """Weighted matchkey with 3+ fields should enable reranking.
         Uses _legacy_auto_configure_v0 directly because allow_remote_assets
         is a legacy-heuristic kwarg that is not threaded through the controller;
@@ -1298,6 +1298,9 @@ class TestDataDrivenStrategy:
         """
         from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
 
+        # Deterministic weighted-path assertion: opt out of FS routing (default-on
+        # 2026-07-17) so this fuzzy-only shape keeps its weighted matchkeys.
+        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
         df = pl.DataFrame({
             "first_name": ["John", "Jane", "Bob", "Alice"],
             "last_name": ["Smith", "Doe", "Wilson", "Brown"],
@@ -1329,10 +1332,13 @@ class TestDataDrivenStrategy:
         assert len(weighted_mks) > 0, "Expected at least one weighted matchkey"
         assert weighted_mks[0].threshold <= 0.80
 
-    def test_threshold_raised_short_strings(self):
+    def test_threshold_raised_short_strings(self, monkeypatch: pytest.MonkeyPatch):
         """Short string fields should raise threshold."""
         from goldenmatch.core.autoconfig import auto_configure_df
 
+        # Deterministic weighted-path assertion: opt out of FS routing (default-on
+        # 2026-07-17) so this fuzzy-only shape keeps its weighted matchkeys.
+        monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
         df = pl.DataFrame({
             "first_name": ["Al", "Bo", "Ed", "Jo", "Mo"],
             "last_name": ["Li", "Wu", "Xu", "Ye", "Hu"],
@@ -1443,9 +1449,12 @@ def test_classify_by_data_multi_name_detection():
     assert col_type == "multi_name"
 
 
-def test_build_matchkeys_multi_name_gets_token_sort():
+def test_build_matchkeys_multi_name_gets_token_sort(monkeypatch):
     import polars as pl
     from goldenmatch.core.autoconfig import auto_configure_df
+    # Deterministic scorer-assignment assertion: opt out of FS routing (default-on
+    # 2026-07-17) so this fuzzy-only shape keeps its weighted token_sort matchkey.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = pl.DataFrame({
         "authors": [
             "Alice Smith, Bob Jones, Carol White, Dave Brown",
@@ -1622,10 +1631,14 @@ def test_v0_auto_detects_phone_standardization():
     assert "phone" in rules["phone_number"]
 
 
-def test_v0_auto_detects_name_standardization():
+def test_v0_auto_detects_name_standardization(monkeypatch):
     """Name columns → each name column gets ['name_proper'] standardizer."""
     import polars as pl
     from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    # Standardization is a deterministic-path lever (the FS routed path EM-trains
+    # on raw values and deliberately skips it); opt out of routing (default-on
+    # 2026-07-17) so this fuzzy-only shape exercises standardization detection.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = pl.DataFrame({
         "first_name": ["alice", "bob", "carol"] * 10,
         "last_name": ["smith", "jones", "doe"] * 10,
@@ -1639,10 +1652,13 @@ def test_v0_auto_detects_name_standardization():
     assert "name_proper" in rules["last_name"]
 
 
-def test_v0_auto_detects_address_standardization():
+def test_v0_auto_detects_address_standardization(monkeypatch):
     """Address column → column gets ['address'] standardizer in rules."""
     import polars as pl
     from goldenmatch.core.autoconfig import _legacy_auto_configure_v0
+    # Standardization is a deterministic-path lever (see name test); opt out of
+    # FS routing (default-on 2026-07-17) to exercise address standardization.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = pl.DataFrame({
         "street_address": ["123 main st", "456 oak ave"] * 10,
         "city": ["nyc", "la"] * 10,

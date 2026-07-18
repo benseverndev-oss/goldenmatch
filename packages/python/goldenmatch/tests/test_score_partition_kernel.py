@@ -66,9 +66,13 @@ def test_kernel_skips_clustering():
     )
 
 
-def test_kernel_skips_autoconfig():
+def test_kernel_skips_autoconfig(monkeypatch):
     """The kernel must NOT call auto_configure_df; the driver already ran
     auto-config on a sample (Phase 2) before dispatching."""
+    # Exercise the deterministic committed-config kernel path (the FS routed
+    # config, default-on 2026-07-17, takes a different scorer lane); this test is
+    # about the kernel skipping re-auto-config, not about routing.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = _person_fixture()
     cfg = _kernel_committed_config(df)
     cfg.backend = "bucket"

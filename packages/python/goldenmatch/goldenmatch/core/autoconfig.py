@@ -4285,9 +4285,33 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # (excluding __-prefixed cols), so any already-extracted domain feature is dropped
     # on the routed path. Acceptable while default-off; revisit if a domain-heavy
     # dataset misroutes or needs its domain features under FS.
-    if (not multi_source and _route_to_probabilistic_enabled()
+    # Domain-heavy data whose extraction produced real domain matchkey columns
+    # (electronics/software/biblio keys in _DOMAIN_SCORER_MAP, mostly strong-id
+    # exact) stays on the deterministic domain-aware path: those matchkeys are a
+    # strong identity signal the FS routed path would drop (it re-profiles df,
+    # excluding __-cols). This is the "revisit if a domain-heavy dataset misroutes"
+    # the routing note called for once routing went default-on. NOTE: person-shape
+    # extraction can populate __-cols that are NOT domain matchkey columns, so gate
+    # on _DOMAIN_SCORER_MAP membership, not on extracted_columns being non-empty.
+    _domain_matchkey_cols = [c for c in extracted_columns if c in _DOMAIN_SCORER_MAP]
+    if (not multi_source and not _domain_matchkey_cols
+            and _route_to_probabilistic_enabled()
             and _is_probabilistic_shape(matchkeys, profiles)):
-        return auto_configure_probabilistic_df(df, llm_provider=llm_provider)
+        routed = auto_configure_probabilistic_df(df, llm_provider=llm_provider)
+        # Parity with the deterministic tail: attach the preflight report so a
+        # routed FS config carries the same verification/diagnostic the default
+        # path does (the config-lint + auto-repair surface). Standardization is
+        # attached inside auto_configure_probabilistic_df.
+        from goldenmatch.core.autoconfig_verify import ConfigValidationError, preflight
+        routed._strict_autoconfig = strict
+        _routed_report = preflight(
+            df_input, routed, profiles=profiles,
+            allow_remote_assets=allow_remote_assets,
+        )
+        if _routed_report.has_errors:
+            raise ConfigValidationError(report=_routed_report)
+        routed._preflight_report = _routed_report
+        return routed
 
     # ── Add domain-extracted fields to matchkeys ──
     if extracted_columns:
@@ -4473,49 +4497,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
 
     memory_config = MemoryConfig(enabled=True) if llm_auto else None
 
-    # Auto-detect standardization rules (Change 1, 2026-05-07)
-    # When the column-profile classifier identifies a typed column (phone,
-    # email, name, address, zip, geo), emit a corresponding StandardizationConfig
-    # rule. The hand-tuned dqbench adapter does this manually; auto-config
-    # now matches it without explicit user intervention.
-    #
-    # StandardizationConfig.rules schema: {column_name: [standardizer_names]}
-    # VALID_STANDARDIZERS: email, phone, zip5, address, state, name_proper,
-    # name_upper, name_lower, strip, trim_whitespace.
-    _std_rules: dict[str, list[str]] = {}  # {col_name: [std_name, ...]}
-    _email_typed_cols: set[str] = set()  # guard: skip address detection on these
-    for _p in profiles:
-        if _p.col_type == "email":
-            _email_typed_cols.add(_p.name)
-            _std_rules[_p.name] = ["email"]
-        elif _p.col_type == "phone":
-            _std_rules[_p.name] = ["phone"]
-        elif _p.col_type == "zip":
-            _std_rules[_p.name] = ["zip5"]
-        elif _p.col_type == "geo":
-            # state-shaped columns (state_cd, province, country) → state rule
-            _cl = _p.name.lower()
-            if any(pat in _cl for pat in ("state", "province", "country")):
-                _std_rules[_p.name] = ["state"]
-        elif _p.col_type == "name":
-            # Route all name columns to name_proper (title-case + strip).
-            _std_rules[_p.name] = ["name_proper"]
-        elif _p.col_type == "address":
-            # Guard: skip if column was already typed as email (e.g. email_address)
-            if _p.name not in _email_typed_cols:
-                _std_rules[_p.name] = ["address"]
-
-    # Build the StandardizationConfig only if we detected something.
-    # Return None rather than StandardizationConfig(rules={}) to avoid passing
-    # an empty config into the pipeline.
-    _standardization = None
-    if _std_rules:
-        from goldenmatch.config.schemas import StandardizationConfig
-        _standardization = StandardizationConfig(rules=_std_rules)
-        logger.info(
-            "auto-config: StandardizationConfig auto-detected %d column rules: %s",
-            len(_std_rules), sorted(_std_rules.keys()),
-        )
+    # Auto-detect standardization rules (Change 1, 2026-05-07). Shared with the
+    # probabilistic routed path (_detect_standardization_config) so a routed FS
+    # config gets the same input normalization as the deterministic default.
+    _standardization = _detect_standardization_config(profiles)
 
     # Capture choices in a decisions object so a future iterative-tuning loop
     # can nudge them without re-profiling. Matchkeys and blocking strategy/
@@ -4834,6 +4819,52 @@ def _pick_missing_semantics(
     return mode
 
 
+def _detect_standardization_config(profiles: list[ColumnProfile]) -> Any:
+    """Auto-detect StandardizationConfig from column types (Change 1, 2026-05-07).
+
+    When the classifier identifies a typed column (phone/email/name/address/zip/
+    geo), emit the matching standardizer so auto-config normalizes inputs without
+    explicit user setup. Returns None when nothing is detected (avoids passing an
+    empty StandardizationConfig into the pipeline). Shared by the deterministic
+    default path and the probabilistic routed path so both normalize identically.
+
+    StandardizationConfig.rules schema: {column_name: [standardizer_names]}.
+    VALID_STANDARDIZERS: email, phone, zip5, address, state, name_proper,
+    name_upper, name_lower, strip, trim_whitespace.
+    """
+    _std_rules: dict[str, list[str]] = {}
+    _email_typed_cols: set[str] = set()  # guard: skip address detection on these
+    for _p in profiles:
+        if _p.col_type == "email":
+            _email_typed_cols.add(_p.name)
+            _std_rules[_p.name] = ["email"]
+        elif _p.col_type == "phone":
+            _std_rules[_p.name] = ["phone"]
+        elif _p.col_type == "zip":
+            _std_rules[_p.name] = ["zip5"]
+        elif _p.col_type == "geo":
+            # state-shaped columns (state_cd, province, country) → state rule
+            _cl = _p.name.lower()
+            if any(pat in _cl for pat in ("state", "province", "country")):
+                _std_rules[_p.name] = ["state"]
+        elif _p.col_type == "name":
+            # Route all name columns to name_proper (title-case + strip).
+            _std_rules[_p.name] = ["name_proper"]
+        elif _p.col_type == "address":
+            # Guard: skip if column was already typed as email (e.g. email_address)
+            if _p.name not in _email_typed_cols:
+                _std_rules[_p.name] = ["address"]
+
+    if not _std_rules:
+        return None
+    from goldenmatch.config.schemas import StandardizationConfig
+    logger.info(
+        "auto-config: StandardizationConfig auto-detected %d column rules: %s",
+        len(_std_rules), sorted(_std_rules.keys()),
+    )
+    return StandardizationConfig(rules=_std_rules)
+
+
 def auto_configure_probabilistic_df(
     df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (arrow lane)
     llm_provider: str | None = None,
@@ -4886,6 +4917,11 @@ def auto_configure_probabilistic_df(
         blocking=blocking,
         golden_rules=GoldenRulesConfig(default_strategy="most_complete"),
         output=OutputConfig(),
+        # NOTE: deliberately NO standardization_config here. The FS path EM-trains
+        # m/u weights on the raw values; forcing name_proper/address normalization
+        # measurably LOWERS FS F1 (ncvr_synthetic f1_probabilistic 0.989 -> 0.978 in
+        # the autoconfig quality corpus). FS handles surface variation via EM, so
+        # standardization is a deterministic-path lever, not shared parity.
     )
 
 
