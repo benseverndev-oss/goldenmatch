@@ -6,6 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Config-healer loop cost is now bounded and tunable (#1404).** `heal` (and
+  the `review_config` / `suggest_from_result` verify path it drives) could run up
+  to `step_cap × (1 + max_verify)` full pipeline passes per call — ~45 on the
+  defaults — plus a full goldencheck `blocking_risk` variant scan (O(distinct²)
+  per string column) re-run on the unchanged frame every iteration. Three cost
+  levers, all defaulting to byte-identical behavior:
+  - The goldencheck variant scan is **memoized for the whole heal loop** via a
+    new `variant_risk_cache()` scope (`core/suggest/adapter.py`) keyed on the
+    data-column set — it runs once over the frame instead of once per iteration.
+    Output is unchanged; only the cost moves.
+  - **Verify fan-out is tunable**: `review_config`/`suggest_from_result`/`heal`
+    take `max_verify`, and `GOLDENMATCH_SUGGEST_MAX_VERIFY` sets it globally
+    (default 8). Since the healer applies only the top surviving suggestion,
+    `max_verify=1` verifies just that candidate — the cheapest mode.
+  - **Marginal-gain early-stop**: `heal(min_health_gain=…)` /
+    `GOLDENMATCH_HEAL_MIN_HEALTH_GAIN` stops the loop once cluster-health gain
+    flattens (fail-open — a result without clusters never triggers a stop). Off
+    by default. `GOLDENMATCH_HEAL_STEP_CAP` also exposes the outer cap.
+
 ## [3.5.0] - 2026-07-18
 
 <!-- README-callout
