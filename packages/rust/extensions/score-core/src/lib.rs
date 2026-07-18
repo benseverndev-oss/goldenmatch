@@ -11,6 +11,11 @@
 use rapidfuzz::distance::{damerau_levenshtein, jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
 
+// Fellegi–Sunter EM training core (pyo3-free numeric heart). PR-C / C1 of the
+// FS Rust+Arrow-only epic; the `native` crate will add the Arrow/#[pyfunction]
+// shim in C2. No wiring yet — this module is self-contained + unit-tested.
+pub mod em_core;
+
 /// `rapidfuzz.fuzz.token_sort_ratio` preprocessing: split on whitespace, sort
 /// the tokens, rejoin with a single space. (Then `fuzz::ratio` on the result.)
 /// Private: its only callers (`token_sort_ratio` + `score_one`) live in this
