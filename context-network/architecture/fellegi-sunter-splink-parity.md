@@ -169,6 +169,33 @@ synthetic_person 0.998 vs 0.996).
 **The "3-19x faster" figure is pre-optimization and needs a re-bench.** It came
 from a bake-off that measured GM's *numpy* path before PR #869's block-scoring
 fixes (which cut the historical_50k wall −72% locally; see the perf section
-above). The committed bake-off `gm_probabilistic` walls are stale until
-`bench-probabilistic.yml` (`run_bakeoff=true`) is re-run on the optimized branch;
-Splink is still faster per node, but by a smaller and as-yet-unre-measured margin.
+above). The committed bake-off `gm_probabilistic` walls are stale; Splink is
+still faster per node, but by a smaller and as-yet-unre-measured margin. The
+re-bench is the scale-envelope head-to-head `bench-er-headtohead.yml`
+(`gm_probabilistic_native` = the real default post-3.4.0, NOT the forced-numpy
+`gm_probabilistic` lane, which cannot finish the auto-config candidate volume at
+1M+ and is a small-scale reference only) — in flight, person 100k/1M.
+
+## The 3.4.0 FS scale + hardening wave (2026-07-16..18)
+The scale-out above exposed a wave of FS correctness + routing work, shipped as
+**goldenmatch 3.4.0**. It moved the native kernel from Phase-3b "opt-in, default
+OFF" to the authoritative, 100%-capable, default path — the "native default OFF"
+note in Phase 3b is now superseded. Five decisions:
+- **Missing values are `unobserved` by default but the mode is per-dataset**
+  ([0041](../decisions/0041-fs-missing-value-semantics.md)) — a missing
+  comparison carries no evidence unless auto-config detects informative
+  missingness (≥20% null) and picks `disagree`; native declines `disagree`.
+- **The native kernel owns 100% FS scorer coverage via `fs-core`**
+  ([0042](../decisions/0042-native-kernel-owns-fs-coverage.md)) — one Rust
+  implementation, numpy retained as the reference-mode fallback + parity oracle.
+- **Bucket is the default FS route, native-optional**
+  ([0043](../decisions/0043-bucket-default-fs-route.md)) — and FS now scores in
+  the distributed/chunked/strategy lanes (one shared `EMResult`); person-1M went
+  from `MemoryError` to 139 s.
+- **Learned blocking lowers to `multi_pass` via per-field transform chains**
+  ([0044](../decisions/0044-learned-blocking-compiler-field-transforms.md)) —
+  compiler landed but currently inert.
+- **quality_gate watches its scoring/routing surfaces and blocks merges**
+  ([0045](../decisions/0045-quality-gate-required-watches-own-surfaces.md)) — the
+  process fix for the silent 0.83→0.33 native regression that made this wave
+  painful.
