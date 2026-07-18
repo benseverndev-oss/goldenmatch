@@ -2145,10 +2145,30 @@ def compute_thresholds(
 
         return round(max(0.40, min(0.95, link_norm)), 4), round(max(0.25, min(link_norm - 0.05, review_norm)), 4)
 
-    # Fixed defaults that work well with pre-blocked pairs
-    # 0.50 is permissive enough to catch partial matches while
-    # still filtering clear non-matches (which score near 0)
-    return 0.50, 0.35
+    # Fixed defaults for pre-blocked pairs.
+    #
+    # The old default was 0.50 — but in linear normalization 0.50 is the NEUTRAL
+    # no-net-evidence point, and same-block pairs that agree ONLY on the (score-
+    # excluded) blocking field, with no other evidence, land there EXACTLY. A
+    # 0.50 link cut therefore auto-links net-zero-evidence pairs, and each one
+    # chains two true clusters in union-find, so a handful of neutral edges
+    # explode into mega-clusters (measured on the auto-config person shape:
+    # pair-precision 0.05 at 100K, worse as blocks grow with N — and the mega-
+    # clusters' dense re-scoring is what OOM-killed gm_probabilistic at 1M). The
+    # link cut must sit ABOVE the neutral prior so a pair needs POSITIVE evidence
+    # to link. 0.55 clears the neutral point while staying permissive for real
+    # partial matches (which carry positive evidence and score well above it):
+    # person F1 0.789->1.000 @5K, 0.380->0.979 @30K, recall unchanged. The
+    # header's posterior path uses an absolute 0.99 cut for the same reason.
+    # Overridable via ``GOLDENMATCH_FS_LINK_DEFAULT`` for sweeps.
+    link_default = 0.55
+    override = os.environ.get("GOLDENMATCH_FS_LINK_DEFAULT")
+    if override is not None:
+        try:
+            link_default = float(override)
+        except ValueError:
+            pass
+    return link_default, 0.35
 
 
 def resolve_thresholds(
