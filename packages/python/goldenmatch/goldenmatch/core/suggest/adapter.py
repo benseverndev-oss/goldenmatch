@@ -35,6 +35,8 @@ bench A/B) or with the environment variable ``GOLDENMATCH_SUGGEST_VERIFY=0``.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import copy
 import json
 import logging
@@ -47,6 +49,59 @@ from goldenmatch._polars_lazy import pl
 from goldenmatch.core.suggest.types import Suggestion, SuggestionsNativeRequired
 
 logger = logging.getLogger(__name__)
+
+# Cache for the expensive goldencheck ``blocking_risk`` (variant-rate) scan,
+# scoped to a single frame (#1404). ``blocking_risk`` runs an O(distinct^2)
+# fuzzy-variant comparison per string column; the heal loop re-profiles the SAME
+# unchanged ``df`` on every iteration, so memoizing the scan for the loop's
+# lifetime turns N scans into 1. Keyed on the data-column set so a different
+# frame never reads a stale entry; a ContextVar so nested/concurrent scopes
+# don't collide. Empty (None) unless a ``variant_risk_cache()`` scope is active,
+# in which case the scan is byte-identical but computed once.
+_VARIANT_RISK_CACHE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "goldenmatch_variant_risk_cache", default=None
+)
+
+
+@contextlib.contextmanager
+def variant_risk_cache():
+    """Scope a single-frame variant-risk cache across repeated suggest calls.
+
+    The healer re-runs ``suggest_from_result`` (→ ``_build_column_signals_batch``
+    → goldencheck ``blocking_risk``) once per iteration over an unchanged frame.
+    Wrapping the loop in this context memoizes that scan so it runs once instead
+    of once-per-iteration (#1404). Output is byte-identical; only the cost moves.
+
+    Re-entrant: a nested scope reuses the outer cache rather than shadowing it.
+    """
+    token = None
+    if _VARIANT_RISK_CACHE.get() is None:
+        token = _VARIANT_RISK_CACHE.set({})
+    try:
+        yield
+    finally:
+        if token is not None:
+            _VARIANT_RISK_CACHE.reset(token)
+
+
+def _cached_blocking_risk(df: pl.DataFrame, data_cols: list[str]) -> dict:
+    """``blocking_risk(df.select(data_cols))`` with the #1404 single-frame cache.
+
+    Reads/writes ``_VARIANT_RISK_CACHE`` when a ``variant_risk_cache()`` scope is
+    active (keyed on the data-column set), else computes directly. Fail-open: any
+    error → ``{}`` (the same value used when goldencheck is absent)."""
+    cache = _VARIANT_RISK_CACHE.get()
+    key = frozenset(data_cols)
+    if cache is not None and key in cache:
+        return cache[key]
+    from goldenmatch.core.quality import blocking_risk
+    try:
+        risk = blocking_risk(df.select(data_cols)) or {}
+    except Exception:
+        risk = {}
+    if cache is not None:
+        cache[key] = risk
+    return risk
 
 # ── Arrow schemas (frozen - must match the Rust kernel exactly) ────────────
 
@@ -286,7 +341,6 @@ def _build_column_signals_batch(
     - variant_rate: blocking_risk() -- defaults to 0.0 when goldencheck absent
     """
     from goldenmatch.core.indicators import compute_column_priors
-    from goldenmatch.core.quality import blocking_risk
 
     # -- Which columns to include (all non-internal data columns) --
     data_cols = [c for c in df.columns if not c.startswith("__")]
@@ -363,10 +417,9 @@ def _build_column_signals_batch(
     if cheap:
         variant_risk: dict = {}
     else:
-        try:
-            variant_risk = blocking_risk(df.select(data_cols)) or {}
-        except Exception:
-            variant_risk = {}
+        # #1404: memoized across a variant_risk_cache() scope (the heal loop);
+        # byte-identical to the direct scan, just computed once per frame.
+        variant_risk = _cached_blocking_risk(df, data_cols)
 
     # -- Assemble rows --
     rows_field: list[str] = []
@@ -469,6 +522,26 @@ def _diagnostic_scored_pairs(engine, df, config):
 # Maximum number of candidate suggestions to verify (avoids runaway cost
 # when the kernel returns an unusually large list).
 _MAX_VERIFY_CANDIDATES: int = 8
+
+
+def _resolve_max_verify(max_verify: int | None) -> int:
+    """Resolve the verify fan-out cap (#1404): explicit kwarg → env
+    ``GOLDENMATCH_SUGGEST_MAX_VERIFY`` → the ``_MAX_VERIFY_CANDIDATES`` default.
+
+    Each verified candidate costs one full pipeline re-run, so a consumer that
+    needs latency over thoroughness (e.g. the healer, which applies only the top
+    surviving suggestion) can lower it — ``=1`` verifies just the top candidate.
+    A value < 1 is clamped to 1 (verifying zero candidates would drop every
+    suggestion). Invalid env values fall back to the default."""
+    if max_verify is None:
+        raw = os.environ.get("GOLDENMATCH_SUGGEST_MAX_VERIFY", "").strip()
+        if not raw:
+            return _MAX_VERIFY_CANDIDATES
+        try:
+            max_verify = int(raw)
+        except ValueError:
+            return _MAX_VERIFY_CANDIDATES
+    return max(1, max_verify)
 
 # Epsilon: keep a suggestion if cand_health >= baseline_health - EPS.
 # Near-zero so we only suppress genuine health regressions.
@@ -605,11 +678,14 @@ def _kernel_suggest(
     return _parse_suggestions(raw_json)
 
 
-def _verify_suggestions(suggestions, df, config, clusters, engine) -> list[Suggestion]:
+def _verify_suggestions(
+    suggestions, df, config, clusters, engine, *, max_verify: int | None = None
+) -> list[Suggestion]:
     """Self-verification pass: re-run the pipeline per candidate suggestion and
     keep only the non-worsening ones (cand_health >= baseline_health - EPS).
-    Caps verification at ``_MAX_VERIFY_CANDIDATES``; the tail passes through
-    unverified.  Verification failures are conservative (keep the suggestion)."""
+    Caps verification at the resolved fan-out (``max_verify`` kwarg → env →
+    ``_MAX_VERIFY_CANDIDATES``); the tail passes through unverified.
+    Verification failures are conservative (keep the suggestion)."""
     # Compute baseline health from the baseline run's scored pairs + threshold.
     from goldenmatch.core.suggest.apply import apply_suggestion
     from goldenmatch.core.suggest.health import suggestion_health_from_clusters
@@ -624,9 +700,10 @@ def _verify_suggestions(suggestions, df, config, clusters, engine) -> list[Sugge
         baseline_health, n_records, len(clusters),
     )
 
-    # Cap verification at _MAX_VERIFY_CANDIDATES (cost guard)
-    candidates = suggestions[:_MAX_VERIFY_CANDIDATES]
-    tail = suggestions[_MAX_VERIFY_CANDIDATES:]  # pass through unverified if any
+    # Cap verification at the resolved fan-out (cost guard; #1404 makes it tunable)
+    cap = _resolve_max_verify(max_verify)
+    candidates = suggestions[:cap]
+    tail = suggestions[cap:]  # pass through unverified if any
 
     verified: list[Suggestion] = []
     for s in candidates:
@@ -693,6 +770,7 @@ def review_config(
     *,
     priors: dict | None = None,
     verify: bool = True,
+    max_verify: int | None = None,
 ) -> list[Suggestion]:
     """Analyze a dedupe run and return config improvement suggestions.
 
@@ -787,10 +865,14 @@ def review_config(
         return suggestions
 
     # -- Self-verification pass (verify=True) --
-    return _verify_suggestions(suggestions, df, _config, clusters, engine)
+    return _verify_suggestions(
+        suggestions, df, _config, clusters, engine, max_verify=max_verify
+    )
 
 
-def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Suggestion]:
+def suggest_from_result(
+    result, df, *, priors=None, verify=False, max_verify: int | None = None
+) -> list[Suggestion]:
     """Artifacts-in suggestion: reuse result.scored_pairs/result.clusters (NO
     pipeline re-run for verify=False) and call the kernel directly. verify=True
     runs the per-candidate simulation loop (which DOES re-run). Returns [] when
@@ -830,4 +912,6 @@ def suggest_from_result(result, df, *, priors=None, verify=False) -> list[Sugges
         return suggestions
     from goldenmatch.tui.engine import MatchEngine
     engine = MatchEngine.from_dataframe(df)
-    return _verify_suggestions(suggestions, df, config, clusters, engine)
+    return _verify_suggestions(
+        suggestions, df, config, clusters, engine, max_verify=max_verify
+    )
