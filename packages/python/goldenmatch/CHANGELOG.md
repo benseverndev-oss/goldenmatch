@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Postgres identity resolution no longer autocommits per record (#1886).** The
+  Postgres `IdentityStore` connects with `autocommit=True`, so `resolve_clusters`'
+  per-record write path (absorbing/merging into existing identities, and weak
+  multi-member clusters) committed every `upsert_identity`/`emit_event`/
+  `upsert_record`/`add_edge` on its own -- one COMMIT + network round-trip per
+  write. Against a remote DB (e.g. Cloud SQL) that turned a ~20k-record resolve
+  into minutes of latency even though the compute is milliseconds; a re-resolve
+  or incremental load against a populated store (where nothing is brand-new, so
+  the bulk COPY fast-path never engages) was the worst case. `resolve_clusters`
+  now wraps its whole write body in a single `IdentityStore.bulk_writes()`
+  transaction -- N commits collapse to one and psycopg pipelines the statements.
+  No-op for SQLite/Mongo; the resolve is now atomic per run.
+
 ### Added
 
 - **Fused Fellegi-Sunter match now covers multi-pass blocking.** New
