@@ -717,7 +717,14 @@ def _accumulate_block_candidate_pairs(
     Caps quadratic blow-up on a pathological huge block (panel data has small
     blocks; this is just a safety net) by skipping blocks over 20k members.
     """
-    block_ids = block_df["__row_id__"].to_list()
+    # Arrow-safe read: on the arrow lane block_df is a pa.Table, where
+    # ``table["col"]`` is a ChunkedArray (no ``.to_list()``); the Frame seam
+    # normalizes both reps (polars-direct + arrow). Post-polars-eviction the
+    # arrow lane is the default, so the bare polars indexing broke the bench-dump
+    # path (and with it the bench-probabilistic panel's goldenmatch F1).
+    from goldenmatch.core.frame import to_frame as _tf_bcp
+
+    block_ids = _tf_bcp(block_df).column("__row_id__").to_list()
     if len(block_ids) > 20000:
         logger.warning(
             "GOLDENMATCH_BENCH_DUMP_PAIRS: skipping candidate dump for block "
