@@ -20,6 +20,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   now wraps its whole write body in a single `IdentityStore.bulk_writes()`
   transaction -- N commits collapse to one and psycopg pipelines the statements.
   No-op for SQLite/Mongo; the resolve is now atomic per run.
+- **Unobserved `record_embedding` field no longer dilutes the weighted score
+  (#1859).** In the vectorized weighted scorer (`find_fuzzy_matches`), a
+  `record_embedding` field added its full weight to the score DENOMINATOR
+  unconditionally, while every other field type multiplied by an observed-value
+  mask -- so a row missing all its embedding columns still counted the field's
+  weight, diluting the pair score (the #1856 shape on a first-class weighted
+  scorer). It now masks the contribution out of both numerator and denominator
+  when a row is unobserved (all embedding columns null), pair-wise like every
+  other field. Clean data (no all-null embedding rows) is byte-identical.
 
 ### Added
 
