@@ -61,9 +61,11 @@ async function emit(pkg) {
   // goldenmatch config surfaces: the scorer/transform name sets. Mirrors the
   // Python emitter; intended cross-language deltas live in parity/goldenmatch.yaml.
   if (pkg === "goldenmatch") {
-    const t = await load("dist/core/types.js");
+    // types.ts is bundled (not its own tsup entry) -> dist/core/types.js does
+    // not exist. The `./core` export entry (dist/core/index.js) re-exports both.
+    const t = await load("dist/core/index.js");
     if (!t.VALID_SCORERS || !t.VALID_TRANSFORMS)
-      throw new Error(`${pkg}: expected VALID_SCORERS + VALID_TRANSFORMS in dist/core/types.js`);
+      throw new Error(`${pkg}: expected VALID_SCORERS + VALID_TRANSFORMS in dist/core/index.js`);
     descriptor.scorers = [...t.VALID_SCORERS].sort();
     descriptor.transforms = [...t.VALID_TRANSFORMS].sort();
   }
