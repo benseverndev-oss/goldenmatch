@@ -748,4 +748,17 @@ pyright_slice:
   - 'packages/python/goldenmatch/goldenmatch/core/indicators.py'
   - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
   - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
+  # The trigger filter must mirror pyrightconfig.json's `include` -- a file that
+  # is type-checked but NOT a trigger lets a strict-type regression land
+  # undetected (a pipeline.py-only change did exactly that; the errors only
+  # surfaced when an unrelated PR touched scorer.py). Keep these in lockstep.
+  - 'packages/python/goldenmatch/goldenmatch/core/pipeline.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/blocker.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/profiler.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/learned_blocking.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/profile_emitter.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/_profile_helpers.py'
+  - 'packages/python/goldenmatch/goldenmatch/_api.py'
+  - 'packages/python/goldenmatch/goldenmatch/utils/transforms.py'
   - 'packages/python/goldenmatch/goldenmatch/config/**'
