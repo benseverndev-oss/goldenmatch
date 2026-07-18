@@ -12,6 +12,7 @@
 //! (`PyArrowType<ArrayData>`), zero-copy, mirroring goldencheck-native. The shims
 //! never touch business logic -- they decode Arrow into a plain `&[f64]` (dropping
 //! null slots, whose backing value is undefined) and delegate to `analysis-core`.
+use analysis_core::{intern_f64, intern_i64, intern_str};
 use arrow::array::{
     make_array, Array, ArrayData, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
     Int64Array, Int8Array, LargeStringArray, StringArray, UInt16Array, UInt32Array, UInt64Array,
@@ -20,141 +21,80 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
 use pyo3::prelude::*;
-use rustc_hash::FxHashMap;
 
-/// Canonicalize an `f64` to a single `u64` bit-key matching Polars equality:
-/// all NaNs fold to one key, `-0.0` and `+0.0` fold together, everything else
-/// keys on its raw bit pattern. Keeps float interning behaviour-exact vs the
-/// pure-Python (Polars-backed) path.
-#[inline]
-fn canon_f64_bits(x: f64) -> u64 {
-    if x.is_nan() {
-        0x7ff8_0000_0000_0000 // one canonical NaN
-    } else if x == 0.0 {
-        0.0f64.to_bits() // -0.0 and +0.0 fold (x == 0.0 catches both)
-    } else {
-        x.to_bits()
-    }
-}
-
-/// Intern one Arrow column to dense `u64` value-ids. Null slots all share a
-/// single reserved id (0) distinct from every real value's id. Float columns
-/// canonicalize NaN / signed-zero to match Polars equality (see
-/// `canon_f64_bits`). Adapted from `goldencheck-native/src/keys.rs`.
+/// Intern one Arrow column to dense `u64` value-ids by extracting a typed buffer
+/// (+ byte-per-row validity) and delegating to the shared `analysis-core`
+/// interner (#1788) -- ONE arrow-free implementation shared with the wasm / SQL
+/// surfaces, so they cannot drift. Null slots share id 0; non-null get dense ids
+/// from 1; floats canonicalize NaN / signed-zero (`analysis_core::canon_f64_bits`)
+/// to match Polars equality. Every integer width, unsigned int, and bool reaches
+/// `intern_i64` by value promotion (`as i64` is bijective for all of them -- u64
+/// bit-reinterprets, bool -> 0/1), so the equality PARTITION the frame kernels
+/// depend on is preserved; the specific ids are never observed by a caller.
 fn intern_column(data: ArrayData) -> PyResult<Vec<u64>> {
-    macro_rules! intern_primitive {
-        ($arr:expr, $keyty:ty, $keyexpr:expr) => {{
-            let arr = $arr;
-            let mut map: FxHashMap<$keyty, u64> = FxHashMap::default();
-            let mut ids = Vec::with_capacity(arr.len());
-            let mut next: u64 = 1; // 0 is reserved for null
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    ids.push(0);
-                    continue;
+    let n = data.len();
+
+    // A byte-per-row validity buffer (0 = null) for any concrete Arrow array.
+    macro_rules! validity {
+        ($arr:expr) => {{
+            let a = &$arr;
+            (0..n)
+                .map(|i| if a.is_null(i) { 0u8 } else { 1u8 })
+                .collect::<Vec<u8>>()
+        }};
+    }
+    // Promote any int/uint/bool array to i64 + validity, then core-intern. `as i64`
+    // is bijective for every one of these (u64 bit-reinterprets, bool -> 0/1), so
+    // the equality partition is identical; the raw ids are unobservable.
+    macro_rules! intern_as_i64 {
+        ($arrty:ty) => {{
+            let arr = <$arrty>::from(data);
+            let valid = validity!(arr);
+            let vals: Vec<i64> = (0..n).map(|i| arr.value(i) as i64).collect();
+            Ok(intern_i64(&vals, &valid))
+        }};
+    }
+    macro_rules! intern_as_f64 {
+        ($arrty:ty) => {{
+            let arr = <$arrty>::from(data);
+            let valid = validity!(arr);
+            let vals: Vec<f64> = (0..n).map(|i| arr.value(i) as f64).collect();
+            Ok(intern_f64(&vals, &valid))
+        }};
+    }
+    macro_rules! intern_as_str {
+        ($arrty:ty) => {{
+            let arr = <$arrty>::from(data);
+            let valid = validity!(arr);
+            // Rebuild a contiguous utf8 offsets/bytes buffer; null rows get an empty
+            // span (validity marks them, so `intern_str` skips them regardless).
+            let mut bytes: Vec<u8> = Vec::new();
+            let mut offsets: Vec<u32> = Vec::with_capacity(n + 1);
+            offsets.push(0);
+            for i in 0..n {
+                if valid[i] != 0 {
+                    bytes.extend_from_slice(arr.value(i).as_bytes());
                 }
-                let key: $keyty = $keyexpr(&arr, i);
-                let id = *map.entry(key).or_insert_with(|| {
-                    let v = next;
-                    next += 1;
-                    v
-                });
-                ids.push(id);
+                offsets.push(bytes.len() as u32);
             }
-            Ok(ids)
+            Ok(intern_str(&offsets, &bytes, &valid))
         }};
     }
 
     match data.data_type() {
-        DataType::Utf8 => {
-            let arr = StringArray::from(data);
-            let mut map: FxHashMap<&str, u64> = FxHashMap::default();
-            let mut ids = Vec::with_capacity(arr.len());
-            let mut next: u64 = 1;
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    ids.push(0);
-                    continue;
-                }
-                let id = *map.entry(arr.value(i)).or_insert_with(|| {
-                    let v = next;
-                    next += 1;
-                    v
-                });
-                ids.push(id);
-            }
-            Ok(ids)
-        }
-        DataType::LargeUtf8 => {
-            let arr = LargeStringArray::from(data);
-            let mut map: FxHashMap<&str, u64> = FxHashMap::default();
-            let mut ids = Vec::with_capacity(arr.len());
-            let mut next: u64 = 1;
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    ids.push(0);
-                    continue;
-                }
-                let id = *map.entry(arr.value(i)).or_insert_with(|| {
-                    let v = next;
-                    next += 1;
-                    v
-                });
-                ids.push(id);
-            }
-            Ok(ids)
-        }
-        DataType::Int8 => {
-            intern_primitive!(Int8Array::from(data), i8, |a: &Int8Array, i| a.value(i))
-        }
-        DataType::Int16 => {
-            intern_primitive!(Int16Array::from(data), i16, |a: &Int16Array, i| a.value(i))
-        }
-        DataType::Int32 => {
-            intern_primitive!(Int32Array::from(data), i32, |a: &Int32Array, i| a.value(i))
-        }
-        DataType::Int64 => {
-            intern_primitive!(Int64Array::from(data), i64, |a: &Int64Array, i| a.value(i))
-        }
-        DataType::UInt8 => {
-            intern_primitive!(UInt8Array::from(data), u8, |a: &UInt8Array, i| a.value(i))
-        }
-        DataType::UInt16 => {
-            intern_primitive!(UInt16Array::from(data), u16, |a: &UInt16Array, i| a
-                .value(i))
-        }
-        DataType::UInt32 => {
-            intern_primitive!(UInt32Array::from(data), u32, |a: &UInt32Array, i| a
-                .value(i))
-        }
-        DataType::UInt64 => {
-            intern_primitive!(UInt64Array::from(data), u64, |a: &UInt64Array, i| a
-                .value(i))
-        }
-        // Floats keyed by a canonicalized bit pattern so NaN / signed-zero fold
-        // exactly like Polars equality (see `canon_f64_bits`).
-        DataType::Float32 => {
-            intern_primitive!(Float32Array::from(data), u64, |a: &Float32Array, i| {
-                canon_f64_bits(a.value(i) as f64)
-            })
-        }
-        DataType::Float64 => {
-            intern_primitive!(Float64Array::from(data), u64, |a: &Float64Array, i| {
-                canon_f64_bits(a.value(i))
-            })
-        }
-        DataType::Boolean => {
-            let arr = BooleanArray::from(data);
-            let mut ids = Vec::with_capacity(arr.len());
-            for i in 0..arr.len() {
-                if arr.is_null(i) {
-                    ids.push(0);
-                } else {
-                    ids.push(if arr.value(i) { 1 } else { 2 });
-                }
-            }
-            Ok(ids)
-        }
+        DataType::Utf8 => intern_as_str!(StringArray),
+        DataType::LargeUtf8 => intern_as_str!(LargeStringArray),
+        DataType::Int8 => intern_as_i64!(Int8Array),
+        DataType::Int16 => intern_as_i64!(Int16Array),
+        DataType::Int32 => intern_as_i64!(Int32Array),
+        DataType::Int64 => intern_as_i64!(Int64Array),
+        DataType::UInt8 => intern_as_i64!(UInt8Array),
+        DataType::UInt16 => intern_as_i64!(UInt16Array),
+        DataType::UInt32 => intern_as_i64!(UInt32Array),
+        DataType::UInt64 => intern_as_i64!(UInt64Array),
+        DataType::Float32 => intern_as_f64!(Float32Array),
+        DataType::Float64 => intern_as_f64!(Float64Array),
+        DataType::Boolean => intern_as_i64!(BooleanArray),
         other => Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "frame kernels do not support Arrow dtype {other:?}; \
              cast to a supported type (string/int/float/bool) first"

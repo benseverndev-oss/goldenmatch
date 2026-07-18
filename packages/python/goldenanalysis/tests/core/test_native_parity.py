@@ -361,3 +361,50 @@ def test_required_mode_implies_wheel_when_set() -> None:
     -- otherwise every native_only test would silently skip."""
     if os.environ.get("GOLDENANALYSIS_NATIVE") == "1":
         assert native_available()
+
+
+# ── #1788: native intern_column now delegates to the shared analysis-core ─────
+# interner. The frame-kernels adversarial fixture only exercises Float64 / Int64
+# / Utf8; these pin the dtypes it does NOT cover -- narrow signed/unsigned ints,
+# UInt64 above i64::MAX (the bit-reinterpret path), Float32 canonicalization, and
+# Boolean -- as native == pure (`_distinct_count_pure` / `_duplicate_row_ratio_pure`).
+
+_DTYPE_SERIES = {
+    "int8": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.Int8),
+    "int16": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.Int16),
+    "int32": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.Int32),
+    "int64": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.Int64),
+    "uint8": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.UInt8),
+    "uint16": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.UInt16),
+    "uint32": lambda pl: pl.Series("v", [5, 5, 3, None, 5], dtype=pl.UInt32),
+    # UInt64 values ABOVE i64::MAX: exercises the u64 -> i64 bit-reinterpret.
+    "uint64_high": lambda pl: pl.Series(
+        "v", [2**63 + 7, 2**63 + 7, 1, None, 2**63 + 7], dtype=pl.UInt64
+    ),
+    # Float32 with -0.0/+0.0 folding + NaN folding + null.
+    "float32": lambda pl: pl.Series(
+        "v", [-0.0, 0.0, float("nan"), float("nan"), None, 1.5], dtype=pl.Float32
+    ),
+    "bool": lambda pl: pl.Series("v", [True, False, True, None, False], dtype=pl.Boolean),
+}
+
+
+@native_only
+@pytest.mark.parametrize("dtype", sorted(_DTYPE_SERIES))
+def test_intern_column_distinct_count_parity_all_dtypes(dtype):
+    import polars as pl
+    from goldenanalysis.core import aggregate
+
+    s = _DTYPE_SERIES[dtype](pl)
+    assert native_module().distinct_count(s.to_arrow()) == aggregate._distinct_count_pure(s)
+
+
+@native_only
+@pytest.mark.parametrize("dtype", sorted(_DTYPE_SERIES))
+def test_intern_column_duplicate_row_ratio_parity_all_dtypes(dtype):
+    import polars as pl
+    from goldenanalysis.core import aggregate
+
+    df = pl.DataFrame([_DTYPE_SERIES[dtype](pl)])
+    native = native_module().duplicate_row_ratio([df[c].to_arrow() for c in df.columns])
+    assert native == aggregate._duplicate_row_ratio_pure(df)
