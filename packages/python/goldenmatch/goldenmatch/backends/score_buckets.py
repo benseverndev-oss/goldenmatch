@@ -515,6 +515,24 @@ def _resolve_fast_path(
     if total_weight <= 0:
         _decline(f"total_weight={total_weight}")
         return None
+    # NE PARITY GUARD: the slow path (_apply_negative_evidence) applies a penalty
+    # for EVERY NE scorer `score_field` can score -- it only skips a scorer that
+    # RAISES (cached in _NE_BROKEN). But the fast path can faithfully reproduce a
+    # per-pair penalty only for scorers in _SCORE_FIELD_DIRECT_SCORERS;
+    # _resolve_ne_specs silently DROPS the rest (ensemble / qgram / date / phash /
+    # audio_fp / initialism_match / alias_match), zeroing a penalty the slow path
+    # applies -> the SAME pair scores differently on bucket vs polars-direct.
+    # Decline to the slow path whenever an NE scorer isn't fast-representable: for
+    # a genuinely-broken scorer the slow path also skips it (identical result), so
+    # declining is parity-correct either way. Parity over speed.
+    for _ne in (mk.negative_evidence or []):
+        _ne_scorer = getattr(_ne, "scorer", None)
+        if _ne_scorer is not None and _ne_scorer not in _SCORE_FIELD_DIRECT_SCORERS:
+            _decline(
+                f"NE scorer {_ne_scorer!r} not in _SCORE_FIELD_DIRECT_SCORERS "
+                f"(slow path would penalize; fast path can't) -> slow-path parity"
+            )
+            return None
     ne_specs = _resolve_ne_specs(mk, prepared_df)
     # Diagnostic on the success path: log matchkey shape so we can compare
     # what the controller commits at different row counts (rerank thresholds

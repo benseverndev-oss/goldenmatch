@@ -1,19 +1,23 @@
-"""Unit tests for ``_ne_effectively_empty`` and the broader fast-path gate
-in ``score_buckets._resolve_fast_path``.
+"""Unit tests for ``_ne_effectively_empty`` and the fast-path gate in
+``score_buckets._resolve_fast_path``.
 
-Background: at auto-config time on the QIS realistic shape (10M rows),
-``promote_negative_evidence`` was adding an NE entry on the ``id`` column
-with scorer name ``ensemble``. ``score_field`` doesn't implement
-``ensemble`` and raises ``ValueError`` -- ``core/scorer.py::_NE_BROKEN``
-catches this once per (scorer, field) and silently skips it on subsequent
-calls. The NE contributes zero penalty at runtime.
+History (two layers):
+1. The gate once declined the fast path whenever ``mk.negative_evidence`` was
+   truthy -- too conservative, so the "smart gate" (PR #552) engaged when the NE
+   scorers were runtime no-ops. Back then ``ensemble`` RAISED in ``score_field``,
+   was cached in ``core/scorer.py::_NE_BROKEN``, and contributed zero penalty, so
+   engaging + dropping it matched the slow path.
+2. That premise is GONE: ``score_field`` later gained real handlers for
+   ``ensemble`` / ``qgram`` / ``date`` / ``phash`` / ``audio_fp`` /
+   ``initialism_match`` / ``alias_match``, so the SLOW path
+   (``_apply_negative_evidence``) now APPLIES their penalty. But those scorers are
+   still not in ``_SCORE_FIELD_DIRECT_SCORERS``, so the fast path dropped them ->
+   zero penalty -> the SAME pair scored differently on bucket vs polars-direct.
 
-But the old fast-path gate declined eligibility whenever
-``mk.negative_evidence`` was truthy, regardless of whether the entries were
-actually callable. That forced the entire workload onto the slow Python
-``find_fuzzy_matches`` path and blocked the native + ExcludeSet handle
-optimizations (PR #552). The smarter gate looks at the NE scorer names and
-only declines when at least one would actually fire at runtime.
+The parity guard in ``_resolve_fast_path`` now DECLINES to the slow path for any
+NE scorer outside ``_SCORE_FIELD_DIRECT_SCORERS`` (parity over speed; for a
+genuinely-``_NE_BROKEN`` scorer the slow path also skips it, so declining is
+correct either way). These tests pin that behavior.
 """
 from __future__ import annotations
 
@@ -113,20 +117,26 @@ class TestResolveFastPath:
             col_last: ["smith", "smith"],
         })
 
-    def test_fast_path_engaged_with_broken_ne(self):
+    @pytest.mark.parametrize("ne_scorer", ["ensemble", "qgram", "date"])
+    def test_fast_path_declines_score_field_handled_but_non_direct_ne(self, ne_scorer):
+        """PARITY GUARD: `score_field` gained handlers for ensemble/qgram/date/
+        phash/audio_fp/initialism_match/alias_match, so the SLOW path
+        (_apply_negative_evidence) applies their penalty -- but the fast path can
+        only reproduce a per-pair penalty for _SCORE_FIELD_DIRECT_SCORERS and would
+        silently DROP these (zero penalty). Same pair, different bucket-vs-polars
+        score. The fast path must DECLINE so the reference slow path scores it.
+        (Historically these RAISED -> _NE_BROKEN no-op -> engaging was safe; that
+        premise is gone.)"""
         mk = _mk_with_ne([
-            NegativeEvidenceField(field="id", scorer="ensemble", threshold=0.8, penalty=0.5),
+            NegativeEvidenceField(field="id", scorer=ne_scorer, threshold=0.8, penalty=0.5),
         ])
         result = _resolve_fast_path(
             mk, self._prepared_df(),
             across_files_only=False, source_lookup=None, target_ids=None,
         )
-        # _resolve_fast_path returns None when not eligible. With broken-NE
-        # only, we should get the spec back. It's None ONLY if some other
-        # prerequisite failed -- this fixture satisfies all of them, so a
-        # None here would mean the broken-NE gate logic didn't fire.
-        assert result is not None, (
-            "broken-NE matchkey should be fast-path eligible after the gate fix"
+        assert result is None, (
+            f"NE scorer {ne_scorer!r} is applied by the slow path but not fast-"
+            f"representable; the fast path must decline for parity, got engaged"
         )
 
     def test_fast_path_engaged_with_callable_ne_missing_xform(self):
