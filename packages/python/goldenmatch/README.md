@@ -57,6 +57,14 @@ npm install goldenmatch
 > core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py — edit the CHANGELOG, not this block) -->
+> **v3.5.0** — **New `date` scorer for date fields (#1858).** `jaro_winkler` scores unrelated
+ISO birthdays 0.80+ (the fixed `YYYY-MM-DD` shape + shared digit alphabet
+dominate), so it can't tell a typo from a different person. The `date` scorer
+compares dates by Damerau-Levenshtein over the canonical digits — a typo scores
+0.90, an unrelated date 0.00 — with a `levenshtein` fallback for non-ISO input.
+Cross-surface (Python, native kernel, TypeScript), and a preflight check warns
+when a name-oriented scorer sits on a date field.
+>
 > **v3.4.0** — **Embeddings are first-class on Fellegi-Sunter matchkeys.** `embedding` and
 `record_embedding` field scorers now train (EM) and score end-to-end on the
 probabilistic path via the vectorized matrix — previously they raised
@@ -71,13 +79,6 @@ migration upgrade pass gains a **fan-out lever** — a risk-gated NE suggestion
 plus cluster-guard tuning from your reference clusters. `goldenmatch-native`
 0.1.15 scores NE in the Rust kernels (`FS_SUPPORTS_NE`; older wheels keep the
 pure-Python fallback automatically).
->
-> **v3.1.0** — **3.1.0 — polars is optional (and the polars-free install is the fast
-configuration).** The engine is Arrow-native end to end with the Rust fused
-kernels on the hot paths (a zero-polars CI gate proves a full dedupe with
-polars imports blocked); `pip install 'goldenmatch[polars]'` is a
-compatibility extra (classic lane, kernel-absent golden replay,
-cell-quality weighting), byte-identical to 3.0.x.
 <!-- README-callouts:end -->
 
 ---
