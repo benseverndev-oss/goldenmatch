@@ -33,6 +33,10 @@ on:
         description: "Enable the opt-in native FS kernel (GOLDENMATCH_FS_NATIVE=1)"
         required: false
         default: "false"
+      fs_default_bucket:
+        description: "FS route: 'true' = memory-bounded bucket route (the #1803 default), 'false' = legacy batched route (GOLDENMATCH_FS_DEFAULT_BUCKET=0). Set false for the legacy leg of a parity A/B."
+        required: false
+        default: "true"
       build_native:
         description: "Build the native extension before running"
         required: false
@@ -50,6 +54,9 @@ jobs:
       # for determinism (mirrors the other bench lanes).
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
       GOLDENMATCH_FS_NATIVE: ${{ inputs.fs_native == 'true' && '1' || '0' }}
+      # Default backend (polars-direct/None) routes FS through the bucket scorer
+      # unless this is 0 -- the legacy batched leg of the item-3 parity A/B.
+      GOLDENMATCH_FS_DEFAULT_BUCKET: ${{ inputs.fs_default_bucket == 'false' && '0' || '1' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
 
