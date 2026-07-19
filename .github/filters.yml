@@ -395,12 +395,15 @@ api_parity:
 # those move. The env scan reads the whole goldenmatch python + rust source, so
 # any .py/.rs change there can add/remove a knob -> re-run the gate.
 config_matrix:
-  - 'docs-site/goldenmatch/config-matrix.mdx'
-  - 'packages/python/goldenmatch/goldenmatch/**/*.py'
-  - 'packages/python/goldenmatch/goldenmatch/core/config_matrix/**'
-  - 'packages/python/goldenmatch/scripts/gen_config_matrix.py'
-  - 'packages/python/goldenmatch/tests/test_config_matrix.py'
+  # The generated blocks are rendered from each package's Python + Rust source
+  # (schema, vocab constants, <PREFIX>_* env scan), so any of those can move a
+  # knob -> re-run the gate. Covers all suite packages + the repo-level generator.
+  - 'docs-site/*/config-matrix.mdx'
+  - 'packages/python/*/*/**/*.py'
   - 'packages/rust/extensions/**/*.rs'
+  - 'scripts/config_matrix/**'
+  - 'scripts/gen_config_matrix.py'
+  - 'scripts/test_config_matrix.py'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's

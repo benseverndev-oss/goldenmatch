@@ -72,6 +72,14 @@ permissions:
 env:
   ARROW_DEFAULT_MEMORY_POOL: system
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+  # Build EM-training blocks from a bounded frame sample instead of the full
+  # frame. Stage-attribution showed the FS dedupe peak is EM's full-frame
+  # build_blocks (~11.7 GB native at 1M), NOT the scorer (~274 MB flat); the
+  # bucket scorer re-partitions internally and ignores these blocks, and EM
+  # only samples ~10k within-block pairs. F1-neutral on the person fixture
+  # (0.9802 == full-frame); measuring the peak-RSS drop at 1M here. Only
+  # affects the gm_probabilistic lanes (bucket route + trained EM).
+  GOLDENMATCH_FS_EM_SAMPLE_ROWS: "100000"
 
 jobs:
   setup:

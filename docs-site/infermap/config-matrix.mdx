@@ -1,0 +1,66 @@
+---
+title: "Config matrix"
+description: "The full matrix of InferMap config options and vocabularies -- generated so it never drifts."
+---
+
+The exhaustive, always-current reference for InferMap (GoldenSchema) configuration.
+InferMap has no single config file -- its knobs are `MapEngine` constructor
+arguments plus a couple of small vocabularies -- so this page consolidates the
+scattered surface into one gated reference for humans and AI agents.
+
+<Info>
+Everything below the line is **generated from code** (`scripts/gen_config_matrix.py`)
+and verified in CI. The guidance above the line is hand-authored. See
+[Overview](/infermap/overview) for a walkthrough.
+</Info>
+
+## How InferMap is configured
+
+- **Run knobs** are `MapEngine(...)` keyword arguments (see **Runtime options**):
+  `min_confidence`, `sample_size`, `scorers`, `domains`, `config_path`, etc.
+- **Optional YAML** (`config_path`) can enable/weight scorers and add aliases;
+  keys: `domains`, `scorers.<Name>.{enabled,weight}`, `aliases.<canonical>: [...]`.
+- **Scorers** each carry a default weight (Exact 1.0, Alias 0.95, Initialism
+  0.75, PatternType 0.7, Profile 0.5, FuzzyName 0.4, LLM 0.8) and combine into a
+  weighted score; `min_confidence` is the accept floor.
+- **Data types** (`VALID_DTYPES`) and **semantic pattern types**
+  (`SEMANTIC_TYPES`) are the inference vocabularies used by the scorers.
+
+{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}
+
+## Runtime options
+
+Config passed as call keyword arguments (this package has no single config model). Generated from the signature.
+
+### `MapEngine`
+
+| Argument | Type | Default | Choices / notes |
+|---|---|---|---|
+| `min_confidence` | float | `0.2` |  |
+| `sample_size` | int | `500` |  |
+| `scorers` | any | `None` |  |
+| `config_path` | str \\| None | `None` |  |
+| `return_score_matrix` | bool | `False` |  |
+| `calibrator` | Calibrator \\| None | `None` |  |
+| `domains` | list[str] \\| None | `None` |  |
+
+## Enumerated vocabularies
+
+Allowed values for the `str`-typed / registry-backed fields above.
+
+| Vocabulary | Source | Applies to | Values |
+|---|---|---|---|
+| Data types | `VALID_DTYPES` | `FieldInfo.dtype` | `boolean`, `date`, `datetime`, `float`, `integer`, `string` |
+| Semantic pattern types | `SEMANTIC_TYPES` | pattern-type detection | `currency`, `date_iso`, `email`, `ip_v4`, `phone`, `url`, `uuid`, `zip_us` |
+
+## Environment variables (index)
+
+1 `INFERMAP_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:
+
+- **NATIVE** (1): `INFERMAP_NATIVE`
+
+{/* config-matrix:generated:end */}
+
+## See also
+
+- [Overview](/infermap/overview).

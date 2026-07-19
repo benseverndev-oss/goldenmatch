@@ -698,8 +698,20 @@ def score_buckets(
     source_lookup: dict[int, str] | None = None,
     target_ids: set[int] | None = None,
     em_result=None,
-) -> list[tuple[int, int, float]]:
+    _emit: str = "list",
+) -> Any:
     """Score all blocks via hash-bucketed partition_by, no per-block LazyFrame.
+
+    ``_emit`` (internal): ``"list"`` (default) returns
+    ``list[tuple[int,int,float]]`` and mutates ``matched_pairs`` in place — the
+    historical contract, byte-identical. ``"arrow"`` returns a
+    ``PAIR_STREAM_SCHEMA`` ``pa.Table`` accumulated INCREMENTALLY (each pass's
+    tuples are converted to Arrow int64/float64 columns and dropped, and the
+    ``matched_pairs`` exclude set is NOT built) — the FS pair-stream memory win
+    (PR-B, ``2026-07-18-fs-arrow-pair-stream-design.md``). Call it via
+    ``score_buckets_arrow``; the arrow route is eligibility-gated to callers with
+    no later exclude-set consumer (duplicate edges collapse in Union-Find, so the
+    cross-pass exclude is a perf optimization, not correctness).
 
     Args:
         prepared_df: Eager Polars DataFrame, already materialized. Must
@@ -1606,10 +1618,26 @@ def score_buckets(
         if _bkt_debug_on():
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
+        # B2c: in arrow mode convert EACH bucket's tuples to Arrow the moment it
+        # returns and drop the Python list, so peak holds one bucket's tuples +
+        # the accumulated int64/float64 columns -- never a per-PASS list[tuple]
+        # (the remaining transient after B2a). List mode is byte-unchanged.
+        _arrow_mode = _emit == "arrow"
         pass_pairs: list[tuple[int, int, float]] = []
+        bucket_tables: list[Any] = []
+        pass_emitted = 0
         pass_blocks_scored = 0
         if n_non_empty_buckets == 0:
-            return pass_pairs, pass_blocks_scored, n_non_empty_buckets
+            empty: Any = pairs_to_pair_stream([]) if _arrow_mode else pass_pairs
+            return empty, pass_blocks_scored, n_non_empty_buckets
+
+        def _sink(bucket_pairs: list) -> None:
+            nonlocal pass_emitted
+            pass_emitted += len(bucket_pairs)
+            if _arrow_mode:
+                bucket_tables.append(pairs_to_pair_stream(bucket_pairs))
+            else:
+                pass_pairs.extend(bucket_pairs)
 
         with stage("bucket_score"):
             # rapidfuzz.cdist releases the GIL inside the scorer, so threads
@@ -1628,18 +1656,31 @@ def score_buckets(
             if max_workers <= 1 or n_non_empty_buckets <= 2:
                 for bucket_df in non_empty_buckets:
                     pairs, n = worker(bucket_df)
-                    pass_pairs.extend(pairs)
+                    _sink(pairs)
+                    del pairs
                     pass_blocks_scored += n
             else:
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     for pairs, n in pool.map(worker, non_empty_buckets):
-                        pass_pairs.extend(pairs)
+                        _sink(pairs)
+                        del pairs
                         pass_blocks_scored += n
         if _bkt_debug_on():
-            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {len(pass_pairs)} pairs", flush=True)
+            print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: bucket_score done in {time.perf_counter()-_ts:.2f}s, {pass_blocks_scored} blocks, {pass_emitted} pairs", flush=True)
+        if _arrow_mode:
+            import pyarrow as _pa
+
+            result: Any = (
+                _pa.concat_tables(bucket_tables) if bucket_tables
+                else pairs_to_pair_stream([])
+            )
+            return result, pass_blocks_scored, n_non_empty_buckets
         return pass_pairs, pass_blocks_scored, n_non_empty_buckets
 
+    _arrow = _emit == "arrow"
     all_pairs: list[tuple[int, int, float]] = []
+    pass_tables: list[Any] = []  # arrow mode: one pa.Table per pass
+    n_emitted = 0
     total_blocks_scored = 0
     total_non_empty = 0
     slim_cols = set(slim_frame.columns)
@@ -1650,12 +1691,27 @@ def score_buckets(
                 key.fields, sorted(set(key.fields) - slim_cols),
             )
             continue
-        pass_pairs, blocks_scored, n_non_empty = _score_single_pass(key)
-        all_pairs.extend(pass_pairs)
+        pass_result, blocks_scored, n_non_empty = _score_single_pass(key)
+        if _arrow:
+            # _score_single_pass already returns a PAIR_STREAM_SCHEMA pa.Table
+            # (converted per BUCKET, B2c) -- accumulate it directly; no per-pass
+            # list ever exists. See the PR-B design doc.
+            n_emitted += pass_result.num_rows
+            pass_tables.append(pass_result)
+            del pass_result
+        else:
+            n_emitted += len(pass_result)
+            all_pairs.extend(pass_result)
         total_blocks_scored += blocks_scored
         total_non_empty += n_non_empty
-    for a, b, _s in all_pairs:
-        matched_pairs.add((min(a, b), max(a, b)))
+    if not _arrow:
+        # Cross-pass exclude set for LATER scoring passes/matchkeys. Arrow mode
+        # SKIPS it (its ~8 GB at 66M pairs is half the OOM): duplicate edges
+        # collapse in Union-Find, so the exclude is a perf optimization, not
+        # correctness, and the arrow route is gated to callers with no later
+        # exclude consumer.
+        for a, b, _s in all_pairs:
+            matched_pairs.add((min(a, b), max(a, b)))
 
     record_metrics({
         "bucket_count": total_non_empty,
@@ -1664,7 +1720,7 @@ def score_buckets(
     })
     logger.info(
         "score_buckets: %d non-empty buckets (target N=%d), %d blocks scored, %d pairs",
-        total_non_empty, n_buckets, total_blocks_scored, len(all_pairs),
+        total_non_empty, n_buckets, total_blocks_scored, n_emitted,
     )
     if _bucket_debug and _dbg_rows:
         n_calls = len(_dbg_rows)
@@ -1690,4 +1746,66 @@ def score_buckets(
                 f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
                 flush=True,
             )
+    if _arrow:
+        import pyarrow as _pa
+
+        if pass_tables:
+            return _pa.concat_tables(pass_tables)
+        return pairs_to_pair_stream([])
     return all_pairs
+
+
+def pairs_to_pair_stream(pairs: list[tuple[int, int, float]]) -> Any:
+    """``list[(id_a, id_b, score)]`` -> a ``PAIR_STREAM_SCHEMA_SPEC`` ``pa.Table``
+    (``id_a``/``id_b`` int64, ``score`` float64) — the Arrow pair-stream shape
+    ``cluster.build_clusters_arrow_native`` consumes.
+
+    B1 seam for the FS Arrow-native pair-stream cutover
+    (``docs/superpowers/specs/2026-07-18-fs-arrow-pair-stream-design.md``). Pair
+    ``(a, b)`` order and any cross-pass DUPLICATE pairs are preserved verbatim —
+    Union-Find collapses duplicate edges, so this is edge-faithful to the
+    ``list[tuple]`` form. Empty input yields a zero-row table with the schema.
+    """
+    import pyarrow as _pa
+
+    if not pairs:
+        return _pa.table({
+            "id_a": _pa.array([], _pa.int64()),
+            "id_b": _pa.array([], _pa.int64()),
+            "score": _pa.array([], _pa.float64()),
+        })
+    # Single left-to-right unzip (one temp list per column, dropped on return).
+    id_a = [p[0] for p in pairs]
+    id_b = [p[1] for p in pairs]
+    score = [p[2] for p in pairs]
+    return _pa.table({
+        "id_a": _pa.array(id_a, _pa.int64()),
+        "id_b": _pa.array(id_b, _pa.int64()),
+        "score": _pa.array(score, _pa.float64()),
+    })
+
+
+def score_buckets_arrow(*args: Any, **kwargs: Any) -> Any:
+    """Arrow pair-stream (``PAIR_STREAM_SCHEMA_SPEC`` ``pa.Table``) form of
+    :func:`score_buckets`.
+
+    B1 of the FS Arrow-native pair-stream cutover (design doc
+    ``2026-07-18-fs-arrow-pair-stream-design.md``). Same scoring, same
+    ``matched_pairs`` mutation, same cross-pass-duplicate semantics as
+    ``score_buckets`` — it delegates, so it is byte-faithful by construction —
+    but returns the emitted pairs as a ``pa.Table`` (``id_a``/``id_b`` int64,
+    ``score`` float64) so the FS clustering path can consume Arrow via
+    ``build_clusters_arrow_native`` instead of accumulating a
+    ``list[tuple]`` + a ``matched_pairs`` set (~16 GB at 66M pairs vs ~1.3 GB
+    Arrow — the 1M person OOM's second cause).
+
+    Accumulates INCREMENTALLY (``_emit="arrow"``): each pass is converted to
+    Arrow and its Python list dropped, and the ``matched_pairs`` exclude set is
+    NOT built — so peak holds one pass's tuples + the accumulated int64/float64
+    columns rather than the whole run's ``list[tuple]`` + an 8 GB set. Because it
+    omits the ``matched_pairs`` mutation, the FS dedupe caller (B2b) routes here
+    only when no later pass/matchkey consumes the exclude set. B2b threads the
+    table into ``build_clusters_arrow_native``.
+    """
+    kwargs["_emit"] = "arrow"
+    return score_buckets(*args, **kwargs)

@@ -34,6 +34,23 @@ orchestrator MUST NOT `os.environ.update(...)` - that would leak
 `GOLDENMATCH_FS_NATIVE=0` from the numpy lane into the following native/zeroconfig
 datapoints in the same process and silently invalidate them.
 
+### Both FS lanes run POSTERIOR calibration (same probability scale as Splink)
+
+Both FS lanes set `GOLDENMATCH_FS_CALIBRATED=posterior` so GM's match score is a
+true posterior probability - the SAME scale Splink's threshold operates on - which
+makes the shared `--threshold` a fair cut for both engines. GM's default is
+`linear` (a min-max of the FS weight envelope); at a fixed high threshold that
+scale mismatch admits a mass of weak-but-positive pairs and, on the person shape,
+catastrophically over-merges (measured: person 1M native `linear` -> pairwise F1
+0.00, ~5e11 false pairs, the whole dataset merged). That collapse is a bench
+artifact of scoring `linear`-scale scores against a `posterior`-scale threshold,
+NOT a defect in GM's FS model - GM's shipped weighted path (`gm_hand_built`) and
+its refuse-rather-than-over-merge zero-config controller both stay clean on the
+same shape. Posterior recovers precision 1.0 / zero FP at the same 0.85 cut
+(person 50k local: `linear` F1 0.53 -> `posterior` F1 0.87, B3 0.98). Biblio is
+unaffected (its true-match weights are well-separated, so `linear` already lands
+right); the change matters on the corruption-heavy person shape.
+
 ### The two FS lanes: numpy vs native (and why both)
 
 FS-native is **default-ON** (`_fs_native_enabled()` returns native whenever the
