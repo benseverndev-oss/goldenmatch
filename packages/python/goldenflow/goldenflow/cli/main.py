@@ -21,7 +21,7 @@ def _version_callback(value: bool):
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: bool = typer.Option(False, "--version", "-v", callback=_version_callback, is_eager=True),
+    version: bool = typer.Option(False, "--version", "-v", callback=_version_callback, is_eager=True, help="Print the installed GoldenFlow version and exit."),
 ):
     if ctx.invoked_subcommand is None and ctx.args:
         # Auto-route to transform if first arg looks like a file or stdin sentinel
@@ -142,7 +142,7 @@ def transform(
 @app.command()
 def validate(
     path: Path = typer.Argument(..., help="Input data file"),
-    config: Path | None = typer.Option(None, "-c", "--config"),
+    config: Path | None = typer.Option(None, "-c", "--config", help="YAML config file describing which transforms to apply."),
 ):
     """Dry-run: show what would change without writing."""
     from goldenflow.cli.errors import cli_error_handler
@@ -256,8 +256,8 @@ def interactive(
 
 @app.command()
 def serve(
-    host: str = typer.Option("0.0.0.0", "--host"),
-    port: int = typer.Option(8000, "--port"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Network interface the REST API server binds to."),
+    port: int = typer.Option(8000, "--port", help="Port the REST API server listens on."),
 ):
     """Launch the REST API server."""
     import uvicorn
@@ -283,7 +283,7 @@ def mcp_serve(
 
 @app.command(name="agent-serve")
 def agent_serve(
-    port: int = typer.Option(8150, "--port"),
+    port: int = typer.Option(8150, "--port", help="Port the A2A agent server listens on."),
 ):
     """Start the A2A agent server."""
     try:
@@ -298,8 +298,8 @@ def agent_serve(
 @app.command()
 def watch(
     path: Path = typer.Argument(".", help="Directory to watch"),
-    config: Path | None = typer.Option(None, "-c", "--config"),
-    output_dir: Path | None = typer.Option(None, "-o", "--output-dir"),
+    config: Path | None = typer.Option(None, "-c", "--config", help="YAML config applied to each new or changed file."),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir", help="Directory where transformed files are written."),
     interval: float = typer.Option(2.0, "--interval", help="Poll interval in seconds"),
 ):
     """Watch a directory and auto-transform new/changed files."""
@@ -311,8 +311,8 @@ def watch(
 def schedule(
     path: Path = typer.Argument(..., help="Data file to transform"),
     interval: str = typer.Option("1h", "--every", help="Interval (e.g., 5m, 1h, 30s)"),
-    config: Path | None = typer.Option(None, "-c", "--config"),
-    output_dir: Path | None = typer.Option(None, "-o", "--output-dir"),
+    config: Path | None = typer.Option(None, "-c", "--config", help="YAML config applied on each scheduled run."),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir", help="Directory where transformed files are written."),
 ):
     """Run transforms on a schedule."""
     from goldenflow.cli.schedule import run_schedule
@@ -322,7 +322,7 @@ def schedule(
 @app.command(name="init")
 def init_cmd(
     data: Path | None = typer.Argument(None, help="Data file to profile"),
-    output: Path = typer.Option("goldenflow.yaml", "-o", "--output"),
+    output: Path = typer.Option("goldenflow.yaml", "-o", "--output", help="Path where the generated config file is written."),
 ):
     """Interactive setup wizard to generate a config file."""
     from goldenflow.cli.init_wizard import run_wizard
@@ -360,7 +360,7 @@ def history(
 
 @app.command()
 def demo(
-    output_dir: Path = typer.Option(Path("."), "-o", "--output-dir"),
+    output_dir: Path = typer.Option(Path("."), "-o", "--output-dir", help="Directory where the sample data and config files are written."),
 ):
     """Generate sample data and config for trying GoldenFlow."""
     from goldenflow.cli.errors import cli_error_handler
@@ -416,8 +416,8 @@ transforms:
 def stream(
     path: Path = typer.Argument(..., help="Input data file"),
     chunk_size: int = typer.Option(10000, "--chunk-size", help="Rows per batch"),
-    config: Path | None = typer.Option(None, "-c", "--config"),
-    output_dir: Path | None = typer.Option(None, "-o", "--output-dir"),
+    config: Path | None = typer.Option(None, "-c", "--config", help="YAML config applied to each streamed batch."),
+    output_dir: Path | None = typer.Option(None, "-o", "--output-dir", help="Directory where the combined transformed file is written."),
 ):
     """Stream-process a large file in chunks."""
     import polars as pl

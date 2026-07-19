@@ -10,7 +10,8 @@ from __future__ import annotations
 import pytest
 
 from config_matrix import REGISTRY
-from config_matrix.crossref import stale_env_refs
+from config_matrix.coverage import coverage
+from config_matrix.crossref import stale_env_refs, undocumented_vocab
 from config_matrix.render import (
     MARKER_END,
     MARKER_START,
@@ -41,6 +42,67 @@ def test_no_stale_env_refs_in_docs(name):
     # code actually reads (the config-matrix registry is the source of truth).
     hits = stale_env_refs(REGISTRY[name])
     assert not hits, "stale env refs: " + "; ".join(f"{h.token} in {h.page}:{h.line_no}" for h in hits)
+
+
+def test_goldencheck_check_types_catalog_matches_source():
+    # CHECK_TYPES is the canonical check-type catalog; assert it still equals the
+    # `check="..."` literals the code actually emits, so it can't drift into a lie.
+    import re
+
+    from goldencheck.models.finding import CHECK_TYPES
+    from config_matrix.render import ROOT
+
+    src = ROOT / "packages" / "python" / "goldencheck" / "goldencheck"
+    scanned: set[str] = set()
+    for p in src.rglob("*.py"):
+        if "tests" in p.parts:
+            continue
+        scanned |= set(re.findall(r'check=["\']([a-z_]+)["\']', p.read_text(encoding="utf-8", errors="ignore")))
+    assert scanned == set(CHECK_TYPES), (
+        f"CHECK_TYPES drifted from source: only-in-source={sorted(scanned - set(CHECK_TYPES))}, "
+        f"only-in-catalog={sorted(set(CHECK_TYPES) - scanned)}"
+    )
+
+
+def test_goldenpipe_builtin_stages_match_pyproject():
+    # BUILTIN_STAGES is the canonical stage catalog; assert it equals the declared
+    # goldenpipe.stages entry points (+ the always-registered `load`), so it can't
+    # drift from what a fresh install actually registers.
+    import tomllib
+
+    from goldenpipe.engine.registry import BUILTIN_STAGES
+    from config_matrix.render import ROOT
+
+    pp = tomllib.loads(
+        (ROOT / "packages" / "python" / "goldenpipe" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    eps = set(pp["project"]["entry-points"]["goldenpipe.stages"])
+    assert set(BUILTIN_STAGES) == eps | {"load"}, (
+        f"BUILTIN_STAGES drifted from pyproject entry points: "
+        f"only-in-pyproject={sorted((eps | {'load'}) - set(BUILTIN_STAGES))}, "
+        f"only-in-catalog={sorted(set(BUILTIN_STAGES) - (eps | {'load'}))}"
+    )
+
+
+@pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.doc_coverage])
+def test_topical_docs_cover_the_canonical_set(name):
+    # Every canonical scorer/strategy/transform/... must be documented in its
+    # reference page, so a newly-added value is propagated there, not just to the matrix.
+    gaps = undocumented_vocab(REGISTRY[name])
+    assert not gaps, "undocumented in topical doc: " + "; ".join(f"{g.token} missing from {g.page}" for g in gaps)
+
+
+@pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.require_full_coverage])
+def test_full_explanation_coverage_maintained(name):
+    # Packages flagged complete must stay at 100% NL-explanation coverage -- a new
+    # field/CLI option/MCP tool without a description regresses this and fails CI.
+    cov = coverage(REGISTRY[name])
+    total = sum(t for t, _ in cov.values())
+    explained = sum(e for _, e in cov.values())
+    assert total == explained, (
+        f"{name} dropped below full explanation coverage ({explained}/{total}); "
+        "add a description to the new knob (Field(description=...) / CLI help / MCP .description)"
+    )
 
 
 @pytest.mark.parametrize("name", list(REGISTRY))

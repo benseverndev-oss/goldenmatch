@@ -4,12 +4,43 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
 
-__all__ = ["Finding", "Severity"]
+__all__ = ["Finding", "Severity", "CHECK_TYPES"]
 
 class Severity(IntEnum):
     INFO = 1
     WARNING = 2
     ERROR = 3
+
+
+# Canonical catalog of `Finding.check` labels. This is the single source of truth
+# for the check-type vocabulary; keep it in sync with the `check="..."` literals in
+# the profilers / relations / drift / denial / engine code (a scan test asserts the
+# two agree, so a new check must be added here).
+CHECK_TYPES: frozenset[str] = frozenset({
+    # schema & type
+    "existence", "required", "unmapped_column", "type_inference",
+    # nullability
+    "nullability", "null_correlation",
+    # uniqueness & keys
+    "unique", "uniqueness", "cardinality", "composite_key", "identity_safe_pk",
+    "duplicate_rows", "near_duplicate_rows", "fuzzy_duplicate_values", "key_uniqueness_loss",
+    # ranges & distribution
+    "range", "range_distribution", "enum",
+    # patterns & format
+    "format_detection", "pattern_consistency", "encoding_detection", "sequence_detection",
+    # temporal & freshness
+    "temporal_order", "future_dated", "stale_data", "temporal_order_drift",
+    # cross-column relations
+    "cross_column", "cross_column_validation", "functional_dependency", "fd_violation",
+    "correlation_break", "new_correlation",
+    # referential integrity
+    "referential_integrity",
+    # denial constraints
+    "denial_constraint",
+    # drift
+    "drift_detection", "distribution_drift", "entropy_drift", "bound_violation",
+    "benford_drift", "type_drift", "pattern_drift", "new_pattern",
+})
 
 @dataclass
 class Finding:

@@ -39,8 +39,8 @@ _Per-metric regression thresholds (percent). Falls back to ``default_pct``._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `default_pct` | float | `10.0` |  |
-| `per_metric` | dict[str, float] | `{}` |  |
+| `default_pct` | float | `10.0` | Percent change from the baseline that counts as a regression for any metric without a per-metric override. |
+| `per_metric` | dict[str, float] | `{}` | Per-metric percent thresholds keyed by metric name, overriding default_pct for those metrics. |
 
 ## Runtime options
 
@@ -56,14 +56,61 @@ Config passed as call keyword arguments (this package has no single config model
 | `run_id` | str \\| None | `None` |  |
 | `generated_at` | datetime \\| None | `None` |  |
 
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `mcp-serve` | `--transport` | text | `'stdio'` | stdio \| http |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host interface to bind when transport is http. |
+| `mcp-serve` | `--port` | integer | `8300` | HTTP port (A2A convention: Analysis = 8300). |
+| `regressions` | `--dataset` | text | **required** | Dataset name whose run history to check. |
+| `regressions` | `--history` | path | **required** | ReportHistory path (.jsonl or .db). |
+| `regressions` | `--baseline` | text | `'rolling_median'` | Baseline strategy to compare against, e.g. rolling_median. |
+| `regressions` | `--window` | integer | `7` | Number of prior runs the baseline is computed over. |
+| `regressions` | `--policy` | text | `None` | Per-metric gates: JSON or "key=pct,key=pct". |
+| `regressions` | `--fail-on-regression` | boolean | `False` | Exit 1 if any regression is flagged (CI gate). |
+| `report` | `input` | path | **required** | A .parquet/.csv frame, or a .json AnalysisReport to re-render. |
+| `report` | `--analyzers` | text | `'all'` | Comma-separated analyzer names, or 'all'. |
+| `report` | `--format` | text | `'markdown'` | markdown \| json |
+| `report` | `--out` | path | `None` | Write the report here instead of (also) printing. |
+| `trend` | `--metric` | text | **required** | Metric key to trend, e.g. cluster.singleton_ratio. |
+| `trend` | `--dataset` | text | **required** | Dataset name whose run history to read. |
+| `trend` | `--history` | path | **required** | ReportHistory path (.jsonl or .db). |
+| `trend` | `--last` | integer | `30` | Number of most recent runs to include in the trend. |
+
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Metric direction | `Direction` | `Metric.direction` | `higher_better`, `lower_better`, `neutral` |
-| Regression baseline | `Baseline` | `--baseline` | `last_known_good`, `previous`, `rolling_median` |
+### Metric direction
+_`Direction` -- `Metric.direction`._
+
+| Value | Meaning |
+|---|---|
+| `higher_better` | A higher value is better; flag a regression on a decrease. |
+| `lower_better` | A lower value is better; flag a regression on an increase. |
+| `neutral` | No preferred direction; never flags a regression. |
+
+### Regression baseline
+_`Baseline` -- `--baseline`._
+
+| Value | Meaning |
+|---|---|
+| `last_known_good` | Compare against the last run marked good. |
+| `previous` | Compare against the immediately prior run. |
+| `rolling_median` | Compare against the rolling median of recent runs. |
+
+### Analyzers
+_`_FALLBACK` -- `analyze(analyzers=...)`._
+
+| Value | Meaning |
+|---|---|
+| `cluster.distribution` | GoldenMatch clusters: count, singletons, size percentiles, reduction ratio. |
+| `frame.summary` | Generic frame stats: row/column counts, null ratio, duplicate ratio, memory. |
+| `match.rates` | GoldenMatch results: pair count, match rate, threshold, recall estimate, score histogram. |
+| `quality.rollup` | GoldenCheck / GoldenFlow rollup: findings, health score, rows changed, rules fired. |
 
 ## Environment variables (index)
 

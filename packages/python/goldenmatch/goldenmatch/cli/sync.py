@@ -29,8 +29,8 @@ def sync_cmd(
             "Layered with config.exclude_columns when both are set."
         ),
     ),
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-    quiet: bool = typer.Option(False, "--quiet", "-q"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug-level logging output."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress informational output."),
 ) -> None:
     """Sync database table — match new records against existing."""
     import logging

@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .render import ROOT, scan_env_vars
+from .render import ROOT, _resolve_vocab, scan_env_vars
 
 # Pages whose whole job is to describe old/removed knobs.
 _EXCLUDE_STEMS = re.compile(
@@ -53,6 +53,34 @@ def _prose_pages(spec) -> list[Path]:
             continue
         pages.append(p)
     return pages
+
+
+# Backticked value tokens in a doc. Includes `.`/`-` so dotted registry names
+# (analyzer `frame.summary`, stage `goldenmatch.dedupe`) match as one token.
+_TOKEN_RE = re.compile(r"`([a-z0-9_][a-z0-9_.-]*)`")
+
+
+def _canonical_set(target: str) -> set[str]:
+    """The canonical value set for a doc_coverage target. `_resolve_vocab` already
+    handles `module:CONST` (frozenset / enum / Literal alias / callable) and
+    `module:Model.field` (a pydantic Literal field)."""
+    return set(_resolve_vocab(target))
+
+
+def undocumented_vocab(spec) -> list[RefFinding]:
+    """Every canonical value that is NOT mentioned in its reference doc -- so a new
+    scorer/strategy/etc. must be propagated to the topical page, not just the matrix."""
+    findings: list[RefFinding] = []
+    doc_dir = (ROOT / spec.doc_path).parent
+    for page, target in getattr(spec, "doc_coverage", ()):
+        path = doc_dir / page
+        if not path.exists():
+            continue
+        present = set(_TOKEN_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
+        rel = path.relative_to(ROOT).as_posix()
+        for value in sorted(_canonical_set(target) - present):
+            findings.append(RefFinding(spec.name, rel, value, 0))
+    return findings
 
 
 def stale_env_refs(spec) -> list[RefFinding]:

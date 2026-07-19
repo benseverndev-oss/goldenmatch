@@ -17,7 +17,7 @@ def serve_ui_cmd(
     host: str = typer.Option("127.0.0.1", help="Host to bind."),
     port: int = typer.Option(5050, help="Port (0 = pick free, default 5050 matches Vite proxy)."),
     dev: bool = typer.Option(False, help="Skip static; expect Vite at :5173."),
-    open_browser: bool = typer.Option(True, "--open/--no-open"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in a browser once the server starts."),
 ) -> None:
     """Launch the local web UI."""
     try:

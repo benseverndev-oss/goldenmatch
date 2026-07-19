@@ -751,6 +751,7 @@ docs:
   - '**/llms*.txt'
   - '**/server.json'
   - 'scripts/check_docs_consistency.py'
+  - 'scripts/check_docs_links.py'
   - 'scripts/check_docs_staleness.py'
   - 'scripts/check_docs_sweep.py'
   - 'scripts/check_version_consistency.py'

@@ -91,9 +91,9 @@ def _parse_policy(spec: str | None):
 @app.command()
 def trend(
     metric: str = typer.Option(..., "--metric", help="Metric key to trend, e.g. cluster.singleton_ratio."),
-    dataset: str = typer.Option(..., "--dataset"),
+    dataset: str = typer.Option(..., "--dataset", help="Dataset name whose run history to read."),
     history: Path = typer.Option(..., "--history", help="ReportHistory path (.jsonl or .db)."),
-    last: int = typer.Option(30, "--last"),
+    last: int = typer.Option(30, "--last", help="Number of most recent runs to include in the trend."),
 ) -> None:
     """Trend a metric over a run history."""
     series = _open_history(history).trend(metric, dataset, last_n=last)
@@ -109,10 +109,10 @@ def trend(
 
 @app.command()
 def regressions(
-    dataset: str = typer.Option(..., "--dataset"),
+    dataset: str = typer.Option(..., "--dataset", help="Dataset name whose run history to check."),
     history: Path = typer.Option(..., "--history", help="ReportHistory path (.jsonl or .db)."),
-    baseline: str = typer.Option("rolling_median", "--baseline"),
-    window: int = typer.Option(7, "--window"),
+    baseline: str = typer.Option("rolling_median", "--baseline", help="Baseline strategy to compare against, e.g. rolling_median."),
+    window: int = typer.Option(7, "--window", help="Number of prior runs the baseline is computed over."),
     policy: str | None = typer.Option(None, "--policy", help='Per-metric gates: JSON or "key=pct,key=pct".'),
     fail_on_regression: bool = typer.Option(
         False, "--fail-on-regression", help="Exit 1 if any regression is flagged (CI gate)."
@@ -137,7 +137,7 @@ def regressions(
 @app.command(name="mcp-serve")
 def mcp_serve(
     transport: str = typer.Option("stdio", "--transport", help="stdio | http"),
-    host: str = typer.Option("0.0.0.0", "--host"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host interface to bind when transport is http."),
     port: int = typer.Option(8300, "--port", help="HTTP port (A2A convention: Analysis = 8300)."),
 ) -> None:
     """Start the GoldenAnalysis MCP server (requires the [mcp] extra)."""

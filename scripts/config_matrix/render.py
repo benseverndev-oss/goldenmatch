@@ -25,7 +25,7 @@ import pkgutil
 import re
 import types
 import typing
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
@@ -43,6 +43,12 @@ def _import(target: str):
     for part in attr.split("."):
         obj = getattr(obj, part)
     return obj
+
+
+def _code(text: str) -> str:
+    """A value shown inside backticks: MDX treats inline-code content as literal,
+    so `<`/`{` are safe; only the table pipe needs escaping."""
+    return text.replace("|", r"\|")
 
 
 def _clean(text: str) -> str:
@@ -97,6 +103,15 @@ def render_type(ann: object) -> tuple[str, list[str], list[type]]:
     return _clean(str(ann).replace("typing.", "")), [], []
 
 
+def _neutral_repr(val: object) -> str:
+    """Platform-neutral repr for a default value. A `pathlib.Path` reprs as
+    `WindowsPath(...)` vs `PosixPath(...)` by OS, which would make the generated
+    doc differ between a Windows dev box and the Linux CI runner (a flapping gate)."""
+    if isinstance(val, PurePath):
+        return f"Path({str(val).replace(chr(92), '/')!r})"
+    return repr(val)
+
+
 def _default_repr(default: object, factory=None) -> str:
     if default is PydanticUndefined and factory is None:
         return "**required**"
@@ -110,7 +125,7 @@ def _default_repr(default: object, factory=None) -> str:
         return f"_(default {type(default).__name__})_"
     if default is inspect.Parameter.empty:
         return "**required**"
-    return f"`{default!r}`"
+    return f"`{_neutral_repr(default)}`"
 
 
 def _model_row_lines(fname: str, type_str: str, choices, nested, description, alias) -> str:
@@ -194,10 +209,105 @@ def render_constructor_section(targets: list[str]) -> str:
     return "\n".join(lines)
 
 
+# --- CLI section (Typer -> click introspection) -----------------------------
+
+
+def _opt_display(p) -> str:
+    longs = [o for o in getattr(p, "opts", []) if o.startswith("--")]
+    if longs:
+        return longs[0]
+    return (getattr(p, "opts", None) or [getattr(p, "name", "?")])[0]
+
+
+def render_cli_section(cli_module: str) -> str:
+    from typer.main import get_command
+
+    group = get_command(importlib.import_module(cli_module).app)
+    lines = ["## CLI", "",
+             "Every command and its options/arguments, generated from the Typer app. "
+             "`choice`-typed options list their allowed values.", "",
+             "| Command | Option | Type | Default | Notes |", "|---|---|---|---|---|"]
+    # A command may be a leaf or a sub-group (one level of nesting is enough here).
+    def _emit(prefix: str, cmd) -> None:
+        sub = getattr(cmd, "commands", None)
+        if sub:
+            for name in sorted(sub):
+                _emit(f"{prefix}{name} ", sub[name])
+            return
+        for p in cmd.params:
+            ptype = getattr(p, "type", None)
+            tname = getattr(ptype, "name", "text")
+            notes = ""
+            choices = getattr(ptype, "choices", None)
+            if choices:
+                notes = ", ".join(f"`{c}`" for c in choices)
+            if getattr(p, "help", None):
+                notes = f"{notes} -- {_clean(p.help)}" if notes else _clean(p.help)
+            required = getattr(p, "required", False)
+            default = "**required**" if required else f"`{_neutral_repr(p.default)}`"
+            lines.append(
+                f"| `{prefix.strip()}` | `{_clean(_opt_display(p))}` | {tname} | {default} | {notes} |"
+            )
+    for name in sorted(group.commands):
+        _emit(f"{name} ", group.commands[name])
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --- MCP section (tool surface) ---------------------------------------------
+
+
+def tool_field(t, key: str) -> str:
+    """A tool's name/description, whether TOOLS holds mcp Tool objects (attrs)
+    or plain dicts (goldenflow) -- so coverage + rendering agree either way."""
+    val = t.get(key, "") if isinstance(t, dict) else getattr(t, key, "")
+    return val or ""
+
+
+def render_mcp_section(mcp_module: str) -> str:
+    try:
+        mod = importlib.import_module(mcp_module)
+    except ModuleNotFoundError:
+        return ""  # [mcp] extra not installed / no server module
+    tools = getattr(mod, "TOOLS", None)
+    if not tools:
+        return ""
+    lines = ["## MCP tools", "",
+             f"{len(tools)} MCP tool(s) exposed by `{mcp_module}` -- the programmatic / "
+             "agent surface. Config-bearing tools take the same knobs as above.", "",
+             "| Tool | Description |", "|---|---|"]
+    for t in sorted(tools, key=lambda t: tool_field(t, "name")):
+        desc = tool_field(t, "description").strip().splitlines()
+        lines.append(f"| `{tool_field(t, 'name') or '?'}` | {_clean(desc[0] if desc else '')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 # --- vocab section (flexible resolver) --------------------------------------
 
 
+def _literal_field(target: str) -> list[str] | None:
+    """If `target` is `module:Model.field` naming a pydantic field whose type is a
+    Literal, return its choices; else None. Lets a schema Literal (e.g.
+    BlockingConfig.strategy) be a first-class vocab."""
+    mod, _, attr = target.partition(":")
+    if "." not in attr:
+        return None
+    model_name, field = attr.split(".", 1)
+    model = getattr(importlib.import_module(mod), model_name, None)
+    if not (isinstance(model, type) and hasattr(model, "model_fields")) or field not in model.model_fields:
+        return None
+    ann = model.model_fields[field].annotation
+    for a in [ann, *typing.get_args(ann)]:
+        if typing.get_origin(a) is typing.Literal:
+            return [str(x) for x in typing.get_args(a)]
+    return []
+
+
 def _resolve_vocab(target: str) -> list[str]:
+    lit = _literal_field(target)
+    if lit is not None:
+        return lit
     obj = _import(target)
     if typing.get_origin(obj) is typing.Literal:
         return [str(a) for a in typing.get_args(obj)]
@@ -230,17 +340,67 @@ def _item_name(v: object) -> str:
     return str(v)
 
 
-def _render_vocab_section(vocabs: list[tuple[str, str, str]]) -> str:
+def _resolve_gloss(target: str, gloss) -> dict[str, str]:
+    """Return {value: one-line meaning}. `gloss` is None (no glosses), a curated
+    {value: text} dict, the string "doc" (derive each value's meaning from its
+    implementing object's docstring, e.g. goldenflow transform funcs), or a
+    ("doc", {overrides}) tuple (derive, then overlay curated fills for gaps)."""
+    curated: dict[str, str] = {}
+    derive = False
+    if isinstance(gloss, dict):
+        curated = gloss
+    elif gloss == "doc":
+        derive = True
+    elif isinstance(gloss, tuple) and gloss and gloss[0] == "doc":
+        derive = True
+        curated = gloss[1] if len(gloss) > 1 else {}
+
+    derived: dict[str, str] = {}
+    if derive:
+        obj = _import(target)
+        if inspect.isroutine(obj):
+            obj = obj()
+        for it in obj if isinstance(obj, (list, tuple, set, frozenset)) else []:
+            doc = getattr(getattr(it, "func", it), "__doc__", None) or getattr(it, "description", None)
+            if doc and doc.strip():
+                derived[_item_name(it)] = doc.strip().splitlines()[0].strip()
+    return {**derived, **curated}
+
+
+def _meaning(g) -> str:
+    return g if isinstance(g, str) else (g.get("meaning", "") if isinstance(g, dict) else "")
+
+
+def _render_vocab_section(vocabs) -> str:
     lines = ["## Enumerated vocabularies", "",
-             "Allowed values for the `str`-typed / registry-backed fields above.", "",
-             "| Vocabulary | Source | Applies to | Values |",
-             "|---|---|---|---|"]
-    for title, target, applies in vocabs:
+             "Allowed values for the `str`-typed / registry-backed fields above.", ""]
+    for entry in vocabs:
+        title, target, applies = entry[0], entry[1], entry[2]
+        gloss = entry[3] if len(entry) > 3 else None
         values = sorted(set(_resolve_vocab(target)))
-        rendered = ", ".join(f"`{_clean(v)}`" for v in values)
-        const = target.split(":")[-1]
-        lines.append(f"| {title} | `{const}` | {applies} | {rendered} |")
-    lines.append("")
+        glosses = _resolve_gloss(target, gloss)
+        # Extra columns come from any per-value dict (e.g. scorers carry range /
+        # best_for); deterministic order.
+        extra: list[str] = []
+        for g in glosses.values():
+            if isinstance(g, dict):
+                extra += [k for k in g if k != "meaning" and k not in extra]
+        extra.sort()
+        lines.append(f"### {title}")
+        lines.append(f"_`{target.split(':')[-1]}` -- {applies}._")
+        lines.append("")
+        if extra or any(_meaning(glosses.get(v)) for v in values):
+            header = ["Value", "Meaning"] + [c.replace("_", " ").capitalize() for c in extra]
+            lines.append("| " + " | ".join(header) + " |")
+            lines.append("|" + "---|" * len(header))
+            for v in values:
+                g = glosses.get(v, "")
+                cells = [f"`{_code(v)}`", _clean(_meaning(g))]
+                cells += [_clean(g.get(c, "") if isinstance(g, dict) else "") for c in extra]
+                lines.append("| " + " | ".join(cells) + " |")
+        else:
+            lines.append(", ".join(f"`{_code(v)}`" for v in values))
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -314,6 +474,12 @@ def render_generated_block(spec) -> str:
         parts.append(render_schema_section(spec.schema_roots).rstrip())
     if spec.constructors:
         parts.append(render_constructor_section(spec.constructors).rstrip())
+    if getattr(spec, "cli_module", None):
+        parts.append(render_cli_section(spec.cli_module).rstrip())
+    if getattr(spec, "mcp_module", None):
+        mcp = render_mcp_section(spec.mcp_module).rstrip()
+        if mcp:
+            parts.append(mcp)
     if spec.vocabs:
         parts.append(_render_vocab_section(spec.vocabs).rstrip())
     parts.append(_render_env_section(spec.env_prefix, spec.src_dirs, spec.tuning_link).rstrip())

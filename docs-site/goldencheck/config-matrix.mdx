@@ -40,54 +40,239 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `version` | int | `1` |  |
-| `settings` | Settings | _(default Settings)_ | [`Settings`](#settings) |
-| `columns` | dict[str, ColumnRule] | `{}` | [`ColumnRule`](#columnrule) |
-| `relations` | list[RelationRule] | `[]` | [`RelationRule`](#relationrule) |
-| `ignore` | list[IgnoreEntry] | `[]` | [`IgnoreEntry`](#ignoreentry) |
+| `version` | int | `1` | Schema version of this configuration file, used to handle format changes across releases. |
+| `settings` | Settings | _(default Settings)_ | [`Settings`](#settings) -- Global run settings such as sampling size and severity handling that apply to the whole check. |
+| `columns` | dict[str, ColumnRule] | `{}` | [`ColumnRule`](#columnrule) -- Per-column validation rules keyed by column name. |
+| `relations` | list[RelationRule] | `[]` | [`RelationRule`](#relationrule) -- Cross-column relationship rules applied across multiple columns. |
+| `ignore` | list[IgnoreEntry] | `[]` | [`IgnoreEntry`](#ignoreentry) -- List of column and check pairs whose findings should be excluded from results. |
 
 ### `Settings`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `sample_size` | int | `100000` |  |
-| `severity_threshold` | str | `'warning'` |  |
-| `fail_on` | str | `'error'` |  |
+| `sample_size` | int | `100000` | Maximum number of rows sampled from the dataset when running checks, capping work on large tables. |
+| `severity_threshold` | str | `'warning'` | Minimum severity level at which a finding is reported, so anything below this floor is suppressed from results. |
+| `fail_on` | str | `'error'` | Severity level that causes the overall run to fail once a finding at or above it is produced. |
 
 ### `ColumnRule`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `type` | str | **required** |  |
-| `required` | bool \| None | `None` |  |
-| `nullable` | bool \| None | `None` |  |
-| `format` | str \| None | `None` |  |
-| `unique` | bool \| None | `None` |  |
-| `range` | list[float] \| None | `None` |  |
-| `enum` | list[str] \| None | `None` |  |
-| `outlier_stddev` | float \| None | `None` |  |
+| `type` | str | **required** | Expected data type for the column, used to flag values that do not conform to it. |
+| `required` | bool \| None | `None` | Whether the column must be present in the dataset, failing the check when it is missing. |
+| `nullable` | bool \| None | `None` | Whether null values are permitted in the column, flagging nulls when set to false. |
+| `format` | str \| None | `None` | Named format the column values must match, such as an email or date pattern, for validating string shape. |
+| `unique` | bool \| None | `None` | Whether every value in the column must be distinct, flagging duplicate values when set to true. |
+| `range` | list[float] \| None | `None` | Inclusive lower and upper numeric bounds that column values must fall within. |
+| `enum` | list[str] \| None | `None` | Closed set of allowed values for the column, flagging any value outside this list. |
+| `outlier_stddev` | float \| None | `None` | Number of standard deviations from the mean beyond which a numeric value is flagged as an outlier. |
 
 ### `RelationRule`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `type` | str | **required** |  |
-| `columns` | list[str] | **required** |  |
+| `type` | str | **required** | Kind of cross-column relationship to enforce, for example a uniqueness or foreign-key style constraint. |
+| `columns` | list[str] | **required** | Columns that participate in the relationship, evaluated together as a group. |
 
 ### `IgnoreEntry`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `column` | str | **required** |  |
-| `check` | str | **required** |  |
+| `column` | str | **required** | Column whose check results should be suppressed from the report. |
+| `check` | str | **required** | Specific check on that column to skip, silencing its findings for that column. |
+
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `agent-serve` | `--port` | integer | `8100` | Port for the A2A server |
+| `baseline` | `file` | path | **required** | CSV/Parquet/Excel file to profile |
+| `baseline` | `--output` | path | `None` | Output YAML path |
+| `baseline` | `--skip` | text | `[]` | Techniques to skip |
+| `baseline` | `--update` | boolean | `False` | Update existing baseline |
+| `demo` | `--no-tui` | boolean | `False` | Print results to stdout. |
+| `demo` | `--domain` | text | `None` | Domain pack to apply. |
+| `denial-constraints` | `file` | path | **required** | Data file to mine for denial constraints. |
+| `denial-constraints` | `--min-confidence` | float | `None` | Fraction of rows/pairs a DC must hold for (default: engine default). |
+| `denial-constraints` | `--sample-size` | integer | `None` | Bound the cross-tuple (pairwise) pass. |
+| `denial-constraints` | `--max-constraints` | integer | `None` | Cap the ranked number of DCs reported. |
+| `diff` | `file` | path | **required** | Data file to compare. |
+| `diff` | `file2` | path | `None` | Second file (omit to compare against git). |
+| `diff` | `--ref` | text | `None` | Git ref to compare against (default: HEAD). |
+| `diff` | `--json` | boolean | `False` | Output as JSON. |
+| `evaluate` | `file` | path | **required** | Data file to scan. |
+| `evaluate` | `--ground-truth` | path | **required** | JSON file with expected findings. |
+| `evaluate` | `--min-f1` | float | `0.0` | Minimum F1 score; exit 1 if below. |
+| `evaluate` | `--json` | boolean | `False` | Output results as JSON. |
+| `fix` | `file` | path | **required** | Data file to fix. |
+| `fix` | `--mode` | text | `'safe'` | Fix mode: safe, moderate, or aggressive. |
+| `fix` | `--output` | path | `None` | Output file path. |
+| `fix` | `--dry-run` | boolean | `False` | Show fixes without writing. |
+| `fix` | `--force` | boolean | `False` | Required for aggressive mode. |
+| `history` | `file` | path | `None` | Filter history by file. |
+| `history` | `--last` | integer | `None` | Show last N scans. |
+| `history` | `--json` | boolean | `False` | Output as JSON. |
+| `init` | `file` | path | **required** | Data file to scan for initial rules. |
+| `init` | `--yes` | boolean | `False` | Accept defaults, skip interactive prompts. |
+| `learn` | `file` | path | **required** | Data file to analyze. |
+| `learn` | `--output` | path | `None` | Output path for rules (default: goldencheck_rules.json). |
+| `learn` | `--llm-provider` | text | `'anthropic'` | LLM provider: anthropic or openai. |
+| `mcp-serve` | `--transport` | text | `'stdio'` | Transport: 'stdio' or 'http' |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
+| `mcp-serve` | `--port` | integer | `8100` | Port for HTTP transport |
+| `refs` | `child` | path | **required** | Child/fact file holding the foreign key(s). |
+| `refs` | `parent` | path | **required** | Parent/dimension file holding the key(s). |
+| `refs` | `--on` | text | `None` | FK mapping 'child_col=parent_col' (repeatable). Omit to auto-detect same-named parent-key columns. |
+| `refs` | `--json` | boolean | `False` | Output results as JSON. |
+| `refs` | `--fail-on` | text | `'error'` | CI exit threshold: error/warning/info. |
+| `review` | `file` | path | **required** | Data file to profile and validate. |
+| `review` | `--config` | path | `None` | Path to goldencheck.yml. |
+| `review` | `--no-tui` | boolean | `False` | Disable TUI and print Rich output instead. |
+| `review` | `--json` | boolean | `False` | Output results as JSON. |
+| `review` | `--llm-boost` | boolean | `False` | Enable LLM enhancement pass. |
+| `review` | `--llm-provider` | text | `'anthropic'` | LLM provider: anthropic or openai. |
+| `review` | `--domain` | text | `None` | Domain pack: healthcare, finance, ecommerce. |
+| `scan` | `files` | path | **required** | Data file(s) to profile. |
+| `scan` | `--no-tui` | boolean | `False` | Disable TUI and print Rich output instead. |
+| `scan` | `--json` | boolean | `False` | Output results as JSON. |
+| `scan` | `--llm-boost` | boolean | `False` | Enable LLM enhancement pass. |
+| `scan` | `--llm-provider` | text | `'anthropic'` | LLM provider: anthropic or openai. |
+| `scan` | `--domain` | text | `None` | Domain pack: healthcare, finance, ecommerce. |
+| `scan` | `--smart` | boolean | `False` | Auto-triage: pin high-confidence, dismiss low. |
+| `scan` | `--guided` | boolean | `False` | Walk through findings one at a time. |
+| `scan` | `--no-history` | boolean | `False` | Don't record this scan in history. |
+| `scan` | `--webhook` | text | `None` | URL to POST findings to. |
+| `scan` | `--notify-on` | text | `'grade-drop'` | Trigger: grade-drop, any-error, any-warning. |
+| `scan` | `--html` | path | `None` | Generate HTML report at this path. |
+| `scan` | `--baseline` | path | `None` | Path to baseline YAML |
+| `scan` | `--no-baseline` | boolean | `False` | Ignore baseline files |
+| `scan` | `--deep` | boolean | `False` | Profile the full dataset (skip the 100K sample cap). |
+| `scan` | `--denial` | boolean | `False` | Also mine denial constraints (opt-in; slower). |
+| `scan-db` | `connection` | text | **required** | Database connection string (postgres://, snowflake://, etc.) |
+| `scan-db` | `--table` | text | `None` | Table name to scan. |
+| `scan-db` | `--query` | text | `None` | Custom SQL query. |
+| `scan-db` | `--domain` | text | `None` | Domain pack. |
+| `scan-db` | `--json` | boolean | `False` | Output as JSON. |
+| `scan-db` | `--html` | path | `None` | Generate HTML report. |
+| `scan-db` | `--sample-size` | integer | `100000` | Max rows to fetch. |
+| `schedule` | `files` | path | **required** | Data files to scan on schedule. |
+| `schedule` | `--interval` | text | `'daily'` | Interval: hourly, daily, weekly, 5min, 15min, 30min, or seconds. |
+| `schedule` | `--domain` | text | `None` | Domain pack. |
+| `schedule` | `--webhook` | text | `None` | Webhook URL for notifications. |
+| `schedule` | `--notify-on` | text | `'grade-drop'` | Trigger: grade-drop, any-error, any-warning. |
+| `schedule` | `--json` | boolean | `False` | JSON output per scan. |
+| `serve` | `--host` | text | `'0.0.0.0'` | Host to bind to. |
+| `serve` | `--port` | integer | `8000` | Port to listen on. |
+| `validate` | `file` | path | **required** | Data file to validate. |
+| `validate` | `--config` | path | `None` | Path to goldencheck.yml. |
+| `validate` | `--no-tui` | boolean | `False` | Disable TUI and print Rich output instead. |
+| `validate` | `--json` | boolean | `False` | Output results as JSON. |
+| `watch` | `directory` | path | **required** | Directory to watch. |
+| `watch` | `--interval` | integer | `60` | Poll interval in seconds. |
+| `watch` | `--pattern` | text | `None` | Glob pattern (e.g., '*.csv'). |
+| `watch` | `--exit-on` | text | `None` | Exit on severity: error or warning. |
+| `watch` | `--json` | boolean | `False` | JSON output per scan. |
+
+## MCP tools
+
+19 MCP tool(s) exposed by `goldencheck.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+
+| Tool | Description |
+|---|---|
+| `analyze_data` | Analyze a data file to detect its domain, profile columns, and recommend a scanning strategy. Returns domain detection, column count, row count, strategy decisions, and alternative approaches. |
+| `approve_reject` | Approve (pin) or reject (dismiss) a review queue item. Decision must be 'pin' or 'dismiss'. |
+| `auto_configure` | Scan a data file, triage findings by confidence, and generate goldencheck.yml content from the pinned findings. Optionally accepts constraints to filter or adjust the generated config. |
+| `compare_domains` | Scan a file with every available domain pack (plus base/no-domain) and compare health scores. Recommends the best-fitting domain. |
+| `explain_column` | Get a natural-language health narrative for a specific column. Scans the file, profiles the column, and explains all findings. |
+| `explain_finding` | Explain a single finding in natural language. Requires the finding as a JSON dict and the file_path to load a profile for context. |
+| `get_column_detail` | Get detailed profile and findings for a specific column. |
+| `get_domain_info` | Get detailed info about a specific domain pack — lists all semantic types, their name hints, and suppression rules. |
+| `health_score` | Get the health score (A-F, 0-100) for a data file. Quick summary of overall data quality. |
+| `install_domain` | Download a community domain pack from the goldencheck-types repository and save it for use in future scans. |
+| `list_checks` | List all available profiler checks and what they detect. No arguments needed. |
+| `list_domains` | List all available domain packs (healthcare, finance, ecommerce, etc.). Domain packs provide specialized semantic type definitions for specific data domains. |
+| `pipeline_handoff` | Generate a structured quality attestation JSON for a data file. Includes health score, findings summary, pinned rules, and attestation status (PASS, PASS_WITH_WARNINGS, REVIEW_REQUIRED, FAIL). |
+| `profile` | Profile a data file and return column-level statistics: type, null%, unique%, min/max, top values, detected formats. Also returns a health score (A-F) based on finding severity. |
+| `review_queue` | List all pending review items for a given job. Returns items that need human decision (medium-confidence findings). |
+| `review_stats` | Get review queue statistics for a job — counts of pending, pinned, and dismissed items. |
+| `scan` | Scan a data file (CSV, Parquet, Excel) for data quality issues. Returns findings with severity, confidence, affected rows, and sample values. No configuration needed — rules are discovered from the data. |
+| `suggest_fix` | Preview fixes for a data file without applying them. Shows what would change (columns, fix types, rows affected, before/after samples). |
+| `validate` | Validate a data file against pinned rules in goldencheck.yml. Returns validation findings (existence, required, unique, enum, range checks). |
 
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Finding severity | `Severity` | `Settings.severity_threshold` / `fail_on` | `ERROR`, `INFO`, `WARNING` |
+### Finding severity
+_`Severity` -- `Settings.severity_threshold` / `fail_on`._
+
+| Value | Meaning |
+|---|---|
+| `ERROR` | Highest severity; fails the run at the default fail_on=error. |
+| `INFO` | Informational finding; never fails the run. |
+| `WARNING` | Advisory finding; fails only when fail_on=warning. |
+
+### Denial-constraint operators
+_`Op` -- mined denial constraints._
+
+| Value | Meaning |
+|---|---|
+| `<` | Less than. |
+| `=` | Equal. |
+| `>` | Greater than. |
+| `≠` | Not equal. |
+| `≤` | Less than or equal. |
+| `≥` | Greater than or equal. |
+
+### Check types
+_`CHECK_TYPES` -- `Finding.check`._
+
+| Value | Meaning |
+|---|---|
+| `benford_drift` | Leading-digit (Benford) distribution drifted. |
+| `bound_violation` | A value crossed a learned baseline bound. |
+| `cardinality` | A column's distinct-value count / ratio. |
+| `composite_key` | A candidate multi-column key. |
+| `correlation_break` | A previously strong correlation weakened. |
+| `cross_column` | A cross-column relationship finding. |
+| `cross_column_validation` | A cross-column validation rule failed. |
+| `denial_constraint` | A mined denial constraint is violated. |
+| `distribution_drift` | A column's value distribution drifted. |
+| `drift_detection` | General distribution drift versus the baseline. |
+| `duplicate_rows` | Fully duplicated rows. |
+| `encoding_detection` | Suspect character encoding / mojibake. |
+| `entropy_drift` | A column's entropy drifted. |
+| `enum` | A value is outside the allowed enum set. |
+| `existence` | A column the config expects is present. |
+| `fd_violation` | Rows violate a functional dependency. |
+| `format_detection` | The detected value format (email, phone, ...). |
+| `functional_dependency` | A discovered functional dependency. |
+| `future_dated` | A date is in the future. |
+| `fuzzy_duplicate_values` | Near-duplicate values within a column. |
+| `identity_safe_pk` | A column is a safe, stable primary key. |
+| `key_uniqueness_loss` | A key lost uniqueness versus the baseline. |
+| `near_duplicate_rows` | Near-duplicate rows (fuzzy). |
+| `new_correlation` | A new column correlation appeared. |
+| `new_pattern` | A new value pattern appeared. |
+| `null_correlation` | Nulls in two columns co-occur suspiciously. |
+| `nullability` | A column's null rate exceeds the allowed bound. |
+| `pattern_consistency` | Values deviate from the column's dominant pattern. |
+| `pattern_drift` | A column's dominant pattern changed. |
+| `range` | A value falls outside the allowed range. |
+| `range_distribution` | Value distribution versus the expected range. |
+| `referential_integrity` | A foreign-key reference is unmatched. |
+| `required` | A required column contains no nulls. |
+| `sequence_detection` | A column is a monotonic sequence / counter. |
+| `stale_data` | Data is older than the freshness bound. |
+| `temporal_order` | Dates violate an expected ordering. |
+| `temporal_order_drift` | Temporal ordering changed versus the baseline. |
+| `type_drift` | A column's inferred type changed. |
+| `type_inference` | The inferred data type for a column. |
+| `unique` | A column declared unique has duplicates. |
+| `uniqueness` | The observed uniqueness of a column. |
+| `unmapped_column` | A column has no rule and no inferred type. |
 
 ## Environment variables (index)
 

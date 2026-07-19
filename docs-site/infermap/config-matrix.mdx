@@ -44,14 +44,78 @@ Config passed as call keyword arguments (this package has no single config model
 | `calibrator` | Calibrator \\| None | `None` |  |
 | `domains` | list[str] \\| None | `None` |  |
 
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `apply` | `source` | text | **required** | Source CSV file to apply mapping to |
+| `apply` | `--config` | text | **required** | Path to mapping config YAML (required) |
+| `apply` | `--output` | text | **required** | Output CSV path (required) |
+| `apply` | `--verbose` | boolean | `False` | Enable verbose logging |
+| `inspect` | `source` | text | **required** | Source data to inspect (CSV path, schema YAML, etc.) |
+| `inspect` | `--table` | text | `None` | Table name for DB sources |
+| `inspect` | `--verbose` | boolean | `False` | Enable verbose logging |
+| `map` | `source` | text | **required** | Source data (CSV path, DataFrame, DB URI, schema YAML) |
+| `map` | `target` | text | **required** | Target data (same variety of inputs) |
+| `map` | `--table` | text | `None` | Optional table name for DB sources |
+| `map` | `--required` | text | `None` | Comma-separated required target field names |
+| `map` | `--schema-file` | text | `None` | Path to schema YAML file |
+| `map` | `--format` | text | `'table'` | Output format: table, json, or yaml |
+| `map` | `--output` | text | `None` | Save mapping config to this YAML file |
+| `map` | `--min-confidence` | float | `0.2` | Minimum confidence threshold (default 0.2, was 0.3 before v0.3) |
+| `map` | `--verbose` | boolean | `False` | Enable verbose logging |
+| `map` | `--debug` | boolean | `False` | Enable debug logging |
+| `mcp-serve` | `--transport` | text | `'stdio'` | Transport: 'stdio' or 'http' |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
+| `mcp-serve` | `--port` | integer | `8100` | Port for HTTP transport |
+| `validate` | `source` | text | **required** | Source data to validate (CSV path, etc.) |
+| `validate` | `--config` | text | **required** | Path to mapping config YAML (required) |
+| `validate` | `--required` | text | `None` | Comma-separated required field names |
+| `validate` | `--strict` | boolean | `False` | Exit code 1 if required fields unmapped |
+| `validate` | `--verbose` | boolean | `False` | Enable verbose logging |
+
+## MCP tools
+
+4 MCP tool(s) exposed by `infermap.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+
+| Tool | Description |
+|---|---|
+| `apply` | Apply a saved mapping config to a source CSV, renaming columns according to the mapping and writing the result to an output file. |
+| `inspect` | Inspect a data source — show fields, types, sample values, null rates, unique rates, and statistics. |
+| `map` | Map source columns to target schema using a weighted scorer pipeline with optimal 1:1 assignment. Returns mappings with confidence scores and human-readable reasoning. |
+| `validate` | Validate that a source file's columns satisfy a saved mapping config. Reports missing source columns and unmapped required fields. |
+
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Data types | `VALID_DTYPES` | `FieldInfo.dtype` | `boolean`, `date`, `datetime`, `float`, `integer`, `string` |
-| Semantic pattern types | `SEMANTIC_TYPES` | pattern-type detection | `currency`, `date_iso`, `email`, `ip_v4`, `phone`, `url`, `uuid`, `zip_us` |
+### Data types
+_`VALID_DTYPES` -- `FieldInfo.dtype`._
+
+| Value | Meaning |
+|---|---|
+| `boolean` | True/false. |
+| `date` | Calendar date. |
+| `datetime` | Date and time. |
+| `float` | Decimal number. |
+| `integer` | Whole number. |
+| `string` | Text. |
+
+### Semantic pattern types
+_`SEMANTIC_TYPES` -- pattern-type detection._
+
+| Value | Meaning |
+|---|---|
+| `currency` | Currency amount. |
+| `date_iso` | ISO-8601 date. |
+| `email` | Email address. |
+| `ip_v4` | IPv4 address. |
+| `phone` | Phone number. |
+| `url` | Web URL. |
+| `uuid` | UUID. |
+| `zip_us` | US ZIP code. |
 
 ## Environment variables (index)
 

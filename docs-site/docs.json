@@ -102,6 +102,7 @@
             "group": "GoldenCheck",
             "pages": [
               "goldencheck/overview",
+              "goldencheck/checks",
               "goldencheck/config-matrix",
               "goldencheck/cli",
               "goldencheck/native",
@@ -112,6 +113,7 @@
             "group": "GoldenFlow",
             "pages": [
               "goldenflow/overview",
+              "goldenflow/transforms",
               "goldenflow/config-matrix",
               "goldenflow/cli",
               "goldenflow/performance"
@@ -121,6 +123,7 @@
             "group": "GoldenPipe",
             "pages": [
               "goldenpipe/overview",
+              "goldenpipe/stages",
               "goldenpipe/config-matrix"
             ]
           },
@@ -128,6 +131,7 @@
             "group": "GoldenAnalysis",
             "pages": [
               "goldenanalysis/overview",
+              "goldenanalysis/analyzers",
               "goldenanalysis/config-matrix",
               "goldenanalysis/cross-run",
               "goldenanalysis/native"
@@ -137,6 +141,7 @@
             "group": "InferMap",
             "pages": [
               "infermap/overview",
+              "infermap/mapping",
               "infermap/config-matrix"
             ]
           },

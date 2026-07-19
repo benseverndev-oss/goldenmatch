@@ -1,0 +1,140 @@
+---
+title: "Stages"
+description: "The GoldenPipe stage and adapter catalog: every built-in stage, the PipelineConfig / StageSpec shape, status enums, and how a pipeline is wired end to end."
+keywords: ["goldenpipe", "stages", "adapters", "pipeline config", "StageSpec", "PipelineConfig", "orchestration", "StageRegistry"]
+---
+
+GoldenPipe is the orchestrator: it runs the other Golden Suite tools as pipeline **stages**. A `PipelineConfig` is a thin envelope over an ordered list of stages, and each stage delegates its real tuning to the suite tool it adapts. A stage reads and writes a shared `PipeContext` (the `df` plus an `artifacts` bag), so `goldencheck.scan` can leave a profile that `goldenmatch.dedupe` picks up downstream without re-profiling.
+
+This page is the stage catalog and the config-shape reference. For the exhaustive, generated knob matrix see [Config matrix](/goldenpipe/config-matrix); for a narrative walkthrough see [Overview](/goldenpipe/overview).
+
+## Stage reference
+
+Stages are packaging **entry points** discovered at runtime by `StageRegistry` (`goldenpipe/engine/registry.py`), so the set is open and extensible. `load` is a built-in registered unconditionally; the other seven come from the `[project.entry-points."goldenpipe.stages"]` table in `goldenpipe/pyproject.toml`. That makes **8 built-in stages**.
+
+Each stage's `config` block is a free-form dict passed straight through to the adapted tool, so the deep knobs for a stage live in that tool's own config matrix (the "Deep config" column).
+
+| Stage (use) | What it does | Deep config |
+|-------------|--------------|-------------|
+| `load` | Built-in. Marks the source `df` as available to downstream stages; the actual file/frame load is handled by the pipeline itself. Produces `df`. | [Overview](/goldenpipe/overview) |
+| `infer_schema` | Infers (or accepts) the working schema. Honors explicit `schema`, `no_infer`, or a named `domain`, else auto-detects. Produces `inferred_schema`. | [Config matrix](/goldenpipe/config-matrix) |
+| `goldencheck.scan` | Runs GoldenCheck to profile and validate the data, emitting findings and a column profile. Produces `findings`, `profile`. | [GoldenCheck](/goldencheck/config-matrix) |
+| `goldenflow.transform` | Runs GoldenFlow to clean and normalize columns; adaptively skipped when the scan finds nothing to fix. Produces `df`, `manifest`. | [GoldenFlow](/goldenflow/config-matrix) |
+| `goldenmatch.dedupe` | Runs GoldenMatch dedupe: blocking, scoring, clustering, and golden-record survivorship. Produces `clusters`, `golden`. | [GoldenMatch](/goldenmatch/config-matrix) |
+| `goldenmatch.dedupe_fused` | The fused one-FFI dedupe kernel: same clusters, lower peak RSS. Drop-in alternative to `goldenmatch.dedupe`. | [GoldenMatch](/goldenmatch/config-matrix) |
+| `goldenmatch.identity_resolve` | Resolves clusters into a durable Identity Graph with stable entity ids across runs. Produces `identity_summary`, `identity_store_path`, `conflicts`. | [Identity Graph](/goldenmatch/identity-graph) |
+| `goldenanalysis.report` | Terminal reporting stage: fans out GoldenAnalysis analyzers over whatever artifacts are present (clusters, scored pairs, findings, manifest, identity summary). Read-only. Place it last. Produces `analysis_report`. | [GoldenAnalysis](/goldenanalysis/config-matrix) |
+
+The `goldenmatch.*` and `goldenanalysis.report` stages need their tool installed. `pip install goldenpipe[golden-suite]` pulls all of GoldenCheck, GoldenFlow, GoldenMatch, and GoldenAnalysis; the narrower extras (`[check]`, `[flow]`, `[match]`, `[analysis]`) pull one each. A stage whose tool is missing fails loudly in `validate()` with the install hint, rather than silently no-opping.
+
+## Pipeline config shape
+
+A pipeline is a `PipelineConfig` (`goldenpipe/models/config.py`): a name, optional default `source`/`output`, an ordered list of `stages`, and a `decisions` log.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `pipeline` | `str` | Name identifying this end-to-end config in runs and logs. |
+| `source` | `str` or null | Default input location stages read from when they do not name their own. |
+| `output` | `str` or null | Default destination for the pipeline's final results. |
+| `stages` | list of `StageSpec` or `str` | Ordered stages. A bare string is shorthand for a `StageSpec` with only `use` set. |
+| `decisions` | list of `str` | Recorded decision entries capturing the choices behind this config. |
+
+Each stage is a `StageSpec`:
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `name` | `str` or null | null | Human-readable label used in logs and as the key other stages reference in `needs`. |
+| `use` | `str` | required | Adapter identifier that runs this stage, e.g. `goldenmatch.dedupe`. Names which suite tool to invoke. |
+| `needs` | list of `str` | `[]` | Names of stages that must finish first, defining the dependency order in the pipeline graph. |
+| `skip_if` | `str` or null | null | Condition expression that, when true at runtime, skips this stage instead of running it. |
+| `on_error` | `continue` or `abort` | `continue` | On a raised error, move on to later stages, or abort the whole pipeline. |
+| `config` | dict | `{}` | Free-form settings passed straight to the named adapter to configure how the tool runs. |
+
+The `config` dict is deliberately opaque to GoldenPipe: it forwards it to the adapted tool untouched. That is why the deep knobs for `goldenmatch.dedupe` live in the [GoldenMatch config matrix](/goldenmatch/config-matrix), not here.
+
+## Status enums
+
+Every stage's `run()` returns a `StageResult` carrying a `StageStatus`; the run as a whole ends in a `PipeStatus` (`goldenpipe/models/context.py`).
+
+| `StageStatus` | Meaning |
+|---------------|---------|
+| `success` | The stage ran and completed. |
+| `skipped` | The stage was skipped (by `skip_if`, a routing `Decision`, or an adaptive short-circuit). |
+| `failed` | The stage raised. Whether the pipeline continues depends on the stage's `on_error`. |
+
+| `PipeStatus` | Meaning |
+|--------------|---------|
+| `success` | Every stage that ran succeeded. |
+| `partial` | The pipeline finished, but at least one stage failed or was skipped. |
+| `failed` | The pipeline could not complete (an `abort`). |
+
+A stage can also return a `Decision` (`skip` / `abort` / `insert` / `reason`) to route the rest of the pipeline, which is how the adaptive logic (skip transform when the scan is clean, route to identity resolution) is expressed.
+
+## Column context and types
+
+Stages share more than the `df`: `goldencheck.scan` builds a `ColumnContext` per column (`goldenpipe/models/column_context.py`), `goldenflow.transform` enriches it with the transforms it applied, and `goldenmatch` consumes it to skip re-profiling. Each column carries an inferred `ColumnType`, a `CardinalityBand`, a null rate, and an `is_identifier` flag.
+
+| `ColumnType` | Typical columns |
+|--------------|-----------------|
+| `name` | `first_name`, `surname`, `full_name` |
+| `email` | `email`, `e_mail` |
+| `phone` | `phone`, `mobile`, `fax` |
+| `date` | `dob`, `created_at`, `*_date` |
+| `geo` | `city`, `state`, `country` |
+| `address` | `address`, `street`, `line_1` |
+| `zip` | `zip`, `postal`, `postcode` |
+| `identifier` | `id`, `sku`, `*_key` |
+| `numeric` | integer / float columns |
+| `string` | generic text |
+| `description` | free-text / multi-name fields |
+
+Classification combines column-name heuristics, the GoldenCheck profile (null rate, cardinality, dtype), and an IQR cardinality band. Name, email, and phone are identifier types by default; date, numeric, and identifier are never identifiers. A transform record with `date` in its name (a GoldenFlow date fixer) confirms the column as a `date` and drops it as an identifier, so a cleaning fixer upstream can change how a column is matched downstream.
+
+## Example pipeline
+
+A small end-to-end pipeline: scan, then transform, then dedupe, then report. The `needs` list wires the dependency graph; `on_error: continue` lets the report still run over whatever earlier stages produced.
+
+```yaml
+pipeline: customer-golden-records
+source: data/customers.csv
+output: out/golden.parquet
+
+stages:
+  - name: scan
+    use: goldencheck.scan
+    config:
+      rules: [nulls, duplicates, formats]
+
+  - name: clean
+    use: goldenflow.transform
+    needs: [scan]
+    skip_if: scan.clean          # adaptive: skip when the scan found nothing to fix
+    config:
+      transforms: [lowercase, strip, normalize_phone]
+
+  - name: dedupe
+    use: goldenmatch.dedupe
+    needs: [clean]
+    config:
+      threshold: 0.85
+      exact: [email]
+      fuzzy: { first_name: 0.4, last_name: 0.4, zip: 0.2 }
+
+  - name: report
+    use: goldenanalysis.report
+    needs: [dedupe]
+    on_error: continue           # never let reporting fail the run
+```
+
+Run it from the CLI or Python:
+
+```python
+import goldenpipe as gp
+
+result = gp.run("pipeline.yaml")
+print(result.status)             # PipeStatus.success / partial / failed
+for name, stage in result.stages.items():
+    print(name, stage.status.value)
+```
+
+Each stage's `config` block is the seam to the underlying tool. To go deeper on any one stage, follow its "Deep config" link in the table above, or see the full [Config matrix](/goldenpipe/config-matrix) for every `PipelineConfig` field and `GOLDENPIPE_*` runtime knob.

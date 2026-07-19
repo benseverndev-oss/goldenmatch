@@ -1,0 +1,135 @@
+---
+title: "Checks"
+description: "The full catalog of GoldenCheck check types: schema, nullability, keys, ranges, patterns, temporal, relations, referential integrity, denial constraints, and drift."
+keywords: ["goldencheck", "checks", "data quality", "validation", "drift detection", "denial constraints", "findings", "severity"]
+---
+
+GoldenCheck is the data-validation engine of the Golden Suite. Every issue it discovers is emitted as a **Finding**, and each Finding carries a `check` label naming the rule that fired. This page catalogs every check type GoldenCheck can raise, grouped by category, so you know exactly what a `check` string on a finding means.
+
+Findings come from three surfaces that all share the same `check` vocabulary:
+
+- **Profilers and the schema validator** run zero-config statistical checks and (when a `goldencheck.yml` is present) declared column rules.
+- **Drift detection** compares the current dataset against a saved baseline and raises `*_drift` and related checks (these findings carry `source="baseline_drift"`).
+- **The LLM layer** re-labels and augments findings; its findings reuse the same `check` names (or a relation `type`) and carry `source="llm"`.
+
+## Check reference
+
+| Check | Category | Detects |
+|-------|----------|---------|
+| `existence` | Schema and type | A column declared in config is missing from the dataset |
+| `required` | Schema and type | A required column contains nulls where a value is mandatory |
+| `unmapped_column` | Schema and type | A dataset column has no rule and was not mapped in config |
+| `type_inference` | Schema and type | Values that do not conform to the declared or inferred column type |
+| `nullability` | Nullability | Unexpected nulls, or a null rate that breaks the profiled expectation |
+| `null_correlation` | Nullability | Nulls that co-occur across columns, hinting at a structural gap |
+| `unique` | Uniqueness and keys | Duplicate values in a column declared unique |
+| `uniqueness` | Uniqueness and keys | A profiled near-unique column that has lost distinctness |
+| `cardinality` | Uniqueness and keys | A distinct-value count that departs from the column profile |
+| `composite_key` | Uniqueness and keys | A candidate multi-column key, and violations of it |
+| `identity_safe_pk` | Uniqueness and keys | Whether a primary key is safe to use as a stable identity key |
+| `duplicate_rows` | Uniqueness and keys | Exact duplicate rows |
+| `near_duplicate_rows` | Uniqueness and keys | Fuzzy or near-duplicate rows |
+| `fuzzy_duplicate_values` | Uniqueness and keys | Near-duplicate values within a single column (likely typos or variants) |
+| `range` | Ranges and distribution | Numeric values outside a declared inclusive min/max |
+| `range_distribution` | Ranges and distribution | Profiled numeric range and statistical outliers |
+| `enum` | Ranges and distribution | Values outside a closed allowed set |
+| `format_detection` | Patterns and format | Values that break a detected format (email, phone, date, and similar) |
+| `pattern_consistency` | Patterns and format | Values that deviate from the column's dominant regex pattern |
+| `encoding_detection` | Patterns and format | Encoding problems such as mojibake or mixed encodings |
+| `sequence_detection` | Patterns and format | Broken or gapped sequences in an ordered column |
+| `temporal_order` | Temporal and freshness | Rows where one date column should precede another but does not |
+| `future_dated` | Temporal and freshness | Timestamps that lie in the future |
+| `stale_data` | Temporal and freshness | Data that is older than the freshness expectation |
+| `cross_column` | Cross-column relations | A cross-column rule violation, such as an age inconsistent with a birth date |
+| `cross_column_validation` | Cross-column relations | A numeric relationship between columns that does not hold |
+| `functional_dependency` | Cross-column relations | A column that should determine another but does not |
+| `fd_violation` | Cross-column relations | Rows that violate a discovered (approximate) functional dependency |
+| `referential_integrity` | Referential integrity | Foreign-key values with no matching key in the referenced table |
+| `denial_constraint` | Denial constraints | Rows or row pairs that violate a mined denial constraint |
+| `drift_detection` | Drift | A general profile shift flagged against the saved baseline |
+| `distribution_drift` | Drift | A value distribution that has shifted versus baseline |
+| `entropy_drift` | Drift | A column whose entropy moved materially versus baseline |
+| `bound_violation` | Drift | Values that crossed bounds learned from the baseline |
+| `benford_drift` | Drift | First-digit distribution that departs from Benford's law versus baseline |
+| `type_drift` | Drift | A column whose inferred type changed versus baseline |
+| `pattern_drift` | Drift | A dominant value pattern that changed versus baseline |
+| `new_pattern` | Drift | A value pattern that appeared and was absent in the baseline |
+| `correlation_break` | Drift | A column correlation present in the baseline that has broken |
+| `new_correlation` | Drift | A column correlation that appeared and was absent in the baseline |
+| `key_uniqueness_loss` | Drift | A key that was unique in the baseline and now has duplicates |
+| `temporal_order_drift` | Drift | A temporal-ordering guarantee that held in the baseline and now fails |
+
+That is 42 check types across 10 categories. The zero-config profilers cover most of them without any `goldencheck.yml`; declared column rules (`type`, `required`, `nullable`, `unique`, `range`, `enum`, `format`) map onto the schema, nullability, keys, ranges, and format checks above.
+
+## Severity and gating
+
+Every finding has one of three severity levels, defined in `goldencheck/models/finding.py` as an ordered `IntEnum`:
+
+| Severity | Value | Meaning |
+|----------|-------|---------|
+| `INFO` | 1 | Informational profile observation, no action implied |
+| `WARNING` | 2 | Likely a data-quality issue worth review |
+| `ERROR` | 3 | A hard violation, such as a declared-rule breach or missing required column |
+
+Two settings gate findings, and they do different jobs:
+
+- **`severity_threshold`** (default `warning`) is a **reporting floor**. Findings below this level are suppressed from the report. Set it to `info` to see everything, or `error` to see only hard violations.
+- **`fail_on`** (default `error`) is the **CI exit gate**. During `validate`, GoldenCheck returns exit code `1` as soon as any finding at or above this severity is present, and `0` otherwise. The comparison is `finding.severity >= SEVERITY_MAP[fail_on]`, so `fail_on: warning` also fails on errors.
+
+`severity_threshold` controls what you see; `fail_on` controls whether the build breaks. They are independent, so you can report warnings while only failing CI on errors (the default pairing).
+
+## Denial-constraint operators
+
+The denial-constraint miner discovers rules of the form `¬(p1 ∧ ... ∧ pm)`: a conjunction of predicates that should (almost) never hold together. When it does hold, the offending rows or row pairs surface as a `denial_constraint` finding. Each predicate compares a column against a literal or another column using one of six operators, defined in `goldencheck/denial/models.py` as `Op`:
+
+| Operator | Symbol | Meaning |
+|----------|--------|---------|
+| `EQ` | `=` | Equal |
+| `NE` | `!=` | Not equal |
+| `LT` | `<` | Less than |
+| `LE` | `<=` | Less than or equal |
+| `GT` | `>` | Greater than |
+| `GE` | `>=` | Greater than or equal |
+
+Predicates come in three scopes: `const` (`t.A op literal`), `single` (`t.A op t.B` within one row), and `cross` (`ta.A op tb.B` across a pair of rows). A mined constraint records its violation fraction `g1` and its `support`, so near-constant business rules surface even when a handful of rows break them.
+
+## Example `goldencheck.yml`
+
+A minimal config that sets the gates and declares a couple of column rules. Everything not declared still gets the zero-config profiler checks above.
+
+```yaml
+version: 1
+
+settings:
+  sample_size: 100000
+  severity_threshold: warning   # reporting floor: hide INFO findings
+  fail_on: error                # CI exit 1 only on ERROR findings
+
+columns:
+  email:
+    type: string
+    required: true
+    nullable: false
+    format: email               # drives format_detection
+    unique: true                # drives the unique check
+
+  age:
+    type: integer
+    range: [0, 120]             # drives the range check
+    outlier_stddev: 3.0         # widens range_distribution outlier band
+
+relations:
+  - type: functional_dependency
+    columns: [zip, city]        # zip should determine city
+
+ignore:
+  - column: legacy_notes
+    check: encoding_detection   # silence a known-noisy check
+```
+
+Run it with `goldencheck validate data.csv -c goldencheck.yml`. The exit code follows `fail_on`; the printed and JSON reports follow `severity_threshold`.
+
+## See also
+
+- [Config matrix](/goldencheck/config-matrix) for the full `goldencheck.yml` reference: every setting, column-rule field, and relation type.
+- [GoldenCheck overview](/goldencheck/overview) for how profilers, drift, and the LLM layer fit together.

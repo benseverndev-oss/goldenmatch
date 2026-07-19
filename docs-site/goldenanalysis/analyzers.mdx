@@ -1,0 +1,135 @@
+---
+title: "Analyzers"
+description: "The GoldenAnalysis analyzer catalog: the read-only metrics each one computes, how a run is configured, and the metric + regression-gating model."
+keywords: ["analyzers", "metrics", "reporting", "frame summary", "match rates", "cluster distribution", "quality rollup", "regression policy", "baseline"]
+---
+
+GoldenAnalysis is the suite's read-only **metrics and reporting** layer. It never transforms data, mutates a store, or makes a pipeline decision. It consumes the typed artifacts another package already produced and emits one unified, comparable, exportable `AnalysisReport`.
+
+The flagship surface is the **analyzer catalog**. Each analyzer takes a typed input (a raw frame, a GoldenMatch result, a GoldenPipe run) and computes a set of dotted, stable `Metric` keys plus optional embeddable tables. An analyze run resolves the requested analyzers, runs each one, and merges their metrics and tables into a single report.
+
+## Analyzer reference
+
+| Analyzer | Input | What it reports |
+|----------|-------|-----------------|
+| `frame.summary` | Any Polars frame (`frame`) | Row count, column count, mean null ratio, exact-duplicate-row ratio, estimated in-memory size, and a `per_column` table (column, dtype, null_ratio, n_unique). Zero suite dependencies, so it is always available. |
+| `match.rates` | A GoldenMatch result (`scored_pairs`, `match_stats`, optional `recall_certificate` + `match_threshold`) | Pair count, match rate, match threshold, recall estimate + safe bound (from a recall certificate), mean pair score, and a 10-bin `score_histogram` table. |
+| `cluster.distribution` | A GoldenMatch result (`clusters`, optional `match_stats`) | Cluster count, record count, singleton ratio, size p50 / p95 / max, reduction ratio, and a `cluster_size_histogram` table (sizes 1 / 2 / 3 / 4+). |
+| `quality.rollup` | GoldenCheck + GoldenFlow artifacts (`findings`, optional `profile`, `manifest`) | Findings total, columns-with-findings, a 0-1 health score (when a profile is present), GoldenFlow rows-changed and rules-fired, and a `findings_by_class` table. |
+
+Every analyzer **degrades gracefully**: it emits the metrics its present artifacts support and simply omits the rest. `match.rates` with no certificate skips the recall metrics; `quality.rollup` with only a manifest skips the `quality.*` keys and keeps the `flow.*` keys. Requested names that are not discoverable are recorded in `report.source["unavailable"]` rather than raising, so the report says what it could and could not compute.
+
+### An open, extensible registry
+
+The four analyzers above are the built-in set, but the catalog is **not closed**. Analyzers are discovered through the `goldenanalysis.analyzers` entry-point group, so a third-party package can register its own analyzer by declaring an entry point, with no edit to GoldenAnalysis itself. The registry unions the entry-point table with a hard-coded fallback map that mirrors it (editable installs sometimes cannot see their own entry points), so discovery stays reliable either way.
+
+```python
+from goldenanalysis.registry import available_analyzers, load_analyzer
+
+available_analyzers()          # every discoverable analyzer, entry-points and fallback
+analyzer = load_analyzer("frame.summary")
+analyzer.info.consumes         # ["frame"]
+analyzer.info.produces         # the dotted metric keys it can emit
+```
+
+An analyzer is anything with an `info` descriptor (its name, what it `consumes`, what it `produces`) and a `run(inp)` method that returns metrics and tables. That protocol is the whole contract a new analyzer implements.
+
+## Configuring a run
+
+Every analyze path funnels through one internal assembler, so the same four options mean the same thing everywhere:
+
+| kwarg | Meaning |
+|-------|---------|
+| `analyzers` | Which analyzers to run. `None` runs every frame-compatible analyzer (the default for the frame path). |
+| `dataset` | A label carried into `report.source["dataset"]` and the default `run_id`. |
+| `run_id` | A stable identifier for the run. Defaults to `"<generated_at>#<dataset>"`. Used to line runs up across a history. |
+| `generated_at` | The run timestamp. Defaults to `datetime.now(UTC)`. |
+
+Three entry points cover the common shapes:
+
+- **`analyze(df, analyzers=None, ...)`** is the generic frame path. It works on any Polars DataFrame with zero suite dependencies installed. `analyzers=None` runs every frame-compatible analyzer (currently `frame.summary`); pass an explicit list to narrow it.
+- **`analyze_match(result, ...)`** analyzes a GoldenMatch `DedupeResult`, running `match.rates` + `cluster.distribution`. Pass `certificate=` to feed the recall metrics; omit it and they are dropped.
+- **`analyze_pipeline(result, ...)`** analyzes a whole GoldenPipe `PipeResult`, fanning out to every analyzer whose consumed artifacts are actually present in the run.
+
+```python
+import goldenanalysis as ga
+
+# Generic frame, all frame-compatible analyzers
+report = ga.analyze(df, dataset="customers")
+
+# Narrow to specific analyzers
+report = ga.analyze(df, analyzers=["frame.summary"], dataset="customers")
+
+# A GoldenMatch result -> match.rates + cluster.distribution
+report = ga.analyze_match(dedupe_result, dataset="customers", certificate=cert)
+
+# A whole GoldenPipe run -> every analyzer whose artifacts are present
+report = ga.analyze_pipeline(pipe_result)
+```
+
+## The metrics model
+
+Every analyzer emits a list of `Metric` records. A metric is a dotted, stable `key`, a `value`, an optional `unit`, and a `direction`. Keys are the cross-run contract: renaming one breaks comparability across a history, so a rename is a `schema_version` bump on the report.
+
+The `direction` is what makes a metric gateable. It tells the regression layer which way is "worse":
+
+| `direction` | Meaning | Flags a regression when the value |
+|-------------|---------|-----------------------------------|
+| `higher_better` | Larger is better (recall, health score). | Decreases past the threshold. |
+| `lower_better` | Smaller is better (null ratio, findings total). | Increases past the threshold. |
+| `neutral` | No inherent good direction (row count, mean score). | Never flags on its own. |
+
+## Regression gating
+
+Metrics become gates when you compare a report against a **baseline** with a **regression policy**. The full mechanics live in [cross-run analysis](/goldenanalysis/cross-run); the two knobs are:
+
+**`Baseline`** picks what "the last run" means:
+
+| Baseline | Meaning |
+|----------|---------|
+| `previous` | The immediately preceding run. |
+| `rolling_median` | The median value across the recent history (noise-tolerant). |
+| `last_known_good` | The last run that passed its own gate. |
+| a `run_id` string | A pinned run to compare against. |
+
+**`RegressionPolicy`** sets how much movement counts. `default_pct` is the percent change from the baseline that flags any metric; `per_metric` overrides it per key for the metrics you care about most. The policy always respects each metric's `direction`, so a `lower_better` metric flags only on an increase and a `higher_better` metric only on a decrease.
+
+```python
+from goldenanalysis.models import RegressionPolicy
+
+policy = RegressionPolicy(
+    default_pct=10.0,                                  # 10% move flags any metric
+    per_metric={"match.recall_safe_bound": 2.0},       # tighter gate on recall
+)
+```
+
+## Reading the report
+
+Every entry point returns one `AnalysisReport`. Run it, then read the merged metrics and tables:
+
+```python
+import goldenanalysis as ga
+
+report = ga.analyze(df, dataset="customers")
+
+report.metrics          # list[Metric] — key, value, unit, direction
+report.tables           # list[AnalysisTable] — e.g. the per_column table
+report.analyzers_run    # which analyzers actually ran
+report.source           # {"dataset": ..., "producer": ..., "unavailable": ...}
+
+# Pull one metric by key
+recall = next(m for m in report.metrics if m.key == "frame.null_ratio_mean")
+print(recall.value, recall.unit, recall.direction)
+
+# Render or serialize
+print(report.to_markdown())
+report.to_json("report.json")
+```
+
+`AnalysisReport` and `Metric` are `snake_case` wire types on every surface, so a report crosses the JSON wire between Python and TypeScript without remapping.
+
+## More
+
+- [Overview](/goldenanalysis/overview) — where GoldenAnalysis sits in the suite and how it differs from GoldenCheck.
+- [Config matrix](/goldenanalysis/config-matrix) — the full option surface across the analyze entry points.
+- [Cross-run analysis](/goldenanalysis/cross-run) — trend metrics over a run history and detect regressions vs a baseline.

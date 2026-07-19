@@ -44,35 +44,136 @@ _Top-level pipeline configuration._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `pipeline` | str | **required** |  |
-| `source` | str \| None | `None` |  |
-| `output` | str \| None | `None` |  |
-| `stages` | list[StageSpec \| str] | **required** | [`StageSpec`](#stagespec) |
-| `decisions` | list[str] | `[]` |  |
+| `pipeline` | str | **required** | Name of the pipeline, identifying this end-to-end configuration in runs and logs. |
+| `source` | str \| None | `None` | Optional default input location that stages read from when they do not specify their own source. |
+| `output` | str \| None | `None` | Optional default destination where the pipeline writes its final results. |
+| `stages` | list[StageSpec \| str] | **required** | [`StageSpec`](#stagespec) -- Ordered list of stages to run, each given as a full StageSpec or a shorthand string naming the adapter to use. |
+| `decisions` | list[str] | `[]` | Recorded pipeline decision entries that capture the choices and rationale behind this configuration. |
 
 ### `StageSpec`
 _Configuration for a single pipeline stage._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `name` | str \| None | `None` |  |
-| `use` | str | **required** |  |
-| `needs` | list[str] | `[]` |  |
-| `skip_if` | str \| None | `None` |  |
-| `on_error` | Literal | `'continue'` | `continue`, `abort` |
-| `config` | dict[str, Any] | `{}` |  |
+| `name` | str \| None | `None` | Optional human-readable label for this stage, used in logs and as the key other stages reference in their needs list. |
+| `use` | str | **required** | Identifier of the adapter that runs this stage, such as goldenmatch.dedupe, naming which suite tool to invoke. |
+| `needs` | list[str] | `[]` | Names of stages that must finish before this one runs, defining the dependency order in the pipeline graph. |
+| `skip_if` | str \| None | `None` | Condition expression that, when it evaluates true at runtime, causes this stage to be skipped rather than executed. |
+| `on_error` | Literal | `'continue'` | `continue`, `abort` -- What to do when this stage raises an error: continue on to later stages or abort the whole pipeline. |
+| `config` | dict[str, Any] | `{}` | Free-form settings dictionary passed straight through to the named adapter to configure how the tool runs. |
+
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `agent-serve` | `--port` | integer | `8250` | Port for A2A server |
+| `init` | `--dir` | text | `'.'` | Directory to create config in |
+| `interactive` | `source` | text | `None` | Optional data file to load (press 'r' to run). |
+| `interactive` | `--config` | text | `None` | Optional pipeline YAML config. |
+| `mcp-serve` | `--transport` | text | `'stdio'` | Transport type: stdio or http |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
+| `mcp-serve` | `--port` | integer | `8250` | Port for HTTP transport |
+| `run` | `source` | text | **required** | Input file path |
+| `run` | `--config` | text | `None` | Pipeline YAML config |
+| `run` | `--output` | text | `None` | Output file path |
+| `run` | `--verbose` | boolean | `False` | Show reasoning and timing |
+| `run` | `--identity-path` | text | `None` | Enable Identity Graph; persist to this SQLite path |
+| `run` | `--identity-dataset` | text | `None` | Identity Graph dataset namespace |
+| `run` | `--identity-source-pk` | text | `None` | Column to derive `&#123;source&#125;:&#123;source_pk&#125;` record_id from |
+| `run` | `--identity-weak-threshold` | float | `None` | Auto-flag bottleneck pair as conflicts_with when cluster confidence &lt; this. Defaults to 0.6 (per IdentityConfig). |
+| `serve` | `--port` | integer | `8000` | Port for REST API |
+| `validate` | `--config` | text | **required** | Pipeline YAML config |
+
+## MCP tools
+
+4 MCP tool(s) exposed by `goldenpipe.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+
+| Tool | Description |
+|---|---|
+| `explain_pipeline` | Explain what a pipeline config does |
+| `list_stages` | List all discovered pipeline stages |
+| `run_pipeline` | Run a pipeline on a file OR inline data (records / csv_text) and return per-stage status, reasoning and timing PLUS the deduped output (golden-record count + preview, unique/duplicate counts, cluster count, match stats). Give a `stages` list or `config_path` to control the chain, or omit both for zero-config auto. |
+| `validate_pipeline` | Validate pipeline wiring |
 
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Stage status | `StageStatus` | per-stage result status | `failed`, `skipped`, `success` |
-| Pipeline status | `PipeStatus` | run result status | `failed`, `partial`, `success` |
-| Column types | `ColumnType` | column classification | `address`, `date`, `description`, `email`, `geo`, `identifier`, `name`, `numeric`, `phone`, `string`, `zip` |
-| Cardinality bands | `CardinalityBand` | column cardinality band | ``, `high`, `low`, `mid`, `skip` |
-| Repair fixers | `FIXERS` | repair-op allowlist | `date_parse`, `email_canonical`, `email_normalize`, `fix_mojibake`, `name_proper`, `normalize_unicode`, `phone_national`, `zip_normalize` |
+### Stage status
+_`StageStatus` -- per-stage result status._
+
+| Value | Meaning |
+|---|---|
+| `failed` | Stage raised an error. |
+| `skipped` | Stage skipped by its skip_if condition. |
+| `success` | Stage completed successfully. |
+
+### Pipeline status
+_`PipeStatus` -- run result status._
+
+| Value | Meaning |
+|---|---|
+| `failed` | One or more stages failed the run. |
+| `partial` | Some stages succeeded and some failed. |
+| `success` | Every stage succeeded. |
+
+### Column types
+_`ColumnType` -- column classification._
+
+| Value | Meaning |
+|---|---|
+| `address` | Postal address. |
+| `date` | Date/time value. |
+| `description` | Long free text. |
+| `email` | Email address. |
+| `geo` | Geographic coordinate. |
+| `identifier` | Unique identifier / key. |
+| `name` | Person or entity name. |
+| `numeric` | Numeric measure. |
+| `phone` | Phone number. |
+| `string` | Free-form string. |
+| `zip` | Postal/ZIP code. |
+
+### Cardinality bands
+_`CardinalityBand` -- column cardinality band._
+
+| Value | Meaning |
+|---|---|
+| `` | Unset / unknown. |
+| `high` | Many distinct values (near-unique). |
+| `low` | Few distinct values. |
+| `mid` | Moderate distinct values. |
+| `skip` | Excluded from cardinality analysis. |
+
+### Repair fixers
+_`FIXERS` -- repair-op allowlist._
+
+| Value | Meaning |
+|---|---|
+| `date_parse` | Parse a date into ISO form. |
+| `email_canonical` | Canonicalize an email (dedupe dots/plus). |
+| `email_normalize` | Lowercase/normalize an email. |
+| `fix_mojibake` | Repair UTF-8/Latin-1 mojibake. |
+| `name_proper` | Proper-case a name. |
+| `normalize_unicode` | Normalize to Unicode NFC. |
+| `phone_national` | Normalize a phone to national format. |
+| `zip_normalize` | Normalize a ZIP code. |
+
+### Stages
+_`BUILTIN_STAGES` -- `StageSpec.use`._
+
+| Value | Meaning |
+|---|---|
+| `goldenanalysis.report` | Run GoldenAnalysis metrics + reporting. |
+| `goldencheck.scan` | Run a GoldenCheck data-quality scan. |
+| `goldenflow.transform` | Run GoldenFlow transforms / standardization. |
+| `goldenmatch.dedupe` | Run GoldenMatch dedupe / entity resolution. |
+| `goldenmatch.dedupe_fused` | Run the fused GoldenMatch dedupe kernel. |
+| `goldenmatch.identity_resolve` | Resolve records against the identity graph. |
+| `infer_schema` | Infer the source schema (via infermap). |
+| `load` | Load a source file into the pipeline frame. |
 
 ## Environment variables (index)
 
