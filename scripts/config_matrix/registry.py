@@ -31,6 +31,11 @@ class PackageSpec:
     # BLOCK on any regression (a new field/option/tool without a description).
     # Packages still filling the long tail leave it False (advisory coverage only).
     require_full_coverage: bool = False
+    # (topical-page, canonical-set target) pairs: every value of the canonical set
+    # must be documented in that page too, so a new scorer/strategy is propagated
+    # to its reference doc, not just the matrix. target is "module:CONST" (frozenset
+    # / enum / Literal alias) or "module:Model.field" (a Literal field).
+    doc_coverage: tuple[tuple[str, str], ...] = ()
 
 
 REGISTRY: dict[str, PackageSpec] = {
@@ -122,6 +127,13 @@ REGISTRY: dict[str, PackageSpec] = {
             }),
         ],
         tuning_link="/goldenmatch/tuning",
+        doc_coverage=(
+            ("scoring.mdx", "goldenmatch.config.schemas:VALID_SCORERS"),
+            ("blocking.mdx", "goldenmatch.config.schemas:BlockingConfig.strategy"),
+            ("configuration.mdx", "goldenmatch.config.schemas:VALID_SIMPLE_TRANSFORMS"),
+            ("configuration.mdx", "goldenmatch.config.schemas:VALID_STRATEGIES"),
+            ("configuration.mdx", "goldenmatch.config.schemas:VALID_STANDARDIZERS"),
+        ),
     ),
     "goldencheck": PackageSpec(
         name="goldencheck",

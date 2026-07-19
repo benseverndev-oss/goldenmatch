@@ -15,11 +15,13 @@ A per-package `env_allow` set covers anything those heuristics miss.
 """
 from __future__ import annotations
 
+import importlib
 import re
+import typing
 from dataclasses import dataclass
 from pathlib import Path
 
-from .render import ROOT, scan_env_vars
+from .render import ROOT, _resolve_vocab, scan_env_vars
 
 # Pages whose whole job is to describe old/removed knobs.
 _EXCLUDE_STEMS = re.compile(
@@ -53,6 +55,41 @@ def _prose_pages(spec) -> list[Path]:
             continue
         pages.append(p)
     return pages
+
+
+_TOKEN_RE = re.compile(r"`([a-z0-9_]+)`")
+
+
+def _canonical_set(target: str) -> set[str]:
+    """Resolve a doc_coverage target to its canonical value set. `module:CONST`
+    (frozenset / enum / Literal alias) goes through the vocab resolver; a
+    `module:Model.field` target reads that pydantic field's Literal choices."""
+    _, _, attr = target.partition(":")
+    if "." in attr:
+        mod, _, rest = target.partition(":")
+        model_name, field = rest.split(".", 1)
+        ann = getattr(importlib.import_module(mod), model_name).model_fields[field].annotation
+        for a in [ann, *typing.get_args(ann)]:
+            if typing.get_origin(a) is typing.Literal:
+                return {str(x) for x in typing.get_args(a)}
+        return set()
+    return set(_resolve_vocab(target))
+
+
+def undocumented_vocab(spec) -> list[RefFinding]:
+    """Every canonical value that is NOT mentioned in its reference doc -- so a new
+    scorer/strategy/etc. must be propagated to the topical page, not just the matrix."""
+    findings: list[RefFinding] = []
+    doc_dir = (ROOT / spec.doc_path).parent
+    for page, target in getattr(spec, "doc_coverage", ()):
+        path = doc_dir / page
+        if not path.exists():
+            continue
+        present = set(_TOKEN_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
+        rel = path.relative_to(ROOT).as_posix()
+        for value in sorted(_canonical_set(target) - present):
+            findings.append(RefFinding(spec.name, rel, value, 0))
+    return findings
 
 
 def stale_env_refs(spec) -> list[RefFinding]:

@@ -2,7 +2,7 @@
 
   python scripts/gen_config_matrix.py --write [pkg|all]    # regenerate the block(s)
   python scripts/gen_config_matrix.py --check [pkg|all]     # exit 1 if any is stale
-  python scripts/gen_config_matrix.py --refs  [pkg|all]     # exit 1 if a prose doc names a dead env knob
+  python scripts/gen_config_matrix.py --refs  [pkg|all]     # exit 1 if a doc names a dead env knob OR omits a canonical scorer/strategy/...
   python scripts/gen_config_matrix.py --coverage [pkg|all]  # report NL-explanation coverage per package
 
 Each suite package's config surface (pydantic tree / constructor kwargs / vocab
@@ -16,7 +16,7 @@ import sys
 
 from config_matrix import REGISTRY
 from config_matrix.coverage import coverage, format_report
-from config_matrix.crossref import stale_env_refs
+from config_matrix.crossref import stale_env_refs, undocumented_vocab
 from config_matrix.render import docs_are_current, write_docs
 
 
@@ -49,16 +49,20 @@ def main(argv: list[str]) -> int:
     if "--refs" in argv:
         bad = []
         for name in _targets(argv):
-            hits = stale_env_refs(REGISTRY[name])
-            bad += hits
-            if hits:
-                for h in hits:
-                    print(f"::error file={h.page},line={h.line_no}::{h.token} is documented "
-                          f"in {h.page} but is not read anywhere in {name}'s source "
-                          f"(removed/renamed knob?). Fix the doc or add to env_allow.",
-                          file=sys.stderr)
-            else:
-                print(f"OK    {name}: docs reference only live env knobs")
+            env_hits = stale_env_refs(REGISTRY[name])
+            doc_gaps = undocumented_vocab(REGISTRY[name])
+            bad += env_hits + doc_gaps
+            for h in env_hits:
+                print(f"::error file={h.page},line={h.line_no}::{h.token} is documented "
+                      f"in {h.page} but is not read anywhere in {name}'s source "
+                      f"(removed/renamed knob?). Fix the doc or add to env_allow.",
+                      file=sys.stderr)
+            for h in doc_gaps:
+                print(f"::error file={h.page}::{h.token} is a live {name} config value "
+                      f"but is not documented in {h.page}. Add it (propagate the new knob "
+                      f"to its reference doc).", file=sys.stderr)
+            if not env_hits and not doc_gaps:
+                print(f"OK    {name}: docs reference only live knobs + cover the canonical set")
         return 1 if bad else 0
     if "--coverage" in argv:
         for name in _targets(argv):

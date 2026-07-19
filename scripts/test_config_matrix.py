@@ -11,7 +11,7 @@ import pytest
 
 from config_matrix import REGISTRY
 from config_matrix.coverage import coverage
-from config_matrix.crossref import stale_env_refs
+from config_matrix.crossref import stale_env_refs, undocumented_vocab
 from config_matrix.render import (
     MARKER_END,
     MARKER_START,
@@ -42,6 +42,14 @@ def test_no_stale_env_refs_in_docs(name):
     # code actually reads (the config-matrix registry is the source of truth).
     hits = stale_env_refs(REGISTRY[name])
     assert not hits, "stale env refs: " + "; ".join(f"{h.token} in {h.page}:{h.line_no}" for h in hits)
+
+
+@pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.doc_coverage])
+def test_topical_docs_cover_the_canonical_set(name):
+    # Every canonical scorer/strategy/transform/... must be documented in its
+    # reference page, so a newly-added value is propagated there, not just to the matrix.
+    gaps = undocumented_vocab(REGISTRY[name])
+    assert not gaps, "undocumented in topical doc: " + "; ".join(f"{g.token} missing from {g.page}" for g in gaps)
 
 
 @pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.require_full_coverage])
