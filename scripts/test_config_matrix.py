@@ -44,6 +44,26 @@ def test_no_stale_env_refs_in_docs(name):
     assert not hits, "stale env refs: " + "; ".join(f"{h.token} in {h.page}:{h.line_no}" for h in hits)
 
 
+def test_goldencheck_check_types_catalog_matches_source():
+    # CHECK_TYPES is the canonical check-type catalog; assert it still equals the
+    # `check="..."` literals the code actually emits, so it can't drift into a lie.
+    import re
+
+    from goldencheck.models.finding import CHECK_TYPES
+    from config_matrix.render import ROOT
+
+    src = ROOT / "packages" / "python" / "goldencheck" / "goldencheck"
+    scanned: set[str] = set()
+    for p in src.rglob("*.py"):
+        if "tests" in p.parts:
+            continue
+        scanned |= set(re.findall(r'check=["\']([a-z_]+)["\']', p.read_text(encoding="utf-8", errors="ignore")))
+    assert scanned == set(CHECK_TYPES), (
+        f"CHECK_TYPES drifted from source: only-in-source={sorted(scanned - set(CHECK_TYPES))}, "
+        f"only-in-catalog={sorted(set(CHECK_TYPES) - scanned)}"
+    )
+
+
 @pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.doc_coverage])
 def test_topical_docs_cover_the_canonical_set(name):
     # Every canonical scorer/strategy/transform/... must be documented in its

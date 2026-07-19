@@ -226,6 +226,54 @@ _`Op` -- mined denial constraints._
 | `≤` | Less than or equal. |
 | `≥` | Greater than or equal. |
 
+### Check types
+_`CHECK_TYPES` -- `Finding.check`._
+
+| Value | Meaning |
+|---|---|
+| `benford_drift` | Leading-digit (Benford) distribution drifted. |
+| `bound_violation` | A value crossed a learned baseline bound. |
+| `cardinality` | A column's distinct-value count / ratio. |
+| `composite_key` | A candidate multi-column key. |
+| `correlation_break` | A previously strong correlation weakened. |
+| `cross_column` | A cross-column relationship finding. |
+| `cross_column_validation` | A cross-column validation rule failed. |
+| `denial_constraint` | A mined denial constraint is violated. |
+| `distribution_drift` | A column's value distribution drifted. |
+| `drift_detection` | General distribution drift versus the baseline. |
+| `duplicate_rows` | Fully duplicated rows. |
+| `encoding_detection` | Suspect character encoding / mojibake. |
+| `entropy_drift` | A column's entropy drifted. |
+| `enum` | A value is outside the allowed enum set. |
+| `existence` | A column the config expects is present. |
+| `fd_violation` | Rows violate a functional dependency. |
+| `format_detection` | The detected value format (email, phone, ...). |
+| `functional_dependency` | A discovered functional dependency. |
+| `future_dated` | A date is in the future. |
+| `fuzzy_duplicate_values` | Near-duplicate values within a column. |
+| `identity_safe_pk` | A column is a safe, stable primary key. |
+| `key_uniqueness_loss` | A key lost uniqueness versus the baseline. |
+| `near_duplicate_rows` | Near-duplicate rows (fuzzy). |
+| `new_correlation` | A new column correlation appeared. |
+| `new_pattern` | A new value pattern appeared. |
+| `null_correlation` | Nulls in two columns co-occur suspiciously. |
+| `nullability` | A column's null rate exceeds the allowed bound. |
+| `pattern_consistency` | Values deviate from the column's dominant pattern. |
+| `pattern_drift` | A column's dominant pattern changed. |
+| `range` | A value falls outside the allowed range. |
+| `range_distribution` | Value distribution versus the expected range. |
+| `referential_integrity` | A foreign-key reference is unmatched. |
+| `required` | A required column contains no nulls. |
+| `sequence_detection` | A column is a monotonic sequence / counter. |
+| `stale_data` | Data is older than the freshness bound. |
+| `temporal_order` | Dates violate an expected ordering. |
+| `temporal_order_drift` | Temporal ordering changed versus the baseline. |
+| `type_drift` | A column's inferred type changed. |
+| `type_inference` | The inferred data type for a column. |
+| `unique` | A column declared unique has duplicates. |
+| `uniqueness` | The observed uniqueness of a column. |
+| `unmapped_column` | A column has no rule and no inferred type. |
+
 ## Environment variables (index)
 
 6 `GOLDENCHECK_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:

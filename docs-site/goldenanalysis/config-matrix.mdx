@@ -102,6 +102,16 @@ _`Baseline` -- `--baseline`._
 | `previous` | Compare against the immediately prior run. |
 | `rolling_median` | Compare against the rolling median of recent runs. |
 
+### Analyzers
+_`_FALLBACK` -- `analyze(analyzers=...)`._
+
+| Value | Meaning |
+|---|---|
+| `cluster.distribution` | GoldenMatch clusters: count, singletons, size percentiles, reduction ratio. |
+| `frame.summary` | Generic frame stats: row/column counts, null ratio, duplicate ratio, memory. |
+| `match.rates` | GoldenMatch results: pair count, match rate, threshold, recall estimate, score histogram. |
+| `quality.rollup` | GoldenCheck / GoldenFlow rollup: findings, health score, rows changed, rules fired. |
+
 ## Environment variables (index)
 
 1 `GOLDENANALYSIS_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:

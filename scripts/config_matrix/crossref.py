@@ -55,7 +55,9 @@ def _prose_pages(spec) -> list[Path]:
     return pages
 
 
-_TOKEN_RE = re.compile(r"`([a-z0-9_]+)`")
+# Backticked value tokens in a doc. Includes `.`/`-` so dotted registry names
+# (analyzer `frame.summary`, stage `goldenmatch.dedupe`) match as one token.
+_TOKEN_RE = re.compile(r"`([a-z0-9_][a-z0-9_.-]*)`")
 
 
 def _canonical_set(target: str) -> set[str]:
