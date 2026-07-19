@@ -1,7 +1,8 @@
 # FS net-zero-evidence filter — kill scale-growing over-merge without a threshold move
 
-Status: numpy reference SHIPPED (opt-in, default OFF); native port + default flip = follow-up.
-Flag: `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE` (default OFF).
+Status: SHIPPED, default ON — numpy AND the Rust `fs-core` kernel (native, the default
+FS route). Cross-surface (wasm/DuckDB/Postgres) = follow-up.
+Flag: `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE` (default ON; `0` restores legacy).
 
 ## Problem
 
@@ -45,35 +46,48 @@ applied in the scorer's LINEAR branch by forcing `W <= 0` pairs below any cut. T
 posterior calibration already folds the prior into the log-odds (0.99 Bayes cut), so the
 filter is linear-only.
 
-## Measured (numpy path, filter OFF -> ON, at the default 0.50 cut)
+## Measured (filter OFF -> ON, at the default 0.50 cut)
 
-| dataset          | OFF (F1 / P / R)        | ON (F1 / P / R)         |
+person shape (numpy AND native — the over-merge is in the shared min-max scoring):
+
+| n / path         | OFF (F1 / P / R)        | ON (F1 / P / R)         |
 |------------------|-------------------------|-------------------------|
-| person 30K       | 0.405 / 0.254 / 0.9996  | **0.979 / 0.959 / 0.9996** |
-| historical_50k   | 0.826 / 0.926 / 0.746   | **0.826 / 0.926 / 0.746** (byte-identical) |
-| ncvr_synthetic   | 0.861 / 0.757 / 0.9996  | **0.990 / 0.982 / 0.998**  |
+| 30K numpy        | 0.405 / 0.254 / 0.9996  | **0.979 / 0.959 / 0.9996** |
+| 30K native       | 0.472 / 0.309 / 0.9999  | **0.987 / 0.974 / 0.9994** |
 
-It matches what the 0.55 threshold achieved on the person shape, does NOT touch
-`historical_50k` (unlike the threshold), and FIXES `ncvr_synthetic`. Recall preserved
-everywhere.
+`autoconfig_quality` gate (native, default-on), vs the committed baseline:
 
-## Scope shipped now
+| dataset (f1_probabilistic) | baseline | with filter |
+|----------------------------|----------|-------------|
+| historical_50k             | 0.8279   | 0.826 (OK, neutral) |
+| ncvr_synthetic             | 0.9894   | **0.9901** (OK) |
+| anchor_person_match        | 0.9607   | **1.0** (OK) |
 
-`goldenmatch/core/probabilistic.py`, LINEAR mode, 3 numpy emit paths:
-`score_probabilistic_vectorized`, `score_probabilistic_vectorized_batch`, and the scalar
-`score_probabilistic`. `_fs_require_positive_evidence()` gates it; default OFF. Tests:
-`tests/test_probabilistic_vectorized.py::TestRequirePositiveEvidence`.
+Verdict PASS — it matches what the 0.55 threshold achieved on the person shape, does NOT
+touch `historical_50k` (unlike the threshold, which dropped it to 0.794), and IMPROVES
+`ncvr_synthetic` + `anchor_person_match`. Recall preserved everywhere.
 
-## Completion (follow-up) — native + cross-surface + default flip
+## What shipped
 
-The DEFAULT FS route is the Rust `fs-core::score_fs_pair` kernel (native / wasm / DuckDB /
-Postgres all share it), which does NOT yet carry the filter. To flip the default ON:
+LINEAR mode only (posterior folds the prior into the log-odds + a 0.99 Bayes cut).
 
-1. `fs-core::score_fs_pair` + `FsPairParams`: add `require_positive_evidence`; return a
-   below-threshold sentinel when `!calibrated && require_positive_evidence && W <= 0`.
-2. Thread the flag through the pyo3 kernel (`score_block_pairs_fs` / `_arrow`) and the
-   Python native caller; the numpy + native paths pass `True`, keeping native==numpy
-   parity. The wasm / DuckDB / Postgres constructors pass `False` for now (their parity
-   fixtures stay byte-identical) until each surface opts in + regenerates its fixture.
-3. Re-validate the full `autoconfig_quality` gate (native) + the person bench at scale,
-   then flip `_fs_require_positive_evidence()` default to ON.
+- **numpy** (`goldenmatch/core/probabilistic.py`): the 3 emit paths
+  (`score_probabilistic_vectorized`, `_vectorized_batch`, scalar `score_probabilistic`)
+  drop `W <= 0` pairs.
+- **Rust `fs-core::score_fs_pair`** (native, the default FS route): `FsPairParams` gains
+  `require_positive_evidence`; returns the below-threshold sentinel `-1.0` when
+  `!calibrated && require_positive_evidence && W <= 0`. Threaded through the pyo3 kernel
+  (`score_block_pairs_fs` / `_arrow`) + the Python native caller, so **native == numpy
+  under the flag** (parity asserted in `TestNativeFSParity`). Wheel-skew safe: the caller
+  passes the kwarg only when the wheel exports `FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE`, so
+  an older wheel degrades to the legacy native behavior instead of raising.
+- `_fs_require_positive_evidence()` gates both; **default ON**. Tests:
+  `tests/test_probabilistic_vectorized.py::TestRequirePositiveEvidence` +
+  `TestNativeFSParity`.
+
+## Follow-up — the other surfaces
+
+The `fs-wasm` (TS) / DuckDB / Postgres surfaces share `score_fs_pair` but pass
+`require_positive_evidence = false` (their cross-surface parity fixtures are byte-locked).
+Each opts in by passing `true` + regenerating its fixture — a per-surface follow-up,
+tracked against the every-capability-on-every-surface north star.

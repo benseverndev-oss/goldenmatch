@@ -360,6 +360,16 @@ pub struct FsPairParams<'a> {
     /// Per-field embedding dimensionality, indexed like `scorer_ids`. Read only
     /// where `emb_vectors[f]` is `Some`; `0` elsewhere.
     pub emb_dims: &'a [usize],
+    /// Refuse to score a NET-ZERO-EVIDENCE pair (linear mode only): when `true`,
+    /// a pair whose summed match weight `W <= 0` (the evidence does NOT favor a
+    /// match, LR <= 1) returns the below-threshold sentinel `-1.0` so the caller
+    /// never links it. The asymmetric min-max can otherwise map a `W <= 0` pair
+    /// onto a score `>= 0.50` and chain true clusters into mega-clusters via
+    /// union-find (scale-growing precision collapse). Mirrors the numpy
+    /// `_fs_require_positive_evidence` path so native == numpy. `false` = legacy
+    /// (emit at the neutral point). No-op under `calibrated` (the posterior folds
+    /// the prior into the log-odds + uses a 0.99 Bayes cut).
+    pub require_positive_evidence: bool,
 }
 
 /// Dot product of two equal-length f64 slices — the cosine of two L2-normalized
@@ -612,7 +622,12 @@ where
             }
         }
     }
-    if !p.calibrated && !has_regular_evidence && total_weight == 0.0 {
+    if !p.calibrated && p.require_positive_evidence && total_weight <= 0.0 {
+        // Net-zero / net-negative evidence (LR <= 1) is a Fellegi-Sunter
+        // non-match; keep it below any cut so the asymmetric min-max can't
+        // auto-link it into a mega-cluster. See `require_positive_evidence`.
+        -1.0
+    } else if !p.calibrated && !has_regular_evidence && total_weight == 0.0 {
         0.5
     } else {
         fs_normalize(
@@ -686,6 +701,7 @@ mod tests {
             tf_tables: &[],
             emb_vectors: &[],
             emb_dims: &[],
+            require_positive_evidence: false,
         };
         let rows = [["alice", "smith"], ["alice", "jones"], ["bob", "brown"]];
         let get = |f: usize, r: usize| Some(rows[r][f]);
@@ -737,6 +753,7 @@ mod tests {
             tf_tables: &[],
             emb_vectors: &[],
             emb_dims: &[],
+            require_positive_evidence: false,
         };
         // field 1 is null for row 1 -> only field 0 observed; agree -> 1.0 of the
         // single-field observed range.
@@ -791,6 +808,7 @@ mod tests {
             tf_tables: &[],
             emb_vectors: &[],
             emb_dims: &[],
+            require_positive_evidence: false,
         };
         let rows = ["William", "Bill"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -902,6 +920,7 @@ mod tests {
             tf_tables: &[],
             emb_vectors: &[],
             emb_dims: &[],
+            require_positive_evidence: false,
         };
         let rows = ["Robert", "Rupert"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -949,6 +968,7 @@ mod tests {
             tf_tables: &[],
             emb_vectors: &emb_vectors,
             emb_dims: &emb_dims,
+            require_positive_evidence: false,
         };
         // All rows present (non-null) — a synthetic never-null value column.
         let rows = ["x", "x", "x"];
@@ -1032,6 +1052,7 @@ mod tests {
             tf_tables: &tf_tables,
             emb_vectors: &[],
             emb_dims: &[],
+            require_positive_evidence: false,
         };
         let rows = ["smith", "smith", "rare", "rare", "jones"];
         let get = |_f: usize, r: usize| Some(rows[r]);

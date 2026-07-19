@@ -1288,6 +1288,15 @@ class TestDedupeWithPersistedModel:
 
 
 class TestProbabilisticReviewCandidates:
+    @pytest.fixture(autouse=True)
+    def _legacy_emit(self, monkeypatch):
+        # These fixtures exercise the review-band ATTACHMENT mechanism via
+        # net-zero-evidence borderline pairs, which the default net-zero filter
+        # now removes from review too. Pin the legacy emit-at-neutral behavior so
+        # the mechanism stays under test; the filter itself is covered by
+        # tests/test_probabilistic_vectorized.py::TestRequirePositiveEvidence.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
+
     @staticmethod
     def _config(*, link_threshold=None, review_threshold=None):
         return GoldenMatchConfig(
@@ -1872,11 +1881,23 @@ class TestNativeFSParity:
         })
         mk = _make_probabilistic_mk(link_threshold=0.0)
         em = _fallback_result(mk)
+        # Legacy emit-at-neutral (filter off): the all-null (2,3) pair scores 0.5.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
         numpy_pairs = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
         native_pairs = sorted(p.score_probabilistic_native(df, mk, em, set()))
         assert native_pairs == numpy_pairs
         assert dict(((a, b), s) for a, b, s in native_pairs)[(1, 2)] == 1.0
         assert dict(((a, b), s) for a, b, s in native_pairs)[(2, 3)] == 0.5
+        # With the net-zero-evidence filter on, the Rust kernel and numpy STILL
+        # agree (the load-bearing parity): both keep the positive-evidence (1,2)
+        # pair and DROP the all-null net-zero (2,3) pair.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "1")
+        numpy_f = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
+        native_f = sorted(p.score_probabilistic_native(df, mk, em, set()))
+        assert native_f == numpy_f
+        keys_f = {(a, b) for a, b, _ in native_f}
+        assert (1, 2) in keys_f
+        assert (2, 3) not in keys_f
 
     def test_block_scorer_picks_native_when_opted_in(self, monkeypatch):
         from goldenmatch.core import probabilistic as p

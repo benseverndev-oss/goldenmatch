@@ -90,22 +90,21 @@ def _fs_require_positive_evidence() -> bool:
     to 0.55 — does NOT cut real-but-weak partial matches (which carry positive
     evidence in the 0.50-0.55 band, e.g. historical_50k's corrupted PII).
 
-    ``GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`` (default OFF for now; ``1``/``on``
-    enables). Applies to the LINEAR calibration only — the posterior path already
-    folds the prior into the log-odds and uses a 0.99 Bayes cut.
+    ``GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`` (default ON; ``0``/``off``
+    restores the legacy emit-at-neutral behavior). Applies to the LINEAR
+    calibration only — the posterior path already folds the prior into the
+    log-odds and uses a 0.99 Bayes cut.
 
-    **Default OFF pending the native port.** This is the numpy/pure-Python
-    reference; the default FS route is the Rust ``fs-core`` kernel
-    (``score_fs_pair``), which does NOT yet carry the filter. Flipping the default
-    on before the kernel mirrors it would (a) leave native users unprotected and
-    (b) break the native==numpy parity gate. So it ships opt-in first (validated
-    numbers in ``docs/superpowers/specs``), and the default flips once the kernel
-    port lands (fs-core + the cross-surface constructors + fixture regen).
+    Both the numpy scorer AND the Rust ``fs-core`` kernel (native / the default
+    FS route) carry the filter, so native == numpy under the flag. The
+    wasm/DuckDB/Postgres surfaces pass ``false`` (legacy) until each opts in +
+    regenerates its parity fixture. Measured neutral-or-better on every gated
+    dataset (see ``docs/superpowers/specs/2026-07-18-fs-net-zero-evidence-filter.md``).
     """
     v = os.environ.get("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE")
     if v is None:
-        return False
-    return v.strip().lower() in ("1", "true", "yes", "on", "enabled")
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off", "disabled")
 
 
 _FS_MISSING_DEFAULT = "unobserved"
@@ -3441,6 +3440,15 @@ def _score_fs_native_frame(
     # actually uses the feature — an old wheel must NEVER see the kwarg, even
     # if the eligibility gate ever drifted.
     opt_kwargs: dict = {}
+    # Net-zero-evidence filter (mirrors the numpy path). Pass the kwarg only when
+    # the wheel advertises support (FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE); an
+    # OLDER wheel without the param then degrades gracefully to the legacy native
+    # behavior instead of raising on the unknown kwarg. See
+    # _fs_require_positive_evidence.
+    if _fs_require_positive_evidence() and getattr(
+        mod, "FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE", False
+    ):
+        opt_kwargs["require_positive_evidence"] = True
 
     # Custom banding (goldenmatch-native >= 0.1.14).
     level_thresholds = [

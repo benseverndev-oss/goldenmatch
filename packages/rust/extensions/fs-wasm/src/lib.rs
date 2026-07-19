@@ -95,6 +95,10 @@ pub fn score_block_pairs_fs_impl(
         // id-7 field to "fully disagree", but the wasm entry never emits id 7.
         emb_vectors: &[],
         emb_dims: &[],
+        // The wasm/TS surface keeps the legacy emit-at-neutral behavior for now
+        // (its parity fixtures are byte-locked); the net-zero filter is opt-in on
+        // the Python engine first. See the fs-net-zero-evidence-filter spec.
+        require_positive_evidence: false,
     };
 
     let mut out: Vec<(i64, i64, f64)> = Vec::new();

@@ -387,6 +387,7 @@ pub(crate) use goldenmatch_fs_core::{fs_level_from_sim, fs_normalize};
     exclude_set=None,
     tf_freqs=None, tf_collision=None,
     emb_vectors=None, emb_dims=None,
+    require_positive_evidence=false,
 ))]
 pub fn score_block_pairs_fs(
     py: Python<'_>,
@@ -413,6 +414,7 @@ pub fn score_block_pairs_fs(
     tf_collision: Option<Vec<Option<f64>>>,
     emb_vectors: Option<Vec<Option<Vec<f64>>>>,
     emb_dims: Option<Vec<usize>>,
+    require_positive_evidence: bool,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     // FS_SUPPORTS_EXCLUDE_SET: prefer the shared Arc handle (built once per
     // score_buckets call via `build_exclude_set`), fall back to the legacy
@@ -567,6 +569,7 @@ pub fn score_block_pairs_fs(
         tf_tables: &tf_tables,
         emb_vectors: &emb_vectors,
         emb_dims: &emb_dims,
+        require_positive_evidence,
     };
 
     let result = py.detach(|| {
@@ -827,6 +830,7 @@ pub fn score_block_pairs_arrow(
     ne_arrays=None, ne_scorer_ids=None, ne_thresholds=None, ne_weights=None,
     tf_freqs=None, tf_collision=None,
     emb_vectors=None, emb_dims=None,
+    require_positive_evidence=false,
 ))]
 pub fn score_block_pairs_fs_arrow(
     py: Python<'_>,
@@ -853,6 +857,7 @@ pub fn score_block_pairs_fs_arrow(
     tf_collision: Option<Vec<Option<f64>>>,
     emb_vectors: Option<Vec<Option<Vec<f64>>>>,
     emb_dims: Option<Vec<usize>>,
+    require_positive_evidence: bool,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     let row_data = row_ids.0;
     if row_data.data_type() != &DataType::Int64 {
@@ -1027,6 +1032,7 @@ pub fn score_block_pairs_fs_arrow(
         tf_tables: &tf_tables,
         emb_vectors: &emb_vectors,
         emb_dims: &emb_dims,
+        require_positive_evidence,
     };
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors

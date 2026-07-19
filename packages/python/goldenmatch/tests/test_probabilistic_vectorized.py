@@ -337,12 +337,21 @@ class TestRequirePositiveEvidence:
             ],
         )
 
-    def test_default_off_emits_net_zero_pair(self, monkeypatch):
+    def test_default_on_drops_net_zero_pair(self, monkeypatch):
+        # Default ON: the net-zero pair is filtered without any env var set.
         monkeypatch.delenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", raising=False)
         pairs = score_probabilistic_vectorized(self._df(), self._mk(), self._em())
         keys = {(min(a, b), max(a, b)) for a, b, _ in pairs}
-        assert (0, 1) in keys  # net-zero pair emitted (legacy behavior)
-        assert (2, 3) in keys  # positive pair emitted
+        assert (0, 1) not in keys  # net-zero pair filtered by default
+        assert (2, 3) in keys      # positive pair emitted
+
+    def test_explicit_off_emits_net_zero_pair(self, monkeypatch):
+        # =0 restores the legacy emit-at-neutral behavior.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
+        pairs = score_probabilistic_vectorized(self._df(), self._mk(), self._em())
+        keys = {(min(a, b), max(a, b)) for a, b, _ in pairs}
+        assert (0, 1) in keys  # net-zero pair emitted (legacy)
+        assert (2, 3) in keys
 
     def test_on_drops_net_zero_keeps_positive(self, monkeypatch):
         monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "1")
