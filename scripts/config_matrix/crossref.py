@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .render import MARKER_START, ROOT, _resolve_vocab, scan_env_vars
+from .render import MARKER_START, ROOT, _resolve_gloss, _resolve_vocab, scan_env_vars
 
 # Pages whose whole job is to describe old/removed knobs.
 _EXCLUDE_STEMS = re.compile(
@@ -93,6 +93,34 @@ def undocumented_vocab(spec) -> list[RefFinding]:
         rel = path.relative_to(ROOT).as_posix()
         for value in sorted(_canonical_set(target) - present):
             findings.append(RefFinding(spec.name, rel, value, 0))
+    return findings
+
+
+def vocab_column_gaps(spec) -> list[RefFinding]:
+    """Within a vocab, every value must carry every extra column that ANY value
+    carries -- so a decision hint (`best_for`) or `range` column is never
+    half-filled, leaving blank cells that read to a human as 'no guidance here'.
+    Mechanical vocabs with plain-string glosses have no columns and are exempt."""
+    findings: list[RefFinding] = []
+    for entry in getattr(spec, "vocabs", ()):
+        title, target = entry[0], entry[1]
+        gloss = entry[3] if len(entry) > 3 else None
+        glosses = _resolve_gloss(target, gloss)
+        cols: set[str] = set()
+        for g in glosses.values():
+            if isinstance(g, dict):
+                cols |= {k for k in g if k != "meaning"}
+        if not cols:
+            continue
+        for value in sorted(set(_resolve_vocab(target))):
+            g = glosses.get(value)
+            have = (
+                {k for k in cols if str(g.get(k, "")).strip()}
+                if isinstance(g, dict)
+                else set()
+            )
+            for missing in sorted(cols - have):
+                findings.append(RefFinding(spec.name, f"{title} vocab", f"{value}.{missing}", 0))
     return findings
 
 
