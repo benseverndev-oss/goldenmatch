@@ -82,7 +82,8 @@ def main(argv: list[str]) -> int:
             print(f"wrote {write_docs(REGISTRY[name])}")
         return 0
     if "--manifest" in argv:
-        print(f"wrote {write_manifest()}")
+        for p in write_manifest():
+            print(f"wrote {p}")
         return 0
     if "--manifest-check" in argv:
         if manifest_is_current():

@@ -46,6 +46,11 @@ from .render import (
 
 SCHEMA_ID = "goldenmatch.agent-manifest/v1"
 MANIFEST_PATH = "docs/agent-manifest.json"
+# Byte-identical copy bundled into goldensuite-mcp so the deployed (pip-installed)
+# MCP server's `suite_manifest` tool works without the repo's docs/ tree. Gated
+# equal to MANIFEST_PATH, so the two can never diverge.
+BUNDLED_PATH = "packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json"
+_MANIFEST_PATHS = (MANIFEST_PATH, BUNDLED_PATH)
 _REGEN = "python scripts/gen_config_matrix.py --manifest"
 
 
@@ -327,17 +332,19 @@ def manifest_json() -> str:
     return json.dumps(build_manifest(), indent=2, ensure_ascii=False, sort_keys=False) + "\n"
 
 
-def _path() -> Path:
-    return ROOT / MANIFEST_PATH
-
-
-def write_manifest() -> Path:
-    p = _path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(manifest_json(), encoding="utf-8", newline="\n")
-    return p
+def write_manifest() -> list[Path]:
+    """Write the canonical manifest AND its bundled copy (identical bytes)."""
+    body = manifest_json()
+    written = []
+    for rel in _MANIFEST_PATHS:
+        p = ROOT / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8", newline="\n")
+        written.append(p)
+    return written
 
 
 def manifest_is_current() -> bool:
-    p = _path()
-    return p.exists() and p.read_text(encoding="utf-8") == manifest_json()
+    body = manifest_json()
+    return all((ROOT / rel).exists() and (ROOT / rel).read_text(encoding="utf-8") == body
+               for rel in _MANIFEST_PATHS)

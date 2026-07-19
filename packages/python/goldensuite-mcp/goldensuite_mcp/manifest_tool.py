@@ -63,6 +63,10 @@ _CACHE: dict[str, Any] = {}
 
 
 def _manifest_path() -> Path | None:
+    # 1) explicit override; 2) the canonical file in a repo checkout (freshest
+    # during active editing); 3) the copy bundled next to this module, which is
+    # the only one present in a pip-installed / deployed server. (2) and (3) are
+    # byte-identical -- the config-matrix gate keeps them in lockstep.
     env = os.environ.get("GOLDENSUITE_MANIFEST_PATH")
     if env:
         p = Path(env)
@@ -71,7 +75,8 @@ def _manifest_path() -> Path | None:
         cand = parent / "docs" / "agent-manifest.json"
         if cand.exists():
             return cand
-    return None
+    bundled = Path(__file__).resolve().parent / "agent-manifest.json"
+    return bundled if bundled.exists() else None
 
 
 def load_manifest() -> dict | None:

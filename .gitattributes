@@ -13,3 +13,4 @@ pnpm-lock.yaml     linguist-generated=true -diff
 # scripts/test_config_matrix.py. Force LF so the byte-for-byte drift gate can't
 # trip on a CRLF checkout (Windows dev vs Linux CI).
 docs/agent-manifest.json  linguist-generated=true -diff eol=lf
+packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json  linguist-generated=true -diff eol=lf
