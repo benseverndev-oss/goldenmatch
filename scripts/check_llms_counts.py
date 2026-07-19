@@ -82,10 +82,37 @@ def counts(pkg: str) -> dict[str, int | None]:
     return {"mcp": mcp_tools(pkg), "exports": exports(pkg), "skills": a2a_skills(pkg)}
 
 
+_DOCS_LINK = re.compile(r"https://docs\.bensevern\.dev/([A-Za-z0-9/_-]+)")
+_DEAD_DOMAIN = re.compile(r"https://[A-Za-z0-9.-]*\.github\.io/[A-Za-z0-9/_-]*")
+
+
+def doc_link_errors() -> list[str]:
+    """Network-free link check for the llms.txt: the canonical docs domain is
+    `docs.bensevern.dev` (docs.json), so a cited `docs.bensevern.dev/<path>` must
+    map to a real `docs-site/<path>.mdx`, and the old per-package `*.github.io`
+    mkdocs sites (dead post-fold) must not be referenced. Catches link rot without
+    a flaky network call."""
+    errors: list[str] = []
+    files = [ROOT / "llms.txt"] + [ROOT / f"packages/python/{p}/llms.txt" for p in PKGS]
+    for path in files:
+        if not path.exists():
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for dead in sorted(set(_DEAD_DOMAIN.findall(text))):
+            errors.append(f"{rel}: references dead github.io docs site: {dead}")
+        for sub in sorted(set(_DOCS_LINK.findall(text))):
+            if not (ROOT / "docs-site" / f"{sub}.mdx").exists():
+                errors.append(f"{rel}: docs link /{sub} has no docs-site/{sub}.mdx")
+    return errors
+
+
 def _check_file(rel: str, pattern: re.Pattern[str], expected: int, label: str,
                 errors: list[str]) -> int:
     """Assert every match of `pattern` in the file equals `expected`. Returns the
-    number of matches checked (0 => the surface doesn't state this count)."""
+    number of matches checked (0 => the surface doesn't state this count). Use for
+    surfaces where the count appears only as a clean total (the llms.txt) and for
+    export counts (never sub-counted)."""
     path = ROOT / rel
     if not path.exists():
         return 0
@@ -96,6 +123,28 @@ def _check_file(rel: str, pattern: re.Pattern[str], expected: int, label: str,
         if got != expected:
             errors.append(f"{rel}: states {got} {label}, code has {expected}")
     return seen
+
+
+def _check_total_presence(rel: str, pattern: re.Pattern[str], expected: int,
+                          label: str, errors: list[str]) -> int:
+    """Sub-count-aware check for surfaces (READMEs) that mix the grand total with
+    per-category sub-counts (e.g. goldencheck's "7 tools" for one group vs the "19
+    tools" total). The canonical total MUST appear at least once, and no stated
+    count may EXCEED it (a sub-count is always <= total; a number above it is drift
+    up, and a wrong total leaves the real total absent)."""
+    path = ROOT / rel
+    if not path.exists():
+        return 0
+    values = [int(m.group(1)) for m in pattern.finditer(path.read_text(encoding="utf-8"))]
+    if not values:
+        return 0
+    if expected not in values:
+        errors.append(f"{rel}: no '{expected} {label}' total found "
+                      f"(states {sorted(set(values))}); code has {expected}")
+    for v in values:
+        if v > expected:
+            errors.append(f"{rel}: states {v} {label}, exceeds the code total of {expected}")
+    return len(values)
 
 
 def main() -> int:
@@ -126,17 +175,24 @@ def main() -> int:
             unverified.append(f"{pkg}: llms.txt states a skill count but no _SKILLS "
                               "introspection source -- not gated")
 
-    # goldenmatch README also restates tools/skills -- lock those too.
-    gm = counts("goldenmatch")
-    if gm["mcp"] is not None:
-        _check_file("packages/python/goldenmatch/README.md", _TOOLS, gm["mcp"], "tools", errors)
-    if gm["skills"] is not None:
-        _check_file("packages/python/goldenmatch/README.md", _SKILLS, gm["skills"], "skills", errors)
+        # Package README -- exports are strict (never sub-counted); tool/skill
+        # totals use the sub-count-aware presence+ceiling rule, because READMEs
+        # mix the grand total with per-category sub-counts.
+        readme = f"packages/python/{pkg}/README.md"
+        if c["exports"] is not None:
+            _check_file(readme, _EXPORTS, c["exports"], "exports", errors)
+        if c["mcp"] is not None:
+            _check_total_presence(readme, _TOOLS, c["mcp"], "tools", errors)
+        if c["skills"] is not None:
+            _check_total_presence(readme, _SKILLS, c["skills"], "skills", errors)
 
     # Suite-level llms.txt: "N tools across the suite" == sum of per-package MCP tools.
     seen_suite = _check_file("llms.txt", _SUITE_TOTAL, suite_total, "suite tools", errors)
     if not seen_suite:
         unverified.append(f"llms.txt: no 'N tools across the suite' claim (suite total is {suite_total})")
+
+    # Doc links in the llms.txt resolve to real pages (and no dead github.io sites).
+    errors.extend(doc_link_errors())
 
     for u in unverified:
         print(f"UNVERIFIED: {u}")

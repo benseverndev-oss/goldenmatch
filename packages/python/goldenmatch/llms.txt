@@ -15,6 +15,9 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 - REST API: `goldenmatch serve` on port 8000
 - SQL: Postgres (pgrx extension) + DuckDB UDFs — dedupe / match / score / auto-config + telemetry / identity graph
 
+## AutoConfigController telemetry (cross-surface)
+Every interface above returns the same JSON shape from `goldenmatch.web.controller_telemetry.serialize_telemetry`: `{stop_reason, health, scoring, blocking, cluster, column_priors, decisions, committed_matchkeys, negative_evidence}`. Write one parser, reuse across web / TUI / CLI / SQL / MCP / A2A / REST.
+
 ## Document ingest (run on unstructured input)
 GoldenMatch doesn't require structured data. Extract matchable records from PDFs/images (cards, forms, invoices, scanned directories) against a schema you control, then dedupe them. Two-step: `suggest_schema_from_file(sample)` proposes a schema (review it), `ingest_documents(paths, schema)` returns a DataFrame -> `dedupe_df(df, exclude_columns=["_source_file","_source_page","_extract_confidence"])`. Python: `from goldenmatch.documents import ingest_documents`. CLI: `goldenmatch ingest-docs {suggest-schema, run}`. MCP tools + A2A skills: `documents_suggest_schema`, `documents_ingest`. REST: `POST /api/v1/documents/{suggest-schema, ingest}`. Web UI: `/documents`. Needs `goldenmatch[documents]` + an OpenAI vision key (`OPENAI_API_KEY_PERSONAL`; default `gpt-4o`). Docs: https://docs.bensevern.dev/goldenmatch/documents
 
@@ -144,7 +147,7 @@ GoldenMatch is the headline package of a 6-package suite that composes into one 
 - Native-dispatch telemetry (#1048, v2.1.0): `result.native` reports whether the scoring hot path used the Rust kernel; warns on a silently-slow Python fallback.
 
 ## Docs
-- [Full docs](https://benseverndev-oss.github.io/goldenmatch/): 22 guides
-- [Full API reference](https://benseverndev-oss.github.io/goldenmatch/python-api): 200 exports
+- [Full docs](https://docs.bensevern.dev/goldenmatch/overview): 22 guides
+- [Full API reference](https://docs.bensevern.dev/goldenmatch/python-api): 200 exports
 - [PyPI](https://pypi.org/project/goldenmatch/)
 - [GitHub](https://github.com/benseverndev-oss/goldenmatch)
