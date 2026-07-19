@@ -98,3 +98,17 @@ packages/python/goldengraph/goldengraph/_native*.so
 
 # scratch Modal run logs (transient)
 modal_*.log
+
+# --- Agent/session hygiene (keep the repo root readable to crawlers) ---
+# Secrets: MCP registry bearer tokens written to the repo root by local tooling.
+# These must NEVER be committed. Pattern-ignored so `git add -A` can't leak them.
+.mcpregistry_*token
+# Session build logs dropped at the root (_cargobuild.log, _pnpm.log, _uvsync.log …).
+_*.log
+# Session handoff / working-notes dumps. Point-in-time snapshots an agent can't
+# tell are stale — keep them out of the tree an agent crawls first.
+HANDOFF-*.md
+# Stray npm lockfiles. This is a pnpm workspace (pnpm-lock.yaml is authoritative);
+# a package-lock.json is drift that confuses both tooling and agents.
+package-lock.json
+**/package-lock.json

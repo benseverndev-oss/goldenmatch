@@ -1,2 +1,11 @@
 /tests/fixtures/synthetic_1m.csv filter=lfs diff=lfs merge=lfs -text
 /packages/python/goldenmatch/tests/fixtures/synthetic_1m.csv filter=lfs diff=lfs merge=lfs -text
+
+# Generated / machine-authored files. `linguist-generated` collapses them in
+# PR diffs and drops them from GitHub language stats; `-diff` stops git from
+# emitting a (useless, huge) textual diff. These are outputs, not source an
+# agent or reviewer should read line-by-line.
+**/llms.txt        linguist-generated=true -diff
+**/llms-full.txt   linguist-generated=true -diff
+uv.lock            linguist-generated=true -diff
+pnpm-lock.yaml     linguist-generated=true -diff
