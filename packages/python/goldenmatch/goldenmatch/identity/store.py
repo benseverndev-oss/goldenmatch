@@ -29,6 +29,25 @@ from goldenmatch.identity.model import (
 
 log = logging.getLogger("goldenmatch.identity")
 
+
+def _write_pipeline_enabled() -> bool:
+    """psycopg pipeline mode for the per-record identity write path
+    (the absorb / merge branches of ``resolve_clusters``). Default ON for the
+    postgres backend. Against a REMOTE Postgres (e.g. Cloud SQL) the per-record
+    path issues one statement per ``upsert_identity`` / ``emit_event`` /
+    ``upsert_record`` / ``add_edge``; #1894's single-transaction wrap removed the
+    per-commit fsync but not the per-statement NETWORK ROUND-TRIP, which is what
+    dominates at few-ms RTT (#1912 -- a ~20k-record re-resolve stayed >11 min).
+    Pipeline mode lets the client stream many statements before waiting for
+    results, collapsing ~N round-trips into a handful of syncs while preserving
+    the exact statements + rich event payloads (unlike a COPY rewrite, which
+    would drop the event payload and edge ``negative_evidence``). Kill-switch
+    ``GOLDENMATCH_IDENTITY_WRITE_PIPELINE=0`` restores per-statement writes."""
+    return os.environ.get(
+        "GOLDENMATCH_IDENTITY_WRITE_PIPELINE", "1"
+    ).strip() != "0"
+
+
 SCHEMA_VERSION = 5
 
 _SCHEMA = """
@@ -494,6 +513,30 @@ class IdentityStore:
         else:
             yield
 
+    @contextlib.contextmanager
+    def write_pipeline(self) -> Iterator[None]:
+        """Batch the per-record write path into psycopg pipeline mode (Postgres).
+
+        Wraps the ``resolve_clusters`` absorb / merge loop so its
+        ``upsert_identity`` / ``upsert_record`` / ``add_edge(return_id=False)`` /
+        ``emit_event(return_id=False)`` statements stream to the server without a
+        per-statement round-trip (see ``_write_pipeline_enabled``). No-op for
+        SQLite / Mongo and when the kill-switch is set.
+
+        COPY is not permitted in pipeline mode, so the caller must flush any bulk
+        COPY accumulators OUTSIDE this block (still inside ``bulk_writes``). Reads
+        issued inside a pipeline still work -- psycopg auto-syncs to fetch a
+        result -- but each such sync forfeits batching, so callers should
+        pre-fetch reads (e.g. ``get_identities``) before the write loop and pass
+        ``return_id=False`` to the write helpers that would otherwise read back a
+        generated id.
+        """
+        if self._backend == "postgres" and _write_pipeline_enabled():
+            with self._conn.pipeline():
+                yield
+        else:
+            yield
+
     def bulk_upsert_identities(self, df: Any) -> None:
         if self._backend != "postgres":
             raise NotImplementedError(
@@ -721,6 +764,39 @@ class IdentityStore:
         )
         return self._row_to_identity(row) if row else None
 
+    def get_identities(
+        self, entity_ids: Iterable[str]
+    ) -> dict[str, IdentityNode]:
+        """Batched ``get_identity`` -- resolve many entity ids in one (chunked)
+        round-trip. Pre-flight helper for ``resolve_clusters`` (#1912): reading
+        each cluster's existing identity from this dict instead of a per-cluster
+        ``get_identity`` SELECT keeps the absorb / merge write loop read-free, so
+        ``write_pipeline`` batches its writes without a per-cluster sync. Missing
+        ids are simply absent from the returned dict."""
+        ids = list({e for e in entity_ids if e})
+        if not ids:
+            return {}
+        if self._backend == "mongo":
+            out: dict[str, IdentityNode] = {}
+            for eid in ids:
+                node = self._mongo.get_identity(eid)
+                if node is not None:
+                    out[eid] = node
+            return out
+        # Chunk the IN-list (SQLite host-parameter cap; harmless on postgres).
+        out = {}
+        _CHUNK = 900
+        for i in range(0, len(ids), _CHUNK):
+            chunk = ids[i:i + _CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._fetchall(
+                f"SELECT * FROM identity_nodes WHERE entity_id IN ({placeholders})",
+                tuple(chunk),
+            )
+            for r in rows:
+                out[r["entity_id"]] = self._row_to_identity(r)
+        return out
+
     def list_identities(
         self,
         dataset: str | None = None,
@@ -855,7 +931,7 @@ class IdentityStore:
                 out[r["record_id"]] = r["entity_id"]
         return out
 
-    def add_edge(self, edge: EvidenceEdge) -> int | None:
+    def add_edge(self, edge: EvidenceEdge, *, return_id: bool = True) -> int | None:
         if self._backend == "mongo":
             return self._mongo.add_edge(edge)
         a, b = canon_record_pair(edge.record_a_id, edge.record_b_id)
@@ -894,6 +970,11 @@ class IdentityStore:
                         edge.recorded_at.isoformat(),
                     ),
                 )
+        # Fire-and-forget: the resolve_clusters write path ignores the edge_id,
+        # so skip the read-back -- under write_pipeline() this SELECT would force
+        # a per-edge sync and defeat the batching (#1912).
+        if not return_id:
+            return None
         row = self._fetchone(
             "SELECT edge_id FROM evidence_edges WHERE entity_id=? AND record_a_id=? "
             "AND record_b_id=? AND kind=? AND COALESCE(run_name,'')=COALESCE(?,'')",
@@ -949,7 +1030,9 @@ class IdentityStore:
             )
         return [self._row_to_edge(r) for r in rows]
 
-    def emit_event(self, event: IdentityEvent) -> int | None:
+    def emit_event(
+        self, event: IdentityEvent, *, return_id: bool = True
+    ) -> int | None:
         if self._backend == "mongo":
             return self._mongo.emit_event(event)
         payload = json.dumps(event.payload) if event.payload is not None else None
@@ -973,6 +1056,10 @@ class IdentityStore:
                 event.entry_hash, event.recorded_at.isoformat(),
             ),
         )
+        # Fire-and-forget: resolve_clusters ignores the event_id; skipping the
+        # read-back keeps write_pipeline() batching (#1912).
+        if not return_id:
+            return None
         row = self._fetchone(
             "SELECT MAX(event_id) AS event_id FROM identity_events WHERE entity_id = ?",
             (event.entity_id,),
