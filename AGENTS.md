@@ -64,6 +64,21 @@ Scope work to one package where possible: `uv run pytest packages/python/<pkg>`.
 - **Only `.github/workflows/` at the repo root runs.** Workflow files left under
   `packages/*/.github/` are orphaned and silently ignored.
 
+## Look it up instead of grepping: `docs/agent-manifest.json`
+
+`docs/agent-manifest.json` is a generated, machine-readable index of every
+package's **config schema, CLI commands, MCP tools, enumerated vocabularies
+(with `best_for` decision hints), and `<PREFIX>_*` env knobs** — for all six
+packages. Query it to answer "what scorers exist and which suits names", "what
+MCP tools does goldenpipe expose", "what's the type/default of
+`GoldenMatchConfig.threshold`", or "which env vars tune goldenmatch" without
+searching the tree.
+
+It is generated from the same registry as the CI-gated config-matrix docs
+(`scripts/config_matrix/`) and gated for drift by `scripts/test_config_matrix.py`,
+so it can't silently fall out of sync with the code. Never hand-edit it;
+regenerate with `python scripts/gen_config_matrix.py --manifest`.
+
 ## Where the deep context lives
 
 - `CLAUDE.md` (repo root) — CI structure, path filters, merge queue, release &

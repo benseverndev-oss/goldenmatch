@@ -403,6 +403,9 @@ config_matrix:
   - 'packages/rust/extensions/**/*.rs'
   - 'scripts/config_matrix/**'
   - 'scripts/gen_config_matrix.py'
+  # The agent-navigation manifest is rendered from the same registry; a hand-edit
+  # of the committed JSON must re-run the gate so it can't be tampered out of sync.
+  - 'docs/agent-manifest.json'
   - 'scripts/test_config_matrix.py'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'

@@ -1,0 +1,257 @@
+"""Agent-navigation manifest: a structured-JSON view of the SAME source of truth
+the config-matrix docs render from.
+
+Motivation: coding agents shouldn't have to grep the tree to answer "what
+scorers exist / which MCP tools does goldenpipe expose / what's the type and
+default of GoldenMatchConfig.threshold / which env knobs tune goldenmatch". The
+config-matrix registry (registry.py) + resolvers (render.py) already extract all
+of that from live code, and the docs are CI-gated against drift. This module
+reuses those exact resolvers to emit one machine-readable JSON instead of MDX
+tables, so the manifest is derived from -- and gated against -- the same code.
+It is NOT a second source of truth: `manifest_is_current()` folds into the same
+`--check` gate, so the manifest can never silently diverge from the code (or the
+docs).
+
+Determinism: every collection is built in a stable order (registry definition
+order, deterministic model BFS, sorted vocab values / tool names / CLI commands,
+source-sorted env scan) so the committed JSON is byte-stable across a Windows dev
+box and the Linux CI runner -- the same discipline the MDX gate needs.
+"""
+from __future__ import annotations
+
+import importlib
+import inspect
+import json
+import typing
+from pathlib import Path
+
+from pydantic_core import PydanticUndefined
+
+from .registry import REGISTRY, PackageSpec
+from .render import (
+    ROOT,
+    _import,
+    _meaning,
+    _neutral_repr,
+    _reachable_models,
+    _resolve_gloss,
+    _resolve_vocab,
+    _warmup,
+    render_type,
+    scan_env_vars,
+    tool_field,
+)
+
+SCHEMA_ID = "goldenmatch.agent-manifest/v1"
+MANIFEST_PATH = "docs/agent-manifest.json"
+_REGEN = "python scripts/gen_config_matrix.py --manifest"
+
+
+# --- field / kwarg extraction (shared shape for schema + constructor) --------
+
+
+def _default(default: object, factory=None) -> tuple[bool, str | None]:
+    """(required, default_repr). Mirrors render._default_repr but structured, and
+    uses the platform-neutral repr so the JSON doesn't flap by OS."""
+    if default is PydanticUndefined and factory is None:
+        return True, None
+    if factory is not None:
+        try:
+            default = factory()
+        except Exception:
+            return False, "(factory)"
+    if default is inspect.Parameter.empty:
+        return True, None
+    return False, _neutral_repr(default)
+
+
+def _field(name: str, ann: object, description, alias, required: bool, default: str | None) -> dict:
+    type_str, choices, nested = render_type(ann)
+    out: dict = {"name": name, "type": type_str, "required": required}
+    if default is not None:
+        out["default"] = default
+    if choices:
+        out["choices"] = choices
+    if nested:
+        out["nested"] = list(dict.fromkeys(n.__name__ for n in nested))
+    if description:
+        out["description"] = description.strip()
+    if alias:
+        out["alias"] = alias
+    return out
+
+
+def _config_models(roots: list[str]) -> list[dict]:
+    models, seen = [], set()
+    for target in roots:
+        for model in _reachable_models(_import(target)):
+            if model in seen:
+                continue
+            seen.add(model)
+            fields = []
+            for fname, fi in model.model_fields.items():
+                required, default = _default(fi.default, fi.default_factory)
+                fields.append(_field(fname, fi.annotation, fi.description,
+                                     getattr(fi, "alias", None), required, default))
+            entry: dict = {"name": model.__name__, "fields": fields}
+            doc = (model.__doc__ or "").strip().splitlines()
+            if doc:
+                entry["doc"] = doc[0].strip()
+            models.append(entry)
+    return models
+
+
+def _constructors(targets: list[str]) -> list[dict]:
+    out = []
+    for target in targets:
+        obj = _import(target)
+        func = obj.__init__ if isinstance(obj, type) else obj
+        fields = []
+        for pname, p in inspect.signature(func).parameters.items():
+            if pname in ("self", "args", "kwargs") or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                continue
+            required = p.default is inspect.Parameter.empty
+            default = None if required else _neutral_repr(p.default)
+            fields.append(_field(pname, p.annotation, None, None, required, default))
+        out.append({"name": obj.__name__, "fields": fields})
+    return out
+
+
+# --- CLI (Typer -> click), structured mirror of render.render_cli_section ----
+
+
+def _cli(cli_module: str) -> list[dict]:
+    from typer.main import get_command
+
+    group = get_command(importlib.import_module(cli_module).app)
+    commands: list[dict] = []
+
+    def _emit(prefix: str, cmd) -> None:
+        sub = getattr(cmd, "commands", None)
+        if sub:
+            for name in sorted(sub):
+                _emit(f"{prefix}{name} ", sub[name])
+            return
+        options = []
+        for p in cmd.params:
+            ptype = getattr(p, "type", None)
+            opt: dict = {
+                "name": _opt_name(p),
+                "type": getattr(ptype, "name", "text"),
+                "required": bool(getattr(p, "required", False)),
+            }
+            if not opt["required"]:
+                opt["default"] = _neutral_repr(p.default)
+            choices = getattr(ptype, "choices", None)
+            if choices:
+                opt["choices"] = list(choices)
+            if getattr(p, "help", None):
+                opt["help"] = p.help
+            options.append(opt)
+        commands.append({"command": prefix.strip(), "options": options})
+
+    for name in sorted(group.commands):
+        _emit(f"{name} ", group.commands[name])
+    return commands
+
+
+def _opt_name(p) -> str:
+    longs = [o for o in getattr(p, "opts", []) if o.startswith("--")]
+    if longs:
+        return longs[0]
+    return (getattr(p, "opts", None) or [getattr(p, "name", "?")])[0]
+
+
+# --- MCP tools ---------------------------------------------------------------
+
+
+def _mcp_tools(mcp_module: str) -> list[dict]:
+    try:
+        mod = importlib.import_module(mcp_module)
+    except ModuleNotFoundError:
+        return []
+    tools = getattr(mod, "TOOLS", None) or []
+    out = []
+    for t in sorted(tools, key=lambda t: tool_field(t, "name")):
+        desc = tool_field(t, "description").strip().splitlines()
+        out.append({"name": tool_field(t, "name"), "description": desc[0] if desc else ""})
+    return out
+
+
+# --- vocabularies (values + meaning + any decision columns) ------------------
+
+
+def _vocabularies(vocabs) -> list[dict]:
+    out = []
+    for entry in vocabs:
+        title, target, applies = entry[0], entry[1], entry[2]
+        gloss = entry[3] if len(entry) > 3 else None
+        glosses = _resolve_gloss(target, gloss)
+        values = []
+        for v in sorted(set(_resolve_vocab(target))):
+            g = glosses.get(v, "")
+            item: dict = {"value": v}
+            meaning = _meaning(g)
+            if meaning:
+                item["meaning"] = meaning
+            if isinstance(g, dict):
+                for k in sorted(g):
+                    if k != "meaning":
+                        item[k] = g[k]
+            values.append(item)
+        out.append({"title": title, "target": target, "applies": applies, "values": values})
+    return out
+
+
+# --- assembly ----------------------------------------------------------------
+
+
+def build_package(spec: PackageSpec) -> dict:
+    _warmup(getattr(spec, "vocab_warmup", []))
+    pkg: dict = {"nav_group": spec.nav_group, "env_prefix": spec.env_prefix, "doc_path": spec.doc_path}
+    if spec.schema_roots:
+        pkg["config_models"] = _config_models(spec.schema_roots)
+    if spec.constructors:
+        pkg["constructors"] = _constructors(spec.constructors)
+    if getattr(spec, "cli_module", None):
+        pkg["cli"] = _cli(spec.cli_module)
+    if getattr(spec, "mcp_module", None):
+        tools = _mcp_tools(spec.mcp_module)
+        if tools:
+            pkg["mcp_tools"] = tools
+    if spec.vocabs:
+        pkg["vocabularies"] = _vocabularies(spec.vocabs)
+    pkg["env_vars"] = scan_env_vars(spec.env_prefix, spec.src_dirs)
+    return pkg
+
+
+def build_manifest() -> dict:
+    return {
+        "schema": SCHEMA_ID,
+        "note": (
+            "Generated from scripts/config_matrix (same registry + resolvers as the "
+            f"CI-gated config-matrix docs). DO NOT EDIT. Regenerate: {_REGEN}"
+        ),
+        "packages": {name: build_package(spec) for name, spec in REGISTRY.items()},
+    }
+
+
+def manifest_json() -> str:
+    """Canonical serialization -- the exact bytes the gate compares."""
+    return json.dumps(build_manifest(), indent=2, ensure_ascii=False, sort_keys=False) + "\n"
+
+
+def _path() -> Path:
+    return ROOT / MANIFEST_PATH
+
+
+def write_manifest() -> Path:
+    p = _path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(manifest_json(), encoding="utf-8", newline="\n")
+    return p
+
+
+def manifest_is_current() -> bool:
+    p = _path()
+    return p.exists() and p.read_text(encoding="utf-8") == manifest_json()
