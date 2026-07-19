@@ -55,11 +55,22 @@ _GM_RUN_LANES = {"gm_hand_built", "gm_probabilistic",
 LANES: dict[str, Lane] = {
     "splink": Lane("splink", "run_splink.py"),
     "gm_hand_built": Lane("gm_hand_built", "run_goldenmatch.py", mode="hand_built"),
+    # Both FS lanes score in POSTERIOR calibration so GM's match score is a true
+    # probability on the SAME scale as Splink's, making the shared --threshold a
+    # fair cut for both engines. GM's default is `linear` (min-max of the weight
+    # envelope); at a fixed high threshold that scale mismatch admits a mass of
+    # weak-but-positive person-shape pairs and catastrophically over-merges
+    # (person 1M linear -> F1 0.00), which is a bench artifact, not a model gap.
+    # Posterior recovers precision 1.0 / zero FP at the same 0.85 cut.
     "gm_probabilistic": Lane("gm_probabilistic", "run_goldenmatch.py",
-                             mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "0"},
+                             mode="probabilistic",
+                             env={"GOLDENMATCH_FS_NATIVE": "0",
+                                  "GOLDENMATCH_FS_CALIBRATED": "posterior"},
                              extra_args=("--fs-basic-scorers",)),
     "gm_probabilistic_native": Lane("gm_probabilistic_native", "run_goldenmatch.py",
-                                    mode="probabilistic", env={"GOLDENMATCH_FS_NATIVE": "1"},
+                                    mode="probabilistic",
+                                    env={"GOLDENMATCH_FS_NATIVE": "1",
+                                         "GOLDENMATCH_FS_CALIBRATED": "posterior"},
                                     extra_args=("--fs-basic-scorers",)),
     "gm_zeroconfig": Lane("gm_zeroconfig", "run_goldenmatch.py", mode="zeroconfig"),
     "gm_converted_splink": Lane("gm_converted_splink", "run_gm_converted.py"),
