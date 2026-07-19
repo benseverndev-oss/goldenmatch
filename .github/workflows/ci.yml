@@ -3230,6 +3230,8 @@ jobs:
         run: python scripts/check_docs_consistency.py
       - name: Doc links + frontmatter (in-body cross-links resolve; MDX frontmatter valid)
         run: python scripts/check_docs_links.py
+      - name: Benchmark claims consistent with source of truth
+        run: python scripts/check_benchmark_claims.py
 
   # Mintlify render gate (BLOCKING): the docs site's OWN parser/build, which the
   # stdlib check_docs_links.py cannot replicate. `mint validate` builds the site in

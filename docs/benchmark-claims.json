@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Source of truth for the headline benchmark/perf numbers cited in the AI-facing",
+    "llms.txt and READMEs. When you re-run a benchmark (e.g. docs/benchmarks/), update",
+    "the value HERE and in every citing surface; scripts/check_benchmark_claims.py fails",
+    "until they agree, so surfaces can't disagree with each other or keep boasting a",
+    "number the engine no longer hits. LIMITATION: this locks the surfaces to this",
+    "declared value -- it does not re-run the benchmark. Bumping a value is a deliberate",
+    "act that should follow a fresh run. Authority for the current values:",
+    "docs/benchmarks/2026-06-09-splink-bakeoff.md (summary table)."
+  ],
+  "surfaces": [
+    "llms.txt",
+    "README.md",
+    "packages/python/goldenmatch/llms.txt",
+    "packages/python/goldenmatch/README.md"
+  ],
+  "claims": [
+    {"id": "historical_50k_gm_f1", "context": "historical_50k", "value": "0.778"},
+    {"id": "febrl3_gm_f1", "context": "febrl3", "value": "0.991"},
+    {"id": "synthetic_person_gm_f1", "context": "synthetic_person", "value": "0.998"},
+    {"id": "dblp_acm_gm_f1", "context": "DBLP-ACM", "value": "96.4%"},
+    {"id": "dqbench_composite", "context": "DQbench", "value": "91.04"},
+    {"id": "pprl_febrl4_f1", "context": "FEBRL4", "value": "92.4%"},
+    {"id": "scale_100m_wall", "context": "100M", "value": "9.2 min"}
+  ]
+}
