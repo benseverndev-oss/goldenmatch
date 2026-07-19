@@ -121,6 +121,54 @@ fn build_full_config<'py>(
     Ok(cfg)
 }
 
+/// Sections that only a *full* `GoldenMatchConfig` can express — the slim
+/// `exact`/`fuzzy`/`blocking`/`threshold` kwargs cannot represent custom
+/// survivorship (`golden_rules`), explicit `matchkeys`, `standardization`
+/// rules, or `negative_evidence`. When any is present the config is routed
+/// through the full Pydantic path.
+const FULL_CONFIG_KEYS: [&str; 4] = [
+    "matchkeys",
+    "golden_rules",
+    "standardization",
+    "negative_evidence",
+];
+
+/// Build the `dedupe_df` kwargs from a stored config JSON.
+///
+/// The pgrx `gm_configure` stores an opaque config blob. If it carries full
+/// `GoldenMatchConfig` sections (see `FULL_CONFIG_KEYS`) the slim kwargs would
+/// silently drop them — e.g. a `golden_rules` survivorship config never reached
+/// the golden-record composition (#1914). So when the blob is a full config we
+/// build the Pydantic object and pass it verbatim via `config=` (skips
+/// auto-config, honours every section); otherwise we forward the slim kwargs
+/// exactly as before, so existing `{"exact": [...], "fuzzy": {...}}` callers are
+/// byte-unchanged.
+fn build_dedupe_kwargs<'py>(
+    py: Python<'py>,
+    config_json: &str,
+) -> Result<Bound<'py, PyDict>, BridgeError> {
+    let json_mod = py.import("json")?;
+    let config_dict = json_mod.call_method1("loads", (config_json,))?;
+    let kwargs = PyDict::new(py);
+
+    let is_full = FULL_CONFIG_KEYS
+        .iter()
+        .any(|k| matches!(config_dict.get_item(k), Ok(v) if !v.is_none()));
+    if is_full {
+        kwargs.set_item("config", build_full_config(py, config_json)?)?;
+        return Ok(kwargs);
+    }
+
+    for key in ["exact", "fuzzy", "blocking", "threshold"] {
+        if let Ok(v) = config_dict.get_item(key) {
+            if !v.is_none() {
+                kwargs.set_item(key, v)?;
+            }
+        }
+    }
+    Ok(kwargs)
+}
+
 /// Result of a dedupe operation, returned as JSON strings for the extension
 /// layer to parse and convert to SQL tuples.
 pub struct DedupeResult {
@@ -192,32 +240,11 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
         // Build DataFrame from JSON
         let df = convert::json_to_arrow_df(py, rows_json)?;
 
-        // Parse config JSON to kwargs
-        let config_dict = json_mod.call_method1("loads", (config_json,))?;
-
-        // Call gm.dedupe_df(df, **config)
-        let kwargs = PyDict::new(py);
-        // Extract known keys from config
-        if let Ok(exact) = config_dict.get_item("exact") {
-            if !exact.is_none() {
-                kwargs.set_item("exact", exact)?;
-            }
-        }
-        if let Ok(fuzzy) = config_dict.get_item("fuzzy") {
-            if !fuzzy.is_none() {
-                kwargs.set_item("fuzzy", fuzzy)?;
-            }
-        }
-        if let Ok(blocking) = config_dict.get_item("blocking") {
-            if !blocking.is_none() {
-                kwargs.set_item("blocking", blocking)?;
-            }
-        }
-        if let Ok(threshold) = config_dict.get_item("threshold") {
-            if !threshold.is_none() {
-                kwargs.set_item("threshold", threshold)?;
-            }
-        }
+        // Parse config JSON to kwargs. A full GoldenMatchConfig blob (with
+        // golden_rules / matchkeys / standardization / negative_evidence) is
+        // routed through `config=` so those sections reach the pipeline instead
+        // of being dropped by the slim kwargs (#1914); slim blobs are unchanged.
+        let kwargs = build_dedupe_kwargs(py, config_json)?;
 
         let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
 
@@ -637,32 +664,11 @@ pub fn dedupe_pairs(rows_json: &str, config_json: &str) -> Result<Vec<ScoredPair
 
     Python::with_gil(|py| {
         let gm = py.import("goldenmatch")?;
-        let json_mod = py.import("json")?;
 
         let df = convert::json_to_arrow_df(py, rows_json)?;
-        let config_dict = json_mod.call_method1("loads", (config_json,))?;
-
-        let kwargs = PyDict::new(py);
-        if let Ok(exact) = config_dict.get_item("exact") {
-            if !exact.is_none() {
-                kwargs.set_item("exact", exact)?;
-            }
-        }
-        if let Ok(fuzzy) = config_dict.get_item("fuzzy") {
-            if !fuzzy.is_none() {
-                kwargs.set_item("fuzzy", fuzzy)?;
-            }
-        }
-        if let Ok(blocking) = config_dict.get_item("blocking") {
-            if !blocking.is_none() {
-                kwargs.set_item("blocking", blocking)?;
-            }
-        }
-        if let Ok(threshold) = config_dict.get_item("threshold") {
-            if !threshold.is_none() {
-                kwargs.set_item("threshold", threshold)?;
-            }
-        }
+        // Full-config sections (matchkeys/golden_rules/standardization/NE) are
+        // routed through `config=`; slim blobs keep the exact/fuzzy kwargs (#1914).
+        let kwargs = build_dedupe_kwargs(py, config_json)?;
 
         let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
         let scored_pairs = result.getattr("scored_pairs")?;
@@ -688,27 +694,11 @@ pub fn dedupe_clusters(
 
     Python::with_gil(|py| {
         let gm = py.import("goldenmatch")?;
-        let json_mod = py.import("json")?;
 
         let df = convert::json_to_arrow_df(py, rows_json)?;
-        let config_dict = json_mod.call_method1("loads", (config_json,))?;
-
-        let kwargs = PyDict::new(py);
-        if let Ok(exact) = config_dict.get_item("exact") {
-            if !exact.is_none() {
-                kwargs.set_item("exact", exact)?;
-            }
-        }
-        if let Ok(fuzzy) = config_dict.get_item("fuzzy") {
-            if !fuzzy.is_none() {
-                kwargs.set_item("fuzzy", fuzzy)?;
-            }
-        }
-        if let Ok(blocking) = config_dict.get_item("blocking") {
-            if !blocking.is_none() {
-                kwargs.set_item("blocking", blocking)?;
-            }
-        }
+        // Full-config sections (matchkeys/golden_rules/standardization/NE) are
+        // routed through `config=`; slim blobs keep the exact/fuzzy kwargs (#1914).
+        let kwargs = build_dedupe_kwargs(py, config_json)?;
 
         let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
         let clusters_obj = result.getattr("clusters")?;
@@ -1981,6 +1971,40 @@ mod tests {
                 assert!(v.is_object(), "stats_json not an object");
             }
             Err(e) => require_or_skip(e, "dedupe_full_basic"),
+        }
+    }
+
+    // ── #1914: the slim `dedupe()` entry must thread a full config's
+    // `golden_rules` (custom survivorship) through to golden composition. Before
+    // the fix it forwarded only exact/fuzzy/blocking/threshold, silently dropping
+    // golden_rules so `gm_golden` always used goldenmatch's default composition.
+    #[test]
+    fn test_dedupe_threads_golden_rules_survivorship() {
+        // Same email -> one cluster; the `name` field differs in length.
+        // `longest_value` on `name` MUST win "Alice" over "Al".
+        let rows = r#"[
+            {"email": "a@x.com", "name": "Al"},
+            {"email": "a@x.com", "name": "Alice"}
+        ]"#;
+        let config = r#"{
+            "matchkeys": [{"name":"k","type":"exact","fields":[{"field":"email","scorer":"exact"}]}],
+            "golden_rules": {
+                "default_strategy": "first_non_null",
+                "field_rules": {"name": {"strategy": "longest_value"}}
+            }
+        }"#;
+        match dedupe(rows, config) {
+            Ok(result) => {
+                let golden = result
+                    .golden_json
+                    .expect("golden_json should be present for a matched cluster");
+                assert!(
+                    golden.contains("Alice"),
+                    "golden record should keep the longest name via golden_rules \
+                     (survivorship must reach composition); got: {golden}"
+                );
+            }
+            Err(e) => require_or_skip(e, "dedupe_threads_golden_rules_survivorship"),
         }
     }
 
