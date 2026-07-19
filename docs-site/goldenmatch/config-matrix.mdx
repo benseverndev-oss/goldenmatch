@@ -1,0 +1,640 @@
+---
+title: "Config matrix"
+description: "The full matrix of GoldenMatch config knobs, their valid values, and how they combine -- generated from the schema so it never drifts."
+---
+
+This is the exhaustive reference for **every** GoldenMatch config knob: the
+declarative schema (`GoldenMatchConfig` and every nested object), the enumerated
+string vocabularies, and the `GOLDENMATCH_*` runtime environment knobs. It is
+built for both humans and AI agents that need a single, complete, always-current
+map of what is configurable.
+
+<Info>
+The **object reference**, **vocabularies**, and **env index** below the line are
+**generated from code** (`scripts/gen_config_matrix.py`) and verified in CI, so
+they can never silently drift from the engine. The **combinations & outcomes**
+section above the line is hand-authored guidance. For prose walkthroughs see
+[Configuration](/goldenmatch/configuration) (YAML fields), [Scoring](/goldenmatch/scoring),
+[Blocking](/goldenmatch/blocking), and [Tuning & opt-ins](/goldenmatch/tuning)
+(env-var semantics + defaults).
+</Info>
+
+## How to read this page
+
+- **Combinations & outcomes** (below) is the decision layer: which knob to reach
+  for, and what happens when knobs interact.
+- **Config object reference** is the structural layer: every field, its type, its
+  default, and its allowed Literal values, per config object.
+- **Enumerated vocabularies** lists the allowed values for the `str`-typed fields
+  (scorers, strategies, standardizers).
+- **Environment variables** indexes every `GOLDENMATCH_*` knob by area; defaults
+  and effects are in [Tuning & opt-ins](/goldenmatch/tuning).
+
+## Combinations & intended outcomes
+
+### Matchkey type: `exact` vs `weighted` vs `probabilistic`
+
+The single most consequential choice. Set per matchkey via `MatchkeyConfig.type`.
+
+| Type | You provide | Threshold | When to use | Outcome |
+|---|---|---|---|---|
+| `exact` | fields only | none | Deterministic keys (email, SSN, normalized phone). | Pair matches iff every field is identical after transforms. Fastest; no scoring. |
+| `weighted` | per-field `scorer` + `weight` + a `threshold` | required | You know the relative field importance and want an interpretable, training-free score. | Score = weighted mean over **observed** fields (a null field no longer caps the pair below threshold). |
+| `probabilistic` | fields + `scorer`; weights are EM-learned | `link_threshold` / `review_threshold` (auto if unset) | You have enough data to learn m/u weights and want best recall/precision without hand-tuning. | Fellegi-Sunter log-likelihood with EM-learned agreement/disagreement weights. Supports `levels`, `level_thresholds`, `negative_evidence`, `tf_adjustment`, and `missing` modes. Requires blocking. |
+
+### Missing values x scorer/type
+
+`MatchkeyConfig.missing` (`unobserved` vs `disagree`) is **probabilistic-only**.
+
+| Setting | Null field means | Use when | Failure mode if wrong |
+|---|---|---|---|
+| `unobserved` (default) | no evidence either way; field excluded, score renormalized over observed | missingness is at random | On null-heavy *informative*-missingness data, pairs agreeing on their few populated fields look certain -> mass over-merge (this is the `historical_50k` F1 0.83 -> 0.33 regression). |
+| `disagree` | evidence *against* a match (scored as level 0) | missingness is informative (a blank field is a real signal) | Slightly under-merges truly missing-at-random data. |
+
+- **Auto-config picks the mode** from profiled null rates (`disagree` when the worst comparison field is >= 20% null); override with `MatchkeyConfig.missing` or the global `GOLDENMATCH_FS_MISSING`.
+- **Native kernel caveat:** the native FS kernel implements only `unobserved`; a `disagree`-mode matchkey routes to the numpy path automatically (correctness over speed).
+- On **weighted** matchkeys there is no `missing` knob -- a null field is simply dropped from the weighted mean (renormalized by observed weight).
+
+### Blocking strategy x data scale
+
+`BlockingConfig.strategy` selects candidate generation. Any weighted/probabilistic
+matchkey **requires** a blocking config. A null block key means "cannot be
+blocked", never "blocks with every other null-key row" -- null keys are filtered
+across every strategy (no false mega-blocks).
+
+| Strategy | Needs | Best for | Notes |
+|---|---|---|---|
+| `static` | `keys` | Small/known equality keys | Simplest; one exact block key. |
+| `multi_pass` | `keys` or `passes` | Recall via several complementary keys | `union_mode` unions pairs across passes. |
+| `sorted_neighborhood` | `sort_key`, `window_size` | Fuzzy adjacency (typos in the key) | Sliding window over sorted rows. |
+| `learned` | recall/reduction targets | Auto-mined predicates | `learned_min_recall` / `learned_min_reduction` / `learned_predicate_depth`; cache with `learned_cache_path`. |
+| `lsh` / `simhash` / `perceptual` | the matching config block | Near-duplicate text / semantic / image | MinHash / semantic SimHash / perceptual-hash banding. |
+| `ann` | `ann_column`, `ann_model` | Embedding-neighbor recall | `ann_top_k` neighbors per row. |
+| `canopy` | `canopy` block | Cheap loose pre-grouping | Loose/tight thresholds. |
+
+Guardrails regardless of strategy: `max_block_size` + `skip_oversized`, `max_total_comparisons`, and `auto_suggest` / `auto_select` to let auto-config choose keys/strategy.
+
+### Execution routing: in-memory vs bucket vs distributed vs scale-mode
+
+Left mostly to the controller, but pinnable.
+
+| Knob | Values | Effect |
+|---|---|---|
+| `mode` | `standard` / `scale` | `scale` routes to the DataFusion out-of-core spine (handles data beyond RAM; **not** bit-identical to `standard`). |
+| `backend` | `None` (Polars) / `duckdb` / `ray` | Distributed/OOC compute backend. |
+| `distributed_routing` | per-stage `scoring` / `clustering` / `golden` = `auto` / `distributed*` / `in_process` | Pin an individual stage's route instead of letting the router decide. |
+| `n_buckets`, `prepared_record_store`, `partitioned_block_scoring` | int / bool / bool | Bucketed Parquet storage + on-disk block materialization for memory-bounded scale. |
+
+Env-level routing (see the env index): `GOLDENMATCH_BUCKET_DEFAULT` (the default in-memory bucket FS route up to ~750K rows), `GOLDENMATCH_MATCH_FUSED` (fused block->score->cluster kill-switch; fires under RSS pressure), `GOLDENMATCH_NATIVE` / `GOLDENMATCH_FRAME` (native kernel + arrow/polars frame seam). The controller **refuses** a low-confidence ("RED") auto-config at >= 100K rows unless `allow_red_config` is set.
+
+### Dedupe vs link
+
+Not an enum -- it is expressed by `InputConfig`: a single `files` list = **dedupe**
+(find duplicates within one dataset); `file_a` + `file_b` = **link** (match across
+two datasets, cross-source pairs only).
+
+### Survivorship: field rules, groups, conditional, correlated
+
+`golden_rules` decides the surviving value per field after clustering.
+
+- **`field_rules`** map a column to a `strategy` (see the survivorship vocabulary). List form = **conditional** rules (`when:` predicates over already-resolved fields, first match wins, one when-less default last).
+- **`field_groups`** pin >= 2 columns **lock-step** to one winning row (e.g. `city`/`state`/`zip` must come from the same record) via a group `strategy` (`most_complete` / `source_priority` / `most_recent` / `anchor`).
+- **Correlated / conditional / validated** survivorship runs **in-memory only** -- it is refused on the distributed/Sail paths.
+- `quality_weighting`, `weak_cluster_threshold`, `auto_split` + `max_cluster_size` control how weak/oversized clusters are downgraded or split before survivorship.
+
+### Multi-table / collective ER: `propagation_mode`
+
+For graph/relational ER across entity types (`graph.propagation_mode`):
+
+| Mode | Effect | Use when |
+|---|---|---|
+| `additive` (default) | Add a flat neighbor-evidence boost | Simple cross-entity reinforcement. |
+| `multiplicative` | Multiply by neighbor evidence | Stronger coupling. |
+| `relational` (collective) | Blend attribute + neighborhood similarity (`alpha`, `rel_threshold`, `rel_mode`) and iterate to fixpoint | Homonym-heavy data where shared neighbors disambiguate (largest F1 lift). |
+
+### Native / frame kill-switches
+
+Defaults are fast: arrow frames + native kernel where available. `GOLDENMATCH_NATIVE=auto`
+falls back to pure Python silently if the compiled wheel is absent; `=1` requires
+it (raises), `=0` forces Python. `GOLDENMATCH_FRAME=polars` restores the Polars
+frame seam (needs the `[polars]` extra). Reach for these only to reproduce a
+result across environments or to isolate a perf/parity question.
+
+{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}
+
+## Config object reference
+
+Every config object in the pydantic `GoldenMatchConfig` tree, generated from `config/schemas.py`. Nested objects link by name.
+
+### `GoldenMatchConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `input` | InputConfig \| None | `None` | [`InputConfig`](#inputconfig) |
+| `output` | OutputConfig | _(default OutputConfig)_ | [`OutputConfig`](#outputconfig) |
+| `match_settings` | MatchSettingsConfig \| None | `None` | [`MatchSettingsConfig`](#matchsettingsconfig) |
+| `matchkeys` | list[MatchkeyConfig] \| None | `None` | [`MatchkeyConfig`](#matchkeyconfig) |
+| `blocking` | BlockingConfig \| None | `None` | [`BlockingConfig`](#blockingconfig) |
+| `golden_rules` | GoldenRulesConfig \| None | `None` | [`GoldenRulesConfig`](#goldenrulesconfig) |
+| `standardization` | StandardizationConfig \| None | `None` | [`StandardizationConfig`](#standardizationconfig) |
+| `validation` | ValidationConfig \| None | `None` | [`ValidationConfig`](#validationconfig) |
+| `quality` | QualityConfig \| None | `None` | [`QualityConfig`](#qualityconfig) |
+| `transform` | TransformConfig \| None | `None` | [`TransformConfig`](#transformconfig) |
+| `llm_boost` | bool | `False` |  |
+| `llm_scorer` | LLMScorerConfig \| None | `None` | [`LLMScorerConfig`](#llmscorerconfig) |
+| `llm_auto` | bool | `False` |  |
+| `domain` | DomainConfig \| None | `None` | [`DomainConfig`](#domainconfig) |
+| `backend` | str \| None | `None` |  |
+| `distributed_routing` | DistributedRoutingConfig \| None | `None` | [`DistributedRoutingConfig`](#distributedroutingconfig) |
+| `semantic_blocking` | SemanticBlockingConfig \| None | `None` | [`SemanticBlockingConfig`](#semanticblockingconfig) |
+| `allow_slow_path` | bool | `False` |  |
+| `mode` | Literal | `'standard'` | `standard`, `scale` |
+| `planning_effort` | Literal | `'normal'` | `fast`, `normal`, `thinking`, `einstein` -- Auto-config planning-effort tier (spec 2026-06-06 §Phase 0). Controls how hard the controller searches: 'fast' = a single cheap pass; 'normal' (default) = today's interactive budget; 'thinking'/'einstein' spend the freed engine cycles on a larger sample, more refit iterations, and — at thinking+ — measuring real blocking on the full frame instead of extrapolating. Overridable via the GOLDENMATCH_PLANNING_EFFORT env var. Default 'normal' is byte-for-byte the prior behavior. |
+| `throughput` | ThroughputConfig \| None | `None` | [`ThroughputConfig`](#throughputconfig) |
+| `memory` | MemoryConfig \| None | `None` | [`MemoryConfig`](#memoryconfig) |
+| `identity` | IdentityConfig \| None | `None` | [`IdentityConfig`](#identityconfig) |
+| `exclude_columns` | list[str] | `[]` | Column names to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking. GoldenFlow transforms skip them entirely (column passes through unchanged). Layered ADDITIVELY with GoldenCheck detector-derived exclusions (#404) -- the user list is OR'd with auto-detection, not a replacement. `QualityConfig.autoconfig_force_include` still wins on conflict (rescue beats every opt-out path). Column still appears in golden record output -- exclusion is about matching + transforming, not output. See spec docs/superpowers/specs/2026-05-21-unified-column-exclusions-design.md. |
+| `prepared_record_store` | bool | `False` | When True, the prep stage (quality scan + transform + auto-fix) writes its output to a DuckDB-backed disk store keyed by config signature. Subsequent calls with the same config + data shape read prepared records from disk instead of re-prepping. Path via GOLDENMATCH_PREPARED_RECORD_STORE_DIR env var; persistence via GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST=1. Spec: docs/superpowers/specs/2026-05-15-distributed-plan-v1-design.md §Component 1. |
+| `partitioned_block_scoring` | bool | `False` | When True AND prepared_record_store is True, the pipeline materializes blocks to the disk store as a side effect of build_blocks (Component 2 Phase 2 of Distributed Plan v1). Stages on-disk blocks for Component 3 (distributed scoring); no single-process win expected. Default off. |
+| `n_buckets` | int \| None | `None` | Number of hash buckets for Component 2 v2 bucketed Parquet storage. None means use the heuristic default max(cpu_count() * 4, 64). Hard-capped at 1024. Spec: docs/superpowers/specs/2026-05-17-distributed-plan-component-2-v2-bucketed-storage-design.md §Configuration. |
+
+### `InputConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `files` | list[InputFileConfig] | `[]` | [`InputFileConfig`](#inputfileconfig) |
+| `file_a` | InputFileConfig \| None | `None` | [`InputFileConfig`](#inputfileconfig) |
+| `file_b` | InputFileConfig \| None | `None` | [`InputFileConfig`](#inputfileconfig) |
+
+### `OutputConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `path` | str \| None | `None` |  |
+| `format` | str \| None | `None` |  |
+| `directory` | str \| None | `None` |  |
+| `run_name` | str \| None | `None` |  |
+| `lineage_provenance` | bool | `False` |  |
+
+### `MatchSettingsConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `matchkeys` | list[MatchkeyConfig] | **required** | [`MatchkeyConfig`](#matchkeyconfig) |
+
+### `MatchkeyConfig`
+_A matchkey: rule for declaring two records 'the same' on a field/field-set._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `name` | str | **required** |  |
+| `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` |
+| `comparison` | str \| None | `None` |  |
+| `fields` | list[MatchkeyField] | **required** | [`MatchkeyField`](#matchkeyfield) |
+| `threshold` | float \| None | `None` |  |
+| `auto_threshold` | bool | `False` |  |
+| `rerank` | bool | `False` |  |
+| `rerank_model` | str | `'cross-encoder/ms-marco-MiniLM-L-6-v2'` |  |
+| `rerank_band` | float | `0.1` |  |
+| `negative_evidence` | list[NegativeEvidenceField] \| None | `None` | [`NegativeEvidenceField`](#negativeevidencefield) |
+| `em_iterations` | int | `20` |  |
+| `convergence_threshold` | float | `0.001` |  |
+| `link_threshold` | float \| None | `None` |  |
+| `review_threshold` | float \| None | `None` |  |
+| `model_path` | str \| None | `None` |  |
+| `missing` | Literal \| None | `None` | `unobserved`, `disagree` |
+
+### `BlockingConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `keys` | list[BlockingKeyConfig] | `[]` | [`BlockingKeyConfig`](#blockingkeyconfig) |
+| `max_block_size` | int | `5000` |  |
+| `skip_oversized` | bool | `False` |  |
+| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual` |
+| `learned_sample_size` | int | `5000` |  |
+| `learned_min_recall` | float | `0.95` |  |
+| `learned_min_reduction` | float | `0.9` |  |
+| `learned_predicate_depth` | int | `2` |  |
+| `learned_cache_path` | str \| None | `None` |  |
+| `auto_suggest` | bool | `False` |  |
+| `auto_select` | bool | `False` |  |
+| `sub_block_keys` | list[BlockingKeyConfig] \| None | `None` | [`BlockingKeyConfig`](#blockingkeyconfig) |
+| `window_size` | int | `20` |  |
+| `sort_key` | list[SortKeyField] \| None | `None` | [`SortKeyField`](#sortkeyfield) |
+| `passes` | list[BlockingKeyConfig] \| None | `None` | [`BlockingKeyConfig`](#blockingkeyconfig) |
+| `union_mode` | bool | `True` |  |
+| `max_total_comparisons` | int \| None | `None` |  |
+| `ann_column` | str \| None | `None` |  |
+| `ann_model` | str | `'all-MiniLM-L6-v2'` |  |
+| `ann_top_k` | int | `20` |  |
+| `canopy` | CanopyConfig \| None | `None` | [`CanopyConfig`](#canopyconfig) |
+| `lsh` | LSHKeyConfig \| None | `None` | [`LSHKeyConfig`](#lshkeyconfig) |
+| `simhash` | SimHashKeyConfig \| None | `None` | [`SimHashKeyConfig`](#simhashkeyconfig) |
+| `perceptual` | PerceptualKeyConfig \| None | `None` | [`PerceptualKeyConfig`](#perceptualkeyconfig) |
+
+### `GoldenRulesConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `default_strategy` | str \| None | `None` |  |
+| `default` | GoldenFieldRule \| None | `None` | [`GoldenFieldRule`](#goldenfieldrule) |
+| `field_rules` | dict[str, GoldenFieldRule \| list[GoldenFieldRule]] | `{}` | [`GoldenFieldRule`](#goldenfieldrule) |
+| `field_groups` | list[GoldenGroupRule] | `[]` | [`GoldenGroupRule`](#goldengrouprule) |
+| `field_group_detection` | bool | `False` |  |
+| `max_cluster_size` | int | `100` |  |
+| `auto_split` | bool | `True` |  |
+| `quality_weighting` | bool | `True` |  |
+| `weak_cluster_threshold` | float | `0.3` |  |
+| `split_edge_budget` | int \| None | `None` |  |
+| `adaptive` | bool | `False` |  |
+| `use_llm_for_ambiguous` | bool | `False` |  |
+| `cluster_overrides` | dict[int, dict[str, GoldenFieldRule]] \| None | `None` | [`GoldenFieldRule`](#goldenfieldrule) |
+
+### `StandardizationConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `rules` | dict[str, list[str]] | `{}` |  |
+
+### `ValidationConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `rules` | list[ValidationRuleConfig] | `[]` | [`ValidationRuleConfig`](#validationruleconfig) |
+| `auto_fix` | bool | `True` |  |
+
+### `QualityConfig`
+_GoldenCheck integration config for enhanced data quality._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `True` |  |
+| `mode` | str | `'announced'` |  |
+| `fix_mode` | str | `'safe'` |  |
+| `domain` | str \| None | `None` |  |
+| `autoconfig_force_exclude` | list[str] | `[]` |  |
+| `autoconfig_force_include` | list[str] | `[]` |  |
+
+### `TransformConfig`
+_GoldenFlow integration config for data transformation._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `True` |  |
+| `mode` | Literal | `'announced'` | `silent`, `announced`, `disabled` |
+
+### `LLMScorerConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `False` |  |
+| `provider` | str \| None | `None` |  |
+| `model` | str \| None | `None` |  |
+| `auto_threshold` | float | `0.95` |  |
+| `candidate_lo` | float | `0.75` |  |
+| `candidate_hi` | float | `0.95` |  |
+| `batch_size` | int | `75` |  |
+| `max_workers` | int | `5` |  |
+| `calibration_sample_size` | int | `100` |  |
+| `calibration_max_rounds` | int | `5` |  |
+| `calibration_convergence_delta` | float | `0.01` |  |
+| `budget` | BudgetConfig \| None | `None` | [`BudgetConfig`](#budgetconfig) |
+| `mode` | str | `'pairwise'` |  |
+| `cluster_max_size` | int | `100` |  |
+| `cluster_min_size` | int | `5` |  |
+
+### `DomainConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `False` |  |
+| `mode` | str \| None | `None` |  |
+| `confidence_threshold` | float | `0.3` |  |
+| `llm_validation` | bool | `True` |  |
+| `budget` | BudgetConfig \| None | `None` | [`BudgetConfig`](#budgetconfig) |
+
+### `DistributedRoutingConfig`
+_Per-stage distributed-routing pins. ``auto`` lets the planner decide;_
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `scoring` | Literal | `'auto'` | `auto`, `distributed`, `in_process` |
+| `clustering` | Literal | `'auto'` | `auto`, `distributed_wcc`, `in_memory_scipy` |
+| `golden` | Literal | `'auto'` | `auto`, `distributed`, `in_process` |
+
+### `SemanticBlockingConfig`
+_Opt-in semantic candidate-generation (recall-lever) config. Carries the_
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `keys` | list[Literal] | `['ann', 'initialism', 'alias']` | `ann`, `initialism`, `alias` -- Which semantic blocking keys to union into candidate generation: 'ann' (embedding nearest-neighbors), 'initialism' (initialism expansion), 'alias' (alias-table lookups). |
+| `ann_model` | str | `'inhouse'` | Embedding model id for the ANN key (e.g. 'inhouse'). |
+| `ann_top_k` | int | `20` | Number of ANN neighbors retrieved per record for candidate generation. |
+| `ann_threshold` | float | `0.5` | Minimum ANN similarity for a neighbor to become a candidate pair. |
+| `alias_tables` | list[Literal] | `['given_names', 'business']` | `given_names`, `business` -- Which alias tables the 'alias' key consults. |
+
+### `ThroughputConfig`
+_Opt-in sketch-then-verify throughput tier (#1083)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `False` |  |
+| `recall_target` | float | `0.95` |  |
+| `similarity_threshold` | float \| None | `None` |  |
+
+### `MemoryConfig`
+_Learning Memory configuration._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `True` |  |
+| `backend` | str | `'sqlite'` |  |
+| `path` | str | `'.goldenmatch/memory.db'` |  |
+| `connection` | str \| None | `None` |  |
+| `trust` | dict[str, float] | `{'human': 1.0, 'agent': 0.5}` |  |
+| `learning` | LearningConfig | _(default LearningConfig)_ | [`LearningConfig`](#learningconfig) |
+| `reanchor` | bool | `True` |  |
+| `dataset` | str \| None | `None` |  |
+| `table_prefix` | str | `''` |  |
+
+### `IdentityConfig`
+_Identity Graph configuration._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `False` |  |
+| `backend` | str | `'sqlite'` |  |
+| `path` | str | `'.goldenmatch/identity.db'` |  |
+| `connection` | str \| None | `None` |  |
+| `dataset` | str \| None | `None` |  |
+| `source_pk_column` | str \| None | `None` |  |
+| `emit_singletons` | bool | `True` |  |
+| `weak_confidence_threshold` | float | `0.6` |  |
+| `stitching` | ChannelStitchConfig \| None | `None` | [`ChannelStitchConfig`](#channelstitchconfig) |
+| `survivorship` | SurvivorshipConfig \| None | `None` | [`SurvivorshipConfig`](#survivorshipconfig) |
+| `stabilization` | StabilizationConfig \| None | `None` | [`StabilizationConfig`](#stabilizationconfig) |
+| `mediation` | MediationConfig \| None | `None` | [`MediationConfig`](#mediationconfig) |
+
+### `InputFileConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `path` | str | **required** |  |
+| `id_column` | str \| None | `None` |  |
+| `source_label` | str \| None | `None` |  |
+| `source_name` | str \| None | `None` |  |
+| `column_map` | dict[str, str] \| None | `None` |  |
+| `delimiter` | str | `','` |  |
+| `encoding` | str | `'utf8'` |  |
+| `sheet` | str \| None | `None` |  |
+| `parse_mode` | str | `'auto'` |  |
+| `header_row` | int \| None | `None` |  |
+| `has_header` | bool \| None | `None` |  |
+| `skip_rows` | list[int] \| None | `None` |  |
+
+### `MatchkeyField`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `field` | str \| None | `None` |  |
+| `column` | str \| None | `None` |  |
+| `transforms` | list[str] | `[]` |  |
+| `scorer` | str \| None | `None` |  |
+| `weight` | float \| None | `None` |  |
+| `model` | str \| None | `None` |  |
+| `columns` | list[str] \| None | `None` |  |
+| `column_weights` | dict[str, float] \| None | `None` |  |
+| `levels` | int | `2` |  |
+| `partial_threshold` | float | `0.8` |  |
+| `tf_adjustment` | bool | `False` |  |
+| `tf_freqs` | dict[str, float] \| None | `None` |  |
+| `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` |
+| `em_iterations` | int \| None | `None` |  |
+| `level_thresholds` | list[float] \| None | `None` |  |
+
+### `NegativeEvidenceField`
+_v1.11: a field whose disagreement subtracts from a weighted matchkey's_
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `field` | str | **required** |  |
+| `transforms` | list[str] | `[]` |  |
+| `scorer` | str | **required** |  |
+| `threshold` | float | **required** |  |
+| `penalty` | float \| None | `None` |  |
+| `penalty_bits` | float \| None | `None` |  |
+| `derive_from` | list[str] \| None | `None` |  |
+
+### `BlockingKeyConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `fields` | list[str] | **required** |  |
+| `transforms` | list[str] | `[]` |  |
+| `field_transforms` | dict[str, list[str]] | `{}` |  |
+
+### `SortKeyField`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `transforms` | list[str] | `[]` |  |
+
+### `CanopyConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `fields` | list[str] | **required** |  |
+| `loose_threshold` | float | `0.3` |  |
+| `tight_threshold` | float | `0.7` |  |
+| `max_canopy_size` | int | `500` |  |
+
+### `LSHKeyConfig`
+_MinHash/LSH blocking on a text column (#1081)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `mode` | Literal | `'char'` | `char`, `word` |
+| `k` | int | `3` |  |
+| `num_perms` | int | `128` |  |
+| `seed` | int | `0` |  |
+| `threshold` | float \| None | `None` |  |
+| `num_bands` | int \| None | `None` |  |
+
+### `SimHashKeyConfig`
+_SimHash/LSH blocking on a text column via dense embeddings (#1082)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `num_planes` | int | `256` |  |
+| `seed` | int | `0` |  |
+| `threshold` | float \| None | `None` |  |
+| `num_bands` | int \| None | `None` |  |
+| `model` | str \| None | `None` |  |
+
+### `PerceptualKeyConfig`
+_Banded hamming-LSH blocking over a column of perceptual hashes (ADR 0022)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `num_bands` | int | `16` |  |
+| `hash_bits` | int | `64` |  |
+
+### `GoldenFieldRule`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `strategy` | str | **required** |  |
+| `date_column` | str \| None | `None` |  |
+| `source_priority` | list[str] \| None | `None` |  |
+| `when` | str \| None | `None` |  |
+| `validate_with` _(alias `validate`)_ | str \| None | `None` |  |
+
+### `GoldenGroupRule`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `name` | str | **required** |  |
+| `columns` | list[str] | **required** |  |
+| `category` | str \| None | `None` |  |
+| `strategy` | str | `'most_complete'` |  |
+| `date_column` | str \| None | `None` |  |
+| `source_priority` | list[str] \| None | `None` |  |
+| `anchor` | str \| None | `None` |  |
+| `allow_fill` | bool | `False` |  |
+
+### `ValidationRuleConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `rule_type` | Literal | **required** | `regex`, `min_length`, `max_length`, `not_null`, `in_set`, `format` |
+| `params` | dict | `{}` |  |
+| `action` | Literal | `'flag'` | `null`, `quarantine`, `flag` |
+
+### `BudgetConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `max_cost_usd` | float \| None | `None` |  |
+| `max_calls` | int \| None | `None` |  |
+| `escalation_model` | str \| None | `None` |  |
+| `escalation_band` | list[float] | `[0.8, 0.9]` |  |
+| `escalation_budget_pct` | float | `20` |  |
+| `warn_at_pct` | float | `80` |  |
+
+### `LearningConfig`
+_Learning Memory learning parameters._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `threshold_min_corrections` | int | `10` |  |
+| `weights_min_corrections` | int | `50` |  |
+
+### `ChannelStitchConfig`
+_Cross-device / channel stitching configuration (#1110, epic #1108)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `enabled` | bool | `False` |  |
+| `device_keys` | list[str] | `[]` |  |
+| `channel_column` | str | `'channel'` |  |
+| `channel_map` | dict[str, str] | `{}` |  |
+| `channel_trust` | dict[str, float] | `{}` |  |
+| `adjust_cross_channel` | bool | `True` |  |
+| `prob_threshold` | float | `0.0` |  |
+
+### `SurvivorshipConfig`
+_Golden-record survivorship configuration (#1111, epic #1108)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `field_strategies` | dict[str, str] | `{}` |  |
+| `default_strategy` | str | `'most_complete'` |  |
+| `timestamp_column` | str \| None | `None` |  |
+| `learn_from_corrections` | bool | `False` |  |
+
+### `StabilizationConfig`
+_Cross-run entity stabilization -- Identity v3 (#1112, epic #1108)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `min_runs` | int | `3` |  |
+| `winner_strategy` | str | `'most_records'` |  |
+| `min_score` | float | `0.0` |  |
+
+### `MediationConfig`
+_Conflict mediation workflow -- Identity v3 (#1113, epic #1108)._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `auto_apply` | bool | `True` |  |
+
+## Enumerated vocabularies
+
+The allowed string values for the `str`-typed fields above, from the frozensets in `config/schemas.py`.
+
+| Vocabulary | Constant | Applies to | Values |
+|---|---|---|---|
+| Scorers | `VALID_SCORERS` | `MatchkeyField.scorer` / `NegativeEvidenceField.scorer` | `alias_match`, `audio_fp`, `date`, `dice`, `embedding`, `ensemble`, `exact`, `initialism_match`, `jaccard`, `jaro_winkler`, `levenshtein`, `phash`, `qgram`, `radial`, `record_embedding`, `soundex_match`, `token_sort` |
+| Simple transforms | `VALID_SIMPLE_TRANSFORMS` | `transforms` chains | `alpha_only`, `digits_only`, `first_token`, `last_token`, `lowercase`, `metaphone`, `normalize_whitespace`, `soundex`, `strip`, `strip_all`, `token_sort`, `uppercase` |
+| Survivorship strategies | `VALID_STRATEGIES` | `GoldenFieldRule.strategy` | `confidence_majority`, `first_non_null`, `longest_value`, `majority_vote`, `most_complete`, `most_recent`, `source_priority`, `unanimous_or_null` |
+| Group survivorship strategies | `_GROUP_STRATEGIES` | `GoldenGroupRule.strategy` | `anchor`, `most_complete`, `most_recent`, `source_priority` |
+| Standardizers | `VALID_STANDARDIZERS` | `StandardizationConfig.rules` | `address`, `email`, `name_lower`, `name_proper`, `name_upper`, `phone`, `state`, `strip`, `trim_whitespace`, `zip5` |
+| Matchkey types | `_VALID_MK_TYPES` | `MatchkeyConfig.type` | `exact`, `probabilistic`, `weighted` |
+
+Extended-grammar transforms (regex-validated, not in the set above): `substring:<start>:<end>`, `qgram:<n>`, `bloom_filter[:<a>:<b>:<c>]`. Custom survivorship: `custom:<snake_case>`. Plugin scorers/transforms resolve via the plugin registry.
+
+## Environment variables (index)
+
+147 `GOLDENMATCH_*` runtime knobs are read by the engine (Python + native kernel). This index is scanned from source so it is complete; **defaults, valid values, and effects live in [Tuning & opt-ins](/goldenmatch/tuning)**. Grouped by area:
+
+- **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
+- **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
+- **ANALYTICS** (1): `GOLDENMATCH_ANALYTICS`
+- **API** (2): `GOLDENMATCH_API_CORS_ORIGINS`, `GOLDENMATCH_API_TOKEN`
+- **AUTOCONFIG** (10): `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE`, `GOLDENMATCH_AUTOCONFIG_FORCE_EXCLUDE`, `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE`, `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET`, `GOLDENMATCH_AUTOCONFIG_LLM`, `GOLDENMATCH_AUTOCONFIG_MEMORY`, `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC`, `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_COMMIT`, `GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY`
+- **BENCH** (1): `GOLDENMATCH_BENCH_DUMP_PAIRS`
+- **BLOCKING** (8): `GOLDENMATCH_BLOCKING_CARDINALITY_SCALER`, `GOLDENMATCH_BLOCKING_DEGENERATE_MAX_AVG_BLOCK_SIZE`, `GOLDENMATCH_BLOCKING_DEGENERATE_THRESHOLD`, `GOLDENMATCH_BLOCKING_MAX_RATIO`, `GOLDENMATCH_BLOCKING_MIN_RATIO`, `GOLDENMATCH_BLOCKING_PAIRS_PER_ROW`, `GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS`, `GOLDENMATCH_BLOCKING_PRUNE_PASSES`
+- **BUCKET** (5): `GOLDENMATCH_BUCKET_DEBUG`, `GOLDENMATCH_BUCKET_DEFAULT`, `GOLDENMATCH_BUCKET_SLIM_PROJECTION`, `GOLDENMATCH_BUCKET_VEC_MAX`, `GOLDENMATCH_BUCKET_VEC_MIN`
+- **CLUSTER** (1): `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET`
+- **COLUMNAR** (1): `GOLDENMATCH_COLUMNAR_PIPELINE`
+- **CONFIG** (1): `GOLDENMATCH_CONFIG_LINT`
+- **DATABASE** (1): `GOLDENMATCH_DATABASE_URL`
+- **DISTRIBUTED** (13): `GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE`, `GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD`, `GOLDENMATCH_DISTRIBUTED_FS_TRAIN_ROWS`, `GOLDENMATCH_DISTRIBUTED_GOLDEN_THRESHOLD`, `GOLDENMATCH_DISTRIBUTED_OP_RESERVATION`, `GOLDENMATCH_DISTRIBUTED_PIPELINE`, `GOLDENMATCH_DISTRIBUTED_SCORE_CONCURRENCY`, `GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS`, `GOLDENMATCH_DISTRIBUTED_SCORE_PROJECT`, `GOLDENMATCH_DISTRIBUTED_SHUFFLE_PARTS`, `GOLDENMATCH_DISTRIBUTED_WCC`, `GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH`, `GOLDENMATCH_DISTRIBUTED_WCC_SEED`
+- **EMBEDDING** (1): `GOLDENMATCH_EMBEDDING_PROVIDER`
+- **FRAME** (2): `GOLDENMATCH_FRAME`, `GOLDENMATCH_FRAME_LANE`
+- **FS** (11): `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
+- **GOLDEN** (4): `GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_GOLDEN_SLIM_MULTIDF`, `GOLDENMATCH_GOLDEN_STRATEGY_STRICT`, `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS`
+- **GPU** (3): `GOLDENMATCH_GPU_API_KEY`, `GOLDENMATCH_GPU_ENDPOINT`, `GOLDENMATCH_GPU_MODE`
+- **HEAL** (2): `GOLDENMATCH_HEAL_MIN_HEALTH_GAIN`, `GOLDENMATCH_HEAL_STEP_CAP`
+- **IDENTITY** (2): `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT`, `GOLDENMATCH_IDENTITY_DSN`
+- **INHOUSE** (1): `GOLDENMATCH_INHOUSE_MODEL`
+- **LLM** (2): `GOLDENMATCH_LLM_BASE_URL`, `GOLDENMATCH_LLM_MODEL`
+- **MATCH** (2): `GOLDENMATCH_MATCH_FUSED`, `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS`
+- **MCP** (6): `GOLDENMATCH_MCP_ALLOW_PUBLIC`, `GOLDENMATCH_MCP_MAX_UPLOAD_BYTES`, `GOLDENMATCH_MCP_SESSION_MAX`, `GOLDENMATCH_MCP_SESSION_TTL`, `GOLDENMATCH_MCP_TOKEN`, `GOLDENMATCH_MCP_UPLOAD_TTL`
+- **NATIVE** (5): `GOLDENMATCH_NATIVE`, `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE`, `GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS`, `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS`, `GOLDENMATCH_NATIVE_SKETCH_RAYON_MIN_ROWS`
+- **NE** (1): `GOLDENMATCH_NE_TUNER_MIN_CORRECTIONS`
+- **OTHER** (37): `GOLDENMATCH_ANN_BACKEND`, `GOLDENMATCH_ANN_HNSW_EF_CONSTRUCTION`, `GOLDENMATCH_ANN_HNSW_EF_SEARCH`, `GOLDENMATCH_ANN_HNSW_M`, `GOLDENMATCH_ANN_HNSW_MAX_K`, `GOLDENMATCH_ANN_HNSW_MIN`, `GOLDENMATCH_ATTRIBUTE_DEMOTION`, `GOLDENMATCH_AUTO_SEMANTIC_BLOCKING`, `GOLDENMATCH_BASE_STORE`, `GOLDENMATCH_BRIDGE_REQUIRE_PY`, `GOLDENMATCH_DISCRIMINATIVE_TAU`, `GOLDENMATCH_DISCRIMINATIVE_VETO`, `GOLDENMATCH_DUCKDB_SCORE_DB`, `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY`, `GOLDENMATCH_FACILITY_NAME_NE`, `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`, `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`, `GOLDENMATCH_FUSED_BLOCK_CONCURRENCY`, `GOLDENMATCH_FUSED_BYTES_PER_CELL`, `GOLDENMATCH_FUSED_BYTES_PER_PAIR`, `GOLDENMATCH_FUSED_PRESSURE_FRACTION`, `GOLDENMATCH_FUSED_RSS_SCALE`, `GOLDENMATCH_LLAMA_GGUF`, `GOLDENMATCH_MULTISOURCE_AUTOCONFIG`, `GOLDENMATCH_NOISE_AWARE_SCORERS`, `GOLDENMATCH_NOISE_AWARE_TARGET`, `GOLDENMATCH_PERCEPTUAL_AUTOCONFIG`, `GOLDENMATCH_QUALITY_AWARE_BLOCKING`, `GOLDENMATCH_QUALITY_GATED_REVIEW`, `GOLDENMATCH_SEMANTIC_BLOCKING_THRESHOLD`, `GOLDENMATCH_SKIP_MATCH_LOG`, `GOLDENMATCH_STANDARDIZE_STAGED`, `GOLDENMATCH_STREAMING_BLOCK_WORKERS`, `GOLDENMATCH_TF_NAME_WEIGHTING`, `GOLDENMATCH_UDF_IMPORTS`, `GOLDENMATCH_WEAKNESS_LLM`, `GOLDENMATCH_WEAKNESS_LLM_MODEL`
+- **PLANNER** (1): `GOLDENMATCH_PLANNER_BUCKET`
+- **PLANNING** (1): `GOLDENMATCH_PLANNING_EFFORT`
+- **PREP** (3): `GOLDENMATCH_PREPARED_RECORD_STORE_DIR`, `GOLDENMATCH_PREPARED_RECORD_STORE_PERSIST`, `GOLDENMATCH_PREP_STAGED_COLLECT`
+- **SAIL** (1): `GOLDENMATCH_SAIL_IDENTITY_ID_SCHEME`
+- **SUGGEST** (10): `GOLDENMATCH_SUGGEST_COHESION`, `GOLDENMATCH_SUGGEST_COVERAGE_CAP`, `GOLDENMATCH_SUGGEST_FULL_DIST`, `GOLDENMATCH_SUGGEST_HEALTH`, `GOLDENMATCH_SUGGEST_MAX_VERIFY`, `GOLDENMATCH_SUGGEST_ON_DEDUPE`, `GOLDENMATCH_SUGGEST_RECALL_COH_ABS`, `GOLDENMATCH_SUGGEST_RECALL_MIN_SHED`, `GOLDENMATCH_SUGGEST_RECALL_RATIO`, `GOLDENMATCH_SUGGEST_VERIFY`
+- **SYNC** (1): `GOLDENMATCH_SYNC_STREAMING_THRESHOLD`
+- **THROUGHPUT** (3): `GOLDENMATCH_THROUGHPUT`, `GOLDENMATCH_THROUGHPUT_RECALL`, `GOLDENMATCH_THROUGHPUT_SIMILARITY`
+- **VECTOR** (1): `GOLDENMATCH_VECTOR_INDEX_DIR`
+- **WEB** (1): `GOLDENMATCH_WEB_TOKEN`
+
+{/* config-matrix:generated:end */}
+
+## See also
+
+- [Configuration](/goldenmatch/configuration) -- YAML field walkthroughs with examples.
+- [Tuning & opt-ins](/goldenmatch/tuning) -- `GOLDENMATCH_*` defaults, valid values, and effects.
+- [Scoring](/goldenmatch/scoring) and [Blocking](/goldenmatch/blocking) -- per-topic detail.
+- [Config linter](/goldenmatch/config-linter) -- the pre-flight rules that flag risky config.
