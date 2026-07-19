@@ -631,6 +631,9 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_FS_MONOTONIC` | `warn` | Non-monotonic EM-weight handling. `warn` (default) = detect + warn, **don't modify** (Splink posture). `enforce`/`1`/`on` = isotonic (PAV) repair. `0`/`off` = silent (no detection). |
 | `GOLDENMATCH_FS_MISSING` | per-dataset | Missing-value semantics (#1846). `unobserved` = textbook FS (a missing value is absence of evidence); `disagree` = evidence against a match. Env overrides `mk.missing`; by default auto-config picks per-dataset from profiled null rates. |
 | `GOLDENMATCH_TF_NAME_WEIGHTING` | `1` (on) | Data-driven term-frequency down-weighting for `name_freq_weighted_jw` fields (shared with the weighted path). `0` = static-census behavior. |
+| `GOLDENMATCH_FS_EM_SAMPLE_ROWS` | `100000` | Cap on the frame rows used to build EM-training blocks on the bucket route (scoring re-partitions internally, so only EM training sees the sample). Bounds the FS memory peak at scale; byte-identical F1 when `height <= cap`. `0` restores full-frame EM. |
+| `GOLDENMATCH_FS_MAX_PASS_PAIRS` | `300000000` | Global total candidate-pair budget for probabilistic-blocking auto-config. Bounds the emitted passes so a low-cardinality pass can't compound into a megablock (the OOM/over-generation gate). |
+| `GOLDENMATCH_FS_ARROW_STREAM` | `0` (off) | Opt the eligible single-matchkey FS bucket dedupe path into incremental per-bucket Arrow pair-stream accumulation (banks the exclude-set + scoring-accumulation peak). Byte-identical clusters. |
 
 **Other advanced (scorer / golden / cluster — not FS-specific)**
 
