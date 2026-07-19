@@ -10,6 +10,21 @@ from typing import Any
 
 from goldenpipe.models.stage import StageInfo
 
+# Canonical catalog of built-in stage names: the always-registered `load` plus the
+# `goldenpipe.stages` entry points declared in pyproject.toml. This is the source
+# of truth for the stage vocabulary (runtime entry-point discovery is
+# environment-dependent, so it is not); a test asserts it matches pyproject.
+BUILTIN_STAGES: frozenset[str] = frozenset({
+    "load",
+    "infer_schema",
+    "goldencheck.scan",
+    "goldenflow.transform",
+    "goldenmatch.dedupe",
+    "goldenmatch.dedupe_fused",
+    "goldenmatch.identity_resolve",
+    "goldenanalysis.report",
+})
+
 
 class StageRegistry:
     """Discovers and stores pipeline stages."""

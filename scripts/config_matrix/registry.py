@@ -293,7 +293,20 @@ REGISTRY: dict[str, PackageSpec] = {
                 "email_canonical": "Canonicalize an email (dedupe dots/plus).", "name_proper": "Proper-case a name.",
                 "phone_national": "Normalize a phone to national format.", "zip_normalize": "Normalize a ZIP code.",
             }),
+            ("Stages", "goldenpipe.engine.registry:BUILTIN_STAGES", "`StageSpec.use`", {
+                "load": "Load a source file into the pipeline frame.",
+                "infer_schema": "Infer the source schema (via infermap).",
+                "goldencheck.scan": "Run a GoldenCheck data-quality scan.",
+                "goldenflow.transform": "Run GoldenFlow transforms / standardization.",
+                "goldenmatch.dedupe": "Run GoldenMatch dedupe / entity resolution.",
+                "goldenmatch.dedupe_fused": "Run the fused GoldenMatch dedupe kernel.",
+                "goldenmatch.identity_resolve": "Resolve records against the identity graph.",
+                "goldenanalysis.report": "Run GoldenAnalysis metrics + reporting.",
+            }),
         ],
+        doc_coverage=(
+            ("stages.mdx", "goldenpipe.engine.registry:BUILTIN_STAGES"),
+        ),
     ),
     "infermap": PackageSpec(
         name="infermap",

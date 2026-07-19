@@ -161,6 +161,20 @@ _`FIXERS` -- repair-op allowlist._
 | `phone_national` | Normalize a phone to national format. |
 | `zip_normalize` | Normalize a ZIP code. |
 
+### Stages
+_`BUILTIN_STAGES` -- `StageSpec.use`._
+
+| Value | Meaning |
+|---|---|
+| `goldenanalysis.report` | Run GoldenAnalysis metrics + reporting. |
+| `goldencheck.scan` | Run a GoldenCheck data-quality scan. |
+| `goldenflow.transform` | Run GoldenFlow transforms / standardization. |
+| `goldenmatch.dedupe` | Run GoldenMatch dedupe / entity resolution. |
+| `goldenmatch.dedupe_fused` | Run the fused GoldenMatch dedupe kernel. |
+| `goldenmatch.identity_resolve` | Resolve records against the identity graph. |
+| `infer_schema` | Infer the source schema (via infermap). |
+| `load` | Load a source file into the pipeline frame. |
+
 ## Environment variables (index)
 
 1 `GOLDENPIPE_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:

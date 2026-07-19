@@ -64,6 +64,26 @@ def test_goldencheck_check_types_catalog_matches_source():
     )
 
 
+def test_goldenpipe_builtin_stages_match_pyproject():
+    # BUILTIN_STAGES is the canonical stage catalog; assert it equals the declared
+    # goldenpipe.stages entry points (+ the always-registered `load`), so it can't
+    # drift from what a fresh install actually registers.
+    import tomllib
+
+    from goldenpipe.engine.registry import BUILTIN_STAGES
+    from config_matrix.render import ROOT
+
+    pp = tomllib.loads(
+        (ROOT / "packages" / "python" / "goldenpipe" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    eps = set(pp["project"]["entry-points"]["goldenpipe.stages"])
+    assert set(BUILTIN_STAGES) == eps | {"load"}, (
+        f"BUILTIN_STAGES drifted from pyproject entry points: "
+        f"only-in-pyproject={sorted((eps | {'load'}) - set(BUILTIN_STAGES))}, "
+        f"only-in-catalog={sorted(set(BUILTIN_STAGES) - (eps | {'load'}))}"
+    )
+
+
 @pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.doc_coverage])
 def test_topical_docs_cover_the_canonical_set(name):
     # Every canonical scorer/strategy/transform/... must be documented in its
