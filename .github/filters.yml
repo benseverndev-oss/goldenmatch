@@ -389,6 +389,20 @@ api_parity:
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'
   - 'scripts/check_api_parity.py'
+# Config-matrix drift gate (scripts/gen_config_matrix.py --check). The generated
+# block of config-matrix.mdx is rendered from the pydantic schema + VALID_*
+# vocabularies + the GOLDENMATCH_* env scan, so it must re-check whenever any of
+# those move. The env scan reads the whole goldenmatch python + rust source, so
+# any .py/.rs change there can add/remove a knob -> re-run the gate.
+config_matrix:
+  - 'docs-site/goldenmatch/config-matrix.mdx'
+  - 'packages/python/goldenmatch/goldenmatch/**/*.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/config_matrix/**'
+  - 'packages/python/goldenmatch/scripts/gen_config_matrix.py'
+  - 'packages/python/goldenmatch/tests/test_config_matrix.py'
+  - 'packages/rust/extensions/**/*.rs'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the

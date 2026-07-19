@@ -119,6 +119,7 @@ jobs:
       quality_gate: ${{ steps.filter.outputs.quality_gate }}
       api_parity: ${{ steps.filter.outputs.api_parity }}
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
+      config_matrix: ${{ steps.filter.outputs.config_matrix }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -3228,6 +3229,31 @@ jobs:
       - name: Doc consistency (roster matrix + nav integrity + changelog/version)
         run: python scripts/check_docs_consistency.py
 
+  # Config-matrix drift gate (BLOCKING). The generated block of config-matrix.mdx
+  # is rendered from the pydantic GoldenMatchConfig tree + VALID_* vocabularies +
+  # the scanned GOLDENMATCH_* env set; this fails if the committed page is stale
+  # vs the live surface. Needs goldenmatch importable (pydantic introspection) +
+  # the source tree (env scan), so it uv-syncs like api_parity.
+  config_matrix:
+    needs: changes
+    if: needs.changes.outputs.config_matrix == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync goldenmatch (pure-Python; no native kernel needed for introspection)
+        run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Config-matrix drift check
+        run: uv run python packages/python/goldenmatch/scripts/gen_config_matrix.py --check
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          PYTHONPATH: packages/python/goldenmatch
+
   # Tier-2 doc-staleness ADVISORY. Diff-aware: flags a GOLDENMATCH_* env-flag
   # change with no tuning.mdx update (gating), and an __all__/re-export change
   # with no doc surface touched (warning). continue-on-error => never blocks
@@ -3475,6 +3501,7 @@ jobs:
       # were advisory -- a correct red couldn't block a merge. Now required.
       - api_parity
       - native_symbols
+      - config_matrix
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
