@@ -1,0 +1,87 @@
+---
+title: "Config matrix"
+description: "The full matrix of GoldenPipe pipeline-config knobs and vocabularies -- generated so it never drifts."
+---
+
+The exhaustive, always-current reference for GoldenPipe configuration: the
+`PipelineConfig` / `StageSpec` schema, the status/column/fixer vocabularies, and
+every `GOLDENPIPE_*` runtime knob. Built for humans and AI agents.
+
+<Info>
+Everything below the line is **generated from code** (`scripts/gen_config_matrix.py`)
+and verified in CI. The guidance above the line is hand-authored. See
+[Overview](/goldenpipe/overview) for a walkthrough.
+</Info>
+
+## How GoldenPipe is configured
+
+GoldenPipe is the orchestrator: a `PipelineConfig` is a thin envelope over a list
+of **stages**, and each stage delegates its real tuning to the suite tool it
+adapts.
+
+- **`stages`** -- a list of `StageSpec{name, use, needs, skip_if, on_error, config}`.
+  `use` names the adapter (e.g. `goldencheck.scan`, `goldenflow.transform`,
+  `goldenmatch.dedupe`, `goldenanalysis.report`); `config` is a free-form dict
+  passed straight to that tool. **So the deep knobs for a stage live in that
+  tool's own config matrix** -- see [GoldenMatch](/goldenmatch/config-matrix),
+  [GoldenCheck](/goldencheck/config-matrix), [GoldenFlow](/goldenflow/config-matrix),
+  [GoldenAnalysis](/goldenanalysis/config-matrix).
+- **`on_error`** per stage is `continue` (default) or `abort`.
+- Adapter/stage names are packaging **entry points** discovered at runtime
+  (`StageRegistry`), so the set is open/extensible and not gated here; the
+  built-ins are `load`, `infer_schema`, `goldencheck.scan`, `goldenflow.transform`,
+  `goldenmatch.dedupe`, `goldenmatch.dedupe_fused`, `goldenmatch.identity_resolve`,
+  `goldenanalysis.report`.
+
+{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}
+
+## Config object reference
+
+Every config object in the pydantic tree(s), generated from the package schema. Nested objects link by name.
+
+### `PipelineConfig`
+_Top-level pipeline configuration._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `pipeline` | str | **required** |  |
+| `source` | str \| None | `None` |  |
+| `output` | str \| None | `None` |  |
+| `stages` | list[StageSpec \| str] | **required** | [`StageSpec`](#stagespec) |
+| `decisions` | list[str] | `[]` |  |
+
+### `StageSpec`
+_Configuration for a single pipeline stage._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `name` | str \| None | `None` |  |
+| `use` | str | **required** |  |
+| `needs` | list[str] | `[]` |  |
+| `skip_if` | str \| None | `None` |  |
+| `on_error` | Literal | `'continue'` | `continue`, `abort` |
+| `config` | dict[str, Any] | `{}` |  |
+
+## Enumerated vocabularies
+
+Allowed values for the `str`-typed / registry-backed fields above.
+
+| Vocabulary | Source | Applies to | Values |
+|---|---|---|---|
+| Stage status | `StageStatus` | per-stage result status | `failed`, `skipped`, `success` |
+| Pipeline status | `PipeStatus` | run result status | `failed`, `partial`, `success` |
+| Column types | `ColumnType` | column classification | `address`, `date`, `description`, `email`, `geo`, `identifier`, `name`, `numeric`, `phone`, `string`, `zip` |
+| Cardinality bands | `CardinalityBand` | column cardinality band | ``, `high`, `low`, `mid`, `skip` |
+| Repair fixers | `FIXERS` | repair-op allowlist | `date_parse`, `email_canonical`, `email_normalize`, `fix_mojibake`, `name_proper`, `normalize_unicode`, `phone_national`, `zip_normalize` |
+
+## Environment variables (index)
+
+1 `GOLDENPIPE_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:
+
+- **NATIVE** (1): `GOLDENPIPE_NATIVE`
+
+{/* config-matrix:generated:end */}
+
+## See also
+
+- [Overview](/goldenpipe/overview) and each stage tool's own config matrix (linked above).

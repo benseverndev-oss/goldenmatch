@@ -1,0 +1,347 @@
+"""Shared config-matrix renderer for every suite package.
+
+One renderer, driven by a per-package `PackageSpec` (see registry.py). It composes
+a generated doc block from up to four section types, whichever a package declares:
+
+- **schema**: walk a root pydantic model tree (fields, types, Literal choices,
+  defaults) -- goldenmatch/goldencheck/goldenflow/goldenpipe/goldenanalysis.
+- **constructor**: render a class/function's keyword surface (name, type, default)
+  for packages whose config is call kwargs, not a model -- infermap's `MapEngine`.
+- **vocab**: resolve `module:attr` to a sorted value list, whatever its shape --
+  frozenset/set/list, Enum, Literal alias, dict (keys), or a zero-arg callable
+  (e.g. goldenflow's `list_transforms()`).
+- **env**: scan the package's Python + Rust source for its `<PREFIX>_*` env knobs.
+
+Only the text between the markers is generated; the prose around it is hand-authored.
+`docs_are_current(spec)` diffs the committed block against a fresh render; CI runs
+`scripts/gen_config_matrix.py --check <pkg>`.
+"""
+from __future__ import annotations
+
+import enum
+import importlib
+import inspect
+import pkgutil
+import re
+import types
+import typing
+from pathlib import Path
+
+from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
+
+ROOT = Path(__file__).resolve().parents[2]
+
+MARKER_START = "{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}"
+MARKER_END = "{/* config-matrix:generated:end */}"
+
+
+def _import(target: str):
+    """'pkg.mod:attr' -> the attribute."""
+    mod, _, attr = target.partition(":")
+    obj = importlib.import_module(mod)
+    for part in attr.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def _clean(text: str) -> str:
+    """MDX-safe table cell: escape the pipe and the JSX-significant chars."""
+    return (
+        text.replace("|", r"\|").replace("<", "&lt;").replace("{", "&#123;").replace("}", "&#125;")
+    )
+
+
+# --- type rendering (shared by schema + constructor sections) ---------------
+
+
+def render_type(ann: object) -> tuple[str, list[str], list[type]]:
+    """Return (type_str, literal_choices, nested_pydantic_types) for an annotation."""
+    origin = typing.get_origin(ann)
+    args = typing.get_args(ann)
+
+    if origin is typing.Union or isinstance(ann, types.UnionType):
+        parts = [a for a in args if a is not type(None)]
+        has_none = len(parts) != len(args)
+        rendered, choices, nested = [], [], []
+        for part in parts:
+            t, c, n = render_type(part)
+            rendered.append(t)
+            choices += c
+            nested += n
+        text = " | ".join(rendered) if rendered else "None"
+        if has_none:
+            text += " | None"
+        return text, choices, nested
+
+    if origin is typing.Literal:
+        return "Literal", [str(a) for a in args], []
+
+    if origin in (list, set, frozenset):
+        inner, c, n = render_type(args[0]) if args else ("", [], [])
+        name = {list: "list", set: "set", frozenset: "frozenset"}[origin]
+        return f"{name}[{inner}]", c, n
+
+    if origin is dict:
+        k = render_type(args[0])[0] if args else ""
+        v, c, n = render_type(args[1]) if len(args) > 1 else ("", [], [])
+        return f"dict[{k}, {v}]", c, n
+
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        return ann.__name__, [], [ann]
+
+    if ann is inspect.Parameter.empty:
+        return "any", [], []
+    if isinstance(ann, type):
+        return ann.__name__, [], []
+    return _clean(str(ann).replace("typing.", "")), [], []
+
+
+def _default_repr(default: object, factory=None) -> str:
+    if default is PydanticUndefined and factory is None:
+        return "**required**"
+    if factory is not None:
+        try:
+            val = factory()
+        except Exception:
+            return "_(factory)_"
+        default = val
+    if isinstance(default, BaseModel):
+        return f"_(default {type(default).__name__})_"
+    if default is inspect.Parameter.empty:
+        return "**required**"
+    return f"`{default!r}`"
+
+
+def _model_row_lines(fname: str, type_str: str, choices, nested, description, alias) -> str:
+    notes = ""
+    if choices:
+        notes = ", ".join(f"`{c}`" for c in choices)
+    elif nested:
+        notes = ", ".join(f"[`{n.__name__}`](#{n.__name__.lower()})" for n in dict.fromkeys(nested))
+    if description:
+        desc = _clean(description.strip())
+        notes = f"{notes} -- {desc}" if notes else desc
+    a = f" _(alias `{alias}`)_" if alias else ""
+    return f"| `{fname}`{a} | {_clean(type_str)} | {{default}} | {notes} |"
+
+
+# --- schema section (pydantic tree) -----------------------------------------
+
+
+def _reachable_models(root: type[BaseModel]) -> list[type[BaseModel]]:
+    ordered, seen, queue = [root], {root}, [root]
+    while queue:
+        model = queue.pop(0)
+        for fi in model.model_fields.values():
+            for tp in render_type(fi.annotation)[2]:
+                if tp not in seen:
+                    seen.add(tp)
+                    ordered.append(tp)
+                    queue.append(tp)
+    return ordered
+
+
+def render_schema_section(roots: list[str]) -> str:
+    lines = ["## Config object reference", "",
+             "Every config object in the pydantic tree(s), generated from the "
+             "package schema. Nested objects link by name.", ""]
+    seen: set[type] = set()
+    for target in roots:
+        for model in _reachable_models(_import(target)):
+            if model in seen:
+                continue
+            seen.add(model)
+            lines.append(f"### `{model.__name__}`")
+            doc = (model.__doc__ or "").strip().splitlines()
+            if doc:
+                lines.append(f"_{doc[0].strip()}_")
+            lines.append("")
+            lines.append("| Field | Type | Default | Choices / notes |")
+            lines.append("|---|---|---|---|")
+            for fname, fi in model.model_fields.items():
+                type_str, choices, nested = render_type(fi.annotation)
+                row = _model_row_lines(fname, type_str, choices, nested, fi.description,
+                                       getattr(fi, "alias", None))
+                lines.append(row.replace("{default}", _default_repr(fi.default, fi.default_factory)))
+            lines.append("")
+    return "\n".join(lines)
+
+
+# --- constructor section (kwargs surface) -----------------------------------
+
+
+def render_constructor_section(targets: list[str]) -> str:
+    lines = ["## Runtime options", "",
+             "Config passed as call keyword arguments (this package has no single "
+             "config model). Generated from the signature.", ""]
+    for target in targets:
+        obj = _import(target)
+        func = obj.__init__ if isinstance(obj, type) else obj
+        label = obj.__name__ + ("(...)" if not isinstance(obj, type) else "")
+        lines.append(f"### `{label}`")
+        lines.append("")
+        lines.append("| Argument | Type | Default | Choices / notes |")
+        lines.append("|---|---|---|---|")
+        for pname, p in inspect.signature(func).parameters.items():
+            if pname in ("self", "args", "kwargs") or p.kind in (
+                p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                continue
+            type_str, choices, nested = render_type(p.annotation)
+            row = _model_row_lines(pname, type_str, choices, nested, None, None)
+            lines.append(row.replace("{default}", _default_repr(p.default)))
+        lines.append("")
+    return "\n".join(lines)
+
+
+# --- vocab section (flexible resolver) --------------------------------------
+
+
+def _resolve_vocab(target: str) -> list[str]:
+    obj = _import(target)
+    if typing.get_origin(obj) is typing.Literal:
+        return [str(a) for a in typing.get_args(obj)]
+    if typing.get_origin(obj) in (typing.Union, types.UnionType) or isinstance(obj, types.UnionType):
+        out: list[str] = []
+        for a in typing.get_args(obj):
+            if typing.get_origin(a) is typing.Literal:
+                out += [str(x) for x in typing.get_args(a)]
+        return out
+    if isinstance(obj, type) and issubclass(obj, enum.Enum):
+        return [m.value if isinstance(m.value, str) else m.name for m in obj]
+    if inspect.isroutine(obj):
+        obj = obj()
+    if isinstance(obj, dict):
+        return [str(k) for k in obj.keys()]
+    if isinstance(obj, (set, frozenset, list, tuple)):
+        return [_item_name(v) for v in obj]
+    return [_item_name(obj)]
+
+
+def _item_name(v: object) -> str:
+    """A vocab value's display token: the string itself, else its `.name`
+    attribute (registry records like goldenflow's `TransformInfo`), else repr.
+    Never str() an object whose repr embeds a memory address -- that flaps the gate."""
+    if isinstance(v, str):
+        return v
+    name = getattr(v, "name", None)
+    if isinstance(name, str):
+        return name
+    return str(v)
+
+
+def _render_vocab_section(vocabs: list[tuple[str, str, str]]) -> str:
+    lines = ["## Enumerated vocabularies", "",
+             "Allowed values for the `str`-typed / registry-backed fields above.", "",
+             "| Vocabulary | Source | Applies to | Values |",
+             "|---|---|---|---|"]
+    for title, target, applies in vocabs:
+        values = sorted(set(_resolve_vocab(target)))
+        rendered = ", ".join(f"`{_clean(v)}`" for v in values)
+        const = target.split(":")[-1]
+        lines.append(f"| {title} | `{const}` | {applies} | {rendered} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --- env section ------------------------------------------------------------
+
+_ENV_RE_TMPL = r'''["'](%s_[A-Z0-9_]+)["']'''
+
+
+def scan_env_vars(prefix: str, src_dirs: list[str]) -> dict[str, list[str]]:
+    rx = re.compile(_ENV_RE_TMPL % re.escape(prefix.rstrip("_")))
+    names: set[str] = set()
+    for rel in src_dirs:
+        root = ROOT / rel
+        if not root.exists():
+            continue
+        for path in list(root.rglob("*.py")) + list(root.rglob("*.rs")):
+            parts = path.parts
+            if "tests" in parts or path.name.startswith("test_") or path.name.endswith("_test.py"):
+                continue
+            try:
+                names.update(rx.findall(path.read_text(encoding="utf-8", errors="ignore")))
+            except OSError:
+                continue
+    groups: dict[str, list[str]] = {}
+    plen = len(prefix.rstrip("_")) + 1
+    for name in names:
+        token = name[plen:].split("_", 1)[0] or "OTHER"
+        groups.setdefault(token, []).append(name)
+    return {k: sorted(v) for k, v in sorted(groups.items())}
+
+
+def _render_env_section(prefix: str, src_dirs: list[str], tuning_link: str | None) -> str:
+    groups = scan_env_vars(prefix, src_dirs)
+    total = sum(len(v) for v in groups.values())
+    detail = f" Details in [Tuning & opt-ins]({tuning_link})." if tuning_link else ""
+    lines = ["## Environment variables (index)", "",
+             f"{total} `{prefix}*` runtime knob(s) read by the package, scanned "
+             f"from source so this is complete.{detail} Grouped by area:", ""]
+    if not total:
+        lines.append("_(none)_")
+    for group, envs in groups.items():
+        lines.append(f"- **{group}** ({len(envs)}): " + ", ".join(f"`{e}`" for e in envs))
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --- assembly + splice + diff -----------------------------------------------
+
+
+def _warmup(packages: list[str]) -> None:
+    """Deterministically import every submodule of the given packages so lazy
+    decorator registries (e.g. goldenflow's `@register_transform`) are fully
+    populated regardless of what else happened to be imported first. Without this
+    a registry-backed vocab would vary by import order and flap the gate."""
+    for pkgname in packages:
+        try:
+            pkg = importlib.import_module(pkgname)
+        except Exception:
+            continue
+        for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + "."):
+            try:
+                importlib.import_module(m.name)
+            except Exception:
+                continue
+
+
+def render_generated_block(spec) -> str:
+    _warmup(getattr(spec, "vocab_warmup", []))
+    parts: list[str] = []
+    if spec.schema_roots:
+        parts.append(render_schema_section(spec.schema_roots).rstrip())
+    if spec.constructors:
+        parts.append(render_constructor_section(spec.constructors).rstrip())
+    if spec.vocabs:
+        parts.append(_render_vocab_section(spec.vocabs).rstrip())
+    parts.append(_render_env_section(spec.env_prefix, spec.src_dirs, spec.tuning_link).rstrip())
+    body = "\n\n".join(parts)
+    return f"{MARKER_START}\n\n{body}\n\n{MARKER_END}"
+
+
+def _doc_path(spec) -> Path:
+    return ROOT / spec.doc_path
+
+
+def _splice(existing: str, block: str) -> str:
+    start, end = existing.find(MARKER_START), existing.find(MARKER_END)
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("config-matrix markers missing or malformed")
+    return existing[:start] + block + existing[end + len(MARKER_END):]
+
+
+def _rendered_full(spec) -> str:
+    return _splice(_doc_path(spec).read_text(encoding="utf-8"), render_generated_block(spec))
+
+
+def docs_are_current(spec) -> bool:
+    p = _doc_path(spec)
+    return p.exists() and p.read_text(encoding="utf-8") == _rendered_full(spec)
+
+
+def write_docs(spec) -> Path:
+    p = _doc_path(spec)
+    p.write_text(_rendered_full(spec), encoding="utf-8", newline="\n")
+    return p

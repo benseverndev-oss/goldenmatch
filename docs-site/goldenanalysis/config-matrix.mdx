@@ -1,0 +1,78 @@
+---
+title: "Config matrix"
+description: "The full matrix of GoldenAnalysis config options and vocabularies -- generated so it never drifts."
+---
+
+The exhaustive, always-current reference for GoldenAnalysis configuration.
+GoldenAnalysis is read-only metrics + reporting, so its config surface is small:
+`analyze(...)` keyword arguments, the regression `RegressionPolicy`, and a couple
+of vocabularies. This page consolidates them into one gated reference.
+
+<Info>
+Everything below the line is **generated from code** (`scripts/gen_config_matrix.py`)
+and verified in CI. The guidance above the line is hand-authored. See
+[Overview](/goldenanalysis/overview) and [Cross-run](/goldenanalysis/cross-run).
+</Info>
+
+## How GoldenAnalysis is configured
+
+- **Run knobs** are `analyze(...)` keyword arguments (see **Runtime options**):
+  `analyzers` (which analyzers to run; `None` = all frame-compatible), `dataset`,
+  `run_id`, `generated_at`.
+- **Regression gating** uses a `RegressionPolicy` (`default_pct` plus optional
+  `per_metric` overrides). A metric's `Direction` (`higher_better` /
+  `lower_better` / `neutral`) decides which way a change counts as a regression,
+  compared against a chosen `Baseline` (`previous` / `rolling_median` /
+  `last_known_good`).
+- Analyzers are an open registry (`frame.summary`, `match.rates`,
+  `cluster.distribution`, `quality.rollup`, plus any third-party entry points), so
+  the analyzer set is extensible and not gated here.
+
+{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}
+
+## Config object reference
+
+Every config object in the pydantic tree(s), generated from the package schema. Nested objects link by name.
+
+### `RegressionPolicy`
+_Per-metric regression thresholds (percent). Falls back to ``default_pct``._
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `default_pct` | float | `10.0` |  |
+| `per_metric` | dict[str, float] | `{}` |  |
+
+## Runtime options
+
+Config passed as call keyword arguments (this package has no single config model). Generated from the signature.
+
+### `analyze(...)`
+
+| Argument | Type | Default | Choices / notes |
+|---|---|---|---|
+| `df` | pl.DataFrame | **required** |  |
+| `analyzers` | Sequence[str] \\| None | `None` |  |
+| `dataset` | str \\| None | `None` |  |
+| `run_id` | str \\| None | `None` |  |
+| `generated_at` | datetime \\| None | `None` |  |
+
+## Enumerated vocabularies
+
+Allowed values for the `str`-typed / registry-backed fields above.
+
+| Vocabulary | Source | Applies to | Values |
+|---|---|---|---|
+| Metric direction | `Direction` | `Metric.direction` | `higher_better`, `lower_better`, `neutral` |
+| Regression baseline | `Baseline` | `--baseline` | `last_known_good`, `previous`, `rolling_median` |
+
+## Environment variables (index)
+
+1 `GOLDENANALYSIS_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:
+
+- **NATIVE** (1): `GOLDENANALYSIS_NATIVE`
+
+{/* config-matrix:generated:end */}
+
+## See also
+
+- [Overview](/goldenanalysis/overview), [Cross-run](/goldenanalysis/cross-run), [Native](/goldenanalysis/native).
