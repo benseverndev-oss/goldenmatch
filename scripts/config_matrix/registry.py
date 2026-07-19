@@ -34,6 +34,7 @@ class PackageSpec:
 REGISTRY: dict[str, PackageSpec] = {
     "goldenmatch": PackageSpec(
         name="goldenmatch",
+        require_full_coverage=True,
         doc_path="docs-site/goldenmatch/config-matrix.mdx",
         nav_group="GoldenMatch",
         env_prefix="GOLDENMATCH_",
@@ -71,6 +72,7 @@ REGISTRY: dict[str, PackageSpec] = {
     ),
     "goldenflow": PackageSpec(
         name="goldenflow",
+        require_full_coverage=True,
         doc_path="docs-site/goldenflow/config-matrix.mdx",
         nav_group="GoldenFlow",
         env_prefix="GOLDENFLOW_",
@@ -120,6 +122,7 @@ REGISTRY: dict[str, PackageSpec] = {
     ),
     "goldenanalysis": PackageSpec(
         name="goldenanalysis",
+        require_full_coverage=True,
         doc_path="docs-site/goldenanalysis/config-matrix.mdx",
         nav_group="GoldenAnalysis",
         env_prefix="GOLDENANALYSIS_",

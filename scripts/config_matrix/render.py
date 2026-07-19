@@ -242,6 +242,13 @@ def render_cli_section(cli_module: str) -> str:
 # --- MCP section (tool surface) ---------------------------------------------
 
 
+def tool_field(t, key: str) -> str:
+    """A tool's name/description, whether TOOLS holds mcp Tool objects (attrs)
+    or plain dicts (goldenflow) -- so coverage + rendering agree either way."""
+    val = t.get(key, "") if isinstance(t, dict) else getattr(t, key, "")
+    return val or ""
+
+
 def render_mcp_section(mcp_module: str) -> str:
     try:
         mod = importlib.import_module(mcp_module)
@@ -254,9 +261,9 @@ def render_mcp_section(mcp_module: str) -> str:
              f"{len(tools)} MCP tool(s) exposed by `{mcp_module}` -- the programmatic / "
              "agent surface. Config-bearing tools take the same knobs as above.", "",
              "| Tool | Description |", "|---|---|"]
-    for t in sorted(tools, key=lambda t: getattr(t, "name", "")):
-        desc = (getattr(t, "description", "") or "").strip().splitlines()
-        lines.append(f"| `{getattr(t, 'name', '?')}` | {_clean(desc[0] if desc else '')} |")
+    for t in sorted(tools, key=lambda t: tool_field(t, "name")):
+        desc = tool_field(t, "description").strip().splitlines()
+        lines.append(f"| `{tool_field(t, 'name') or '?'}` | {_clean(desc[0] if desc else '')} |")
     lines.append("")
     return "\n".join(lines)
 

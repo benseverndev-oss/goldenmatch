@@ -60,7 +60,9 @@ _BLOOM_FILTER_RE = re.compile(r"^bloom_filter:\d+:\d+:\d+$")
 
 
 class FieldTransform(BaseModel):
-    transform: str
+    transform: str = Field(
+        description="Name of the normalization to apply, such as a simple transform, 'substring:start:end', 'qgram:n', 'bloom_filter', or a registered plugin transform.",
+    )
 
     @model_validator(mode="after")
     def _validate_transform(self) -> FieldTransform:
@@ -361,10 +363,22 @@ class RulesPayload(BaseModel):
     Absent (``None``) means "let the engine pick" — the workbench's
     historical default of ``auto_suggest=True`` with no static keys.
     """
-    threshold: float = Field(ge=0.0, le=1.0)
-    matchkeys: list[MatchkeyField]
-    standardization: dict[str, list[str]] | None = None
-    blocking: BlockingConfig | None = None
+    threshold: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Score at or above which a pair is accepted as a match across the payload's matchkeys.",
+    )
+    matchkeys: list[MatchkeyField] = Field(
+        description="Flat list of field-level match rules the workbench translates into engine matchkeys.",
+    )
+    standardization: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Per-column standardizer names applied before matching; validated against VALID_STANDARDIZERS.",
+    )
+    blocking: BlockingConfig | None = Field(
+        default=None,
+        description="Blocking strategy and keys to pin; None lets the engine auto-suggest candidate generation.",
+    )
 
     @model_validator(mode="after")
     def _validate_standardizers(self) -> RulesPayload:
@@ -650,10 +664,21 @@ class SortKeyField(BaseModel):
 
 
 class CanopyConfig(BaseModel):
-    fields: list[str]
-    loose_threshold: float = 0.3
-    tight_threshold: float = 0.7
-    max_canopy_size: int = 500
+    fields: list[str] = Field(
+        description="Columns used to compute cheap similarity when forming canopies.",
+    )
+    loose_threshold: float = Field(
+        default=0.3,
+        description="Loose similarity at or above which a record joins a canopy as a candidate.",
+    )
+    tight_threshold: float = Field(
+        default=0.7,
+        description="Tight similarity at or above which a record is removed from the pool so it seeds no new canopy.",
+    )
+    max_canopy_size: int = Field(
+        default=500,
+        description="Ceiling on records in one canopy, capping the candidate pairs it can generate.",
+    )
 
 
 class LSHKeyConfig(BaseModel):
@@ -665,13 +690,33 @@ class LSHKeyConfig(BaseModel):
     ignored). Shingle ``mode`` is char- or word-grams of size ``k``.
     """
 
-    column: str
-    mode: Literal["char", "word"] = "char"
-    k: int = 3
-    num_perms: int = 128
-    seed: int = 0
-    threshold: float | None = None
-    num_bands: int | None = None
+    column: str = Field(
+        description="Text column MinHash/LSH blocks on to group near-duplicate strings.",
+    )
+    mode: Literal["char", "word"] = Field(
+        default="char",
+        description="Whether shingles are character-grams or word-grams before hashing.",
+    )
+    k: int = Field(
+        default=3,
+        description="Shingle size (number of chars or words per gram).",
+    )
+    num_perms: int = Field(
+        default=128,
+        description="Number of MinHash permutations; more permutations sharpen the similarity estimate at higher cost.",
+    )
+    seed: int = Field(
+        default=0,
+        description="Random seed making the MinHash permutations reproducible.",
+    )
+    threshold: float | None = Field(
+        default=None,
+        description="Target Jaccard similarity from which the band/row split is derived when num_bands is unset.",
+    )
+    num_bands: int | None = Field(
+        default=None,
+        description="Explicit LSH band count (must divide num_perms); overrides threshold when set.",
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> LSHKeyConfig:
@@ -705,12 +750,29 @@ class SimHashKeyConfig(BaseModel):
     ignored).
     """
 
-    column: str
-    num_planes: int = 256
-    seed: int = 0
-    threshold: float | None = None
-    num_bands: int | None = None
-    model: str | None = None
+    column: str = Field(
+        description="Text column embedded then SimHash-blocked to group semantically near records.",
+    )
+    num_planes: int = Field(
+        default=256,
+        description="Number of random hyperplanes the embedding is projected through to form the SimHash signature.",
+    )
+    seed: int = Field(
+        default=0,
+        description="Random seed making the SimHash hyperplanes reproducible.",
+    )
+    threshold: float | None = Field(
+        default=None,
+        description="Target cosine similarity from which the band/row split is derived when num_bands is unset.",
+    )
+    num_bands: int | None = Field(
+        default=None,
+        description="Explicit LSH band count (must divide num_planes); overrides threshold when set.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Embedding model used to vectorize the column; None uses the in-house ER embedder.",
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> SimHashKeyConfig:
@@ -746,9 +808,17 @@ class PerceptualKeyConfig(BaseModel):
     knob for an explicit config.
     """
 
-    column: str
-    num_bands: int = 16
-    hash_bits: int = 64
+    column: str = Field(
+        description="Column holding fixed-width hex perceptual hashes to block media near-duplicates on.",
+    )
+    num_bands: int = Field(
+        default=16,
+        description="Number of contiguous bit-bands the hash is split into; more bands raise recall and candidate pairs.",
+    )
+    hash_bits: int = Field(
+        default=64,
+        description="Total bit width of the perceptual hash; must be a positive multiple of num_bands.",
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> PerceptualKeyConfig:
@@ -768,9 +838,22 @@ class ThroughputConfig(BaseModel):
     similarity (Jaccard 0.8 lexical / cosine 0.85 semantic, chosen by metric).
     """
 
-    enabled: bool = False
-    recall_target: float = Field(default=0.95, gt=0.0, lt=1.0)
-    similarity_threshold: float | None = Field(default=None, gt=0.0, lt=1.0)
+    enabled: bool = Field(
+        default=False,
+        description="Turns on the sketch-then-verify throughput tier in place of per-field fuzzy/FS scoring.",
+    )
+    recall_target: float = Field(
+        default=0.95,
+        gt=0.0,
+        lt=1.0,
+        description="Desired blocking recall the sketch tier tunes its band count toward.",
+    )
+    similarity_threshold: float | None = Field(
+        default=None,
+        gt=0.0,
+        lt=1.0,
+        description="Overrides the default near-duplicate similarity cutoff; None uses the metric-specific default.",
+    )
 
 
 class BlockingConfig(BaseModel):
@@ -1160,23 +1243,51 @@ VALID_STANDARDIZERS = frozenset({
 
 
 class ValidationRuleConfig(BaseModel):
-    column: str
-    rule_type: Literal["regex", "min_length", "max_length", "not_null", "in_set", "format"]
-    params: dict = Field(default_factory=dict)
-    action: Literal["null", "quarantine", "flag"] = "flag"
+    column: str = Field(
+        description="Column the validation rule is checked against.",
+    )
+    rule_type: Literal["regex", "min_length", "max_length", "not_null", "in_set", "format"] = Field(
+        description="Kind of check applied to the column's values.",
+    )
+    params: dict = Field(
+        default_factory=dict,
+        description="Rule-specific parameters, such as the pattern, length bound, or allowed set.",
+    )
+    action: Literal["null", "quarantine", "flag"] = Field(
+        default="flag",
+        description="What happens to a failing value: null it out, quarantine the row, or just flag it.",
+    )
 
 
 class ValidationConfig(BaseModel):
-    rules: list[ValidationRuleConfig] = Field(default_factory=list)
-    auto_fix: bool = True  # whether to run auto-fix before validation
+    rules: list[ValidationRuleConfig] = Field(
+        default_factory=list,
+        description="Per-column validation rules run against the input before matching.",
+    )
+    auto_fix: bool = Field(
+        default=True,
+        description="Runs GoldenFlow auto-fix on the data before validation executes.",
+    )  # whether to run auto-fix before validation
 
 
 class QualityConfig(BaseModel):
     """GoldenCheck integration config for enhanced data quality."""
-    enabled: bool = True       # auto-detected: True if goldencheck installed
-    mode: str = "announced"    # "silent" | "announced" | "disabled"
-    fix_mode: str = "safe"     # "safe" | "moderate" | "none"
-    domain: str | None = None  # "healthcare" | "finance" | "ecommerce"
+    enabled: bool = Field(
+        default=True,
+        description="Enables GoldenCheck quality scanning and fixes; auto-detected true when goldencheck is installed.",
+    )       # auto-detected: True if goldencheck installed
+    mode: str = Field(
+        default="announced",
+        description="How quality findings are surfaced: 'silent', 'announced', or 'disabled'.",
+    )    # "silent" | "announced" | "disabled"
+    fix_mode: str = Field(
+        default="safe",
+        description="How aggressively quality fixes are applied: 'safe', 'moderate', or 'none'.",
+    )     # "safe" | "moderate" | "none"
+    domain: str | None = Field(
+        default=None,
+        description="Domain pack tuning the quality checks, such as 'healthcare', 'finance', or 'ecommerce'.",
+    )  # "healthcare" | "finance" | "ecommerce"
 
     # Auto-config column-exclusion overrides (#404). The exclusion
     # detectors in `core.quality_exclusions` identify columns that are
@@ -1190,18 +1301,33 @@ class QualityConfig(BaseModel):
     #   - autoconfig_force_include: columns to RESCUE from any
     #     auto-detection. Useful for legitimate hash columns used in
     #     PPRL, etc. force_include wins on conflict.
-    autoconfig_force_exclude: list[str] = Field(default_factory=list)
-    autoconfig_force_include: list[str] = Field(default_factory=list)
+    autoconfig_force_exclude: list[str] = Field(
+        default_factory=list,
+        description="Columns always excluded from matching regardless of auto-detection.",
+    )
+    autoconfig_force_include: list[str] = Field(
+        default_factory=list,
+        description="Columns rescued from any auto-exclusion; wins on conflict with force_exclude.",
+    )
 
 
 class TransformConfig(BaseModel):
     """GoldenFlow integration config for data transformation."""
-    enabled: bool = True       # auto-detected: True if goldenflow installed
-    mode: Literal["silent", "announced", "disabled"] = "announced"
+    enabled: bool = Field(
+        default=True,
+        description="Enables GoldenFlow data transformation; auto-detected true when goldenflow is installed.",
+    )       # auto-detected: True if goldenflow installed
+    mode: Literal["silent", "announced", "disabled"] = Field(
+        default="announced",
+        description="How applied transforms are surfaced: 'silent', 'announced', or 'disabled'.",
+    )
 
 
 class StandardizationConfig(BaseModel):
-    rules: dict[str, list[str]] = Field(default_factory=dict)
+    rules: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Per-column ordered standardizer names applied before matching.",
+    )
 
     @model_validator(mode="after")
     def _validate_standardizers(self) -> StandardizationConfig:
@@ -1219,81 +1345,218 @@ class StandardizationConfig(BaseModel):
 
 
 class InputFileConfig(BaseModel):
-    path: str
-    id_column: str | None = None
-    source_label: str | None = None
-    source_name: str | None = None
-    column_map: dict[str, str] | None = None
-    delimiter: str = ","
-    encoding: str = "utf8"
-    sheet: str | None = None
-    parse_mode: str = "auto"  # auto, delimited, fixed_width, key_value, block, entity_extract
-    header_row: int | None = None
-    has_header: bool | None = None
-    skip_rows: list[int] | None = None
+    path: str = Field(
+        description="Filesystem path to the input data file.",
+    )
+    id_column: str | None = Field(
+        default=None,
+        description="Column holding a stable record identifier; a row index is used when unset.",
+    )
+    source_label: str | None = Field(
+        default=None,
+        description="Human-readable label attached to records from this file.",
+    )
+    source_name: str | None = Field(
+        default=None,
+        description="Source name recorded on each record for provenance and source-priority survivorship.",
+    )
+    column_map: dict[str, str] | None = Field(
+        default=None,
+        description="Renames raw file columns to canonical names before matching.",
+    )
+    delimiter: str = Field(
+        default=",",
+        description="Field delimiter for delimited text files.",
+    )
+    encoding: str = Field(
+        default="utf8",
+        description="Character encoding used to decode the file.",
+    )
+    sheet: str | None = Field(
+        default=None,
+        description="Worksheet name to read from an Excel workbook.",
+    )
+    parse_mode: str = Field(
+        default="auto",
+        description="How the file is parsed: auto, delimited, fixed_width, key_value, block, or entity_extract.",
+    )  # auto, delimited, fixed_width, key_value, block, entity_extract
+    header_row: int | None = Field(
+        default=None,
+        description="Zero-based row index that holds column headers.",
+    )
+    has_header: bool | None = Field(
+        default=None,
+        description="Whether the file has a header row; None lets the parser infer it.",
+    )
+    skip_rows: list[int] | None = Field(
+        default=None,
+        description="Row indices to skip while reading, such as banner or junk lines.",
+    )
 
 
 class InputConfig(BaseModel):
-    files: list[InputFileConfig] = Field(default_factory=list)
-    file_a: InputFileConfig | None = None
-    file_b: InputFileConfig | None = None
+    files: list[InputFileConfig] = Field(
+        default_factory=list,
+        description="Input files to load and combine, used for deduplication across one or more sources.",
+    )
+    file_a: InputFileConfig | None = Field(
+        default=None,
+        description="First file in a two-source record-linkage (match) run.",
+    )
+    file_b: InputFileConfig | None = Field(
+        default=None,
+        description="Second file matched against file_a in a two-source record-linkage run.",
+    )
 
 
 # ── OutputConfig ────────────────────────────────────────────────────────────
 
 
 class OutputConfig(BaseModel):
-    path: str | None = None
-    format: str | None = None
-    directory: str | None = None
-    run_name: str | None = None
+    path: str | None = Field(
+        default=None,
+        description="Destination file path for the primary results output.",
+    )
+    format: str | None = Field(
+        default=None,
+        description="Output file format (e.g. csv or parquet); inferred from the path when unset.",
+    )
+    directory: str | None = Field(
+        default=None,
+        description="Directory the run's output artifacts are written into.",
+    )
+    run_name: str | None = Field(
+        default=None,
+        description="Name identifying this run, used to key output subdirectories and lineage.",
+    )
     # When True, the lineage sidecar gains a `golden_records` section with
     # per-field provenance (value + source_row_id of the winning record).
     # Default off: at large scale this materializes one provenance object per
     # cluster + a large JSON sidecar. The vectorized batch builder makes it
     # feasible (per-field source_row_id, no per-row candidate list).
-    lineage_provenance: bool = False
+    lineage_provenance: bool = Field(
+        default=False,
+        description="Adds per-field golden-record provenance (winning value plus source row id) to the lineage sidecar.",
+    )
 
 
 # ── LLM Budget / Scorer Config ────────────────────────────────────────────
 
 
 class BudgetConfig(BaseModel):
-    max_cost_usd: float | None = None
-    max_calls: int | None = None
-    escalation_model: str | None = None
-    escalation_band: list[float] = Field(default_factory=lambda: [0.80, 0.90])
-    escalation_budget_pct: float = 20
-    warn_at_pct: float = 80
+    max_cost_usd: float | None = Field(
+        default=None,
+        description="Hard cap on total LLM spend for the run; calls stop once it is reached.",
+    )
+    max_calls: int | None = Field(
+        default=None,
+        description="Hard cap on the number of LLM requests for the run.",
+    )
+    escalation_model: str | None = Field(
+        default=None,
+        description="Pricier model borderline pairs are escalated to for a second opinion.",
+    )
+    escalation_band: list[float] = Field(
+        default_factory=lambda: [0.80, 0.90],
+        description="Score band [low, high] whose pairs are escalated to the pricier model.",
+    )
+    escalation_budget_pct: float = Field(
+        default=20,
+        description="Percentage of the budget reserved for escalation to the pricier model.",
+    )
+    warn_at_pct: float = Field(
+        default=80,
+        description="Percentage of the budget spent at which a warning is emitted.",
+    )
 
 
 class LLMScorerConfig(BaseModel):
-    enabled: bool = False
-    provider: str | None = None  # "openai" or "anthropic", auto-detected if None
-    model: str | None = None  # e.g. "gpt-4o-mini", auto-detected if None
-    auto_threshold: float = 0.95  # auto-accept pairs above this
-    candidate_lo: float = 0.75  # lower bound of LLM scoring range
-    candidate_hi: float = 0.95  # upper bound (same as auto_threshold)
-    batch_size: int = 75
-    max_workers: int = 5  # concurrent LLM requests
-    calibration_sample_size: int = 100  # pairs per calibration round
-    calibration_max_rounds: int = 5  # max calibration iterations
-    calibration_convergence_delta: float = 0.01  # stop when threshold shift < this
-    budget: BudgetConfig | None = None
-    mode: str = "pairwise"  # "pairwise" (legacy) or "cluster" (in-context LLM clustering)
-    cluster_max_size: int = 100  # max records per LLM cluster block
-    cluster_min_size: int = 5  # below this, fall back to pairwise
+    enabled: bool = Field(
+        default=False,
+        description="Turns on LLM scoring of borderline candidate pairs.",
+    )
+    provider: str | None = Field(
+        default=None,
+        description="LLM provider ('openai' or 'anthropic'); auto-detected from credentials when None.",
+    )  # "openai" or "anthropic", auto-detected if None
+    model: str | None = Field(
+        default=None,
+        description="LLM model name (e.g. 'gpt-4o-mini'); auto-detected when None.",
+    )  # e.g. "gpt-4o-mini", auto-detected if None
+    auto_threshold: float = Field(
+        default=0.95,
+        description="Score above which pairs are auto-accepted without an LLM call.",
+    )  # auto-accept pairs above this
+    candidate_lo: float = Field(
+        default=0.75,
+        description="Lower bound of the score band whose pairs are sent to the LLM.",
+    )  # lower bound of LLM scoring range
+    candidate_hi: float = Field(
+        default=0.95,
+        description="Upper bound of the score band whose pairs are sent to the LLM.",
+    )  # upper bound (same as auto_threshold)
+    batch_size: int = Field(
+        default=75,
+        description="Number of pairs packed into a single LLM request.",
+    )
+    max_workers: int = Field(
+        default=5,
+        description="Number of concurrent LLM requests.",
+    )  # concurrent LLM requests
+    calibration_sample_size: int = Field(
+        default=100,
+        description="Pairs sampled per calibration round to tune the accept threshold.",
+    )  # pairs per calibration round
+    calibration_max_rounds: int = Field(
+        default=5,
+        description="Maximum threshold-calibration rounds before stopping.",
+    )  # max calibration iterations
+    calibration_convergence_delta: float = Field(
+        default=0.01,
+        description="Calibration stops once the threshold shift between rounds falls below this.",
+    )  # stop when threshold shift < this
+    budget: BudgetConfig | None = Field(
+        default=None,
+        description="Cost and call limits governing LLM usage; None means unbounded.",
+    )
+    mode: str = Field(
+        default="pairwise",
+        description="LLM scoring mode: 'pairwise' per-pair scoring or 'cluster' in-context block clustering.",
+    )  # "pairwise" (legacy) or "cluster" (in-context LLM clustering)
+    cluster_max_size: int = Field(
+        default=100,
+        description="Maximum records per LLM cluster block in cluster mode.",
+    )  # max records per LLM cluster block
+    cluster_min_size: int = Field(
+        default=5,
+        description="Block size below which cluster mode falls back to pairwise scoring.",
+    )  # below this, fall back to pairwise
 
 
 # ── Domain Extraction Config ──────────────────────────────────────────────
 
 
 class DomainConfig(BaseModel):
-    enabled: bool = False
-    mode: str | None = None  # "product", "person", "bibliographic", "company", "auto"
-    confidence_threshold: float = 0.3  # below this, route to LLM
-    llm_validation: bool = True  # whether to use LLM for low-confidence extractions
-    budget: BudgetConfig | None = None  # reuses budget config
+    enabled: bool = Field(
+        default=False,
+        description="Turns on domain feature extraction as a pipeline step before matchkeys.",
+    )
+    mode: str | None = Field(
+        default=None,
+        description="Domain to extract for ('product', 'person', 'bibliographic', 'company', or 'auto' to detect).",
+    )  # "product", "person", "bibliographic", "company", "auto"
+    confidence_threshold: float = Field(
+        default=0.3,
+        description="Extraction confidence below which a record is routed to the LLM instead.",
+    )  # below this, route to LLM
+    llm_validation: bool = Field(
+        default=True,
+        description="Uses the LLM to validate low-confidence extractions.",
+    )  # whether to use LLM for low-confidence extractions
+    budget: BudgetConfig | None = Field(
+        default=None,
+        description="Cost and call limits for the domain-extraction LLM calls.",
+    )  # reuses budget config
 
 
 # ── Learning Memory Config ─────────────────────────────────────────────────
@@ -1301,21 +1564,54 @@ class DomainConfig(BaseModel):
 
 class LearningConfig(BaseModel):
     """Learning Memory learning parameters."""
-    threshold_min_corrections: int = 10
-    weights_min_corrections: int = 50
+    threshold_min_corrections: int = Field(
+        default=10,
+        description="Minimum stored corrections before learned thresholds are tuned from them.",
+    )
+    weights_min_corrections: int = Field(
+        default=50,
+        description="Minimum stored corrections before learned field weights are tuned from them.",
+    )
 
 
 class MemoryConfig(BaseModel):
     """Learning Memory configuration."""
-    enabled: bool = True
-    backend: str = "sqlite"
-    path: str = ".goldenmatch/memory.db"
-    connection: str | None = None
-    trust: dict[str, float] = Field(default_factory=lambda: {"human": 1.0, "agent": 0.5})
-    learning: LearningConfig = Field(default_factory=LearningConfig)
-    reanchor: bool = True
-    dataset: str | None = None
-    table_prefix: str = ""
+    enabled: bool = Field(
+        default=True,
+        description="Turns on Learning Memory so stored corrections and learned thresholds feed back into runs.",
+    )
+    backend: str = Field(
+        default="sqlite",
+        description="Storage backend for the memory store ('sqlite' or 'postgres').",
+    )
+    path: str = Field(
+        default=".goldenmatch/memory.db",
+        description="SQLite file path for the memory store when the backend is sqlite.",
+    )
+    connection: str | None = Field(
+        default=None,
+        description="Database connection string used when the backend is postgres.",
+    )
+    trust: dict[str, float] = Field(
+        default_factory=lambda: {"human": 1.0, "agent": 0.5},
+        description="Per-source trust weights that scale how strongly a correction's origin influences learning.",
+    )
+    learning: LearningConfig = Field(
+        default_factory=LearningConfig,
+        description="Thresholds governing how many corrections are needed before rules are learned.",
+    )
+    reanchor: bool = Field(
+        default=True,
+        description="Re-anchors stored corrections to current rows by record hash so they survive row reordering.",
+    )
+    dataset: str | None = Field(
+        default=None,
+        description="Dataset name scoping corrections so unrelated datasets do not share memory.",
+    )
+    table_prefix: str = Field(
+        default="",
+        description="Prefix applied to memory table names, letting multiple stores share one database.",
+    )
 
     @field_validator("dataset")
     @classmethod
@@ -1349,20 +1645,41 @@ class ChannelStitchConfig(BaseModel):
     (or a future pipeline hook) passes it to ``stitch_frame``.
     """
 
-    enabled: bool = False
+    enabled: bool = Field(
+        default=False,
+        description="Turns on cross-device/channel stitching so a caller can join a person's records across channels.",
+    )
     # Columns whose shared non-null value is a near-certain same-person signal.
     # Empty -> stitching.DEFAULT_DEVICE_KEYS.
-    device_keys: list[str] = Field(default_factory=list)
+    device_keys: list[str] = Field(
+        default_factory=list,
+        description="Columns whose shared non-null value is a near-certain same-person signal; empty uses the defaults.",
+    )
     # Column carrying an explicit channel label per record.
-    channel_column: str = "channel"
+    channel_column: str = Field(
+        default="channel",
+        description="Column carrying an explicit channel label per record.",
+    )
     # Exact ``__source__`` -> channel overrides (beats the substring hints).
-    channel_map: dict[str, str] = Field(default_factory=dict)
+    channel_map: dict[str, str] = Field(
+        default_factory=dict,
+        description="Exact source-name to channel overrides that beat substring channel inference.",
+    )
     # Per-channel trust weight in (0, 1]. Empty -> stitching.DEFAULT_CHANNEL_TRUST.
-    channel_trust: dict[str, float] = Field(default_factory=dict)
+    channel_trust: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-channel trust weight in (0, 1] used to downweight cross-channel matches; empty uses the defaults.",
+    )
     # Scale probabilistic match scores by the channels' trust factor.
-    adjust_cross_channel: bool = True
+    adjust_cross_channel: bool = Field(
+        default=True,
+        description="Scales probabilistic match scores by the two channels' trust factor.",
+    )
     # Drop probabilistic stitch edges below this (post-adjustment) weight.
-    prob_threshold: float = 0.0
+    prob_threshold: float = Field(
+        default=0.0,
+        description="Drops probabilistic stitch edges whose post-adjustment weight falls below this.",
+    )
 
 
 class SurvivorshipConfig(BaseModel):
@@ -1376,14 +1693,26 @@ class SurvivorshipConfig(BaseModel):
 
     # Per-field merge strategy overrides (column -> strategy name). Unlisted
     # columns use ``default_strategy``.
-    field_strategies: dict[str, str] = Field(default_factory=dict)
-    default_strategy: str = "most_complete"
+    field_strategies: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-column survivorship strategy overrides; unlisted columns fall back to default_strategy.",
+    )
+    default_strategy: str = Field(
+        default="most_complete",
+        description="Survivorship strategy applied to any column without its own override.",
+    )
     # Column carrying a per-record timestamp (enables most_recent + per-cell
     # timestamp provenance).
-    timestamp_column: str | None = None
+    timestamp_column: str | None = Field(
+        default=None,
+        description="Column with a per-record timestamp enabling most_recent survivorship and per-cell provenance.",
+    )
     # Fold learned per-field strategies (from FIELD_CORRECT corrections) into
     # ``field_strategies``. Consumed by a caller/learning pass, not on its own.
-    learn_from_corrections: bool = False
+    learn_from_corrections: bool = Field(
+        default=False,
+        description="Folds per-field strategies learned from steward corrections into field_strategies.",
+    )
 
 
 class StabilizationConfig(BaseModel):
@@ -1395,11 +1724,20 @@ class StabilizationConfig(BaseModel):
     """
 
     # Distinct runs of cross-entity overlap evidence before a pair consolidates.
-    min_runs: int = 3
+    min_runs: int = Field(
+        default=3,
+        description="Distinct runs of cross-entity overlap evidence required before two entities auto-consolidate.",
+    )
     # Survivor selection: most_records | oldest | newest | lowest_id.
-    winner_strategy: str = "most_records"
+    winner_strategy: str = Field(
+        default="most_records",
+        description="Which entity survives a consolidation: most_records, oldest, newest, or lowest_id.",
+    )
     # Minimum max-edge score for a pair to count as overlap.
-    min_score: float = 0.0
+    min_score: float = Field(
+        default=0.0,
+        description="Minimum max-edge score for a cross-entity pair to count as overlap evidence.",
+    )
 
     @field_validator("winner_strategy")
     @classmethod
@@ -1420,7 +1758,10 @@ class MediationConfig(BaseModel):
     recording the verdict). Config plumbing only.
     """
 
-    auto_apply: bool = True
+    auto_apply: bool = Field(
+        default=True,
+        description="Whether a 'distinct' mediation verdict actually splits the record out or is only recorded.",
+    )
 
 
 class IdentityConfig(BaseModel):
@@ -1428,30 +1769,66 @@ class IdentityConfig(BaseModel):
 
     Spec: ``docs/superpowers/specs/2026-05-12-identity-graph-design.md``
     """
-    enabled: bool = False
-    backend: str = "sqlite"
-    path: str = ".goldenmatch/identity.db"
-    connection: str | None = None
-    dataset: str | None = None
-    source_pk_column: str | None = None
-    emit_singletons: bool = True
+    enabled: bool = Field(
+        default=False,
+        description="Turns on the durable identity graph that assigns stable entity ids across runs after clustering.",
+    )
+    backend: str = Field(
+        default="sqlite",
+        description="Storage backend for the identity graph ('sqlite' or 'postgres').",
+    )
+    path: str = Field(
+        default=".goldenmatch/identity.db",
+        description="SQLite file path for the identity graph when the backend is sqlite.",
+    )
+    connection: str | None = Field(
+        default=None,
+        description="Database connection string used when the backend is postgres.",
+    )
+    dataset: str | None = Field(
+        default=None,
+        description="Dataset name scoping identities so unrelated datasets do not share entity ids.",
+    )
+    source_pk_column: str | None = Field(
+        default=None,
+        description="Column supplying each record's source primary key for stable record ids; a payload hash is used when unset.",
+    )
+    emit_singletons: bool = Field(
+        default=True,
+        description="Whether single-record clusters also get a durable entity id.",
+    )
     # v2.1: when a cluster's confidence drops below this, the resolver flags the
     # bottleneck pair as a ``conflicts_with`` edge so a steward sees it for
     # review. 0.6 mirrors the existing ``weak_cluster_threshold`` family. Set
     # to 0 to disable auto-detection.
-    weak_confidence_threshold: float = 0.6
+    weak_confidence_threshold: float = Field(
+        default=0.6,
+        description="Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it.",
+    )
     # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
     # stitching is not configured (the default; identity resolution is
     # unchanged).
-    stitching: ChannelStitchConfig | None = None
+    stitching: ChannelStitchConfig | None = Field(
+        default=None,
+        description="Cross-device/channel stitching configuration; None leaves identity resolution unchanged.",
+    )
     # #1111: golden-record survivorship (strategies + per-cell provenance).
     # None -> default flat golden record (unchanged).
-    survivorship: SurvivorshipConfig | None = None
+    survivorship: SurvivorshipConfig | None = Field(
+        default=None,
+        description="Identity golden-record survivorship configuration; None keeps the default flat golden record.",
+    )
     # #1112: cross-run entity stabilization (Identity v3). None -> no stabilize
     # pass configured (the default).
-    stabilization: StabilizationConfig | None = None
+    stabilization: StabilizationConfig | None = Field(
+        default=None,
+        description="Cross-run entity stabilization configuration; None runs no stabilize pass.",
+    )
     # #1113: conflict mediation workflow. None -> not configured (default).
-    mediation: MediationConfig | None = None
+    mediation: MediationConfig | None = Field(
+        default=None,
+        description="Conflict mediation workflow configuration; None leaves mediation unconfigured.",
+    )
 
     @field_validator("dataset")
     @classmethod
@@ -1465,7 +1842,9 @@ class IdentityConfig(BaseModel):
 
 
 class MatchSettingsConfig(BaseModel):
-    matchkeys: list[MatchkeyConfig]
+    matchkeys: list[MatchkeyConfig] = Field(
+        description="Matchkeys defining how records are compared and declared the same.",
+    )
 
 
 # ── GoldenMatchConfig (top-level) ──────────────────────────────────────────
@@ -1475,9 +1854,18 @@ class DistributedRoutingConfig(BaseModel):
     """Per-stage distributed-routing pins. ``auto`` lets the planner decide;
     an explicit value pins the stage and is surfaced by the linter."""
 
-    scoring: Literal["auto", "distributed", "in_process"] = "auto"
-    clustering: Literal["auto", "distributed_wcc", "in_memory_scipy"] = "auto"
-    golden: Literal["auto", "distributed", "in_process"] = "auto"
+    scoring: Literal["auto", "distributed", "in_process"] = Field(
+        default="auto",
+        description="Pins where pair scoring runs; 'auto' lets the planner choose distributed vs in-process.",
+    )
+    clustering: Literal["auto", "distributed_wcc", "in_memory_scipy"] = Field(
+        default="auto",
+        description="Pins the clustering engine; 'auto' lets the planner choose distributed WCC vs in-memory scipy.",
+    )
+    golden: Literal["auto", "distributed", "in_process"] = Field(
+        default="auto",
+        description="Pins where golden-record building runs; 'auto' lets the planner choose distributed vs in-process.",
+    )
 
 
 class SemanticBlockingConfig(BaseModel):
@@ -1515,31 +1903,88 @@ class SemanticBlockingConfig(BaseModel):
 
 
 class GoldenMatchConfig(BaseModel):
-    input: InputConfig | None = None
-    output: OutputConfig = Field(default_factory=lambda: OutputConfig())
-    match_settings: MatchSettingsConfig | None = None
-    matchkeys: list[MatchkeyConfig] | None = None
-    blocking: BlockingConfig | None = None
-    golden_rules: GoldenRulesConfig | None = None
-    standardization: StandardizationConfig | None = None
-    validation: ValidationConfig | None = None
-    quality: QualityConfig | None = None
-    transform: TransformConfig | None = None
-    llm_boost: bool = False
-    llm_scorer: LLMScorerConfig | None = None
-    llm_auto: bool = False
-    domain: DomainConfig | None = None
-    backend: str | None = None  # None (default Polars), "ray", "duckdb"
-    distributed_routing: DistributedRoutingConfig | None = None
-    semantic_blocking: SemanticBlockingConfig | None = None
-    allow_slow_path: bool = False
+    input: InputConfig | None = Field(
+        default=None,
+        description="Input files to load; omit when passing a DataFrame directly to the API.",
+    )
+    output: OutputConfig = Field(
+        default_factory=lambda: OutputConfig(),
+        description="Where and how results are written.",
+    )
+    match_settings: MatchSettingsConfig | None = Field(
+        default=None,
+        description="Nested matchkeys container; an alternative to the top-level matchkeys field.",
+    )
+    matchkeys: list[MatchkeyConfig] | None = Field(
+        default=None,
+        description="Matchkeys defining how records are compared; takes precedence over match_settings.",
+    )
+    blocking: BlockingConfig | None = Field(
+        default=None,
+        description="Candidate-generation configuration; required when any matchkey is weighted or probabilistic.",
+    )
+    golden_rules: GoldenRulesConfig | None = Field(
+        default=None,
+        description="Survivorship rules for building one golden record per cluster.",
+    )
+    standardization: StandardizationConfig | None = Field(
+        default=None,
+        description="Per-column standardizers applied before matching.",
+    )
+    validation: ValidationConfig | None = Field(
+        default=None,
+        description="Validation rules and auto-fix settings applied to the input.",
+    )
+    quality: QualityConfig | None = Field(
+        default=None,
+        description="GoldenCheck data-quality integration settings.",
+    )
+    transform: TransformConfig | None = Field(
+        default=None,
+        description="GoldenFlow data-transformation integration settings.",
+    )
+    llm_boost: bool = Field(
+        default=False,
+        description="Enables active-learning LLM boosting of borderline matches.",
+    )
+    llm_scorer: LLMScorerConfig | None = Field(
+        default=None,
+        description="LLM pair-scoring configuration for borderline candidates.",
+    )
+    llm_auto: bool = Field(
+        default=False,
+        description="Lets auto-config enable and configure the LLM scorer automatically.",
+    )
+    domain: DomainConfig | None = Field(
+        default=None,
+        description="Domain feature-extraction configuration used before matchkeys.",
+    )
+    backend: str | None = Field(
+        default=None,
+        description="Execution backend: None (default Polars in-memory), 'ray', 'duckdb', 'chunked', or 'bucket'.",
+    )  # None (default Polars), "ray", "duckdb"
+    distributed_routing: DistributedRoutingConfig | None = Field(
+        default=None,
+        description="Per-stage distributed-routing pins; None lets the planner decide every stage.",
+    )
+    semantic_blocking: SemanticBlockingConfig | None = Field(
+        default=None,
+        description="Opt-in semantic candidate-generation keys (ANN, initialism, alias) unioned into blocking.",
+    )
+    allow_slow_path: bool = Field(
+        default=False,
+        description="Permits falling back to a slower non-fused execution path when the fast path is ineligible.",
+    )
     # Execution mode. "standard" (default) = the in-memory/Ray pipeline,
     # bit-identical artifacts. "scale" = the DataFusion spine (out-of-core,
     # deterministic + semantically correct but NOT bit-identical to standard;
     # MAX dedup, reduced feature surface). The spine entry
     # (backends/datafusion_spine.run_spine) enforces the scale-mode feature
     # gate; this field is the opt-in signal.
-    mode: Literal["standard", "scale"] = "standard"
+    mode: Literal["standard", "scale"] = Field(
+        default="standard",
+        description="Execution mode: 'standard' in-memory/Ray (bit-identical) or 'scale' DataFusion spine (out-of-core, reduced features).",
+    )
     planning_effort: Literal["fast", "normal", "thinking", "einstein"] = Field(
         default="normal",
         description=(
@@ -1553,9 +1998,18 @@ class GoldenMatchConfig(BaseModel):
             "'normal' is byte-for-byte the prior behavior."
         ),
     )
-    throughput: ThroughputConfig | None = None
-    memory: MemoryConfig | None = None
-    identity: IdentityConfig | None = None
+    throughput: ThroughputConfig | None = Field(
+        default=None,
+        description="Opt-in sketch-then-verify throughput tier for high-recall, low-cost dedup.",
+    )
+    memory: MemoryConfig | None = Field(
+        default=None,
+        description="Learning Memory configuration for persisting corrections and learned thresholds.",
+    )
+    identity: IdentityConfig | None = Field(
+        default=None,
+        description="Identity Graph configuration for stable cross-run entity ids.",
+    )
     exclude_columns: list[str] = Field(
         default_factory=list,
         description=(

@@ -58,7 +58,8 @@ def _mcp_cov(spec) -> tuple[int, int]:
         tools = importlib.import_module(spec.mcp_module).TOOLS
     except Exception:
         return 0, 0
-    return len(tools), sum(bool((getattr(t, "description", "") or "").strip()) for t in tools)
+    from .render import tool_field
+    return len(tools), sum(bool(tool_field(t, "description").strip()) for t in tools)
 
 
 def coverage(spec) -> dict[str, tuple[int, int]]:

@@ -41,12 +41,12 @@ def _open(path: str) -> IdentityStore:
 
 @identity_app.command("list")
 def list_cmd(
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
-    dataset: str | None = typer.Option(None, "--dataset"),
-    status: str | None = typer.Option(None, "--status"),
-    limit: int = typer.Option(50, "--limit"),
-    offset: int = typer.Option(0, "--offset"),
-    json_out: bool = typer.Option(False, "--json"),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    dataset: str | None = typer.Option(None, "--dataset", help="Filter to identities in this dataset."),
+    status: str | None = typer.Option(None, "--status", help="Filter to identities with this status."),
+    limit: int = typer.Option(50, "--limit", help="Maximum number of identities to return."),
+    offset: int = typer.Option(0, "--offset", help="Number of identities to skip for pagination."),
+    json_out: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table."),
 ) -> None:
     """List identities (most recently updated first)."""
     with _open(path) as s:
@@ -73,9 +73,9 @@ def list_cmd(
 
 @identity_app.command("show")
 def show_cmd(
-    entity_id: str = typer.Argument(...),
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
-    json_out: bool = typer.Option(False, "--json"),
+    entity_id: str = typer.Argument(..., help="The entity_id of the identity to operate on."),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    json_out: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table."),
 ) -> None:
     """Show an identity with members, edges, and recent events."""
     with _open(path) as s:
@@ -103,8 +103,8 @@ def show_cmd(
 @identity_app.command("resolve")
 def resolve_cmd(
     record_id: str = typer.Argument(..., help="`{source}:{pk}` to look up"),
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
-    json_out: bool = typer.Option(False, "--json"),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    json_out: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table."),
 ) -> None:
     """Resolve a record_id to its identity."""
     with _open(path) as s:
@@ -120,10 +120,10 @@ def resolve_cmd(
 
 @identity_app.command("history")
 def history_cmd(
-    entity_id: str = typer.Argument(...),
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
-    limit: int = typer.Option(50, "--limit"),
-    json_out: bool = typer.Option(False, "--json"),
+    entity_id: str = typer.Argument(..., help="The entity_id of the identity to operate on."),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    limit: int = typer.Option(50, "--limit", help="Maximum number of events to return."),
+    json_out: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table."),
 ) -> None:
     """Show the temporal event log for an identity."""
     with _open(path) as s:
@@ -148,9 +148,9 @@ def history_cmd(
 
 @identity_app.command("conflicts")
 def conflicts_cmd(
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
-    dataset: str | None = typer.Option(None, "--dataset"),
-    json_out: bool = typer.Option(False, "--json"),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    dataset: str | None = typer.Option(None, "--dataset", help="Filter to identities in this dataset."),
+    json_out: bool = typer.Option(False, "--json", help="Emit results as JSON instead of a table."),
 ) -> None:
     """List conflicting evidence edges."""
     with _open(path) as s:
@@ -179,8 +179,8 @@ def conflicts_cmd(
 def merge_cmd(
     keep: str = typer.Argument(..., help="entity_id to keep"),
     absorb: str = typer.Argument(..., help="entity_id to absorb"),
-    reason: str | None = typer.Option(None, "--reason"),
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
+    reason: str | None = typer.Option(None, "--reason", help="Optional reason recorded in the event log."),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
 ) -> None:
     """Manually merge two identities. Records from ``absorb`` move to ``keep``."""
     with _open(path) as s:
@@ -190,10 +190,10 @@ def merge_cmd(
 
 @identity_app.command("split")
 def split_cmd(
-    entity_id: str = typer.Argument(...),
+    entity_id: str = typer.Argument(..., help="The entity_id of the identity to operate on."),
     record_ids: list[str] = typer.Argument(..., help="record_ids to move to a new identity"),
-    reason: str | None = typer.Option(None, "--reason"),
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
+    reason: str | None = typer.Option(None, "--reason", help="Optional reason recorded in the event log."),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
 ) -> None:
     """Manually split records off into a new identity."""
     with _open(path) as s:
@@ -203,8 +203,8 @@ def split_cmd(
 
 @identity_app.command("migrate-ids")
 def migrate_ids_cmd(
-    path: str = typer.Option(DEFAULT_PATH, "--path"),
-    dsn: str | None = typer.Option(None, "--dsn", envvar="GOLDENMATCH_IDENTITY_DSN"),
+    path: str = typer.Option(DEFAULT_PATH, "--path", help="Path to the identity graph database."),
+    dsn: str | None = typer.Option(None, "--dsn", envvar="GOLDENMATCH_IDENTITY_DSN", help="Database connection string for the identity store."),
     dry_run: bool = typer.Option(False, "--dry-run",
         help="Report what would change; mutate nothing."),
 ) -> None:

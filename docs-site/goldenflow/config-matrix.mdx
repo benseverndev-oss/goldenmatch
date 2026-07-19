@@ -92,13 +92,13 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 | Command | Option | Type | Default | Notes |
 |---|---|---|---|---|
-| `agent-serve` | `--port` | integer | `8150` |  |
-| `demo` | `--output-dir` | path | `WindowsPath('.')` |  |
+| `agent-serve` | `--port` | integer | `8150` | Port the A2A agent server listens on. |
+| `demo` | `--output-dir` | path | `WindowsPath('.')` | Directory where the sample data and config files are written. |
 | `diff` | `before` | path | **required** | Before file |
 | `diff` | `after` | path | **required** | After file |
 | `history` | `--limit` | integer | `20` | Number of recent runs to show |
 | `init` | `data` | path | `None` | Data file to profile |
-| `init` | `--output` | path | `'goldenflow.yaml'` |  |
+| `init` | `--output` | path | `'goldenflow.yaml'` | Path where the generated config file is written. |
 | `interactive` | `path` | path | `None` | Input data file |
 | `learn` | `path` | path | **required** | Input data file |
 | `learn` | `--output` | path | `'goldenflow.yaml'` | Output config path |
@@ -112,14 +112,14 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `profile` | `path` | path | **required** | Input data file |
 | `schedule` | `path` | path | **required** | Data file to transform |
 | `schedule` | `--every` | text | `'1h'` | Interval (e.g., 5m, 1h, 30s) |
-| `schedule` | `--config` | path | `None` |  |
-| `schedule` | `--output-dir` | path | `None` |  |
-| `serve` | `--host` | text | `'0.0.0.0'` |  |
-| `serve` | `--port` | integer | `8000` |  |
+| `schedule` | `--config` | path | `None` | YAML config applied on each scheduled run. |
+| `schedule` | `--output-dir` | path | `None` | Directory where transformed files are written. |
+| `serve` | `--host` | text | `'0.0.0.0'` | Network interface the REST API server binds to. |
+| `serve` | `--port` | integer | `8000` | Port the REST API server listens on. |
 | `stream` | `path` | path | **required** | Input data file |
 | `stream` | `--chunk-size` | integer | `10000` | Rows per batch |
-| `stream` | `--config` | path | `None` |  |
-| `stream` | `--output-dir` | path | `None` |  |
+| `stream` | `--config` | path | `None` | YAML config applied to each streamed batch. |
+| `stream` | `--output-dir` | path | `None` | Directory where the combined transformed file is written. |
 | `transform` | `path` | path | **required** | Input data file |
 | `transform` | `--config` | path | `None` | YAML config file |
 | `transform` | `--output-dir` | path | `None` | Output directory |
@@ -128,10 +128,10 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `transform` | `--llm` | boolean | `False` | Enable LLM-enhanced transforms |
 | `transform` | `--strict` | boolean | `False` | Fail if any transform errors occur |
 | `validate` | `path` | path | **required** | Input data file |
-| `validate` | `--config` | path | `None` |  |
+| `validate` | `--config` | path | `None` | YAML config file describing which transforms to apply. |
 | `watch` | `path` | path | `'.'` | Directory to watch |
-| `watch` | `--config` | path | `None` |  |
-| `watch` | `--output-dir` | path | `None` |  |
+| `watch` | `--config` | path | `None` | YAML config applied to each new or changed file. |
+| `watch` | `--output-dir` | path | `None` | Directory where transformed files are written. |
 | `watch` | `--interval` | float | `2.0` | Poll interval in seconds |
 
 ## MCP tools
@@ -140,16 +140,16 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 | Tool | Description |
 |---|---|
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
-| `?` |  |
+| `diff` | Compare two data files and show what changed (added, removed, modified rows). |
+| `explain_transform` | Describe what a specific transform does, its mode, and input types. |
+| `learn` | Generate a YAML config from data patterns. |
+| `list_domains` | List available domain packs (e.g., people_hr, ecommerce, finance). |
+| `list_transforms` | List all registered transforms with their modes, input types, and auto-apply status. |
+| `map` | Auto-map schemas between source and target files. |
+| `profile` | Profile a data file showing column types, nulls, and patterns. |
+| `select_from_findings` | Map GoldenCheck findings to recommended GoldenFlow transforms. Bridge tool for Check-to-Flow handoff. |
+| `transform` | Clean / normalize a data file with GoldenFlow transforms (phone, date, unicode, casing, categorical, and more) and write the transformed file. Zero-config auto-detects and applies transforms; pass a config to control them. See list_transforms for what's available. Does not deduplicate or match -- it only reshapes column values. |
+| `validate` | Dry-run transform on a file. Shows what would change without writing output. |
 
 ## Enumerated vocabularies
 

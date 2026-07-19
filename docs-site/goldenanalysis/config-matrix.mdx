@@ -63,12 +63,12 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | Command | Option | Type | Default | Notes |
 |---|---|---|---|---|
 | `mcp-serve` | `--transport` | text | `'stdio'` | stdio \| http |
-| `mcp-serve` | `--host` | text | `'0.0.0.0'` |  |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host interface to bind when transport is http. |
 | `mcp-serve` | `--port` | integer | `8300` | HTTP port (A2A convention: Analysis = 8300). |
-| `regressions` | `--dataset` | text | **required** |  |
+| `regressions` | `--dataset` | text | **required** | Dataset name whose run history to check. |
 | `regressions` | `--history` | path | **required** | ReportHistory path (.jsonl or .db). |
-| `regressions` | `--baseline` | text | `'rolling_median'` |  |
-| `regressions` | `--window` | integer | `7` |  |
+| `regressions` | `--baseline` | text | `'rolling_median'` | Baseline strategy to compare against, e.g. rolling_median. |
+| `regressions` | `--window` | integer | `7` | Number of prior runs the baseline is computed over. |
 | `regressions` | `--policy` | text | `None` | Per-metric gates: JSON or "key=pct,key=pct". |
 | `regressions` | `--fail-on-regression` | boolean | `False` | Exit 1 if any regression is flagged (CI gate). |
 | `report` | `input` | path | **required** | A .parquet/.csv frame, or a .json AnalysisReport to re-render. |
@@ -76,9 +76,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `report` | `--format` | text | `'markdown'` | markdown \| json |
 | `report` | `--out` | path | `None` | Write the report here instead of (also) printing. |
 | `trend` | `--metric` | text | **required** | Metric key to trend, e.g. cluster.singleton_ratio. |
-| `trend` | `--dataset` | text | **required** |  |
+| `trend` | `--dataset` | text | **required** | Dataset name whose run history to read. |
 | `trend` | `--history` | path | **required** | ReportHistory path (.jsonl or .db). |
-| `trend` | `--last` | integer | `30` |  |
+| `trend` | `--last` | integer | `30` | Number of most recent runs to include in the trend. |
 
 ## Enumerated vocabularies
 
