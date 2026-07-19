@@ -22,9 +22,9 @@
 //!   and compare against Rust's before re-encoding to JSON.
 
 use goldenmatch_autoconfig_core::{
-    assemble_strong_id_union, classify_columns, decide_plan, exact_matchkey_floor,
-    extrapolate_pair_count, finalize_strong_id_union, sparse_match_floor, BlockingColumnInput,
-    ColType, ColumnStats, ExtrapolationInput, PlannerInput, UnionFinalizeInput,
+    assemble_strong_id_union, classify_by_name, classify_columns, decide_plan,
+    exact_matchkey_floor, extrapolate_pair_count, finalize_strong_id_union, sparse_match_floor,
+    BlockingColumnInput, ColType, ColumnStats, ExtrapolationInput, PlannerInput, UnionFinalizeInput,
 };
 use serde_json::Value;
 
@@ -531,6 +531,37 @@ fn select_blocking_golden_parity() {
     assert!(
         failures.is_empty(),
         "select_blocking golden failures:\n{}",
+        failures.join("\n")
+    );
+}
+
+// ── classify_by_name parity (the strong-id union's name-classification authority) ──
+
+const CLASSIFY_BY_NAME_JSON: &str = include_str!("../golden/classify_by_name_vectors.json");
+
+#[test]
+fn classify_by_name_golden_parity() {
+    let vectors: Vec<Value> = serde_json::from_str(CLASSIFY_BY_NAME_JSON)
+        .expect("failed to parse classify_by_name_vectors.json");
+    assert!(
+        vectors.len() >= 40,
+        "expected >= 40 classify_by_name vectors, got {}",
+        vectors.len()
+    );
+    let mut failures: Vec<String> = Vec::new();
+    for vec in &vectors {
+        let name = vec["name"].as_str().expect("name");
+        let got: Value = serde_json::to_value(classify_by_name(name)).unwrap();
+        if got != vec["expected"] {
+            failures.push(format!(
+                "classify_by_name({name:?}) mismatch: expected={} got={got}",
+                vec["expected"]
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "classify_by_name golden failures:\n{}",
         failures.join("\n")
     );
 }

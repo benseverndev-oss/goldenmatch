@@ -21,6 +21,7 @@ import {
   autoconfig_extrapolate_pair_count,
   autoconfig_sparse_match_floor,
   autoconfig_exact_matchkey_floor,
+  autoconfig_classify_by_name,
   autoconfig_assemble_strong_id_union,
   autoconfig_finalize_strong_id_union,
 } from "./_wasm/autoconfigWasmBindings.js";
@@ -384,6 +385,15 @@ export function exactMatchkeyFloor(colType: string): number {
 export function exactMatchkeyFloorRawJson(inputJson: string): string {
   ensureInit();
   return autoconfig_exact_matchkey_floor(inputJson);
+}
+
+// Name-pattern classifier (the strong-id union's name-classification authority).
+// Raw JSON `{"name": "..."}` in, a JSON col_type string or `null` out — the same
+// shared `classify_by_name` core the Python native path and the pure-TS
+// `classifyByName` port both reproduce. See classify.rs / classifyByName.ts.
+export function classifyByNameRawJson(inputJson: string): string {
+  ensureInit();
+  return autoconfig_classify_by_name(inputJson);
 }
 
 // Blocking selection — the #1207 strong-identifier union, phase 1 (assemble) +

@@ -14,7 +14,7 @@ pub use planner::{
     ExecutionPlan, PlannerInput, RuntimeProfile, SpillThreshold,
 };
 // Layer 2 re-exports (B4)
-pub use classify::{classify_columns, ColType, ColumnProfile, ColumnStats};
+pub use classify::{classify_by_name, classify_columns, ColType, ColumnProfile, ColumnStats};
 // S1 extrapolation kernel re-exports
 pub use extrapolate::{extrapolate_pair_count, ExtrapolationInput, ExtrapolationOutput};
 // S2b/S3 threshold kernel re-exports

@@ -11,18 +11,17 @@
  * split mirrors the core: the host MEASURES the row-level signals (OR-coverage,
  * per-pass block size), these pure functions GATE.
  *
- * **Not yet wired into `buildBlocking`.** The always-on runtime reroute is
- * increment 2b, deliberately deferred: the core's `assemble` derives name-column
- * detection from `classify_by_name` (a name-*pattern*-only classifier — e.g. bare
- * `first`/`last` are NOT names, only `first_name`/`surname` are), which differs
- * from TS's data-aware `classifyColumn`. Feeding TS's classifier makes the union
- * over-fire vs Python (it fired on a bare-`first`/`last` dataset where Python's
- * `_classify_by_name` returns None). Closing that requires the core's
- * `classify_by_name` to be the name-classification authority on the TS surface —
- * a deliberate decision (shared classifier vs a faithful port), not a rush. Until
- * then this ships the shared decision kernel + parity, like fs-wasm shipped its
- * kernel before the scoring-path reroute.
+ * **Name detection uses `classifyByName` (increment 2b).** The core's `assemble`
+ * derives name-column detection from `classify_by_name` (a name-*pattern*-only
+ * classifier — bare `first`/`last` are NOT names, only `first_name`/`surname`
+ * are), which differs from TS's data-aware `classifyColumn`. This port therefore
+ * calls `classifyByName(c.name)` (the fixture-pinned pure-TS port of the core's
+ * `classify_by_name`) for name detection, so it matches Python exactly and does
+ * not over-fire when wired into the always-on `buildBlocking`. Strong-id / geo
+ * detection still uses the data-aware `colType`, matching the core.
  */
+
+import { classifyByName } from "./classifyByName.js";
 
 /** `autoconfig.py::_STRONG_EXACT_TYPES` — the strong-identifier col_types. */
 const STRONG_EXACT_TYPES = new Set(["identifier", "email", "phone"]);
@@ -32,10 +31,11 @@ const UNION_PASS_MIN_NONNULL = 0.02;
 export const BLOCKING_UNION_COVERAGE_TARGET = 0.95;
 
 /** One column's profile signals the union decision needs (mirrors the core's
- *  `BlockingColumnInput`). `colType` is the classifier's snake_case verdict; per
- *  the file header, name detection here treats `colType === "name"` as
- *  name-classified — faithful on the golden fixture, but see 2b for the
- *  `classify_by_name` reconciliation the runtime reroute needs. */
+ *  `BlockingColumnInput`). `colType` is the data-aware classifier's snake_case
+ *  verdict (used for strong-id / geo detection); name detection is derived
+ *  internally from the column NAME via `classifyByName`, exactly as the core
+ *  derives it from `classify_by_name` — so the boundary stays `(name, colType,
+ *  nullRate, cardinalityRatio)` with no extra host input. */
 export interface UnionColumn {
   readonly name: string;
   readonly colType: string;
@@ -97,8 +97,12 @@ export function assembleStrongIdUnion(
 
   if (strongIdCount < 1) return null;
 
-  // name+geo passes for rows missing every strong id.
-  const nameCols = cols.filter((c) => c.colType === "name");
+  // name+geo passes for rows missing every strong id. Name detection uses the
+  // name-*pattern*-only `classifyByName` (the core's internal `classify_by_name`,
+  // Python `_classify_by_name`), NOT the data-aware `colType` — bare `first`/
+  // `last` are NOT names, so the union does not over-fire on them (the #1317
+  // 2a→2b crux). Strong-id / geo detection still uses the data-aware `colType`.
+  const nameCols = cols.filter((c) => classifyByName(c.name) === "name");
   const first = nameCols.find((c) => c.name.toLowerCase().includes("first"))?.name;
   const last = nameCols.find((c) => {
     const n = c.name.toLowerCase();

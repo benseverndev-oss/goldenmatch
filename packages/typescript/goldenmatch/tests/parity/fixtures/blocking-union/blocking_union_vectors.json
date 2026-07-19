@@ -1,0 +1,334 @@
+[
+  {
+    "name": "union_strong_id_multisource",
+    "input_rows": [
+      {
+        "first_name": "First0",
+        "last_name": "Last0",
+        "member_id": "MID0000",
+        "email": null,
+        "city": "City0"
+      },
+      {
+        "first_name": "First0",
+        "last_name": "Last0",
+        "member_id": null,
+        "email": "user0@ex.com",
+        "city": "City0"
+      },
+      {
+        "first_name": "First1",
+        "last_name": "Last1",
+        "member_id": "MID0001",
+        "email": null,
+        "city": "City1"
+      },
+      {
+        "first_name": "First1",
+        "last_name": "Last1",
+        "member_id": null,
+        "email": "user1@ex.com",
+        "city": "City1"
+      },
+      {
+        "first_name": "First2",
+        "last_name": "Last2",
+        "member_id": "MID0002",
+        "email": null,
+        "city": "City2"
+      },
+      {
+        "first_name": "First2",
+        "last_name": "Last2",
+        "member_id": null,
+        "email": "user2@ex.com",
+        "city": "City2"
+      },
+      {
+        "first_name": "First3",
+        "last_name": "Last3",
+        "member_id": "MID0003",
+        "email": null,
+        "city": "City3"
+      },
+      {
+        "first_name": "First3",
+        "last_name": "Last3",
+        "member_id": null,
+        "email": "user3@ex.com",
+        "city": "City3"
+      },
+      {
+        "first_name": "First4",
+        "last_name": "Last4",
+        "member_id": "MID0004",
+        "email": null,
+        "city": "City4"
+      },
+      {
+        "first_name": "First4",
+        "last_name": "Last4",
+        "member_id": null,
+        "email": "user4@ex.com",
+        "city": "City4"
+      },
+      {
+        "first_name": "First5",
+        "last_name": "Last5",
+        "member_id": "MID0005",
+        "email": null,
+        "city": "City0"
+      },
+      {
+        "first_name": "First5",
+        "last_name": "Last5",
+        "member_id": null,
+        "email": "user5@ex.com",
+        "city": "City0"
+      },
+      {
+        "first_name": "First6",
+        "last_name": "Last6",
+        "member_id": "MID0006",
+        "email": null,
+        "city": "City1"
+      },
+      {
+        "first_name": "First6",
+        "last_name": "Last6",
+        "member_id": null,
+        "email": "user6@ex.com",
+        "city": "City1"
+      },
+      {
+        "first_name": "First7",
+        "last_name": "Last7",
+        "member_id": "MID0007",
+        "email": null,
+        "city": "City2"
+      },
+      {
+        "first_name": "First7",
+        "last_name": "Last7",
+        "member_id": null,
+        "email": "user7@ex.com",
+        "city": "City2"
+      },
+      {
+        "first_name": "First8",
+        "last_name": "Last8",
+        "member_id": "MID0008",
+        "email": null,
+        "city": "City3"
+      },
+      {
+        "first_name": "First8",
+        "last_name": "Last8",
+        "member_id": null,
+        "email": "user8@ex.com",
+        "city": "City3"
+      },
+      {
+        "first_name": "First9",
+        "last_name": "Last9",
+        "member_id": "MID0009",
+        "email": null,
+        "city": "City4"
+      },
+      {
+        "first_name": "First9",
+        "last_name": "Last9",
+        "member_id": null,
+        "email": "user9@ex.com",
+        "city": "City4"
+      },
+      {
+        "first_name": "First10",
+        "last_name": "Last10",
+        "member_id": "MID0010",
+        "email": null,
+        "city": "City0"
+      },
+      {
+        "first_name": "First10",
+        "last_name": "Last10",
+        "member_id": null,
+        "email": "user10@ex.com",
+        "city": "City0"
+      },
+      {
+        "first_name": "First11",
+        "last_name": "Last11",
+        "member_id": "MID0011",
+        "email": null,
+        "city": "City1"
+      },
+      {
+        "first_name": "First11",
+        "last_name": "Last11",
+        "member_id": null,
+        "email": "user11@ex.com",
+        "city": "City1"
+      }
+    ],
+    "expected_blocking": {
+      "strategy": "multi_pass",
+      "keys": [
+        {
+          "fields": [
+            "member_id"
+          ],
+          "transforms": [
+            "strip"
+          ]
+        }
+      ],
+      "passes": [
+        {
+          "fields": [
+            "member_id"
+          ],
+          "transforms": [
+            "strip"
+          ]
+        },
+        {
+          "fields": [
+            "email"
+          ],
+          "transforms": [
+            "lowercase",
+            "strip"
+          ]
+        },
+        {
+          "fields": [
+            "first_name",
+            "last_name"
+          ],
+          "transforms": [
+            "strip"
+          ]
+        },
+        {
+          "fields": [
+            "last_name",
+            "city"
+          ],
+          "transforms": [
+            "strip"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mixed_blocking_name_fallback",
+    "input_rows": [
+      {
+        "first": "Alice",
+        "last": "Smith",
+        "phone": "5551234",
+        "zip": "10001"
+      },
+      {
+        "first": "Alice",
+        "last": "Smyth",
+        "phone": "5551234",
+        "zip": "10001"
+      },
+      {
+        "first": "Bob",
+        "last": "Jones",
+        "phone": "5552222",
+        "zip": "10002"
+      },
+      {
+        "first": "Bob",
+        "last": "Jones",
+        "phone": "5552222",
+        "zip": "10002"
+      },
+      {
+        "first": "Carol",
+        "last": "White",
+        "phone": "5553333",
+        "zip": "10003"
+      },
+      {
+        "first": "Dan",
+        "last": "Brown",
+        "phone": "5554444",
+        "zip": "10004"
+      },
+      {
+        "first": "Eve",
+        "last": "Green",
+        "phone": "5555555",
+        "zip": "10005"
+      }
+    ],
+    "expected_blocking": {
+      "strategy": "multi_pass",
+      "keys": [
+        {
+          "fields": [
+            "first"
+          ],
+          "transforms": [
+            "lowercase",
+            "soundex"
+          ]
+        }
+      ],
+      "passes": [
+        {
+          "fields": [
+            "first"
+          ],
+          "transforms": [
+            "lowercase",
+            "substring:0:5"
+          ]
+        },
+        {
+          "fields": [
+            "first"
+          ],
+          "transforms": [
+            "lowercase",
+            "soundex"
+          ]
+        },
+        {
+          "fields": [
+            "first"
+          ],
+          "transforms": [
+            "lowercase",
+            "token_sort",
+            "substring:0:8"
+          ]
+        },
+        {
+          "fields": [
+            "last"
+          ],
+          "transforms": [
+            "lowercase",
+            "soundex"
+          ]
+        },
+        {
+          "fields": [
+            "last"
+          ],
+          "transforms": [
+            "lowercase",
+            "substring:0:5"
+          ]
+        }
+      ]
+    }
+  }
+]
