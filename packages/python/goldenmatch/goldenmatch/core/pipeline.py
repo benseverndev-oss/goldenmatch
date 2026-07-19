@@ -100,6 +100,110 @@ def _split_probabilistic_pairs(
     return linked, review
 
 
+def _fs_arrow_stream_enabled() -> bool:
+    """``GOLDENMATCH_FS_ARROW_STREAM`` (default OFF) opts the eligible FS bucket
+    dedupe path onto the Arrow pair stream — ``score_buckets_arrow`` (incremental
+    Arrow accumulation, no ``matched_pairs`` exclude set) instead of the
+    ``list[tuple]`` + set path. PR-B / B2b. Byte-identical clusters when on
+    (parity-gated); the win is peak RSS on the FS scoring phase (the 1M person
+    OOM's second cause)."""
+    return os.environ.get("GOLDENMATCH_FS_ARROW_STREAM", "0").strip().lower() in (
+        "1", "true", "yes",
+    )
+
+
+def _fs_arrow_stream_eligible(
+    config: GoldenMatchConfig,
+    matchkeys: list,
+    across_files_only: bool,
+    bench_dump: bool,
+) -> bool:
+    """The Arrow FS pair stream skips building the ``matched_pairs`` exclude set,
+    so it is safe only when NO later pass/matchkey consumes it and no post-scoring
+    step needs the source lookup / per-block candidate accounting:
+
+      - exactly ONE matchkey (the probabilistic one) — a second matchkey reads
+        ``matched_pairs`` as its cross-matchkey exclude;
+      - no semantic blocking (unions extra candidates via ``matched_pairs``);
+      - not ``across_files_only`` (the cross-source filter still needs the
+        per-pair source lookup — vectorizing it onto the table is a follow-up);
+      - not the bench-dump path (needs the per-block candidate ceiling).
+
+    Downstream (postflight / memory / clustering) is UNCHANGED — the linked pairs
+    are materialized to the same ``all_pairs`` list — so clusters are byte-
+    identical; B2b banks the exclude-set + scoring-accumulation memory only.
+    Threading Arrow through postflight + clustering is B2c."""
+    if across_files_only or bench_dump:
+        return False
+    if getattr(config, "semantic_blocking", None) is not None:
+        return False
+    return len(matchkeys) == 1
+
+
+def _split_pair_stream(
+    pair_table: Any, link_threshold: float
+) -> tuple[list[tuple[int, int, float]], list[tuple[int, int, float]]]:
+    """``_split_probabilistic_pairs`` on a ``PAIR_STREAM_SCHEMA`` ``pa.Table``:
+    partition rows by ``score >= link_threshold`` via an Arrow filter, then
+    materialize the (linked, review) tuple lists the existing downstream
+    consumes. Same split as the list path (parity-gated)."""
+    import pyarrow.compute as _pc
+
+    link_mask = _pc.greater_equal(  # pyright: ignore[reportAttributeAccessIssue]
+        pair_table.column("score"), link_threshold
+    )
+
+    def _rows(tbl: Any) -> list[tuple[int, int, float]]:
+        d = tbl.to_pydict()
+        return list(zip(d["id_a"], d["id_b"], d["score"]))
+
+    linked = _rows(pair_table.filter(link_mask))
+    review = _rows(
+        pair_table.filter(_pc.invert(link_mask))  # pyright: ignore[reportAttributeAccessIssue]
+    )
+    return linked, review
+
+
+_FS_EM_SAMPLE_SEED = 42
+
+
+_FS_EM_SAMPLE_DEFAULT_ROWS = 100_000
+
+
+def _fs_em_sample_rows() -> int | None:
+    """Cap the frame EM training builds its within-block-pair sample from on the
+    FS bucket route. **DEFAULT ON at 100k rows** (``GOLDENMATCH_FS_EM_SAMPLE_ROWS``
+    override; ``0``/empty = off).
+
+    On the bucket route with a trained (not preloaded) EM, ``blocks`` feed ONLY
+    EM's ~10k within-block-pair sample -- ``score_buckets`` re-partitions
+    internally and never reads them. Yet ``build_blocks`` materializes EVERY
+    block on the FULL frame, which is the FS memory PEAK (a spike BEFORE scoring,
+    while bucket scoring runs flat). Building blocks on a bounded random sample
+    keeps EM's pair sample representative while cutting that peak.
+
+    **Only samples when ``height > cap``**, so ≤100k-row datasets are byte-
+    identical (no sampling). Validated F1-neutral where it triggers: 1M person
+    native peak 11.7->5.7 GB with byte-identical F1 (0.970/0.967, same TP/FP/FN),
+    and error-heavy historical_50k at a 40% sample gave identical F1 (0.7935).
+    The ``bench-probabilistic`` panel (``em_sample_rows`` input) is the standing
+    regression gate. ``GOLDENMATCH_FS_EM_SAMPLE_ROWS=0`` restores full-frame EM.
+
+    Resolution: unset -> the 100k default (ON); explicit ``""``/``0``/negative ->
+    off (full frame); explicit positive -> that cap."""
+    v = os.environ.get("GOLDENMATCH_FS_EM_SAMPLE_ROWS")
+    if v is None:
+        return _FS_EM_SAMPLE_DEFAULT_ROWS  # default ON
+    v = v.strip()
+    if not v:
+        return None  # explicit empty -> off (full-frame EM)
+    try:
+        n = int(v)
+    except ValueError:
+        return _FS_EM_SAMPLE_DEFAULT_ROWS  # unparseable -> keep the default on
+    return n if n > 0 else None  # 0 / negative -> explicit off
+
+
 def _finalize_review_pairs(
     review_pairs: list[tuple[int, int, float]],
     linked_pairs: list[tuple[int, int, float]],
@@ -316,6 +420,11 @@ def _score_probabilistic_matchkey(
         score_probabilistic_blocks_batched,
     )
 
+    # Callers guard `config.blocking is None` before dispatching here (a
+    # probabilistic matchkey needs blocking); narrow it once for the whole body.
+    if config.blocking is None:
+        return
+
     def _across_files_filter(pairs: list) -> list:
         if not across_files_only:
             return pairs
@@ -339,9 +448,41 @@ def _score_probabilistic_matchkey(
     _fs_need_blocks = (
         bool(bench_dump_dir) or not _fs_use_bucket or not fs_model_preloaded(mk)
     )
-    blocks = (
-        build_blocks(block_frame, config.blocking) if _fs_need_blocks else []
+    # EM-only blocks (dedupe scope): bucket route + trained EM (no preloaded
+    # model) + no bench dump. Here `blocks` feed ONLY EM's within-block-pair
+    # sample; score_buckets re-partitions internally and never reads them, so a
+    # bounded random sample of the frame (GOLDENMATCH_FS_EM_SAMPLE_ROWS) keeps
+    # EM's pair sample representative while avoiding the full-frame build_blocks
+    # PEAK (the FS memory hog, a spike BEFORE scoring). Gated to target_ids is
+    # None -- the match lanes are out of the validated scope.
+    _em_only_blocks = (
+        target_ids is None
+        and _fs_use_bucket
+        and not bench_dump_dir
+        and not fs_model_preloaded(mk)
     )
+    _em_cap = _fs_em_sample_rows()
+    if _fs_need_blocks and _em_only_blocks and _em_cap is not None:
+        from goldenmatch.core.frame import to_frame as _tf_em
+
+        _em_src = _tf_em(score_frame)
+        if _em_src.height > _em_cap:
+            logger.info(
+                "FS EM-block sample: EM training blocks from a %d-row sample of "
+                "%d (GOLDENMATCH_FS_EM_SAMPLE_ROWS) -- avoids the full-frame "
+                "build_blocks peak; score_buckets ignores these blocks.",
+                _em_cap, _em_src.height,
+            )
+            blocks = build_blocks(
+                _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED).native,
+                config.blocking,
+            )
+        else:
+            blocks = build_blocks(block_frame, config.blocking)
+    elif _fs_need_blocks:
+        blocks = build_blocks(block_frame, config.blocking)
+    else:
+        blocks = []
     # Collect from keys AND passes (multi_pass puts keys in `.passes`).
     blocking_fields = (
         collect_blocking_fields(config.blocking) if config.blocking else []
@@ -373,6 +514,38 @@ def _score_probabilistic_matchkey(
         # bench dump below is the only remaining reader).
         if not bench_dump_dir:
             blocks = []
+        # Arrow pair stream (PR-B / B2b, flagged): incremental Arrow
+        # accumulation, no matched_pairs exclude set built (eligibility
+        # guarantees no later consumer). Split link/review on the table, then
+        # materialize the SAME (linked, review) lists downstream consumes ->
+        # clusters byte-identical to the list path; the win is the exclude-set +
+        # scoring-accumulation peak RSS. Dedupe-scope only (target_ids is None) --
+        # the match lanes need per-target filtering the stream doesn't vectorize.
+        _use_arrow_stream = (
+            target_ids is None
+            and _fs_arrow_stream_enabled()
+            and _fs_arrow_stream_eligible(
+                config, [mk], across_files_only, bool(bench_dump_dir)
+            )
+        )
+        if _use_arrow_stream:
+            from goldenmatch.backends.score_buckets import score_buckets_arrow
+            _pair_table = score_buckets_arrow(
+                score_frame,
+                config.blocking,
+                scoring_mk,
+                matched_pairs,
+                n_buckets=config.n_buckets,
+                em_result=em_result,
+            )
+            pairs, candidates = _split_pair_stream(_pair_table, link_threshold)
+            del _pair_table
+            review_pairs.extend(candidates)
+            all_pairs.extend(pairs)
+            # matched_pairs intentionally NOT populated (single matchkey,
+            # eligibility guarantees no later exclude consumer) -- the peak this
+            # drops.
+            return
         pairs = score_buckets(
             score_frame,
             config.blocking,
@@ -395,7 +568,10 @@ def _score_probabilistic_matchkey(
             assert bench_emitted_pairs is not None
             # Candidate ceiling: enumerate within-block pairs from the SAME
             # blocks score_buckets consumes (blocking is backend-independent);
-            # `pairs` is already the emitted set.
+            # `pairs` is already the emitted set. The dedupe caller always passes
+            # the accumulator sets alongside bench_dump_dir.
+            assert bench_candidate_pairs is not None
+            assert bench_emitted_pairs is not None
             for block in blocks:
                 block_df = block.materialize().native
                 _accumulate_block_candidate_pairs(block_df, bench_candidate_pairs)
@@ -576,7 +752,14 @@ def _accumulate_block_candidate_pairs(
     Caps quadratic blow-up on a pathological huge block (panel data has small
     blocks; this is just a safety net) by skipping blocks over 20k members.
     """
-    block_ids = block_df["__row_id__"].to_list()
+    # Arrow-safe read: on the arrow lane block_df is a pa.Table, where
+    # ``table["col"]`` is a ChunkedArray (no ``.to_list()``); the Frame seam
+    # normalizes both reps (polars-direct + arrow). Post-polars-eviction the
+    # arrow lane is the default, so the bare polars indexing broke the bench-dump
+    # path (and with it the bench-probabilistic panel's goldenmatch F1).
+    from goldenmatch.core.frame import to_frame as _tf_bcp
+
+    block_ids = _tf_bcp(block_df).column("__row_id__").to_list()
     if len(block_ids) > 20000:
         logger.warning(
             "GOLDENMATCH_BENCH_DUMP_PAIRS: skipping candidate dump for block "
@@ -2161,6 +2344,8 @@ def _run_fused_fs_match_short_circuit(
 
     if not (match_fused_fs_ready(config) or match_fused_fs_multipass_ready(config)):
         return None
+    if config.blocking is None:
+        return None  # fused-FS readiness implies blocking; narrow for the body
 
     from goldenmatch.core.blocker import build_blocks, collect_blocking_fields
     from goldenmatch.core.frame import to_frame as _tf_entry

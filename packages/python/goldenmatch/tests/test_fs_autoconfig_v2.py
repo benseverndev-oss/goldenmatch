@@ -20,7 +20,9 @@ import pytest
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
+    _bound_probabilistic_blocking_pairs,
     _diversify_probabilistic_blocking,
+    _fs_total_pair_budget,
     build_probabilistic_matchkeys,
 )
 
@@ -267,6 +269,120 @@ def test_lever3_no_df_is_backward_compatible(monkeypatch):
     out = _diversify_probabilistic_blocking(_base_blocking(), _person_profiles())
     sigs = {(tuple(p.fields), tuple(p.transforms or [])) for p in (out.passes or [])}
     assert (("dob",), ("substring:0:4",)) in sigs
+
+
+# ── pair-budget gate: bound passes by candidate PAIRS, not just rows ──────────
+#
+# The 1M person auto-config emitted a `dob substring:0:4` (birth-YEAR) pass and
+# `first_name`/`surname` soundex passes summing to ~12.9B candidate pairs — each
+# under the max_safe_block ROW ceiling but quadratic in pairs — and OOM-killed
+# gm_probabilistic. The row gate measures the wrong axis; this gate measures
+# Σ C(block,2). Tests drive it at unit scale via GOLDENMATCH_FS_MAX_PASS_PAIRS.
+
+
+def _one_block_frame():
+    """6 rows sharing one `city` block (15 pairs) but distinct surnames whose
+    initials all differ (a surname-initial reducer splits it to singletons), plus
+    a distinct `rid` for a selective survivor pass."""
+    return pl.DataFrame({
+        "city": ["Xtown"] * 6,
+        "surname": ["Ash", "Bell", "Cole", "Dean", "East", "Frost"],
+        "rid": [f"r{i}" for i in range(6)],
+    })
+
+
+def _coarse_blocking(*fields):
+    return BlockingConfig(
+        strategy="multi_pass",
+        passes=[BlockingKeyConfig(fields=[f], transforms=["strip"]) for f in fields],
+    )
+
+
+def test_pair_budget_is_flat_global_total(monkeypatch):
+    # The budget is a flat memory-derived TOTAL across passes (not per-pass, not
+    # N-scaled): candidate pairs grow ~N² while memory is fixed, so a linear
+    # floor can't both keep a pass safe at 100K and bound it at 1M.
+    monkeypatch.delenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", raising=False)
+    assert _fs_total_pair_budget(1_000_000) == _fs_total_pair_budget(10)
+    assert _fs_total_pair_budget(50_000) == 300_000_000
+    # The env override wins and is read as an integer.
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    assert _fs_total_pair_budget(1_000_000) == 5
+
+
+def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):
+    # A coarse `city` pass (15 pairs) over a tiny budget is rescued as a bounded
+    # [city, surname-initial] compound (splits to singletons -> 0 pairs), NOT
+    # dropped -- the recall lever is preserved. This is item 1: gate on PAIRS.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    profs = [_p("city", "geo"), _p("surname", "name")]
+    out = _bound_probabilistic_blocking_pairs(
+        _coarse_blocking("city"), profs, _one_block_frame()
+    )
+    compound = next((p for p in (out.passes or []) if set(p.fields) == {"city", "surname"}), None)
+    assert compound is not None
+    assert compound.field_transforms == {"city": ["strip"], "surname": ["substring:0:1"]}
+
+
+def test_pair_gate_drops_coarse_pass_when_no_reducer_helps(monkeypatch):
+    # surname is constant -> the [city, surname] compound is STILL one 15-pair
+    # block, so no reducer brings city under budget -> the coarse pass is DROPPED,
+    # while the selective `rid` pass survives (recall falls back to it).
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    df = pl.DataFrame({"city": ["X"] * 6, "surname": ["Same"] * 6, "rid": [f"r{i}" for i in range(6)]})
+    profs = [_p("city", "geo"), _p("surname", "name")]
+    out = _bound_probabilistic_blocking_pairs(_coarse_blocking("city", "rid"), profs, df)
+    fields = [p.fields for p in (out.passes or [])]
+    assert ["city"] not in fields  # coarse megablock pass removed
+    assert ["rid"] in fields       # selective pass preserved
+
+
+def test_pair_gate_keeps_selective_passes(monkeypatch):
+    # Every pass is selective (distinct keys -> 0 pairs) -> nothing changes even
+    # under a tiny budget (the gate drops ONLY over-budget passes).
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    b = _coarse_blocking("rid")
+    out = _bound_probabilistic_blocking_pairs(b, [_p("rid", "identifier", card=1.0)], _one_block_frame())
+    assert [p.fields for p in (out.passes or [])] == [["rid"]]
+
+
+def test_pair_gate_never_strips_to_empty(monkeypatch):
+    # Both passes over budget with no discriminating reducer -> keep the single
+    # most selective pass rather than return zero blocking.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    df = pl.DataFrame({"city": ["X"] * 6, "town": ["Y"] * 6})
+    out = _bound_probabilistic_blocking_pairs(_coarse_blocking("city", "town"), [], df)
+    assert len(out.passes or []) == 1
+
+
+def test_pair_gate_off_when_v2_disabled(monkeypatch):
+    monkeypatch.setenv(ON, "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    b = _coarse_blocking("city")
+    out = _bound_probabilistic_blocking_pairs(b, [_p("city", "geo")], _one_block_frame())
+    assert out is b  # untouched
+
+
+def test_pair_gate_noop_without_df(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    b = _coarse_blocking("city")
+    out = _bound_probabilistic_blocking_pairs(b, [_p("city", "geo")], None)
+    assert out is b  # can't measure -> skip, same object
+
+
+def test_pair_gate_default_budget_is_noop_at_unit_scale(monkeypatch):
+    # Without the override, the 150M flat total means a 15-pair block never trips
+    # -> the gate is inert on small data (only large configs are bounded).
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.delenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", raising=False)
+    b = _coarse_blocking("city")
+    out = _bound_probabilistic_blocking_pairs(b, [_p("city", "geo"), _p("surname", "name")], _one_block_frame())
+    assert [p.fields for p in (out.passes or [])] == [["city"]]
 
 
 # ── end-to-end: v2 config trains + scores ─────────────────────────────────────

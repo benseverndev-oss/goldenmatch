@@ -4871,6 +4871,11 @@ def auto_configure_probabilistic_df(
     # identifier) so the FS candidate set isn't gated entirely on (corrupted)
     # name keys. Purely additive — recall ceiling can only rise.
     blocking = _diversify_probabilistic_blocking(blocking, profiles, df)
+    # Pair-budget gate: bound EVERY pass (build_blocking's soundex passes + the
+    # diversified ones) by candidate pairs Σ C(block,2), not just block rows —
+    # the row ceiling let ~12.9B-pair configs (dob-YEAR + name-soundex mega-
+    # passes) through and OOM-killed gm_probabilistic at 1M. See #1803.
+    blocking = _bound_probabilistic_blocking_pairs(blocking, profiles, df)
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,
@@ -4988,5 +4993,295 @@ def _diversify_probabilistic_blocking(
     return blocking.model_copy(update={
         "strategy": "multi_pass",
         "passes": base_passes + new_passes,
+        "auto_select": False,
+    })
+
+
+def _pass_specs(key: BlockingKeyConfig) -> list[tuple[str, tuple[str, ...]]]:
+    """``[(field, transforms), ...]`` for a blocking key, honoring per-field
+    ``field_transforms`` (a field present there uses ITS chain; absent fields use
+    the key-level ``transforms``) — mirrors how the blocker derives the block key.
+    """
+    ft = getattr(key, "field_transforms", None) or {}
+    shared = tuple(getattr(key, "transforms", None) or [])
+    return [(f, tuple(ft[f]) if f in ft else shared) for f in key.fields]
+
+
+def _project_pass_pairs(
+    bframe: Any,
+    specs: list[tuple[str, tuple[str, ...]]],
+    effective_n_full: int,
+    sample_n: int,
+    _col_cache: dict[str, list] | None = None,
+    _tx_cache: dict[tuple, list] | None = None,
+) -> tuple[int, int] | None:
+    """``(max_block_rows, candidate_pairs)`` a pass emits at full N.
+
+    ``candidate_pairs = Σ C(block, 2)`` over every non-empty block key — the axis
+    FS scoring memory actually scales on (a 15k-row birth-YEAR block is 110M
+    pairs), which the row-only ``_compute_max_safe_block`` ceiling misses. A row
+    is absent from the pass if ANY component transforms to null/empty (the blocker
+    filters null/sentinel keys). ``effective_n_full/sample_n`` scales each block
+    linearly (bounded keys grow ∝ N), matching ``_projected_block``. None if a
+    column is unmeasurable.
+
+    **Polars/numpy-free by construction** (D6 zero-polars invariant): reads via
+    the arrow-agnostic ``Frame`` abstraction and counts with ``Counter``.
+    Transforms are applied over DISTINCT values (else soundex over 1M rows is 1M
+    calls) and cached across passes. Runs once at config time, not on a hot path.
+    """
+    from collections import Counter
+
+    from goldenmatch.utils.transforms import apply_transforms as _apply
+
+    mapped_cols: list[list] = []
+    for fld, transforms in specs:
+        if _col_cache is not None and fld in _col_cache:
+            raw = _col_cache[fld]
+        else:
+            try:
+                raw = bframe.column(fld).to_list()
+            except Exception:  # pragma: no cover -- missing column, skip pass
+                return None
+            if _col_cache is not None:
+                _col_cache[fld] = raw
+        tkey = (fld, transforms)
+        if _tx_cache is not None and tkey in _tx_cache:
+            mapped = _tx_cache[tkey]
+        elif transforms:
+            # The blocker casts to Utf8 before applying transforms (block-key
+            # derivation); mirror that so a substring reducer on an int column
+            # (postcode/dob) doesn't crash.
+            tmap = {
+                v: (_apply(str(v), list(transforms)) if v is not None else None)
+                for v in set(raw)
+            }
+            mapped = [tmap[v] for v in raw]
+            if _tx_cache is not None:
+                _tx_cache[tkey] = mapped
+        else:
+            mapped = raw
+            if _tx_cache is not None:
+                _tx_cache[tkey] = mapped
+        mapped_cols.append(mapped)
+
+    if len(mapped_cols) == 1:
+        counts = Counter(
+            v for v in mapped_cols[0] if v is not None and v != ""
+        )
+    else:
+        counts = Counter(
+            "\x1f".join(str(v) for v in row)
+            for row in zip(*mapped_cols)
+            if all(v is not None and v != "" for v in row)
+        )
+    if not counts:
+        return (0, 0)
+    scale = effective_n_full != sample_n
+    max_block = 0
+    pairs = 0
+    for cnt in counts.values():
+        b = -(-(cnt * effective_n_full) // sample_n) if scale else cnt  # ceil
+        if b > max_block:
+            max_block = b
+        pairs += b * (b - 1) // 2
+    return (max_block, pairs)
+
+
+_FS_TOTAL_PAIR_BUDGET = 300_000_000
+
+
+def _fs_total_pair_budget(n_rows: int) -> int:
+    """GLOBAL candidate-pair budget across ALL blocking passes (not per-pass).
+
+    FS scoring memory scales with the TOTAL candidate pairs held across passes
+    (the scored-pair stream + the clustering edge set), and candidate pairs grow
+    ~N² while a per-pass *linear* floor cannot both keep a pass memory-safe at
+    100K and bound it at 1M (a 55M-pair surname pass is fine at 100K but the same
+    shape is 5.5B at 1M). So the ceiling is a FLAT, memory-derived total
+    (~150M pairs ≈ a few GB of transient ``(id, id, score)`` stream), NOT scaled
+    by N. Individual mega-BLOCK passes are still gated per-pass by
+    ``_compute_max_safe_block`` (the per-block score-matrix cost). Override with
+    ``GOLDENMATCH_FS_MAX_PASS_PAIRS``.
+
+    n_rows is accepted for signature stability / future tuning but the budget is
+    intentionally flat: the physical limit is memory, which does not grow with N.
+    """
+    override = os.environ.get("GOLDENMATCH_FS_MAX_PASS_PAIRS")
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            pass
+    return _FS_TOTAL_PAIR_BUDGET
+
+
+def _bound_probabilistic_blocking_pairs(
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+    df: Any = None,
+    *,
+    n_rows_full: int | None = None,
+) -> BlockingConfig | None:
+    """Bound blocking by per-block ROWS **and** a GLOBAL candidate-PAIR budget.
+
+    ``_diversify`` and ``_compute_max_safe_block`` gate on block ROW count, but FS
+    scoring memory also scales with the TOTAL candidate PAIRS across passes
+    (``Σ C(block, 2)``): a 15k-row birth-YEAR block clears a 25k-row ceiling yet
+    is 110M pairs, and ``build_blocking``'s single-field ``soundex`` passes are
+    never row-gated at all. On the 1M person auto-config these summed to ~12.9B
+    candidate pairs and OOM-killed the runner regardless of scoring route.
+
+    Two gates, in order (runs after ``_diversify``, over the WHOLE pass list):
+      1. **Per-pass max-block** — any pass whose max block exceeds
+         ``_compute_max_safe_block`` (the per-block score-matrix cost, a real
+         resident bomb at every scale) is bounded/dropped immediately.
+      2. **Global total-pairs** — if the surviving passes' pairs SUM over
+         ``_fs_total_pair_budget`` (a flat memory-derived total, NOT per-pass and
+         NOT N-scaled), the largest-pair pass is bounded (append the most
+         selective reducer initial — surname, first name, city, then zip/id
+         prefix) or DROPPED, repeatedly, until the total is under budget.
+
+    A flat total is why this no longer over-bounds at 50K–100K (a 55M-pair
+    surname pass is memory-safe there and now KEPT — restoring recall the old
+    per-pass 5M floor cost) while still crushing the 12.9B-pair 1M case. Always
+    leaves ≥1 pass.
+
+    Default ON with ``_fs_autoconfig_v2_enabled``; needs ``df`` to measure (skips
+    otherwise, same contract as ``_diversify``). ``GOLDENMATCH_FS_MAX_PASS_PAIRS``
+    overrides the total; ``GOLDENMATCH_FS_AUTOCONFIG_V2=0`` disables it.
+    """
+    if blocking is None or not _fs_autoconfig_v2_enabled() or df is None:
+        return blocking
+
+    from goldenmatch.core._native_loader import native_enabled as _native_enabled
+    from goldenmatch.core.frame import to_frame as _tf
+
+    bframe = _tf(df)
+    sample_n = max(int(bframe.height), 1)
+    effective_n_full = (
+        int(n_rows_full) if (n_rows_full and int(n_rows_full) > sample_n) else sample_n
+    )
+    max_block = _compute_max_safe_block(
+        effective_n_full, _native_enabled("block_scoring")
+    )
+    total_budget = _fs_total_pair_budget(effective_n_full)
+
+    passes = list(blocking.passes or []) or list(blocking.keys or [])
+    if not passes:
+        return blocking
+
+    # Reducer discriminators, most selective first: name initials, then city,
+    # then zip/identifier/phone prefix. Each shrinks a coarse block ∝ its own
+    # cardinality (a surname-initial split cuts a soundex block ~18x).
+    by_type: dict[str, list[str]] = {}
+    for p in profiles:
+        by_type.setdefault(p.col_type, []).append(p.name)
+    reducers: list[tuple[str, tuple[str, ...]]] = []
+    for f in by_type.get("name", []):
+        reducers.append((f, ("substring:0:1",)))
+    for f in by_type.get("geo", []) + by_type.get("city", []):
+        reducers.append((f, ("substring:0:1",)))
+    for f in (
+        by_type.get("zip", []) + by_type.get("identifier", []) + by_type.get("phone", [])
+    ):
+        reducers.append((f, ("substring:0:2",)))
+
+    _col_cache: dict[str, list] = {}
+    _tx_cache: dict[tuple, list] = {}
+
+    def _proj(specs: list[tuple[str, tuple[str, ...]]]) -> tuple[int, int] | None:
+        return _project_pass_pairs(
+            bframe, specs, effective_n_full, sample_n, _col_cache, _tx_cache
+        )
+
+    def _bound_one(
+        key: BlockingKeyConfig,
+        specs: list[tuple[str, tuple[str, ...]]],
+    ) -> tuple[BlockingKeyConfig, tuple[int, int]] | None:
+        """Append the first reducer that brings the pass under max-block AND the
+        total budget; None if no reducer helps (caller then drops the pass)."""
+        pass_fields = set(key.fields)
+        for rf, rt in reducers:
+            if rf in pass_fields:
+                continue
+            cspecs = specs + [(rf, rt)]
+            cproj = _proj(cspecs)
+            if cproj is not None and cproj[0] <= max_block and cproj[1] <= total_budget:
+                ft = {f: list(t) for f, t in cspecs}
+                return (
+                    BlockingKeyConfig(
+                        fields=[f for f, _ in cspecs], field_transforms=ft
+                    ),
+                    cproj,
+                )
+        return None
+
+    # `entries` carries (key, specs, proj) for every pass (proj None =
+    # unmeasurable, treated as selective / not counted). NB: there is NO
+    # standalone per-block gate here — a block over ``max_block`` is only a
+    # memory bomb because it is also over-budget on pairs (a b-row single block
+    # is C(b,2) pairs; at 1M a >25k-row block is >300M pairs), so the total-pairs
+    # gate below catches every real case, and its ``_bound_one`` reducer already
+    # requires the bounded result to respect ``max_block``. A standalone
+    # max-block gate would ALSO bound small memory-trivial blocks (a 3k-row block
+    # at 50k is a 13 MB matrix) and needlessly cost recall — measured
+    # historical_50k f1_probabilistic 0.826 -> 0.794 before this was dropped.
+    entries: list[tuple[BlockingKeyConfig, list, tuple[int, int] | None]] = [
+        (key, _pass_specs(key), _proj(_pass_specs(key))) for key in passes
+    ]
+    changed = False
+
+    # Global total-pairs budget. Bound the largest-pair pass until the
+    # sum is under budget. Bounding (append a reducer -> a compound) is always
+    # allowed since it PRESERVES the pass; only DROPPING (no reducer helps) is
+    # blocked once a single pass remains, so blocking is never stripped to
+    # nothing. Each step strictly shrinks or removes a pass, so this terminates.
+    def _pairs(e: tuple[BlockingKeyConfig, list, tuple[int, int] | None]) -> int:
+        return e[2][1] if e[2] is not None else 0
+
+    while sum(_pairs(e) for e in entries) > total_budget:
+        boundable = [i for i in range(len(entries)) if _pairs(entries[i]) > 0]
+        if not boundable:
+            break  # remaining passes are all selective; nothing worth bounding
+        idx = max(boundable, key=lambda i: _pairs(entries[i]))
+        key, specs, proj = entries[idx]
+        bounded = _bound_one(key, specs)
+        if bounded is not None:
+            bkey, bproj = bounded
+            entries[idx] = (bkey, _pass_specs(bkey), bproj)
+            changed = True
+            logger.info(
+                "FS pair-gate: total over budget; pass %s (%d pairs) bounded to "
+                "%s (%d pairs) at n=%d. See #1803.",
+                key.fields, proj[1] if proj else -1, bkey.fields, bproj[1],
+                effective_n_full,
+            )
+        elif len(entries) > 1:
+            entries.pop(idx)
+            changed = True
+            logger.info(
+                "FS pair-gate: total over budget; dropping pass %s (%d pairs) — no "
+                "reducer bounds it. Recall falls back to the selective passes at "
+                "n=%d. See #1803.",
+                key.fields, proj[1] if proj else -1, effective_n_full,
+            )
+        else:
+            break  # last pass, can't bound -> keep it rather than strip to none
+
+    if not changed:
+        return blocking
+    kept = [e[0] for e in entries]
+    if not kept:
+        # Never strip blocking to nothing: retain the single most selective pass.
+        best = min(passes, key=lambda k: (_proj(_pass_specs(k)) or (0, 1 << 62))[1])
+        kept = [best]
+        logger.warning(
+            "FS pair-gate: every pass exceeded budget; retaining the most "
+            "selective pass %s to preserve recall.", best.fields,
+        )
+    return blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "passes": kept,
         "auto_select": False,
     })
