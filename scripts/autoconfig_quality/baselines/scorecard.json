@@ -17,8 +17,8 @@
           "final_recall": 1.0,
           "threshold_loss": -1.0
         },
-        "f1": 0.9607,
-        "precision": 0.9244,
+        "f1": 1.0,
+        "precision": 1.0,
         "recall": 1.0
       },
       "kind": "anchor",
@@ -130,12 +130,12 @@
       "f1_probabilistic": {
         "attribution": {
           "blocking_recall": 0.0,
-          "final_recall": 0.9469,
-          "threshold_loss": -0.9469
+          "final_recall": 0.9758,
+          "threshold_loss": -0.9758
         },
-        "f1": 0.9883,
+        "f1": 0.9969,
         "precision": 1.0,
-        "recall": 0.9769
+        "recall": 0.9939
       },
       "kind": "real",
       "signals": {
@@ -182,22 +182,22 @@
       "f1": {
         "attribution": {
           "blocking_recall": 0.0,
-          "final_recall": 0.5597,
-          "threshold_loss": -0.5597
+          "final_recall": 0.5523,
+          "threshold_loss": -0.5523
         },
-        "f1": 0.828,
-        "precision": 0.9305,
-        "recall": 0.7459
+        "f1": 0.8129,
+        "precision": 0.9301,
+        "recall": 0.722
       },
       "f1_probabilistic": {
         "attribution": {
           "blocking_recall": 0.0,
-          "final_recall": 0.5596,
-          "threshold_loss": -0.5596
+          "final_recall": 0.5614,
+          "threshold_loss": -0.5614
         },
-        "f1": 0.8284,
-        "precision": 0.9313,
-        "recall": 0.746
+        "f1": 0.826,
+        "precision": 0.9257,
+        "recall": 0.7457
       },
       "kind": "real",
       "signals": {
@@ -238,27 +238,27 @@
       "f1": {
         "attribution": {
           "blocking_recall": 0.0,
-          "final_recall": 0.996,
-          "threshold_loss": -0.996
+          "final_recall": 0.9984,
+          "threshold_loss": -0.9984
         },
-        "f1": 0.9932,
-        "precision": 0.9905,
-        "recall": 0.996
+        "f1": 0.9901,
+        "precision": 0.9819,
+        "recall": 0.9984
       },
       "f1_probabilistic": {
         "attribution": {
           "blocking_recall": 0.0,
-          "final_recall": 0.984,
-          "threshold_loss": -0.984
+          "final_recall": 0.9984,
+          "threshold_loss": -0.9984
         },
-        "f1": 0.9899,
-        "precision": 0.996,
-        "recall": 0.984
+        "f1": 0.9901,
+        "precision": 0.9819,
+        "recall": 0.9984
       },
       "kind": "real",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 434530,
+          "candidate_pairs": 434710,
           "max_block": 145,
           "n_blocks": 65,
           "p99": 145,
@@ -304,7 +304,7 @@
       "dblp_acm": "absent",
       "ncvr_real": "absent"
     },
-    "git_sha": "79563aca39972bcf43d0e26436a8e1a8bceb21e1",
-    "native_version": "0.1.5"
+    "git_sha": "b5efc6992932ca8530f887213a700364ac54aca9",
+    "native_version": "0.1.17"
   }
 }
