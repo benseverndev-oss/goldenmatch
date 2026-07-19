@@ -86,6 +86,43 @@ SELECT goldenmatch_match_tables('prospects', 'customers', '{"fuzzy": {"name": 0.
 | `gm_clusters(job)` | Table of `(cluster_id, record_id)` for a job |
 | `gm_telemetry(job)` | Last run's AutoConfigController telemetry |
 
+#### Custom survivorship / `golden_rules` in `gm_golden`
+
+`gm_configure` stores an **opaque config blob**. Pass a full `GoldenMatchConfig`
+JSON — including a `golden_rules` survivorship section — and `gm_run` composes
+`gm_golden`'s output under those per-field strategies (the extension routes any
+full-config blob through the full Pydantic config path, so `golden_rules`,
+`standardization`, explicit `matchkeys`, and `negative_evidence` all take effect;
+a slim `{"exact": [...], "fuzzy": {...}}` blob keeps the zero-config path):
+
+```sql
+-- Compose golden records with custom per-field survivorship: keep the longest
+-- `name`, and default every other field to the first non-null value.
+SELECT goldenmatch.gm_configure('people', $$
+{
+  "matchkeys": [
+    {"name": "email_key", "type": "exact",
+     "fields": [{"field": "email", "scorer": "exact"}]}
+  ],
+  "golden_rules": {
+    "default_strategy": "first_non_null",
+    "field_rules": {
+      "name":       {"strategy": "longest_value"},
+      "updated_at": {"strategy": "most_recent", "date_column": "updated_at"}
+    }
+  }
+}
+$$);
+
+SELECT goldenmatch.gm_run('people', 'contacts');
+SELECT goldenmatch.gm_golden('people');   -- golden records honour golden_rules
+```
+
+Valid `strategy` values: `first_non_null`, `longest_value`, `most_complete`,
+`most_recent` (needs `date_column`), `source_priority` (needs `source_priority`),
+`majority_vote`, `confidence_majority`, `unanimous_or_null`. Per-cell provenance
+(source / agreed-by / confidence) in `gm_golden` output is a tracked follow-up.
+
 ### AutoConfig
 
 | Function | Description |
