@@ -839,7 +839,14 @@ def _route_to_probabilistic_enabled() -> bool:
     exact matching by its surviving email key -- see _is_probabilistic_shape). Only
     no-strong-id + >=2-fuzzy-field shapes route; strong-id (email/phone/identifier)
     shapes stay on exact matching. Kill-switch:
-    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=0 (or false/no/off/disabled)."""
+    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=0 (or false/no/off/disabled).
+
+    An in-process override (`deterministic_routing()` / `_ROUTE_PROBABILISTIC_OVERRIDE`)
+    takes precedence over the env var -- the streaming/incremental orchestrator uses it
+    to stay deterministic because it cannot execute a routed F-S config per-block."""
+    override = _ROUTE_PROBABILISTIC_OVERRIDE.get()
+    if override is not None:
+        return bool(override)
     return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1").strip().lower() not in (
         "0", "false", "no", "off", "disabled",
     )
@@ -857,15 +864,32 @@ def _is_probabilistic_shape(
     matchkeys: list[MatchkeyConfig], profiles: list[ColumnProfile]
 ) -> bool:
     """Probabilistic shape = no SURVIVING exact matchkey backed by a strong-identity
-    column (identifier/email/phone) + >=2 fuzzy (weighted) fields for EM to weight.
-    Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id column
-    (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'."""
+    column (identifier/email/phone) + >=2 DISTINCT fuzzy (weighted) COLUMNS for EM to
+    weight. Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id
+    column (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'.
+
+    The count is over DISTINCT REAL input COLUMNS, not matchkey-field entries: a single
+    free-text/description column gets *two* fuzzy fields -- a `token_sort` on the column
+    plus a whole-record `record_embedding` on the synthetic `__record__` field (the
+    "route long text to fuzzy alongside embedding" rule). That is ONE semantic field
+    re-scored, not two independent ones. Fellegi-Sunter EM assumes conditional
+    independence ACROSS FIELDS, so scoring one column twice does not make an FS-shaped
+    dataset -- and routing a single-text-column corpus to FS measurably splits obvious
+    near-duplicates (it belongs on the LSH + fuzzy deterministic path). We therefore
+    drop synthetic `__`-prefixed fields (e.g. `__record__`) from the count, so a real
+    multi-field person dataset (first_name + last_name) still routes while a single-column
+    corpus stays put."""
     col_type = {p.name: p.col_type for p in profiles}
     # f.field is str | None (embedding fields have None); drop None for the lookup.
     exact_fields = [f.field for mk in matchkeys if mk.type == "exact" for f in mk.fields if f.field]
     has_strong_id = any(col_type.get(fld) in _STRONG_EXACT_TYPES for fld in exact_fields)
-    fuzzy_field_count = sum(len(mk.fields) for mk in matchkeys if mk.type == "weighted")
-    return (not has_strong_id) and fuzzy_field_count >= 2
+    fuzzy_columns = {
+        f.field
+        for mk in matchkeys if mk.type == "weighted"
+        for f in mk.fields
+        if f.field and not f.field.startswith("__")
+    }
+    return (not has_strong_id) and len(fuzzy_columns) >= 2
 
 
 def _noise_aware_scorer(col_type: str, scorer: str) -> str:
@@ -3663,6 +3687,29 @@ def _match_mode_autoconfig():  # pyright: ignore[reportUnusedFunction]  # used c
         yield
     finally:
         _AUTOCONFIG_MATCH_MODE.reset(token)
+
+
+# Set by execution paths that CANNOT run the Fellegi-Sunter routed config --
+# the streaming / incremental orchestrator (`goldenmatch sync` / `db.watch`) scores
+# per-block and cannot train a global EM model, so a routed probabilistic config
+# raises NotImplementedError in `_score_block_streaming`. These paths wrap their
+# `auto_configure(_df)` call in `deterministic_routing()` so zero-config streaming
+# stays on the deterministic weighted path. `None` = honor the env default.
+_ROUTE_PROBABILISTIC_OVERRIDE: ContextVar = ContextVar(
+    "_ROUTE_PROBABILISTIC_OVERRIDE", default=None,
+)
+
+
+@contextlib.contextmanager
+def deterministic_routing():
+    """Force auto-config OFF the probabilistic (Fellegi-Sunter) route for the
+    duration -- for execution paths (streaming / incremental) that can't train
+    per-partition EM. Zero-config on these paths stays on the weighted path."""
+    token = _ROUTE_PROBABILISTIC_OVERRIDE.set(False)
+    try:
+        yield
+    finally:
+        _ROUTE_PROBABILISTIC_OVERRIDE.reset(token)
 
 
 def _multisource_autoconfig_enabled() -> bool:

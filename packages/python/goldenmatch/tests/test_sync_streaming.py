@@ -146,11 +146,15 @@ def _kernel_config(df: pl.DataFrame, block_field: str = "last_name"):
     to per-block scoring.
     """
     from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
-    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.autoconfig import auto_configure_df, deterministic_routing
 
-    cfg = auto_configure_df(
-        df, confidence_required=False, _skip_finalize=True,
-    )
+    # Mirror the streaming orchestrator (`goldenmatch sync`): it wraps auto-config
+    # in deterministic_routing() because per-block streaming can't train a global
+    # EM model, so a routed probabilistic config raises in _score_block_streaming.
+    with deterministic_routing():
+        cfg = auto_configure_df(
+            df, confidence_required=False, _skip_finalize=True,
+        )
     # Force a known blocking key so test fixtures are predictable.
     cfg.blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=[block_field])])
     cfg.backend = "bucket"
