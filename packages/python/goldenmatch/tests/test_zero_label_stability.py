@@ -42,6 +42,12 @@ def test_stability_none_when_flag_off(monkeypatch):
 
 def test_stability_computed_when_flag_on(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ZERO_LABEL_STABILITY", "1")
+    # Perturbation stability perturbs a WEIGHTED matchkey threshold. This df's
+    # email is low-cardinality (no exact matchkey) so under the default-on
+    # probabilistic router it becomes a fuzzy-only -> F-S config with no
+    # perturbable weighted matchkey (stability stays None). Pin the router off:
+    # this test is about the weighted-path stability compute, not routing.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     goldenmatch.auto_configure_df(_df(), confidence_required=False)
     stab = _committed_zero_label().perturbation_stability
     # Committed config has a weighted (name->ensemble) matchkey -> perturbable.

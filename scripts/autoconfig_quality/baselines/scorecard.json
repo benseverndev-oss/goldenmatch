@@ -3,22 +3,22 @@
     "anchor_person_match": {
       "f1": {
         "attribution": {
-          "blocking_recall": 1.0,
+          "blocking_recall": 0.0,
           "final_recall": 1.0,
-          "threshold_loss": 0.0
+          "threshold_loss": -1.0
         },
-        "f1": 0.9896,
-        "precision": 0.9793,
+        "f1": 1.0,
+        "precision": 1.0,
         "recall": 1.0
       },
       "f1_probabilistic": {
         "attribution": {
-          "blocking_recall": 1.0,
+          "blocking_recall": 0.0,
           "final_recall": 1.0,
-          "threshold_loss": 0.0
+          "threshold_loss": -1.0
         },
-        "f1": 0.9607,
-        "precision": 0.9244,
+        "f1": 1.0,
+        "precision": 1.0,
         "recall": 1.0
       },
       "kind": "anchor",
@@ -119,36 +119,36 @@
     "febrl3": {
       "f1": {
         "attribution": {
-          "blocking_recall": 0.9296,
-          "final_recall": 0.9618,
-          "threshold_loss": -0.0321
+          "blocking_recall": 0.0,
+          "final_recall": 0.9587,
+          "threshold_loss": -0.9587
         },
-        "f1": 0.9921,
-        "precision": 0.9997,
-        "recall": 0.9847
+        "f1": 0.9912,
+        "precision": 0.9992,
+        "recall": 0.9833
       },
       "f1_probabilistic": {
         "attribution": {
-          "blocking_recall": 0.9296,
-          "final_recall": 0.9524,
-          "threshold_loss": -0.0228
+          "blocking_recall": 0.0,
+          "final_recall": 0.9758,
+          "threshold_loss": -0.9758
         },
-        "f1": 0.9908,
+        "f1": 0.9969,
         "precision": 1.0,
-        "recall": 0.9818
+        "recall": 0.9939
       },
       "kind": "real",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 15484,
-          "max_block": 36,
-          "n_blocks": 1974,
-          "p99": 14,
-          "reduction_ratio": 0.9988
+          "candidate_pairs": 8408,
+          "max_block": 6,
+          "n_blocks": 2046,
+          "p99": 6,
+          "reduction_ratio": 0.9993
         },
         "blocking_fields": [
+          "postcode",
           "soc_sec_id",
-          "state",
           "surname"
         ],
         "classification": {
@@ -157,7 +157,7 @@
           "date_of_birth": "date",
           "given_name": "name",
           "id": "identifier",
-          "postcode": "numeric",
+          "postcode": "zip",
           "soc_sec_id": "identifier",
           "state": "geo",
           "street_number": "numeric",
@@ -181,28 +181,32 @@
     "historical_50k": {
       "f1": {
         "attribution": {
-          "skipped": "scale"
+          "blocking_recall": 0.0,
+          "final_recall": 0.5523,
+          "threshold_loss": -0.5523
         },
-        "f1": 0.3409,
-        "precision": 0.2474,
-        "recall": 0.5478
+        "f1": 0.8129,
+        "precision": 0.9301,
+        "recall": 0.722
       },
       "f1_probabilistic": {
         "attribution": {
-          "skipped": "scale"
+          "blocking_recall": 0.0,
+          "final_recall": 0.5614,
+          "threshold_loss": -0.5614
         },
-        "f1": 0.8279,
-        "precision": 0.9272,
-        "recall": 0.7478
+        "f1": 0.826,
+        "precision": 0.9257,
+        "recall": 0.7457
       },
       "kind": "real",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 17997410,
-          "max_block": 1000,
-          "n_blocks": 21821,
-          "p99": 124,
-          "reduction_ratio": 0.9859
+          "candidate_pairs": 19546409,
+          "max_block": 1024,
+          "n_blocks": 21249,
+          "p99": 128,
+          "reduction_ratio": 0.9847
         },
         "blocking_fields": [
           "first_and_surname",
@@ -233,28 +237,28 @@
     "ncvr_synthetic": {
       "f1": {
         "attribution": {
-          "blocking_recall": 1.0,
-          "final_recall": 0.936,
-          "threshold_loss": 0.064
+          "blocking_recall": 0.0,
+          "final_recall": 0.9984,
+          "threshold_loss": -0.9984
         },
-        "f1": 0.9649,
-        "precision": 0.9957,
-        "recall": 0.936
+        "f1": 0.9901,
+        "precision": 0.9819,
+        "recall": 0.9984
       },
       "f1_probabilistic": {
         "attribution": {
-          "blocking_recall": 1.0,
-          "final_recall": 0.9876,
-          "threshold_loss": 0.0124
+          "blocking_recall": 0.0,
+          "final_recall": 0.9984,
+          "threshold_loss": -0.9984
         },
-        "f1": 0.9894,
-        "precision": 0.9912,
-        "recall": 0.9876
+        "f1": 0.9901,
+        "precision": 0.9819,
+        "recall": 0.9984
       },
       "kind": "real",
       "signals": {
         "blocking_cost": {
-          "candidate_pairs": 434530,
+          "candidate_pairs": 434710,
           "max_block": 145,
           "n_blocks": 65,
           "p99": 145,
@@ -300,7 +304,7 @@
       "dblp_acm": "absent",
       "ncvr_real": "absent"
     },
-    "git_sha": "5db27b2fce7f84487d680b02bd229a4b805cabe7",
-    "native_version": "0.1.12"
+    "git_sha": "b5efc6992932ca8530f887213a700364ac54aca9",
+    "native_version": "0.1.17"
   }
 }

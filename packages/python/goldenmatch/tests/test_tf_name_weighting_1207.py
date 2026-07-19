@@ -102,6 +102,9 @@ def _name_fields(cfg):
 
 def test_autoconfig_populates_tf_freqs_for_name_scorer(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_TF_NAME_WEIGHTING", "1")
+    # name_freq_weighted_jw is a deterministic weighted-path scorer; opt out of FS
+    # routing (default-on 2026-07-17) so this name shape keeps that matchkey.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     cfg = auto_configure_df(_common_vs_rare_name_df())
     nf = _name_fields(cfg)
     assert nf, "expected a name_freq_weighted_jw field on this person shape"
@@ -117,6 +120,10 @@ def test_kill_switch_disables_tf_population(monkeypatch):
 
 def test_tf_downweight_reaches_scoring_end_to_end(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_TF_NAME_WEIGHTING", "1")
+    # TF name-weighting is a WEIGHTED-matchkey-path feature; the default-on
+    # probabilistic router (2026-07-17) would divert this person-shaped df to
+    # the F-S path (no name_freq_weighted_jw tf_freqs). Pin it off.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = _common_vs_rare_name_df()
     cfg = auto_configure_df(df)
     nf = _name_fields(cfg)
@@ -170,6 +177,9 @@ def test_tf_downweight_robust_to_source_casing(monkeypatch):
     values.
     """
     monkeypatch.setenv("GOLDENMATCH_TF_NAME_WEIGHTING", "1")
+    # Weighted-path feature; pin the probabilistic router off (see the sibling
+    # end-to-end test).
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = _mixed_case_common_vs_rare_name_df()
     cfg = auto_configure_df(df)
     nf = _name_fields(cfg)

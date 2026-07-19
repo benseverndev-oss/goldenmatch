@@ -263,6 +263,12 @@ def test_zero_config_dedupe_df_is_polars_free():
         {
             "GOLDENMATCH_FRAME": "arrow",
             "GOLDENMATCH_NATIVE": "1",
+            # Pin arrow-native explicitly: the whole point of this gate is the
+            # arrow-native path, and _run_subprocess inherits dict(os.environ),
+            # so a sibling test that left GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=0
+            # (e.g. the arrow-vs-polars parity comparison) would otherwise force
+            # the polars input-boundary coercion and false-fail this tripwire.
+            "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE": "1",
             "POLARS_SKIP_CPU_CHECK": "1",
             "GOLDENMATCH_AUTOCONFIG_MEMORY": "0",
         },

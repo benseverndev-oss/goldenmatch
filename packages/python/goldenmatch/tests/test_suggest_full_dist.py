@@ -159,6 +159,10 @@ def test_full_dist_on_lowers_to_high_side_valley_when_threshold_far_above(monkey
 
     from scripts.suggest_quality.oracle import _auto_configure_no_rerank  # noqa: PLC0415
     df = _ncvr()
+    # Test the dip rule on a WEIGHTED/fuzzy matchkey threshold; the default-on
+    # probabilistic router would divert the NCVR person shape to F-S (no weighted
+    # threshold to perturb -> StopIteration below). Pin it off to test the weighted path.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     cfg = _auto_configure_no_rerank(df)
     # Set the primary weighted/fuzzy matchkey threshold WELL above the 0.875
     # valley (> DIP_MIN_GAP) so the dip rule is guaranteed to fire.

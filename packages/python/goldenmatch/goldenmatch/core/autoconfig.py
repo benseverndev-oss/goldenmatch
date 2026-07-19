@@ -832,11 +832,23 @@ def _tf_name_weighting_enabled() -> bool:
 def _route_to_probabilistic_enabled() -> bool:
     """Auto-route a probabilistic-shaped dataset (no strong-identity exact matchkey
     + multiple weak fuzzy fields) to the Fellegi-Sunter path instead of the default
-    exact+weighted matchkeys. Default OFF (2026-06-23) -- a behavior change pending
-    the dual-strategy corpus proof. Enable:
-    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=1 (or true/yes/on/enabled)."""
-    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0").lower() in (
-        "1", "true", "yes", "on", "enabled",
+    exact+weighted matchkeys. Default ON (2026-07-17) -- the dual-strategy corpus
+    proof came back green: routing lifts the default-strategy F1 on every routed
+    dataset (historical_50k 0.34->0.77, ncvr_synthetic 0.96->0.99, febrl3 flat) with
+    NO regression on the one det-wins anchor (anchor_person_match holds ~0.99, kept on
+    exact matching by its surviving email key -- see _is_probabilistic_shape). Only
+    no-strong-id + >=2-fuzzy-field shapes route; strong-id (email/phone/identifier)
+    shapes stay on exact matching. Kill-switch:
+    GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=0 (or false/no/off/disabled).
+
+    An in-process override (`deterministic_routing()` / `_ROUTE_PROBABILISTIC_OVERRIDE`)
+    takes precedence over the env var -- the streaming/incremental orchestrator uses it
+    to stay deterministic because it cannot execute a routed F-S config per-block."""
+    override = _ROUTE_PROBABILISTIC_OVERRIDE.get()
+    if override is not None:
+        return bool(override)
+    return os.environ.get("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1").strip().lower() not in (
+        "0", "false", "no", "off", "disabled",
     )
 
 
@@ -852,15 +864,32 @@ def _is_probabilistic_shape(
     matchkeys: list[MatchkeyConfig], profiles: list[ColumnProfile]
 ) -> bool:
     """Probabilistic shape = no SURVIVING exact matchkey backed by a strong-identity
-    column (identifier/email/phone) + >=2 fuzzy (weighted) fields for EM to weight.
-    Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id column
-    (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'."""
+    column (identifier/email/phone) + >=2 DISTINCT fuzzy (weighted) COLUMNS for EM to
+    weight. Keys on the EMITTED matchkeys (not raw profiles), so a ceiling-excluded id
+    column (a perfectly-unique surrogate) correctly counts as 'no surviving strong key'.
+
+    The count is over DISTINCT REAL input COLUMNS, not matchkey-field entries: a single
+    free-text/description column gets *two* fuzzy fields -- a `token_sort` on the column
+    plus a whole-record `record_embedding` on the synthetic `__record__` field (the
+    "route long text to fuzzy alongside embedding" rule). That is ONE semantic field
+    re-scored, not two independent ones. Fellegi-Sunter EM assumes conditional
+    independence ACROSS FIELDS, so scoring one column twice does not make an FS-shaped
+    dataset -- and routing a single-text-column corpus to FS measurably splits obvious
+    near-duplicates (it belongs on the LSH + fuzzy deterministic path). We therefore
+    drop synthetic `__`-prefixed fields (e.g. `__record__`) from the count, so a real
+    multi-field person dataset (first_name + last_name) still routes while a single-column
+    corpus stays put."""
     col_type = {p.name: p.col_type for p in profiles}
     # f.field is str | None (embedding fields have None); drop None for the lookup.
     exact_fields = [f.field for mk in matchkeys if mk.type == "exact" for f in mk.fields if f.field]
     has_strong_id = any(col_type.get(fld) in _STRONG_EXACT_TYPES for fld in exact_fields)
-    fuzzy_field_count = sum(len(mk.fields) for mk in matchkeys if mk.type == "weighted")
-    return (not has_strong_id) and fuzzy_field_count >= 2
+    fuzzy_columns = {
+        f.field
+        for mk in matchkeys if mk.type == "weighted"
+        for f in mk.fields
+        if f.field and not f.field.startswith("__")
+    }
+    return (not has_strong_id) and len(fuzzy_columns) >= 2
 
 
 def _noise_aware_scorer(col_type: str, scorer: str) -> str:
@@ -3660,6 +3689,29 @@ def _match_mode_autoconfig():  # pyright: ignore[reportUnusedFunction]  # used c
         _AUTOCONFIG_MATCH_MODE.reset(token)
 
 
+# Set by execution paths that CANNOT run the Fellegi-Sunter routed config --
+# the streaming / incremental orchestrator (`goldenmatch sync` / `db.watch`) scores
+# per-block and cannot train a global EM model, so a routed probabilistic config
+# raises NotImplementedError in `_score_block_streaming`. These paths wrap their
+# `auto_configure(_df)` call in `deterministic_routing()` so zero-config streaming
+# stays on the deterministic weighted path. `None` = honor the env default.
+_ROUTE_PROBABILISTIC_OVERRIDE: ContextVar = ContextVar(
+    "_ROUTE_PROBABILISTIC_OVERRIDE", default=None,
+)
+
+
+@contextlib.contextmanager
+def deterministic_routing():
+    """Force auto-config OFF the probabilistic (Fellegi-Sunter) route for the
+    duration -- for execution paths (streaming / incremental) that can't train
+    per-partition EM. Zero-config on these paths stays on the weighted path."""
+    token = _ROUTE_PROBABILISTIC_OVERRIDE.set(False)
+    try:
+        yield
+    finally:
+        _ROUTE_PROBABILISTIC_OVERRIDE.reset(token)
+
+
 def _multisource_autoconfig_enabled() -> bool:
     """#858 multi-source zero-config guard. Default ON; disable with
     ``GOLDENMATCH_MULTISOURCE_AUTOCONFIG=0`` (or false/disabled/off/no)."""
@@ -4280,9 +4332,33 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # (excluding __-prefixed cols), so any already-extracted domain feature is dropped
     # on the routed path. Acceptable while default-off; revisit if a domain-heavy
     # dataset misroutes or needs its domain features under FS.
-    if (not multi_source and _route_to_probabilistic_enabled()
+    # Domain-heavy data whose extraction produced real domain matchkey columns
+    # (electronics/software/biblio keys in _DOMAIN_SCORER_MAP, mostly strong-id
+    # exact) stays on the deterministic domain-aware path: those matchkeys are a
+    # strong identity signal the FS routed path would drop (it re-profiles df,
+    # excluding __-cols). This is the "revisit if a domain-heavy dataset misroutes"
+    # the routing note called for once routing went default-on. NOTE: person-shape
+    # extraction can populate __-cols that are NOT domain matchkey columns, so gate
+    # on _DOMAIN_SCORER_MAP membership, not on extracted_columns being non-empty.
+    _domain_matchkey_cols = [c for c in extracted_columns if c in _DOMAIN_SCORER_MAP]
+    if (not multi_source and not _domain_matchkey_cols
+            and _route_to_probabilistic_enabled()
             and _is_probabilistic_shape(matchkeys, profiles)):
-        return auto_configure_probabilistic_df(df, llm_provider=llm_provider)
+        routed = auto_configure_probabilistic_df(df, llm_provider=llm_provider)
+        # Parity with the deterministic tail: attach the preflight report so a
+        # routed FS config carries the same verification/diagnostic the default
+        # path does (the config-lint + auto-repair surface). Standardization is
+        # attached inside auto_configure_probabilistic_df.
+        from goldenmatch.core.autoconfig_verify import ConfigValidationError, preflight
+        routed._strict_autoconfig = strict
+        _routed_report = preflight(
+            df_input, routed, profiles=profiles,
+            allow_remote_assets=allow_remote_assets,
+        )
+        if _routed_report.has_errors:
+            raise ConfigValidationError(report=_routed_report)
+        routed._preflight_report = _routed_report
+        return routed
 
     # ── Add domain-extracted fields to matchkeys ──
     if extracted_columns:
@@ -4468,49 +4544,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
 
     memory_config = MemoryConfig(enabled=True) if llm_auto else None
 
-    # Auto-detect standardization rules (Change 1, 2026-05-07)
-    # When the column-profile classifier identifies a typed column (phone,
-    # email, name, address, zip, geo), emit a corresponding StandardizationConfig
-    # rule. The hand-tuned dqbench adapter does this manually; auto-config
-    # now matches it without explicit user intervention.
-    #
-    # StandardizationConfig.rules schema: {column_name: [standardizer_names]}
-    # VALID_STANDARDIZERS: email, phone, zip5, address, state, name_proper,
-    # name_upper, name_lower, strip, trim_whitespace.
-    _std_rules: dict[str, list[str]] = {}  # {col_name: [std_name, ...]}
-    _email_typed_cols: set[str] = set()  # guard: skip address detection on these
-    for _p in profiles:
-        if _p.col_type == "email":
-            _email_typed_cols.add(_p.name)
-            _std_rules[_p.name] = ["email"]
-        elif _p.col_type == "phone":
-            _std_rules[_p.name] = ["phone"]
-        elif _p.col_type == "zip":
-            _std_rules[_p.name] = ["zip5"]
-        elif _p.col_type == "geo":
-            # state-shaped columns (state_cd, province, country) → state rule
-            _cl = _p.name.lower()
-            if any(pat in _cl for pat in ("state", "province", "country")):
-                _std_rules[_p.name] = ["state"]
-        elif _p.col_type == "name":
-            # Route all name columns to name_proper (title-case + strip).
-            _std_rules[_p.name] = ["name_proper"]
-        elif _p.col_type == "address":
-            # Guard: skip if column was already typed as email (e.g. email_address)
-            if _p.name not in _email_typed_cols:
-                _std_rules[_p.name] = ["address"]
-
-    # Build the StandardizationConfig only if we detected something.
-    # Return None rather than StandardizationConfig(rules={}) to avoid passing
-    # an empty config into the pipeline.
-    _standardization = None
-    if _std_rules:
-        from goldenmatch.config.schemas import StandardizationConfig
-        _standardization = StandardizationConfig(rules=_std_rules)
-        logger.info(
-            "auto-config: StandardizationConfig auto-detected %d column rules: %s",
-            len(_std_rules), sorted(_std_rules.keys()),
-        )
+    # Auto-detect standardization rules (Change 1, 2026-05-07). Shared with the
+    # probabilistic routed path (_detect_standardization_config) so a routed FS
+    # config gets the same input normalization as the deterministic default.
+    _standardization = _detect_standardization_config(profiles)
 
     # Capture choices in a decisions object so a future iterative-tuning loop
     # can nudge them without re-profiling. Matchkeys and blocking strategy/
@@ -4829,6 +4866,52 @@ def _pick_missing_semantics(
     return mode
 
 
+def _detect_standardization_config(profiles: list[ColumnProfile]) -> Any:
+    """Auto-detect StandardizationConfig from column types (Change 1, 2026-05-07).
+
+    When the classifier identifies a typed column (phone/email/name/address/zip/
+    geo), emit the matching standardizer so auto-config normalizes inputs without
+    explicit user setup. Returns None when nothing is detected (avoids passing an
+    empty StandardizationConfig into the pipeline). Shared by the deterministic
+    default path and the probabilistic routed path so both normalize identically.
+
+    StandardizationConfig.rules schema: {column_name: [standardizer_names]}.
+    VALID_STANDARDIZERS: email, phone, zip5, address, state, name_proper,
+    name_upper, name_lower, strip, trim_whitespace.
+    """
+    _std_rules: dict[str, list[str]] = {}
+    _email_typed_cols: set[str] = set()  # guard: skip address detection on these
+    for _p in profiles:
+        if _p.col_type == "email":
+            _email_typed_cols.add(_p.name)
+            _std_rules[_p.name] = ["email"]
+        elif _p.col_type == "phone":
+            _std_rules[_p.name] = ["phone"]
+        elif _p.col_type == "zip":
+            _std_rules[_p.name] = ["zip5"]
+        elif _p.col_type == "geo":
+            # state-shaped columns (state_cd, province, country) → state rule
+            _cl = _p.name.lower()
+            if any(pat in _cl for pat in ("state", "province", "country")):
+                _std_rules[_p.name] = ["state"]
+        elif _p.col_type == "name":
+            # Route all name columns to name_proper (title-case + strip).
+            _std_rules[_p.name] = ["name_proper"]
+        elif _p.col_type == "address":
+            # Guard: skip if column was already typed as email (e.g. email_address)
+            if _p.name not in _email_typed_cols:
+                _std_rules[_p.name] = ["address"]
+
+    if not _std_rules:
+        return None
+    from goldenmatch.config.schemas import StandardizationConfig
+    logger.info(
+        "auto-config: StandardizationConfig auto-detected %d column rules: %s",
+        len(_std_rules), sorted(_std_rules.keys()),
+    )
+    return StandardizationConfig(rules=_std_rules)
+
+
 def auto_configure_probabilistic_df(
     df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (arrow lane)
     llm_provider: str | None = None,
@@ -4881,6 +4964,11 @@ def auto_configure_probabilistic_df(
         blocking=blocking,
         golden_rules=GoldenRulesConfig(default_strategy="most_complete"),
         output=OutputConfig(),
+        # NOTE: deliberately NO standardization_config here. The FS path EM-trains
+        # m/u weights on the raw values; forcing name_proper/address normalization
+        # measurably LOWERS FS F1 (ncvr_synthetic f1_probabilistic 0.989 -> 0.978 in
+        # the autoconfig quality corpus). FS handles surface variation via EM, so
+        # standardization is a deterministic-path lever, not shared parity.
     )
 
 

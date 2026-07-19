@@ -13,6 +13,17 @@ import polars as pl
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _pin_deterministic_routing(monkeypatch):
+    """Every test here exercises the distributed `_score_partition_with_config`
+    kernel, which by design cannot score per-partition probabilistic (F-S)
+    matchkeys without a driver-trained model. The person-shaped fixture routes
+    to the probabilistic path under the default-on router (2026-07-17), so pin
+    it off: these tests are about the kernel mechanics, not about routing.
+    """
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
+
+
 def _person_fixture() -> pl.DataFrame:
     return pl.DataFrame({
         "first_name": ["Alice"] * 5 + ["Bob"] * 5 + ["Alyce"] * 5 + ["Robert"] * 5,
@@ -66,9 +77,13 @@ def test_kernel_skips_clustering():
     )
 
 
-def test_kernel_skips_autoconfig():
+def test_kernel_skips_autoconfig(monkeypatch):
     """The kernel must NOT call auto_configure_df; the driver already ran
     auto-config on a sample (Phase 2) before dispatching."""
+    # Exercise the deterministic committed-config kernel path (the FS routed
+    # config, default-on 2026-07-17, takes a different scorer lane); this test is
+    # about the kernel skipping re-auto-config, not about routing.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
     df = _person_fixture()
     cfg = _kernel_committed_config(df)
     cfg.backend = "bucket"

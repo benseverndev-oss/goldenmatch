@@ -87,6 +87,7 @@ def sync_cmd(
             from goldenmatch.core.autoconfig import (
                 _RUNTIME_EXCLUDE_COLUMNS,
                 auto_configure,
+                deterministic_routing,
             )
             _ctx_token = _RUNTIME_EXCLUDE_COLUMNS.set(_cli_excludes or None)
             try:
@@ -95,7 +96,11 @@ def sync_cmd(
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
                     sample.write_csv(f.name)
-                    cfg = auto_configure([(f.name, table)])
+                    # Streaming/incremental sync scores per-block and can't train a
+                    # global EM model, so keep zero-config on the deterministic
+                    # weighted path (a routed F-S config raises in _score_block_streaming).
+                    with deterministic_routing():
+                        cfg = auto_configure([(f.name, table)])
             finally:
                 _RUNTIME_EXCLUDE_COLUMNS.reset(_ctx_token)
             if not quiet:

@@ -430,7 +430,7 @@ def test_cardinality_guard_just_below_0_5_excluded():
 
 # ── Interaction: single e2e run that exercises all three fixes together ───
 
-def test_dedupe_df_interaction_all_three_fixes_together():
+def test_dedupe_df_interaction_all_three_fixes_together(monkeypatch):
     """One end-to-end run that would hit all three bugs simultaneously if
     any regressed:
 
@@ -456,6 +456,11 @@ def test_dedupe_df_interaction_all_three_fixes_together():
     a non-empty clusters dict) but small enough to run in a couple seconds.
     """
     df = _person_df(500)
+
+    # These three regressions live in the deterministic build_matchkeys / stats
+    # path; opt out of FS routing (default-on 2026-07-17) so the person shape
+    # keeps exercising that path rather than the FS routed lane.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "0")
 
     # Exercise the fixed auto-config path explicitly so we can strip
     # reranking out of the produced config before the pipeline runs.
