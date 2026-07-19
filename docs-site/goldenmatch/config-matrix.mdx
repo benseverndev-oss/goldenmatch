@@ -1011,26 +1011,26 @@ _`VALID_SIMPLE_TRANSFORMS` -- `transforms` chains._
 ### Survivorship strategies
 _`VALID_STRATEGIES` -- `GoldenFieldRule.strategy`._
 
-| Value | Meaning |
-|---|---|
-| `confidence_majority` | Value backed by the highest total match confidence. |
-| `first_non_null` | First non-null value in row order. |
-| `longest_value` | The longest, most detailed value. |
-| `majority_vote` | Most frequent value across the cluster. |
-| `most_complete` | Value from the record with the fewest nulls. |
-| `most_recent` | Value from the newest record (needs date_column). |
-| `source_priority` | Value from the highest-priority source (needs source_priority). |
-| `unanimous_or_null` | The value only if every record agrees, else null. |
+| Value | Meaning | Best for |
+|---|---|---|
+| `confidence_majority` | Value backed by the highest total match confidence. | Weighting by match quality |
+| `first_non_null` | First non-null value in row order. | Pre-ordered inputs |
+| `longest_value` | The longest, most detailed value. | Truncated/abbreviated values |
+| `majority_vote` | Most frequent value across the cluster. | Many redundant sources |
+| `most_complete` | Value from the record with the fewest nulls. | Default; sparse records |
+| `most_recent` | Value from the newest record (needs date_column). | Time-stamped sources |
+| `source_priority` | Value from the highest-priority source (needs source_priority). | A trusted source ranking |
+| `unanimous_or_null` | The value only if every record agrees, else null. | Zero-tolerance fields |
 
 ### Group survivorship strategies
 _`_GROUP_STRATEGIES` -- `GoldenGroupRule.strategy`._
 
-| Value | Meaning |
-|---|---|
-| `anchor` | Take all group columns from the anchor column's winning row. |
-| `most_complete` | Take all group columns from the most-complete row. |
-| `most_recent` | Take the group from the newest row. |
-| `source_priority` | Take the group from the highest-priority source. |
+| Value | Meaning | Best for |
+|---|---|---|
+| `anchor` | Take all group columns from the anchor column's winning row. | Tying the group to one key field |
+| `most_complete` | Take all group columns from the most-complete row. | Default; a coherent row |
+| `most_recent` | Take the group from the newest row. | Time-stamped groups |
+| `source_priority` | Take the group from the highest-priority source. | A trusted source ranking |
 
 ### Standardizers
 _`VALID_STANDARDIZERS` -- `StandardizationConfig.rules`._
@@ -1051,42 +1051,42 @@ _`VALID_STANDARDIZERS` -- `StandardizationConfig.rules`._
 ### Matchkey types
 _`_VALID_MK_TYPES` -- `MatchkeyConfig.type`._
 
-| Value | Meaning |
-|---|---|
-| `exact` | All fields must match exactly; fastest, no scoring. |
-| `probabilistic` | Fellegi-Sunter scoring with EM-learned agreement weights. |
-| `weighted` | Weighted mean of per-field scores compared to a threshold. |
+| Value | Meaning | Best for |
+|---|---|---|
+| `exact` | All fields must match exactly; fastest, no scoring. | Reliable keys, max speed |
+| `probabilistic` | Fellegi-Sunter scoring with EM-learned agreement weights. | Unknown field reliability, best recall |
+| `weighted` | Weighted mean of per-field scores compared to a threshold. | Tunable fuzzy matching |
 
 ### Backends
 _`BackendName` -- `GoldenMatchConfig.backend` / `--backend`._
 
-| Value | Meaning |
-|---|---|
-| `bucket` | Memory-bounded field-hash bucket scorer (the in-memory default route). |
-| `chunked` | Chunked in-memory execution to cap peak memory. |
-| `duckdb` | DuckDB-backed out-of-core execution. |
-| `polars-direct` | Straight in-memory Polars execution. |
-| `ray` | Distributed execution on a Ray cluster. |
+| Value | Meaning | Best for |
+|---|---|---|
+| `bucket` | Memory-bounded field-hash bucket scorer (the in-memory default route). | &lt; 500K, default (native on) |
+| `chunked` | Chunked in-memory execution to cap peak memory. | 5M+ on one machine |
+| `duckdb` | DuckDB-backed out-of-core execution. | 500K-50M, out-of-core |
+| `polars-direct` | Straight in-memory Polars execution. | &lt; 500K, native kernel absent |
+| `ray` | Distributed execution on a Ray cluster. | 50M+, distributed |
 
 ### Clustering strategies
 _`ClusteringStrategy` -- planner cluster route._
 
-| Value | Meaning |
-|---|---|
-| `distributed_wcc` | Distributed weakly-connected-components on a cluster. |
-| `in_memory` | In-memory union-find clustering. |
-| `partitioned_union_find` | Disk-partitioned union-find for large pair sets. |
-| `streaming_cc` | Streaming connected-components. |
+| Value | Meaning | Best for |
+|---|---|---|
+| `distributed_wcc` | Distributed weakly-connected-components on a cluster. | Ray cluster, 100M+ |
+| `in_memory` | In-memory union-find clustering. | Default; graph fits in RAM |
+| `partitioned_union_find` | Disk-partitioned union-find for large pair sets. | Huge single-box pair sets |
+| `streaming_cc` | Streaming connected-components. | Chunked / out-of-core runs |
 
 ### Planning efforts
 _`_PLANNING_EFFORTS` -- `planning_effort`._
 
-| Value | Meaning |
-|---|---|
-| `einstein` | Maximum auto-config search; slowest and most thorough. |
-| `fast` | Single cheap auto-config pass. |
-| `normal` | Default interactive auto-config budget (byte-identical to historical). |
-| `thinking` | Extra refit iterations plus full-frame blocking measurement. |
+| Value | Meaning | Best for |
+|---|---|---|
+| `einstein` | Maximum auto-config search; slowest and most thorough. | Max quality, cost no object |
+| `fast` | Single cheap auto-config pass. | Quick iteration |
+| `normal` | Default interactive auto-config budget (byte-identical to historical). | Default balance |
+| `thinking` | Extra refit iterations plus full-frame blocking measurement. | Harder datasets |
 
 ## Environment variables (index)
 

@@ -11,7 +11,7 @@ import pytest
 
 from config_matrix import REGISTRY
 from config_matrix.coverage import coverage
-from config_matrix.crossref import stale_env_refs, undocumented_vocab
+from config_matrix.crossref import stale_env_refs, undocumented_vocab, vocab_column_gaps
 from config_matrix.render import (
     MARKER_END,
     MARKER_START,
@@ -90,6 +90,16 @@ def test_topical_docs_cover_the_canonical_set(name):
     # reference page, so a newly-added value is propagated there, not just to the matrix.
     gaps = undocumented_vocab(REGISTRY[name])
     assert not gaps, "undocumented in topical doc: " + "; ".join(f"{g.token} missing from {g.page}" for g in gaps)
+
+
+@pytest.mark.parametrize("name", list(REGISTRY))
+def test_vocab_decision_columns_are_complete(name):
+    # A decision vocab that gives some values a `best_for` / `range` hint must give
+    # it to EVERY value -- a half-filled column renders blank cells that read to a
+    # human as "no guidance". So a newly-added scorer/strategy/backend can't ship
+    # without its decision hint.
+    gaps = vocab_column_gaps(REGISTRY[name])
+    assert not gaps, "vocab column gaps: " + "; ".join(f"{g.token} ({g.page})" for g in gaps)
 
 
 @pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.require_full_coverage])
