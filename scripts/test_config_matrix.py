@@ -115,6 +115,35 @@ def test_full_explanation_coverage_maintained(name):
     )
 
 
+def test_recipe_configs_validate():
+    # Every ```yaml block on the recipes page must be a COMPLETE, valid config --
+    # validated through the same load_config path a real file takes. A renamed or
+    # removed field / scorer / strategy makes the snippet fail schema validation,
+    # so the copy-paste recipes can never rot into referencing a dead knob.
+    import os
+    import re
+    import tempfile
+
+    from config_matrix.render import ROOT
+    from goldenmatch.config.loader import load_config
+
+    page = ROOT / "docs-site" / "goldenmatch" / "recipes.mdx"
+    blocks = re.findall(r"```yaml\n(.*?)```", page.read_text(encoding="utf-8"), re.DOTALL)
+    assert len(blocks) >= 6, f"expected >=6 config blocks on the recipes page, found {len(blocks)}"
+    errors = []
+    for i, block in enumerate(blocks, 1):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8")
+        try:
+            tmp.write(block)
+            tmp.close()
+            load_config(tmp.name)
+        except Exception as exc:  # noqa: BLE001 -- surface which recipe is broken
+            errors.append(f"recipe block #{i}: {str(exc)[:200]}")
+        finally:
+            os.unlink(tmp.name)
+    assert not errors, "invalid recipe config(s):\n" + "\n".join(errors)
+
+
 @pytest.mark.parametrize("name", list(REGISTRY))
 def test_render_is_deterministic(name):
     # Two renders must be byte-identical -- guards against object reprs with

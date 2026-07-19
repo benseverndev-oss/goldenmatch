@@ -1,0 +1,214 @@
+---
+title: "Configuration recipes"
+description: "Copy-paste GoldenMatch configs for common jobs: customer dedupe, cross-source linking, typo-heavy names, addresses, image dedupe, 100M distributed, and survivorship."
+keywords: ["goldenmatch", "recipes", "config", "examples", "dedupe", "matchkey", "survivorship"]
+---
+
+The [config matrix](/goldenmatch/config-matrix) is the exhaustive reference for every knob. This page is the opposite: a short set of task-shaped starting points. Find the row that looks like your problem, copy the config, point it at your columns, and run.
+
+You usually do **not** need a config at all. `goldenmatch dedupe your.csv` auto-tunes everything. Reach for a config when you want to pin the behavior for reproducible runs, override one decision the auto-tuner got wrong, or document the matching policy for review. Every config below is a complete, valid file (CI validates each one against the live schema, so they can't drift).
+
+Run any of them with:
+
+```bash
+goldenmatch dedupe your.csv --config recipe.yaml
+```
+
+## Deduplicate a customer list
+
+**You have** a contact list under ~500K rows with names, emails, and addresses. **You want** to collapse duplicates with high precision.
+
+Match on exact normalized email first (near-zero false merges), then fall back to a fuzzy name comparison. `adaptive` blocking buckets on a last-name prefix and recursively splits any oversized bucket.
+
+```yaml
+matchkeys:
+  - name: email_exact
+    type: exact
+    fields:
+      - column: email
+        transforms: [lowercase, strip]
+  - name: name_fuzzy
+    type: weighted
+    threshold: 0.88
+    fields:
+      - column: first_name
+        scorer: jaro_winkler
+        weight: 1.0
+      - column: last_name
+        scorer: jaro_winkler
+        weight: 1.5
+blocking:
+  strategy: adaptive
+  max_block_size: 5000
+  keys:
+    - fields: [last_name]
+      transforms: [lowercase, "substring:0:3"]
+standardization:
+  email: [email]
+  zip: [zip5]
+golden_rules:
+  default_strategy: most_complete
+```
+
+## Link two sources at a few million rows
+
+**You have** two systems (say a CRM and a billing export) totaling millions of rows on one machine. **You want** to link the same person across both without running out of memory.
+
+The `chunked` backend streams and caps peak memory. Block on a selective key (`dob`) so per-chunk pair counts stay bounded, and match on a name plus date-of-birth. `date` is typo-tolerant over ISO date digits; `most_recent` keeps the freshest value.
+
+```yaml
+backend: chunked
+matchkeys:
+  - name: name_dob
+    type: weighted
+    threshold: 0.9
+    fields:
+      - column: full_name
+        scorer: token_sort
+        weight: 1.0
+      - column: dob
+        scorer: date
+        weight: 1.5
+blocking:
+  strategy: static
+  max_block_size: 5000
+  skip_oversized: true
+  keys:
+    - fields: [dob]
+golden_rules:
+  default_strategy: most_recent
+```
+
+## Match typo-heavy names
+
+**You have** names full of transpositions, misspellings, and OCR noise. **You want** recall without exploding the comparison count.
+
+`ensemble` takes the best of several name scorers (Jaro-Winkler / token-sort / Soundex), so no single typo pattern sinks a true match. `sorted_neighborhood` slides a window over sorted records, which catches pairs an exact blocking key would miss when the key itself has a typo. `longest_value` keeps the most complete spelling.
+
+```yaml
+matchkeys:
+  - name: noisy_names
+    type: weighted
+    threshold: 0.85
+    fields:
+      - column: name
+        scorer: ensemble
+        weight: 1.0
+blocking:
+  strategy: sorted_neighborhood
+  window_size: 10
+  sort_key:
+    - column: name
+  keys:
+    - fields: [name]
+golden_rules:
+  default_strategy: longest_value
+```
+
+## Match messy postal addresses
+
+**You have** addresses with inconsistent formatting, abbreviations, and unit ordering. **You want** them to match despite the noise.
+
+Standardize the address, state, and ZIP up front so formatting differences never reach the scorer. `token_sort` makes the street comparison order-insensitive ("12 Main St Apt 4" vs "Apt 4, 12 Main Street"), and an exact ZIP agreement anchors precision.
+
+```yaml
+matchkeys:
+  - name: address_match
+    type: weighted
+    threshold: 0.86
+    fields:
+      - column: street
+        scorer: token_sort
+        weight: 1.0
+      - column: zip
+        scorer: exact
+        weight: 1.0
+blocking:
+  strategy: adaptive
+  keys:
+    - fields: [zip]
+standardization:
+  street: [address]
+  state: [state]
+  zip: [zip5]
+golden_rules:
+  default_strategy: most_complete
+```
+
+## Deduplicate near-identical images
+
+**You have** an image library with resized, re-encoded, or lightly edited duplicates. **You want** to find them by visual similarity, not by filename or bytes.
+
+`phash` scores perceptual-hash Hamming similarity, so a re-saved JPEG still matches its original. `perceptual` blocking is banded-Hamming LSH over those hashes, so only plausibly-similar images get compared.
+
+```yaml
+matchkeys:
+  - name: image_dupes
+    type: weighted
+    threshold: 0.9
+    fields:
+      - column: image_path
+        scorer: phash
+        weight: 1.0
+blocking:
+  strategy: perceptual
+  keys:
+    - fields: [image_path]
+golden_rules:
+  default_strategy: first_non_null
+```
+
+## Deduplicate at 100M+ rows
+
+**You have** hundreds of millions of rows and a Ray cluster. **You want** a run that never materializes the full graph on the driver.
+
+The config below is an ordinary matching policy; what makes the run distributed is *how you invoke it* (`backend: ray` plus the distributed-pipeline env vars and a global `__row_id__` column). Keep matchkeys cheap at scale and block on a high-cardinality key so per-partition pair counts stay small.
+
+```yaml
+backend: ray
+matchkeys:
+  - name: name_fuzzy
+    type: weighted
+    threshold: 0.85
+    fields:
+      - column: first_name
+        scorer: jaro_winkler
+        weight: 1.0
+blocking:
+  strategy: static
+  max_block_size: 5000
+  skip_oversized: true
+  keys:
+    - fields: [last_name]
+golden_rules:
+  default_strategy: most_complete
+output:
+  format: parquet
+  directory: ./out_100m
+```
+
+See [Backends and scale](/goldenmatch/backends-and-scale) for the cluster setup, the `__row_id__` requirement, and the full distributed env reference.
+
+## Control the golden record
+
+**You have** clusters that resolve fine, but the surviving values are wrong: a stale email wins, or a truncated name. **You want** per-field survivorship rules.
+
+Set a `default_strategy` for every field, then override the ones that matter. Here email follows a trusted source ranking and phone takes the most recently updated value. See the [Survivorship strategies](/goldenmatch/config-matrix#survivorship-strategies) table for every option and when to pick it.
+
+```yaml
+matchkeys:
+  - name: id_exact
+    type: exact
+    fields:
+      - column: customer_id
+        scorer: exact
+golden_rules:
+  default_strategy: most_complete
+  field_rules:
+    email:
+      strategy: source_priority
+      source_priority: [crm, billing, web]
+    phone:
+      strategy: most_recent
+      date_column: updated_at
+```
