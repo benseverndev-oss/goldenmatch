@@ -65,6 +65,16 @@ def _transforms() -> list[str]:
     return sorted(VALID_SIMPLE_TRANSFORMS)
 
 
+def _blocking_strategies() -> list[str]:
+    # goldenmatch config surface: the accepted blocking-strategy names. Mirrors TS
+    # `VALID_BLOCKING_STRATEGIES` (config-edits.ts); intended cross-language deltas
+    # are declared in parity/goldenmatch.yaml (lsh/perceptual/simhash are Python-only).
+    from typing import get_args
+
+    from goldenmatch.config.schemas import BlockingConfig
+    return sorted(get_args(BlockingConfig.model_fields["strategy"].annotation))
+
+
 # The only per-package variance on the Python side is the CLI module path.
 _CLI_MODULE = {
     "goldenmatch": "goldenmatch.cli.main",
@@ -82,7 +92,8 @@ REGISTRY = {
           # Scorer/transform config surfaces are goldenmatch-only (no extra needed:
           # config.schemas imports without the mcp/a2a stacks). Other packages
           # never declare these surfaces, so they're skipped for them.
-          **({"scorers": (_scorers, None), "transforms": (_transforms, None)}
+          **({"scorers": (_scorers, None), "transforms": (_transforms, None),
+              "blocking_strategies": (_blocking_strategies, None)}
              if pkg == "goldenmatch" else {})}
     for pkg, mod in _CLI_MODULE.items()
 }

@@ -561,6 +561,7 @@ export {
   editFromSpec,
   parseLlmEdits,
   foldEdits,
+  VALID_BLOCKING_STRATEGIES,
   type ConfigEdit,
 } from "./config-edits.js";
 

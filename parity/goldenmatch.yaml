@@ -283,3 +283,21 @@ transforms:
   - uppercase
   python_only: []
   ts_only: []
+# blocking_strategies surface (config.schemas BlockingConfig.strategy <->
+# config-edits.ts VALID_BLOCKING_STRATEGIES). python_only: lsh + simhash (MinHash /
+# SimHash LSH) and perceptual (image-hash LSH) have no TS port yet.
+blocking_strategies:
+  shared:
+  - adaptive
+  - ann
+  - ann_pairs
+  - canopy
+  - learned
+  - multi_pass
+  - sorted_neighborhood
+  - static
+  python_only:
+  - lsh
+  - perceptual
+  - simhash
+  ts_only: []
