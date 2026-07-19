@@ -91,11 +91,26 @@ null_rate, cardinality_ratio)` — no extra host input.
    re-exports + Rust golden tests + a golden fixture JSON. Pure addition to
    `autoconfig-core`; **no surface behavior changes**, so zero regression risk.
    Fully built/tested with `cargo test` (no wasm/maturin needed).
-2. **TS reroute (closes #1317).** Rebuild the committed autoconfig wasm embed;
-   thread rows into `buildBlocking`; on the exact-pool-empty fall-through call
-   the core (assemble → measure coverage/block-size in JS → finalize) BEFORE the
-   name fallback. Keep a pure-TS fallback that matches the core (the established
-   opt-in-backend posture). TS parity test on the shared golden fixture.
+2. **TS surface — split into 2a (done) + 2b (deferred) after a build-time
+   finding.**
+   - **2a (shipped):** expose the core via wasm shims (`autoconfig_assemble_/
+     finalize_strong_id_union`) + rebuild the committed embed; port the pure
+     DECISION logic to `src/core/blockingUnion.ts`; cross-surface parity test
+     asserting **TS-pure == wasm == the golden fixture** on assemble + finalize.
+   - **2b (deferred — the actual `buildBlocking` reroute that closes #1317):**
+     wiring the union into the always-on `buildBlocking` surfaced that the core's
+     `assemble` derives name-column detection from **`classify_by_name`** (a
+     name-*pattern*-only classifier: bare `first`/`last` are NOT names, only
+     `first_name`/`surname` are), which differs from TS's data-aware
+     `classifyColumn`. Feeding TS's classifier makes the union **over-fire** vs
+     Python (it fired on a bare-`first`/`last` dataset where Python returns the
+     name fallback — caught by `controller-stoppoint.parity.test.ts::mixed_blocking`).
+     Closing #1317 in the always-on path therefore needs the core's
+     `classify_by_name` to be the name-classification authority on the TS surface
+     — a deliberate choice (route classification through the core vs a faithful
+     port, noting the TS classifier is already documented as wasm≠pure-TS), NOT a
+     rush. 2a lands the shared decision kernel + parity first, exactly like
+     fs-wasm shipped its kernel before the scoring-path reroute.
 3. **Python reroute.** Route `_build_strong_identifier_union` + the call-site
    survivor filtering through the core (native when the wheel carries the symbol,
    pure-Python fallback matching the core otherwise). Equivalence test

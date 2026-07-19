@@ -1,0 +1,160 @@
+{
+  "_comment": "Cross-surface oracle for the #1207 strong-identifier blocking union (autoconfig-core::select_blocking). Hand-authored from the Python _build_strong_identifier_union (autoconfig.py:1583) + build_blocking call-site (:3145) semantics; the Python equivalence test (increment 3) and the TS parity test (increment 2) assert their paths reproduce these same outputs. Small datasets so Python's full-N block-size projection is a no-op and host-measured coverage/pass_survives are exact.",
+  "assemble": [
+    {
+      "name": "null_sparse_two_ids_plus_name_geo",
+      "input": [
+        {"name": "npi", "col_type": "identifier", "null_rate": 0.4, "cardinality_ratio": 0.9},
+        {"name": "email", "col_type": "email", "null_rate": 0.5, "cardinality_ratio": 0.8},
+        {"name": "first_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.3},
+        {"name": "last_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.4},
+        {"name": "zip", "col_type": "zip", "null_rate": 0.2, "cardinality_ratio": 0.1}
+      ],
+      "expected": [
+        {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+        {"fields": ["email"], "transforms": ["lowercase", "strip"], "is_strong_id": true},
+        {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false},
+        {"fields": ["last_name", "zip"], "transforms": ["strip"], "is_strong_id": false}
+      ]
+    },
+    {
+      "name": "no_strong_id_returns_none",
+      "input": [
+        {"name": "first_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.3},
+        {"name": "last_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.4},
+        {"name": "zip", "col_type": "zip", "null_rate": 0.2, "cardinality_ratio": 0.1}
+      ],
+      "expected": null
+    },
+    {
+      "name": "perfect_surrogate_id_excluded_876",
+      "input": [
+        {"name": "id", "col_type": "identifier", "null_rate": 0.0, "cardinality_ratio": 1.0},
+        {"name": "first_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.3},
+        {"name": "last_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.4}
+      ],
+      "expected": null
+    },
+    {
+      "name": "id_below_nonnull_floor_excluded",
+      "input": [
+        {"name": "rare_id", "col_type": "identifier", "null_rate": 0.99, "cardinality_ratio": 0.5},
+        {"name": "first_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.3},
+        {"name": "last_name", "col_type": "name", "null_rate": 0.1, "cardinality_ratio": 0.4}
+      ],
+      "expected": null
+    },
+    {
+      "name": "one_id_no_name_geo_under_two_passes_returns_none",
+      "input": [
+        {"name": "email", "col_type": "email", "null_rate": 0.5, "cardinality_ratio": 0.8}
+      ],
+      "expected": null
+    },
+    {
+      "name": "two_ids_no_name_geo_two_passes_ok",
+      "input": [
+        {"name": "npi", "col_type": "identifier", "null_rate": 0.3, "cardinality_ratio": 0.9},
+        {"name": "phone", "col_type": "phone", "null_rate": 0.4, "cardinality_ratio": 0.85}
+      ],
+      "expected": [
+        {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+        {"fields": ["phone"], "transforms": ["strip"], "is_strong_id": true}
+      ]
+    }
+  ],
+  "finalize": [
+    {
+      "name": "all_pass_coverage_ok_emits_union",
+      "input": {
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["email"], "transforms": ["lowercase", "strip"], "is_strong_id": true},
+          {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false},
+          {"fields": ["last_name", "zip"], "transforms": ["strip"], "is_strong_id": false}
+        ],
+        "coverage": 0.98,
+        "pass_survives": [true, true, true, true],
+        "max_safe_block": 1000
+      },
+      "expected": {
+        "strategy": "multi_pass",
+        "keys": [{"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true}],
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["email"], "transforms": ["lowercase", "strip"], "is_strong_id": true},
+          {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false},
+          {"fields": ["last_name", "zip"], "transforms": ["strip"], "is_strong_id": false}
+        ],
+        "max_block_size": 1000,
+        "skip_oversized": true
+      }
+    },
+    {
+      "name": "coverage_below_target_returns_none",
+      "input": {
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["email"], "transforms": ["lowercase", "strip"], "is_strong_id": true}
+        ],
+        "coverage": 0.80,
+        "pass_survives": [true, true],
+        "max_safe_block": 1000
+      },
+      "expected": null
+    },
+    {
+      "name": "one_id_survives_but_under_two_survivors_returns_none",
+      "input": {
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["email"], "transforms": ["lowercase", "strip"], "is_strong_id": true},
+          {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false},
+          {"fields": ["last_name", "zip"], "transforms": ["strip"], "is_strong_id": false}
+        ],
+        "coverage": 0.98,
+        "pass_survives": [true, false, false, false],
+        "max_safe_block": 1000
+      },
+      "expected": null
+    },
+    {
+      "name": "two_survivors_but_no_strong_id_returns_none",
+      "input": {
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false},
+          {"fields": ["last_name", "zip"], "transforms": ["strip"], "is_strong_id": false}
+        ],
+        "coverage": 0.98,
+        "pass_survives": [false, true, true],
+        "max_safe_block": 1000
+      },
+      "expected": null
+    },
+    {
+      "name": "id_plus_one_name_survive_emits_two_pass_union",
+      "input": {
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["email"], "transforms": ["lowercase", "strip"], "is_strong_id": true},
+          {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false},
+          {"fields": ["last_name", "zip"], "transforms": ["strip"], "is_strong_id": false}
+        ],
+        "coverage": 0.96,
+        "pass_survives": [true, false, true, false],
+        "max_safe_block": 500
+      },
+      "expected": {
+        "strategy": "multi_pass",
+        "keys": [{"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true}],
+        "passes": [
+          {"fields": ["npi"], "transforms": ["strip"], "is_strong_id": true},
+          {"fields": ["first_name", "last_name"], "transforms": ["strip"], "is_strong_id": false}
+        ],
+        "max_block_size": 500,
+        "skip_oversized": true
+      }
+    }
+  ]
+}
