@@ -121,8 +121,10 @@ def test_vectorized_embedding_scores_duplicates_high(fake_embedder):
     em = train_em(df, mk, n_sample_pairs=10, max_iterations=3)
     scores = {(min(a, b), max(a, b)): s
               for a, b, s in score_probabilistic_vectorized(df, mk, em)}
-    # (0,1) same bio; (0,2) different bio.
-    assert scores.get((0, 1), 0.0) > scores.get((0, 2), 1.0)
+    # (0,1) same bio; (0,2) different bio. A different-bio pair carries net-zero
+    # evidence, so with the positive-evidence link filter (default ON) it is
+    # dropped entirely -> default to 0.0 (a dropped pair = no match), not 1.0.
+    assert scores.get((0, 1), 0.0) > scores.get((0, 2), 0.0)
 
 
 def _rec_df() -> pl.DataFrame:
@@ -154,8 +156,10 @@ def test_record_embedding_trains_and_scores(fake_embedder):
     assert "__record__" in em.match_weights
     scores = {(min(a, b), max(a, b)): s
               for a, b, s in score_probabilistic_vectorized(df, mk, em)}
-    # (0,1) identical record; (0,2) different.
-    assert scores.get((0, 1), 0.0) > scores.get((0, 2), 1.0)
+    # (0,1) identical record; (0,2) different. A different-record pair carries
+    # net-zero evidence, so with the positive-evidence link filter (default ON)
+    # it is dropped -> default to 0.0 (a dropped pair = no match), not 1.0.
+    assert scores.get((0, 1), 0.0) > scores.get((0, 2), 0.0)
 
 
 # ── Task 4: train <-> score level parity (load-bearing invariant) ─────

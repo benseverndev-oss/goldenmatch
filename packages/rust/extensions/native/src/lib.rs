@@ -71,6 +71,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // L2-normalized vectors. Python's `_fs_native_eligible` admits an embedding
     // field only when this flag is present; old wheels keep the numpy path.
     m.add("FS_SUPPORTS_EMBEDDING", true)?;
+    // Wheel-skew capability flag: both FS entries accept the `require_positive_evidence`
+    // kwarg and drop net-zero-evidence pairs (linear mode, W <= 0). Python passes the
+    // kwarg only when this flag is present, so an OLDER wheel degrades gracefully to the
+    // legacy emit-at-neutral native behavior (the numpy fallback still filters).
+    m.add("FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;

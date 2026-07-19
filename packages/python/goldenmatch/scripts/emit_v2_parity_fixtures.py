@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,17 @@ def _serialize_pairs(pairs) -> list[dict[str, Any]]:
 
 def _run_probabilistic() -> dict[str, Any]:
     out: dict[str, Any] = {}
+
+    # These are CROSS-SURFACE FS-math parity fixtures (Python <-> TS): they lock
+    # the shared level-band -> EM-weight -> normalize scoring, which the TS port
+    # implements verbatim. The net-zero-evidence link filter
+    # (GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE, default ON) is a Python-runtime
+    # post-scoring gate that the TS/wasm surface does NOT implement (it passes
+    # require_positive_evidence=false, like DuckDB/Postgres), so emitting these
+    # fixtures with the filter ON would drop pairs TS still produces and break
+    # probabilistic.parity.test.ts. Pin it OFF so the committed fixture is the
+    # unfiltered math both surfaces share.
+    os.environ["GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE"] = "0"
 
     # --- discrete EM, 2-level ---
     rows2 = _prob_rows_small()

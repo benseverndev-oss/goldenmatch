@@ -75,6 +75,38 @@ def _fs_calibration_mode() -> str:
     return _FS_CALIBRATION_DEFAULT
 
 
+def _fs_require_positive_evidence() -> bool:
+    """Whether the linear FS scorer refuses to emit a NET-ZERO-EVIDENCE pair — one
+    whose summed match weight (log-likelihood ratio) is <= 0, i.e. the evidence
+    does NOT favor a match.
+
+    Such a pair agrees only on the (score-excluded) blocking field and disagrees /
+    is null on everything else, yet the linear min-max normalization can still map
+    its non-positive weight onto a score >= the 0.50 neutral point and AUTO-LINK
+    it — chaining true clusters into mega-clusters via union-find. Measured on the
+    synthetic person shape: pair-precision collapses 0.85 (5K) -> 0.25 (30K) and
+    worsens with N. Requiring strictly positive evidence (LR > 1) to link is the
+    Fellegi-Sunter-principled cut and — unlike raising the global link threshold
+    to 0.55 — does NOT cut real-but-weak partial matches (which carry positive
+    evidence in the 0.50-0.55 band, e.g. historical_50k's corrupted PII).
+
+    ``GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`` (default ON; ``0``/``off``
+    restores the legacy emit-at-neutral behavior). Applies to the LINEAR
+    calibration only — the posterior path already folds the prior into the
+    log-odds and uses a 0.99 Bayes cut.
+
+    Both the numpy scorer AND the Rust ``fs-core`` kernel (native / the default
+    FS route) carry the filter, so native == numpy under the flag. The
+    wasm/DuckDB/Postgres surfaces pass ``false`` (legacy) until each opts in +
+    regenerates its parity fixture. Measured neutral-or-better on every gated
+    dataset (see ``docs/superpowers/specs/2026-07-18-fs-net-zero-evidence-filter.md``).
+    """
+    v = os.environ.get("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off", "disabled")
+
+
 _FS_MISSING_DEFAULT = "unobserved"
 
 
@@ -2309,6 +2341,10 @@ def score_probabilistic(
             else:
                 normalized = 0.5
 
+            if not calibrated and total_weight <= 0.0 and _fs_require_positive_evidence():
+                # Net-zero / net-negative evidence is a non-match (mirrors the
+                # vectorized path). See _fs_require_positive_evidence.
+                continue
             if normalized >= link_threshold:
                 results.append((a, b, round(normalized, 4)))
 
@@ -2726,6 +2762,11 @@ def score_probabilistic_vectorized(
         normalized = np.where(
             ~has_regular_evidence & (total_weight == 0.0), 0.5, normalized
         )
+        if _fs_require_positive_evidence():
+            # Net-zero / net-negative evidence (LR <= 1) is a Fellegi-Sunter
+            # non-match; force it below any cut so the asymmetric min-max can't
+            # auto-link it into a mega-cluster. See _fs_require_positive_evidence.
+            normalized = np.where(total_weight <= 0.0, -1.0, normalized)
 
     # Emit upper-triangle pairs at/above threshold.
     return _emit_triu_pairs(normalized, row_ids, link_threshold, exclude_pairs)
@@ -2842,6 +2883,10 @@ def score_probabilistic_vectorized_batch(
         normalized = np.where(
             ~has_regular_evidence & (total_weight == 0.0), 0.5, normalized
         )
+        if _fs_require_positive_evidence():
+            # Net-zero / net-negative evidence is a non-match; keep it below any
+            # cut (mirrors score_probabilistic_vectorized). See the helper.
+            normalized = np.where(total_weight <= 0.0, -1.0, normalized)
 
     ids = np.asarray(row_ids)
     results: list[tuple[int, int, float]] = []
@@ -3395,6 +3440,15 @@ def _score_fs_native_frame(
     # actually uses the feature — an old wheel must NEVER see the kwarg, even
     # if the eligibility gate ever drifted.
     opt_kwargs: dict = {}
+    # Net-zero-evidence filter (mirrors the numpy path). Pass the kwarg only when
+    # the wheel advertises support (FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE); an
+    # OLDER wheel without the param then degrades gracefully to the legacy native
+    # behavior instead of raising on the unknown kwarg. See
+    # _fs_require_positive_evidence.
+    if _fs_require_positive_evidence() and getattr(
+        mod, "FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE", False
+    ):
+        opt_kwargs["require_positive_evidence"] = True
 
     # Custom banding (goldenmatch-native >= 0.1.14).
     level_thresholds = [

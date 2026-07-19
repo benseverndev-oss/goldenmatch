@@ -114,7 +114,12 @@ class TestScalarScoring:
             "phone": ["111", "222", "333", "333", "444", None],
         })
 
-    def test_ne_fires_adds_w_fired(self):
+    def test_ne_fires_adds_w_fired(self, monkeypatch):
+        # This asserts the min-max NORMALIZATION of a net-negative pair (W=-1.0),
+        # which is only observable when such pairs are emitted. The default-ON
+        # net-zero-evidence link filter drops W<=0 pairs, so pin it OFF here to
+        # keep exercising the normalization math the test targets.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
         mk, em = _scalar_mk_and_em()
         pairs = {(a, b): s for a, b, s in score_probabilistic(self._df(), mk, em, set())}
         # name agrees (weight 2.0), phone differs -> NE fires (-3.0) -> total -1.0.
@@ -206,7 +211,11 @@ class TestScalarVectorizedParity:
 
 
 class TestNormalizedBounds:
-    def test_all_disagree_and_all_fire_normalizes_to_zero_not_negative(self):
+    def test_all_disagree_and_all_fire_normalizes_to_zero_not_negative(self, monkeypatch):
+        # Asserts the normalization FLOOR (score clamps to 0, never negative) for a
+        # maximally-negative pair. That pair is W<=0, which the default-ON
+        # net-zero-evidence link filter drops; pin it OFF to reach the clamp path.
+        monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
         mk = MatchkeyConfig(
             name="fs_extreme", type="probabilistic",
             fields=[MatchkeyField(field="name", scorer="exact", levels=2)],

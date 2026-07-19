@@ -634,6 +634,7 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_FS_EM_SAMPLE_ROWS` | `100000` | Cap on the frame rows used to build EM-training blocks on the bucket route (scoring re-partitions internally, so only EM training sees the sample). Bounds the FS memory peak at scale; byte-identical F1 when `height <= cap`. `0` restores full-frame EM. |
 | `GOLDENMATCH_FS_MAX_PASS_PAIRS` | `300000000` | Global total candidate-pair budget for probabilistic-blocking auto-config. Bounds the emitted passes so a low-cardinality pass can't compound into a megablock (the OOM/over-generation gate). |
 | `GOLDENMATCH_FS_ARROW_STREAM` | `0` (off) | Opt the eligible single-matchkey FS bucket dedupe path into incremental per-bucket Arrow pair-stream accumulation (banks the exclude-set + scoring-accumulation peak). Byte-identical clusters. |
+| `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE` | `1` (on) | Require strictly positive net evidence (summed match weight `W > 0`) to link a pair in **linear** mode — drops `W <= 0` pairs the min-max normalization would otherwise map onto a score `>= 0.5`, killing the scale-growing FS over-merge. `0` restores the legacy emit-at-neutral behavior. Linear-only (posterior calibration already folds the prior into the 0.5 Bayes cut); the wasm/DuckDB/Postgres surfaces pass `false`. |
 
 **Other advanced (scorer / golden / cluster — not FS-specific)**
 
