@@ -666,6 +666,7 @@ def _get_block_scorer(config: GoldenMatchConfig):
     return score_blocks_parallel
 from goldenmatch.core.cluster import (
     ClusterFrames,
+    LazyClusterDict,
     build_cluster_frames,
     build_clusters_columnar,
     cluster_frames_to_dict,
@@ -4159,8 +4160,38 @@ def _run_dedupe_pipeline(
     else:
         scored_pairs = dedup_pairs_max_score(all_pairs)
 
+    # Cluster aggregates for stats WITHOUT forcing the dict. `_extract_stats`
+    # previously recomputed multi-member cluster count + matched-record count by
+    # iterating `clusters.values()`, which forced the frames-out dict build on
+    # the dedupe_df hot path (the SP-C win otherwise leaves `results["clusters"]`
+    # lazy). Compute both from the metadata frame (one `size` column read) on the
+    # frames-out path, or from the already-built dict on the columnar/gate-off
+    # path -- so `_extract_stats` reads these instead of walking the dict.
+    if cluster_frames is not None:
+        from goldenmatch.core.frame import to_frame as _tf_cs
+
+        _sizes = _tf_cs(cluster_frames.metadata).column("size").to_list()
+        _multi_member = sum(1 for s in _sizes if s > 1)
+        _matched_records = sum(s for s in _sizes if s > 1)
+    else:
+        _multi_member = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
+        _matched_records = sum(
+            c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
+        )
+
     results = {
-        "clusters": _clusters_dict(),
+        # Frames-out path keeps this LAZY: cluster_frames_to_dict (~900K dict
+        # allocations at 1M) runs only if a consumer actually reads .clusters.
+        # The columnar/gate-off path already bound a real dict cheaply.
+        "clusters": (
+            LazyClusterDict(_clusters_dict)
+            if cluster_frames is not None
+            else _clusters_dict()
+        ),
+        "cluster_stats": {
+            "multi_member_cluster_count": _multi_member,
+            "matched_record_count": _matched_records,
+        },
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),

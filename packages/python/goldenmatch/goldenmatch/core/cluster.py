@@ -1830,6 +1830,147 @@ def cluster_dict_to_frames(clusters: dict[int, dict]) -> ClusterFrames:
     return ClusterFrames(assignments=assignments, metadata=metadata)
 
 
+class LazyClusterDict(dict):
+    """A ``dict[int, dict]`` that builds its contents on first content access.
+
+    The frames-out pipeline path (SP-B/SP-C) keeps clusters as the columnar
+    ``ClusterFrames`` and only ever needs the legacy ``dict[int, dict]`` shape
+    when a consumer actually reads it. Building it eagerly at ``results[
+    "clusters"]`` cost ~3.6s on a 1M frames-out run (``cluster_frames_to_dict``
+    allocates ~900K per-cluster dicts) — pure waste for callers (the bench, most
+    programmatic ``dedupe_df`` users, stats-only consumers) that never touch
+    ``.clusters``.
+
+    This subclass defers ``cluster_frames_to_dict`` until the first real access.
+    It IS a ``dict`` (so ``isinstance(x, dict)`` stays True and, once built, it
+    behaves identically), but stays empty until a content method fires
+    ``_ensure``. Every read/mutate path that can observe contents ensures first;
+    a consumer that ignores it pays nothing.
+    """
+
+    __slots__ = ("_builder", "_built")
+
+    def __init__(self, builder):
+        super().__init__()
+        self._builder = builder
+        self._built = False
+
+    def _ensure(self) -> None:
+        if not self._built:
+            self._built = True
+            built = self._builder()
+            if built:
+                dict.update(self, built)
+
+    # -- read paths: materialize before answering ---------------------------
+    def __getitem__(self, key):
+        self._ensure()
+        return dict.__getitem__(self, key)
+
+    def __len__(self):  # also drives bool(self)
+        self._ensure()
+        return dict.__len__(self)
+
+    def __iter__(self):
+        self._ensure()
+        return dict.__iter__(self)
+
+    def __contains__(self, key):
+        self._ensure()
+        return dict.__contains__(self, key)
+
+    def __eq__(self, other):
+        self._ensure()
+        return dict.__eq__(self, other)
+
+    def __ne__(self, other):
+        self._ensure()
+        return dict.__ne__(self, other)
+
+    __hash__ = None  # dicts are unhashable; keep it so after overriding __eq__
+
+    def __repr__(self):
+        self._ensure()
+        return dict.__repr__(self)
+
+    def __reversed__(self):
+        self._ensure()
+        return reversed(list(dict.keys(self)))
+
+    def __or__(self, other):
+        self._ensure()
+        return dict(self) | other
+
+    def __ror__(self, other):
+        self._ensure()
+        return other | dict(self)
+
+    def get(self, key, default=None):
+        self._ensure()
+        return dict.get(self, key, default)
+
+    def keys(self):
+        self._ensure()
+        return dict.keys(self)
+
+    def values(self):
+        self._ensure()
+        return dict.values(self)
+
+    def items(self):
+        self._ensure()
+        return dict.items(self)
+
+    def copy(self):
+        self._ensure()
+        return dict(self)
+
+    # -- mutate paths: materialize first so a write doesn't get clobbered ----
+    def __setitem__(self, key, value):
+        self._ensure()
+        dict.__setitem__(self, key, value)
+
+    def __delitem__(self, key):
+        self._ensure()
+        dict.__delitem__(self, key)
+
+    def pop(self, *args):
+        self._ensure()
+        return dict.pop(self, *args)
+
+    def popitem(self):
+        self._ensure()
+        return dict.popitem(self)
+
+    def setdefault(self, key, default=None):
+        self._ensure()
+        return dict.setdefault(self, key, default)
+
+    def update(self, *args, **kwargs):
+        self._ensure()
+        dict.update(self, *args, **kwargs)
+
+    def __ior__(self, other):
+        self._ensure()
+        dict.update(self, other)
+        return self
+
+    # -- pickle/copy: hand back a plain, fully-materialized dict -------------
+    def __reduce__(self):
+        self._ensure()
+        return (dict, (dict(self),))
+
+    def __copy__(self):
+        self._ensure()
+        return dict(self)
+
+    def __deepcopy__(self, memo):
+        import copy as _copy
+
+        self._ensure()
+        return {k: _copy.deepcopy(v, memo) for k, v in dict.items(self)}
+
+
 def cluster_frames_to_dict(frames: ClusterFrames) -> dict[int, dict]:
     """Adapter: two-frame Phase-2 representation -> legacy
     ``dict[int, dict]`` shape. For migrating consumers during Phase 2b.

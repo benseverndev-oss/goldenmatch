@@ -1420,8 +1420,22 @@ def _extract_stats(result: dict) -> dict:
             _frame_height(golden),
         )
 
-    total_clusters = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
-    matched_records = sum(c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1)
+    # Prefer the pipeline's frame-derived aggregates (`cluster_stats`) when
+    # present -- reading them avoids walking `clusters.values()`, which on the
+    # frames-out path would force the lazy cluster-dict build (~3.6s at 1M) that
+    # the SP-C path exists to defer. Byte-identical to the dict walk (both count
+    # multi-member clusters + sum their sizes); the fallback stays for callers
+    # whose result predates `cluster_stats` (columnar/gate-off already bind a
+    # real dict, so their walk is cheap anyway).
+    _cluster_stats = result.get("cluster_stats")
+    if _cluster_stats is not None:
+        total_clusters = _cluster_stats["multi_member_cluster_count"]
+        matched_records = _cluster_stats["matched_record_count"]
+    else:
+        total_clusters = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
+        matched_records = sum(
+            c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
+        )
     match_rate = matched_records / total_records if total_records > 0 else 0.0
 
     return {
