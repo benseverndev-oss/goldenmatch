@@ -30,6 +30,36 @@ export function autoconfig_assemble_strong_id_union(cols_json) {
 }
 
 /**
+ * Name-pattern classifier: a JSON `{"name": "first_name"}` -> a JSON col_type
+ * string (`"name"`, `"date"`, …) or `null`. This is the name-*pattern*-only
+ * classifier the strong-id union uses for name-column detection (Python
+ * `_classify_by_name`), distinct from the data-aware `classify_columns` — it is
+ * the name-classification authority the pure-TS union port pins itself against.
+ * @param {string} input_json
+ * @returns {string}
+ */
+export function autoconfig_classify_by_name(input_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(input_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.autoconfig_classify_by_name(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Layer 2 classifier: a JSON array of `ColumnStats` -> a JSON array of `ColumnProfile`.
  * @param {string} cols_json
  * @returns {string}

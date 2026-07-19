@@ -1,0 +1,306 @@
+[
+  {
+    "name": "name",
+    "expected": "name"
+  },
+  {
+    "name": "first_name",
+    "expected": "name"
+  },
+  {
+    "name": "last_name",
+    "expected": "name"
+  },
+  {
+    "name": "full_name",
+    "expected": "name"
+  },
+  {
+    "name": "fname",
+    "expected": "name"
+  },
+  {
+    "name": "lname",
+    "expected": "name"
+  },
+  {
+    "name": "surname",
+    "expected": "name"
+  },
+  {
+    "name": "given_name",
+    "expected": "name"
+  },
+  {
+    "name": "firstname",
+    "expected": "name"
+  },
+  {
+    "name": "lastname",
+    "expected": "name"
+  },
+  {
+    "name": "FirstName",
+    "expected": "name"
+  },
+  {
+    "name": "SURNAME",
+    "expected": "name"
+  },
+  {
+    "name": "first",
+    "expected": null
+  },
+  {
+    "name": "last",
+    "expected": null
+  },
+  {
+    "name": "middle",
+    "expected": null
+  },
+  {
+    "name": "nickname",
+    "expected": null
+  },
+  {
+    "name": "created_name",
+    "expected": "date"
+  },
+  {
+    "name": "birth_date",
+    "expected": "date"
+  },
+  {
+    "name": "dob",
+    "expected": "date"
+  },
+  {
+    "name": "registration",
+    "expected": "date"
+  },
+  {
+    "name": "updated_at",
+    "expected": "date"
+  },
+  {
+    "name": "event_dt",
+    "expected": "date"
+  },
+  {
+    "name": "order_date",
+    "expected": "date"
+  },
+  {
+    "name": "year",
+    "expected": "year"
+  },
+  {
+    "name": "birth_year",
+    "expected": "year"
+  },
+  {
+    "name": "yr",
+    "expected": "year"
+  },
+  {
+    "name": "fiscal_year",
+    "expected": "year"
+  },
+  {
+    "name": "email",
+    "expected": "email"
+  },
+  {
+    "name": "e_mail",
+    "expected": "email"
+  },
+  {
+    "name": "email_address",
+    "expected": "email"
+  },
+  {
+    "name": "contact_email",
+    "expected": "email"
+  },
+  {
+    "name": "id",
+    "expected": "identifier"
+  },
+  {
+    "name": "record_id",
+    "expected": "identifier"
+  },
+  {
+    "name": "recordID",
+    "expected": "identifier"
+  },
+  {
+    "name": "recordId",
+    "expected": "identifier"
+  },
+  {
+    "name": "recordid",
+    "expected": null
+  },
+  {
+    "name": "customer_key",
+    "expected": "identifier"
+  },
+  {
+    "name": "sku",
+    "expected": "identifier"
+  },
+  {
+    "name": "uuid",
+    "expected": "identifier"
+  },
+  {
+    "name": "guid",
+    "expected": "identifier"
+  },
+  {
+    "name": "account_no",
+    "expected": "identifier"
+  },
+  {
+    "name": "account_num",
+    "expected": "identifier"
+  },
+  {
+    "name": "vendor_ref",
+    "expected": "identifier"
+  },
+  {
+    "name": "npi",
+    "expected": null
+  },
+  {
+    "name": "price",
+    "expected": "numeric"
+  },
+  {
+    "name": "total",
+    "expected": "numeric"
+  },
+  {
+    "name": "salary",
+    "expected": "numeric"
+  },
+  {
+    "name": "balance",
+    "expected": "numeric"
+  },
+  {
+    "name": "amount",
+    "expected": "numeric"
+  },
+  {
+    "name": "zip",
+    "expected": "zip"
+  },
+  {
+    "name": "postal_code",
+    "expected": "zip"
+  },
+  {
+    "name": "postcode",
+    "expected": "zip"
+  },
+  {
+    "name": "zip_code",
+    "expected": "zip"
+  },
+  {
+    "name": "city",
+    "expected": "geo"
+  },
+  {
+    "name": "state",
+    "expected": "geo"
+  },
+  {
+    "name": "country",
+    "expected": "geo"
+  },
+  {
+    "name": "province",
+    "expected": "geo"
+  },
+  {
+    "name": "region",
+    "expected": "geo"
+  },
+  {
+    "name": "county",
+    "expected": "geo"
+  },
+  {
+    "name": "state_cd",
+    "expected": "geo"
+  },
+  {
+    "name": "municipality",
+    "expected": null
+  },
+  {
+    "name": "address",
+    "expected": "address"
+  },
+  {
+    "name": "street",
+    "expected": "address"
+  },
+  {
+    "name": "addr",
+    "expected": "address"
+  },
+  {
+    "name": "line_1",
+    "expected": "address"
+  },
+  {
+    "name": "line2",
+    "expected": "address"
+  },
+  {
+    "name": "phone",
+    "expected": "phone"
+  },
+  {
+    "name": "telephone",
+    "expected": "phone"
+  },
+  {
+    "name": "mobile",
+    "expected": "phone"
+  },
+  {
+    "name": "fax",
+    "expected": "phone"
+  },
+  {
+    "name": "cell",
+    "expected": "phone"
+  },
+  {
+    "name": "notes",
+    "expected": null
+  },
+  {
+    "name": "description",
+    "expected": null
+  },
+  {
+    "name": "xyz",
+    "expected": null
+  },
+  {
+    "name": "col1",
+    "expected": null
+  },
+  {
+    "name": "",
+    "expected": null
+  }
+]
