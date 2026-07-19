@@ -20,8 +20,10 @@ box and the Linux CI runner -- the same discipline the MDX gate needs.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
 import json
+import tomllib
 import typing
 from pathlib import Path
 
@@ -203,12 +205,95 @@ def _vocabularies(vocabs) -> list[dict]:
     return out
 
 
+# --- structural map (the "where does it live" half of don't-grep) -----------
+# Derived from authoritative sources only: the Python import system resolves a
+# module to its actual file (so it can't name a path that doesn't exist), the
+# package's pyproject declares its entry points, and each crate's Cargo.toml
+# names itself. Nothing here is hand-maintained.
+
+
+def _rel(path: str | None) -> str | None:
+    """Absolute filesystem path -> repo-relative POSIX path (deterministic across
+    a Windows dev box and the Linux CI runner)."""
+    if not path:
+        return None
+    try:
+        return Path(path).resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return None
+
+
+def _module_file(target: str) -> str | None:
+    """'pkg.mod:attr' or 'pkg.mod' -> the module's source file, repo-relative."""
+    mod = target.partition(":")[0]
+    try:
+        spec = importlib.util.find_spec(mod)
+    except (ImportError, ValueError):
+        return None
+    return _rel(spec.origin) if spec else None
+
+
+def _entry_points(pyproject: Path) -> dict:
+    if not pyproject.exists():
+        return {}
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    eps = data.get("project", {}).get("entry-points", {})
+    return {group: dict(sorted(entries.items())) for group, entries in sorted(eps.items())}
+
+
+def _source(spec: PackageSpec) -> dict:
+    import_name = spec.src_dirs[0].rsplit("/", 1)[-1]
+    modules: dict[str, str] = {}
+    if spec.schema_roots:
+        f = _module_file(spec.schema_roots[0])
+        if f:
+            modules["config_schema"] = f
+    if spec.constructors:
+        f = _module_file(spec.constructors[0])
+        if f:
+            modules["constructor"] = f
+    if getattr(spec, "cli_module", None):
+        f = _module_file(spec.cli_module)
+        if f:
+            modules["cli"] = f
+    if getattr(spec, "mcp_module", None):
+        f = _module_file(spec.mcp_module)
+        if f:
+            modules["mcp_server"] = f
+    out: dict = {"import_name": import_name, "root": spec.src_dirs[0]}
+    if modules:
+        out["modules"] = modules
+    eps = _entry_points(ROOT / spec.src_dirs[0].rsplit("/", 1)[0] / "pyproject.toml")
+    if eps:
+        out["entry_points"] = eps
+    return out
+
+
+def _rust_crates() -> list[dict]:
+    """Every Rust crate under packages/rust/extensions, name + path, read from the
+    Cargo.toml `[package].name` -- the authoritative crate registry."""
+    ext = ROOT / "packages" / "rust" / "extensions"
+    crates: list[dict] = []
+    for cargo in ext.rglob("Cargo.toml"):
+        if "target" in cargo.parts:
+            continue
+        try:
+            data = tomllib.loads(cargo.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        name = data.get("package", {}).get("name")
+        if name:
+            crates.append({"name": name, "path": _rel(str(cargo.parent))})
+    return sorted(crates, key=lambda c: c["name"])
+
+
 # --- assembly ----------------------------------------------------------------
 
 
 def build_package(spec: PackageSpec) -> dict:
     _warmup(getattr(spec, "vocab_warmup", []))
     pkg: dict = {"nav_group": spec.nav_group, "env_prefix": spec.env_prefix, "doc_path": spec.doc_path}
+    pkg["source"] = _source(spec)
     if spec.schema_roots:
         pkg["config_models"] = _config_models(spec.schema_roots)
     if spec.constructors:
@@ -233,6 +318,7 @@ def build_manifest() -> dict:
             f"CI-gated config-matrix docs). DO NOT EDIT. Regenerate: {_REGEN}"
         ),
         "packages": {name: build_package(spec) for name, spec in REGISTRY.items()},
+        "rust_crates": _rust_crates(),
     }
 
 

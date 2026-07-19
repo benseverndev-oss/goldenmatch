@@ -6,6 +6,15 @@
       "nav_group": "GoldenMatch",
       "env_prefix": "GOLDENMATCH_",
       "doc_path": "docs-site/goldenmatch/config-matrix.mdx",
+      "source": {
+        "import_name": "goldenmatch",
+        "root": "packages/python/goldenmatch/goldenmatch",
+        "modules": {
+          "config_schema": "packages/python/goldenmatch/goldenmatch/config/schemas.py",
+          "cli": "packages/python/goldenmatch/goldenmatch/cli/main.py",
+          "mcp_server": "packages/python/goldenmatch/goldenmatch/mcp/server.py"
+        }
+      },
       "config_models": [
         {
           "name": "GoldenMatchConfig",
@@ -5370,6 +5379,15 @@
       "nav_group": "GoldenCheck",
       "env_prefix": "GOLDENCHECK_",
       "doc_path": "docs-site/goldencheck/config-matrix.mdx",
+      "source": {
+        "import_name": "goldencheck",
+        "root": "packages/python/goldencheck/goldencheck",
+        "modules": {
+          "config_schema": "packages/python/goldencheck/goldencheck/config/schema.py",
+          "cli": "packages/python/goldencheck/goldencheck/cli/main.py",
+          "mcp_server": "packages/python/goldencheck/goldencheck/mcp/server.py"
+        }
+      },
       "config_models": [
         {
           "name": "GoldenCheckConfig",
@@ -6562,6 +6580,15 @@
       "nav_group": "GoldenFlow",
       "env_prefix": "GOLDENFLOW_",
       "doc_path": "docs-site/goldenflow/config-matrix.mdx",
+      "source": {
+        "import_name": "goldenflow",
+        "root": "packages/python/goldenflow/goldenflow",
+        "modules": {
+          "config_schema": "packages/python/goldenflow/goldenflow/config/schema.py",
+          "cli": "packages/python/goldenflow/goldenflow/cli/main.py",
+          "mcp_server": "packages/python/goldenflow/goldenflow/mcp/server.py"
+        }
+      },
       "config_models": [
         {
           "name": "GoldenFlowConfig",
@@ -7730,6 +7757,26 @@
       "nav_group": "GoldenPipe",
       "env_prefix": "GOLDENPIPE_",
       "doc_path": "docs-site/goldenpipe/config-matrix.mdx",
+      "source": {
+        "import_name": "goldenpipe",
+        "root": "packages/python/goldenpipe/goldenpipe",
+        "modules": {
+          "config_schema": "packages/python/goldenpipe/goldenpipe/models/config.py",
+          "cli": "packages/python/goldenpipe/goldenpipe/cli/main.py",
+          "mcp_server": "packages/python/goldenpipe/goldenpipe/mcp/server.py"
+        },
+        "entry_points": {
+          "goldenpipe.stages": {
+            "goldenanalysis.report": "goldenpipe.adapters.analysis:AnalysisReportStage",
+            "goldencheck.scan": "goldenpipe.adapters.check:ScanStage",
+            "goldenflow.transform": "goldenpipe.adapters.flow:TransformStage",
+            "goldenmatch.dedupe": "goldenpipe.adapters.match:DedupeStage",
+            "goldenmatch.dedupe_fused": "goldenpipe.adapters.match:FusedDedupeStage",
+            "goldenmatch.identity_resolve": "goldenpipe.adapters.identity:IdentityResolveStage",
+            "infer_schema": "goldenpipe.stages.infer_schema:infer_schema_stage"
+          }
+        }
+      },
       "config_models": [
         {
           "name": "PipelineConfig",
@@ -8207,6 +8254,15 @@
       "nav_group": "InferMap",
       "env_prefix": "INFERMAP_",
       "doc_path": "docs-site/infermap/config-matrix.mdx",
+      "source": {
+        "import_name": "infermap",
+        "root": "packages/python/infermap/infermap",
+        "modules": {
+          "constructor": "packages/python/infermap/infermap/engine.py",
+          "cli": "packages/python/infermap/infermap/cli.py",
+          "mcp_server": "packages/python/infermap/infermap/mcp/server.py"
+        }
+      },
       "constructors": [
         {
           "name": "MapEngine",
@@ -8550,6 +8606,23 @@
       "nav_group": "GoldenAnalysis",
       "env_prefix": "GOLDENANALYSIS_",
       "doc_path": "docs-site/goldenanalysis/config-matrix.mdx",
+      "source": {
+        "import_name": "goldenanalysis",
+        "root": "packages/python/goldenanalysis/goldenanalysis",
+        "modules": {
+          "config_schema": "packages/python/goldenanalysis/goldenanalysis/models/policy.py",
+          "constructor": "packages/python/goldenanalysis/goldenanalysis/_api.py",
+          "cli": "packages/python/goldenanalysis/goldenanalysis/cli/main.py"
+        },
+        "entry_points": {
+          "goldenanalysis.analyzers": {
+            "cluster.distribution": "goldenanalysis.analyzers.cluster_dist:ClusterDistributionAnalyzer",
+            "frame.summary": "goldenanalysis.analyzers.frame_summary:FrameSummaryAnalyzer",
+            "match.rates": "goldenanalysis.analyzers.match_rates:MatchRatesAnalyzer",
+            "quality.rollup": "goldenanalysis.analyzers.quality_rollup:QualityRollupAnalyzer"
+          }
+        }
+      },
       "config_models": [
         {
           "name": "RegressionPolicy",
@@ -8812,5 +8885,223 @@
         ]
       }
     }
-  }
+  },
+  "rust_crates": [
+    {
+      "name": "analysis-core",
+      "path": "packages/rust/extensions/analysis-core"
+    },
+    {
+      "name": "analysis-native",
+      "path": "packages/rust/extensions/analysis-native"
+    },
+    {
+      "name": "fingerprint-wasm",
+      "path": "packages/rust/extensions/fingerprint-wasm"
+    },
+    {
+      "name": "goldencheck-core",
+      "path": "packages/rust/extensions/goldencheck-core"
+    },
+    {
+      "name": "goldencheck-native",
+      "path": "packages/rust/extensions/goldencheck-native"
+    },
+    {
+      "name": "goldencheck-wasm",
+      "path": "packages/rust/extensions/goldencheck-wasm"
+    },
+    {
+      "name": "goldenembed",
+      "path": "packages/rust/extensions/goldenembed"
+    },
+    {
+      "name": "goldenembed-core",
+      "path": "packages/rust/extensions/goldenembed-core"
+    },
+    {
+      "name": "goldenembed-wasm",
+      "path": "packages/rust/extensions/goldenembed-wasm"
+    },
+    {
+      "name": "goldenflow-core",
+      "path": "packages/rust/extensions/goldenflow-core"
+    },
+    {
+      "name": "goldenflow-native",
+      "path": "packages/rust/extensions/native-flow"
+    },
+    {
+      "name": "goldenflow-wasm",
+      "path": "packages/rust/extensions/goldenflow-wasm"
+    },
+    {
+      "name": "goldenflow_duckdb",
+      "path": "packages/rust/extensions/goldenflow-duckdb"
+    },
+    {
+      "name": "goldengraph-cabi",
+      "path": "packages/rust/extensions/goldengraph-cabi"
+    },
+    {
+      "name": "goldengraph-core",
+      "path": "packages/rust/extensions/goldengraph-core"
+    },
+    {
+      "name": "goldengraph-native",
+      "path": "packages/rust/extensions/goldengraph-native"
+    },
+    {
+      "name": "goldengraph-wasm",
+      "path": "packages/rust/extensions/goldengraph-wasm"
+    },
+    {
+      "name": "goldenhnsw",
+      "path": "packages/rust/extensions/goldenhnsw"
+    },
+    {
+      "name": "goldenhnsw-wasm",
+      "path": "packages/rust/extensions/goldenhnsw-wasm"
+    },
+    {
+      "name": "goldenmatch-analysis-wasm",
+      "path": "packages/rust/extensions/analysis-wasm"
+    },
+    {
+      "name": "goldenmatch-autoconfig-core",
+      "path": "packages/rust/extensions/autoconfig-core"
+    },
+    {
+      "name": "goldenmatch-autoconfig-wasm",
+      "path": "packages/rust/extensions/autoconfig-wasm"
+    },
+    {
+      "name": "goldenmatch-bridge",
+      "path": "packages/rust/extensions/bridge"
+    },
+    {
+      "name": "goldenmatch-datafusion-udf",
+      "path": "packages/rust/extensions/datafusion-udf"
+    },
+    {
+      "name": "goldenmatch-documents-core",
+      "path": "packages/rust/extensions/documents-core"
+    },
+    {
+      "name": "goldenmatch-documents-wasm",
+      "path": "packages/rust/extensions/documents-wasm"
+    },
+    {
+      "name": "goldenmatch-embed-py",
+      "path": "packages/rust/extensions/embed-py"
+    },
+    {
+      "name": "goldenmatch-fingerprint-core",
+      "path": "packages/rust/extensions/fingerprint-core"
+    },
+    {
+      "name": "goldenmatch-fs-core",
+      "path": "packages/rust/extensions/fs-core"
+    },
+    {
+      "name": "goldenmatch-fs-wasm",
+      "path": "packages/rust/extensions/fs-wasm"
+    },
+    {
+      "name": "goldenmatch-graph-core",
+      "path": "packages/rust/extensions/graph-core"
+    },
+    {
+      "name": "goldenmatch-graph-layout",
+      "path": "packages/rust/extensions/graph-layout"
+    },
+    {
+      "name": "goldenmatch-hnsw-py",
+      "path": "packages/rust/extensions/hnsw-py"
+    },
+    {
+      "name": "goldenmatch-native",
+      "path": "packages/rust/extensions/native"
+    },
+    {
+      "name": "goldenmatch-perceptual-core",
+      "path": "packages/rust/extensions/perceptual-core"
+    },
+    {
+      "name": "goldenmatch-perceptual-wasm",
+      "path": "packages/rust/extensions/perceptual-wasm"
+    },
+    {
+      "name": "goldenmatch-score-core",
+      "path": "packages/rust/extensions/score-core"
+    },
+    {
+      "name": "goldenmatch-score-wasm",
+      "path": "packages/rust/extensions/score-wasm"
+    },
+    {
+      "name": "goldenmatch-sketch-core",
+      "path": "packages/rust/extensions/sketch-core"
+    },
+    {
+      "name": "goldenmatch-suggest-core",
+      "path": "packages/rust/extensions/suggest-core"
+    },
+    {
+      "name": "goldenmatch-suggest-wasm",
+      "path": "packages/rust/extensions/suggest-wasm"
+    },
+    {
+      "name": "goldenmatch_pg",
+      "path": "packages/rust/extensions/postgres"
+    },
+    {
+      "name": "goldenpipe-core",
+      "path": "packages/rust/extensions/goldenpipe-core"
+    },
+    {
+      "name": "goldenpipe-native",
+      "path": "packages/rust/extensions/goldenpipe-native"
+    },
+    {
+      "name": "goldenpipe-wasm",
+      "path": "packages/rust/extensions/goldenpipe-wasm"
+    },
+    {
+      "name": "goldenprofile-cabi",
+      "path": "packages/rust/extensions/goldenprofile-cabi"
+    },
+    {
+      "name": "goldenprofile-core",
+      "path": "packages/rust/extensions/goldenprofile-core"
+    },
+    {
+      "name": "goldenprofile-native",
+      "path": "packages/rust/extensions/goldenprofile-native"
+    },
+    {
+      "name": "goldenprofile-wasm",
+      "path": "packages/rust/extensions/goldenprofile-wasm"
+    },
+    {
+      "name": "graph-wasm",
+      "path": "packages/rust/extensions/graph-wasm"
+    },
+    {
+      "name": "infermap-core",
+      "path": "packages/rust/extensions/infermap-core"
+    },
+    {
+      "name": "infermap-native",
+      "path": "packages/rust/extensions/infermap-native"
+    },
+    {
+      "name": "infermap-wasm",
+      "path": "packages/rust/extensions/infermap-wasm"
+    },
+    {
+      "name": "sketch-wasm",
+      "path": "packages/rust/extensions/sketch-wasm"
+    }
+  ]
 }

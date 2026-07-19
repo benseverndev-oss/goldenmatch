@@ -23,13 +23,16 @@ def test_find_tools_dispatch_returns_full_catalog(monkeypatch):
     from goldensuite_mcp.server import _aggregate
 
     tools, dispatch = _aggregate()
-    real_tool_names = {t.name for t in tools} - {"suite_find_tools"}
+    # The catalog is every REAL tool -- not the suite-native meta-tools
+    # (suite_find_tools lists itself never; suite_manifest is navigation, not a
+    # callable data tool, and registers after this snapshot).
+    real_tool_names = {t.name for t in tools} - {"suite_find_tools", "suite_manifest"}
     out = dispatch["suite_find_tools"]("suite_find_tools", {})
     returned = {r["name"] for r in out["tools"]}
     assert out["count"] == len(real_tool_names)
-    # It enumerates every real tool but NOT itself.
     assert returned == real_tool_names
     assert "suite_find_tools" not in returned
+    assert "suite_manifest" not in returned
 
 
 def test_find_tools_entries_carry_schema(monkeypatch):

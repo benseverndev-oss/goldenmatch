@@ -60,6 +60,8 @@ CURATED_TOOLS: frozenset[str] = frozenset({
     "analyze_frame", "detect_regressions",
     # discovery meta-tool -- how a client reaches the ~80 non-headline tools
     "suite_find_tools",
+    # navigation meta-tool -- look up config/CLI/tools/vocab/env/source without grepping
+    "suite_manifest",
     # composite workflow tools -- one-call happy paths
     "dedupe_file", "match_sources", "assess_file", "clean_and_dedupe",
 })
@@ -400,6 +402,19 @@ def _aggregate() -> tuple[list[Tool], dict[str, Callable[[str, dict], dict]]]:
         logger.warning(
             "goldensuite-mcp: %r already registered by %s; discovery meta-tool not added",
             _FIND_TOOLS_NAME, seen[_FIND_TOOLS_NAME],
+        )
+
+    # Register the navigation meta-tool (serves slices of the generated agent
+    # manifest). Suite-native, like the discovery tool -- guard against a clash.
+    from goldensuite_mcp import manifest_tool
+    if manifest_tool.TOOL_NAME not in seen:
+        all_tools.append(manifest_tool.TOOL)
+        name_to_dispatch[manifest_tool.TOOL_NAME] = manifest_tool.make_dispatch()
+        seen[manifest_tool.TOOL_NAME] = "goldensuite"
+    else:
+        logger.warning(
+            "goldensuite-mcp: %r already registered by %s; manifest meta-tool not added",
+            manifest_tool.TOOL_NAME, seen[manifest_tool.TOOL_NAME],
         )
 
     return all_tools, name_to_dispatch
