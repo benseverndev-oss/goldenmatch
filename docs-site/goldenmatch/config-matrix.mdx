@@ -187,69 +187,69 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `name` | str | **required** |  |
-| `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` |
-| `comparison` | str \| None | `None` |  |
-| `fields` | list[MatchkeyField] | **required** | [`MatchkeyField`](#matchkeyfield) |
-| `threshold` | float \| None | `None` |  |
-| `auto_threshold` | bool | `False` |  |
-| `rerank` | bool | `False` |  |
-| `rerank_model` | str | `'cross-encoder/ms-marco-MiniLM-L-6-v2'` |  |
-| `rerank_band` | float | `0.1` |  |
-| `negative_evidence` | list[NegativeEvidenceField] \| None | `None` | [`NegativeEvidenceField`](#negativeevidencefield) |
-| `em_iterations` | int | `20` |  |
-| `convergence_threshold` | float | `0.001` |  |
-| `link_threshold` | float \| None | `None` |  |
-| `review_threshold` | float \| None | `None` |  |
-| `model_path` | str \| None | `None` |  |
-| `missing` | Literal \| None | `None` | `unobserved`, `disagree` |
+| `name` | str | **required** | Identifier for this matchkey, used in output and logs. |
+| `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` -- Matching mode: exact equality, weighted per-field scoring, or probabilistic Fellegi-Sunter. |
+| `comparison` | str \| None | `None` | Alias for 'type' accepting the same exact/weighted/probabilistic values. |
+| `fields` | list[MatchkeyField] | **required** | [`MatchkeyField`](#matchkeyfield) -- Fields compared to decide whether two records match under this matchkey. |
+| `threshold` | float \| None | `None` | Score at or above which a pair is accepted as a match; required for weighted matchkeys. |
+| `auto_threshold` | bool | `False` | Enables automatic Otsu-style tuning of the accept threshold from the score distribution. |
+| `rerank` | bool | `False` | Enables cross-encoder reranking of borderline pairs near the threshold. |
+| `rerank_model` | str | `'cross-encoder/ms-marco-MiniLM-L-6-v2'` | Cross-encoder model used to rerank borderline pairs when rerank is on. |
+| `rerank_band` | float | `0.1` | Half-width of the score band around the threshold within which pairs are reranked. |
+| `negative_evidence` | list[NegativeEvidenceField] \| None | `None` | [`NegativeEvidenceField`](#negativeevidencefield) -- Fields whose disagreement penalizes the match score, catching false positives that agree on other fields. |
+| `em_iterations` | int | `20` | Maximum EM iterations when training probabilistic weights. |
+| `convergence_threshold` | float | `0.001` | EM stops early once parameter change between iterations falls below this value. |
+| `link_threshold` | float \| None | `None` | Probabilistic match probability at or above which a pair is auto-linked. |
+| `review_threshold` | float \| None | `None` | Probabilistic match probability at or above which a pair is sent for manual review; must not exceed link_threshold. |
+| `model_path` | str \| None | `None` | File where the trained probabilistic model is loaded from if present, or saved to after training. |
+| `missing` | Literal \| None | `None` | `unobserved`, `disagree` -- How a missing value is treated probabilistically: 'unobserved' contributes nothing, 'disagree' counts against a match. |
 
 ### `BlockingConfig`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `keys` | list[BlockingKeyConfig] | `[]` | [`BlockingKeyConfig`](#blockingkeyconfig) |
-| `max_block_size` | int | `5000` |  |
-| `skip_oversized` | bool | `False` |  |
-| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual` |
-| `learned_sample_size` | int | `5000` |  |
-| `learned_min_recall` | float | `0.95` |  |
-| `learned_min_reduction` | float | `0.9` |  |
-| `learned_predicate_depth` | int | `2` |  |
-| `learned_cache_path` | str \| None | `None` |  |
-| `auto_suggest` | bool | `False` |  |
-| `auto_select` | bool | `False` |  |
-| `sub_block_keys` | list[BlockingKeyConfig] \| None | `None` | [`BlockingKeyConfig`](#blockingkeyconfig) |
-| `window_size` | int | `20` |  |
-| `sort_key` | list[SortKeyField] \| None | `None` | [`SortKeyField`](#sortkeyfield) |
-| `passes` | list[BlockingKeyConfig] \| None | `None` | [`BlockingKeyConfig`](#blockingkeyconfig) |
-| `union_mode` | bool | `True` |  |
-| `max_total_comparisons` | int \| None | `None` |  |
-| `ann_column` | str \| None | `None` |  |
-| `ann_model` | str | `'all-MiniLM-L6-v2'` |  |
-| `ann_top_k` | int | `20` |  |
-| `canopy` | CanopyConfig \| None | `None` | [`CanopyConfig`](#canopyconfig) |
-| `lsh` | LSHKeyConfig \| None | `None` | [`LSHKeyConfig`](#lshkeyconfig) |
-| `simhash` | SimHashKeyConfig \| None | `None` | [`SimHashKeyConfig`](#simhashkeyconfig) |
-| `perceptual` | PerceptualKeyConfig \| None | `None` | [`PerceptualKeyConfig`](#perceptualkeyconfig) |
+| `keys` | list[BlockingKeyConfig] | `[]` | [`BlockingKeyConfig`](#blockingkeyconfig) -- Blocking keys that generate candidate pairs; records sharing any key are compared. |
+| `max_block_size` | int | `5000` | Ceiling on how many records one block may hold before it is treated as oversized. |
+| `skip_oversized` | bool | `False` | When true, blocks exceeding max_block_size are dropped rather than scored, guarding against mega-block blowups. |
+| `strategy` | Literal | `'static'` | `static`, `adaptive`, `sorted_neighborhood`, `multi_pass`, `ann`, `canopy`, `ann_pairs`, `learned`, `lsh`, `simhash`, `perceptual` -- Candidate-generation method that selects how pairs are proposed for scoring. |
+| `learned_sample_size` | int | `5000` | Number of sampled records the learned-predicate miner trains its blocking rules on. |
+| `learned_min_recall` | float | `0.95` | Minimum pair recall a learned predicate must retain to be accepted. |
+| `learned_min_reduction` | float | `0.9` | Minimum fraction of the full comparison space a learned predicate must eliminate. |
+| `learned_predicate_depth` | int | `2` | Maximum number of conjoined conditions in a mined blocking predicate. |
+| `learned_cache_path` | str \| None | `None` | File where learned blocking predicates are persisted for reuse across runs. |
+| `auto_suggest` | bool | `False` | Lets the engine discover blocking keys at runtime instead of using the static keys. |
+| `auto_select` | bool | `False` | Lets the engine pick the best blocking strategy automatically. |
+| `sub_block_keys` | list[BlockingKeyConfig] \| None | `None` | [`BlockingKeyConfig`](#blockingkeyconfig) -- Secondary keys used to split oversized blocks into smaller candidate sets. |
+| `window_size` | int | `20` | Sliding-window width, in sorted records, for sorted-neighborhood blocking. |
+| `sort_key` | list[SortKeyField] \| None | `None` | [`SortKeyField`](#sortkeyfield) -- Ordered columns records are sorted on for sorted-neighborhood blocking. |
+| `passes` | list[BlockingKeyConfig] \| None | `None` | [`BlockingKeyConfig`](#blockingkeyconfig) -- Sequence of blocking key sets applied in separate passes for multi_pass blocking. |
+| `union_mode` | bool | `True` | When true, candidate pairs from all passes are unioned rather than intersected. |
+| `max_total_comparisons` | int \| None | `None` | Global cap on the number of candidate pairs generated across all blocks. |
+| `ann_column` | str \| None | `None` | Text column embedded for approximate-nearest-neighbor blocking. |
+| `ann_model` | str | `'all-MiniLM-L6-v2'` | Embedding model used to vectorize records for ANN blocking. |
+| `ann_top_k` | int | `20` | Number of nearest neighbors retrieved per record in ANN blocking. |
+| `canopy` | CanopyConfig \| None | `None` | [`CanopyConfig`](#canopyconfig) -- Configuration for canopy clustering when the strategy is 'canopy'. |
+| `lsh` | LSHKeyConfig \| None | `None` | [`LSHKeyConfig`](#lshkeyconfig) -- MinHash/LSH configuration required when the strategy is 'lsh'. |
+| `simhash` | SimHashKeyConfig \| None | `None` | [`SimHashKeyConfig`](#simhashkeyconfig) -- SimHash/LSH configuration required when the strategy is 'simhash'. |
+| `perceptual` | PerceptualKeyConfig \| None | `None` | [`PerceptualKeyConfig`](#perceptualkeyconfig) -- Perceptual-hash LSH configuration used when the strategy is 'perceptual'. |
 
 ### `GoldenRulesConfig`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `default_strategy` | str \| None | `None` |  |
-| `default` | GoldenFieldRule \| None | `None` | [`GoldenFieldRule`](#goldenfieldrule) |
-| `field_rules` | dict[str, GoldenFieldRule \| list[GoldenFieldRule]] | `{}` | [`GoldenFieldRule`](#goldenfieldrule) |
-| `field_groups` | list[GoldenGroupRule] | `[]` | [`GoldenGroupRule`](#goldengrouprule) |
-| `field_group_detection` | bool | `False` |  |
-| `max_cluster_size` | int | `100` |  |
-| `auto_split` | bool | `True` |  |
-| `quality_weighting` | bool | `True` |  |
-| `weak_cluster_threshold` | float | `0.3` |  |
-| `split_edge_budget` | int \| None | `None` |  |
-| `adaptive` | bool | `False` |  |
-| `use_llm_for_ambiguous` | bool | `False` |  |
-| `cluster_overrides` | dict[int, dict[str, GoldenFieldRule]] \| None | `None` | [`GoldenFieldRule`](#goldenfieldrule) |
+| `default_strategy` | str \| None | `None` | Survivorship strategy applied to any field without its own rule; required unless 'default' is set. |
+| `default` | GoldenFieldRule \| None | `None` | [`GoldenFieldRule`](#goldenfieldrule) -- Full default rule whose strategy backfills default_strategy when the latter is unset. |
+| `field_rules` | dict[str, GoldenFieldRule \| list[GoldenFieldRule]] | `{}` | [`GoldenFieldRule`](#goldenfieldrule) -- Per-column survivorship rules, or an ordered list of conditional rules ending in a default clause. |
+| `field_groups` | list[GoldenGroupRule] | `[]` | [`GoldenGroupRule`](#goldengrouprule) -- Groups of columns resolved together so their values stay mutually consistent. |
+| `field_group_detection` | bool | `False` | Enables automatic discovery of related column groups to resolve as units. |
+| `max_cluster_size` | int | `100` | Cluster size above which auto-split intervenes to break up likely over-merged clusters. |
+| `auto_split` | bool | `True` | Enables splitting oversized clusters into tighter subclusters before building golden records. |
+| `quality_weighting` | bool | `True` | Weights survivorship choices by per-source completeness and quality signals. |
+| `weak_cluster_threshold` | float | `0.3` | Cohesion score below which a cluster is flagged as weak and handled more conservatively. |
+| `split_edge_budget` | int \| None | `None` | Cap on cumulative edge work spent auto-splitting clusters; None auto-scales from the row count. |
+| `adaptive` | bool | `False` | Enables post-cluster refinement that re-picks per-field strategies from cluster health and profiles. |
+| `use_llm_for_ambiguous` | bool | `False` | Falls back to one cached LLM call per field to pick a strategy when the heuristic refiner is undecided. |
+| `cluster_overrides` | dict[int, dict[str, GoldenFieldRule]] \| None | `None` | [`GoldenFieldRule`](#goldenfieldrule) -- Per-cluster field rules that supersede the top-level rules for the named clusters only. |
 
 ### `StandardizationConfig`
 
@@ -397,49 +397,49 @@ _Identity Graph configuration._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `field` | str \| None | `None` |  |
-| `column` | str \| None | `None` |  |
-| `transforms` | list[str] | `[]` |  |
-| `scorer` | str \| None | `None` |  |
-| `weight` | float \| None | `None` |  |
-| `model` | str \| None | `None` |  |
-| `columns` | list[str] \| None | `None` |  |
-| `column_weights` | dict[str, float] \| None | `None` |  |
-| `levels` | int | `2` |  |
-| `partial_threshold` | float | `0.8` |  |
-| `tf_adjustment` | bool | `False` |  |
-| `tf_freqs` | dict[str, float] \| None | `None` |  |
-| `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` |
-| `em_iterations` | int \| None | `None` |  |
-| `level_thresholds` | list[float] \| None | `None` |  |
+| `field` | str \| None | `None` | Source column this field compares on; may be given as 'column' instead. |
+| `column` | str \| None | `None` | Alias for 'field' naming the source column to compare. |
+| `transforms` | list[str] | `[]` | Normalization steps applied to the value before scoring, in order. |
+| `scorer` | str \| None | `None` | Similarity comparator used to score agreement between the two values. |
+| `weight` | float \| None | `None` | Relative importance of this field's agreement within a weighted matchkey. |
+| `model` | str \| None | `None` | Embedding model name used when the scorer is 'embedding'. |
+| `columns` | list[str] \| None | `None` | Set of source columns fused into one vector when the scorer is 'record_embedding'. |
+| `column_weights` | dict[str, float] \| None | `None` | Per-column weights blending the inputs for the 'record_embedding' scorer. |
+| `levels` | int | `2` | Number of probabilistic agreement bands (2=agree/disagree, 3=agree/partial/disagree). |
+| `partial_threshold` | float | `0.8` | Similarity at or above which a 3-level comparison counts as a partial agreement. |
+| `tf_adjustment` | bool | `False` | Enables Winkler term-frequency weighting so agreement on a rare value counts more than on a common one. |
+| `tf_freqs` | dict[str, float] \| None | `None` | Precomputed value-to-frequency table that drives data-driven downweighting of common values. |
+| `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` -- Workbench hint for which matchkey kind to wrap this field in when translating a flat field list. |
+| `em_iterations` | int \| None | `None` | Per-field cap on EM training iterations for a probabilistic comparison. |
+| `level_thresholds` | list[float] \| None | `None` | Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries. |
 
 ### `NegativeEvidenceField`
 _v1.11: a field whose disagreement subtracts from a weighted matchkey's_
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `field` | str | **required** |  |
-| `transforms` | list[str] | `[]` |  |
-| `scorer` | str | **required** |  |
-| `threshold` | float | **required** |  |
-| `penalty` | float \| None | `None` |  |
-| `penalty_bits` | float \| None | `None` |  |
-| `derive_from` | list[str] \| None | `None` |  |
+| `field` | str | **required** | Column whose disagreement between two records counts as evidence against a match. |
+| `transforms` | list[str] | `[]` | Normalization steps applied to the value before the disagreement check. |
+| `scorer` | str | **required** | Similarity comparator used to decide whether the two values disagree. |
+| `threshold` | float | **required** | Similarity below which the two values are treated as disagreeing and the penalty fires. |
+| `penalty` | float \| None | `None` | Flat 0-1 amount subtracted from a weighted/exact score on disagreement. |
+| `penalty_bits` | float \| None | `None` | Fixed log-likelihood-ratio penalty in bits applied on disagreement for probabilistic matchkeys, overriding EM. |
+| `derive_from` | list[str] \| None | `None` | Source columns space-joined to synthesize the compared field when it is not present in the raw frame. |
 
 ### `BlockingKeyConfig`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `fields` | list[str] | **required** |  |
-| `transforms` | list[str] | `[]` |  |
-| `field_transforms` | dict[str, list[str]] | `{}` |  |
+| `fields` | list[str] | **required** | Columns whose combined values form the blocking key; records sharing a key become candidate pairs. |
+| `transforms` | list[str] | `[]` | Normalization steps applied to every field before deriving the block key. |
+| `field_transforms` | dict[str, list[str]] | `{}` | Per-field transform chains overriding the key-level transforms for the named fields only. |
 
 ### `SortKeyField`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `column` | str | **required** |  |
-| `transforms` | list[str] | `[]` |  |
+| `column` | str | **required** | Column records are sorted on for sorted-neighborhood blocking. |
+| `transforms` | list[str] | `[]` | Normalization steps applied to the value before sorting. |
 
 ### `CanopyConfig`
 
@@ -488,24 +488,24 @@ _Banded hamming-LSH blocking over a column of perceptual hashes (ADR 0022)._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `strategy` | str | **required** |  |
-| `date_column` | str \| None | `None` |  |
-| `source_priority` | list[str] \| None | `None` |  |
-| `when` | str \| None | `None` |  |
-| `validate_with` _(alias `validate`)_ | str \| None | `None` |  |
+| `strategy` | str | **required** | Survivorship strategy that picks the winning value for a field across a cluster's records. |
+| `date_column` | str \| None | `None` | Column supplying recency, required by the 'most_recent' strategy. |
+| `source_priority` | list[str] \| None | `None` | Ordered source names preferred first, required by the 'source_priority' strategy. |
+| `when` | str \| None | `None` | Predicate over already-resolved fields gating whether this rule applies. |
+| `validate_with` _(alias `validate`)_ | str \| None | `None` | Name of a goldenflow validator that filters candidate values before survivorship. |
 
 ### `GoldenGroupRule`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `name` | str | **required** |  |
-| `columns` | list[str] | **required** |  |
-| `category` | str \| None | `None` |  |
-| `strategy` | str | `'most_complete'` |  |
-| `date_column` | str \| None | `None` |  |
-| `source_priority` | list[str] \| None | `None` |  |
-| `anchor` | str \| None | `None` |  |
-| `allow_fill` | bool | `False` |  |
+| `name` | str | **required** | Identifier for this group of columns that must survive together. |
+| `columns` | list[str] | **required** | Related columns resolved as a unit so their values stay from a single source record. |
+| `category` | str \| None | `None` | Optional label categorizing the group for reporting. |
+| `strategy` | str | `'most_complete'` | Survivorship strategy applied to the group as a whole when choosing the winning record. |
+| `date_column` | str \| None | `None` | Column supplying recency, required by the group's 'most_recent' strategy. |
+| `source_priority` | list[str] \| None | `None` | Ordered source names preferred first, required by the group's 'source_priority' strategy. |
+| `anchor` | str \| None | `None` | Column whose non-null presence selects the source record, required by and only valid with the 'anchor' strategy. |
+| `allow_fill` | bool | `False` | When true, individually missing values in the winning record may be filled from other records. |
 
 ### `ValidationRuleConfig`
 
@@ -863,9 +863,88 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-78 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+78 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
-`add_correction`, `agent_approve_reject`, `agent_compare_strategies`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `analyze_blocking`, `analyze_data`, `auto_configure`, `certify_recall`, `compare_clusters`, `config_weaknesses`, `controller_telemetry`, `convert_splink_config`, `create_domain`, `dedupe`, `documents_ingest`, `documents_suggest_schema`, `evaluate`, `explain_cluster`, `explain_match`, `explain_pair`, `explain_routing`, `export_results`, `find_duplicates`, `fix_quality`, `get_cluster`, `get_golden_record`, `get_stats`, `identity_audit`, `identity_audit_seal`, `identity_audit_verify`, `identity_claim`, `identity_conflicts`, `identity_history`, `identity_list`, `identity_merge`, `identity_profile`, `identity_resolve`, `identity_resolve_conflict`, `identity_show`, `identity_split`, `identity_stats`, `identity_worklist`, `incremental`, `learn_thresholds`, `lineage`, `lint_routing`, `list_clusters`, `list_corrections`, `list_domains`, `list_plugins`, `list_runs`, `match`, `match_record`, `memory_export`, `memory_import`, `memory_stats`, `plan_routing`, `pprl_auto_config`, `pprl_link`, `profile`, `profile_data`, `retrieve_similar`, `review_config`, `rollback`, `run_transforms`, `scan_quality`, `schema_match`, `sensitivity`, `shatter_cluster`, `suggest_config`, `suggest_pprl`, `test_domain`, `unmerge_record`, `upload_dataset`
+| Tool | Description |
+|---|---|
+| `add_correction` | Add a Learning Memory correction. Two shapes: |
+| `agent_approve_reject` | Approve or reject a review queue pair |
+| `agent_compare_strategies` | Compare ER strategies on your data |
+| `agent_deduplicate` | Deduplicate ONE dataset: auto-configures matching, runs the full entity-resolution pipeline, and returns the duplicate clusters with confidence gating (auto-merge / needs-review / reject) plus per-decision reasoning. Takes a file path or an uploaded dataset; pass output_path to also write the golden (deduplicated) records to CSV. Operates on a single source -- to link records across TWO datasets use agent_match_sources instead. |
+| `agent_explain_cluster` | Explain why records are in the same cluster |
+| `agent_explain_pair` | Natural language explanation for a record pair |
+| `agent_match_sources` | Link records across TWO datasets (not dedupe one): auto-selects a matching strategy, scores cross-source pairs, and returns the matched pairs with confidence. Takes two file paths or uploaded datasets (file_a / file_b); pass output_path to also write the matched pairs to CSV. To find duplicates WITHIN a single dataset use agent_deduplicate instead. |
+| `agent_review_queue` | Get borderline pairs awaiting approval |
+| `analyze_blocking` | Diagnose blocking on the loaded dataset: returns ranked blocking key candidates with block counts, max block size, total candidate comparisons, and estimated recall. Use it to explain why matching is slow or produces too many candidate pairs. |
+| `analyze_data` | Profile a dataset (read-only, runs no matching and writes nothing): column stats, the detected domain/entity type, data-quality signals, and a recommended entity-resolution strategy. Takes a file path or an uploaded dataset. Use it before deduplicating to understand the data and preview the strategy the auto-config would pick. |
+| `auto_configure` | Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`. |
+| `certify_recall` | Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems. |
+| `compare_clusters` | Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output). |
+| `config_weaknesses` | Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary. |
+| `controller_telemetry` | Return the AutoConfigController telemetry from the most recent `auto_configure` or `agent_deduplicate` call in this MCP session. Same JSON shape as the web /api/v1/controller/telemetry endpoint. |
+| `convert_splink_config` | Convert a Splink settings JSON (bare or trained) into a GoldenMatch config. Pass the settings as an inline JSON string -- no filesystem access needed. Returns the config as YAML, a findings report (severity/splink_path/message/mapped_to per finding), a summary, and -- when the Splink input carried trained m/u probabilities -- the imported EM model as a dict you can persist yourself. strict=True fails on ANY lossy mapping (not just hard errors). |
+| `create_domain` | Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.). |
+| `dedupe` | Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
+| `documents_ingest` | Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report. |
+| `documents_suggest_schema` | Propose a target extraction schema (JSON) from a sample document image/PDF. |
+| `evaluate` | Score the loaded run against ground-truth pairs. Loads a ground-truth CSV (id_a,id_b columns) and returns precision, recall, and F1 for the current clustering. |
+| `explain_cluster` | Alias for `agent_explain_cluster`. Explain why records are in the same cluster |
+| `explain_match` | Explain why two records match or don't match. Shows per-field score breakdown. |
+| `explain_pair` | Alias for `explain_match`. Explain why two records match or don't match. Shows per-field score breakdown. |
+| `explain_routing` | Human-readable explanation of why each stage is routed the way it is, with the driver-RAM projection that drove it. |
+| `export_results` | Export matching results to a file (CSV or JSON). |
+| `find_duplicates` | Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
+| `fix_quality` | Run GoldenCheck scan and apply fixes to a CSV file. Returns the fixed data summary and a manifest of all fixes applied. Requires goldencheck: pip install goldenmatch[quality] |
+| `get_cluster` | Get details of a specific cluster: all member records and their field values. |
+| `get_golden_record` | Get the merged golden (canonical) record for a cluster. |
+| `get_stats` | Get dataset statistics: record count, cluster count, match rate, cluster sizes. |
+| `identity_audit` | Export the append-only identity audit log in commit order: every event with actor / trust / timestamp / reason, so a reviewer can reconstruct exactly which actor changed what, when, and why. Optionally filtered by dataset / actor. |
+| `identity_audit_seal` | Anchor the append-only audit log with a tamper-evidence seal: a chained sha256 root over every event since the last seal. Cheap and idempotent (a no-op when nothing new has been logged). Run it periodically (or after a batch of stewardship actions) so the history becomes provably untampered. Optionally scoped to a dataset. Publish/mirror the returned root_hash to make tampering detectable by an external party. |
+| `identity_audit_verify` | Verify the append-only audit log against its seal chain. Replays the per-event content hashes and the seal roots to detect content edits, deletion, reordering, and insertion of any sealed event. Returns &#123;ok, events_checked, seals_checked&#125; plus the ids of any content mismatches / broken seals / missing sealed events. Optionally scoped to a dataset. |
+| `identity_claim` | Claim a record into an identity, moving it out of any prior entity ('this record belongs to that identity'). Emits a provenance-stamped `claimed` event on both the gaining and losing entities. |
+| `identity_conflicts` | List evidence edges marked `conflicts_with`. |
+| `identity_history` | Return the temporal event log for an identity. |
+| `identity_list` | List identities, optionally filtered by dataset/status. |
+| `identity_merge` | Manually merge two identities. All records from `absorb_entity_id` are reassigned to `keep_entity_id`. The merge events are stamped with `actor`/`trust` provenance so the audit log records who merged these and on what authority. |
+| `identity_profile` | MDM profile of one entity: record count + per-source breakdown, golden record, confidence, conflict count, canonical version (structural-event count), and first/last activity. Returns &#123;found: false&#125; when no such entity exists. |
+| `identity_resolve` | Resolve a record_id to its durable identity. Returns the full identity view (members, evidence edges, recent events) or null when no identity exists for that record. |
+| `identity_resolve_conflict` | Adjudicate a `conflicts_with` pair: 'same' keeps the entity intact, 'distinct' splits the second record out into a new identity, 'defer' only logs. Records a durable mediation verdict + event with actor/trust provenance, and stops the conflict re-surfacing in the open-conflicts queue. |
+| `identity_show` | Fetch the full detail of one identity by entity_id: its member records, evidence edges, and recent event log. Returns &#123;found: false&#125; when no such entity exists. |
+| `identity_split` | Split a subset of records off an identity into a brand-new identity. The original keeps the remaining records. The split events carry `actor`/`trust` provenance. |
+| `identity_stats` | Graph-level summary / health stats: entities by status, total records, records-per-entity distribution, conflict total, source mix, and the largest entities. Optionally scoped to a dataset. |
+| `identity_worklist` | Prioritized steward worklist: active entities needing attention (open conflicts and/or confidence below weak_confidence), highest conflict count first. |
+| `incremental` | Match a batch of new records against an existing base dataset (without re-running the whole base). Returns matched (new_row_id, base_row_id, score) pairs plus counts. Auto-configures from the base file if no config is given. |
+| `learn_thresholds` | Force a MemoryLearner pass over accumulated corrections. Returns the list of LearnedAdjustments produced (matchkey_name, threshold, sample_size, learned_at). Requires >= 10 corrections per matchkey before threshold tuning fires; otherwise returns an empty list. |
+| `lineage` | Field-level provenance for the loaded run: for each scored pair, the per-field scores that produced the match, plus cluster id. Optionally write a lineage JSON to a directory. |
+| `lint_routing` | Flag config/env overrides that force a slow path (e.g. CLUSTERING_THRESHOLD=0 when the edge set fits driver RAM). ERROR at scale; would_refuse mirrors the runtime guard. |
+| `list_clusters` | List duplicate clusters found in the dataset. Returns cluster IDs, sizes, and member counts. |
+| `list_corrections` | List stored Learning Memory corrections, optionally filtered by dataset. Returns id_a, id_b, decision, source, trust, reason, matchkey_name, dataset, original_score, created_at. |
+| `list_domains` | List available domain extraction rulebooks (built-in + user-defined). |
+| `list_plugins` | List all registered goldenmatch plugins by category. Includes the 22 v1.18.2 predefined plugins (numeric/format/business/aggregation) plus any user-registered plugins via entry-points or PluginRegistry.register_*(). Each entry includes name, source (builtin or user), category, and the first line of the merge docstring. |
+| `list_runs` | List previous dedupe/match runs (for rollback) from the run log. |
+| `match` | Alias for `match_record`. Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: &#123;"name": "John Smith", "email": "john@test.com", "zip": "10001"&#125; |
+| `match_record` | Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: &#123;"name": "John Smith", "email": "john@test.com", "zip": "10001"&#125; |
+| `memory_export` | Return all corrections as a list of dicts (CSV-shaped). Caller is responsible for writing the file. Optionally filter by dataset. |
+| `memory_import` | Import corrections from a list of dicts (the exact shape memory_export returns). Upserts into the store: higher trust wins, same trust = latest wins. Returns the count imported. |
+| `memory_stats` | Return Learning Memory status: total correction count, last learn time, and current learned adjustments. Cheap; safe for status checks. |
+| `plan_routing` | Project per-stage distributed routing (scoring/clustering/golden) for a given data shape + cluster. Pure; no controller run. |
+| `pprl_auto_config` | Analyze the loaded dataset and recommend optimal PPRL (privacy-preserving record linkage) configuration. Returns recommended fields, bloom filter parameters, threshold, and explanation. |
+| `pprl_link` | Run privacy-preserving record linkage between two parties' data. Computes bloom filters, matches records without sharing raw data. Specify fields, threshold, and security level. |
+| `profile` | Alias for `profile_data`. Get data quality profile: column types, null rates, unique counts, sample values. |
+| `profile_data` | Get data quality profile: column types, null rates, unique counts, sample values. |
+| `retrieve_similar` | Semantic retrieval (#1089): return the records in a CSV most similar to a free-text query, ranked by cosine similarity. Embeds the chosen column and the query with the zero-config in-house embedder (no cloud/torch by default) and runs ANN search. The read side of the RAG entity-canonicalization epic -- fetch candidate records by query without running a full dedupe. |
+| `review_config` | Run the config healer over the loaded dataset: analyze the dedupe run and return ranked, self-verified suggestions for improving the matching config (thresholds, scorers, negative evidence, blocking). Each suggestion carries an id, kind, target, rationale, and a machine-applicable patch. Requires the native kernel (pip install goldenmatch[native]); returns an empty list otherwise. |
+| `rollback` | Undo a previous run by DELETING its output files (looked up by run_id in the run log). Destructive: removes the files that run wrote. Use list_runs first to find the run_id. |
+| `run_transforms` | Run GoldenFlow data transforms on a CSV file. Normalizes phone numbers (E.164), dates (ISO), categorical spelling, and Unicode issues. Returns a manifest of transforms applied. Requires goldenflow: pip install goldenmatch[transform] |
+| `scan_quality` | Run GoldenCheck data quality scan on a CSV file. Returns issues found (encoding errors, Unicode problems, format violations) without applying fixes. Requires goldencheck: pip install goldenmatch[quality] |
+| `schema_match` | Auto-map columns between two files with different schemas. Returns proposed (col_a, col_b) mappings with a confidence score and method (synonym / name_sim / composite). Useful before matching two sources. |
+| `sensitivity` | Parameter-sensitivity analysis: sweep one or more config parameters across a range and report how stable the clustering is at each value (CCMS unchanged %). Use it to find robust thresholds. Auto-configures the file if no config is given. |
+| `shatter_cluster` | Break an entire cluster into individual records. All members become singletons. Use when a cluster is completely wrong. |
+| `suggest_config` | Analyze bad merges and suggest config changes. Provide examples of incorrect merges (pairs that should NOT have matched) and GoldenMatch will identify which fields/thresholds to tighten. Example: [&#123;"record_a": &#123;...&#125;, "record_b": &#123;...&#125;, "reason": "different people"&#125;] |
+| `suggest_pprl` | Check if data needs privacy-preserving matching |
+| `test_domain` | Test a domain extraction rulebook against sample records. Shows what features would be extracted from the loaded data. |
+| `unmerge_record` | Remove a record from its cluster. The record becomes a singleton. Remaining cluster members are re-clustered using stored pair scores. Use this to fix bad merges. |
+| `upload_dataset` | Upload a local file's bytes to the server and get back a server-side path to reuse across other tools (analyze_data, auto_configure, agent_deduplicate, ...). No hosting needed. Send base64 (default) or raw text via `encoding`. Uploaded files are ephemeral scratch, reaped after GOLDENMATCH_MCP_UPLOAD_TTL (default 24h); re-upload if you need a path older than that. Max size GOLDENMATCH_MCP_MAX_UPLOAD_BYTES (default 64MB) -- above it, pass a public http(s) URL as file_path instead. |
 
 ## Enumerated vocabularies
 

@@ -25,6 +25,10 @@ class PackageSpec:
     # Env names other docs may reference despite not being read in code (rare;
     # the migration-page + removal-context heuristics cover most). Explicit escape hatch.
     env_allow: tuple[str, ...] = ()
+    # Once a package's introspectable knobs are all explained, flip this on to
+    # BLOCK on any regression (a new field/option/tool without a description).
+    # Packages still filling the long tail leave it False (advisory coverage only).
+    require_full_coverage: bool = False
 
 
 REGISTRY: dict[str, PackageSpec] = {
@@ -52,6 +56,7 @@ REGISTRY: dict[str, PackageSpec] = {
     ),
     "goldencheck": PackageSpec(
         name="goldencheck",
+        require_full_coverage=True,
         doc_path="docs-site/goldencheck/config-matrix.mdx",
         nav_group="GoldenCheck",
         env_prefix="GOLDENCHECK_",
@@ -82,6 +87,7 @@ REGISTRY: dict[str, PackageSpec] = {
     ),
     "goldenpipe": PackageSpec(
         name="goldenpipe",
+        require_full_coverage=True,
         doc_path="docs-site/goldenpipe/config-matrix.mdx",
         nav_group="GoldenPipe",
         env_prefix="GOLDENPIPE_",
@@ -99,6 +105,7 @@ REGISTRY: dict[str, PackageSpec] = {
     ),
     "infermap": PackageSpec(
         name="infermap",
+        require_full_coverage=True,
         doc_path="docs-site/infermap/config-matrix.mdx",
         nav_group="InferMap",
         env_prefix="INFERMAP_",

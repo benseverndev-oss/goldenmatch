@@ -25,8 +25,14 @@ class RegressionPolicy(BaseModel):
     flags on an INCREASE and a ``higher_better`` metric only on a DECREASE.
     """
 
-    default_pct: float = 10.0
-    per_metric: dict[str, float] = Field(default_factory=dict)
+    default_pct: float = Field(
+        default=10.0,
+        description="Percent change from the baseline that counts as a regression for any metric without a per-metric override.",
+    )
+    per_metric: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-metric percent thresholds keyed by metric name, overriding default_pct for those metrics.",
+    )
 
     def threshold_for(self, key: str) -> float:
         return self.per_metric.get(key, self.default_pct)

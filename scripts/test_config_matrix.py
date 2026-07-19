@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from config_matrix import REGISTRY
+from config_matrix.coverage import coverage
 from config_matrix.crossref import stale_env_refs
 from config_matrix.render import (
     MARKER_END,
@@ -41,6 +42,19 @@ def test_no_stale_env_refs_in_docs(name):
     # code actually reads (the config-matrix registry is the source of truth).
     hits = stale_env_refs(REGISTRY[name])
     assert not hits, "stale env refs: " + "; ".join(f"{h.token} in {h.page}:{h.line_no}" for h in hits)
+
+
+@pytest.mark.parametrize("name", [n for n, s in REGISTRY.items() if s.require_full_coverage])
+def test_full_explanation_coverage_maintained(name):
+    # Packages flagged complete must stay at 100% NL-explanation coverage -- a new
+    # field/CLI option/MCP tool without a description regresses this and fails CI.
+    cov = coverage(REGISTRY[name])
+    total = sum(t for t, _ in cov.values())
+    explained = sum(e for _, e in cov.values())
+    assert total == explained, (
+        f"{name} dropped below full explanation coverage ({explained}/{total}); "
+        "add a description to the new knob (Field(description=...) / CLI help / MCP .description)"
+    )
 
 
 @pytest.mark.parametrize("name", list(REGISTRY))

@@ -40,46 +40,46 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `version` | int | `1` |  |
-| `settings` | Settings | _(default Settings)_ | [`Settings`](#settings) |
-| `columns` | dict[str, ColumnRule] | `{}` | [`ColumnRule`](#columnrule) |
-| `relations` | list[RelationRule] | `[]` | [`RelationRule`](#relationrule) |
-| `ignore` | list[IgnoreEntry] | `[]` | [`IgnoreEntry`](#ignoreentry) |
+| `version` | int | `1` | Schema version of this configuration file, used to handle format changes across releases. |
+| `settings` | Settings | _(default Settings)_ | [`Settings`](#settings) -- Global run settings such as sampling size and severity handling that apply to the whole check. |
+| `columns` | dict[str, ColumnRule] | `{}` | [`ColumnRule`](#columnrule) -- Per-column validation rules keyed by column name. |
+| `relations` | list[RelationRule] | `[]` | [`RelationRule`](#relationrule) -- Cross-column relationship rules applied across multiple columns. |
+| `ignore` | list[IgnoreEntry] | `[]` | [`IgnoreEntry`](#ignoreentry) -- List of column and check pairs whose findings should be excluded from results. |
 
 ### `Settings`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `sample_size` | int | `100000` |  |
-| `severity_threshold` | str | `'warning'` |  |
-| `fail_on` | str | `'error'` |  |
+| `sample_size` | int | `100000` | Maximum number of rows sampled from the dataset when running checks, capping work on large tables. |
+| `severity_threshold` | str | `'warning'` | Minimum severity level at which a finding is reported, so anything below this floor is suppressed from results. |
+| `fail_on` | str | `'error'` | Severity level that causes the overall run to fail once a finding at or above it is produced. |
 
 ### `ColumnRule`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `type` | str | **required** |  |
-| `required` | bool \| None | `None` |  |
-| `nullable` | bool \| None | `None` |  |
-| `format` | str \| None | `None` |  |
-| `unique` | bool \| None | `None` |  |
-| `range` | list[float] \| None | `None` |  |
-| `enum` | list[str] \| None | `None` |  |
-| `outlier_stddev` | float \| None | `None` |  |
+| `type` | str | **required** | Expected data type for the column, used to flag values that do not conform to it. |
+| `required` | bool \| None | `None` | Whether the column must be present in the dataset, failing the check when it is missing. |
+| `nullable` | bool \| None | `None` | Whether null values are permitted in the column, flagging nulls when set to false. |
+| `format` | str \| None | `None` | Named format the column values must match, such as an email or date pattern, for validating string shape. |
+| `unique` | bool \| None | `None` | Whether every value in the column must be distinct, flagging duplicate values when set to true. |
+| `range` | list[float] \| None | `None` | Inclusive lower and upper numeric bounds that column values must fall within. |
+| `enum` | list[str] \| None | `None` | Closed set of allowed values for the column, flagging any value outside this list. |
+| `outlier_stddev` | float \| None | `None` | Number of standard deviations from the mean beyond which a numeric value is flagged as an outlier. |
 
 ### `RelationRule`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `type` | str | **required** |  |
-| `columns` | list[str] | **required** |  |
+| `type` | str | **required** | Kind of cross-column relationship to enforce, for example a uniqueness or foreign-key style constraint. |
+| `columns` | list[str] | **required** | Columns that participate in the relationship, evaluated together as a group. |
 
 ### `IgnoreEntry`
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `column` | str | **required** |  |
-| `check` | str | **required** |  |
+| `column` | str | **required** | Column whose check results should be suppressed from the report. |
+| `check` | str | **required** | Specific check on that column to skip, silencing its findings for that column. |
 
 ## CLI
 
@@ -177,9 +177,29 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-19 MCP tool(s) exposed by `goldencheck.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+19 MCP tool(s) exposed by `goldencheck.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
-`analyze_data`, `approve_reject`, `auto_configure`, `compare_domains`, `explain_column`, `explain_finding`, `get_column_detail`, `get_domain_info`, `health_score`, `install_domain`, `list_checks`, `list_domains`, `pipeline_handoff`, `profile`, `review_queue`, `review_stats`, `scan`, `suggest_fix`, `validate`
+| Tool | Description |
+|---|---|
+| `analyze_data` | Analyze a data file to detect its domain, profile columns, and recommend a scanning strategy. Returns domain detection, column count, row count, strategy decisions, and alternative approaches. |
+| `approve_reject` | Approve (pin) or reject (dismiss) a review queue item. Decision must be 'pin' or 'dismiss'. |
+| `auto_configure` | Scan a data file, triage findings by confidence, and generate goldencheck.yml content from the pinned findings. Optionally accepts constraints to filter or adjust the generated config. |
+| `compare_domains` | Scan a file with every available domain pack (plus base/no-domain) and compare health scores. Recommends the best-fitting domain. |
+| `explain_column` | Get a natural-language health narrative for a specific column. Scans the file, profiles the column, and explains all findings. |
+| `explain_finding` | Explain a single finding in natural language. Requires the finding as a JSON dict and the file_path to load a profile for context. |
+| `get_column_detail` | Get detailed profile and findings for a specific column. |
+| `get_domain_info` | Get detailed info about a specific domain pack — lists all semantic types, their name hints, and suppression rules. |
+| `health_score` | Get the health score (A-F, 0-100) for a data file. Quick summary of overall data quality. |
+| `install_domain` | Download a community domain pack from the goldencheck-types repository and save it for use in future scans. |
+| `list_checks` | List all available profiler checks and what they detect. No arguments needed. |
+| `list_domains` | List all available domain packs (healthcare, finance, ecommerce, etc.). Domain packs provide specialized semantic type definitions for specific data domains. |
+| `pipeline_handoff` | Generate a structured quality attestation JSON for a data file. Includes health score, findings summary, pinned rules, and attestation status (PASS, PASS_WITH_WARNINGS, REVIEW_REQUIRED, FAIL). |
+| `profile` | Profile a data file and return column-level statistics: type, null%, unique%, min/max, top values, detected formats. Also returns a health score (A-F) based on finding severity. |
+| `review_queue` | List all pending review items for a given job. Returns items that need human decision (medium-confidence findings). |
+| `review_stats` | Get review queue statistics for a job — counts of pending, pinned, and dismissed items. |
+| `scan` | Scan a data file (CSV, Parquet, Excel) for data quality issues. Returns findings with severity, confidence, affected rows, and sample values. No configuration needed — rules are discovered from the data. |
+| `suggest_fix` | Preview fixes for a data file without applying them. Shows what would change (columns, fix types, rows affected, before/after samples). |
+| `validate` | Validate a data file against pinned rules in goldencheck.yml. Returns validation findings (existence, required, unique, enum, range checks). |
 
 ## Enumerated vocabularies
 

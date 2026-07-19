@@ -44,23 +44,23 @@ _Top-level pipeline configuration._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `pipeline` | str | **required** |  |
-| `source` | str \| None | `None` |  |
-| `output` | str \| None | `None` |  |
-| `stages` | list[StageSpec \| str] | **required** | [`StageSpec`](#stagespec) |
-| `decisions` | list[str] | `[]` |  |
+| `pipeline` | str | **required** | Name of the pipeline, identifying this end-to-end configuration in runs and logs. |
+| `source` | str \| None | `None` | Optional default input location that stages read from when they do not specify their own source. |
+| `output` | str \| None | `None` | Optional default destination where the pipeline writes its final results. |
+| `stages` | list[StageSpec \| str] | **required** | [`StageSpec`](#stagespec) -- Ordered list of stages to run, each given as a full StageSpec or a shorthand string naming the adapter to use. |
+| `decisions` | list[str] | `[]` | Recorded pipeline decision entries that capture the choices and rationale behind this configuration. |
 
 ### `StageSpec`
 _Configuration for a single pipeline stage._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `name` | str \| None | `None` |  |
-| `use` | str | **required** |  |
-| `needs` | list[str] | `[]` |  |
-| `skip_if` | str \| None | `None` |  |
-| `on_error` | Literal | `'continue'` | `continue`, `abort` |
-| `config` | dict[str, Any] | `{}` |  |
+| `name` | str \| None | `None` | Optional human-readable label for this stage, used in logs and as the key other stages reference in their needs list. |
+| `use` | str | **required** | Identifier of the adapter that runs this stage, such as goldenmatch.dedupe, naming which suite tool to invoke. |
+| `needs` | list[str] | `[]` | Names of stages that must finish before this one runs, defining the dependency order in the pipeline graph. |
+| `skip_if` | str \| None | `None` | Condition expression that, when it evaluates true at runtime, causes this stage to be skipped rather than executed. |
+| `on_error` | Literal | `'continue'` | `continue`, `abort` -- What to do when this stage raises an error: continue on to later stages or abort the whole pipeline. |
+| `config` | dict[str, Any] | `{}` | Free-form settings dictionary passed straight through to the named adapter to configure how the tool runs. |
 
 ## CLI
 
@@ -88,9 +88,14 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-4 MCP tool(s) exposed by `goldenpipe.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+4 MCP tool(s) exposed by `goldenpipe.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
-`explain_pipeline`, `list_stages`, `run_pipeline`, `validate_pipeline`
+| Tool | Description |
+|---|---|
+| `explain_pipeline` | Explain what a pipeline config does |
+| `list_stages` | List all discovered pipeline stages |
+| `run_pipeline` | Run a pipeline on a file OR inline data (records / csv_text) and return per-stage status, reasoning and timing PLUS the deduped output (golden-record count + preview, unique/duplicate counts, cluster count, match stats). Give a `stages` list or `config_path` to control the chain, or omit both for zero-config auto. |
+| `validate_pipeline` | Validate pipeline wiring |
 
 ## Enumerated vocabularies
 

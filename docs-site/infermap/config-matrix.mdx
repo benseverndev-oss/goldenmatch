@@ -78,9 +78,14 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-4 MCP tool(s) exposed by `infermap.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+4 MCP tool(s) exposed by `infermap.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
-`apply`, `inspect`, `map`, `validate`
+| Tool | Description |
+|---|---|
+| `apply` | Apply a saved mapping config to a source CSV, renaming columns according to the mapping and writing the result to an output file. |
+| `inspect` | Inspect a data source — show fields, types, sample values, null rates, unique rates, and statistics. |
+| `map` | Map source columns to target schema using a weighted scorer pipeline with optimal 1:1 assignment. Returns mappings with confidence scores and human-readable reasoning. |
+| `validate` | Validate that a source file's columns satisfy a saved mapping config. Reports missing source columns and unmapped required fields. |
 
 ## Enumerated vocabularies
 

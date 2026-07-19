@@ -90,17 +90,48 @@ class FieldTransform(BaseModel):
 
 
 class MatchkeyField(BaseModel):
-    field: str | None = None
-    column: str | None = None
-    transforms: list[str] = Field(default_factory=list)
-    scorer: str | None = None
-    weight: float | None = None
-    model: str | None = None  # for embedding scorer
-    columns: list[str] | None = None  # for record_embedding scorer
-    column_weights: dict[str, float] | None = None  # per-field weights for record_embedding
-    levels: int = Field(default=2, ge=2)  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
+    field: str | None = Field(
+        default=None,
+        description="Source column this field compares on; may be given as 'column' instead.",
+    )
+    column: str | None = Field(
+        default=None,
+        description="Alias for 'field' naming the source column to compare.",
+    )
+    transforms: list[str] = Field(
+        default_factory=list,
+        description="Normalization steps applied to the value before scoring, in order.",
+    )
+    scorer: str | None = Field(
+        default=None,
+        description="Similarity comparator used to score agreement between the two values.",
+    )
+    weight: float | None = Field(
+        default=None,
+        description="Relative importance of this field's agreement within a weighted matchkey.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Embedding model name used when the scorer is 'embedding'.",
+    )  # for embedding scorer
+    columns: list[str] | None = Field(
+        default=None,
+        description="Set of source columns fused into one vector when the scorer is 'record_embedding'.",
+    )  # for record_embedding scorer
+    column_weights: dict[str, float] | None = Field(
+        default=None,
+        description="Per-column weights blending the inputs for the 'record_embedding' scorer.",
+    )  # per-field weights for record_embedding
+    levels: int = Field(
+        default=2,
+        ge=2,
+        description="Number of probabilistic agreement bands (2=agree/disagree, 3=agree/partial/disagree).",
+    )  # comparison levels for probabilistic: 2=agree/disagree, 3=agree/partial/disagree
     partial_threshold: float = Field(
-        default=0.8, ge=0.0, le=1.0
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Similarity at or above which a 3-level comparison counts as a partial agreement.",
     )  # score >= this = partial agree (when levels=3)
     # Probabilistic-only: term-frequency (Winkler) weight adjustment. When True,
     # an exact agreement on a *rare* value carries more match weight than on a
@@ -108,30 +139,46 @@ class MatchkeyField(BaseModel):
     # "Smith"). Off by default — only meaningful for skewed-frequency
     # categorical fields (names, cities). Applied by the vectorized FS scorer
     # using per-value frequencies computed at EM-train time.
-    tf_adjustment: bool = False
+    tf_adjustment: bool = Field(
+        default=False,
+        description="Enables Winkler term-frequency weighting so agreement on a rare value counts more than on a common one.",
+    )
     # #1207 PR2a: per-dataset value->relative-frequency table for
     # name_freq_weighted_jw; when present the scorer downweights agreements on
     # high-frequency values across the whole JW range (data-driven), else falls
     # back to static census IDF in the borderline zone.
-    tf_freqs: dict[str, float] | None = None
+    tf_freqs: dict[str, float] | None = Field(
+        default=None,
+        description="Precomputed value-to-frequency table that drives data-driven downweighting of common values.",
+    )
     # Workbench-only hint: which kind of MatchkeyConfig to wrap this field
     # in when /preview / /run translate the flat row list into engine
     # MatchkeyConfigs. Optional + None-default so engine-internal callers
     # that build MatchkeyField directly remain unaffected; preview's
     # _build_config falls back to its scorer-based heuristic when absent.
-    type: Literal["exact", "weighted", "probabilistic"] | None = None
+    type: Literal["exact", "weighted", "probabilistic"] | None = Field(
+        default=None,
+        description="Workbench hint for which matchkey kind to wrap this field in when translating a flat field list.",
+    )
     # Probabilistic-only: EM iterations cap. Mirrors MatchkeyConfig.em_iterations
     # so the workbench can tune training stability without surfacing the full
     # MatchkeyConfig shape. Read by _build_config when type == "probabilistic".
     # `None` (not 20) is the default so `model_dump(exclude_none=True)` doesn't
     # leak the value into saved YAML for non-probabilistic matchkeys; the
     # workbench → engine translation in web/preview.py coerces None → 20.
-    em_iterations: int | None = Field(default=None, ge=1)
+    em_iterations: int | None = Field(
+        default=None,
+        ge=1,
+        description="Per-field cap on EM training iterations for a probabilistic comparison.",
+    )
     # N-level custom banding (Splink-converter Stage 1). Descending similarity
     # cutoffs; level index = count of satisfied thresholds (0 = disagree,
     # levels-1 = top agree). None => legacy banding (partial_threshold for
     # 2/3 levels, even k/N spacing for N>3). Length must be levels-1.
-    level_thresholds: list[float] | None = None
+    level_thresholds: list[float] | None = Field(
+        default=None,
+        description="Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries.",
+    )
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> MatchkeyField:
@@ -218,29 +265,51 @@ class NegativeEvidenceField(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    field: str
-    transforms: list[str] = Field(default_factory=list)
-    scorer: str
-    threshold: float = Field(ge=0.0, le=1.0)
+    field: str = Field(
+        description="Column whose disagreement between two records counts as evidence against a match.",
+    )
+    transforms: list[str] = Field(
+        default_factory=list,
+        description="Normalization steps applied to the value before the disagreement check.",
+    )
+    scorer: str = Field(
+        description="Similarity comparator used to decide whether the two values disagree.",
+    )
+    threshold: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Similarity below which the two values are treated as disagreeing and the penalty fires.",
+    )
     # Weighted/exact only: flat 0-1 penalty subtracted from the score when
     # this field disagrees. REQUIRED for weighted/exact (enforced by
     # ``MatchkeyConfig._validate_weighted``, not here); REJECTED for
     # probabilistic matchkeys, which use EM-learned weights instead (or the
     # ``penalty_bits`` override below).
-    penalty: float | None = Field(default=None, ge=0.0, le=1.0)
+    penalty: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Flat 0-1 amount subtracted from a weighted/exact score on disagreement.",
+    )
     # Probabilistic-only: fixed LLR override in log2 units. When set, the NE
     # dimension skips EM and contributes -abs(penalty_bits) when FIRED (both
     # values present and scorer similarity STRICTLY below threshold), else 0.
     # Absent => the weight is EM-learned (see core/probabilistic.py).
     # Rejected on weighted/exact matchkeys (they use `penalty`).
-    penalty_bits: float | None = None
+    penalty_bits: float | None = Field(
+        default=None,
+        description="Fixed log-likelihood-ratio penalty in bits applied on disagreement for probabilistic matchkeys, overriding EM.",
+    )
     # When set, ``field`` is a SYNTHESIZED column the pipeline materializes
     # before scoring by space-joining ``derive_from`` (e.g. a person full name
     # from ['first_name', 'last_name']). Lets an NE score a composite the raw
     # frame doesn't carry -- used by the facility full-name NE lever so a
     # token_sort on the whole name can tell distinct colleagues apart from
     # nickname/typo duplicates. None => ``field`` must already exist.
-    derive_from: list[str] | None = None
+    derive_from: list[str] | None = Field(
+        default=None,
+        description="Source columns space-joined to synthesize the compared field when it is not present in the raw frame.",
+    )
 
     @model_validator(mode="after")
     def _validate_transforms_and_scorer(self) -> NegativeEvidenceField:
@@ -338,15 +407,40 @@ class MatchkeyConfig(BaseModel):
     mutating fields post-construction) and the crash points at the bug.
     """
 
-    name: str
-    type: Literal["exact", "weighted", "probabilistic"] | None = None
-    comparison: str | None = None
-    fields: list[MatchkeyField]
-    threshold: float | None = None
-    auto_threshold: bool = False
-    rerank: bool = False
-    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    rerank_band: float = 0.1
+    name: str = Field(
+        description="Identifier for this matchkey, used in output and logs.",
+    )
+    type: Literal["exact", "weighted", "probabilistic"] | None = Field(
+        default=None,
+        description="Matching mode: exact equality, weighted per-field scoring, or probabilistic Fellegi-Sunter.",
+    )
+    comparison: str | None = Field(
+        default=None,
+        description="Alias for 'type' accepting the same exact/weighted/probabilistic values.",
+    )
+    fields: list[MatchkeyField] = Field(
+        description="Fields compared to decide whether two records match under this matchkey.",
+    )
+    threshold: float | None = Field(
+        default=None,
+        description="Score at or above which a pair is accepted as a match; required for weighted matchkeys.",
+    )
+    auto_threshold: bool = Field(
+        default=False,
+        description="Enables automatic Otsu-style tuning of the accept threshold from the score distribution.",
+    )
+    rerank: bool = Field(
+        default=False,
+        description="Enables cross-encoder reranking of borderline pairs near the threshold.",
+    )
+    rerank_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        description="Cross-encoder model used to rerank borderline pairs when rerank is on.",
+    )
+    rerank_band: float = Field(
+        default=0.1,
+        description="Half-width of the score band around the threshold within which pairs are reranked.",
+    )
     # v1.11: negative evidence fields — default-None for v1.10 cache compat.
     #
     # Valid on all three matchkey types. ``weighted``/``exact`` use a flat
@@ -354,18 +448,42 @@ class MatchkeyConfig(BaseModel):
     # Sunter) uses EM-learned NE weights (Formulation B), with an optional
     # ``penalty_bits`` fixed override. See
     # ``docs/superpowers/specs/2026-07-14-fs-negative-evidence-design.md``.
-    negative_evidence: list[NegativeEvidenceField] | None = None
+    negative_evidence: list[NegativeEvidenceField] | None = Field(
+        default=None,
+        description="Fields whose disagreement penalizes the match score, catching false positives that agree on other fields.",
+    )
     # Fellegi-Sunter EM parameters
-    em_iterations: int = Field(default=20, ge=1)
-    convergence_threshold: float = Field(default=0.001, gt=0.0)
-    link_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    review_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    em_iterations: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum EM iterations when training probabilistic weights.",
+    )
+    convergence_threshold: float = Field(
+        default=0.001,
+        gt=0.0,
+        description="EM stops early once parameter change between iterations falls below this value.",
+    )
+    link_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Probabilistic match probability at or above which a pair is auto-linked.",
+    )
+    review_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Probabilistic match probability at or above which a pair is sent for manual review; must not exceed link_threshold.",
+    )
     # Probabilistic-only: persisted EM model (Splink-style train-once -> reuse).
     # When set and the file exists, the trained EMResult is loaded and EM is
     # skipped; when set and absent, EM runs and the result is saved there.
     # Ignored for non-probabilistic matchkeys. See core/probabilistic.py
     # load_or_train_em.
-    model_path: str | None = None
+    model_path: str | None = Field(
+        default=None,
+        description="File where the trained probabilistic model is loaded from if present, or saved to after training.",
+    )
     # Probabilistic-only: how a missing value on either side of a comparison is
     # treated (#1846).
     #
@@ -384,7 +502,10 @@ class MatchkeyConfig(BaseModel):
     # auto_configure_probabilistic_df picks this from the profiled null rates;
     # GOLDENMATCH_FS_MISSING overrides globally. Ignored for non-probabilistic
     # matchkeys.
-    missing: Literal["unobserved", "disagree"] | None = None
+    missing: Literal["unobserved", "disagree"] | None = Field(
+        default=None,
+        description="How a missing value is treated probabilistically: 'unobserved' contributes nothing, 'disagree' counts against a match.",
+    )
 
     @model_validator(mode="after")
     def _validate_weighted(self) -> MatchkeyConfig:
@@ -487,15 +608,23 @@ class MatchkeyConfig(BaseModel):
 
 
 class BlockingKeyConfig(BaseModel):
-    fields: list[str]
-    transforms: list[str] = Field(default_factory=list)
+    fields: list[str] = Field(
+        description="Columns whose combined values form the blocking key; records sharing a key become candidate pairs.",
+    )
+    transforms: list[str] = Field(
+        default_factory=list,
+        description="Normalization steps applied to every field before deriving the block key.",
+    )
     # Per-field transform chains (#1826). A field present here uses ITS chain
     # for the block-key derivation; fields absent keep the key-level
     # ``transforms`` chain. This is what lets a mixed Splink rule
     # (``l.last=r.last AND SUBSTR(l.first,1,1)=SUBSTR(r.first,1,1)``) map
     # exactly instead of widening every field to the substring (the
     # 388K-mega-block footgun).
-    field_transforms: dict[str, list[str]] = Field(default_factory=dict)
+    field_transforms: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Per-field transform chains overriding the key-level transforms for the named fields only.",
+    )
 
     @model_validator(mode="after")
     def _validate_fields_nonempty(self) -> BlockingKeyConfig:
@@ -511,8 +640,13 @@ class BlockingKeyConfig(BaseModel):
 
 
 class SortKeyField(BaseModel):
-    column: str
-    transforms: list[str] = Field(default_factory=list)
+    column: str = Field(
+        description="Column records are sorted on for sorted-neighborhood blocking.",
+    )
+    transforms: list[str] = Field(
+        default_factory=list,
+        description="Normalization steps applied to the value before sorting.",
+    )
 
 
 class CanopyConfig(BaseModel):
@@ -640,30 +774,102 @@ class ThroughputConfig(BaseModel):
 
 
 class BlockingConfig(BaseModel):
-    keys: list[BlockingKeyConfig] = []
-    max_block_size: int = 5000
-    skip_oversized: bool = False
-    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual"] = "static"
-    learned_sample_size: int = 5000
-    learned_min_recall: float = 0.95
-    learned_min_reduction: float = 0.90
-    learned_predicate_depth: int = 2
-    learned_cache_path: str | None = None  # persist for reuse
-    auto_suggest: bool = False
-    auto_select: bool = False
-    sub_block_keys: list[BlockingKeyConfig] | None = None
-    window_size: int = 20
-    sort_key: list[SortKeyField] | None = None
-    passes: list[BlockingKeyConfig] | None = None
-    union_mode: bool = True
-    max_total_comparisons: int | None = None
-    ann_column: str | None = None
-    ann_model: str = "all-MiniLM-L6-v2"
-    ann_top_k: int = 20
-    canopy: CanopyConfig | None = None
-    lsh: LSHKeyConfig | None = None
-    simhash: SimHashKeyConfig | None = None
-    perceptual: PerceptualKeyConfig | None = None
+    keys: list[BlockingKeyConfig] = Field(
+        default_factory=list,
+        description="Blocking keys that generate candidate pairs; records sharing any key are compared.",
+    )
+    max_block_size: int = Field(
+        default=5000,
+        description="Ceiling on how many records one block may hold before it is treated as oversized.",
+    )
+    skip_oversized: bool = Field(
+        default=False,
+        description="When true, blocks exceeding max_block_size are dropped rather than scored, guarding against mega-block blowups.",
+    )
+    strategy: Literal["static", "adaptive", "sorted_neighborhood", "multi_pass", "ann", "canopy", "ann_pairs", "learned", "lsh", "simhash", "perceptual"] = Field(
+        default="static",
+        description="Candidate-generation method that selects how pairs are proposed for scoring.",
+    )
+    learned_sample_size: int = Field(
+        default=5000,
+        description="Number of sampled records the learned-predicate miner trains its blocking rules on.",
+    )
+    learned_min_recall: float = Field(
+        default=0.95,
+        description="Minimum pair recall a learned predicate must retain to be accepted.",
+    )
+    learned_min_reduction: float = Field(
+        default=0.90,
+        description="Minimum fraction of the full comparison space a learned predicate must eliminate.",
+    )
+    learned_predicate_depth: int = Field(
+        default=2,
+        description="Maximum number of conjoined conditions in a mined blocking predicate.",
+    )
+    learned_cache_path: str | None = Field(
+        default=None,
+        description="File where learned blocking predicates are persisted for reuse across runs.",
+    )  # persist for reuse
+    auto_suggest: bool = Field(
+        default=False,
+        description="Lets the engine discover blocking keys at runtime instead of using the static keys.",
+    )
+    auto_select: bool = Field(
+        default=False,
+        description="Lets the engine pick the best blocking strategy automatically.",
+    )
+    sub_block_keys: list[BlockingKeyConfig] | None = Field(
+        default=None,
+        description="Secondary keys used to split oversized blocks into smaller candidate sets.",
+    )
+    window_size: int = Field(
+        default=20,
+        description="Sliding-window width, in sorted records, for sorted-neighborhood blocking.",
+    )
+    sort_key: list[SortKeyField] | None = Field(
+        default=None,
+        description="Ordered columns records are sorted on for sorted-neighborhood blocking.",
+    )
+    passes: list[BlockingKeyConfig] | None = Field(
+        default=None,
+        description="Sequence of blocking key sets applied in separate passes for multi_pass blocking.",
+    )
+    union_mode: bool = Field(
+        default=True,
+        description="When true, candidate pairs from all passes are unioned rather than intersected.",
+    )
+    max_total_comparisons: int | None = Field(
+        default=None,
+        description="Global cap on the number of candidate pairs generated across all blocks.",
+    )
+    ann_column: str | None = Field(
+        default=None,
+        description="Text column embedded for approximate-nearest-neighbor blocking.",
+    )
+    ann_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Embedding model used to vectorize records for ANN blocking.",
+    )
+    ann_top_k: int = Field(
+        default=20,
+        description="Number of nearest neighbors retrieved per record in ANN blocking.",
+    )
+    canopy: CanopyConfig | None = Field(
+        default=None,
+        description="Configuration for canopy clustering when the strategy is 'canopy'.",
+    )
+    lsh: LSHKeyConfig | None = Field(
+        default=None,
+        description="MinHash/LSH configuration required when the strategy is 'lsh'.",
+    )
+    simhash: SimHashKeyConfig | None = Field(
+        default=None,
+        description="SimHash/LSH configuration required when the strategy is 'simhash'.",
+    )
+    perceptual: PerceptualKeyConfig | None = Field(
+        default=None,
+        description="Perceptual-hash LSH configuration used when the strategy is 'perceptual'.",
+    )
 
     @model_validator(mode="after")
     def _validate_keys_or_passes(self) -> BlockingConfig:
@@ -706,11 +912,26 @@ class BlockingConfig(BaseModel):
 
 
 class GoldenFieldRule(BaseModel):
-    strategy: str
-    date_column: str | None = None
-    source_priority: list[str] | None = None
-    when: str | None = None       # predicate over already-resolved fields
-    validate_with: str | None = Field(default=None, alias="validate")  # candidate-filter name (goldenflow validator)
+    strategy: str = Field(
+        description="Survivorship strategy that picks the winning value for a field across a cluster's records.",
+    )
+    date_column: str | None = Field(
+        default=None,
+        description="Column supplying recency, required by the 'most_recent' strategy.",
+    )
+    source_priority: list[str] | None = Field(
+        default=None,
+        description="Ordered source names preferred first, required by the 'source_priority' strategy.",
+    )
+    when: str | None = Field(
+        default=None,
+        description="Predicate over already-resolved fields gating whether this rule applies.",
+    )       # predicate over already-resolved fields
+    validate_with: str | None = Field(
+        default=None,
+        alias="validate",
+        description="Name of a goldenflow validator that filters candidate values before survivorship.",
+    )  # candidate-filter name (goldenflow validator)
 
     @model_validator(mode="after")
     def _validate_strategy(self) -> GoldenFieldRule:
@@ -742,14 +963,36 @@ _GROUP_STRATEGIES = frozenset({"most_complete", "source_priority", "most_recent"
 
 
 class GoldenGroupRule(BaseModel):
-    name: str
-    columns: list[str]
-    category: str | None = None
-    strategy: str = "most_complete"
-    date_column: str | None = None
-    source_priority: list[str] | None = None
-    anchor: str | None = None
-    allow_fill: bool = False
+    name: str = Field(
+        description="Identifier for this group of columns that must survive together.",
+    )
+    columns: list[str] = Field(
+        description="Related columns resolved as a unit so their values stay from a single source record.",
+    )
+    category: str | None = Field(
+        default=None,
+        description="Optional label categorizing the group for reporting.",
+    )
+    strategy: str = Field(
+        default="most_complete",
+        description="Survivorship strategy applied to the group as a whole when choosing the winning record.",
+    )
+    date_column: str | None = Field(
+        default=None,
+        description="Column supplying recency, required by the group's 'most_recent' strategy.",
+    )
+    source_priority: list[str] | None = Field(
+        default=None,
+        description="Ordered source names preferred first, required by the group's 'source_priority' strategy.",
+    )
+    anchor: str | None = Field(
+        default=None,
+        description="Column whose non-null presence selects the source record, required by and only valid with the 'anchor' strategy.",
+    )
+    allow_fill: bool = Field(
+        default=False,
+        description="When true, individually missing values in the winning record may be filled from other records.",
+    )
 
     @model_validator(mode="after")
     def _validate_group(self) -> GoldenGroupRule:
@@ -782,28 +1025,61 @@ class GoldenGroupRule(BaseModel):
 
 
 class GoldenRulesConfig(BaseModel):
-    default_strategy: str | None = None
-    default: GoldenFieldRule | None = None
-    field_rules: dict[str, GoldenFieldRule | list[GoldenFieldRule]] = Field(default_factory=dict)
-    field_groups: list[GoldenGroupRule] = Field(default_factory=list)
-    field_group_detection: bool = False
-    max_cluster_size: int = 100
-    auto_split: bool = True
-    quality_weighting: bool = True
-    weak_cluster_threshold: float = 0.3
+    default_strategy: str | None = Field(
+        default=None,
+        description="Survivorship strategy applied to any field without its own rule; required unless 'default' is set.",
+    )
+    default: GoldenFieldRule | None = Field(
+        default=None,
+        description="Full default rule whose strategy backfills default_strategy when the latter is unset.",
+    )
+    field_rules: dict[str, GoldenFieldRule | list[GoldenFieldRule]] = Field(
+        default_factory=dict,
+        description="Per-column survivorship rules, or an ordered list of conditional rules ending in a default clause.",
+    )
+    field_groups: list[GoldenGroupRule] = Field(
+        default_factory=list,
+        description="Groups of columns resolved together so their values stay mutually consistent.",
+    )
+    field_group_detection: bool = Field(
+        default=False,
+        description="Enables automatic discovery of related column groups to resolve as units.",
+    )
+    max_cluster_size: int = Field(
+        default=100,
+        description="Cluster size above which auto-split intervenes to break up likely over-merged clusters.",
+    )
+    auto_split: bool = Field(
+        default=True,
+        description="Enables splitting oversized clusters into tighter subclusters before building golden records.",
+    )
+    quality_weighting: bool = Field(
+        default=True,
+        description="Weights survivorship choices by per-source completeness and quality signals.",
+    )
+    weak_cluster_threshold: float = Field(
+        default=0.3,
+        description="Cohesion score below which a cluster is flagged as weak and handled more conservatively.",
+    )
     # #726: cap on cumulative auto-split edge-work. None => auto-scaled
     # max(5_000_000, n_rows * 5). Raise this (or env
     # GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET) if a loud "clusters left oversized"
     # warning fires on a legitimately dense dataset. Precedence: this field >
     # env > auto-scaled.
-    split_edge_budget: int | None = None
+    split_edge_budget: int | None = Field(
+        default=None,
+        description="Cap on cumulative edge work spent auto-splitting clusters; None auto-scales from the row count.",
+    )
     # v1.18: post-cluster golden-rules refinement. When True, after
     # clustering the pipeline runs `refine_golden_rules` against the
     # cluster output + column profiles to pick per-field strategies
     # informed by within-cluster spread, per-source completeness, etc.
     # Default False to preserve existing behavior; opt-in for v1.18 users.
     # Spec: docs/superpowers/specs/2026-05-22-intelligent-golden-rules-design.md
-    adaptive: bool = False
+    adaptive: bool = Field(
+        default=False,
+        description="Enables post-cluster refinement that re-picks per-field strategies from cluster health and profiles.",
+    )
 
     # v1.20.x (#430): LLM fallback for ambiguous fields. When True and
     # the heuristic refiner returns None for a field (no rule fires),
@@ -812,7 +1088,10 @@ class GoldenRulesConfig(BaseModel):
     # `BudgetConfig`-attached scorer config (set on `match_settings`).
     # Soft-fails: no API key / budget exhausted / invalid response
     # -> falls back to the base default_strategy.
-    use_llm_for_ambiguous: bool = False
+    use_llm_for_ambiguous: bool = Field(
+        default=False,
+        description="Falls back to one cached LLM call per field to pick a strategy when the heuristic refiner is undecided.",
+    )
 
     # v1.18.2 (#429): per-cluster strategy overrides. Maps cluster_id
     # -> {field_name -> GoldenFieldRule}. When a cluster_id appears
@@ -828,7 +1107,10 @@ class GoldenRulesConfig(BaseModel):
     # cluster rules force the slow path that calls merge_field per
     # cluster). Spec:
     # docs/superpowers/specs/2026-05-22-golden-rules-intelligence-layer-2-design.md §3
-    cluster_overrides: dict[int, dict[str, GoldenFieldRule]] | None = None
+    cluster_overrides: dict[int, dict[str, GoldenFieldRule]] | None = Field(
+        default=None,
+        description="Per-cluster field rules that supersede the top-level rules for the named clusters only.",
+    )
 
     @model_validator(mode="after")
     def _validate_default(self) -> GoldenRulesConfig:

@@ -39,8 +39,8 @@ _Per-metric regression thresholds (percent). Falls back to ``default_pct``._
 
 | Field | Type | Default | Choices / notes |
 |---|---|---|---|
-| `default_pct` | float | `10.0` |  |
-| `per_metric` | dict[str, float] | `{}` |  |
+| `default_pct` | float | `10.0` | Percent change from the baseline that counts as a regression for any metric without a per-metric override. |
+| `per_metric` | dict[str, float] | `{}` | Per-metric percent thresholds keyed by metric name, overriding default_pct for those metrics. |
 
 ## Runtime options
 

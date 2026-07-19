@@ -250,12 +250,14 @@ def render_mcp_section(mcp_module: str) -> str:
     tools = getattr(mod, "TOOLS", None)
     if not tools:
         return ""
-    names = sorted(getattr(t, "name", str(t)) for t in tools)
     lines = ["## MCP tools", "",
-             f"{len(names)} MCP tool(s) exposed by `{mcp_module}` -- the programmatic / "
-             "agent surface. Each accepts a JSON input; the config-bearing tools "
-             "(`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.", "",
-             ", ".join(f"`{n}`" for n in names), ""]
+             f"{len(tools)} MCP tool(s) exposed by `{mcp_module}` -- the programmatic / "
+             "agent surface. Config-bearing tools take the same knobs as above.", "",
+             "| Tool | Description |", "|---|---|"]
+    for t in sorted(tools, key=lambda t: getattr(t, "name", "")):
+        desc = (getattr(t, "description", "") or "").strip().splitlines()
+        lines.append(f"| `{getattr(t, 'name', '?')}` | {_clean(desc[0] if desc else '')} |")
+    lines.append("")
     return "\n".join(lines)
 
 
