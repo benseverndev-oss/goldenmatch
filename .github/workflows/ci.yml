@@ -3231,6 +3231,34 @@ jobs:
       - name: Doc links + frontmatter (in-body cross-links resolve; MDX frontmatter valid)
         run: python scripts/check_docs_links.py
 
+  # Mintlify render gate (BLOCKING): the docs site's OWN parser/build, which the
+  # stdlib check_docs_links.py cannot replicate. `mint validate` builds the site in
+  # strict mode (any warning/error fails) -- it catches malformed MDX/JSX bodies
+  # (e.g. a bare `<->` that opens a JSX tag), invalid frontmatter, and docs.json
+  # schema errors. `mint broken-links --check-anchors` catches broken internal
+  # links AND anchor-slug mismatches (the anchor half is exactly what the Python
+  # check strips). Kept alongside docs_consistency so basic link/frontmatter
+  # coverage survives even if Mintlify's release CDN is unreachable.
+  docs_render:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+      - name: Install Mintlify CLI
+        run: npm i -g mint
+      - name: Validate docs build (strict; MDX/JSX + frontmatter + docs.json)
+        run: mint validate --disable-openapi
+      - name: Broken internal links + anchors
+        run: mint broken-links --check-anchors
+
   # Config-matrix drift gate (BLOCKING), one leg per suite package. Each package's
   # config-matrix.mdx generated block is rendered from its live surface (pydantic
   # tree / constructor kwargs / vocab constants / <PREFIX>_* env scan) by the
@@ -3528,6 +3556,7 @@ jobs:
       - version_consistency
       - readme_callouts
       - docs_consistency
+      - docs_render
       - ts_parity_freshness
       # api_parity + native_symbols guard cross-surface invariants (Python<->TS
       # tool/CLI/skill/scorer/transform parity; native symbol registration) but
