@@ -48,6 +48,16 @@ SELECT goldenmatch_match_tables('prospects', 'customers', '{"fuzzy": {"name": 0.
 | `goldenmatch_dedupe_pairs(table, config)` | Dedupe -> table of `(id_a, id_b, score)` |
 | `goldenmatch_dedupe_clusters(table, config)` | Dedupe -> table of `(cluster_id, record_id, cluster_size)` |
 
+> **How table ops move data.** The table operations (and `gm_run`) read the
+> input via SPI as a JSON array (`row_to_json`) and hand that string to the
+> embedded engine — a **JSON handoff, not a zero-copy Arrow interchange**. So
+> running in-database saves the client↔DB network hop, but not the row
+> serialization; on a wide table the `row_to_json` pass is itself a cost. An
+> Arrow-native table read (SPI → Arrow, engine ingests the RecordBatch) is a
+> tracked follow-up (#1883). The scalar/native-direct functions
+> (`goldenmatch_score`, the `goldenmatch_*_pairs` kernels, ...) do **not** go
+> through this path.
+
 ### Scalar functions
 
 | Function | Description |

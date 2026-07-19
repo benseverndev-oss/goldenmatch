@@ -380,10 +380,29 @@ api_parity:
   - 'packages/typescript/*/src/node/mcp/**'
   - 'packages/typescript/*/src/node/a2a/**'
   - 'packages/typescript/*/src/cli.ts'
+  # scorers/transforms surfaces: the VALID_SCORERS / VALID_SIMPLE_TRANSFORMS
+  # (Python) and VALID_SCORERS / VALID_TRANSFORMS (TS) declarations. Without
+  # these the gate can't see a scorer/transform added on one side only.
+  - 'packages/python/*/*/config/schemas.py'
+  - 'packages/typescript/*/src/core/types.ts'
   - 'parity/**'
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'
   - 'scripts/check_api_parity.py'
+# Config-matrix drift gate (scripts/gen_config_matrix.py --check). The generated
+# block of config-matrix.mdx is rendered from the pydantic schema + VALID_*
+# vocabularies + the GOLDENMATCH_* env scan, so it must re-check whenever any of
+# those move. The env scan reads the whole goldenmatch python + rust source, so
+# any .py/.rs change there can add/remove a knob -> re-run the gate.
+config_matrix:
+  - 'docs-site/goldenmatch/config-matrix.mdx'
+  - 'packages/python/goldenmatch/goldenmatch/**/*.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/config_matrix/**'
+  - 'packages/python/goldenmatch/scripts/gen_config_matrix.py'
+  - 'packages/python/goldenmatch/tests/test_config_matrix.py'
+  - 'packages/rust/extensions/**/*.rs'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the
@@ -748,4 +767,17 @@ pyright_slice:
   - 'packages/python/goldenmatch/goldenmatch/core/indicators.py'
   - 'packages/python/goldenmatch/goldenmatch/core/complexity_profile.py'
   - 'packages/python/goldenmatch/goldenmatch/core/scorer.py'
+  # The trigger filter must mirror pyrightconfig.json's `include` -- a file that
+  # is type-checked but NOT a trigger lets a strict-type regression land
+  # undetected (a pipeline.py-only change did exactly that; the errors only
+  # surfaced when an unrelated PR touched scorer.py). Keep these in lockstep.
+  - 'packages/python/goldenmatch/goldenmatch/core/pipeline.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/blocker.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/cluster.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/profiler.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/learned_blocking.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/profile_emitter.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/_profile_helpers.py'
+  - 'packages/python/goldenmatch/goldenmatch/_api.py'
+  - 'packages/python/goldenmatch/goldenmatch/utils/transforms.py'
   - 'packages/python/goldenmatch/goldenmatch/config/**'

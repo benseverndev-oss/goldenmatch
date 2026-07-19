@@ -90,6 +90,7 @@
                 "group": "API reference",
                 "pages": [
                   "goldenmatch/configuration",
+                  "goldenmatch/config-matrix",
                   "goldenmatch/tuning",
                   "goldenmatch/config-linter",
                   "goldenmatch/api-quick-reference"

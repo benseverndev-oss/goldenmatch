@@ -383,9 +383,9 @@ def _score_probabilistic_matchkey(
     matched_pairs: set,
     all_pairs: list,
     review_pairs: list,
-    target_ids: Any = None,
+    target_ids: set[int] | None = None,
     across_files_only: bool = False,
-    source_lookup: dict | None = None,
+    source_lookup: dict[int, str] | None = None,
     bench_dump_dir: str | None = None,
     bench_candidate_pairs: set[tuple[int, int]] | None = None,
     bench_emitted_pairs: set[tuple[int, int]] | None = None,
@@ -425,15 +425,20 @@ def _score_probabilistic_matchkey(
     if config.blocking is None:
         return
 
-    def _across_files_filter(
-        pairs: list[tuple[int, int, float]],
-    ) -> list[tuple[int, int, float]]:
-        if not across_files_only or source_lookup is None:
+    def _across_files_filter(pairs: list) -> list:
+        if not across_files_only:
             return pairs
+        _sl = source_lookup or {}
         return [
             (a, b, s) for a, b, s in pairs
-            if source_lookup.get(a) != source_lookup.get(b)
+            if _sl.get(a) != _sl.get(b)
         ]
+
+    # The probabilistic scoring body always runs with blocking configured (FS
+    # without blocking is full O(n^2), which the pipeline never routes here);
+    # narrow the Optional for the build_blocks / score_buckets / external-blocks
+    # calls below.
+    assert config.blocking is not None, "probabilistic scoring requires blocking"
 
     # Resolve the bucket route BEFORE building blocks: skip build_blocks entirely
     # when the blocks feed nothing (bucket route + preloaded model + no bench
@@ -558,6 +563,9 @@ def _score_probabilistic_matchkey(
         for a, b, _s in pairs:
             matched_pairs.add((min(a, b), max(a, b)))
         if bench_dump_dir:
+            # bench_dump_dir set => the caller always supplies both bench sets.
+            assert bench_candidate_pairs is not None
+            assert bench_emitted_pairs is not None
             # Candidate ceiling: enumerate within-block pairs from the SAME
             # blocks score_buckets consumes (blocking is backend-independent);
             # `pairs` is already the emitted set. The dedupe caller always passes
@@ -591,6 +599,7 @@ def _score_probabilistic_matchkey(
     # Bench-dump path: per-block scoring for exact candidate/emitted accounting
     # (the batched path doesn't expose per-block candidates).
     if bench_dump_dir:
+        # bench_dump_dir set => the caller always supplies both bench sets.
         assert bench_candidate_pairs is not None
         assert bench_emitted_pairs is not None
         block_scorer = probabilistic_block_scorer(scoring_mk, em_result)
@@ -2353,7 +2362,9 @@ def _run_fused_fs_match_short_circuit(
     # short-circuit exists for).
     _need_blocks = not fs_model_preloaded(mk)
     blocks = (
-        list(build_blocks(collected_df.lazy(), config.blocking)) if _need_blocks else []
+        list(build_blocks(collected_df.lazy(), config.blocking))
+        if _need_blocks and config.blocking is not None
+        else []
     )
     blocking_fields = (
         collect_blocking_fields(config.blocking) if config.blocking else []

@@ -1,0 +1,123 @@
+name: Cut goldenmatch release
+
+# Manual release cutter for the goldenmatch Python package (PyPI + a SIGNED
+# GitHub Release). Companion to cut-native-release.yml.
+#
+# Why this exists: publish-goldenmatch.yml OWNS the release. Immutable releases
+# (repo setting) seal a release's assets at publish time, so the signed
+# wheel/sdist/sigstore bundles have to be attached while the release is still a
+# DRAFT and only then published. Its documented SOP is "push a bare vX.Y.Z tag",
+# but:
+#   - the managed dev sandbox can't push tags (HTTP 403), and
+#   - hand-creating the release with `gh release create` PUBLISHES an immutable
+#     release immediately, which PERMANENTLY tombstones the tag name -- deleting
+#     it does NOT free it, so the version can never get a proper signed Release
+#     (the v3.5.0 incident, mirroring the v2.1.0 one in ADR 0019).
+#
+# A runner's GITHUB_TOKEN has `contents: write` and can push the tag. This
+# workflow pushes the bare `v<version>` tag, then CALLS publish-goldenmatch.yml
+# as a reusable workflow in the SAME run. The explicit call is required because a
+# GITHUB_TOKEN tag push does NOT re-trigger publish-goldenmatch's `push: tags`
+# event. Because the tag already exists when publish runs, its final
+# `gh release edit --draft=false` only flips the draft flag -- it never has to
+# create the tag ref (the step that the ruleset/immutability blocks).
+#
+# Preconditions: bump goldenmatch to <version> on main FIRST
+# (pyproject.toml + goldenmatch/__init__.py + server.json, all in lockstep) and
+# land the `## [<version>]` CHANGELOG section (publish reads notes from it).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version WITHOUT the leading v (must equal main's goldenmatch version), e.g. 3.5.0"
+        required: true
+        type: string
+
+# Granted here so the reusable publish-goldenmatch.yml job (called below) has the
+# token scopes it needs: id-token for cosign keyless + PyPI OIDC, attestations
+# for build provenance, contents to push the tag + own the Release. A reusable
+# workflow cannot exceed its caller's grant, so these must be set at this level.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tagstep.outputs.tag }}
+    # Route the dispatch input through env so it is a shell variable, never
+    # interpolated into a run script (avoids actionlint expression-injection).
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Guard - input version matches the tree (lockstep) and tag is new
+        run: |
+          set -euo pipefail
+          base=packages/python/goldenmatch
+          py=$(grep -m1 -E '^version'      "$base/pyproject.toml"            | sed -E 's/.*"([^"]+)".*/\1/')
+          init=$(grep -m1 -E '^__version__' "$base/goldenmatch/__init__.py"  | sed -E 's/.*"([^"]+)".*/\1/')
+          srv=$(grep -m1 -E '"version"'     "$base/server.json"              | sed -E 's/.*"version" *: *"([^"]+)".*/\1/')
+          echo "requested=$VERSION  pyproject=$py  __init__=$init  server.json=$srv"
+          for pair in "pyproject:$py" "__init__:$init" "server.json:$srv"; do
+            name=${pair%%:*}; got=${pair#*:}
+            if [ "$got" != "$VERSION" ]; then
+              echo "::error::version mismatch -- $name is $got, expected $VERSION. Bump goldenmatch to $VERSION on main first (all three in lockstep)."
+              exit 1
+            fi
+          done
+          tag="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::tag $tag already exists on origin -- nothing to cut"
+            exit 1
+          fi
+
+      - name: Configure tag signing (SSH; optional)
+        id: sign
+        env:
+          SIGNING_KEY: ${{ secrets.NATIVE_TAG_SSH_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SIGNING_KEY:-}" ]; then
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SIGNING_KEY" > ~/.ssh/tagsign
+            chmod 600 ~/.ssh/tagsign
+            ssh-keygen -y -f ~/.ssh/tagsign > ~/.ssh/tagsign.pub
+            git config --global gpg.format ssh
+            git config --global user.signingkey ~/.ssh/tagsign
+            echo "flag=-s" >> "$GITHUB_OUTPUT"
+            echo "Tag signing enabled (SSH key from NATIVE_TAG_SSH_SIGNING_KEY)."
+          else
+            echo "::warning::NATIVE_TAG_SSH_SIGNING_KEY not set -- creating an UNSIGNED annotated tag"
+            echo "flag=-a" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create + push the bare v-tag
+        id: tagstep
+        env:
+          FLAG: ${{ steps.sign.outputs.flag }}
+        run: |
+          set -euo pipefail
+          git config --global user.name  "goldenmatch release"
+          git config --global user.email "actions@github.com"
+          tag="v$VERSION"
+          git tag "$FLAG" "$tag" -m "goldenmatch $VERSION"
+          git push origin "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  # Build + PyPI publish + cosign sign + provenance + create the DRAFT release
+  # with signed assets + publish it -- all in this same run against the tag the
+  # cut job just pushed (so publish never needs to create the tag ref).
+  publish:
+    needs: cut
+    uses: ./.github/workflows/publish-goldenmatch.yml
+    with:
+      tag: ${{ needs.cut.outputs.tag }}
+      ref: ${{ needs.cut.outputs.tag }}
+    secrets: inherit

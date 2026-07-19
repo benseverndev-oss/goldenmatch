@@ -4,6 +4,9 @@ export function autoconfig_decide_plan(input_json: string): string;
 export function autoconfig_extrapolate_pair_count(input_json: string): string;
 export function autoconfig_sparse_match_floor(input_json: string): string;
 export function autoconfig_exact_matchkey_floor(input_json: string): string;
+export function autoconfig_classify_by_name(input_json: string): string;
+export function autoconfig_assemble_strong_id_union(cols_json: string): string;
+export function autoconfig_finalize_strong_id_union(input_json: string): string;
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 export function initSync(
   module: { module: SyncInitInput } | SyncInitInput,

@@ -22,6 +22,8 @@ import {
   makeGoldenRulesConfig,
 } from "./types.js";
 import { profileRows, type ColumnProfile, type DatasetProfile } from "./profiler.js";
+import type { UnionColumn } from "./blockingUnion.js";
+import { tryStrongIdUnion } from "./blockingUnionMeasure.js";
 import { detectDomain } from "./domain.js";
 import { preflight, ConfigValidationError } from "./autoconfigVerify.js";
 import { isAvailable as givenNamesAvailable } from "./refdata/givenNames.js";
@@ -387,7 +389,13 @@ function buildWeightedMatchkey(
   });
 }
 
-function buildBlocking(profiles: readonly ColumnProfile[]): BlockingConfig {
+/** Default block-size ceiling for scale-safety, matching TS blocking configs. */
+const BLOCKING_MAX_SAFE_BLOCK = 1000;
+
+function buildBlocking(
+  profiles: readonly ColumnProfile[],
+  rows: readonly Row[] = [],
+): BlockingConfig {
   // Python parity (Gap #1): exact-pool gates (null + cardinality) apply ONLY
   // to exact candidates, NOT to name columns. Python DEFAULT_BLOCKING_MAX_RATIO=0.5.
   const MAX_NULL = 0.2;
@@ -423,6 +431,35 @@ function buildBlocking(profiles: readonly ColumnProfile[]): BlockingConfig {
       maxBlockSize: 1000,
       skipOversized: true,
     });
+  }
+
+  // #1207 (via #1317): per-identifier blocking UNION. Reached only when no single
+  // exact key cleared the null ceiling (exactEligible empty) — the null-sparse
+  // multi-source strong-id shape where a name-only fallback silently loses recall
+  // vs Python. Prefer a UNION of one pass per strong id + name+geo, whose
+  // OR-coverage restores the population the single key drops. Emitted before the
+  // name fallback so it wins; falls through unchanged when it can't reach the
+  // coverage target or < 2 passes survive. Decision lives in the shared core
+  // (`blockingUnion.ts`); the host measures coverage + per-pass scale-safety
+  // (`blockingUnionMeasure.ts`). Needs the rows (aggregates alone can't carry
+  // OR-coverage), so this only fires when `buildBlocking` was given rows.
+  if (rows.length > 0) {
+    const unionCols: UnionColumn[] = profiles.map((p) => ({
+      name: p.name,
+      colType: p.inferredType,
+      nullRate: p.nullRate,
+      cardinalityRatio: p.cardinalityRatio,
+    }));
+    const union = tryStrongIdUnion(unionCols, rows, BLOCKING_MAX_SAFE_BLOCK);
+    if (union !== null) {
+      return makeBlockingConfig({
+        strategy: "multi_pass",
+        keys: union.keys.map((k) => ({ fields: [...k.fields], transforms: [...k.transforms] })),
+        passes: union.passes.map((p) => ({ fields: [...p.fields], transforms: [...p.transforms] })),
+        maxBlockSize: union.maxBlockSize,
+        skipOversized: true,
+      });
+    }
   }
 
   if (nameCols.length > 0) {
@@ -532,7 +569,7 @@ export function autoConfigureRows(
   const matchkeys: MatchkeyConfig[] = [...exactKeys];
   if (weighted) matchkeys.push(weighted);
 
-  const blocking = buildBlocking(profiles);
+  const blocking = buildBlocking(profiles, rows);
   const goldenRules = makeGoldenRulesConfig({ defaultStrategy: "most_complete" });
 
   const config = makeConfig({

@@ -110,26 +110,114 @@ class HealOutcome:
 _HEAL_STEP_CAP = 5
 
 
-def heal(df, config, *, step_cap: int = _HEAL_STEP_CAP) -> HealOutcome:
+def _resolve_step_cap(step_cap: int | None) -> int:
+    """Resolve the heal iteration cap (#1404): explicit kwarg → env
+    ``GOLDENMATCH_HEAL_STEP_CAP`` → the ``_HEAL_STEP_CAP`` default. Each step is a
+    full dedupe plus up to ``max_verify`` verification re-runs, so this is the
+    coarsest cost lever. Clamped to >= 1; invalid env falls back to the default."""
+    if step_cap is None:
+        raw = os.environ.get("GOLDENMATCH_HEAL_STEP_CAP", "").strip()
+        if not raw:
+            return _HEAL_STEP_CAP
+        try:
+            step_cap = int(raw)
+        except ValueError:
+            return _HEAL_STEP_CAP
+    return max(1, step_cap)
+
+
+def _resolve_min_health_gain(min_health_gain: float | None) -> float | None:
+    """Resolve the marginal-gain early-stop threshold (#1404): explicit kwarg →
+    env ``GOLDENMATCH_HEAL_MIN_HEALTH_GAIN`` → ``None`` (disabled, the default).
+
+    When a float is resolved, the heal loop stops once an iteration's cluster
+    health fails to improve on the previous iteration's by at least this much --
+    i.e. the healer stops when it is no longer helping, instead of always
+    exhausting ``step_cap``. Left off by default so the shipped convergence is
+    byte-identical; a value of ``0.0`` stops on the first non-improving step."""
+    if min_health_gain is not None:
+        return min_health_gain
+    raw = os.environ.get("GOLDENMATCH_HEAL_MIN_HEALTH_GAIN", "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _safe_cluster_health(result, df) -> float | None:
+    """Cluster-health proxy for the heal early-stop, fail-open. Returns ``None``
+    (never triggers a stop) when the result has no clusters or anything raises --
+    so callers/tests without a real DedupeResult keep the default convergence."""
+    try:
+        clusters = getattr(result, "clusters", None)
+        if not clusters:
+            return None
+        from goldenmatch.core.suggest.health import suggestion_health_from_clusters
+        return suggestion_health_from_clusters(clusters, df.height)
+    except Exception:
+        return None
+
+
+def heal(
+    df,
+    config,
+    *,
+    step_cap: int | None = None,
+    max_verify: int | None = None,
+    min_health_gain: float | None = None,
+) -> HealOutcome:
     """Bounded verified heal loop: re-run -> verified suggest -> apply top -> repeat
     until the healer goes quiet (or step_cap, or a repeated patch id). Returns the
-    healed config, the applied trail (auditable), and the last DedupeResult."""
+    healed config, the applied trail (auditable), and the last DedupeResult.
+
+    Cost bounds (#1404):
+    - ``step_cap`` (env ``GOLDENMATCH_HEAL_STEP_CAP``) caps the outer iterations.
+    - ``max_verify`` (env ``GOLDENMATCH_SUGGEST_MAX_VERIFY``) caps the per-step
+      verification fan-out. The healer applies only the TOP surviving suggestion,
+      so ``max_verify=1`` (verify just the top candidate) is the cheapest mode.
+    - ``min_health_gain`` (env ``GOLDENMATCH_HEAL_MIN_HEALTH_GAIN``) early-stops
+      when marginal cluster-health gain flattens; ``None`` (default) disables it.
+    - The expensive goldencheck variant scan is memoized for the whole loop via
+      ``variant_risk_cache()`` (runs once over the unchanged frame, not per step).
+    """
     from goldenmatch._api import dedupe_df  # deferred
-    from goldenmatch.core.suggest.adapter import suggest_from_result  # deferred
+    from goldenmatch.core.suggest.adapter import (  # deferred
+        suggest_from_result,
+        variant_risk_cache,
+    )
     from goldenmatch.core.suggest.apply import apply_suggestion  # deferred
+
+    step_cap = _resolve_step_cap(step_cap)
+    min_health_gain = _resolve_min_health_gain(min_health_gain)
 
     trail = []
     applied_ids = set()
     last_result = None
-    for _ in range(step_cap):
-        last_result = dedupe_df(df, config=config)
-        sugs = suggest_from_result(last_result, df, verify=True)
-        if not sugs:
-            break
-        top = sugs[0]
-        if top.id in applied_ids:
-            break
-        applied_ids.add(top.id)
-        config = apply_suggestion(config, top)
-        trail.append(top)
+    prev_health: float | None = None
+    with variant_risk_cache():
+        for _ in range(step_cap):
+            last_result = dedupe_df(df, config=config)
+            if min_health_gain is not None:
+                cur_health = _safe_cluster_health(last_result, df)
+                if (
+                    cur_health is not None
+                    and prev_health is not None
+                    and cur_health - prev_health < min_health_gain
+                ):
+                    break  # marginal cluster-health gain flattened -> stop early
+                if cur_health is not None:
+                    prev_health = cur_health
+            sugs = suggest_from_result(
+                last_result, df, verify=True, max_verify=max_verify
+            )
+            if not sugs:
+                break
+            top = sugs[0]
+            if top.id in applied_ids:
+                break
+            applied_ids.add(top.id)
+            config = apply_suggestion(config, top)
+            trail.append(top)
     return HealOutcome(config=config, trail=trail, result=last_result)
