@@ -17,6 +17,8 @@ class PackageSpec:
     src_dirs: list[str]
     schema_roots: list[str] = field(default_factory=list)
     constructors: list[str] = field(default_factory=list)
+    cli_module: str | None = None
+    mcp_module: str | None = None
     vocabs: list[tuple[str, str, str]] = field(default_factory=list)
     vocab_warmup: list[str] = field(default_factory=list)
     tuning_link: str | None = None
@@ -33,6 +35,8 @@ REGISTRY: dict[str, PackageSpec] = {
         env_prefix="GOLDENMATCH_",
         src_dirs=["packages/python/goldenmatch/goldenmatch", _RUST],
         schema_roots=["goldenmatch.config.schemas:GoldenMatchConfig"],
+        cli_module="goldenmatch.cli.main",
+        mcp_module="goldenmatch.mcp.server",
         vocabs=[
             ("Scorers", "goldenmatch.config.schemas:VALID_SCORERS", "`MatchkeyField.scorer` / `NegativeEvidenceField.scorer`"),
             ("Simple transforms", "goldenmatch.config.schemas:VALID_SIMPLE_TRANSFORMS", "`transforms` chains"),
@@ -40,6 +44,9 @@ REGISTRY: dict[str, PackageSpec] = {
             ("Group survivorship strategies", "goldenmatch.config.schemas:_GROUP_STRATEGIES", "`GoldenGroupRule.strategy`"),
             ("Standardizers", "goldenmatch.config.schemas:VALID_STANDARDIZERS", "`StandardizationConfig.rules`"),
             ("Matchkey types", "goldenmatch.config.schemas:_VALID_MK_TYPES", "`MatchkeyConfig.type`"),
+            ("Backends", "goldenmatch.core.execution_plan:BackendName", "`GoldenMatchConfig.backend` / `--backend`"),
+            ("Clustering strategies", "goldenmatch.core.execution_plan:ClusteringStrategy", "planner cluster route"),
+            ("Planning efforts", "goldenmatch.core.autoconfig_controller:_PLANNING_EFFORTS", "`planning_effort`"),
         ],
         tuning_link="/goldenmatch/tuning",
     ),
@@ -50,8 +57,11 @@ REGISTRY: dict[str, PackageSpec] = {
         env_prefix="GOLDENCHECK_",
         src_dirs=["packages/python/goldencheck/goldencheck", _RUST],
         schema_roots=["goldencheck.config.schema:GoldenCheckConfig"],
+        cli_module="goldencheck.cli.main",
+        mcp_module="goldencheck.mcp.server",
         vocabs=[
             ("Finding severity", "goldencheck.models.finding:Severity", "`Settings.severity_threshold` / `fail_on`"),
+            ("Denial-constraint operators", "goldencheck.denial.models:Op", "mined denial constraints"),
         ],
     ),
     "goldenflow": PackageSpec(
@@ -61,6 +71,8 @@ REGISTRY: dict[str, PackageSpec] = {
         env_prefix="GOLDENFLOW_",
         src_dirs=["packages/python/goldenflow/goldenflow", _RUST],
         schema_roots=["goldenflow.config.schema:GoldenFlowConfig"],
+        cli_module="goldenflow.cli.main",
+        mcp_module="goldenflow.mcp.server",
         vocabs=[
             ("Transform ops", "goldenflow.transforms:list_transforms", "`TransformSpec.ops`"),
             ("Domain packs", "goldenflow.domains:_DOMAINS", "`learn_config(domain=...)`"),
@@ -75,6 +87,8 @@ REGISTRY: dict[str, PackageSpec] = {
         env_prefix="GOLDENPIPE_",
         src_dirs=["packages/python/goldenpipe/goldenpipe", _RUST],
         schema_roots=["goldenpipe.models.config:PipelineConfig"],
+        cli_module="goldenpipe.cli.main",
+        mcp_module="goldenpipe.mcp.server",
         vocabs=[
             ("Stage status", "goldenpipe.models.context:StageStatus", "per-stage result status"),
             ("Pipeline status", "goldenpipe.models.context:PipeStatus", "run result status"),
@@ -90,6 +104,8 @@ REGISTRY: dict[str, PackageSpec] = {
         env_prefix="INFERMAP_",
         src_dirs=["packages/python/infermap/infermap", _RUST],
         constructors=["infermap.engine:MapEngine"],
+        cli_module="infermap.cli",
+        mcp_module="infermap.mcp.server",
         vocabs=[
             ("Data types", "infermap.types:VALID_DTYPES", "`FieldInfo.dtype`"),
             ("Semantic pattern types", "infermap.scorers.pattern_type:SEMANTIC_TYPES", "pattern-type detection"),
@@ -103,6 +119,7 @@ REGISTRY: dict[str, PackageSpec] = {
         src_dirs=["packages/python/goldenanalysis/goldenanalysis", _RUST],
         schema_roots=["goldenanalysis.models.policy:RegressionPolicy"],
         constructors=["goldenanalysis._api:analyze"],
+        cli_module="goldenanalysis.cli.main",
         vocabs=[
             ("Metric direction", "goldenanalysis.models.report:Direction", "`Metric.direction`"),
             ("Regression baseline", "goldenanalysis.models.policy:Baseline", "`--baseline`"),

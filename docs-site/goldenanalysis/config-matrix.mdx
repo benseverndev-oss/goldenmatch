@@ -56,6 +56,30 @@ Config passed as call keyword arguments (this package has no single config model
 | `run_id` | str \\| None | `None` |  |
 | `generated_at` | datetime \\| None | `None` |  |
 
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `mcp-serve` | `--transport` | text | `'stdio'` | stdio \| http |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` |  |
+| `mcp-serve` | `--port` | integer | `8300` | HTTP port (A2A convention: Analysis = 8300). |
+| `regressions` | `--dataset` | text | **required** |  |
+| `regressions` | `--history` | path | **required** | ReportHistory path (.jsonl or .db). |
+| `regressions` | `--baseline` | text | `'rolling_median'` |  |
+| `regressions` | `--window` | integer | `7` |  |
+| `regressions` | `--policy` | text | `None` | Per-metric gates: JSON or "key=pct,key=pct". |
+| `regressions` | `--fail-on-regression` | boolean | `False` | Exit 1 if any regression is flagged (CI gate). |
+| `report` | `input` | path | **required** | A .parquet/.csv frame, or a .json AnalysisReport to re-render. |
+| `report` | `--analyzers` | text | `'all'` | Comma-separated analyzer names, or 'all'. |
+| `report` | `--format` | text | `'markdown'` | markdown \| json |
+| `report` | `--out` | path | `None` | Write the report here instead of (also) printing. |
+| `trend` | `--metric` | text | **required** | Metric key to trend, e.g. cluster.singleton_ratio. |
+| `trend` | `--dataset` | text | **required** |  |
+| `trend` | `--history` | path | **required** | ReportHistory path (.jsonl or .db). |
+| `trend` | `--last` | integer | `30` |  |
+
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.

@@ -81,6 +81,106 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 | `column` | str | **required** |  |
 | `check` | str | **required** |  |
 
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `agent-serve` | `--port` | integer | `8100` | Port for the A2A server |
+| `baseline` | `file` | path | **required** | CSV/Parquet/Excel file to profile |
+| `baseline` | `--output` | path | `None` | Output YAML path |
+| `baseline` | `--skip` | text | `[]` | Techniques to skip |
+| `baseline` | `--update` | boolean | `False` | Update existing baseline |
+| `demo` | `--no-tui` | boolean | `False` | Print results to stdout. |
+| `demo` | `--domain` | text | `None` | Domain pack to apply. |
+| `denial-constraints` | `file` | path | **required** | Data file to mine for denial constraints. |
+| `denial-constraints` | `--min-confidence` | float | `None` | Fraction of rows/pairs a DC must hold for (default: engine default). |
+| `denial-constraints` | `--sample-size` | integer | `None` | Bound the cross-tuple (pairwise) pass. |
+| `denial-constraints` | `--max-constraints` | integer | `None` | Cap the ranked number of DCs reported. |
+| `diff` | `file` | path | **required** | Data file to compare. |
+| `diff` | `file2` | path | `None` | Second file (omit to compare against git). |
+| `diff` | `--ref` | text | `None` | Git ref to compare against (default: HEAD). |
+| `diff` | `--json` | boolean | `False` | Output as JSON. |
+| `evaluate` | `file` | path | **required** | Data file to scan. |
+| `evaluate` | `--ground-truth` | path | **required** | JSON file with expected findings. |
+| `evaluate` | `--min-f1` | float | `0.0` | Minimum F1 score; exit 1 if below. |
+| `evaluate` | `--json` | boolean | `False` | Output results as JSON. |
+| `fix` | `file` | path | **required** | Data file to fix. |
+| `fix` | `--mode` | text | `'safe'` | Fix mode: safe, moderate, or aggressive. |
+| `fix` | `--output` | path | `None` | Output file path. |
+| `fix` | `--dry-run` | boolean | `False` | Show fixes without writing. |
+| `fix` | `--force` | boolean | `False` | Required for aggressive mode. |
+| `history` | `file` | path | `None` | Filter history by file. |
+| `history` | `--last` | integer | `None` | Show last N scans. |
+| `history` | `--json` | boolean | `False` | Output as JSON. |
+| `init` | `file` | path | **required** | Data file to scan for initial rules. |
+| `init` | `--yes` | boolean | `False` | Accept defaults, skip interactive prompts. |
+| `learn` | `file` | path | **required** | Data file to analyze. |
+| `learn` | `--output` | path | `None` | Output path for rules (default: goldencheck_rules.json). |
+| `learn` | `--llm-provider` | text | `'anthropic'` | LLM provider: anthropic or openai. |
+| `mcp-serve` | `--transport` | text | `'stdio'` | Transport: 'stdio' or 'http' |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
+| `mcp-serve` | `--port` | integer | `8100` | Port for HTTP transport |
+| `refs` | `child` | path | **required** | Child/fact file holding the foreign key(s). |
+| `refs` | `parent` | path | **required** | Parent/dimension file holding the key(s). |
+| `refs` | `--on` | text | `None` | FK mapping 'child_col=parent_col' (repeatable). Omit to auto-detect same-named parent-key columns. |
+| `refs` | `--json` | boolean | `False` | Output results as JSON. |
+| `refs` | `--fail-on` | text | `'error'` | CI exit threshold: error/warning/info. |
+| `review` | `file` | path | **required** | Data file to profile and validate. |
+| `review` | `--config` | path | `None` | Path to goldencheck.yml. |
+| `review` | `--no-tui` | boolean | `False` | Disable TUI and print Rich output instead. |
+| `review` | `--json` | boolean | `False` | Output results as JSON. |
+| `review` | `--llm-boost` | boolean | `False` | Enable LLM enhancement pass. |
+| `review` | `--llm-provider` | text | `'anthropic'` | LLM provider: anthropic or openai. |
+| `review` | `--domain` | text | `None` | Domain pack: healthcare, finance, ecommerce. |
+| `scan` | `files` | path | **required** | Data file(s) to profile. |
+| `scan` | `--no-tui` | boolean | `False` | Disable TUI and print Rich output instead. |
+| `scan` | `--json` | boolean | `False` | Output results as JSON. |
+| `scan` | `--llm-boost` | boolean | `False` | Enable LLM enhancement pass. |
+| `scan` | `--llm-provider` | text | `'anthropic'` | LLM provider: anthropic or openai. |
+| `scan` | `--domain` | text | `None` | Domain pack: healthcare, finance, ecommerce. |
+| `scan` | `--smart` | boolean | `False` | Auto-triage: pin high-confidence, dismiss low. |
+| `scan` | `--guided` | boolean | `False` | Walk through findings one at a time. |
+| `scan` | `--no-history` | boolean | `False` | Don't record this scan in history. |
+| `scan` | `--webhook` | text | `None` | URL to POST findings to. |
+| `scan` | `--notify-on` | text | `'grade-drop'` | Trigger: grade-drop, any-error, any-warning. |
+| `scan` | `--html` | path | `None` | Generate HTML report at this path. |
+| `scan` | `--baseline` | path | `None` | Path to baseline YAML |
+| `scan` | `--no-baseline` | boolean | `False` | Ignore baseline files |
+| `scan` | `--deep` | boolean | `False` | Profile the full dataset (skip the 100K sample cap). |
+| `scan` | `--denial` | boolean | `False` | Also mine denial constraints (opt-in; slower). |
+| `scan-db` | `connection` | text | **required** | Database connection string (postgres://, snowflake://, etc.) |
+| `scan-db` | `--table` | text | `None` | Table name to scan. |
+| `scan-db` | `--query` | text | `None` | Custom SQL query. |
+| `scan-db` | `--domain` | text | `None` | Domain pack. |
+| `scan-db` | `--json` | boolean | `False` | Output as JSON. |
+| `scan-db` | `--html` | path | `None` | Generate HTML report. |
+| `scan-db` | `--sample-size` | integer | `100000` | Max rows to fetch. |
+| `schedule` | `files` | path | **required** | Data files to scan on schedule. |
+| `schedule` | `--interval` | text | `'daily'` | Interval: hourly, daily, weekly, 5min, 15min, 30min, or seconds. |
+| `schedule` | `--domain` | text | `None` | Domain pack. |
+| `schedule` | `--webhook` | text | `None` | Webhook URL for notifications. |
+| `schedule` | `--notify-on` | text | `'grade-drop'` | Trigger: grade-drop, any-error, any-warning. |
+| `schedule` | `--json` | boolean | `False` | JSON output per scan. |
+| `serve` | `--host` | text | `'0.0.0.0'` | Host to bind to. |
+| `serve` | `--port` | integer | `8000` | Port to listen on. |
+| `validate` | `file` | path | **required** | Data file to validate. |
+| `validate` | `--config` | path | `None` | Path to goldencheck.yml. |
+| `validate` | `--no-tui` | boolean | `False` | Disable TUI and print Rich output instead. |
+| `validate` | `--json` | boolean | `False` | Output results as JSON. |
+| `watch` | `directory` | path | **required** | Directory to watch. |
+| `watch` | `--interval` | integer | `60` | Poll interval in seconds. |
+| `watch` | `--pattern` | text | `None` | Glob pattern (e.g., '*.csv'). |
+| `watch` | `--exit-on` | text | `None` | Exit on severity: error or warning. |
+| `watch` | `--json` | boolean | `False` | JSON output per scan. |
+
+## MCP tools
+
+19 MCP tool(s) exposed by `goldencheck.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+
+`analyze_data`, `approve_reject`, `auto_configure`, `compare_domains`, `explain_column`, `explain_finding`, `get_column_detail`, `get_domain_info`, `health_score`, `install_domain`, `list_checks`, `list_domains`, `pipeline_handoff`, `profile`, `review_queue`, `review_stats`, `scan`, `suggest_fix`, `validate`
+
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.
@@ -88,6 +188,7 @@ Allowed values for the `str`-typed / registry-backed fields above.
 | Vocabulary | Source | Applies to | Values |
 |---|---|---|---|
 | Finding severity | `Severity` | `Settings.severity_threshold` / `fail_on` | `ERROR`, `INFO`, `WARNING` |
+| Denial-constraint operators | `Op` | mined denial constraints | `&lt;`, `=`, `>`, `≠`, `≤`, `≥` |
 
 ## Environment variables (index)
 

@@ -86,6 +86,60 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 | `target` | str \| list[str] | **required** |  |
 | `transform` | str \| list[str] \| None | `None` |  |
 
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `agent-serve` | `--port` | integer | `8150` |  |
+| `demo` | `--output-dir` | path | `WindowsPath('.')` |  |
+| `diff` | `before` | path | **required** | Before file |
+| `diff` | `after` | path | **required** | After file |
+| `history` | `--limit` | integer | `20` | Number of recent runs to show |
+| `init` | `data` | path | `None` | Data file to profile |
+| `init` | `--output` | path | `'goldenflow.yaml'` |  |
+| `interactive` | `path` | path | `None` | Input data file |
+| `learn` | `path` | path | **required** | Input data file |
+| `learn` | `--output` | path | `'goldenflow.yaml'` | Output config path |
+| `map` | `--source` | path | **required** | Source data file |
+| `map` | `--target` | path | **required** | Target data file or schema |
+| `map` | `--config` | path | `None` | Mapping config |
+| `map` | `--output` | path | `None` | Save mapping config |
+| `mcp-serve` | `--transport` | text | `'stdio'` | Transport: stdio or http |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
+| `mcp-serve` | `--port` | integer | `8150` | Port for HTTP transport |
+| `profile` | `path` | path | **required** | Input data file |
+| `schedule` | `path` | path | **required** | Data file to transform |
+| `schedule` | `--every` | text | `'1h'` | Interval (e.g., 5m, 1h, 30s) |
+| `schedule` | `--config` | path | `None` |  |
+| `schedule` | `--output-dir` | path | `None` |  |
+| `serve` | `--host` | text | `'0.0.0.0'` |  |
+| `serve` | `--port` | integer | `8000` |  |
+| `stream` | `path` | path | **required** | Input data file |
+| `stream` | `--chunk-size` | integer | `10000` | Rows per batch |
+| `stream` | `--config` | path | `None` |  |
+| `stream` | `--output-dir` | path | `None` |  |
+| `transform` | `path` | path | **required** | Input data file |
+| `transform` | `--config` | path | `None` | YAML config file |
+| `transform` | `--output-dir` | path | `None` | Output directory |
+| `transform` | `--domain` | text | `None` | Domain pack to use |
+| `transform` | `--from-findings` | boolean | `False` | Read findings from stdin |
+| `transform` | `--llm` | boolean | `False` | Enable LLM-enhanced transforms |
+| `transform` | `--strict` | boolean | `False` | Fail if any transform errors occur |
+| `validate` | `path` | path | **required** | Input data file |
+| `validate` | `--config` | path | `None` |  |
+| `watch` | `path` | path | `'.'` | Directory to watch |
+| `watch` | `--config` | path | `None` |  |
+| `watch` | `--output-dir` | path | `None` |  |
+| `watch` | `--interval` | float | `2.0` | Poll interval in seconds |
+
+## MCP tools
+
+10 MCP tool(s) exposed by `goldenflow.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+
+`{'name': 'diff', 'description': 'Compare two data files and show what changed (added, removed, modified rows).', 'inputSchema': {'type': 'object', 'properties': {'path_before': {'type': 'string', 'description': 'Path to original file'}, 'path_after': {'type': 'string', 'description': 'Path to transformed file'}}, 'required': ['path_before', 'path_after']}}`, `{'name': 'explain_transform', 'description': 'Describe what a specific transform does, its mode, and input types.', 'inputSchema': {'type': 'object', 'properties': {'transform_name': {'type': 'string', 'description': 'Name of the transform'}}, 'required': ['transform_name']}}`, `{'name': 'learn', 'description': 'Generate a YAML config from data patterns.', 'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string', 'description': 'Path to data file'}}, 'required': ['path']}}`, `{'name': 'list_domains', 'description': 'List available domain packs (e.g., people_hr, ecommerce, finance).', 'inputSchema': {'type': 'object', 'properties': {}}}`, `{'name': 'list_transforms', 'description': 'List all registered transforms with their modes, input types, and auto-apply status.', 'inputSchema': {'type': 'object', 'properties': {}}}`, `{'name': 'map', 'description': 'Auto-map schemas between source and target files.', 'inputSchema': {'type': 'object', 'properties': {'source': {'type': 'string', 'description': 'Source file path'}, 'target': {'type': 'string', 'description': 'Target file path'}}, 'required': ['source', 'target']}}`, `{'name': 'profile', 'description': 'Profile a data file showing column types, nulls, and patterns.', 'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string', 'description': 'Path to data file'}}, 'required': ['path']}}`, `{'name': 'select_from_findings', 'description': 'Map GoldenCheck findings to recommended GoldenFlow transforms. Bridge tool for Check-to-Flow handoff.', 'inputSchema': {'type': 'object', 'properties': {'findings': {'type': 'array', 'items': {'type': 'object'}, 'description': "List of GoldenCheck findings (each with 'check' and 'column' fields)"}}, 'required': ['findings']}}`, `{'name': 'transform', 'description': "Clean / normalize a data file with GoldenFlow transforms (phone, date, unicode, casing, categorical, and more) and write the transformed file. Zero-config auto-detects and applies transforms; pass a config to control them. See list_transforms for what's available. Does not deduplicate or match -- it only reshapes column values.", 'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string', 'description': 'Path to data file'}, 'config': {'type': 'string', 'description': 'Optional YAML config path'}}, 'required': ['path']}}`, `{'name': 'validate', 'description': 'Dry-run transform on a file. Shows what would change without writing output.', 'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string', 'description': 'Path to data file'}, 'config': {'type': 'string', 'description': 'Optional YAML config path'}}, 'required': ['path']}}`
+
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.

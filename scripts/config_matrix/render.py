@@ -194,6 +194,71 @@ def render_constructor_section(targets: list[str]) -> str:
     return "\n".join(lines)
 
 
+# --- CLI section (Typer -> click introspection) -----------------------------
+
+
+def _opt_display(p) -> str:
+    longs = [o for o in getattr(p, "opts", []) if o.startswith("--")]
+    if longs:
+        return longs[0]
+    return (getattr(p, "opts", None) or [getattr(p, "name", "?")])[0]
+
+
+def render_cli_section(cli_module: str) -> str:
+    from typer.main import get_command
+
+    group = get_command(importlib.import_module(cli_module).app)
+    lines = ["## CLI", "",
+             "Every command and its options/arguments, generated from the Typer app. "
+             "`choice`-typed options list their allowed values.", "",
+             "| Command | Option | Type | Default | Notes |", "|---|---|---|---|---|"]
+    # A command may be a leaf or a sub-group (one level of nesting is enough here).
+    def _emit(prefix: str, cmd) -> None:
+        sub = getattr(cmd, "commands", None)
+        if sub:
+            for name in sorted(sub):
+                _emit(f"{prefix}{name} ", sub[name])
+            return
+        for p in cmd.params:
+            ptype = getattr(p, "type", None)
+            tname = getattr(ptype, "name", "text")
+            notes = ""
+            choices = getattr(ptype, "choices", None)
+            if choices:
+                notes = ", ".join(f"`{c}`" for c in choices)
+            if getattr(p, "help", None):
+                notes = f"{notes} -- {_clean(p.help)}" if notes else _clean(p.help)
+            required = getattr(p, "required", False)
+            default = "**required**" if required else f"`{p.default!r}`"
+            lines.append(
+                f"| `{prefix.strip()}` | `{_clean(_opt_display(p))}` | {tname} | {default} | {notes} |"
+            )
+    for name in sorted(group.commands):
+        _emit(f"{name} ", group.commands[name])
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --- MCP section (tool surface) ---------------------------------------------
+
+
+def render_mcp_section(mcp_module: str) -> str:
+    try:
+        mod = importlib.import_module(mcp_module)
+    except ModuleNotFoundError:
+        return ""  # [mcp] extra not installed / no server module
+    tools = getattr(mod, "TOOLS", None)
+    if not tools:
+        return ""
+    names = sorted(getattr(t, "name", str(t)) for t in tools)
+    lines = ["## MCP tools", "",
+             f"{len(names)} MCP tool(s) exposed by `{mcp_module}` -- the programmatic / "
+             "agent surface. Each accepts a JSON input; the config-bearing tools "
+             "(`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.", "",
+             ", ".join(f"`{n}`" for n in names), ""]
+    return "\n".join(lines)
+
+
 # --- vocab section (flexible resolver) --------------------------------------
 
 
@@ -314,6 +379,12 @@ def render_generated_block(spec) -> str:
         parts.append(render_schema_section(spec.schema_roots).rstrip())
     if spec.constructors:
         parts.append(render_constructor_section(spec.constructors).rstrip())
+    if getattr(spec, "cli_module", None):
+        parts.append(render_cli_section(spec.cli_module).rstrip())
+    if getattr(spec, "mcp_module", None):
+        mcp = render_mcp_section(spec.mcp_module).rstrip()
+        if mcp:
+            parts.append(mcp)
     if spec.vocabs:
         parts.append(_render_vocab_section(spec.vocabs).rstrip())
     parts.append(_render_env_section(spec.env_prefix, spec.src_dirs, spec.tuning_link).rstrip())

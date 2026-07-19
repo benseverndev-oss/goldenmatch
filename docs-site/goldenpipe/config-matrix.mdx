@@ -62,6 +62,36 @@ _Configuration for a single pipeline stage._
 | `on_error` | Literal | `'continue'` | `continue`, `abort` |
 | `config` | dict[str, Any] | `{}` |  |
 
+## CLI
+
+Every command and its options/arguments, generated from the Typer app. `choice`-typed options list their allowed values.
+
+| Command | Option | Type | Default | Notes |
+|---|---|---|---|---|
+| `agent-serve` | `--port` | integer | `8250` | Port for A2A server |
+| `init` | `--dir` | text | `'.'` | Directory to create config in |
+| `interactive` | `source` | text | `None` | Optional data file to load (press 'r' to run). |
+| `interactive` | `--config` | text | `None` | Optional pipeline YAML config. |
+| `mcp-serve` | `--transport` | text | `'stdio'` | Transport type: stdio or http |
+| `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
+| `mcp-serve` | `--port` | integer | `8250` | Port for HTTP transport |
+| `run` | `source` | text | **required** | Input file path |
+| `run` | `--config` | text | `None` | Pipeline YAML config |
+| `run` | `--output` | text | `None` | Output file path |
+| `run` | `--verbose` | boolean | `False` | Show reasoning and timing |
+| `run` | `--identity-path` | text | `None` | Enable Identity Graph; persist to this SQLite path |
+| `run` | `--identity-dataset` | text | `None` | Identity Graph dataset namespace |
+| `run` | `--identity-source-pk` | text | `None` | Column to derive `&#123;source&#125;:&#123;source_pk&#125;` record_id from |
+| `run` | `--identity-weak-threshold` | float | `None` | Auto-flag bottleneck pair as conflicts_with when cluster confidence &lt; this. Defaults to 0.6 (per IdentityConfig). |
+| `serve` | `--port` | integer | `8000` | Port for REST API |
+| `validate` | `--config` | text | **required** | Pipeline YAML config |
+
+## MCP tools
+
+4 MCP tool(s) exposed by `goldenpipe.mcp.server` -- the programmatic / agent surface. Each accepts a JSON input; the config-bearing tools (`auto_configure`, `dedupe`, `match`, ...) take the same knobs as above.
+
+`explain_pipeline`, `list_stages`, `run_pipeline`, `validate_pipeline`
+
 ## Enumerated vocabularies
 
 Allowed values for the `str`-typed / registry-backed fields above.
