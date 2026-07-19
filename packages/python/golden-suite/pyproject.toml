@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.3.1"
+version = "0.3.2"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -44,7 +44,7 @@ dependencies = [
     "goldenanalysis>=0.4",              # read-only cross-cutting metrics + reporting
     "goldencheck-types>=0.2",           # shared canonical field-type contracts
     # --- native acceleration (on by default; see note above) ---
-    "goldenmatch-native>=0.1.18",       # >=0.1.18 adds the native `date_similarity` kernel (date scorer's native path); 0.1.17 carries the FS exclude-set Arc handle + zero-copy arrow FS entry + unobserved-evidence math
+    "goldenmatch-native>=0.1.19",       # >=0.1.19 adds the `FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE` capability so the net-zero-evidence FS link filter (default-on, kills the scale-growing over-merge) actually runs on the native kernel; 0.1.18 added the native `date_similarity` kernel
     "goldencheck-native>=0.1",
     "goldenflow-native>=0.26.0",        # >=0.26.0 = the full columnar surface (format_f64 + AsFloat numeric-input); now a BASE dep of goldenflow 2.0
     "goldenanalysis-native>=0.1",

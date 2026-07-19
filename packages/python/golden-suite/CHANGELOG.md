@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.2] - 2026-07-19
+
+- Floor bump: `goldenmatch-native>=0.1.19`. 0.1.19 adds the
+  `FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE` capability flag, so the net-zero-evidence
+  Fellegi-Sunter link filter (default-on; requires strictly positive summed match
+  weight `W > 0` to link, killing the precision collapse that grew with row count)
+  actually runs on the native kernel instead of silently degrading to the legacy
+  emit-at-neutral path. Cut after goldenmatch-native 0.1.19 landed on PyPI
+  (member-on-PyPI-first lockstep).
+
 ## [0.3.1] - 2026-07-18
 
 - Floor bump: `goldenmatch[polars]>=3.5` (3.5.0: the date-aware `date` scorer;
