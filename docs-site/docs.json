@@ -91,6 +91,7 @@
                 "pages": [
                   "goldenmatch/configuration",
                   "goldenmatch/config-matrix",
+                  "goldenmatch/recipes",
                   "goldenmatch/tuning",
                   "goldenmatch/config-linter",
                   "goldenmatch/api-quick-reference"
