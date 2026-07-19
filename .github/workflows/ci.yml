@@ -3470,6 +3470,11 @@ jobs:
       - readme_callouts
       - docs_consistency
       - ts_parity_freshness
+      # api_parity + native_symbols guard cross-surface invariants (Python<->TS
+      # tool/CLI/skill/scorer/transform parity; native symbol registration) but
+      # were advisory -- a correct red couldn't block a merge. Now required.
+      - api_parity
+      - native_symbols
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
