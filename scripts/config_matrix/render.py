@@ -45,6 +45,12 @@ def _import(target: str):
     return obj
 
 
+def _code(text: str) -> str:
+    """A value shown inside backticks: MDX treats inline-code content as literal,
+    so `<`/`{` are safe; only the table pipe needs escaping."""
+    return text.replace("|", r"\|")
+
+
 def _clean(text: str) -> str:
     """MDX-safe table cell: escape the pipe and the JSX-significant chars."""
     return (
@@ -304,17 +310,52 @@ def _item_name(v: object) -> str:
     return str(v)
 
 
-def _render_vocab_section(vocabs: list[tuple[str, str, str]]) -> str:
+def _resolve_gloss(target: str, gloss) -> dict[str, str]:
+    """Return {value: one-line meaning}. `gloss` is None (no glosses), a curated
+    {value: text} dict, the string "doc" (derive each value's meaning from its
+    implementing object's docstring, e.g. goldenflow transform funcs), or a
+    ("doc", {overrides}) tuple (derive, then overlay curated fills for gaps)."""
+    curated: dict[str, str] = {}
+    derive = False
+    if isinstance(gloss, dict):
+        curated = gloss
+    elif gloss == "doc":
+        derive = True
+    elif isinstance(gloss, tuple) and gloss and gloss[0] == "doc":
+        derive = True
+        curated = gloss[1] if len(gloss) > 1 else {}
+
+    derived: dict[str, str] = {}
+    if derive:
+        obj = _import(target)
+        if inspect.isroutine(obj):
+            obj = obj()
+        for it in obj if isinstance(obj, (list, tuple, set, frozenset)) else []:
+            doc = getattr(getattr(it, "func", it), "__doc__", None) or getattr(it, "description", None)
+            if doc and doc.strip():
+                derived[_item_name(it)] = doc.strip().splitlines()[0].strip()
+    return {**derived, **curated}
+
+
+def _render_vocab_section(vocabs) -> str:
     lines = ["## Enumerated vocabularies", "",
-             "Allowed values for the `str`-typed / registry-backed fields above.", "",
-             "| Vocabulary | Source | Applies to | Values |",
-             "|---|---|---|---|"]
-    for title, target, applies in vocabs:
+             "Allowed values for the `str`-typed / registry-backed fields above.", ""]
+    for entry in vocabs:
+        title, target, applies = entry[0], entry[1], entry[2]
+        gloss = entry[3] if len(entry) > 3 else None
         values = sorted(set(_resolve_vocab(target)))
-        rendered = ", ".join(f"`{_clean(v)}`" for v in values)
-        const = target.split(":")[-1]
-        lines.append(f"| {title} | `{const}` | {applies} | {rendered} |")
-    lines.append("")
+        glosses = _resolve_gloss(target, gloss)
+        lines.append(f"### {title}")
+        lines.append(f"_`{target.split(':')[-1]}` -- {applies}._")
+        lines.append("")
+        if any(glosses.get(v) for v in values):
+            lines.append("| Value | Meaning |")
+            lines.append("|---|---|")
+            for v in values:
+                lines.append(f"| `{_code(v)}` | {_clean(glosses.get(v, ''))} |")
+        else:
+            lines.append(", ".join(f"`{_code(v)}`" for v in values))
+        lines.append("")
     return "\n".join(lines)
 
 

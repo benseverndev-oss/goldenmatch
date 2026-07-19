@@ -155,11 +155,157 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Transform ops | `list_transforms` | `TransformSpec.ops` | `aba_validate`, `abs_value`, `account_mask`, `address_expand`, `address_standardize`, `age_from_dob`, `boolean_normalize`, `carceral_abbreviate`, `carceral_name_normalize`, `carceral_org_strip`, `category_auto_correct`, `category_from_file`, `category_llm_correct`, `category_standardize`, `cc_brand`, `cc_format`, `cc_mask`, `cc_validate`, `clamp`, `collapse_whitespace`, `comma_decimal`, `company_extract_legal`, `company_normalize`, `company_strip_legal`, `country_standardize`, `currency_strip`, `cusip_format`, `cusip_validate`, `date_eu`, `date_iso8601`, `date_parse`, `date_shift`, `date_us`, `date_validate`, `datetime_iso8601`, `double_metaphone_alt`, `double_metaphone_primary`, `ean_validate`, `ein_format`, `email_canonical`, `email_extract_domain`, `email_lowercase`, `email_mask`, `email_normalize`, `email_validate`, `extract_day`, `extract_day_of_week`, `extract_month`, `extract_numbers`, `extract_quarter`, `extract_year`, `fill_zero`, `fix_mojibake`, `fraction_to_decimal`, `gender_standardize`, `iban_format`, `iban_validate`, `icd10_format`, `imei_validate`, `initial_expand`, `isbn_normalize`, `isbn_validate`, `isin_validate`, `latlng_pack`, `lowercase`, `luhn_validate`, `merge_name`, `mls_normalize`, `name_initials`, `name_proper`, `name_script`, `name_transliterate`, `nickname_standardize`, `normalize_line_endings`, `normalize_quotes`, `normalize_unicode`, `npi_validate`, `null_standardize`, `ordinal_to_int`, `pad_left`, `pad_right`, `percentage_normalize`, `phone_country_code`, `phone_digits`, `phone_e164`, `phone_national`, `phone_validate`, `remove_digits`, `remove_emojis`, `remove_html_tags`, `remove_punctuation`, `remove_urls`, `roman_to_int`, `round`, `scientific_to_decimal`, `sku_normalize`, `soundex`, `split_address`, `split_name`, `split_name_reverse`, `ssn_format`, `ssn_mask`, `ssn_validate`, `state_abbreviate`, `state_expand`, `strip`, `strip_middle`, `strip_suffixes`, `strip_titles`, `swift_format`, `swift_validate`, `title_case`, `to_integer`, `truncate`, `unit_normalize`, `uppercase`, `url_canonical`, `url_extract_domain`, `url_normalize`, `url_strip_tracking`, `url_strip_www`, `vat_format`, `vat_validate`, `zip_normalize` |
-| Domain packs | `_DOMAINS` | `learn_config(domain=...)` | `carceral`, `ecommerce`, `finance`, `healthcare`, `people_hr`, `real_estate` |
-| Canonicalize kinds | `CanonicalizeKind` | `canonicalize` op | `email`, `name`, `phone`, `postal` |
+### Transform ops
+_`list_transforms` -- `TransformSpec.ops`._
+
+| Value | Meaning |
+|---|---|
+| `aba_validate` | Validate a US ABA bank routing number: exactly 9 digits plus the |
+| `abs_value` | Return the absolute value. |
+| `account_mask` | Mask account numbers showing only last 4 digits. |
+| `address_expand` | Replace street abbreviations (St, Ave...) with full forms. |
+| `address_standardize` | Replace full street suffixes (Street, Avenue...) with abbreviations. |
+| `age_from_dob` | Compute age in years from a date of birth. |
+| `boolean_normalize` | Parse loose boolean-ish strings (yes/no/y/n/1/0/true/false/t/f). |
+| `carceral_abbreviate` | Expand carceral facility-type abbreviations and state-complex aliases. |
+| `carceral_name_normalize` | Full carceral name pipeline: org-strip + uppercase + punctuation strip |
+| `carceral_org_strip` | Strip leading operator-org prefix from a carceral facility name. |
+| `category_auto_correct` | Auto-correct categorical misspellings and case variants. |
+| `category_from_file` | Load mapping from a CSV/YAML file and standardize values. |
+| `category_llm_correct` | LLM-enhanced categorical correction. |
+| `category_standardize` | Map variant values to canonical values. mapping: &#123;canonical: [variant1, variant2, ...]&#125; |
+| `cc_brand` | Detect the card brand (visa/mastercard/amex/...) or null. Native-first. |
+| `cc_format` | Group a valid payment-card number (Amex 4-6-5, else 4-4-4-4...); |
+| `cc_mask` | Mask a payment-card number to stars + last 4 digits. |
+| `cc_validate` | Validate a payment-card number via the Luhn checksum. |
+| `clamp` | Clip values into [min_val, max_val]. |
+| `collapse_whitespace` | Collapse runs of whitespace to single spaces. |
+| `comma_decimal` | Convert European decimal format (1.234,56) to float (1234.56). |
+| `company_extract_legal` | Extract the canonical legal-form token (``inc``/``llc``/...) or null. |
+| `company_normalize` | Composite company dedup key: lowercase, drop leading 'the', strip legal |
+| `company_strip_legal` | Strip trailing legal-form suffixes, preserving the core name's case. |
+| `country_standardize` | Normalize country names to ISO 3166-1 alpha-2 codes. |
+| `currency_strip` | Strip currency symbols and thousand separators, return numeric. |
+| `cusip_format` | Standardize CUSIP identifiers (9 chars, uppercase). |
+| `cusip_validate` | Validate a CUSIP. Native-first over goldenflow-core. |
+| `date_eu` | Parse a European (DD/MM/YYYY) date. |
+| `date_iso8601` | Parse/format a date as ISO-8601. |
+| `date_parse` | Auto-detect format and normalize to ISO 8601. |
+| `date_shift` | Shift dates by a number of days (positive = forward, negative = backward). |
+| `date_us` | Parse a US (MM/DD/YYYY) date. |
+| `date_validate` | Validate if value is a parseable date. Returns True/False/None. |
+| `datetime_iso8601` | Parse to ISO 8601 datetime (with time component). |
+| `double_metaphone_alt` | Alternate Double Metaphone code. Native-first. |
+| `double_metaphone_primary` | Primary Double Metaphone code (blocking key). Native-first. |
+| `ean_validate` | Validate an EAN-8, UPC-A, or EAN-13 via its GTIN mod-10 checksum. |
+| `ein_format` | Normalize EIN to XX-XXXXXXX format. Native-first. |
+| `email_canonical` | Full dedup key: email_normalize + alias googlemail.com -> gmail.com so |
+| `email_extract_domain` | Extract the lowercased domain from an email address. |
+| `email_lowercase` | Lowercase the entire email address (trim + lowercase). |
+| `email_mask` | PII mask: keep the first local char, star the rest, keep @domain |
+| `email_normalize` | Normalize email: lowercase, strip +tags, strip dots from Gmail local part. |
+| `email_validate` | Validate email format. Returns True/False/None. |
+| `extract_day` | Extract the day of month as an integer (1-31). |
+| `extract_day_of_week` | Extract the day of week name (Monday, Tuesday, etc.). |
+| `extract_month` | Extract the month as an integer (1-12). |
+| `extract_numbers` | Extract all numbers from text, joined by spaces. |
+| `extract_quarter` | Extract the quarter (1-4) from a date. |
+| `extract_year` | Extract the year as an integer. |
+| `fill_zero` | Replace null values with 0. |
+| `fix_mojibake` | Fix common UTF-8/Latin-1 mojibake by re-encoding. |
+| `fraction_to_decimal` | Parse a fraction or mixed number (1/2, 3 3/4) to a float. Native-first. |
+| `gender_standardize` | Standardize gender strings to ``M``/``F``; anything else passes |
+| `iban_format` | Group a valid IBAN into 4-char blocks; ``null`` for invalid input. |
+| `iban_validate` | Validate an IBAN via structural checks + the ISO 7064 mod-97 check. |
+| `icd10_format` | Standardize ICD-10 codes (uppercase, insert dot after 3rd char). |
+| `imei_validate` | Validate an IMEI: exactly 15 digits plus the Luhn checksum. |
+| `initial_expand` | Returns (series, flagged_rows). Values with initials are unchanged but flagged. |
+| `isbn_normalize` | Canonicalize a valid ISBN-10/13 to its 13-digit form; ``null`` for |
+| `isbn_validate` | Validate an ISBN-10 or ISBN-13 via its checksum. |
+| `isin_validate` | Validate an ISIN (ISO 6166). Native-first over goldenflow-core. |
+| `latlng_pack` | Pack ``lat`` + ``lng`` into a single ``latlng`` column shaped |
+| `lowercase` | Lowercase the value. |
+| `luhn_validate` | Generic Luhn check-digit validation. Native-first over goldenflow-core. |
+| `merge_name` | Merge first_name and last_name columns into a full_name column. |
+| `mls_normalize` | Normalize MLS listing IDs (uppercase, strip whitespace). |
+| `name_initials` | Initials of each whitespace token (letter-leading tokens only). |
+| `name_proper` | Proper-case a name (title-case + Mc/O' fixups). |
+| `name_script` | Detect the dominant Unicode script in a name: ``Unknown`` for empty |
+| `name_transliterate` | ASCII-fold a name via an explicit curated diacritic map. Non-ASCII |
+| `nickname_standardize` | Map common nicknames to formal first names. |
+| `normalize_line_endings` | Normalize \r\n and \r to \n. |
+| `normalize_quotes` | Replace smart/curly quotes with straight quotes. |
+| `normalize_unicode` | Normalize to Unicode NFC form. |
+| `npi_validate` | Validate a US NPI. Native-first over goldenflow-core. |
+| `null_standardize` | Map null-sentinel strings (n/a, null, none, na, nil, nan, -, empty) to |
+| `ordinal_to_int` | Parse an English ordinal (1st/2nd/3rd) to its integer. Native-first. |
+| `pad_left` | Left-pad strings to a fixed width. |
+| `pad_right` | Right-pad strings to a fixed width. |
+| `percentage_normalize` | Strip trailing %, parse to float, divide by 100. |
+| `phone_country_code` | Extract the country calling code as an integer. |
+| `phone_digits` | Keep only the phone number's digits. |
+| `phone_e164` | Format a phone number as E.164. |
+| `phone_national` | Format a phone number in national format. |
+| `phone_validate` | Flag whether the phone number is valid. |
+| `remove_digits` | Remove all digit characters from text. |
+| `remove_emojis` | Remove emoji characters from text. |
+| `remove_html_tags` | Strip HTML tags from text. |
+| `remove_punctuation` | Strip punctuation characters. |
+| `remove_urls` | Strip URLs (http/https) from text. |
+| `roman_to_int` | Parse a Roman numeral to its integer (canonical forms only, 1..=3999). |
+| `round` | Round to n decimal places (round-half-away-from-zero, see the |
+| `scientific_to_decimal` | Convert scientific notation (1.5e3) to decimal (1500.0). |
+| `sku_normalize` | Normalize SKU identifiers (uppercase, strip whitespace, remove special chars). |
+| `soundex` | Soundex phonetic key. Native-first over goldenflow-core. |
+| `split_address` | Parse 'street, city, state zip' into separate columns. |
+| `split_name` | Split 'First Last' into first_name and last_name columns. |
+| `split_name_reverse` | Split 'Last, First' into first_name and last_name columns. |
+| `ssn_format` | Normalize SSN to XXX-XX-XXXX format. Native-first over goldenflow-core. |
+| `ssn_mask` | Mask SSN to ***-**-XXXX (last 4 visible). Native-first. |
+| `ssn_validate` | Flag whether the value is a valid US Social Security Number. |
+| `state_abbreviate` | Normalize state name to a 2-letter abbreviation (unmatched -> original). |
+| `state_expand` | Expand a 2-letter state abbreviation to its full name (unmatched -> original). |
+| `strip` | Trim leading/trailing whitespace. |
+| `strip_middle` | Keep only the first and last whitespace tokens (drop the middle). |
+| `strip_suffixes` | Strip trailing professional suffixes (Jr/Sr/II/MD/PhD/etc.) from names. |
+| `strip_titles` | Strip leading personal titles (Mr/Mrs/Ms/Dr/Prof/etc.) from names. |
+| `swift_format` | Normalize a valid SWIFT/BIC code to uppercase (spaces stripped); |
+| `swift_validate` | Validate a SWIFT/BIC code via structural checks (length 8/11 + |
+| `title_case` | Title-case the value. |
+| `to_integer` | Parse string to integer, truncating any decimal part. |
+| `truncate` | Truncate string to the first n characters. |
+| `unit_normalize` | Normalize unit/apartment/suite designations. |
+| `uppercase` | Uppercase the value. |
+| `url_canonical` | Composite dedup key: ensure scheme, lowercase scheme+host, strip www., |
+| `url_extract_domain` | Extract domain from a URL. |
+| `url_normalize` | Normalize URLs: ensure scheme, lowercase domain, strip trailing slash. |
+| `url_strip_tracking` | Remove tracking query params (utm_*, gclid, fbclid, ...), preserving the |
+| `url_strip_www` | Strip a leading ``www.`` label from the host, preserving scheme, path, |
+| `vat_format` | Normalize a valid EU VAT number to its compact uppercase form (prefix |
+| `vat_validate` | Validate an EU VAT number: structural check (country prefix + length + |
+| `zip_normalize` | Normalize a US ZIP to 5-digit form (strip +4, zero-pad all-digit, preserve |
+
+### Domain packs
+_`_DOMAINS` -- `learn_config(domain=...)`._
+
+| Value | Meaning |
+|---|---|
+| `carceral` | Corrections / justice field pack. |
+| `ecommerce` | E-commerce / retail field pack. |
+| `finance` | Financial-services field pack. |
+| `healthcare` | Healthcare field pack. |
+| `people_hr` | People / HR field pack. |
+| `real_estate` | Real-estate field pack. |
+
+### Canonicalize kinds
+_`CanonicalizeKind` -- `canonicalize` op._
+
+| Value | Meaning |
+|---|---|
+| `email` | Canonical email form. |
+| `name` | Canonical person-name form. |
+| `phone` | Canonical phone form. |
+| `postal` | Canonical postal-address form. |
 
 ## Environment variables (index)
 

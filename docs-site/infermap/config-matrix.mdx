@@ -91,10 +91,31 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Data types | `VALID_DTYPES` | `FieldInfo.dtype` | `boolean`, `date`, `datetime`, `float`, `integer`, `string` |
-| Semantic pattern types | `SEMANTIC_TYPES` | pattern-type detection | `currency`, `date_iso`, `email`, `ip_v4`, `phone`, `url`, `uuid`, `zip_us` |
+### Data types
+_`VALID_DTYPES` -- `FieldInfo.dtype`._
+
+| Value | Meaning |
+|---|---|
+| `boolean` | True/false. |
+| `date` | Calendar date. |
+| `datetime` | Date and time. |
+| `float` | Decimal number. |
+| `integer` | Whole number. |
+| `string` | Text. |
+
+### Semantic pattern types
+_`SEMANTIC_TYPES` -- pattern-type detection._
+
+| Value | Meaning |
+|---|---|
+| `currency` | Currency amount. |
+| `date_iso` | ISO-8601 date. |
+| `email` | Email address. |
+| `ip_v4` | IPv4 address. |
+| `phone` | Phone number. |
+| `url` | Web URL. |
+| `uuid` | UUID. |
+| `zip_us` | US ZIP code. |
 
 ## Environment variables (index)
 

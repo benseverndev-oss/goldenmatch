@@ -84,10 +84,23 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Metric direction | `Direction` | `Metric.direction` | `higher_better`, `lower_better`, `neutral` |
-| Regression baseline | `Baseline` | `--baseline` | `last_known_good`, `previous`, `rolling_median` |
+### Metric direction
+_`Direction` -- `Metric.direction`._
+
+| Value | Meaning |
+|---|---|
+| `higher_better` | A higher value is better; flag a regression on a decrease. |
+| `lower_better` | A lower value is better; flag a regression on an increase. |
+| `neutral` | No preferred direction; never flags a regression. |
+
+### Regression baseline
+_`Baseline` -- `--baseline`._
+
+| Value | Meaning |
+|---|---|
+| `last_known_good` | Compare against the last run marked good. |
+| `previous` | Compare against the immediately prior run. |
+| `rolling_median` | Compare against the rolling median of recent runs. |
 
 ## Environment variables (index)
 

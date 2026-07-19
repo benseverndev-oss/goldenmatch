@@ -205,10 +205,26 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Finding severity | `Severity` | `Settings.severity_threshold` / `fail_on` | `ERROR`, `INFO`, `WARNING` |
-| Denial-constraint operators | `Op` | mined denial constraints | `&lt;`, `=`, `>`, `≠`, `≤`, `≥` |
+### Finding severity
+_`Severity` -- `Settings.severity_threshold` / `fail_on`._
+
+| Value | Meaning |
+|---|---|
+| `ERROR` | Highest severity; fails the run at the default fail_on=error. |
+| `INFO` | Informational finding; never fails the run. |
+| `WARNING` | Advisory finding; fails only when fail_on=warning. |
+
+### Denial-constraint operators
+_`Op` -- mined denial constraints._
+
+| Value | Meaning |
+|---|---|
+| `<` | Less than. |
+| `=` | Equal. |
+| `>` | Greater than. |
+| `≠` | Not equal. |
+| `≤` | Less than or equal. |
+| `≥` | Greater than or equal. |
 
 ## Environment variables (index)
 

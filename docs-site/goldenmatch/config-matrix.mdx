@@ -950,17 +950,126 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Scorers | `VALID_SCORERS` | `MatchkeyField.scorer` / `NegativeEvidenceField.scorer` | `alias_match`, `audio_fp`, `date`, `dice`, `embedding`, `ensemble`, `exact`, `initialism_match`, `jaccard`, `jaro_winkler`, `levenshtein`, `phash`, `qgram`, `radial`, `record_embedding`, `soundex_match`, `token_sort` |
-| Simple transforms | `VALID_SIMPLE_TRANSFORMS` | `transforms` chains | `alpha_only`, `digits_only`, `first_token`, `last_token`, `lowercase`, `metaphone`, `normalize_whitespace`, `soundex`, `strip`, `strip_all`, `token_sort`, `uppercase` |
-| Survivorship strategies | `VALID_STRATEGIES` | `GoldenFieldRule.strategy` | `confidence_majority`, `first_non_null`, `longest_value`, `majority_vote`, `most_complete`, `most_recent`, `source_priority`, `unanimous_or_null` |
-| Group survivorship strategies | `_GROUP_STRATEGIES` | `GoldenGroupRule.strategy` | `anchor`, `most_complete`, `most_recent`, `source_priority` |
-| Standardizers | `VALID_STANDARDIZERS` | `StandardizationConfig.rules` | `address`, `email`, `name_lower`, `name_proper`, `name_upper`, `phone`, `state`, `strip`, `trim_whitespace`, `zip5` |
-| Matchkey types | `_VALID_MK_TYPES` | `MatchkeyConfig.type` | `exact`, `probabilistic`, `weighted` |
-| Backends | `BackendName` | `GoldenMatchConfig.backend` / `--backend` | `bucket`, `chunked`, `duckdb`, `polars-direct`, `ray` |
-| Clustering strategies | `ClusteringStrategy` | planner cluster route | `distributed_wcc`, `in_memory`, `partitioned_union_find`, `streaming_cc` |
-| Planning efforts | `_PLANNING_EFFORTS` | `planning_effort` | `einstein`, `fast`, `normal`, `thinking` |
+### Scorers
+_`VALID_SCORERS` -- `MatchkeyField.scorer` / `NegativeEvidenceField.scorer`._
+
+| Value | Meaning |
+|---|---|
+| `alias_match` | Matches known name aliases and nicknames (Bob &lt;-> Robert). |
+| `audio_fp` | Audio-fingerprint similarity for sound clips. |
+| `date` | Damerau-Levenshtein over canonical ISO date digits; typo-tolerant date compare. |
+| `dice` | Dice coefficient over character bigrams. |
+| `embedding` | Cosine similarity of a model embedding of the field. |
+| `ensemble` | Weighted blend of several sub-scorers. |
+| `exact` | Exact string equality after transforms. |
+| `initialism_match` | Matches initials/acronyms against their expansions. |
+| `jaccard` | Jaccard overlap of token/character sets. |
+| `jaro_winkler` | Jaro-Winkler string similarity, strong on short names and typos. |
+| `levenshtein` | Normalized Levenshtein edit distance. |
+| `phash` | Perceptual-hash Hamming similarity for images. |
+| `qgram` | Q-gram (n-gram) overlap similarity. |
+| `radial` | Rotation/crop-invariant radial-variance image similarity. |
+| `record_embedding` | Cosine similarity of an embedding over several columns. |
+| `soundex_match` | Phonetic Soundex-code equality. |
+| `token_sort` | Token-sorted ratio; order-insensitive multi-word compare. |
+
+### Simple transforms
+_`VALID_SIMPLE_TRANSFORMS` -- `transforms` chains._
+
+| Value | Meaning |
+|---|---|
+| `alpha_only` | Keep only alphabetic characters. |
+| `digits_only` | Keep only digits. |
+| `first_token` | Keep the first whitespace token. |
+| `last_token` | Keep the last whitespace token. |
+| `lowercase` | Lowercase the value. |
+| `metaphone` | Metaphone phonetic encoding. |
+| `normalize_whitespace` | Collapse runs of whitespace to single spaces. |
+| `soundex` | Soundex phonetic encoding. |
+| `strip` | Trim leading/trailing whitespace. |
+| `strip_all` | Remove all whitespace. |
+| `token_sort` | Sort the whitespace tokens alphabetically. |
+| `uppercase` | Uppercase the value. |
+
+### Survivorship strategies
+_`VALID_STRATEGIES` -- `GoldenFieldRule.strategy`._
+
+| Value | Meaning |
+|---|---|
+| `confidence_majority` | Value backed by the highest total match confidence. |
+| `first_non_null` | First non-null value in row order. |
+| `longest_value` | The longest, most detailed value. |
+| `majority_vote` | Most frequent value across the cluster. |
+| `most_complete` | Value from the record with the fewest nulls. |
+| `most_recent` | Value from the newest record (needs date_column). |
+| `source_priority` | Value from the highest-priority source (needs source_priority). |
+| `unanimous_or_null` | The value only if every record agrees, else null. |
+
+### Group survivorship strategies
+_`_GROUP_STRATEGIES` -- `GoldenGroupRule.strategy`._
+
+| Value | Meaning |
+|---|---|
+| `anchor` | Take all group columns from the anchor column's winning row. |
+| `most_complete` | Take all group columns from the most-complete row. |
+| `most_recent` | Take the group from the newest row. |
+| `source_priority` | Take the group from the highest-priority source. |
+
+### Standardizers
+_`VALID_STANDARDIZERS` -- `StandardizationConfig.rules`._
+
+| Value | Meaning |
+|---|---|
+| `address` | Normalize a postal address. |
+| `email` | Lowercase and canonicalize an email address. |
+| `name_lower` | Lowercase a name. |
+| `name_proper` | Proper-case a name. |
+| `name_upper` | Uppercase a name. |
+| `phone` | Normalize a phone number. |
+| `state` | Normalize a US state to its 2-letter code. |
+| `strip` | Trim whitespace. |
+| `trim_whitespace` | Collapse and trim whitespace. |
+| `zip5` | Normalize a US ZIP to 5 digits. |
+
+### Matchkey types
+_`_VALID_MK_TYPES` -- `MatchkeyConfig.type`._
+
+| Value | Meaning |
+|---|---|
+| `exact` | All fields must match exactly; fastest, no scoring. |
+| `probabilistic` | Fellegi-Sunter scoring with EM-learned agreement weights. |
+| `weighted` | Weighted mean of per-field scores compared to a threshold. |
+
+### Backends
+_`BackendName` -- `GoldenMatchConfig.backend` / `--backend`._
+
+| Value | Meaning |
+|---|---|
+| `bucket` | Memory-bounded field-hash bucket scorer (the in-memory default route). |
+| `chunked` | Chunked in-memory execution to cap peak memory. |
+| `duckdb` | DuckDB-backed out-of-core execution. |
+| `polars-direct` | Straight in-memory Polars execution. |
+| `ray` | Distributed execution on a Ray cluster. |
+
+### Clustering strategies
+_`ClusteringStrategy` -- planner cluster route._
+
+| Value | Meaning |
+|---|---|
+| `distributed_wcc` | Distributed weakly-connected-components on a cluster. |
+| `in_memory` | In-memory union-find clustering. |
+| `partitioned_union_find` | Disk-partitioned union-find for large pair sets. |
+| `streaming_cc` | Streaming connected-components. |
+
+### Planning efforts
+_`_PLANNING_EFFORTS` -- `planning_effort`._
+
+| Value | Meaning |
+|---|---|
+| `einstein` | Maximum auto-config search; slowest and most thorough. |
+| `fast` | Single cheap auto-config pass. |
+| `normal` | Default interactive auto-config budget (byte-identical to historical). |
+| `thinking` | Extra refit iterations plus full-frame blocking measurement. |
 
 ## Environment variables (index)
 

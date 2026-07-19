@@ -101,13 +101,65 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 Allowed values for the `str`-typed / registry-backed fields above.
 
-| Vocabulary | Source | Applies to | Values |
-|---|---|---|---|
-| Stage status | `StageStatus` | per-stage result status | `failed`, `skipped`, `success` |
-| Pipeline status | `PipeStatus` | run result status | `failed`, `partial`, `success` |
-| Column types | `ColumnType` | column classification | `address`, `date`, `description`, `email`, `geo`, `identifier`, `name`, `numeric`, `phone`, `string`, `zip` |
-| Cardinality bands | `CardinalityBand` | column cardinality band | ``, `high`, `low`, `mid`, `skip` |
-| Repair fixers | `FIXERS` | repair-op allowlist | `date_parse`, `email_canonical`, `email_normalize`, `fix_mojibake`, `name_proper`, `normalize_unicode`, `phone_national`, `zip_normalize` |
+### Stage status
+_`StageStatus` -- per-stage result status._
+
+| Value | Meaning |
+|---|---|
+| `failed` | Stage raised an error. |
+| `skipped` | Stage skipped by its skip_if condition. |
+| `success` | Stage completed successfully. |
+
+### Pipeline status
+_`PipeStatus` -- run result status._
+
+| Value | Meaning |
+|---|---|
+| `failed` | One or more stages failed the run. |
+| `partial` | Some stages succeeded and some failed. |
+| `success` | Every stage succeeded. |
+
+### Column types
+_`ColumnType` -- column classification._
+
+| Value | Meaning |
+|---|---|
+| `address` | Postal address. |
+| `date` | Date/time value. |
+| `description` | Long free text. |
+| `email` | Email address. |
+| `geo` | Geographic coordinate. |
+| `identifier` | Unique identifier / key. |
+| `name` | Person or entity name. |
+| `numeric` | Numeric measure. |
+| `phone` | Phone number. |
+| `string` | Free-form string. |
+| `zip` | Postal/ZIP code. |
+
+### Cardinality bands
+_`CardinalityBand` -- column cardinality band._
+
+| Value | Meaning |
+|---|---|
+| `` | Unset / unknown. |
+| `high` | Many distinct values (near-unique). |
+| `low` | Few distinct values. |
+| `mid` | Moderate distinct values. |
+| `skip` | Excluded from cardinality analysis. |
+
+### Repair fixers
+_`FIXERS` -- repair-op allowlist._
+
+| Value | Meaning |
+|---|---|
+| `date_parse` | Parse a date into ISO form. |
+| `email_canonical` | Canonicalize an email (dedupe dots/plus). |
+| `email_normalize` | Lowercase/normalize an email. |
+| `fix_mojibake` | Repair UTF-8/Latin-1 mojibake. |
+| `name_proper` | Proper-case a name. |
+| `normalize_unicode` | Normalize to Unicode NFC. |
+| `phone_national` | Normalize a phone to national format. |
+| `zip_normalize` | Normalize a ZIP code. |
 
 ## Environment variables (index)
 
