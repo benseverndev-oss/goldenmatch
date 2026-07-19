@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.1] - 2026-07-18
+
+- Floor bump: `goldenmatch[polars]>=3.5` (3.5.0: the date-aware `date` scorer;
+  the FS missing-value correctness wave that restored `historical_50k`
+  probabilistic F1 0.33 -> 0.83; 100% native Fellegi-Sunter coverage via the
+  shared `fs-core` crate; and the `from_splink` random-pair-prior fix) and
+  `goldenmatch-native>=0.1.18` (adds the native `date_similarity` kernel so the
+  `date` scorer runs on the native path, not just the pure-Python fallback).
+  Cut after goldenmatch 3.5.0 + goldenmatch-native 0.1.18 landed on PyPI
+  (member-on-PyPI-first lockstep).
+
 ## [0.3.0] - 2026-07-16
 
 - Suite minor train: floors raised to `goldenmatch[polars]>=3.4` (FS scoring in

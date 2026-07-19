@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "golden-suite"
-version = "0.3.0"
+version = "0.3.1"
 description = "One-line, perf-optimized install for the entire Golden Suite — goldenmatch, goldencheck, goldenflow, goldenpipe, GoldenSchema (infermap), goldenanalysis, native acceleration on by default"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -37,14 +37,14 @@ classifiers = [
 dependencies = [
     # --- suite (floors track the current majors) ---
     "goldenpipe[golden-suite]>=1.4",    # orchestrator + check/flow/match/analysis
-    "goldenmatch[polars]>=3.4",         # entity resolution: dedupe, match, golden records (>=3.4: FS in distributed/chunked lanes + bounded strategy-blocking scorer; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
+    "goldenmatch[polars]>=3.5",         # entity resolution: dedupe, match, golden records (>=3.5: date-aware `date` scorer + the FS missing-value correctness wave (historical_50k F1 restored) + 100% native FS coverage; [polars] keeps the wall-optimization paths + the classic lane on for suite installs)
     "goldencheck[polars]>=3.2",       # data validation (>=3.0.0 = Arrow-native Polars-free default scan; [polars] kept for the scan_dataframe(pl.DataFrame) overload goldenmatch's quality bridge uses, also pulled transitively by goldenmatch)
     "goldenflow>=2.1.0",                 # transform / standardize / normalize (>=2.1.0 = owned auto-detect profile kernel; native floor >=0.27.0)
     "infermap>=0.6",                  # GoldenSchema: inference-driven schema mapping
     "goldenanalysis>=0.4",              # read-only cross-cutting metrics + reporting
     "goldencheck-types>=0.2",           # shared canonical field-type contracts
     # --- native acceleration (on by default; see note above) ---
-    "goldenmatch-native>=0.1.17",       # >=0.1.17 carries the FS exclude-set Arc handle + zero-copy arrow FS entry + unobserved-evidence math
+    "goldenmatch-native>=0.1.18",       # >=0.1.18 adds the native `date_similarity` kernel (date scorer's native path); 0.1.17 carries the FS exclude-set Arc handle + zero-copy arrow FS entry + unobserved-evidence math
     "goldencheck-native>=0.1",
     "goldenflow-native>=0.26.0",        # >=0.26.0 = the full columnar surface (format_f64 + AsFloat numeric-input); now a BASE dep of goldenflow 2.0
     "goldenanalysis-native>=0.1",
