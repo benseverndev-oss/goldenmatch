@@ -1,0 +1,112 @@
+---
+title: "Config matrix"
+description: "The full matrix of GoldenFlow config knobs and its transform vocabulary -- generated so it never drifts."
+---
+
+The exhaustive, always-current reference for GoldenFlow configuration: the
+`GoldenFlowConfig` schema, the full transform-op vocabulary, the domain packs,
+and every `GOLDENFLOW_*` runtime knob. Built for humans and AI agents.
+
+<Info>
+Everything below the line is **generated from code** (`scripts/gen_config_matrix.py`)
+and verified in CI. The guidance above the line is hand-authored. See
+[Overview](/goldenflow/overview) and [CLI](/goldenflow/cli) for walkthroughs.
+</Info>
+
+## How GoldenFlow is configured
+
+A GoldenFlow config (`GoldenFlowConfig`, loadable from YAML or learned from a
+sample via `learn_config`) is a declarative transform plan:
+
+- **`transforms`** -- the core: a list of `TransformSpec{column, ops}`, where
+  `ops` is an ordered chain of transform-op names drawn from the **Transform ops**
+  vocabulary below (e.g. `["strip", "lowercase", "email_normalize"]`). The op
+  vocabulary is the real config surface; the model shape is thin.
+- **`splits` / `filters` / `renames` / `drop` / `dedup` / `mappings`** -- column
+  reshaping around the transform chains.
+- **Domain packs** (`learn_config(domain=...)`) seed sensible op chains for a
+  known domain (see the **Domain packs** vocabulary).
+
+`canonicalize` is a first-class op with its own `CanonicalizeKind` set.
+
+{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}
+
+## Config object reference
+
+Every config object in the pydantic tree(s), generated from the package schema. Nested objects link by name.
+
+### `GoldenFlowConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `source` | str \| None | `None` |  |
+| `output` | str \| None | `None` |  |
+| `transforms` | list[TransformSpec] | `[]` | [`TransformSpec`](#transformspec) |
+| `splits` | list[SplitSpec] | `[]` | [`SplitSpec`](#splitspec) |
+| `renames` | dict[str, str] | `{}` |  |
+| `drop` | list[str] | `[]` |  |
+| `filters` | list[FilterSpec] | `[]` | [`FilterSpec`](#filterspec) |
+| `dedup` | DedupSpec \| None | `None` | [`DedupSpec`](#dedupspec) |
+| `mappings` | list[MappingSpec] | `[]` | [`MappingSpec`](#mappingspec) |
+
+### `TransformSpec`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `ops` | list[str] | **required** |  |
+
+### `SplitSpec`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `source` | str | **required** |  |
+| `target` | list[str] | **required** |  |
+| `method` | str | **required** |  |
+
+### `FilterSpec`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `condition` | str | **required** |  |
+
+### `DedupSpec`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `columns` | list[str] | **required** |  |
+| `keep` | Literal | `'first'` | `first`, `last` |
+
+### `MappingSpec`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `source` | str | **required** |  |
+| `target` | str \| list[str] | **required** |  |
+| `transform` | str \| list[str] \| None | `None` |  |
+
+## Enumerated vocabularies
+
+Allowed values for the `str`-typed / registry-backed fields above.
+
+| Vocabulary | Source | Applies to | Values |
+|---|---|---|---|
+| Transform ops | `list_transforms` | `TransformSpec.ops` | `aba_validate`, `abs_value`, `account_mask`, `address_expand`, `address_standardize`, `age_from_dob`, `boolean_normalize`, `carceral_abbreviate`, `carceral_name_normalize`, `carceral_org_strip`, `category_auto_correct`, `category_from_file`, `category_llm_correct`, `category_standardize`, `cc_brand`, `cc_format`, `cc_mask`, `cc_validate`, `clamp`, `collapse_whitespace`, `comma_decimal`, `company_extract_legal`, `company_normalize`, `company_strip_legal`, `country_standardize`, `currency_strip`, `cusip_format`, `cusip_validate`, `date_eu`, `date_iso8601`, `date_parse`, `date_shift`, `date_us`, `date_validate`, `datetime_iso8601`, `double_metaphone_alt`, `double_metaphone_primary`, `ean_validate`, `ein_format`, `email_canonical`, `email_extract_domain`, `email_lowercase`, `email_mask`, `email_normalize`, `email_validate`, `extract_day`, `extract_day_of_week`, `extract_month`, `extract_numbers`, `extract_quarter`, `extract_year`, `fill_zero`, `fix_mojibake`, `fraction_to_decimal`, `gender_standardize`, `iban_format`, `iban_validate`, `icd10_format`, `imei_validate`, `initial_expand`, `isbn_normalize`, `isbn_validate`, `isin_validate`, `latlng_pack`, `lowercase`, `luhn_validate`, `merge_name`, `mls_normalize`, `name_initials`, `name_proper`, `name_script`, `name_transliterate`, `nickname_standardize`, `normalize_line_endings`, `normalize_quotes`, `normalize_unicode`, `npi_validate`, `null_standardize`, `ordinal_to_int`, `pad_left`, `pad_right`, `percentage_normalize`, `phone_country_code`, `phone_digits`, `phone_e164`, `phone_national`, `phone_validate`, `remove_digits`, `remove_emojis`, `remove_html_tags`, `remove_punctuation`, `remove_urls`, `roman_to_int`, `round`, `scientific_to_decimal`, `sku_normalize`, `soundex`, `split_address`, `split_name`, `split_name_reverse`, `ssn_format`, `ssn_mask`, `ssn_validate`, `state_abbreviate`, `state_expand`, `strip`, `strip_middle`, `strip_suffixes`, `strip_titles`, `swift_format`, `swift_validate`, `title_case`, `to_integer`, `truncate`, `unit_normalize`, `uppercase`, `url_canonical`, `url_extract_domain`, `url_normalize`, `url_strip_tracking`, `url_strip_www`, `vat_format`, `vat_validate`, `zip_normalize` |
+| Domain packs | `_DOMAINS` | `learn_config(domain=...)` | `carceral`, `ecommerce`, `finance`, `healthcare`, `people_hr`, `real_estate` |
+| Canonicalize kinds | `CanonicalizeKind` | `canonicalize` op | `email`, `name`, `phone`, `postal` |
+
+## Environment variables (index)
+
+5 `GOLDENFLOW_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:
+
+- **ENGINE** (1): `GOLDENFLOW_ENGINE`
+- **FUSED** (1): `GOLDENFLOW_FUSED_APPLY`
+- **LLM** (1): `GOLDENFLOW_LLM`
+- **NATIVE** (2): `GOLDENFLOW_NATIVE`, `GOLDENFLOW_NATIVE_CSV_PARALLEL_MIN_BYTES`
+
+{/* config-matrix:generated:end */}
+
+## See also
+
+- [Overview](/goldenflow/overview), [CLI](/goldenflow/cli), [Performance](/goldenflow/performance).

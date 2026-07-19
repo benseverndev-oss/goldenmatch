@@ -1,0 +1,107 @@
+---
+title: "Config matrix"
+description: "The full matrix of GoldenCheck config knobs -- generated from the schema so it never drifts."
+---
+
+The exhaustive, always-current reference for GoldenCheck configuration: the
+`goldencheck.yml` schema, the finding-severity vocabulary, and every
+`GOLDENCHECK_*` runtime knob. Built for humans and AI agents that need one
+complete map of what is configurable.
+
+<Info>
+Everything below the line is **generated from code** (`scripts/gen_config_matrix.py`)
+and verified in CI, so it can never silently drift. The guidance above the line is
+hand-authored. See [Overview](/goldencheck/overview) and [CLI](/goldencheck/cli)
+for walkthroughs.
+</Info>
+
+## How GoldenCheck is configured
+
+Config lives in a `goldencheck.yml` file loaded into `GoldenCheckConfig`:
+
+- **`settings`** -- run-wide knobs: `sample_size`, `severity_threshold` (the
+  floor at which a finding is reported), and `fail_on` (the level that fails the
+  run).
+- **`columns`** -- per-column `ColumnRule`s (`type`, `required`, `nullable`,
+  `format`, `unique`, `range`, `enum`, `outlier_stddev`).
+- **`relations`** -- cross-column `RelationRule`s.
+- **`ignore`** -- suppress specific `(column, check)` findings.
+
+Findings carry a `Severity` (`INFO` < `WARNING` < `ERROR`); `severity_threshold`
+and `fail_on` are compared against it.
+
+{/* config-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_config_matrix.py --write */}
+
+## Config object reference
+
+Every config object in the pydantic tree(s), generated from the package schema. Nested objects link by name.
+
+### `GoldenCheckConfig`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `version` | int | `1` |  |
+| `settings` | Settings | _(default Settings)_ | [`Settings`](#settings) |
+| `columns` | dict[str, ColumnRule] | `{}` | [`ColumnRule`](#columnrule) |
+| `relations` | list[RelationRule] | `[]` | [`RelationRule`](#relationrule) |
+| `ignore` | list[IgnoreEntry] | `[]` | [`IgnoreEntry`](#ignoreentry) |
+
+### `Settings`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `sample_size` | int | `100000` |  |
+| `severity_threshold` | str | `'warning'` |  |
+| `fail_on` | str | `'error'` |  |
+
+### `ColumnRule`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `type` | str | **required** |  |
+| `required` | bool \| None | `None` |  |
+| `nullable` | bool \| None | `None` |  |
+| `format` | str \| None | `None` |  |
+| `unique` | bool \| None | `None` |  |
+| `range` | list[float] \| None | `None` |  |
+| `enum` | list[str] \| None | `None` |  |
+| `outlier_stddev` | float \| None | `None` |  |
+
+### `RelationRule`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `type` | str | **required** |  |
+| `columns` | list[str] | **required** |  |
+
+### `IgnoreEntry`
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `column` | str | **required** |  |
+| `check` | str | **required** |  |
+
+## Enumerated vocabularies
+
+Allowed values for the `str`-typed / registry-backed fields above.
+
+| Vocabulary | Source | Applies to | Values |
+|---|---|---|---|
+| Finding severity | `Severity` | `Settings.severity_threshold` / `fail_on` | `ERROR`, `INFO`, `WARNING` |
+
+## Environment variables (index)
+
+6 `GOLDENCHECK_*` runtime knob(s) read by the package, scanned from source so this is complete. Grouped by area:
+
+- **AGENT** (1): `GOLDENCHECK_AGENT_TOKEN`
+- **FORCE** (1): `GOLDENCHECK_FORCE_TUI`
+- **LLM** (2): `GOLDENCHECK_LLM_BUDGET`, `GOLDENCHECK_LLM_MODEL`
+- **NATIVE** (1): `GOLDENCHECK_NATIVE`
+- **SCAN** (1): `GOLDENCHECK_SCAN_THREADS`
+
+{/* config-matrix:generated:end */}
+
+## See also
+
+- [Overview](/goldencheck/overview) and [CLI](/goldencheck/cli).
+- [Native acceleration](/goldencheck/native) -- the `GOLDENCHECK_NATIVE` toggle in context.
