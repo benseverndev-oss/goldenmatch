@@ -2,8 +2,9 @@
 //! The structured contract lives in the core crate; Python serializes the
 //! input dict to JSON, this deserializes -> calls the core -> serializes back.
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
-    sparse_match_floor, ColumnStats, ExtrapolationInput, PlannerInput,
+    assemble_strong_id_union, classify_columns, decide_plan, exact_matchkey_floor,
+    extrapolate_pair_count, finalize_strong_id_union, sparse_match_floor, BlockingColumnInput,
+    ColumnStats, ExtrapolationInput, PlannerInput, UnionFinalizeInput,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -56,4 +57,25 @@ pub fn autoconfig_exact_matchkey_floor(input_json: &str) -> PyResult<String> {
         .ok_or_else(|| PyValueError::new_err("missing/invalid col_type"))?;
     let floor = exact_matchkey_floor(col_type);
     Ok(serde_json::json!({ "floor": floor }).to_string())
+}
+
+/// Blocking selection, phase 1 (#1207 strong-identifier union): a JSON array of
+/// `BlockingColumnInput` -> a JSON array of `UnionPass` (candidate passes) or `null`.
+#[pyfunction]
+pub fn autoconfig_assemble_strong_id_union(cols_json: &str) -> PyResult<String> {
+    let cols: Vec<BlockingColumnInput> = serde_json::from_str(cols_json)
+        .map_err(|e| PyValueError::new_err(format!("bad BlockingColumnInput json: {e}")))?;
+    let out = assemble_strong_id_union(&cols);
+    serde_json::to_string(&out).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Blocking selection, phase 2 (#1207 strong-identifier union): a JSON
+/// `UnionFinalizeInput` -> a JSON `BlockingConfigOut` (the emitted `multi_pass`
+/// union) or `null`.
+#[pyfunction]
+pub fn autoconfig_finalize_strong_id_union(input_json: &str) -> PyResult<String> {
+    let input: UnionFinalizeInput = serde_json::from_str(input_json)
+        .map_err(|e| PyValueError::new_err(format!("bad UnionFinalizeInput json: {e}")))?;
+    let out = finalize_strong_id_union(&input);
+    serde_json::to_string(&out).map_err(|e| PyValueError::new_err(e.to_string()))
 }

@@ -119,10 +119,20 @@ null_rate, cardinality_ratio)` — no extra host input.
      `blocking-union.parity.test.ts` (Python-oracle fixture): TS emits the SAME
      union as Python on the null-sparse multi-source case, and the SAME name
      fallback on the bare-`first`/`last` case. **#1317 closed.**
-3. **Python reroute.** Route `_build_strong_identifier_union` + the call-site
-   survivor filtering through the core (native when the wheel carries the symbol,
-   pure-Python fallback matching the core otherwise). Equivalence test
-   Python == core golden. Wheel republish is CI's job.
+3. **Python reroute (SHIPPED).** `build_blocking` routes the #1207 union DECISION
+   through the shared core when the `goldenmatch-native` wheel carries the symbol
+   (`autoconfig_assemble_/finalize_strong_id_union` pyo3 shims + the
+   `native_enabled("autoconfig")` + `hasattr` gate, mirroring the planner), else
+   the legacy `_build_strong_identifier_union` + call-site survivor filter (kept
+   BYTE-UNCHANGED — its direct unit tests still pass verbatim). The host still
+   MEASURES OR-coverage + per-pass scale-safety; the core ASSEMBLES + gates. A
+   pyo3-free pure-Python mirror (`blocking_union_core.py`,
+   `assemble_/finalize_strong_id_union_pure`) is the symbol-less-wheel fallback.
+   Proven three ways: (a) the pure mirror reproduces `select_blocking_vectors.json`
+   (Python == Rust == TS); (b) native IS the Rust core, exercised by the `native`
+   CI lane; (c) an equivalence test that the core path == the legacy path on both
+   a union-firing and a decline dataset. Wheel republish is CI's job. Default
+   users (no wheel) are byte-unchanged.
 
 Later increments can migrate the rest of `build_blocking` (exact-pool pick,
 compound fallback, name fallback) into the core the same way; the union is first

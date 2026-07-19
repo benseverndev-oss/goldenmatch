@@ -36,6 +36,11 @@ from goldenmatch.core.autoconfig_discriminative import (
     should_demote_attribute_field,
     should_veto_exact,
 )
+from goldenmatch.core.blocking_union_core import (
+    assemble_union,
+    finalize_union,
+    union_via_core_enabled,
+)
 from goldenmatch.core.complexity_profile import DataProfile
 from goldenmatch.core.profile_emitter import _emitter_stack, current_emitter
 from goldenmatch.core.profiler import _guess_type
@@ -3173,37 +3178,89 @@ def build_blocking(
             return _project_pairs_per_row(pb) <= _blocking_pairs_per_row_budget()
         return True
 
-    union_cfg = _build_strong_identifier_union(profiles, df, n_rows_full=n_rows_full)
-    if union_cfg is not None:
-        id_passes: list[BlockingKeyConfig] = []
-        other_passes: list[BlockingKeyConfig] = []
-        for p in union_cfg.passes or []:
-            if len(p.fields) == 1 and _col_types.get(p.fields[0]) in _STRONG_EXACT_TYPES:
-                id_passes.append(p)
-            else:
-                other_passes.append(p)
-        # Strong-id singletons: gate on the NON-NULL projected block (the static
-        # blocker drops null keys). Name/geo passes: standard #715/#876 gate.
-        surviving_ids = [p for p in id_passes if _id_pass_scale_safe_nonnull(p.fields[0])]
-        surviving_other = [p for p in other_passes if _pass_is_bounded(p)]
-        survivors = surviving_ids + surviving_other
-        if surviving_ids and len(survivors) >= 2:
-            primary = survivors[0]
-            logger.info(
-                "Auto-selecting strong-identifier blocking UNION (%d passes, "
-                "%d strong-id) on null-sparse data: no single exact key cleared "
-                "the 0.20 null ceiling; union OR-coverage restores the dropped "
-                "population. Strong-id passes gated on non-null block size "
-                "(null keys are dropped at runtime). See #1207.",
-                len(survivors), len(surviving_ids),
-            )
-            return BlockingConfig(
-                keys=[primary],
-                strategy="multi_pass",
-                passes=survivors,
-                max_block_size=max_safe_block,
-                skip_oversized=True,
-            )
+    if union_via_core_enabled():
+        # #1317 increment 3: route the #1207 union DECISION through the shared
+        # native ``autoconfig-core`` kernel (byte-identical to the pure-Python
+        # path below; see ``blocking_union_core``). The host still MEASURES the
+        # two row-level signals (OR-coverage + per-pass scale-safety); the core
+        # ASSEMBLES the candidate passes and applies the coverage/survivor gates.
+        _union_cols = [
+            {
+                "name": p.name,
+                "col_type": p.col_type,
+                "null_rate": _null_rate(p.name),
+                "cardinality_ratio": float(p.cardinality_ratio or 0.0),
+            }
+            for p in profiles
+        ]
+        _cand = assemble_union(_union_cols)
+        if _cand is not None:
+            _cov = _union_coverage(df, [list(p["fields"]) for p in _cand])
+            _survives = [
+                _id_pass_scale_safe_nonnull(p["fields"][0])
+                if p["is_strong_id"]
+                else _pass_is_bounded(
+                    BlockingKeyConfig(fields=list(p["fields"]), transforms=list(p["transforms"]))
+                )
+                for p in _cand
+            ]
+            _out = finalize_union(_cand, _cov, _survives, max_safe_block)
+            if _out is not None:
+                logger.info(
+                    "Auto-selecting strong-identifier blocking UNION via the shared "
+                    "native core (%d passes) on null-sparse data. See #1207/#1317.",
+                    len(_out["passes"]),
+                )
+                return BlockingConfig(
+                    keys=[
+                        BlockingKeyConfig(
+                            fields=list(k["fields"]), transforms=list(k["transforms"])
+                        )
+                        for k in _out["keys"]
+                    ],
+                    strategy="multi_pass",
+                    passes=[
+                        BlockingKeyConfig(
+                            fields=list(p["fields"]), transforms=list(p["transforms"])
+                        )
+                        for p in _out["passes"]
+                    ],
+                    max_block_size=int(_out["max_block_size"]),
+                    skip_oversized=True,
+                )
+        # The core declined the union -> fall through to the name fallback below.
+    else:
+        union_cfg = _build_strong_identifier_union(profiles, df, n_rows_full=n_rows_full)
+        if union_cfg is not None:
+            id_passes: list[BlockingKeyConfig] = []
+            other_passes: list[BlockingKeyConfig] = []
+            for p in union_cfg.passes or []:
+                if len(p.fields) == 1 and _col_types.get(p.fields[0]) in _STRONG_EXACT_TYPES:
+                    id_passes.append(p)
+                else:
+                    other_passes.append(p)
+            # Strong-id singletons: gate on the NON-NULL projected block (the static
+            # blocker drops null keys). Name/geo passes: standard #715/#876 gate.
+            surviving_ids = [p for p in id_passes if _id_pass_scale_safe_nonnull(p.fields[0])]
+            surviving_other = [p for p in other_passes if _pass_is_bounded(p)]
+            survivors = surviving_ids + surviving_other
+            if surviving_ids and len(survivors) >= 2:
+                primary = survivors[0]
+                logger.info(
+                    "Auto-selecting strong-identifier blocking UNION (%d passes, "
+                    "%d strong-id) on null-sparse data: no single exact key cleared "
+                    "the 0.20 null ceiling; union OR-coverage restores the dropped "
+                    "population. Strong-id passes gated on non-null block size "
+                    "(null keys are dropped at runtime). See #1207.",
+                    len(survivors), len(surviving_ids),
+                )
+                return BlockingConfig(
+                    keys=[primary],
+                    strategy="multi_pass",
+                    passes=survivors,
+                    max_block_size=max_safe_block,
+                    skip_oversized=True,
+                )
 
     # ── Check if name-based fallback would also be oversized ──
     # #715: the name path picks ONE primary name column (pattern_names[0], else
