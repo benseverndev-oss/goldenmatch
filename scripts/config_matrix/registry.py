@@ -147,6 +147,8 @@ REGISTRY: dict[str, PackageSpec] = {
             ("configuration.mdx", "goldenmatch.config.schemas:VALID_STRATEGIES"),
             ("configuration.mdx", "goldenmatch.config.schemas:VALID_STANDARDIZERS"),
             ("backends-and-scale.mdx", "goldenmatch.core.execution_plan:BackendName"),
+            ("backends-and-scale.mdx", "goldenmatch.core.execution_plan:ClusteringStrategy"),
+            ("auto-config.mdx", "goldenmatch.core.autoconfig_controller:_PLANNING_EFFORTS"),
         ),
     ),
     "goldencheck": PackageSpec(

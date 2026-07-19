@@ -95,6 +95,17 @@ The distributed connected-components algorithm is a randomized contraction (Bög
   Debug the prep-versus-kernel split for the bucket backend with `GOLDENMATCH_BUCKET_DEBUG=1`. It prints a per-bucket prep / kernel / post-filter timing breakdown. It is off by default, costs nothing, and does not change output.
 </Note>
 
+## Clustering strategies
+
+Once pairs are scored, GoldenMatch groups the surviving edges into entities. The planner picks a `clustering_strategy` to match the backend and scale; you can also set it explicitly in config.
+
+| Strategy | When it runs | How it works |
+|----------|--------------|--------------|
+| `in_memory` | Default, single machine | In-memory union-find over the full edge set. Fastest when the graph fits in RAM. |
+| `partitioned_union_find` | Large single-machine pair sets | Disk-partitioned union-find, so the edge set is not bounded by RAM. |
+| `streaming_cc` | Chunked / out-of-core runs | Streaming connected-components that consumes edges without materializing the whole graph. |
+| `distributed_wcc` | Ray cluster (100M+) | Distributed weakly-connected-components (randomized contraction) that resolves components spanning partitions, with no driver-side union-find. See the Distributed Phase 5 section above. |
+
 ## Native acceleration
 
 `pip install goldenmatch` ships the Rust kernel (`goldenmatch-native`) on common platforms. **Rust is the reference implementation** (2026-07 reference-mode change); the pure-Python paths are the lossy fallback used when the wheel is absent. The `GOLDENMATCH_NATIVE` environment variable has **three** modes:
