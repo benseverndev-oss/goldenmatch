@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .render import ROOT, _resolve_vocab, scan_env_vars
+from .render import MARKER_START, ROOT, _resolve_vocab, scan_env_vars
 
 # Pages whose whole job is to describe old/removed knobs.
 _EXCLUDE_STEMS = re.compile(
@@ -49,10 +49,23 @@ def _prose_pages(spec) -> list[Path]:
     doc_dir = (ROOT / spec.doc_path).parent
     pages = []
     for p in sorted(doc_dir.rglob("*.mdx")):
-        if p.name == "config-matrix.mdx" or _EXCLUDE_STEMS.search(p.stem):
+        if _EXCLUDE_STEMS.search(p.stem):
             continue
         pages.append(p)
     return pages
+
+
+def _scannable_text(page: Path) -> str:
+    """The prose region of a page to check for dead references. For the config
+    matrix, only the hand-authored region ABOVE the generated marker can rot --
+    the generated block is rendered from the source of truth, so scanning it would
+    be circular. Every other page is scanned whole."""
+    text = page.read_text(encoding="utf-8", errors="ignore")
+    if page.name == "config-matrix.mdx":
+        cut = text.find(MARKER_START)
+        if cut != -1:
+            text = text[:cut]
+    return text
 
 
 # Backticked value tokens in a doc. Includes `.`/`-` so dotted registry names
@@ -90,7 +103,7 @@ def stale_env_refs(spec) -> list[RefFinding]:
     rx = re.compile(re.escape(prefix) + r"_[A-Z0-9_]+")
     findings: list[RefFinding] = []
     for page in _prose_pages(spec):
-        for i, line in enumerate(page.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+        for i, line in enumerate(_scannable_text(page).splitlines(), 1):
             if _REMOVAL_CTX.search(line):
                 continue
             for tok in set(rx.findall(line)):
