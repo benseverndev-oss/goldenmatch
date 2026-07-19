@@ -25,7 +25,7 @@ import pkgutil
 import re
 import types
 import typing
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
@@ -103,6 +103,15 @@ def render_type(ann: object) -> tuple[str, list[str], list[type]]:
     return _clean(str(ann).replace("typing.", "")), [], []
 
 
+def _neutral_repr(val: object) -> str:
+    """Platform-neutral repr for a default value. A `pathlib.Path` reprs as
+    `WindowsPath(...)` vs `PosixPath(...)` by OS, which would make the generated
+    doc differ between a Windows dev box and the Linux CI runner (a flapping gate)."""
+    if isinstance(val, PurePath):
+        return f"Path({str(val).replace(chr(92), '/')!r})"
+    return repr(val)
+
+
 def _default_repr(default: object, factory=None) -> str:
     if default is PydanticUndefined and factory is None:
         return "**required**"
@@ -116,7 +125,7 @@ def _default_repr(default: object, factory=None) -> str:
         return f"_(default {type(default).__name__})_"
     if default is inspect.Parameter.empty:
         return "**required**"
-    return f"`{default!r}`"
+    return f"`{_neutral_repr(default)}`"
 
 
 def _model_row_lines(fname: str, type_str: str, choices, nested, description, alias) -> str:
@@ -235,7 +244,7 @@ def render_cli_section(cli_module: str) -> str:
             if getattr(p, "help", None):
                 notes = f"{notes} -- {_clean(p.help)}" if notes else _clean(p.help)
             required = getattr(p, "required", False)
-            default = "**required**" if required else f"`{p.default!r}`"
+            default = "**required**" if required else f"`{_neutral_repr(p.default)}`"
             lines.append(
                 f"| `{prefix.strip()}` | `{_clean(_opt_display(p))}` | {tname} | {default} | {notes} |"
             )
