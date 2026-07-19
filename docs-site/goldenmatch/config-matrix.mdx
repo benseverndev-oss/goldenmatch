@@ -953,25 +953,42 @@ Allowed values for the `str`-typed / registry-backed fields above.
 ### Scorers
 _`VALID_SCORERS` -- `MatchkeyField.scorer` / `NegativeEvidenceField.scorer`._
 
-| Value | Meaning |
-|---|---|
-| `alias_match` | Matches known name aliases and nicknames (Bob &lt;-> Robert). |
-| `audio_fp` | Audio-fingerprint similarity for sound clips. |
-| `date` | Damerau-Levenshtein over canonical ISO date digits; typo-tolerant date compare. |
-| `dice` | Dice coefficient over character bigrams. |
-| `embedding` | Cosine similarity of a model embedding of the field. |
-| `ensemble` | Weighted blend of several sub-scorers. |
-| `exact` | Exact string equality after transforms. |
-| `initialism_match` | Matches initials/acronyms against their expansions. |
-| `jaccard` | Jaccard overlap of token/character sets. |
-| `jaro_winkler` | Jaro-Winkler string similarity, strong on short names and typos. |
-| `levenshtein` | Normalized Levenshtein edit distance. |
-| `phash` | Perceptual-hash Hamming similarity for images. |
-| `qgram` | Q-gram (n-gram) overlap similarity. |
-| `radial` | Rotation/crop-invariant radial-variance image similarity. |
-| `record_embedding` | Cosine similarity of an embedding over several columns. |
-| `soundex_match` | Phonetic Soundex-code equality. |
-| `token_sort` | Token-sorted ratio; order-insensitive multi-word compare. |
+| Value | Meaning | Best for | Range |
+|---|---|---|---|
+| `alias_match` | Matches known name aliases and nicknames (Bob &lt;-> Robert). | Names with nicknames | 0 or 1 |
+| `audio_fp` | Audio-fingerprint similarity. | Audio clips | 0.0-1.0 |
+| `date` | Damerau-Levenshtein over canonical ISO date digits; typo-tolerant. | Dates (dob, birth_date) | 0.0-1.0 |
+| `dice` | Dice coefficient over character bigrams / bloom filters. | PPRL | 0.0-1.0 |
+| `embedding` | Cosine similarity of a model embedding of the field. | Semantic matching | 0.0-1.0 |
+| `ensemble` | Best of several sub-scorers (max of jaro_winkler / token_sort / soundex). | Names with reordering | 0.0-1.0 |
+| `exact` | Exact string equality after transforms. | Email, phone, ID | 0 or 1 |
+| `initialism_match` | Matches initials/acronyms against their expansions. | Acronyms, initials | 0 or 1 |
+| `jaccard` | Jaccard overlap of token/character sets or bloom filters. | PPRL | 0.0-1.0 |
+| `jaro_winkler` | Jaro-Winkler edit distance with a shared-prefix bonus. | Names | 0.0-1.0 |
+| `levenshtein` | Normalized Levenshtein edit distance. | General strings | 0.0-1.0 |
+| `phash` | Perceptual-hash Hamming similarity. | Images | 0.0-1.0 |
+| `qgram` | Q-gram (n-gram) overlap similarity. | General strings, typos | 0.0-1.0 |
+| `radial` | Rotation/crop-invariant radial-variance similarity. | Rotated/cropped images | 0.0-1.0 |
+| `record_embedding` | Cosine similarity of an embedding over several columns. | Cross-field semantic | 0.0-1.0 |
+| `soundex_match` | Phonetic Soundex-code equality. | Names | 0 or 1 |
+| `token_sort` | Sort the tokens, then ratio; order-insensitive. | Names, addresses | 0.0-1.0 |
+
+### Blocking strategies
+_`BlockingConfig.strategy` -- `BlockingConfig.strategy`._
+
+| Value | Meaning | Best for |
+|---|---|---|
+| `adaptive` | Static plus recursive sub-blocking of oversized blocks. | Default choice |
+| `ann` | Approximate nearest-neighbor over embeddings. | Semantic matching |
+| `ann_pairs` | Direct-pair ANN scoring (skips block materialization). | Faster ANN |
+| `canopy` | Cheap loose canopy pre-grouping. | Text-heavy data |
+| `learned` | Data-driven mined blocking predicates. | Auto-discovered rules |
+| `lsh` | MinHash / LSH sketching on a text column. | Near-duplicate text |
+| `multi_pass` | Union candidate pairs from several blocking passes. | Noisy data, best recall |
+| `perceptual` | Banded-Hamming LSH over perceptual image hashes. | Near-duplicate images |
+| `simhash` | SimHash LSH over embeddings. | Semantic near-duplicate text |
+| `sorted_neighborhood` | Slide a window over sorted records. | Typos in the blocking key |
+| `static` | Group records by an exact blocking key. | Clean data with reliable keys |
 
 ### Simple transforms
 _`VALID_SIMPLE_TRANSFORMS` -- `transforms` chains._

@@ -277,7 +277,28 @@ def render_mcp_section(mcp_module: str) -> str:
 # --- vocab section (flexible resolver) --------------------------------------
 
 
+def _literal_field(target: str) -> list[str] | None:
+    """If `target` is `module:Model.field` naming a pydantic field whose type is a
+    Literal, return its choices; else None. Lets a schema Literal (e.g.
+    BlockingConfig.strategy) be a first-class vocab."""
+    mod, _, attr = target.partition(":")
+    if "." not in attr:
+        return None
+    model_name, field = attr.split(".", 1)
+    model = getattr(importlib.import_module(mod), model_name, None)
+    if not (isinstance(model, type) and hasattr(model, "model_fields")) or field not in model.model_fields:
+        return None
+    ann = model.model_fields[field].annotation
+    for a in [ann, *typing.get_args(ann)]:
+        if typing.get_origin(a) is typing.Literal:
+            return [str(x) for x in typing.get_args(a)]
+    return []
+
+
 def _resolve_vocab(target: str) -> list[str]:
+    lit = _literal_field(target)
+    if lit is not None:
+        return lit
     obj = _import(target)
     if typing.get_origin(obj) is typing.Literal:
         return [str(a) for a in typing.get_args(obj)]
@@ -337,6 +358,10 @@ def _resolve_gloss(target: str, gloss) -> dict[str, str]:
     return {**derived, **curated}
 
 
+def _meaning(g) -> str:
+    return g if isinstance(g, str) else (g.get("meaning", "") if isinstance(g, dict) else "")
+
+
 def _render_vocab_section(vocabs) -> str:
     lines = ["## Enumerated vocabularies", "",
              "Allowed values for the `str`-typed / registry-backed fields above.", ""]
@@ -345,14 +370,25 @@ def _render_vocab_section(vocabs) -> str:
         gloss = entry[3] if len(entry) > 3 else None
         values = sorted(set(_resolve_vocab(target)))
         glosses = _resolve_gloss(target, gloss)
+        # Extra columns come from any per-value dict (e.g. scorers carry range /
+        # best_for); deterministic order.
+        extra: list[str] = []
+        for g in glosses.values():
+            if isinstance(g, dict):
+                extra += [k for k in g if k != "meaning" and k not in extra]
+        extra.sort()
         lines.append(f"### {title}")
         lines.append(f"_`{target.split(':')[-1]}` -- {applies}._")
         lines.append("")
-        if any(glosses.get(v) for v in values):
-            lines.append("| Value | Meaning |")
-            lines.append("|---|---|")
+        if extra or any(_meaning(glosses.get(v)) for v in values):
+            header = ["Value", "Meaning"] + [c.replace("_", " ").capitalize() for c in extra]
+            lines.append("| " + " | ".join(header) + " |")
+            lines.append("|" + "---|" * len(header))
             for v in values:
-                lines.append(f"| `{_code(v)}` | {_clean(glosses.get(v, ''))} |")
+                g = glosses.get(v, "")
+                cells = [f"`{_code(v)}`", _clean(_meaning(g))]
+                cells += [_clean(g.get(c, "") if isinstance(g, dict) else "") for c in extra]
+                lines.append("| " + " | ".join(cells) + " |")
         else:
             lines.append(", ".join(f"`{_code(v)}`" for v in values))
         lines.append("")

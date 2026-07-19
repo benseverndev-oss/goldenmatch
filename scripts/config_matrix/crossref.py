@@ -15,9 +15,7 @@ A per-package `env_allow` set covers anything those heuristics miss.
 """
 from __future__ import annotations
 
-import importlib
 import re
-import typing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,18 +59,9 @@ _TOKEN_RE = re.compile(r"`([a-z0-9_]+)`")
 
 
 def _canonical_set(target: str) -> set[str]:
-    """Resolve a doc_coverage target to its canonical value set. `module:CONST`
-    (frozenset / enum / Literal alias) goes through the vocab resolver; a
-    `module:Model.field` target reads that pydantic field's Literal choices."""
-    _, _, attr = target.partition(":")
-    if "." in attr:
-        mod, _, rest = target.partition(":")
-        model_name, field = rest.split(".", 1)
-        ann = getattr(importlib.import_module(mod), model_name).model_fields[field].annotation
-        for a in [ann, *typing.get_args(ann)]:
-            if typing.get_origin(a) is typing.Literal:
-                return {str(x) for x in typing.get_args(a)}
-        return set()
+    """The canonical value set for a doc_coverage target. `_resolve_vocab` already
+    handles `module:CONST` (frozenset / enum / Literal alias / callable) and
+    `module:Model.field` (a pydantic Literal field)."""
     return set(_resolve_vocab(target))
 
 
