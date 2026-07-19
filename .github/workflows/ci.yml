@@ -3292,6 +3292,16 @@ jobs:
           GOLDENFLOW_NATIVE: "0"
           GOLDENPIPE_NATIVE: "0"
           INFERMAP_NATIVE: "0"
+      - name: llms.txt / README capability counts match code (run once; all pkgs synced)
+        if: matrix.package == 'goldenmatch'
+        run: uv run python scripts/check_llms_counts.py
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
           GOLDENANALYSIS_NATIVE: "0"
       - name: Config-matrix drift check (${{ matrix.package }})
         run: uv run python scripts/gen_config_matrix.py --check ${{ matrix.package }}

@@ -404,6 +404,13 @@ config_matrix:
   - 'scripts/config_matrix/**'
   - 'scripts/gen_config_matrix.py'
   - 'scripts/test_config_matrix.py'
+  # llms.txt / README capability-count gate: the stated counts derive from the
+  # package source (already covered above), but a hand-edit to a surface must
+  # re-run the check too.
+  - 'scripts/check_llms_counts.py'
+  - 'packages/python/*/llms.txt'
+  - 'packages/python/*/README.md'
+  - 'llms.txt'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's

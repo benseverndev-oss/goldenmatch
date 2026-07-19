@@ -6,11 +6,11 @@
 Zero-config gets good results and returns the config it chose; the healer (`review_config`) reviews the results and suggests ranked, self-verified tweaks; apply them, results improve, repeat — closing the gap to expert-tuned without you being the expert. Wired into the default pipeline: `dedupe_df` attaches candidate suggestions to `result.suggestions` when a free signal fires (`dedupe_df(suggest=True)` verified, `heal=True` full loop; disable with `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`). Needs `goldenmatch[native]`; degrades gracefully without it. Docs: https://docs.bensevern.dev/goldenmatch/config-suggestions
 
 ## Interfaces
-- MCP Server: `goldenmatch mcp-serve` (16 agent tools + 24 data tools + 7 memory tools + 7 identity tools = 54 total)
-- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (54 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
+- MCP Server: `goldenmatch mcp-serve` (78 tools across data, agent, identity, memory, routing, and document groups)
+- Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (78 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (40 skills advertised in the agent card)
 - CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch autoconfig`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
-- Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~101 exports
+- Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~200 exports
 - TypeScript / Edge: `npm install goldenmatch` — same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel, and `enableSuggestWasm()` brings the config-suggestion "healer" (`dedupe({suggest, heal})`) to TS via suggest-core (pure-TS stays the default + byte-identical fallback)
 - REST API: `goldenmatch serve` on port 8000
 - SQL: Postgres (pgrx extension) + DuckDB UDFs — dedupe / match / score / auto-config + telemetry / identity graph
@@ -145,6 +145,6 @@ GoldenMatch is the headline package of a 6-package suite that composes into one 
 
 ## Docs
 - [Full docs](https://benseverndev-oss.github.io/goldenmatch/): 22 guides
-- [Full API reference](https://benseverndev-oss.github.io/goldenmatch/python-api): 101 exports
+- [Full API reference](https://benseverndev-oss.github.io/goldenmatch/python-api): 200 exports
 - [PyPI](https://pypi.org/project/goldenmatch/)
 - [GitHub](https://github.com/benseverndev-oss/goldenmatch)
