@@ -1,16 +1,17 @@
 ---
 title: "Backends and scale"
-description: "The Polars, chunked, DuckDB, and Ray backends, and the measured scale numbers for each."
-keywords: ["backend", "polars", "duckdb", "chunked", "ray", "scale", "performance"]
+description: "The polars-direct, bucket, chunked, DuckDB, and Ray backends, and the measured scale numbers for each."
+keywords: ["backend", "polars-direct", "bucket", "duckdb", "chunked", "ray", "scale", "performance"]
 ---
 
-GoldenMatch runs the same pipeline across four backends. The default is in-memory Polars; the others trade per-record speed for the ability to handle larger datasets without running out of memory.
+GoldenMatch runs the same pipeline across five backends (the `backend=` / `--backend` values). The in-memory default trades per-record speed for the others' ability to handle larger datasets without running out of memory.
 
 ## Backends
 
 | Backend | Range | How it works |
 |---------|-------|--------------|
-| `polars` (default) | < 500K rows | In-memory classic scorer. v3.1.0+: requires the `[polars]` extra; without it the planner routes to the Arrow-native paths, which measure faster (the Rust kernels carry the hot paths). |
+| `polars-direct` | < 500K rows | In-memory classic scorer, and the default when the native `block_scoring` kernel is unavailable. Named for the Polars frame path; v3.1.0+ requires the `[polars]` extra, and without it the planner routes to the faster Arrow-native paths (the Rust kernels carry the hot paths). |
+| `bucket` (default) | < 500K rows | Memory-bounded field-hash bucket scorer. The default in-memory route whenever the native `block_scoring` kernel is present (1.7-3.7x faster than `polars-direct` at 1K-60K rows); falls back to `polars-direct` otherwise. |
 | `chunked` | 5M+ rows, single machine | Streaming CSV reader plus a vectorized Polars cross-chunk join plus a block-keyed bucketed index. |
 | `duckdb` | 500K – 50M rows | Out-of-core pair store via DuckDB. Spills to disk, so RAM is not the ceiling. |
 | `ray` | ≥ 50M rows, distributed | Per-block remote tasks; matchkey config and exclude-pairs set shared zero-copy via the Ray object store. |
