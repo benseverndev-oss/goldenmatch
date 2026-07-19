@@ -142,6 +142,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         autoconfig::autoconfig_exact_matchkey_floor,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        autoconfig::autoconfig_assemble_strong_id_union,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        autoconfig::autoconfig_finalize_strong_id_union,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(suggest::suggest_config, m)?)?;
     m.add_function(wrap_pyfunction!(documents::documents_schema_validate, m)?)?;
     m.add_function(wrap_pyfunction!(

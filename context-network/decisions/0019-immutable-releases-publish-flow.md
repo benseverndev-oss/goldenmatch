@@ -39,5 +39,30 @@ turning OFF the immutable-releases repo setting to keep the old attach-after-
 publish flow — keeping immutability and fixing the flow is the better trade.
 Mirrored in the root `CLAUDE.md` "Post-fold GitHub Actions" note.
 
+## Update (2026-07-18) — CI cutter `cut-goldenmatch-release.yml`
+
+The SOP "push a bare `v*` tag" assumes an environment that CAN push tags. The
+managed dev/agent sandbox can't (HTTP 403), and the tempting fallback —
+`gh release create` by hand — is actively dangerous under immutable releases:
+publishing a release immediately SEALS the tag, and GitHub then permanently
+**tombstones the tag name** (`tag_name was used by an immutable release`).
+Deleting the release does not free it, so the version can never get a proper
+signed Release. This bit v3.5.0 (2026-07-18): an erroneous hand-cut published an
+empty immutable release, and even after deletion the tag was unrecoverable —
+3.5.0 shipped to PyPI + the MCP registry correctly but has no GitHub Release.
+
+Fix: `cut-goldenmatch-release.yml` (companion to `cut-native-release.yml`).
+A `workflow_dispatch` with a `version` input that (1) guards the version against
+main (pyproject/`__init__`/server.json lockstep + tag-is-new), (2) pushes the
+bare `v<version>` tag from the runner (a GITHUB_TOKEN push has `contents: write`
+and clears the sandbox 403), then (3) CALLS `publish-goldenmatch.yml` reusably.
+`publish-goldenmatch.yml` gained a `workflow_call` trigger for this; its
+`TAG`/`ref` expressions were unified across push/dispatch/call. The call is
+required because a GITHUB_TOKEN tag push does NOT re-trigger the `push: tags`
+event. Because the tag exists before publish runs, the final
+`gh release edit --draft=false` only flips the draft flag and never creates the
+tag ref (the step the ruleset/immutability blocks). New SOP for a `v*` release:
+bump + land the CHANGELOG on main, then run `cut-goldenmatch-release.yml`.
+
 ---
-**Classification:** decision/accepted • **Last updated:** 2026-06-18
+**Classification:** decision/accepted • **Last updated:** 2026-07-18

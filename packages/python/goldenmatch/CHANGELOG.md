@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Config-healer loop cost is now bounded and tunable (#1404).** `heal` (and
+  the `review_config` / `suggest_from_result` verify path it drives) could run up
+  to `step_cap × (1 + max_verify)` full pipeline passes per call — ~45 on the
+  defaults — plus a full goldencheck `blocking_risk` variant scan (O(distinct²)
+  per string column) re-run on the unchanged frame every iteration. Three cost
+  levers, all defaulting to byte-identical behavior:
+  - The goldencheck variant scan is **memoized for the whole heal loop** via a
+    new `variant_risk_cache()` scope (`core/suggest/adapter.py`) keyed on the
+    data-column set — it runs once over the frame instead of once per iteration.
+    Output is unchanged; only the cost moves.
+  - **Verify fan-out is tunable**: `review_config`/`suggest_from_result`/`heal`
+    take `max_verify`, and `GOLDENMATCH_SUGGEST_MAX_VERIFY` sets it globally
+    (default 8). Since the healer applies only the top surviving suggestion,
+    `max_verify=1` verifies just that candidate — the cheapest mode.
+  - **Marginal-gain early-stop**: `heal(min_health_gain=…)` /
+    `GOLDENMATCH_HEAL_MIN_HEALTH_GAIN` stops the loop once cluster-health gain
+    flattens (fail-open — a result without clusters never triggers a stop). Off
+    by default. `GOLDENMATCH_HEAL_STEP_CAP` also exposes the outer cap.
+
+## [3.5.0] - 2026-07-18
+
+<!-- README-callout
+**New `date` scorer for date fields (#1858).** `jaro_winkler` scores unrelated
+ISO birthdays 0.80+ (the fixed `YYYY-MM-DD` shape + shared digit alphabet
+dominate), so it can't tell a typo from a different person. The `date` scorer
+compares dates by Damerau-Levenshtein over the canonical digits — a typo scores
+0.90, an unrelated date 0.00 — with a `levenshtein` fallback for non-ISO input.
+Cross-surface (Python, native kernel, TypeScript), and a preflight check warns
+when a name-oriented scorer sits on a date field.
+-->
+
 ### Fixed
 
 - **Postgres identity resolution no longer autocommits per record (#1886).** The
@@ -20,9 +53,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   now wraps its whole write body in a single `IdentityStore.bulk_writes()`
   transaction -- N commits collapse to one and psycopg pipelines the statements.
   No-op for SQLite/Mongo; the resolve is now atomic per run.
+- **Unobserved `record_embedding` field no longer dilutes the weighted score
+  (#1859).** In the vectorized weighted scorer (`find_fuzzy_matches`), a
+  `record_embedding` field added its full weight to the score DENOMINATOR
+  unconditionally, while every other field type multiplied by an observed-value
+  mask -- so a row missing all its embedding columns still counted the field's
+  weight, diluting the pair score (the #1856 shape on a first-class weighted
+  scorer). It now masks the contribution out of both numerator and denominator
+  when a row is unobserved (all embedding columns null), pair-wise like every
+  other field. Clean data (no all-null embedding rows) is byte-identical.
 
 ### Added
 
+- **Date-aware `date` scorer (#1858).** A comparison scorer for date fields.
+  `jaro_winkler` on an ISO date scores unrelated birthdays 0.80+ (the fixed
+  `YYYY-MM-DD` shape, shared digit alphabet, and `19..`/`20..` prefix dominate),
+  so at any usable cutoff a typo is indistinguishable from a different person —
+  precision craters wherever blocking co-locates same-year records. `date`
+  parses both sides as ISO dates and scores by Damerau-Levenshtein over the eight
+  canonical digits (a swapped-digit typo is one edit): `d0→1.0 / d1→0.90 /
+  d2→0.75 / d≥3→0.0`, mirroring Splink's `DamerauLevenshtein<=2`. Non-ISO input
+  falls back to `levenshtein`. The canonical implementation lives in the Rust
+  `score-core` kernel and funnels to the native PyO3 extension, the pure-Python
+  fallback, and the TypeScript port (byte-identical, parity-tested). Not
+  auto-config-reachable (date columns are skipped as fuzzy fields), so it is for
+  hand-written / Splink-converted configs; a preflight check warns when a
+  name-oriented scorer (`jaro_winkler` / `token_sort` / ...) is placed on a date
+  field. Bumps `goldenmatch-native` to 0.1.18.
 - **Fused Fellegi-Sunter match now covers multi-pass blocking.** New
   `match_fused_fs_multipass_ready` / `run_match_fused_fs_multipass_arrow`
   (`core/fused_match.py`) expand the fused FS path from single-static-key

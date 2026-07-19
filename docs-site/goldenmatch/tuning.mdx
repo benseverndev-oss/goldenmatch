@@ -291,6 +291,9 @@ These tune the [healer](/goldenmatch/config-suggestions) — the `review_config`
 | Variable | Default | Effect | When to set |
 |----------|---------|--------|-------------|
 | `GOLDENMATCH_SUGGEST_ON_DEDUPE` | on | Master switch for the **default-pipeline** healer surface (Python `dedupe_df` / CLI / servers and the TS/WASM `dedupe(rows, { ... })`): attaches advisory `suggestions` when a free trigger fires. Set `0` to disable the trigger + attach entirely (the explicit `suggest=`/`heal=` opt-ins and `review_config` still work). | Set `0` to opt out of the advisory default-run surface. |
+| `GOLDENMATCH_HEAL_STEP_CAP` | `5` | Max healer iterations -- the coarsest cost lever (each step is a full dedupe plus up to `SUGGEST_MAX_VERIFY` verification re-runs). Clamped to >= 1; invalid input falls back to the default. | Lower to cap healer cost on large inputs; raise to allow more repair steps. |
+| `GOLDENMATCH_HEAL_MIN_HEALTH_GAIN` | unset (disabled) | Marginal-gain early stop (#1404): stop the heal loop once an iteration's cluster-health gain falls below this float. Unset = run up to `HEAL_STEP_CAP`; `0.0` stops on the first non-improving step. | Set a small positive value to stop early once suggestions stop paying off. |
+| `GOLDENMATCH_SUGGEST_MAX_VERIFY` | `8` | Max suggestions verified by a full pipeline re-run before the remaining tail passes through unverified. Each verified candidate is one extra re-run. Values `< 1` are clamped to `1`. | Lower to cut healer cost; raise to verify more candidates end-to-end. |
 | `GOLDENMATCH_SUGGEST_HEALTH` | `cohesion` | Self-verify health proxy the gate uses to keep only non-worsening suggestions. `cohesion` (precision-sensitive `min_edge` × saturating coverage) is the default since 2026-06; `legacy` restores the older `matched_rate × avg_conf − HHI` proxy. | `legacy` only to reproduce pre-2026-06 suggestion behavior. The bake-off showed `cohesion` lifts live recovery 0.15 → 0.54 with no real-pair net-negatives. |
 | `GOLDENMATCH_SUGGEST_COHESION` | `min_edge` | Cohesion statistic: `min_edge`, `mean_bottomk_edge`, or `edge_below_cutoff_fraction`. | Leave alone; `min_edge` won the bake-off. |
 | `GOLDENMATCH_SUGGEST_COVERAGE_CAP` | `0.50` | Coverage-saturation cap for the cohesion proxy (matched-rate at which coverage saturates to 1.0). | Leave alone; `0.50` is the safe operating point — tighter caps let a real-pair net-negative through. |
@@ -510,11 +513,13 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_NATIVE` | `auto` | `auto` / `1` / `0` | Native kernel gate. `1` requires native (raises if missing); `0` forces Python. |
 | `GOLDENMATCH_NATIVE_ADDRESS_NORMALIZE` | off | `1` | Polars-native address-normalize fast path. |
 | `GOLDENMATCH_FRAME` | `arrow` | `arrow`/`polars` | Frame backend. `arrow` is the DEFAULT since v3.0.0 (measured ~36% faster end-to-end on the 100K zero-config A/B): file ingest via pyarrow, the whole engine runs on the Frame seam, and result frames are `pyarrow.Table`. Since v3.1.0 polars is an OPTIONAL dependency and the polars-free install is the FAST configuration (measured head-to-head at 500K: 7.11s polars-free vs 7.55s polars-present, identical outputs -- the Rust fused kernels carry the hot paths). `polars` here requires `pip install 'goldenmatch[polars]'` (a clear error names the extra otherwise); the extra is a COMPATIBILITY surface (this classic lane, the kernel-absent golden fast replay, goldencheck cell-quality weighting), not an accelerator. Output-equivalence enforced by a differential harness + frozen fixtures. |
+| `GOLDENMATCH_FRAME_LANE` | `1` (on) | `0`/`1` | Arrow "frame lane" for the output-writing pipeline (keeps the spine arrow through the final collect). `0` restores the classic polars shim. Ignored when `GOLDENMATCH_COLUMNAR_PIPELINE=1`. |
 | `GOLDENMATCH_AUTOCONFIG_MEMORY` | `1` | `0`/`1` | Cross-run auto-config memory. `0` for reproducible/CI runs. |
 | `GOLDENMATCH_PLANNING_EFFORT` | `normal` | `fast`/`normal`/`thinking`/`einstein` | Auto-config iteration budget. |
 | `GOLDENMATCH_DISTRIBUTED_PIPELINE` | unset | `1`/`2` | Distributed execution phase. `2` = real streaming (needs `__row_id__`, writes to `output_path`). |
 | `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY` | `0` | `0`/`1` | Let the planner pick `ray`. Does not enable streaming on its own. |
 | `GOLDENMATCH_PLANNER_BUCKET` | `1` | `0`/`1` | Allow the planner to pick `bucket`. |
+| `GOLDENMATCH_BUCKET_DEFAULT` | `1` (on) | `0`/`off`/`false`/`no` | Default in-memory **bucket** FS route on runs up to 750K rows (the #1798-safe path). Opt out to force the legacy per-block path. Distinct from `GOLDENMATCH_FS_DEFAULT_BUCKET`, which routes the FS bucket path itself. |
 | `GOLDENMATCH_ATTRIBUTE_DEMOTION` | `1` (on) | `0`/`1` | Demote an EXACT matchkey on a shared group/list/facility value (shared clinic phone, campaign id, facility NPI) when its large shared-value groups do not co-agree on the person name. `0` restores the pre-2.7.0 behavior. |
 | `GOLDENMATCH_DISCRIMINATIVE_VETO` | `1` (on) | `0`/`1` | The #1351 exact-key discriminative-power veto (demote a shared-locality exact key). `0` disables it. |
 | `GOLDENMATCH_DISCRIMINATIVE_TAU` | `0.5` | float [0,1] | Co-agreement floor for the discriminative veto: an exact key whose large shared-value groups co-agree on the person name below this fraction is vetoed. Out-of-range values fall back to the default. |
@@ -522,6 +527,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_BASE_STORE` | `auto` | `auto`/`memory`/`lance` | Candidate base store for the ANN `match_one` path. `auto` picks Lance only above ~2M rows when installed. |
 | `GOLDENMATCH_DUCKDB_SCORE_DB` | unset | path | DuckDB pair-store spill path. |
 | `GOLDENMATCH_NATIVE_RAYON_MIN_PAIRS` | `20000000` | int | Native kernel sequential-vs-rayon threshold. |
+| `GOLDENMATCH_NATIVE_RAYON_MIN_BLOOM_ROWS` | `10000` | int | Native PPRL bloom-filter sequential-vs-rayon threshold (row count). `0` = always parallel; a very large value = always sequential. Sibling of `_RAYON_MIN_PAIRS` (the #688-style futex-park guard). |
 | `GOLDENMATCH_CONFIG_LINT` | `warn` | `warn`/`strict`/`off` | Pre-flight config linter: warn-and-run, refuse on error, or skip. |
 | `GOLDENMATCH_THROUGHPUT` | `0` (off) | `0`/`1` | Enable the sketch-then-verify throughput tier. Equivalent to `dedupe_df(throughput=True)`. |
 | `GOLDENMATCH_THROUGHPUT_RECALL` | `0.95` | float | LSH recall target; tunes the band/row split. |
@@ -567,6 +573,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 |----------|---------|--------|
 | `GOLDENMATCH_AUTOCONFIG_LLM` | `0` | LLM config fallback (needs API key). |
 | `GOLDENMATCH_AUTOCONFIG_INDICATOR_BUDGET` | unset | `fast` skips expensive indicators. |
+| `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE` | `1` (on) | Keep auto-config on the arrow-native path instead of coercing the arrow input to polars. Auto-forced off (warn-once per feature) for the sub-features that still assume a polars target (throughput tier, cross-source match). `0` = always coerce arrow→polars. |
 | `GOLDENMATCH_AUTOCONFIG_FORCE_INCLUDE` / `_FORCE_EXCLUDE` | unset | Force columns into/out of analysis. |
 | `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP` | `0` (off) | Auto-detect correlated field groups for survivorship. Equivalent to `field_group_detection: true` in `golden_rules`. Off = byte-identical to prior behavior. Group promotions are visible in the lineage `golden_records` section, `explain --cluster`, and the MCP `lineage` tool. |
 | `GOLDENMATCH_AUTOCONFIG_SAMPLE_STRATEGY` | stratified | `random` forces random sampling. |

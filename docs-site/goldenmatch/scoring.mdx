@@ -13,6 +13,7 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `exact` | Binary 0/1 match | 0 or 1 | Email, phone, ID |
 | `jaro_winkler` | Edit distance with prefix bonus | 0.0--1.0 | Names |
 | `levenshtein` | Normalized Levenshtein distance | 0.0--1.0 | General strings |
+| `date` | Damerau-Levenshtein over canonical ISO digits | 0.0--1.0 | Dates (`dob`, `birth_date`) |
 | `token_sort` | Sort tokens, then ratio | 0.0--1.0 | Names, addresses |
 | `soundex_match` | Phonetic code comparison | 0 or 1 | Names |
 | `ensemble` | max(jaro_winkler, token_sort, soundex) | 0.0--1.0 | Names with reordering |
@@ -23,7 +24,32 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `name_freq_weighted_jw` | Jaro-Winkler modulated by US Census surname IDF | 0.0--1.0 | `last_name` / `surname` |
 | `given_name_aliased_jw` | Jaro-Winkler with alias-aware exact bonus | 0.0--1.0 | `first_name` / `given_name` |
 
-The last two ship as part of the bundled reference-data packs and are picked automatically by auto-config when a column matches the relevant name pattern AND its profiled `col_type` agrees. See [Reference Data](/goldenmatch/reference-data) for the full pack overview, refinement rules, and the col_type gate.
+The `name_freq_weighted_jw` / `given_name_aliased_jw` scorers ship as part of the bundled reference-data packs and are picked automatically by auto-config when a column matches the relevant name pattern AND its profiled `col_type` agrees. See [Reference Data](/goldenmatch/reference-data) for the full pack overview, refinement rules, and the col_type gate.
+
+### Date fields
+
+Do **not** score an ISO date with `jaro_winkler`. The fixed `YYYY-MM-DD` shape, the shared digit alphabet, and the common `19..`/`20..` prefix push *unrelated* birthdays to 0.80+, so a threshold that admits a one-digit typo also admits a different person — precision collapses on any date column that blocking co-locates by birth year.
+
+The `date` scorer parses both sides as ISO dates and compares them by Damerau-Levenshtein edit distance over the eight canonical digits (a swapped-digit typo is one edit), mapped so a single-digit typo stays high while an unrelated date drops to 0:
+
+```
+1980-01-01 vs 1980-01-01  -> 1.00   (same)
+1980-01-01 vs 1980-01-02  -> 0.90   (one-digit typo)
+1980-01-01 vs 1975-01-01  -> 0.75   (two edits)
+1980-01-01 vs 1975-11-30  -> 0.00   (unrelated)   # jaro_winkler gives this 0.80
+```
+
+Non-ISO input falls back to `levenshtein`. Auto-config already skips date columns as fuzzy fields, so `date` is for hand-written / Splink-converted configs; a preflight check warns when a name-oriented scorer (`jaro_winkler` / `token_sort` / ...) is placed on a date field.
+
+```yaml
+matchkeys:
+  - name: person
+    type: weighted
+    fields:
+      - field: dob
+        scorer: date
+        weight: 0.3
+```
 
 ## Fuzzy scoring
 

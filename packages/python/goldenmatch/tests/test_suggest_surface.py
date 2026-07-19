@@ -182,7 +182,7 @@ def test_heal_applies_in_order_then_stops(monkeypatch):
     class _Res:  # stand-in DedupeResult
         config = "CFG0"
     monkeypatch.setattr("goldenmatch._api.dedupe_df", lambda df, *, config=None, **k: _Res())
-    def _sugg(res, df, *, verify=False):
+    def _sugg(res, df, *, verify=False, max_verify=None):
         i = calls["sugg"]; calls["sugg"] += 1
         return seq[i] if i < len(seq) else []
     monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result", _sugg)
@@ -205,7 +205,7 @@ def test_heal_cycle_guard_breaks_on_repeated_id(monkeypatch):
         config = "CFG"
     monkeypatch.setattr("goldenmatch._api.dedupe_df", lambda df, *, config=None, **k: _Res())
     monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result",
-                        lambda res, df, *, verify=False: [s1])   # ALWAYS returns s1
+                        lambda res, df, *, verify=False, max_verify=None: [s1])   # ALWAYS returns s1
     monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
                         lambda cfg, s: cfg)
     out = surf.heal("DF", "CFG", step_cap=5)
@@ -216,7 +216,7 @@ def test_heal_step_cap(monkeypatch):
     import goldenmatch.core.suggest.surface as surf
     from goldenmatch.core.suggest.types import Suggestion
     n = {"i": 0}
-    def _sugg(res, df, *, verify=False):
+    def _sugg(res, df, *, verify=False, max_verify=None):
         n["i"] += 1
         return [Suggestion(id=f"s{n['i']}", kind="k", target="t", current_value=None,
                            proposed_value=None, rationale="", predicted_effect="",
@@ -228,6 +228,206 @@ def test_heal_step_cap(monkeypatch):
     monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion", lambda cfg, s: cfg)
     out = surf.heal("DF", "CFG", step_cap=3)
     assert len(out.trail) == 3   # stops at the cap (unique ids each step)
+
+
+# --- #1404: bounded heal-loop cost (cache + tunable caps + early-stop) -------
+
+
+def test_variant_risk_cache_scopes_one_scan_across_calls(monkeypatch):
+    # blocking_risk is O(distinct^2) per column; the cache runs it once per frame
+    # across a variant_risk_cache() scope. Assert it fires once for repeated
+    # _cached_blocking_risk calls in-scope, and every call outside a scope.
+    import goldenmatch.core.suggest.adapter as ad
+
+    calls = {"n": 0}
+
+    def _fake_blocking_risk(frame):
+        calls["n"] += 1
+        return {"name": 0.1}
+
+    monkeypatch.setattr("goldenmatch.core.quality.blocking_risk", _fake_blocking_risk)
+
+    class _DF:  # only .select is exercised by _cached_blocking_risk
+        def select(self, cols):
+            return cols
+
+    df = _DF()
+    cols = ["name", "city"]
+
+    # Outside a scope: computed every call.
+    ad._cached_blocking_risk(df, cols)
+    ad._cached_blocking_risk(df, cols)
+    assert calls["n"] == 2
+
+    # Inside a scope: computed once, then served from cache.
+    calls["n"] = 0
+    with ad.variant_risk_cache():
+        r1 = ad._cached_blocking_risk(df, cols)
+        r2 = ad._cached_blocking_risk(df, cols)
+        assert calls["n"] == 1
+        assert r1 == r2 == {"name": 0.1}
+        # A different column set is a distinct key -> a second scan.
+        ad._cached_blocking_risk(df, ["name"])
+        assert calls["n"] == 2
+
+    # Cache is torn down on scope exit.
+    calls["n"] = 0
+    ad._cached_blocking_risk(df, cols)
+    assert calls["n"] == 1
+
+
+def test_cached_blocking_risk_fail_open(monkeypatch):
+    import goldenmatch.core.suggest.adapter as ad
+
+    def _boom(frame):
+        raise RuntimeError("goldencheck exploded")
+
+    monkeypatch.setattr("goldenmatch.core.quality.blocking_risk", _boom)
+
+    class _DF:
+        def select(self, cols):
+            return cols
+
+    with ad.variant_risk_cache():
+        assert ad._cached_blocking_risk(_DF(), ["name"]) == {}
+
+
+def test_resolve_max_verify_kwarg_env_default(monkeypatch):
+    import goldenmatch.core.suggest.adapter as ad
+
+    monkeypatch.delenv("GOLDENMATCH_SUGGEST_MAX_VERIFY", raising=False)
+    assert ad._resolve_max_verify(None) == ad._MAX_VERIFY_CANDIDATES
+    assert ad._resolve_max_verify(3) == 3
+    assert ad._resolve_max_verify(0) == 1  # clamped to >= 1
+    monkeypatch.setenv("GOLDENMATCH_SUGGEST_MAX_VERIFY", "2")
+    assert ad._resolve_max_verify(None) == 2
+    assert ad._resolve_max_verify(5) == 5  # explicit kwarg beats env
+    monkeypatch.setenv("GOLDENMATCH_SUGGEST_MAX_VERIFY", "garbage")
+    assert ad._resolve_max_verify(None) == ad._MAX_VERIFY_CANDIDATES
+
+
+def test_verify_suggestions_honors_max_verify(monkeypatch):
+    # _verify_suggestions caps the per-candidate pipeline re-runs at the resolved
+    # fan-out; the tail passes through unverified. Prove max_verify=1 re-runs once.
+    import goldenmatch.core.suggest.adapter as ad
+    from goldenmatch.core.suggest.types import Suggestion
+
+    def _mk(i):
+        return Suggestion(id=f"s{i}", kind="lower_threshold", target="t",
+                          current_value=None, proposed_value=None, rationale="",
+                          predicted_effect="", confidence=1.0, patch={}, evidence={})
+
+    sugs = [_mk(0), _mk(1), _mk(2)]
+    runs = {"n": 0}
+
+    class _Engine:
+        def _run_pipeline(self, df, cfg):
+            runs["n"] += 1
+            class _R:
+                clusters = {}
+            return _R()
+
+    class _DF:
+        height = 10
+
+    monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
+                        lambda cfg, s: cfg)
+    monkeypatch.setattr(
+        "goldenmatch.core.suggest.health.suggestion_health_from_clusters",
+        lambda clusters, n: 1.0,
+    )
+
+    out = ad._verify_suggestions(sugs, _DF(), "CFG", {}, _Engine(), max_verify=1)
+    assert runs["n"] == 1              # only the top candidate was re-run
+    assert [s.id for s in out] == ["s0", "s1", "s2"]  # tail passes through
+
+
+def test_resolve_step_cap_and_min_health_gain(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+
+    monkeypatch.delenv("GOLDENMATCH_HEAL_STEP_CAP", raising=False)
+    monkeypatch.delenv("GOLDENMATCH_HEAL_MIN_HEALTH_GAIN", raising=False)
+    assert surf._resolve_step_cap(None) == surf._HEAL_STEP_CAP
+    assert surf._resolve_step_cap(3) == 3
+    assert surf._resolve_step_cap(0) == 1
+    monkeypatch.setenv("GOLDENMATCH_HEAL_STEP_CAP", "2")
+    assert surf._resolve_step_cap(None) == 2
+
+    assert surf._resolve_min_health_gain(None) is None  # off by default
+    assert surf._resolve_min_health_gain(0.0) == 0.0
+    monkeypatch.setenv("GOLDENMATCH_HEAL_MIN_HEALTH_GAIN", "0.01")
+    assert surf._resolve_min_health_gain(None) == 0.01
+
+
+def test_heal_early_stop_disabled_by_default(monkeypatch):
+    # Without min_health_gain (default), the health path is inert: heal runs to
+    # step_cap even when clusters are present and health never improves.
+    import goldenmatch.core.suggest.surface as surf
+    from goldenmatch.core.suggest.types import Suggestion
+
+    monkeypatch.delenv("GOLDENMATCH_HEAL_MIN_HEALTH_GAIN", raising=False)
+
+    class _Res:
+        config = "CFG"
+        clusters = {"h": 0.5}  # constant health -> would stop early IF enabled
+
+    class _DF:
+        height = 100
+
+    monkeypatch.setattr("goldenmatch._api.dedupe_df",
+                        lambda df, *, config=None, **k: _Res())
+    monkeypatch.setattr(
+        "goldenmatch.core.suggest.health.suggestion_health_from_clusters",
+        lambda clusters, n: clusters["h"],
+    )
+    n = {"i": 0}
+    def _sugg(res, df, *, verify=False, max_verify=None):
+        n["i"] += 1
+        return [Suggestion(id=f"s{n['i']}", kind="k", target="t", current_value=None,
+                           proposed_value=None, rationale="", predicted_effect="",
+                           confidence=1.0, patch={}, evidence={})]
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result", _sugg)
+    monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
+                        lambda cfg, s: cfg)
+
+    out = surf.heal(_DF(), "CFG", step_cap=3)
+    assert len(out.trail) == 3  # ran the full cap; early-stop off by default
+
+
+def test_heal_early_stop_strictly_below_threshold(monkeypatch):
+    import goldenmatch.core.suggest.surface as surf
+    from goldenmatch.core.suggest.types import Suggestion
+
+    # health improves by 0.005 each step; min_health_gain=0.01 -> stop on step 2.
+    healths = iter([0.20, 0.205, 0.99, 0.99])
+
+    class _Res:
+        config = "CFG"
+        def __init__(self):
+            self.clusters = {"h": next(healths)}
+
+    class _DF:
+        height = 100
+
+    monkeypatch.setattr("goldenmatch._api.dedupe_df",
+                        lambda df, *, config=None, **k: _Res())
+    monkeypatch.setattr(
+        "goldenmatch.core.suggest.health.suggestion_health_from_clusters",
+        lambda clusters, n: clusters["h"],
+    )
+    n = {"i": 0}
+    def _sugg(res, df, *, verify=False, max_verify=None):
+        n["i"] += 1
+        return [Suggestion(id=f"s{n['i']}", kind="k", target="t", current_value=None,
+                           proposed_value=None, rationale="", predicted_effect="",
+                           confidence=1.0, patch={}, evidence={})]
+    monkeypatch.setattr("goldenmatch.core.suggest.adapter.suggest_from_result", _sugg)
+    monkeypatch.setattr("goldenmatch.core.suggest.apply.apply_suggestion",
+                        lambda cfg, s: cfg)
+
+    out = surf.heal(_DF(), "CFG", step_cap=10, min_health_gain=0.01)
+    # step0: health 0.20, apply s1. step1: health 0.205, gain 0.005 < 0.01 -> STOP.
+    assert [s.id for s in out.trail] == ["s1"]
 
 
 if __name__ == "__main__":  # pragma: no cover

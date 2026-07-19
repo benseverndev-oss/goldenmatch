@@ -2,6 +2,24 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-18 -- goldenmatch 3.5.0: `date` scorer + cross-surface consistency hardening
+- Cut **goldenmatch 3.5.0** (docs sweep + release). Headline: the `date` scorer
+  (#1858) -- `jaro_winkler` scores unrelated ISO birthdays 0.80+, so `date`
+  compares by Damerau-Levenshtein over the canonical digits (typo 0.90 /
+  unrelated 0.00), canonical impl in the Rust `score-core` kernel funneled to
+  native + pure-Python + TypeScript (byte-identical). No new ADR: it is an
+  instance of the established "Rust is the reference, mirror cross-surface"
+  scorer pattern, not a new architectural decision. Documented in
+  `docs-site/goldenmatch/scoring.mdx` (scorer table + "Date fields" section).
+- Also in the release train: fused FS multi-pass + pipeline routing, Postgres
+  identity-resolution single-transaction fix (#1886).
+- Consistency-hardening wave (post-release, not gating 3.5.0): NE fast/slow-path
+  parity (#1888), api_parity/native_symbols made blocking + scorer/transform
+  surfaces added (#1889), BUCKET_HASH_SEED single-sourced + native scorer-id
+  cross-surface gate (#1890), and the version_consistency gate extended to
+  TypeScript (#1885). Same through-line: gates that guarded a cross-surface
+  invariant while watching only one surface.
+
 ## 2026-07-17 -- Context-network sweep: the FS scale + hardening wave (ADRs 0041-0045)
 - Swept the 2026-07-16..18 window (~40 PRs, shipped as **goldenmatch 3.4.0** +
   the suite minor train #1849) that the network had not yet captured. Five new
