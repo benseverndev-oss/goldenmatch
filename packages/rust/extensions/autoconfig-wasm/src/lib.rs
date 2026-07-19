@@ -4,8 +4,9 @@
 //! serializes its input to JSON, this deserializes -> calls the core -> serializes
 //! back. Parity is structural (one crate), not asserted after the fact.
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
-    sparse_match_floor, ColumnStats, ExtrapolationInput, PlannerInput,
+    assemble_strong_id_union, classify_columns, decide_plan, exact_matchkey_floor,
+    extrapolate_pair_count, finalize_strong_id_union, sparse_match_floor, BlockingColumnInput,
+    ColumnStats, ExtrapolationInput, PlannerInput, UnionFinalizeInput,
 };
 use wasm_bindgen::prelude::*;
 
@@ -60,4 +61,24 @@ pub fn autoconfig_exact_matchkey_floor(input_json: &str) -> Result<String, JsErr
         .ok_or_else(|| JsError::new("missing/invalid col_type"))?;
     let floor = exact_matchkey_floor(col_type);
     Ok(serde_json::json!({ "floor": floor }).to_string())
+}
+
+/// Blocking selection, phase 1: a JSON array of `BlockingColumnInput` -> a JSON
+/// array of `UnionPass` (the #1207 strong-identifier union candidates) or `null`.
+#[wasm_bindgen]
+pub fn autoconfig_assemble_strong_id_union(cols_json: &str) -> Result<String, JsError> {
+    let cols: Vec<BlockingColumnInput> = serde_json::from_str(cols_json)
+        .map_err(|e| JsError::new(&format!("bad BlockingColumnInput json: {e}")))?;
+    let out = assemble_strong_id_union(&cols);
+    serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Blocking selection, phase 2: a JSON `UnionFinalizeInput` -> a JSON
+/// `BlockingConfigOut` (the emitted `multi_pass` union) or `null`.
+#[wasm_bindgen]
+pub fn autoconfig_finalize_strong_id_union(input_json: &str) -> Result<String, JsError> {
+    let input: UnionFinalizeInput = serde_json::from_str(input_json)
+        .map_err(|e| JsError::new(&format!("bad UnionFinalizeInput json: {e}")))?;
+    let out = finalize_strong_id_union(&input);
+    serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
 }
