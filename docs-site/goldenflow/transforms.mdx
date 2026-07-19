@@ -1,0 +1,278 @@
+---
+title: "Transforms"
+description: "The full GoldenFlow transform-op catalog: 124 built-in ops for case, encoding, names, phone, email, dates, addresses, identifiers, phonetics, and more, plus domain packs and scalar canonicalizers."
+keywords: ["goldenflow", "transforms", "standardization", "normalization", "transform ops", "domain packs", "canonicalize", "data cleaning"]
+---
+
+GoldenFlow is the transform / standardize / normalize engine of the Golden Suite. Its flagship surface is the **transform-op catalog**: a registry of small, composable, single-purpose ops you list against columns to turn messy input into clean, match-ready values. Each op is a named function you reference by string in a config, chain in order, and (for most ops) run on a vectorized fast path with an optional owned Rust kernel underneath.
+
+The registry is the source of truth. There are **124 built-in ops** today (including the ops contributed by the bundled [domain packs](#domain-packs)). Ops run left to right per column, so `[strip, lowercase, email_normalize]` trims, lowercases, then canonicalizes in that sequence.
+
+For how ops are picked automatically in zero-config mode and how they map onto detected column types, see [config matrix](/goldenflow/config-matrix). For install, categories overview, and the DQBench score, see the [overview](/goldenflow/overview).
+
+## Op catalog
+
+Ops are grouped by category below. The "Meaning" column is the op's registered gloss. Ops labelled "Native-first" run on an owned `goldenflow-core` Rust kernel when available and fall back to pure Python otherwise.
+
+### Case and whitespace
+
+| Op | Meaning |
+|----|---------|
+| `lowercase` | Lowercase all characters. |
+| `uppercase` | Uppercase all characters. |
+| `title_case` | Title-case each word. |
+| `strip` | Trim leading and trailing whitespace. |
+| `collapse_whitespace` | Collapse internal runs of whitespace to a single space. |
+| `remove_punctuation` | Remove punctuation characters from text. |
+| `pad_left` | Left-pad strings to a fixed width. |
+| `pad_right` | Right-pad strings to a fixed width. |
+| `truncate` | Truncate string to the first n characters. |
+
+### Encoding and Unicode cleanup
+
+| Op | Meaning |
+|----|---------|
+| `normalize_unicode` | Apply Unicode normalization (NFC) to text. |
+| `fix_mojibake` | Fix common UTF-8 / Latin-1 mojibake by re-encoding. |
+| `normalize_quotes` | Replace smart / curly quotes with straight quotes. |
+| `normalize_line_endings` | Normalize CRLF and CR line endings to LF. |
+| `remove_emojis` | Remove emoji characters from text. |
+| `remove_html_tags` | Strip HTML tags from text. |
+| `remove_urls` | Strip URLs (http / https) from text. |
+| `remove_digits` | Remove all digit characters from text. |
+| `extract_numbers` | Extract all numbers from text, joined by spaces. |
+
+### Names
+
+| Op | Meaning |
+|----|---------|
+| `name_proper` | Proper-case a name (title-case plus Mc / O' fixups). |
+| `name_initials` | Initials of each whitespace token (letter-leading tokens only). |
+| `name_script` | Detect the dominant Unicode script in a name (owned kernel; `Unknown` for empty). |
+| `name_transliterate` | ASCII-fold a name via an explicit curated diacritic map (owned kernel). |
+| `nickname_standardize` | Map common nicknames to formal first names. |
+| `strip_titles` | Strip leading personal titles (Mr / Mrs / Ms / Dr / Prof, etc.). |
+| `strip_suffixes` | Strip trailing professional suffixes (Jr / Sr / II / MD / PhD, etc.). |
+| `strip_middle` | Keep only the first and last whitespace tokens (drop the middle). |
+| `initial_expand` | Leave values with initials unchanged but flag the affected rows. |
+| `merge_name` | Merge `first_name` and `last_name` columns into a `full_name` column. |
+| `split_name` | Split `First Last` into `first_name` and `last_name` columns. |
+| `split_name_reverse` | Split `Last, First` into `first_name` and `last_name` columns. |
+
+### Phone
+
+| Op | Meaning |
+|----|---------|
+| `phone_digits` | Keep only the digits of a phone number. |
+| `phone_e164` | Normalize a phone number to E.164 (`+` country code) form. |
+| `phone_national` | Normalize a phone number to national display format. |
+| `phone_country_code` | Extract the country calling code as an integer. |
+| `phone_validate` | Validate a phone number. Returns True / False / None. |
+
+### Email
+
+| Op | Meaning |
+|----|---------|
+| `email_normalize` | Normalize email: lowercase, strip `+tags`, strip dots from a Gmail local part. |
+| `email_canonical` | Full dedup key: `email_normalize` plus aliasing googlemail.com to gmail.com. |
+| `email_lowercase` | Lowercase the entire email address (trim plus lowercase). |
+| `email_extract_domain` | Extract the lowercased domain from an email address. |
+| `email_mask` | PII mask: keep the first local char, star the rest, keep the `@domain`. |
+| `email_validate` | Validate email format. Returns True / False / None. |
+
+### URLs
+
+| Op | Meaning |
+|----|---------|
+| `url_normalize` | Normalize URLs: ensure scheme, lowercase domain, strip trailing slash. |
+| `url_canonical` | Composite dedup key: ensure scheme, lowercase scheme plus host, strip www. |
+| `url_extract_domain` | Extract the domain from a URL. |
+| `url_strip_www` | Strip a leading `www.` label from the host, preserving scheme and path. |
+| `url_strip_tracking` | Remove tracking query params (utm_*, gclid, fbclid, ...), preserving the rest. |
+
+### Dates and time
+
+| Op | Meaning |
+|----|---------|
+| `date_parse` | Auto-detect the format and normalize to ISO 8601. |
+| `date_iso8601` | Parse a date and normalize to ISO 8601 (`YYYY-MM-DD`). |
+| `date_us` | Parse a month-first (MM/DD/YYYY) date and normalize to ISO 8601. |
+| `date_eu` | Parse a day-first (DD/MM/YYYY) date and normalize to ISO 8601. |
+| `datetime_iso8601` | Parse to an ISO 8601 datetime (with a time component). |
+| `date_validate` | Validate whether a value is a parseable date. Returns True / False / None. |
+| `date_shift` | Shift dates by a number of days (positive forward, negative backward). |
+| `age_from_dob` | Compute age in whole years from a date-of-birth column. |
+| `extract_year` | Extract the year as an integer. |
+| `extract_quarter` | Extract the quarter (1 to 4) from a date. |
+| `extract_month` | Extract the month as an integer (1 to 12). |
+| `extract_day` | Extract the day of month as an integer (1 to 31). |
+| `extract_day_of_week` | Extract the day-of-week name (Monday, Tuesday, etc.). |
+
+### Address and geo
+
+| Op | Meaning |
+|----|---------|
+| `address_standardize` | Replace full street suffixes (Street, Avenue, ...) with abbreviations. |
+| `address_expand` | Replace street abbreviations (St, Ave, ...) with full forms. |
+| `unit_normalize` | Normalize unit / apartment / suite designations. |
+| `split_address` | Parse `street, city, state zip` into separate columns. |
+| `state_abbreviate` | Normalize a state name to a 2-letter abbreviation (unmatched passes through). |
+| `state_expand` | Expand a 2-letter state abbreviation to its full name (unmatched passes through). |
+| `zip_normalize` | Normalize a US ZIP to 5-digit form (strip +4, zero-pad all-digit values). |
+| `country_standardize` | Normalize country names to ISO 3166-1 alpha-2 codes. |
+| `latlng_pack` | Pack `lat` plus `lng` into a single `latlng` column for geo-aware scorers. |
+
+### Numeric
+
+| Op | Meaning |
+|----|---------|
+| `to_integer` | Parse a string to an integer, truncating any decimal part. |
+| `abs_value` | Return the absolute value. |
+| `clamp` | Clip values into `[min_val, max_val]`. |
+| `round` | Round to n decimal places (round-half-away-from-zero). |
+| `fill_zero` | Replace null values with 0. |
+| `currency_strip` | Strip currency symbols and thousand separators, return numeric. |
+| `percentage_normalize` | Strip a trailing `%`, parse to float, divide by 100. |
+| `comma_decimal` | Convert European decimal format (1.234,56) to float (1234.56). |
+| `scientific_to_decimal` | Convert scientific notation (1.5e3) to decimal (1500.0). |
+| `fraction_to_decimal` | Parse a fraction or mixed number (1/2, 3 3/4) to a float. Native-first. |
+| `ordinal_to_int` | Parse an English ordinal (1st / 2nd / 3rd) to its integer. Native-first. |
+| `roman_to_int` | Parse a Roman numeral to its integer (canonical forms, 1 to 3999). |
+
+### Categorical and boolean
+
+| Op | Meaning |
+|----|---------|
+| `category_standardize` | Map variant values to canonical values via a supplied mapping. |
+| `category_auto_correct` | Auto-correct categorical misspellings and case variants. |
+| `category_from_file` | Load a mapping from a CSV / YAML file and standardize values. |
+| `category_llm_correct` | LLM-enhanced categorical correction. |
+| `boolean_normalize` | Parse loose boolean-ish strings (yes / no / y / n / 1 / 0 / true / false). |
+| `gender_standardize` | Standardize gender strings to `M` / `F`; anything else passes through. |
+| `null_standardize` | Map null-sentinel strings (n/a, null, none, na, nil, nan, `-`) to null. |
+
+### Company
+
+| Op | Meaning |
+|----|---------|
+| `company_normalize` | Composite company dedup key: lowercase, drop leading `the`, strip legal form. |
+| `company_strip_legal` | Strip trailing legal-form suffixes, preserving the core name's case. |
+| `company_extract_legal` | Extract the canonical legal-form token (`inc` / `llc` / ...) or null. |
+
+### Phonetic and blocking keys
+
+| Op | Meaning |
+|----|---------|
+| `soundex` | Soundex phonetic key. Native-first over goldenflow-core. |
+| `double_metaphone_primary` | Primary Double Metaphone code (blocking key). Native-first. |
+| `double_metaphone_alt` | Alternate Double Metaphone code. Native-first. |
+
+### Identifiers and validation
+
+Checksummed and structural validators / formatters. Most run on owned Rust kernels.
+
+| Op | Meaning |
+|----|---------|
+| `luhn_validate` | Generic Luhn check-digit validation. Native-first. |
+| `cc_validate` | Validate a payment-card number via the Luhn checksum. |
+| `cc_format` | Group a valid payment-card number (Amex 4-6-5, else 4-4-4-4). |
+| `cc_mask` | Mask a payment-card number to stars plus the last 4 digits. |
+| `cc_brand` | Detect the card brand (visa / mastercard / amex / ...) or null. Native-first. |
+| `iban_validate` | Validate an IBAN via structural checks plus the ISO 7064 mod-97 check. |
+| `iban_format` | Group a valid IBAN into 4-char blocks; null for invalid input. |
+| `swift_validate` | Validate a SWIFT / BIC code via structural checks (length 8 or 11). |
+| `swift_format` | Normalize a valid SWIFT / BIC code to uppercase (spaces stripped); null if invalid. |
+| `aba_validate` | Validate a US ABA bank routing number (9 digits plus the checksum). |
+| `vat_validate` | Validate an EU VAT number (country prefix, length, and checksum). |
+| `vat_format` | Normalize a valid EU VAT number to its compact uppercase form. |
+| `ein_format` | Normalize an EIN to `XX-XXXXXXX` format. Native-first. |
+| `cusip_validate` | Validate a CUSIP. Native-first. |
+| `cusip_format` | Standardize CUSIP identifiers (9 chars, uppercase). |
+| `isin_validate` | Validate an ISIN (ISO 6166). Native-first. |
+| `ean_validate` | Validate an EAN-8, UPC-A, or EAN-13 via its GTIN mod-10 checksum. |
+| `isbn_validate` | Validate an ISBN-10 or ISBN-13 via its checksum. |
+| `isbn_normalize` | Canonicalize a valid ISBN-10/13 to its 13-digit form; null if invalid. |
+| `imei_validate` | Validate an IMEI (15 digits plus the Luhn checksum). |
+| `sku_normalize` | Normalize SKU identifiers (uppercase, strip whitespace, remove special chars). |
+| `mls_normalize` | Normalize MLS listing IDs (uppercase, strip whitespace). |
+| `ssn_format` | Normalize an SSN to `XXX-XX-XXXX` format. Native-first. |
+| `ssn_mask` | Mask an SSN to `***-**-XXXX` (last 4 visible). Native-first. |
+| `ssn_validate` | Validate a US Social Security Number. Returns True / False / None. |
+| `npi_validate` | Validate a US NPI. Native-first. |
+| `icd10_format` | Standardize ICD-10 codes (uppercase, insert dot after the 3rd char). |
+| `account_mask` | Mask account numbers, showing only the last 4 digits. |
+
+### Domain-pack ops
+
+Ops contributed by the carceral [domain pack](#domain-packs) (other packs reuse ops from the categories above).
+
+| Op | Meaning |
+|----|---------|
+| `carceral_org_strip` | Strip the leading operator-org prefix from a carceral facility name. |
+| `carceral_abbreviate` | Expand carceral facility-type abbreviations and state-complex aliases. |
+| `carceral_name_normalize` | Full carceral name pipeline: org-strip, uppercase, and punctuation strip. |
+
+## Domain packs
+
+Domain packs bundle a curated set of ops plus a ready-to-run default config for a specific vertical. Load one with `goldenflow.domains.load_domain(name)` (each returns a `DomainPack` with a `name`, `description`, its `transforms` list, and a `default_config`). Packs compose with the general catalog above, so a pack's default config can reference both its own ops and the shared ones.
+
+| Pack | Focus | Transforms |
+|------|-------|-----------|
+| `people_hr` | Name parsing, SSN formatting, employment dates, gender / boolean standardization | `split_name`, `split_name_reverse`, `strip_titles`, `strip_suffixes`, `name_proper`, `ssn_mask`, `ssn_validate`, `date_iso8601`, `gender_standardize`, `boolean_normalize` |
+| `healthcare` | MRN normalization, ICD-10 formatting, NPI validation, date standardization | `npi_validate`, `icd10_format`, `date_iso8601`, `null_standardize`, `strip` |
+| `finance` | Account masking, currency standardization, CUSIP / ISIN formatting | `account_mask`, `cusip_format`, `currency_strip`, `date_iso8601` |
+| `ecommerce` | SKU normalization, price cleaning, category standardization | `sku_normalize`, `currency_strip`, `category_auto_correct`, `strip` |
+| `real_estate` | Address parsing (USPS), MLS ID normalization, price cleaning | `mls_normalize`, `address_standardize`, `zip_normalize`, `currency_strip` |
+| `carceral` | US prisons / jails / detention centers: operator-org prefix stripping, BOP facility-type abbreviation expansion, state-complex aliasing, lat/lng packing | `carceral_org_strip`, `carceral_abbreviate`, `carceral_name_normalize`, `latlng_pack`, `address_standardize`, `unit_normalize`, `zip_normalize`, `state_abbreviate` |
+
+## The `canonicalize` op
+
+`canonicalize(value, kind)` is a separate, deliberately narrow surface from the frame-level transforms above. Where `phone_e164` or `address_standardize` infer country, parse streets, and lean on parsing libraries, `canonicalize` is **scalar** (one string in, one string out), **dependency-free** (stdlib only), and **byte-for-byte portable** so the exact same canonical string can be reproduced in another language (for example, a browser JavaScript / TypeScript port).
+
+That portability is the point for privacy-preserving record linkage and clean rooms: in the true-clean-room tier each party hashes its own values client-side, so the server-side Python and the browser-side JS have to agree on the exact canonical string before hashing, or the encoded records never line up. Every canonicalizer is scalar, total (never raises on string input; `None` maps to `""`), idempotent, locale-independent (ASCII-only case folding), and dependency-free.
+
+`CanonicalizeKind` accepts four kinds:
+
+| Kind | Rule |
+|------|------|
+| `email` | Trim ASCII whitespace, then ASCII-lowercase. No domain or dot surgery, to keep it a reproducible byte transform. |
+| `phone` | Keep ASCII digits only; if the result is 11 digits starting with `1` (NANP country code), drop the leading `1` to get 10 digits. |
+| `name` | ASCII-lowercase, delete ASCII punctuation, collapse ASCII whitespace runs to one space, trim. |
+| `postal` | If the value contains any ASCII letter (alphanumeric postcode), keep ASCII alphanumerics only and ASCII-uppercase; otherwise keep ASCII digits and take the first 5. |
+
+```python
+from goldenflow.canonicalize import canonicalize
+
+canonicalize("  John.O'Brien  ", "name")   # "johnobrien"
+canonicalize("+1 (415) 555-0173", "phone") # "4155550173"
+canonicalize("SW1A 1AA", "postal")         # "SW1A1AA"
+```
+
+## Config example
+
+A `GoldenFlowConfig` drives standardization declaratively. The `transforms:` list holds one spec per column: a `column` name plus an ordered `ops` list. Ops run in sequence, so put trimming and casing before the semantic op that depends on clean input.
+
+```yaml
+transforms:
+  - column: email
+    ops: [strip, lowercase, email_normalize]
+  - column: phone
+    ops: [phone_e164]
+  - column: full_name
+    ops: [strip, collapse_whitespace, name_proper]
+  - column: signup_date
+    ops: [date_parse]
+  - column: state
+    ops: [state_abbreviate]
+```
+
+Run it over a DataFrame:
+
+```python
+import goldenflow as gf
+
+config = gf.GoldenFlowConfig.from_yaml("standardize.yaml")
+clean = gf.transform_df(df, config)
+```
+
+In zero-config mode GoldenFlow profiles each column, infers its type, and applies safe ops for you. The mapping from detected column type to the ops above is documented in [config matrix](/goldenflow/config-matrix); for install, the category overview, and the DQBench score, see the [overview](/goldenflow/overview).

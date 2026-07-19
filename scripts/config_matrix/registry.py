@@ -205,6 +205,9 @@ REGISTRY: dict[str, PackageSpec] = {
             }),
         ],
         vocab_warmup=["goldenflow"],
+        doc_coverage=(
+            ("transforms.mdx", "goldenflow.transforms:list_transforms"),
+        ),
     ),
     "goldenpipe": PackageSpec(
         name="goldenpipe",
@@ -266,6 +269,10 @@ REGISTRY: dict[str, PackageSpec] = {
                 "zip_us": "US ZIP code.", "currency": "Currency amount.",
             }),
         ],
+        doc_coverage=(
+            ("mapping.mdx", "infermap.types:VALID_DTYPES"),
+            ("mapping.mdx", "infermap.scorers.pattern_type:SEMANTIC_TYPES"),
+        ),
     ),
     "goldenanalysis": PackageSpec(
         name="goldenanalysis",

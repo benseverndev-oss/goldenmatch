@@ -1,0 +1,159 @@
+---
+title: "Mapping"
+description: "How InferMap scores and assigns source columns to a target schema: the scorer pipeline, weighted combination, MapEngine configuration, and the inference vocabularies."
+keywords: ["schema mapping", "column matching", "scorers", "confidence", "hungarian algorithm", "alias", "pattern type", "profile"]
+---
+
+InferMap (GoldenSchema) maps messy source columns onto a known target schema. For every source-by-target field pair it runs a pipeline of independent scorers, combines their opinions into a single confidence, and then picks the best 1:1 assignment across the whole `M x N` matrix with the Hungarian algorithm. Each accepted mapping carries a confidence in `0.0..1.0` and a human-readable reason.
+
+Mapping runs after schema extraction (which profiles each column: dtype, null rate, unique rate, and sample values) and produces `(source_field, target_field, confidence)` triples plus the per-scorer breakdown behind each one.
+
+## Scorer reference
+
+Each scorer is a small class with a `name`, a default `weight`, and a `score(source, target)` method that returns a `ScorerResult` (a score plus reasoning) or `None` to abstain. Abstaining matters: a scorer that has no opinion returns `None` and is left out of the weighted average entirely, rather than dragging the pair down with a zero.
+
+| Scorer | Weight | What it matches |
+|--------|--------|-----------------|
+| `ExactScorer` | 1.0 | Case-insensitive exact match on the raw field names (`Email` vs `email`). Scores 1.0 on a match, 0.0 otherwise. |
+| `AliasScorer` | 0.95 | Fields that resolve to the same canonical name via the alias dictionaries (`fname` vs `first_name`), or a source name that appears in the target's declared `aliases`. Scores 0.95 on a match, abstains when neither side has a known alias. |
+| `LLMScorer` | 0.8 | Opt-in provider-backed semantic judgment. Ships as a stub that always abstains until you wire a provider; not part of the default pipeline. |
+| `InitialismScorer` | 0.75 | One name is a prefix-concat abbreviation of the other's tokens (`assay_id` vs `ASSI`, `confidence_score` vs `CONSC`). Score rises with how much of the longer side is preserved; abstains on non-abbreviations. |
+| `PatternTypeScorer` | 0.7 | Both fields' sample values classify to the same semantic pattern type (both `email`, both `zip_us`). Score is the lower of the two match percentages; mismatched types score 0.0. |
+| `ProfileScorer` | 0.5 | Statistical shape of the two columns: dtype, null rate, uniqueness, average value length, and cardinality. See the sub-weights below. |
+| `FuzzyNameScorer` | 0.4 | Jaro-Winkler similarity on normalized field names (lowercased, delimiters stripped). Always returns a score, so it is the tie-breaker that keeps every pair comparable. |
+
+The default pipeline (`default_scorers()`) is the six non-LLM scorers above, evaluated in this order: `ExactScorer`, `AliasScorer`, `PatternTypeScorer`, `ProfileScorer`, `FuzzyNameScorer`, `InitialismScorer`. `LLMScorer` is opt-in and must be added explicitly.
+
+### Profile sub-weights
+
+`ProfileScorer` is itself a weighted blend of five column-shape comparisons:
+
+| Dimension | Weight | Compares |
+|-----------|--------|----------|
+| dtype match | 0.4 | Exact dtype equality (`string` vs `string`). |
+| null rate | 0.2 | Similarity of the two null-fraction rates. |
+| uniqueness rate | 0.2 | Similarity of the two distinct-value rates. |
+| value length | 0.1 | Average sample-value length, normalized by the longer side. |
+| cardinality ratio | 0.1 | Approximate distinct-count (`unique_rate * value_count`), normalized. |
+
+It abstains when either column has zero rows.
+
+## How the scores combine
+
+For each pair, every scorer that does not abstain contributes its `ScorerResult.score` weighted by that scorer's `weight`. The combined confidence is the weighted average:
+
+```
+combined = sum(score * weight) / sum(weight)
+```
+
+Two rules shape the result:
+
+- **Minimum contributors.** A pair needs at least 2 non-abstaining scorers or its combined score is forced to 0.0. This stops a single always-on scorer (like `FuzzyNameScorer`) from carrying a mapping on its own.
+- **`min_confidence` is the accept floor.** After the matrix is built, `optimal_assign` runs the Hungarian algorithm for the best global 1:1 assignment, then drops any assigned pair scoring below `min_confidence` (default `0.2`). Those source and target fields land in `unmapped_source` / `unmapped_target` instead.
+
+A scorer that raises is caught, logged, and treated as an abstain, so one bad custom scorer never fails the run.
+
+## Configuring a mapping run
+
+`MapEngine(...)` takes the run knobs as keyword arguments:
+
+| Argument | Type | Default | Purpose |
+|----------|------|---------|---------|
+| `min_confidence` | float | `0.2` | Accept floor. Assigned pairs scoring below this become unmapped. |
+| `sample_size` | int | `500` | Rows sampled per column during schema extraction (feeds pattern and profile scoring). |
+| `scorers` | list | `None` | Explicit scorer list. Overrides the default pipeline entirely when set. |
+| `domains` | list of str | `None` | Domain dictionaries to load (for example `healthcare`, `finance`, `ecommerce`). `generic` is always merged in. |
+| `config_path` | str | `None` | Path to an optional YAML config (see below). |
+| `return_score_matrix` | bool | `False` | Also return the full source-by-target score matrix (useful for MRR analysis and debugging). |
+| `calibrator` | Calibrator | `None` | Post-assignment confidence calibrator. Never changes which mappings are chosen, only the confidence attached to each. |
+
+### Optional YAML config
+
+When you pass `config_path`, the YAML can load domain dictionaries, enable or reweight individual scorers, and add aliases. Recognized keys:
+
+- `domains`: list of domain dictionaries to merge in.
+- `scorers.<Name>.enabled`: set `false` to drop a scorer from the pipeline.
+- `scorers.<Name>.weight`: override that scorer's default weight.
+- `aliases.<canonical>`: a list of extra alias names that resolve to `<canonical>`.
+
+This is the shape of `infermap.yaml.example`:
+
+```yaml
+scorers:
+  FuzzyNameScorer:
+    weight: 0.2
+  LLMScorer:
+    enabled: false
+aliases:
+  mrn: [medical_record_number, patient_id, chart_number]
+  npi: [provider_id, national_provider_identifier]
+```
+
+A fuller config that also pulls in domain dictionaries:
+
+```yaml
+domains:
+  - healthcare
+  - finance
+scorers:
+  ProfileScorer:
+    enabled: false
+  FuzzyNameScorer:
+    weight: 0.3
+aliases:
+  order_id:
+    - order_num
+    - ord_no
+```
+
+## Inference vocabularies
+
+Two small vocabularies drive the type-aware scorers.
+
+### Data types
+
+`VALID_DTYPES` is the closed set of dtypes a column can carry (`FieldInfo.dtype`). Anything else is coerced to `string`.
+
+| Value | Meaning |
+|-------|---------|
+| `string` | Text. |
+| `integer` | Whole number. |
+| `float` | Decimal number. |
+| `boolean` | True/false. |
+| `date` | Calendar date. |
+| `datetime` | Date and time. |
+
+### Semantic pattern types
+
+`SEMANTIC_TYPES` (in `scorers/pattern_type.py`) is the ordered set of regex-detected value shapes `PatternTypeScorer` classifies against. Earlier entries win when several patterns match. A column is assigned a type only when at least 60 percent of its sampled values match.
+
+| Value | Detects |
+|-------|---------|
+| `email` | Email address. |
+| `uuid` | UUID. |
+| `date_iso` | ISO-8601 date (`YYYY-MM-DD`). |
+| `ip_v4` | IPv4 address. |
+| `url` | HTTP or HTTPS URL. |
+| `phone` | Phone number. |
+| `zip_us` | US ZIP code. |
+| `currency` | Currency amount with a leading symbol. |
+
+## Python example
+
+```python
+from infermap import MapEngine
+
+engine = MapEngine(min_confidence=0.3, domains=["healthcare"])
+result = engine.map("crm_export.csv", "canonical_customers.csv")
+
+for m in result.mappings:
+    print(f"{m.source} -> {m.target}  ({m.confidence:.0%})")
+    print(f"   why: {m.reasoning}")
+
+print("unmapped source:", result.unmapped_source)
+print("unmapped target:", result.unmapped_target)
+```
+
+Each `FieldMapping` also carries a `breakdown` dict of `scorer_name -> ScorerResult`, so you can inspect exactly which scorers contributed and what each one saw.
+
+For the always-current, code-generated list of every `MapEngine` argument, CLI option, and vocabulary value, see the [config matrix](/infermap/config-matrix). For install, quickstart, and the TypeScript API, see the [overview](/infermap/overview).
