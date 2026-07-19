@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from config_matrix import REGISTRY
+from config_matrix.crossref import stale_env_refs
 from config_matrix.render import (
     MARKER_END,
     MARKER_START,
@@ -32,6 +33,14 @@ def test_config_matrix_current(name):
 def test_markers_present(name):
     text = _doc_path(REGISTRY[name]).read_text(encoding="utf-8")
     assert MARKER_START in text and MARKER_END in text
+
+
+@pytest.mark.parametrize("name", list(REGISTRY))
+def test_no_stale_env_refs_in_docs(name):
+    # Every <PREFIX>_* env var named in the package's other docs must be one the
+    # code actually reads (the config-matrix registry is the source of truth).
+    hits = stale_env_refs(REGISTRY[name])
+    assert not hits, "stale env refs: " + "; ".join(f"{h.token} in {h.page}:{h.line_no}" for h in hits)
 
 
 @pytest.mark.parametrize("name", list(REGISTRY))

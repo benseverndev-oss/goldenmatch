@@ -3273,6 +3273,17 @@ jobs:
           GOLDENPIPE_NATIVE: "0"
           INFERMAP_NATIVE: "0"
           GOLDENANALYSIS_NATIVE: "0"
+      - name: Docs cross-reference vs the matrix (${{ matrix.package }})
+        # The other docs must not name an env knob the code no longer reads.
+        run: uv run python scripts/gen_config_matrix.py --refs ${{ matrix.package }}
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+          GOLDENANALYSIS_NATIVE: "0"
 
   # Tier-2 doc-staleness ADVISORY. Diff-aware: flags a GOLDENMATCH_* env-flag
   # change with no tuning.mdx update (gating), and an __all__/re-export change

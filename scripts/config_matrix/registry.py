@@ -20,6 +20,9 @@ class PackageSpec:
     vocabs: list[tuple[str, str, str]] = field(default_factory=list)
     vocab_warmup: list[str] = field(default_factory=list)
     tuning_link: str | None = None
+    # Env names other docs may reference despite not being read in code (rare;
+    # the migration-page + removal-context heuristics cover most). Explicit escape hatch.
+    env_allow: tuple[str, ...] = ()
 
 
 REGISTRY: dict[str, PackageSpec] = {

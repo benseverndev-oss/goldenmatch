@@ -2,6 +2,7 @@
 
   python scripts/gen_config_matrix.py --write [pkg|all]    # regenerate the block(s)
   python scripts/gen_config_matrix.py --check [pkg|all]     # exit 1 if any is stale
+  python scripts/gen_config_matrix.py --refs  [pkg|all]     # exit 1 if a prose doc names a dead env knob
 
 Each suite package's config surface (pydantic tree / constructor kwargs / vocab
 constants / <PREFIX>_* env scan) is the source of truth; the committed page's
@@ -13,6 +14,7 @@ from __future__ import annotations
 import sys
 
 from config_matrix import REGISTRY
+from config_matrix.crossref import stale_env_refs
 from config_matrix.render import docs_are_current, write_docs
 
 
@@ -42,6 +44,20 @@ def main(argv: list[str]) -> int:
                   f"Run: python scripts/gen_config_matrix.py --write {names}", file=sys.stderr)
             return 1
         return 0
+    if "--refs" in argv:
+        bad = []
+        for name in _targets(argv):
+            hits = stale_env_refs(REGISTRY[name])
+            bad += hits
+            if hits:
+                for h in hits:
+                    print(f"::error file={h.page},line={h.line_no}::{h.token} is documented "
+                          f"in {h.page} but is not read anywhere in {name}'s source "
+                          f"(removed/renamed knob?). Fix the doc or add to env_allow.",
+                          file=sys.stderr)
+            else:
+                print(f"OK    {name}: docs reference only live env knobs")
+        return 1 if bad else 0
     if "--write" in argv:
         for name in _targets(argv):
             print(f"wrote {write_docs(REGISTRY[name])}")
