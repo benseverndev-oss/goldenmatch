@@ -22,8 +22,9 @@
 //!   and compare against Rust's before re-encoding to JSON.
 
 use goldenmatch_autoconfig_core::{
-    classify_columns, decide_plan, exact_matchkey_floor, extrapolate_pair_count,
-    sparse_match_floor, ColType, ColumnStats, ExtrapolationInput, PlannerInput,
+    assemble_strong_id_union, classify_columns, decide_plan, exact_matchkey_floor,
+    extrapolate_pair_count, finalize_strong_id_union, sparse_match_floor, BlockingColumnInput,
+    ColType, ColumnStats, ExtrapolationInput, PlannerInput, UnionFinalizeInput,
 };
 use serde_json::Value;
 
@@ -32,8 +33,7 @@ const PLANNER_JSON: &str = include_str!("../golden/planner_vectors.json");
 const CLASSIFIER_JSON: &str = include_str!("../golden/classifier_vectors.json");
 const EXTRAPOLATION_JSON: &str = include_str!("../golden/extrapolation_vectors.json");
 const SPARSE_MATCH_FLOOR_JSON: &str = include_str!("../golden/sparse_match_floor_vectors.json");
-const EXACT_MATCHKEY_FLOOR_JSON: &str =
-    include_str!("../golden/exact_matchkey_floor_vectors.json");
+const EXACT_MATCHKEY_FLOOR_JSON: &str = include_str!("../golden/exact_matchkey_floor_vectors.json");
 
 // ── Planner parity ────────────────────────────────────────────────────────────
 
@@ -80,8 +80,14 @@ fn planner_golden_parity() {
         };
 
         // Compare field by field (avoids f64 precision issues; no f64 in plan)
-        let fields = ["backend", "max_workers", "pair_spill_threshold",
-                      "clustering_strategy", "rule_name", "chunk_size"];
+        let fields = [
+            "backend",
+            "max_workers",
+            "pair_spill_threshold",
+            "clustering_strategy",
+            "rule_name",
+            "chunk_size",
+        ];
 
         for field in &fields {
             let got = &got_val[field];
@@ -186,9 +192,13 @@ fn sparse_match_floor_golden_parity() {
             .as_u64()
             .expect("estimated_pairs must be u64");
         let got = sparse_match_floor(estimated_pairs);
-        let exp = vec["expected"]["floor"].as_u64().expect("floor must be u64");
+        let exp = vec["expected"]["floor"]
+            .as_u64()
+            .expect("floor must be u64");
         if got != exp {
-            failures.push(format!("vec {idx}: estimated_pairs={estimated_pairs} got {got} exp {exp}"));
+            failures.push(format!(
+                "vec {idx}: estimated_pairs={estimated_pairs} got {got} exp {exp}"
+            ));
         }
     }
     assert!(
@@ -222,7 +232,9 @@ fn exact_matchkey_floor_golden_parity() {
             .as_f64()
             .expect("floor must be f64");
         if (got - exp).abs() >= 1e-9 {
-            failures.push(format!("vec {idx}: col_type={col_type} got {got} exp {exp}"));
+            failures.push(format!(
+                "vec {idx}: col_type={col_type} got {got} exp {exp}"
+            ));
         }
     }
     assert!(
@@ -440,7 +452,9 @@ fn serde_null_pair_spill_threshold() {
 #[test]
 fn serde_non_null_pair_spill_threshold() {
     // pair_spill_threshold=Some(Ram) must serialize to "ram" (not "Ram" or "RAM")
-    use goldenmatch_autoconfig_core::{BackendName, ClusteringStrategy, ExecutionPlan, SpillThreshold};
+    use goldenmatch_autoconfig_core::{
+        BackendName, ClusteringStrategy, ExecutionPlan, SpillThreshold,
+    };
     let plan = ExecutionPlan {
         backend: BackendName::Chunked,
         chunk_size: Some(100_000),
@@ -452,4 +466,71 @@ fn serde_non_null_pair_spill_threshold() {
     let v: Value = serde_json::to_value(&plan).unwrap();
     assert_eq!(v["pair_spill_threshold"], Value::String("ram".into()));
     assert_eq!(v["chunk_size"], Value::Number(100_000u64.into()));
+}
+
+// ── Blocking-selection parity (#1207 strong-identifier union) ─────────────────
+
+const SELECT_BLOCKING_JSON: &str = include_str!("../golden/select_blocking_vectors.json");
+
+#[test]
+fn select_blocking_golden_parity() {
+    let doc: Value = serde_json::from_str(SELECT_BLOCKING_JSON)
+        .expect("failed to parse select_blocking_vectors.json");
+    let mut failures: Vec<String> = Vec::new();
+
+    // Phase 1 — assemble
+    let assemble = doc["assemble"].as_array().expect("assemble array");
+    assert!(
+        assemble.len() >= 6,
+        "expected >= 6 assemble vectors, got {}",
+        assemble.len()
+    );
+    for case in assemble {
+        let name = case["name"].as_str().unwrap_or("?");
+        let cols: Vec<BlockingColumnInput> = match serde_json::from_value(case["input"].clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                failures.push(format!("assemble[{name}]: bad input: {e}"));
+                continue;
+            }
+        };
+        let got: Value = serde_json::to_value(assemble_strong_id_union(&cols)).unwrap();
+        if got != case["expected"] {
+            failures.push(format!(
+                "assemble[{name}] mismatch:\n  expected={}\n  got={got}",
+                case["expected"]
+            ));
+        }
+    }
+
+    // Phase 2 — finalize
+    let finalize = doc["finalize"].as_array().expect("finalize array");
+    assert!(
+        finalize.len() >= 5,
+        "expected >= 5 finalize vectors, got {}",
+        finalize.len()
+    );
+    for case in finalize {
+        let name = case["name"].as_str().unwrap_or("?");
+        let input: UnionFinalizeInput = match serde_json::from_value(case["input"].clone()) {
+            Ok(i) => i,
+            Err(e) => {
+                failures.push(format!("finalize[{name}]: bad input: {e}"));
+                continue;
+            }
+        };
+        let got: Value = serde_json::to_value(finalize_strong_id_union(&input)).unwrap();
+        if got != case["expected"] {
+            failures.push(format!(
+                "finalize[{name}] mismatch:\n  expected={}\n  got={got}",
+                case["expected"]
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "select_blocking golden failures:\n{}",
+        failures.join("\n")
+    );
 }
