@@ -740,10 +740,10 @@ readme_callouts:
   - 'packages/python/goldenmatch/CHANGELOG.md'
   - 'scripts/sync_readme_callouts.py'
 docs:
-  # Doc-lockstep gates (scripts/check_docs_*.py). Trigger whenever any
-  # tracked doc surface OR the gate scripts themselves change. The
-  # required `docs_consistency` job and the advisory `docs_staleness`
-  # job both gate on this.
+  # Doc-lockstep gates (scripts/check_docs_*.py) + the Mintlify render gate.
+  # Trigger whenever any tracked doc surface OR the gate scripts themselves
+  # change. The required `docs_consistency` and `docs_render` jobs and the
+  # advisory `docs_staleness` job all gate on this.
   - 'docs-site/**'
   - '**/README.md'
   - '**/CHANGELOG.md'

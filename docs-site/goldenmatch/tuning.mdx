@@ -563,7 +563,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |
 | `GOLDENMATCH_STANDARDIZE_STAGED` | `0` | Staged standardization (experimental, may slow). |
 | `GOLDENMATCH_BUCKET_VEC_MIN` / `_MAX` | `32` / `2000` | Block-size band for the vectorized float64 NxN cdist path in bucket scoring. |
-| Fellegi-Sunter routing & scoring knobs (`GOLDENMATCH_FS_*`) | — | Have their own home: see [Probabilistic / Fellegi-Sunter](#probabilistic--fellegi-sunter-advanced) for the path-routing map + the complete `FS_*` table. |
+| Fellegi-Sunter routing & scoring knobs (`GOLDENMATCH_FS_*`) | — | Have their own home: see [Probabilistic / Fellegi-Sunter](#probabilistic-fellegi-sunter-advanced) for the path-routing map + the complete `FS_*` table. |
 | `GOLDENMATCH_BENCH_DUMP_PAIRS` | unset | Dump per-stage pairs for benchmarking. |
 | `GOLDENMATCH_SKIP_MATCH_LOG` / `GOLDENMATCH_MATCH_LOG_FLUSH_PAIRS` | — | Streaming match-log controls. |
 
@@ -591,7 +591,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_FACILITY_NAME_NE` | `0` | On company/location-mode data (shared phone/address/company demoted because the sharers don't co-agree on the person name), add the person full name (first+last) as `token_sort` negative evidence so distinct colleagues at one facility don't fuse. Opt-in; only fires when facility mode is detected, so person datasets (e.g. Febrl) are unaffected even when set. |
 | `GOLDENMATCH_QUALITY_GATED_REVIEW` | `0` | Downgrade auto-merge on low-quality records. |
 
-### Probabilistic / Fellegi-Sunter (advanced)
+### Probabilistic Fellegi-Sunter (advanced)
 
 A `type: probabilistic` matchkey trains EM once, then its candidate pairs are scored by **one of four paths, chosen automatically** — you rarely set these by hand, but this is the map when you need to:
 

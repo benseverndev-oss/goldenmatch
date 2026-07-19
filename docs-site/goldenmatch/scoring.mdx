@@ -24,7 +24,7 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `name_freq_weighted_jw` | Jaro-Winkler modulated by US Census surname IDF | 0.0--1.0 | `last_name` / `surname` |
 | `given_name_aliased_jw` | Jaro-Winkler with alias-aware exact bonus | 0.0--1.0 | `first_name` / `given_name` |
 | `qgram` | Q-gram (n-gram) overlap similarity | 0.0--1.0 | General strings, typos |
-| `alias_match` | Matches known name aliases and nicknames (Bob <-> Robert) | 0 or 1 | Names with nicknames |
+| `alias_match` | Matches known name aliases and nicknames (e.g. Bob and Robert) | 0 or 1 | Names with nicknames |
 | `initialism_match` | Matches initials/acronyms against their expansions | 0 or 1 | Acronyms, initials |
 | `phash` | Perceptual-hash Hamming similarity | 0.0--1.0 | Images |
 | `radial` | Rotation/crop-invariant radial-variance similarity | 0.0--1.0 | Rotated/cropped images |

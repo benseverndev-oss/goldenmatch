@@ -27,7 +27,7 @@ GoldenMatch is built around one workflow, not a pile of knobs:
 **Zero-config gets you most of the way in one pass; the healing loop closes the gap to an expert-tuned config without you having to be the expert.** It is the user-facing expression of two project commitments: *zero-config should embarrass the alternatives*, and *out-of-the-box should approach the hand-tuned expert*.
 
 <Note>
-  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. On the TypeScript surface the same healer is the opt-in `goldenmatch/core/suggest-wasm` subpath (see [TypeScript / WASM](#typescript--wasm) below); without the WASM kernel TS degrades gracefully to empty suggestions.
+  The healer is **wired into the default pipeline**. Every `dedupe_df(df)` run now checks a free controller signal (RED/YELLOW health or a score dip) and, only when it fires, attaches cheap raw candidate suggestions to `result.suggestions` — no extra pipeline run on a healthy result. Opt into the expensive verified path with `dedupe_df(df, suggest=True)`, or run the full apply-and-re-run loop with `dedupe_df(df, heal=True)`. The same surface is on CLI (`--suggest` / `--heal`), MCP (`review_config`), A2A, REST, web, and the TUI (Suggestions tab). It requires `goldenmatch[native]` (the suggestion kernel is compiled); without the native wheel every surface **degrades gracefully** — it attaches no suggestions and never raises. Kill-switch: `GOLDENMATCH_SUGGEST_ON_DEDUPE=0`. On the TypeScript surface the same healer is the opt-in `goldenmatch/core/suggest-wasm` subpath (see [TypeScript and WASM](#typescript-and-wasm) below); without the WASM kernel TS degrades gracefully to empty suggestions.
 </Note>
 
 ## The loop in code
@@ -112,7 +112,7 @@ You can change or disable the gate:
 
 These are also in the full [tuning reference](/goldenmatch/tuning#config-suggestion-healer-knobs).
 
-## TypeScript / WASM
+## TypeScript and WASM
 
 The healer runs on the TS/JS surface too, via the `suggest-core` kernel compiled to
 WebAssembly (`suggest-wasm`). It is the same pyo3-free kernel
