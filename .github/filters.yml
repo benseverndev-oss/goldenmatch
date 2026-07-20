@@ -420,6 +420,14 @@ config_matrix:
   - 'scripts/agent_codemap.py'
   - 'scripts/test_agent_codemap.py'
   - 'docs/agent-codemap.json'
+  # Repo-level suite surface matrix: reads the parity manifests, the per-package
+  # counts (packages/python/** above), and the recipes pages, so any of those can
+  # move the cross-package view -> re-run its --check.
+  - 'scripts/gen_suite_matrix.py'
+  - 'scripts/test_suite_matrix.py'
+  - 'docs-site/suite-matrix.mdx'
+  - 'docs-site/*/recipes.mdx'
+  - 'parity/*.yaml'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's

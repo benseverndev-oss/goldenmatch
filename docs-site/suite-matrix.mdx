@@ -1,0 +1,70 @@
+---
+title: "Suite surface matrix"
+description: "Cross-package view of the Golden Suite: capability counts, Python/TypeScript parity, and auto-detected gaps — generated from introspection and the parity manifests, gated in CI."
+---
+
+The per-package [config matrices](/goldenmatch/config-matrix) each describe one package. This is the **cross-package** view: how the six packages line up, where the Python and TypeScript ports diverge, and which capabilities are missing where. Everything below the line is generated from live introspection + the parity manifests (`scripts/gen_suite_matrix.py`) and verified in CI, so it can't drift.
+
+{/* suite-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_suite_matrix.py --write */}
+
+## Per-package surface
+
+Live counts (introspected from each package) side by side. `MCP` / `Exports` / `A2A` are the same numbers the llms.txt/README gate locks; `CLI` is the Python command count from the parity manifest.
+
+| Package | MCP tools | Exports | A2A skills | CLI commands | Recipes | TS port |
+|---|---|---|---|---|---|---|
+| `goldenmatch` | 78 | 200 | 40 | 34 | Yes | Yes |
+| `goldencheck` | 19 | 44 | 9 | 19 | — | Yes |
+| `goldenflow` | 10 | 36 | 6 | 16 | — | Yes |
+| `goldenpipe` | 4 | 20 | 4 | 8 | — | Yes |
+| `goldenanalysis` | 4 | 8 | — | 4 | — | Yes |
+| `infermap` | 4 | 19 | — | 5 | — | Yes |
+| **suite** | **119** | | | | | |
+
+## Cross-language parity (Python ↔ TypeScript)
+
+Per surface: values shared by both languages vs each language's exclusives. A non-zero **Python-only** or **TS-only** is a *declared* cross-language gap (`parity/<pkg>.yaml`), not drift — but it is where the two ports diverge.
+
+| Package | Surface | Shared | Python-only | TS-only |
+|---|---|---|---|---|
+| `goldenmatch` | mcp_tools | 38 | 40 | 12 |
+| `goldenmatch` | cli_commands | 11 | 23 | 3 |
+| `goldenmatch` | a2a_skills | 20 | 20 | 16 |
+| `goldenmatch` | scorers | 12 | 5 | 2 |
+| `goldenmatch` | transforms | 12 | 0 | 0 |
+| `goldencheck` | mcp_tools | 18 | 1 | 0 |
+| `goldencheck` | cli_commands | 8 | 11 | 3 |
+| `goldencheck` | a2a_skills | 9 | 0 | 0 |
+| `goldenflow` | mcp_tools | 10 | 0 | 0 |
+| `goldenflow` | cli_commands | 9 | 7 | 0 |
+| `goldenflow` | a2a_skills | 6 | 0 | 0 |
+| `goldenpipe` | mcp_tools | 4 | 0 | 0 |
+| `goldenpipe` | cli_commands | 7 | 1 | 0 |
+| `goldenpipe` | a2a_skills | 4 | 0 | 0 |
+| `goldenanalysis` | mcp_tools | 0 | 4 | 0 |
+| `goldenanalysis` | cli_commands | 3 | 1 | 0 |
+| `infermap` | mcp_tools | 4 | 0 | 0 |
+| `infermap` | cli_commands | 4 | 1 | 0 |
+
+## Gaps & asymmetries (auto-detected)
+
+- **No recipes page:** `goldencheck`, `goldenflow`, `goldenpipe`, `goldenanalysis`, `infermap` (thinner / auto-driven config surfaces).
+- **No A2A skills surface:** `goldenanalysis`, `infermap`.
+- `goldenmatch` **mcp_tools** — Python-only: `analyze_blocking`, `certify_recall`, `compare_clusters`, `config_weaknesses`, `create_domain`, `documents_ingest`, `documents_suggest_schema`, `explain_routing`, `export_results`, `get_cluster`, `get_golden_record`, `get_stats`, `identity_audit`, `identity_audit_seal`, `identity_audit_verify`, `identity_claim`, `identity_profile`, `identity_resolve_conflict`, `identity_show`, `identity_stats`, `identity_worklist`, `incremental`, `lineage`, `lint_routing`, `list_clusters`, `list_domains`, `list_plugins`, `list_runs`, `memory_import`, `plan_routing`, `pprl_auto_config`, `pprl_link`, `retrieve_similar`, `rollback`, `schema_match`, `sensitivity`, `shatter_cluster`, `test_domain`, `unmerge_record`, `upload_dataset`.
+- `goldenmatch` **mcp_tools** — TS-only: `build_clusters`, `find_exact_matches`, `find_fuzzy_matches`, `list_blocking_strategies`, `list_scorers`, `list_strategies`, `list_transforms`, `read_file`, `score_pair`, `score_strings`, `server_info`, `write_csv`.
+- `goldenmatch` **cli_commands** — Python-only: `analyze-blocking`, `anomalies`, `autoconfig`, `compare-clusters`, `config`, `explain`, `incremental`, `ingest-docs`, `init`, `interactive`, `label`, `lineage`, `pprl`, `review`, `rollback`, `runs`, `schedule`, `sensitivity`, `serve-ui`, `setup`, `sync`, `unmerge`, `watch`.
+- `goldenmatch` **cli_commands** — TS-only: `info`, `score`, `tui`.
+- `goldenmatch` **a2a_skills** — Python-only: `analyze_blocking`, `compare_clusters`, `configure`, `documents_ingest`, `documents_suggest_schema`, `identity_audit`, `identity_audit_seal`, `identity_audit_verify`, `identity_claim`, `identity_resolve_conflict`, `identity_show`, `incremental`, `list_runs`, `pprl`, `quality`, `retrieve_similar`, `review`, `rollback`, `schema_match`, `sensitivity`.
+- `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `fix_quality`, `list_scorers`, `list_strategies`, `list_transforms`, `memory_export`, `profile`, `scan_quality`, `score`, `suggest_config`, `suggest_pprl`.
+- `goldenmatch` **scorers** — Python-only: `alias_match`, `audio_fp`, `initialism_match`, `phash`, `radial`.
+- `goldenmatch` **scorers** — TS-only: `given_name_aliased_jw`, `name_freq_weighted_jw`.
+- `goldencheck` **mcp_tools** — Python-only: `install_domain`.
+- `goldencheck` **cli_commands** — Python-only: `agent-serve`, `denial-constraints`, `evaluate`, `history`, `init`, `learn`, `refs`, `review`, `scan-db`, `schedule`, `serve`.
+- `goldencheck` **cli_commands** — TS-only: `health-score`, `list-domains`, `profile`.
+- `goldenflow` **cli_commands** — Python-only: `agent-serve`, `init`, `interactive`, `mcp-serve`, `schedule`, `serve`, `watch`.
+- `goldenpipe` **cli_commands** — Python-only: `interactive`.
+- `goldenanalysis` **mcp_tools** — Python-only: `analyze_frame`, `detect_regressions`, `get_trend`, `list_analyzers`.
+- `goldenanalysis` **cli_commands** — Python-only: `mcp-serve`.
+- `infermap` **cli_commands** — Python-only: `mcp-serve`.
+
+{/* suite-matrix:generated:end */}
