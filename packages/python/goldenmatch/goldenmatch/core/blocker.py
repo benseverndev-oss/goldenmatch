@@ -37,8 +37,19 @@ def _emit_blocking_profile(
     if not _emitter_stack.get():
         return
 
-    # n_rows is computed here, only when an emitter is active.
-    n_rows: int = lf.select(pl.len()).collect().item()
+    # n_rows is computed here, only when an emitter is active. Frame-type
+    # agnostic + polars-free-capable: the arrow seam Frame exposes ``height()``
+    # (num_rows, no polars import), so the emitter no longer forces an
+    # arrow->polars round trip just to count rows. A polars LazyFrame (the
+    # learned/canopy/ann strategies still pass one) has no ``height`` and needs
+    # a collect -- polars is available on that path.
+    _height = getattr(lf, "height", None)
+    if callable(_height):
+        n_rows = int(_height())  # method-style Frame
+    elif _height is not None:
+        n_rows = int(_height)  # ArrowFrame.height is a property (num_rows)
+    else:
+        n_rows = int(lf.select(pl.len()).collect().item())  # polars LazyFrame
 
     # Determine keys_used: prefer passes if truthy, else keys if truthy, else []
     if config.passes:
@@ -1304,14 +1315,19 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
             # op, so that conversion still uses pyarrow under the hood).
             # multi_pass is dual-rep too: it delegates each pass to
             # _build_static_blocks (seam-native via derive_block_key), so it stays
-            # arrow when no polars-only feature (multi-key auto-select or an active
-            # profile emitter) is in play. This is the common zero-config shape
-            # (the #1207 per-identifier union), so keeping it off the polars round
-            # trip is the load-bearing blocking-spine eviction for zero-config.
+            # arrow when no polars-only feature (multi-key auto-select) is in
+            # play. This is the common zero-config shape (the #1207 per-identifier
+            # union), so keeping it off the polars round trip is the load-bearing
+            # blocking-spine eviction for zero-config.
+            # NOTE: an active profile emitter (the auto-config controller) no
+            # longer forces polars here -- ``_emit_blocking_profile`` reads the
+            # row count off the arrow seam's ``height()`` (polars-free), so the
+            # controller's sample iterations run arrow-native on a base install
+            # without polars (previously they errored -> degraded config). The
+            # emitted BlockingProfile is byte-identical (row count is row count).
             _needs_polars = (
                 config.strategy not in ("static", "adaptive", "multi_pass")
                 or (config.auto_select and config.keys and len(config.keys) > 1)
-                or bool(_emitter_stack.get())
             )
             lf = (
                 cast(pl.DataFrame, pl.from_arrow(native)).lazy()
