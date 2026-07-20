@@ -13,23 +13,27 @@ pytest.importorskip("openai")  # the [openai] extra isn't installed on every lan
 
 from goldengraph.llm import OpenAIClient  # noqa: E402
 
+_DEFAULT = "https://api.openai.com/v1"
+
 
 def test_empty_base_url_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "")  # the CI OpenAI-API path
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
     client = OpenAIClient(model="gpt-4o-mini")._ensure_client()
-    assert "api.openai.com" in str(client.base_url)
+    # exact host+path (rstrip the SDK's trailing slash), not a substring `in`:
+    # a substring check would also pass a spoofed api.openai.com.evil.com.
+    assert str(client.base_url).rstrip("/") == _DEFAULT
 
 
 def test_unset_base_url_uses_default(monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
     client = OpenAIClient(model="gpt-4o-mini")._ensure_client()
-    assert "api.openai.com" in str(client.base_url)
+    assert str(client.base_url).rstrip("/") == _DEFAULT
 
 
 def test_real_base_url_is_honored(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:11434/v1")  # local Ollama
     monkeypatch.setenv("OPENAI_API_KEY", "ollama")
     client = OpenAIClient(model="qwen")._ensure_client()
-    assert "localhost:11434" in str(client.base_url)
+    assert str(client.base_url).rstrip("/") == "http://localhost:11434/v1"
