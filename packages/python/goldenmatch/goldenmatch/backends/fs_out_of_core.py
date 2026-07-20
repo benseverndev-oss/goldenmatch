@@ -36,9 +36,9 @@ bench-gated edge, exact parity where no block exceeds the cap). Cross-pass
 duplicate pairs are deduped canonically in pass order, matching
 `score_probabilistic_external_blocks`.
 
-Supports `static`/`multi_pass` blocking (what FS auto-config emits, incl. the SN
-bound → static passes). Raises `NotImplementedError` otherwise so callers can
-fall back to `score_buckets`.
+Supports `static`/`multi_pass` blocking (what FS auto-config emits). Raises
+`NotImplementedError` otherwise (e.g. `sorted_neighborhood`) so callers can fall
+back to `score_buckets`.
 """
 from __future__ import annotations
 

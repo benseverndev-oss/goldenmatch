@@ -359,6 +359,8 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
     from goldenmatch.core.frame import (
         is_polars_dataframe,
         is_polars_lazyframe,
+    )
+    from goldenmatch.core.frame import (
         to_frame as _tf,
     )
 
