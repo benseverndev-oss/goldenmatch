@@ -1,0 +1,64 @@
+---
+title: "Analysis recipes"
+description: "Copy-paste GoldenAnalysis snippets for common jobs: score a dedupe run, roll a whole pipeline into one report, and gate CI on a cross-run regression."
+keywords: ["goldenanalysis", "recipes", "report", "metrics", "cross-run", "regression", "ci gate"]
+---
+
+The [config matrix](/goldenanalysis/config-matrix) lists every analyzer and knob, and [Analyzers](/goldenanalysis/analyzers) explains the metric model. This page is the task-shaped shortcut: a few complete, copy-paste snippets for the jobs you actually reach for. Every entrypoint returns one `AnalysisReport` (`.to_markdown()` / `.to_json()`).
+
+## Score a dedupe run
+
+**You have** a GoldenMatch dedupe result. **You want** match rate, recall, and the cluster-size distribution as one comparable report.
+
+```python
+import goldenanalysis as ga
+from goldenmatch import dedupe_df
+
+result = dedupe_df(df, certify=True)           # certify=True attaches the recall certificate
+report = ga.analyze_match(result, dataset="customers")
+
+print(report.to_markdown())
+report.metrics        # match.rate, match.recall_safe_bound, cluster.singleton_ratio, ...
+```
+
+`certify=True` is what makes `match.recall_safe_bound` — the alerting metric for unsupervised runs — available to the `match.rates` analyzer.
+
+## Roll a whole pipeline into one report
+
+**You have** a full GoldenPipe run (check + flow + match artifacts). **You want** every applicable analyzer to fan out into a single report for the data steward.
+
+```python
+import goldenanalysis as ga
+
+report = ga.analyze_pipeline(pipe_result)      # runs each analyzer whose artifacts are present
+report.analyzers_run                            # e.g. ["frame.summary", "match.rates", "quality.rollup"]
+report.source                                   # {"unavailable": [...]} records what could not be computed
+open("report.md", "w").write(report.to_markdown())
+```
+
+Analyzers degrade gracefully: each emits what its present artifacts support and records the rest in `report.source`, so a partial run still produces a report.
+
+## Gate CI on a cross-run regression
+
+**You have** reports accumulating over time. **You want** a nightly CI job that fails when a quality metric regresses versus a rolling baseline.
+
+```python
+from goldenanalysis import ReportHistory, RegressionPolicy
+
+hist = ReportHistory(path=".golden/analysis.jsonl")
+hist.append(report)                             # after each run
+
+# Direction-aware, per-metric thresholds: a 2% gate on recall catches a quiet 0.97 -> 0.89 drop.
+policy = RegressionPolicy(default_pct=10.0, per_metric={"match.recall_safe_bound": 2.0})
+flagged = hist.detect_regressions("customers", baseline="rolling_median", policy=policy)
+
+if flagged:
+    raise SystemExit(1)                         # fail the job on any flagged regression
+```
+
+Or from the CLI, which exits non-zero on any flag:
+
+```bash
+goldenanalysis regressions --dataset customers --history .golden/analysis.jsonl \
+  --policy "match.recall_safe_bound=2" --fail-on-regression
+```

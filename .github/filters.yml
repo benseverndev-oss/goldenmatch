@@ -781,6 +781,8 @@ docs:
   - '**/server.json'
   - 'scripts/check_docs_consistency.py'
   - 'scripts/check_docs_links.py'
+  - 'scripts/check_docs_sections.py'
+  - 'scripts/test_docs_sections.py'
   - 'scripts/check_benchmark_claims.py'
   - 'docs/benchmark-claims.json'
   - 'scripts/check_docs_staleness.py'

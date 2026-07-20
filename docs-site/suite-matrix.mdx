@@ -1,6 +1,7 @@
 ---
 title: "Suite surface matrix"
 description: "Cross-package view of the Golden Suite: capability counts, the Rust -core compute substrate, Python/TypeScript parity, and auto-detected gaps — generated and gated in CI."
+keywords: ["golden suite", "suite matrix", "cross-package", "parity", "capabilities", "rust core", "reference"]
 ---
 
 The per-package [config matrices](/goldenmatch/config-matrix) each describe one package. This is the **cross-package** view. The anchor is the **Rust / Arrow-native / fused `-core` kernel**: it is the reference implementation, and the Python and TypeScript surfaces are ports that either dispatch to it (the fast path) or run a byte-identical pure-language fallback. So the sections below read against that reference — how the packages line up, which scorers a kernel actually backs vs which are fallback-only, where the two language ports diverge, and what's missing where. Everything below the line is generated from the parity manifests + AST (`scripts/gen_suite_matrix.py`) and verified in CI, so it can't drift.
@@ -17,8 +18,8 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 | `goldencheck` | 19 | 43 | 9 | 19 | Yes | Yes |
 | `goldenflow` | 10 | 36 | 6 | 16 | Yes | Yes |
 | `goldenpipe` | 4 | 20 | 4 | 8 | Yes | Yes |
-| `goldenanalysis` | 4 | 8 | — | 4 | — | Yes |
-| `infermap` | 4 | 19 | — | 5 | — | Yes |
+| `goldenanalysis` | 4 | 8 | — | 4 | Yes | Yes |
+| `infermap` | 4 | 19 | — | 5 | Yes | Yes |
 | **suite** | **119** | | | | | |
 
 ## Compute substrate — the Rust `-core` kernel is the reference
@@ -61,7 +62,6 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 
 ## Gaps & asymmetries (auto-detected)
 
-- **No recipes page:** `goldenanalysis`, `infermap` (thinner / auto-driven config surfaces).
 - **No A2A skills surface:** `goldenanalysis`, `infermap`.
 - `goldenmatch` **mcp_tools** — Python-only: `analyze_blocking`, `certify_recall`, `compare_clusters`, `config_weaknesses`, `create_domain`, `documents_ingest`, `documents_suggest_schema`, `explain_routing`, `export_results`, `get_cluster`, `get_golden_record`, `get_stats`, `identity_audit`, `identity_audit_seal`, `identity_audit_verify`, `identity_claim`, `identity_profile`, `identity_resolve_conflict`, `identity_show`, `identity_stats`, `identity_worklist`, `incremental`, `lineage`, `lint_routing`, `list_clusters`, `list_domains`, `list_plugins`, `list_runs`, `memory_import`, `plan_routing`, `pprl_auto_config`, `pprl_link`, `retrieve_similar`, `rollback`, `schema_match`, `sensitivity`, `shatter_cluster`, `test_domain`, `unmerge_record`, `upload_dataset`.
 - `goldenmatch` **mcp_tools** — TS-only: `build_clusters`, `find_exact_matches`, `find_fuzzy_matches`, `list_blocking_strategies`, `list_scorers`, `list_strategies`, `list_transforms`, `read_file`, `score_pair`, `score_strings`, `server_info`, `write_csv`.
