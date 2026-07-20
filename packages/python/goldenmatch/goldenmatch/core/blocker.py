@@ -43,13 +43,15 @@ def _emit_blocking_profile(
     # arrow->polars round trip just to count rows. A polars LazyFrame (the
     # learned/canopy/ann strategies still pass one) has no ``height`` and needs
     # a collect -- polars is available on that path.
-    _height: Any = getattr(lf, "height", None)
-    if callable(_height):
-        n_rows = int(_height())  # method-style Frame
-    elif _height is not None:
-        n_rows = int(_height)  # ArrowFrame.height is a property (num_rows)
+    _height = getattr(lf, "height", None)
+    if _height is None:
+        # polars LazyFrame has no ``height``; collect the count (polars present here)
+        n_rows = int(lf.select(pl.len()).collect().item())
     else:
-        n_rows = int(lf.select(pl.len()).collect().item())  # polars LazyFrame
+        # arrow-seam Frame exposes num_rows via ``height`` (property) or ``height()``
+        # (method) -- no polars import. cast narrows the object-typed value for int().
+        _hv = _height() if callable(_height) else _height
+        n_rows = int(cast(int, _hv))
 
     # Determine keys_used: prefer passes if truthy, else keys if truthy, else []
     if config.passes:
