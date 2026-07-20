@@ -80,6 +80,7 @@ def _spy_build_blocks_names(monkeypatch) -> list:
 def test_slim_projects_to_row_id_plus_blocking_fields(monkeypatch):
     from goldenmatch.core.pipeline import _build_em_blocks
 
+    monkeypatch.setenv("GOLDENMATCH_FS_EM_AGG_BLOCKS", "0")  # exercise the slim path
     monkeypatch.setenv("GOLDENMATCH_FS_EM_BLOCK_SLIM", "1")
     names = _spy_build_blocks_names(monkeypatch)
 
@@ -96,6 +97,7 @@ def test_slim_projects_to_row_id_plus_blocking_fields(monkeypatch):
 def test_slim_off_keeps_full_width(monkeypatch):
     from goldenmatch.core.pipeline import _build_em_blocks
 
+    monkeypatch.setenv("GOLDENMATCH_FS_EM_AGG_BLOCKS", "0")  # exercise the slim path
     monkeypatch.setenv("GOLDENMATCH_FS_EM_BLOCK_SLIM", "0")
     names = _spy_build_blocks_names(monkeypatch)
 
@@ -121,6 +123,7 @@ def test_slim_output_parity(monkeypatch):
     from goldenmatch import dedupe_df
 
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_EM_AGG_BLOCKS", "0")  # compare slim on vs off
     df = _make_dedupe_df().drop("__row_id__")
 
     monkeypatch.setenv("GOLDENMATCH_FS_EM_BLOCK_SLIM", "1")

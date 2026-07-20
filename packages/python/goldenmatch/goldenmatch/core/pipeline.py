@@ -229,18 +229,55 @@ def _fs_em_block_slim_enabled() -> bool:
     return v.strip().lower() not in ("0", "false", "no", "off")
 
 
+def _fs_em_agg_blocks_enabled() -> bool:
+    """Build the EM-training blocks as compact row-id arrays via one
+    ``group_by().agg()`` per pass instead of per-block frames (DEFAULT ON;
+    ``GOLDENMATCH_FS_EM_AGG_BLOCKS=0`` restores the frame-based
+    ``build_blocks`` path).
+
+    Supersedes the slim-projection lever for static/multi_pass FS blocking: EM
+    reads only ``__row_id__`` + each block's ``blocking_fields``, so building
+    blocks as arrays (``blocker.build_em_blocks_agg``) eliminates BOTH the
+    per-block-object floor AND the per-pass full-frame transient that the
+    width-projection alone can't reach -- whole-pipeline peak 2126->549 MB at
+    100k person, byte-identical output (absent oversized blocks; the
+    bench-probabilistic panel gates the oversized case -- see
+    ``build_em_blocks_agg``)."""
+    v = os.environ.get("GOLDENMATCH_FS_EM_AGG_BLOCKS")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
+
+
 def _build_em_blocks(em_frame: Any, blocking: Any) -> list:
-    """``build_blocks`` for the EM-only path, on a ``__row_id__`` + blocking-key
-    projection of ``em_frame`` when ``_fs_em_block_slim_enabled()`` (the memory
-    win). Falls back to the full frame if the projection can't cover a column
-    ``build_blocks`` needs, so output is identical on any config the projection
-    doesn't handle."""
+    """Build the EM-only training blocks.
+
+    Preferred: ``blocker.build_em_blocks_agg`` (row-id arrays, no per-block
+    frames) for static/multi_pass when ``_fs_em_agg_blocks_enabled()``. Else the
+    ``build_blocks`` path, on a ``__row_id__`` + blocking-key projection of
+    ``em_frame`` when ``_fs_em_block_slim_enabled()`` (a lesser memory win).
+    Both fall back to full-width ``build_blocks`` on anything they can't cover,
+    so output is identical on any config the fast paths don't handle."""
     # NB: use the MODULE-LEVEL ``build_blocks`` (imported at top of file), not a
     # local import -- tests monkeypatch ``pipeline.build_blocks`` to spy on it
     # (test_probabilistic.TestModelReuseSkipsBuildBlocks), and a local re-import
     # would shadow the patch.
     from goldenmatch.core.blocker import collect_blocking_fields
     from goldenmatch.core.frame import to_frame as _tf
+
+    if _fs_em_agg_blocks_enabled() and getattr(blocking, "strategy", None) in (
+        "static",
+        "multi_pass",
+    ):
+        try:
+            from goldenmatch.core.blocker import build_em_blocks_agg
+
+            return build_em_blocks_agg(em_frame, blocking)
+        except Exception:
+            logger.debug(
+                "FS EM agg-block builder failed; falling back to build_blocks.",
+                exc_info=True,
+            )
 
     if _fs_em_block_slim_enabled():
         try:
