@@ -159,3 +159,39 @@ def test_non_field_strategy_raises():
     em = train_em(df, mk, blocks=[], blocking_fields=[])
     with pytest.raises(NotImplementedError):
         score_fs_out_of_core(df, blocking, mk, set(), em)
+
+
+def test_streaming_output_routes_and_excludes_xform(tmp_path):
+    """stream_fs_dedupe_output: unique=singletons, dupes=multi-member, golden=one
+    per non-oversized multi cluster; __xform_* excluded; written via COPY."""
+    import types
+
+    import duckdb
+    import pyarrow.parquet as pq
+
+    from goldenmatch.backends.fs_out_of_core import stream_fs_dedupe_output
+
+    con = duckdb.connect(":memory:")
+    prep = pl.DataFrame({
+        "__row_id__": [1, 2, 3, 4, 5, 6],
+        "name": ["a", "a", "b", "c", "c", "c"],
+        "__xform_name_x__": ["a", "a", "b", "c", "c", "c"],
+    })
+    con.register("p", prep.to_arrow())
+    con.execute("CREATE TABLE prep AS SELECT * FROM p")
+    con.unregister("p")
+    # clusters: {1,2} multi, {3} singleton, {4,5,6} multi
+    assignments = [(1, 10), (2, 10), (3, 20), (4, 30), (5, 30), (6, 30)]
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = stream_fs_dedupe_output(con, "prep", assignments, cfg, str(tmp_path))
+
+    assert res["unique_count"] == 1   # row 3
+    assert res["dupes_count"] == 5    # rows 1,2,4,5,6
+    assert res["golden_count"] == 2   # clusters 10 and 30
+    u = pq.read_table(res["unique_path"])
+    assert "__xform_name_x__" not in u.column_names        # helper excluded
+    assert u.column("__row_id__").to_pylist() == [3]
+    d = pq.read_table(res["dupes_path"])
+    assert sorted(d.column("__row_id__").to_pylist()) == [1, 2, 4, 5, 6]
+    con.close()

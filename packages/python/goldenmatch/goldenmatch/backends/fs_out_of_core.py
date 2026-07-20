@@ -318,3 +318,116 @@ def score_fs_out_of_core(
                         os.unlink(p)
                 except OSError:
                     pass
+
+
+def stream_fs_dedupe_output(
+    con: Any,
+    prep_table: str,
+    assignments: Any,
+    config: Any,
+    out_dir: str,
+    *,
+    record_cols: list[str] | None = None,
+) -> dict:
+    """Stream the O(N) dedupe output (unique / dupes / golden) to parquet from a
+    DuckDB store, BOUNDED — the piece that lets single-box FS clear 50M+.
+
+    ``unique`` and ``dupes`` are the O(N) bulk (unique ~= most of N); they are
+    written with DuckDB ``COPY (query) TO parquet``, which STREAMS the result to
+    disk with NO Python materialisation. Only ``golden`` (bounded to
+    multi-member-cluster rows) uses the in-memory ``build_golden_records_batch``.
+    So peak stays bounded regardless of N — the result frame is never held.
+
+    Args:
+        con: DuckDB connection holding ``prep_table`` (``__row_id__`` + record
+            columns; ``__xform_*`` helpers are excluded from the output).
+        assignments: arrow Table / mapping of (``__row_id__``, ``__cluster_id__``)
+            — one row per input record (singletons included, own cluster).
+        record_cols: output columns; default = every ``prep_table`` column that
+            is not a ``__xform_*`` helper.
+    Returns paths + counts (NOT frames).
+    """
+    import os as _os
+
+    import polars as pl
+    import pyarrow as pa
+
+    from goldenmatch.core.golden import build_golden_records_batch
+
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+    golden_rules = getattr(config, "golden_rules", None)
+
+    # (__row_id__, __cluster_id__) assignments -> a DuckDB table we can JOIN.
+    if not isinstance(assignments, pa.Table):
+        rids = [int(r) for r, _ in assignments]
+        cids = [int(c) for _, c in assignments]
+        assignments = pa.table(
+            {"__row_id__": pa.array(rids, pa.int64()),
+             "__cluster_id__": pa.array(cids, pa.int64())}
+        )
+    con.register("asn_arrow", assignments)
+    con.execute("CREATE OR REPLACE TEMP TABLE asn AS SELECT * FROM asn_arrow")
+    con.unregister("asn_arrow")
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE sizes AS "
+        "SELECT __cluster_id__ AS cid, count(*) AS n FROM asn GROUP BY __cluster_id__"
+    )
+
+    all_cols = [d[0] for d in con.execute(f"DESCRIBE {prep_table}").fetchall()]
+    if record_cols is None:
+        record_cols = [c for c in all_cols if not c.startswith("__xform_")]
+    _sel = ", ".join(f'p."{c}"' for c in record_cols)
+
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+
+    base_join = (
+        f"FROM {prep_table} p "
+        "JOIN asn a ON p.__row_id__ = a.__row_id__ "
+        "JOIN sizes s ON a.__cluster_id__ = s.cid"
+    )
+    # unique = singleton clusters; dupes = multi-member (oversized INCLUDED,
+    # mirroring _finalize's size>1 dupe rule). Both STREAMED via COPY.
+    con.execute(
+        f"COPY (SELECT {_sel} {base_join} WHERE s.n = 1) "
+        f"TO '{unique_path}' (FORMAT parquet)"
+    )
+    con.execute(
+        f"COPY (SELECT {_sel}, a.__cluster_id__ {base_join} WHERE s.n > 1) "
+        f"TO '{dupes_path}' (FORMAT parquet)"
+    )
+    # golden = non-oversized multi-member; bounded subset -> in-memory builder.
+    golden_tbl = con.execute(
+        f"SELECT {_sel}, a.__cluster_id__ {base_join} "
+        f"WHERE s.n > 1 AND s.n <= {int(max_cluster_size)}"
+    ).fetch_arrow_table()
+    golden_count = 0
+    if golden_tbl.num_rows:
+        multi_df = pl.from_arrow(golden_tbl)
+        records = build_golden_records_batch(
+            multi_df,
+            golden_rules if golden_rules is not None else _default_golden_rules(),
+        )
+        golden_count = len(records)
+        pl.DataFrame(records).write_parquet(golden_path)
+
+    import pyarrow.parquet as _pq
+
+    return {
+        "unique_path": unique_path,
+        "dupes_path": dupes_path,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": _pq.read_metadata(unique_path).num_rows,
+        "dupes_count": _pq.read_metadata(dupes_path).num_rows,
+        "golden_count": golden_count,
+    }
+
+
+def _default_golden_rules():
+    from goldenmatch.config.schemas import GoldenRulesConfig
+
+    return GoldenRulesConfig(default_strategy="most_complete")
