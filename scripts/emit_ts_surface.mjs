@@ -64,11 +64,14 @@ async function emit(pkg) {
     // types.ts is bundled (not its own tsup entry) -> dist/core/types.js does
     // not exist. The `./core` export entry (dist/core/index.js) re-exports both.
     const t = await load("dist/core/index.js");
-    if (!t.VALID_SCORERS || !t.VALID_TRANSFORMS || !t.VALID_BLOCKING_STRATEGIES)
-      throw new Error(`${pkg}: expected VALID_SCORERS + VALID_TRANSFORMS + VALID_BLOCKING_STRATEGIES in dist/core/index.js`);
+    if (!t.VALID_SCORERS || !t.VALID_TRANSFORMS || !t.VALID_BLOCKING_STRATEGIES || !t.WASM_COVERED_SCORERS)
+      throw new Error(`${pkg}: expected VALID_SCORERS + VALID_TRANSFORMS + VALID_BLOCKING_STRATEGIES + WASM_COVERED_SCORERS in dist/core/index.js`);
     descriptor.scorers = [...t.VALID_SCORERS].sort();
     descriptor.transforms = [...t.VALID_TRANSFORMS].sort();
     descriptor.blocking_strategies = [...t.VALID_BLOCKING_STRATEGIES].sort();
+    // The scorers with a WASM (-core) kernel -- the reference fast path; the rest
+    // are pure-TS fallbacks. Mirrors Python's _NATIVE_SCORER_IDS.
+    descriptor.scorer_kernels = [...t.WASM_COVERED_SCORERS].sort();
   }
 
   return descriptor;

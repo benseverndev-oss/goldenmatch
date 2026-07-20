@@ -301,3 +301,17 @@ blocking_strategies:
   - perceptual
   - simhash
   ts_only: []
+# scorer_kernels surface: the scorers with a Rust/-core kernel (the REFERENCE fast
+# path) -- Python `_NATIVE_SCORER_IDS` (backends.score_buckets) vs TS
+# `WASM_COVERED_SCORERS` (core/wasm/backend SCORER_ID). Every scorer in the
+# `scorers` surface NOT listed here is a pure-language fallback with no kernel.
+# python_only: `date` has an arrow-native kernel on Python but no TS WASM port yet.
+scorer_kernels:
+  shared:
+  - exact
+  - jaro_winkler
+  - levenshtein
+  - token_sort
+  python_only:
+  - date
+  ts_only: []

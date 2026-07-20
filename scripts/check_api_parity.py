@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies")
+SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies", "scorer_kernels")
 
 
 class ParityFailure(NamedTuple):
