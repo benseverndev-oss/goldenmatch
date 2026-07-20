@@ -2822,7 +2822,12 @@ jobs:
         # arrow-native, so the pgrx lane runs polars-free against current source
         # too (drops the #1747 stopgap here as well). goldenflow's base has no
         # polars dep (it's a [polars] extra), so this stays polars-free.
-        run: pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow pyarrow
+        # psycopg[binary] rides along because gm_resolve (#1913) opens the
+        # identity postgres store from THIS embedded interpreter — it must be
+        # importable in the same site as goldenmatch, not just the system
+        # python. (Identity resolution is fail-open, so a missing psycopg would
+        # silently return an empty summary and skip the write.)
+        run: pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow pyarrow 'psycopg[binary]'
 
       - name: Install cargo-pgrx
         # 0.12.9 pin matches the pgrx version in
@@ -3140,8 +3145,17 @@ jobs:
           # loads the library. (ALTER SYSTEM would fail here — the GUC isn't
           # registered until the lib loads.) Passed via psql -v so ${PGPORT}
           # interpolates while the quoted heredoc keeps the DO $$ blocks intact.
+          # On any failure here, dump the Postgres server log tail: identity
+          # resolution is fail-open, so a psycopg/DSN problem surfaces as a
+          # Python WARNING in the server log rather than a psql error, and the
+          # run1 guard below (empty summary) turns that into a hard failure.
+          identity_smoke_failed() {
+            echo "::error::gm_resolve smoke failed on PG ${PG_VERSION}; server log tail:"
+            sudo tail -n 120 "/var/log/postgresql/postgresql-${PG_VERSION}-main.log" 2>/dev/null || true
+            exit 1
+          }
           sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 \
-            -v dsn="host=/var/run/postgresql port=${PGPORT} dbname=postgres user=postgres" <<'EOSQL'
+            -v dsn="host=/var/run/postgresql port=${PGPORT} dbname=postgres user=postgres" <<'EOSQL' || identity_smoke_failed
             SET goldenmatch.identity_dsn = :'dsn';
             CREATE TABLE id_people (id TEXT, email TEXT, name TEXT);
             INSERT INTO id_people VALUES
@@ -3153,13 +3167,15 @@ jobs:
             SELECT goldenmatch.gm_configure('idjob',
               '{"matchkeys":[{"name":"email_key","type":"exact","fields":[{"field":"email","scorer":"exact"}]}],"identity":{"source_pk_column":"id"}}');
             -- Run 1: creates the graph in this DB (the two a@x.com rows form one
-            -- identity; b@y.com forms another) -> created >= 1.
+            -- identity; b@y.com forms another) -> created >= 1. An empty summary
+            -- ('{}') means identity resolution fail-opened (e.g. the store could
+            -- not connect) -- treat that as a hard failure, not a silent skip.
             DO $$
             DECLARE s jsonb;
             BEGIN
               s := goldenmatch.gm_resolve('idjob', 'id_people', 'people')::jsonb;
-              IF (s->>'created')::int < 1 THEN
-                RAISE EXCEPTION 'gm_resolve run1: expected created>=1, got %', s;
+              IF s->>'created' IS NULL OR (s->>'created')::int < 1 THEN
+                RAISE EXCEPTION 'gm_resolve run1: expected created>=1 (empty summary => identity write skipped/failed), got %', s;
               END IF;
               RAISE NOTICE 'gm_resolve run1: %', s;
             END $$;
@@ -3171,7 +3187,7 @@ jobs:
             DECLARE s jsonb; n_nodes int; max_recs int;
             BEGIN
               s := goldenmatch.gm_resolve('idjob', 'id_people', 'people')::jsonb;
-              IF (s->>'absorbed_records')::int < 1 THEN
+              IF s->>'absorbed_records' IS NULL OR (s->>'absorbed_records')::int < 1 THEN
                 RAISE EXCEPTION 'gm_resolve run2: expected absorbed_records>=1 (incremental), got %', s;
               END IF;
               SELECT count(*) INTO n_nodes FROM identity_nodes;
