@@ -39,9 +39,64 @@ fall back to `score_buckets`.
 """
 from __future__ import annotations
 
+import os
+import tempfile
 from typing import Any
 
 from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
+
+
+def fs_out_of_core_enabled() -> bool:
+    """Opt-in scale switch for the out-of-core FS path (default OFF).
+
+    `GOLDENMATCH_FS_OUT_OF_CORE=1` routes the FS bucket scorer through
+    `score_fs_out_of_core` with a disk-resident prepared table instead of the
+    in-memory `score_buckets` — the separate, opt-in scale option for datasets
+    past the ~40M single-box wall. Off by default: byte-identical to today for
+    every existing run."""
+    return os.environ.get("GOLDENMATCH_FS_OUT_OF_CORE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _resolve_db_path(db_path: str | None) -> str:
+    """None → in-memory DuckDB (tests / small frames). ``"auto"`` → a tempfile
+    that spills the prepared table to DISK, so post-load resident memory drops
+    to the DuckDB buffer cache rather than the frame (the scale path)."""
+    if db_path == "auto":
+        fd, path = tempfile.mkstemp(prefix="gm_fs_ooc_", suffix=".duckdb")
+        os.close(fd)
+        os.unlink(path)  # DuckDB creates the file itself
+        return path
+    return db_path or ":memory:"
+
+
+def _load_frame_batched(con, proj, batch_rows: int = 500_000) -> None:
+    """Load a polars/arrow frame into DuckDB table ``prep`` in row-slice batches
+    — slice → Arrow → append → free — so peak stays ~1× the frame instead of the
+    full ``to_arrow()`` copy (~2-3×). ``slice`` is a zero-copy view; only one
+    batch's Arrow buffer is live at a time on top of the resident frame."""
+    import polars as pl
+
+    pf = proj if isinstance(proj, pl.DataFrame) else pl.from_arrow(proj)
+    n = pf.height
+    off = 0
+    created = False
+    while off < n:
+        sl = pf.slice(off, batch_rows).to_arrow()
+        con.register("_gm_batch", sl)
+        if not created:
+            con.execute("CREATE TABLE prep AS SELECT * FROM _gm_batch")
+            created = True
+        else:
+            con.execute("INSERT INTO prep SELECT * FROM _gm_batch")
+        con.unregister("_gm_batch")
+        off += sl.num_rows
+        del sl
+    if not created:  # empty frame — create the (empty) table from the schema
+        con.register("_gm_batch", pf.head(0).to_arrow())
+        con.execute("CREATE TABLE prep AS SELECT * FROM _gm_batch")
+        con.unregister("_gm_batch")
 
 
 def _needed_columns(prepared_native, mk: MatchkeyConfig, blocking: BlockingConfig) -> list[str]:
@@ -126,17 +181,19 @@ def score_fs_out_of_core(
     if is_polars_lazyframe(native):
         native = native.collect()
     keep = _needed_columns(native, mk, blocking_config)
-    # Project to the scoring columns before landing in DuckDB (the frame's dead
-    # columns never reach disk). Arrow for a zero-copy DuckDB load.
-    proj = native.select(keep) if is_polars_dataframe(native) else native.select(keep)
-    arrow_tbl = proj.to_arrow() if hasattr(proj, "to_arrow") else proj
+    # Project to the scoring columns (dead columns never reach disk). `.select`
+    # shares column buffers with `native`, so this is ~free.
+    proj = native.select(keep)
 
-    con = duckdb.connect(db_path or ":memory:")
+    _resolved_path = _resolve_db_path(db_path)
+    con = duckdb.connect(_resolved_path)
     try:
-        con.register("prep_arrow", arrow_tbl)
-        con.execute("CREATE TABLE prep AS SELECT * FROM prep_arrow")
-        con.unregister("prep_arrow")
-        del arrow_tbl, proj, native
+        # BATCHED load: slice → Arrow → append → free, so peak stays ~1x the
+        # frame (never the full `to_arrow()` copy that made this ~2-3x). With a
+        # file db_path the table spills to disk, so post-load resident drops to
+        # the DuckDB buffer cache, not the frame. This is the Phase-2 memory fix.
+        _load_frame_batched(con, proj)
+        del proj, native
         con.execute("CREATE INDEX ix_rid ON prep(__row_id__)")
 
         # Choose the FS scorer once (native kernel vs vectorized), like score_buckets.
@@ -220,3 +277,12 @@ def score_fs_out_of_core(
         return out
     finally:
         con.close()
+        # Clean up the spilled tempfile (+ DuckDB's -wal sidecar) when we minted
+        # it via db_path="auto"; a caller-supplied path is left for them to own.
+        if db_path == "auto":
+            for p in (_resolved_path, _resolved_path + ".wal"):
+                try:
+                    if os.path.exists(p):
+                        os.unlink(p)
+                except OSError:
+                    pass

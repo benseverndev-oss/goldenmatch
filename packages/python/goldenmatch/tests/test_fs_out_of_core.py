@@ -104,6 +104,24 @@ def test_multipass_parity():
     assert _got_pairs(df, blocking, mk, em) == _reference_pairs(df, blocking, mk, em)
 
 
+def test_disk_spill_parity():
+    """db_path='auto' spills the prepared table to a tempfile on disk; output
+    must match the in-memory path."""
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    mem = {
+        (min(a, b), max(a, b), round(float(s), 4))
+        for a, b, s in score_fs_out_of_core(df, blocking, mk, set(), em)
+    }
+    disk = {
+        (min(a, b), max(a, b), round(float(s), 4))
+        for a, b, s in score_fs_out_of_core(df, blocking, mk, set(), em, db_path="auto")
+    }
+    assert disk == mem == _reference_pairs(df, blocking, mk, em)
+
+
 def test_non_field_strategy_raises():
     df = _make_dedupe_df()
     mk = _make_probabilistic_mk()
