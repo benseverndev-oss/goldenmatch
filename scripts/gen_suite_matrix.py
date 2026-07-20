@@ -102,6 +102,50 @@ def _yn(flag: bool) -> str:
     return "Yes" if flag else "—"
 
 
+def _surface_union(manifest: dict, surface: str) -> set[str]:
+    body = manifest.get(surface) or {}
+    return set(body.get("shared", [])) | set(body.get("python_only", [])) | set(body.get("ts_only", []))
+
+
+def _substrate_lines(gm: dict) -> list[str]:
+    """The compute-substrate view: the Rust/-core kernel is the REFERENCE, and every
+    exposed scorer is classified by whether a kernel backs it (fast path) or it is a
+    pure-language fallback. Anchored on the `scorer_kernels` parity surface."""
+    kern = gm.get("scorer_kernels") or {}
+    k_shared = set(kern.get("shared", []))
+    k_py = set(kern.get("python_only", []))
+    k_ts = set(kern.get("ts_only", []))
+    exposed = _surface_union(gm, "scorers")
+    fallback = sorted(exposed - k_shared - k_py - k_ts)
+
+    def fmt(names):
+        return ", ".join(f"`{n}`" for n in sorted(names)) or "—"
+
+    total = len(exposed)
+    backed = len(k_shared | k_py | k_ts)
+    return [
+        "## Compute substrate — the Rust `-core` kernel is the reference",
+        "",
+        "The Rust / Arrow-native / fused `-core` kernels are the source of truth for"
+        " scoring; each language surface either dispatches to the kernel (the fast path)"
+        " or runs a byte-identical pure-language **fallback**. This tracks which scorers"
+        " a kernel actually backs vs which are fallback-only. Sources: Python"
+        " `_NATIVE_SCORER_IDS` (arrow bucket kernel) and TS `WASM_COVERED_SCORERS`"
+        " (`-core` WASM), gated as the `scorer_kernels` api_parity surface.",
+        "",
+        f"**{backed} of {total} scorers are kernel-backed** (the reference fast path); "
+        f"the other {total - backed} are pure-language fallbacks with no `-core` kernel.",
+        "",
+        "| Substrate | Scorers |",
+        "|---|---|",
+        f"| Rust `-core` kernel — Python + TS | {fmt(k_shared)} |",
+        f"| Rust `-core` kernel — Python arrow-native only (TS falls back) | {fmt(k_py)} |",
+        f"| WASM `-core` kernel — TS only (Python falls back) | {fmt(k_ts)} |",
+        f"| Language fallback — no `-core` kernel | {fmt(fallback)} |",
+        "",
+    ]
+
+
 def render_block() -> str:
     parity = {p: _load_parity(p) for p in PKGS}
     lines: list[str] = [MARKER_START, ""]
@@ -132,7 +176,10 @@ def render_block() -> str:
     lines.append(f"| **suite** | **{suite_mcp}** | | | | | |")
     lines.append("")
 
-    # 2. Cross-language parity (the disjointedness).
+    # 2. Compute substrate -- the Rust `-core` kernel as the reference.
+    lines += _substrate_lines(parity["goldenmatch"])
+
+    # 3. Cross-language parity (the disjointedness).
     lines += [
         "## Cross-language parity (Python ↔ TypeScript)",
         "",
@@ -188,15 +235,19 @@ def _compose(block: str) -> str:
     intro = (
         "---\n"
         'title: "Suite surface matrix"\n'
-        'description: "Cross-package view of the Golden Suite: capability counts, '
-        'Python/TypeScript parity, and auto-detected gaps — generated from introspection '
-        'and the parity manifests, gated in CI."\n'
+        'description: "Cross-package view of the Golden Suite: capability counts, the Rust '
+        '-core compute substrate, Python/TypeScript parity, and auto-detected gaps — '
+        'generated and gated in CI."\n'
         "---\n\n"
         "The per-package [config matrices](/goldenmatch/config-matrix) each describe one "
-        "package. This is the **cross-package** view: how the six packages line up, where "
-        "the Python and TypeScript ports diverge, and which capabilities are missing where. "
-        "Everything below the line is generated from live introspection + the parity "
-        "manifests (`scripts/gen_suite_matrix.py`) and verified in CI, so it can't drift.\n\n"
+        "package. This is the **cross-package** view. The anchor is the **Rust / "
+        "Arrow-native / fused `-core` kernel**: it is the reference implementation, and the "
+        "Python and TypeScript surfaces are ports that either dispatch to it (the fast path) "
+        "or run a byte-identical pure-language fallback. So the sections below read against "
+        "that reference — how the packages line up, which scorers a kernel actually backs vs "
+        "which are fallback-only, where the two language ports diverge, and what's missing "
+        "where. Everything below the line is generated from the parity manifests + AST "
+        "(`scripts/gen_suite_matrix.py`) and verified in CI, so it can't drift.\n\n"
     )
     return intro + block + "\n"
 

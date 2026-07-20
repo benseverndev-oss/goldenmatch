@@ -1,9 +1,9 @@
 ---
 title: "Suite surface matrix"
-description: "Cross-package view of the Golden Suite: capability counts, Python/TypeScript parity, and auto-detected gaps — generated from introspection and the parity manifests, gated in CI."
+description: "Cross-package view of the Golden Suite: capability counts, the Rust -core compute substrate, Python/TypeScript parity, and auto-detected gaps — generated and gated in CI."
 ---
 
-The per-package [config matrices](/goldenmatch/config-matrix) each describe one package. This is the **cross-package** view: how the six packages line up, where the Python and TypeScript ports diverge, and which capabilities are missing where. Everything below the line is generated from live introspection + the parity manifests (`scripts/gen_suite_matrix.py`) and verified in CI, so it can't drift.
+The per-package [config matrices](/goldenmatch/config-matrix) each describe one package. This is the **cross-package** view. The anchor is the **Rust / Arrow-native / fused `-core` kernel**: it is the reference implementation, and the Python and TypeScript surfaces are ports that either dispatch to it (the fast path) or run a byte-identical pure-language fallback. So the sections below read against that reference — how the packages line up, which scorers a kernel actually backs vs which are fallback-only, where the two language ports diverge, and what's missing where. Everything below the line is generated from the parity manifests + AST (`scripts/gen_suite_matrix.py`) and verified in CI, so it can't drift.
 
 {/* suite-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_suite_matrix.py --write */}
 
@@ -20,6 +20,19 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 | `goldenanalysis` | 4 | 8 | — | 4 | — | Yes |
 | `infermap` | 4 | 19 | — | 5 | — | Yes |
 | **suite** | **119** | | | | | |
+
+## Compute substrate — the Rust `-core` kernel is the reference
+
+The Rust / Arrow-native / fused `-core` kernels are the source of truth for scoring; each language surface either dispatches to the kernel (the fast path) or runs a byte-identical pure-language **fallback**. This tracks which scorers a kernel actually backs vs which are fallback-only. Sources: Python `_NATIVE_SCORER_IDS` (arrow bucket kernel) and TS `WASM_COVERED_SCORERS` (`-core` WASM), gated as the `scorer_kernels` api_parity surface.
+
+**5 of 19 scorers are kernel-backed** (the reference fast path); the other 14 are pure-language fallbacks with no `-core` kernel.
+
+| Substrate | Scorers |
+|---|---|
+| Rust `-core` kernel — Python + TS | `exact`, `jaro_winkler`, `levenshtein`, `token_sort` |
+| Rust `-core` kernel — Python arrow-native only (TS falls back) | `date` |
+| WASM `-core` kernel — TS only (Python falls back) | — |
+| Language fallback — no `-core` kernel | `alias_match`, `audio_fp`, `dice`, `embedding`, `ensemble`, `given_name_aliased_jw`, `initialism_match`, `jaccard`, `name_freq_weighted_jw`, `phash`, `qgram`, `radial`, `record_embedding`, `soundex_match` |
 
 ## Cross-language parity (Python ↔ TypeScript)
 

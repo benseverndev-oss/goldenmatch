@@ -75,6 +75,15 @@ def _blocking_strategies() -> list[str]:
     return sorted(get_args(BlockingConfig.model_fields["strategy"].annotation))
 
 
+def _scorer_kernels() -> list[str]:
+    # The scorers with a Rust/arrow-native kernel (the reference fast path) --
+    # every OTHER scorer in VALID_SCORERS is a pure-Python fallback. Mirrors TS
+    # `WASM_COVERED_SCORERS`; the Python/TS delta (e.g. `date` is native on Python,
+    # not yet in the TS WASM kernel) is declared in parity/goldenmatch.yaml.
+    from goldenmatch.backends.score_buckets import _NATIVE_SCORER_IDS
+    return sorted(_NATIVE_SCORER_IDS)
+
+
 # The only per-package variance on the Python side is the CLI module path.
 _CLI_MODULE = {
     "goldenmatch": "goldenmatch.cli.main",
@@ -93,7 +102,8 @@ REGISTRY = {
           # config.schemas imports without the mcp/a2a stacks). Other packages
           # never declare these surfaces, so they're skipped for them.
           **({"scorers": (_scorers, None), "transforms": (_transforms, None),
-              "blocking_strategies": (_blocking_strategies, None)}
+              "blocking_strategies": (_blocking_strategies, None),
+              "scorer_kernels": (_scorer_kernels, None)}
              if pkg == "goldenmatch" else {})}
     for pkg, mod in _CLI_MODULE.items()
 }
