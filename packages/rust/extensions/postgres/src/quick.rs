@@ -13,10 +13,10 @@ use crate::spi;
 /// Deduplicate a Postgres table. Returns JSON with golden records and stats.
 #[pg_extern]
 pub fn goldenmatch_dedupe_table(table_name: String, config_json: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
 
-    match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
+    match goldenmatch_bridge::api::dedupe(&table_data, &config_json) {
         Ok(result) => result.golden_json.unwrap_or_else(|| result.stats_json),
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -52,10 +52,10 @@ pub fn goldenmatch_dedupe_pairs(
     table_name: String,
     config_json: String,
 ) -> TableIterator<'static, (name!(id_a, i64), name!(id_b, i64), name!(score, f64))> {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
 
-    match goldenmatch_bridge::api::dedupe_pairs(&rows_json, &config_json) {
+    match goldenmatch_bridge::api::dedupe_pairs(&table_data, &config_json) {
         Ok(pairs) => {
             let rows: Vec<(i64, i64, f64)> = pairs
                 .into_iter()
@@ -84,10 +84,10 @@ pub fn goldenmatch_dedupe_clusters(
         name!(cluster_size, i64),
     ),
 > {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
 
-    match goldenmatch_bridge::api::dedupe_clusters(&rows_json, &config_json) {
+    match goldenmatch_bridge::api::dedupe_clusters(&table_data, &config_json) {
         Ok(members) => {
             let rows: Vec<(i64, i64, i64)> = members
                 .into_iter()
@@ -203,7 +203,10 @@ pub fn goldenmatch_explain(record_a: String, record_b: String, config: String) -
 /// Deduplicate JSON records directly.
 #[pg_extern]
 pub fn goldenmatch_dedupe(rows_json: String, config_json: String) -> String {
-    match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
+    // JSON-direct entry: the caller hands records as JSON, so wrap them for the
+    // TableData dispatch (the columnar path only applies to SPI table reads).
+    let table_data = goldenmatch_bridge::convert::TableData::Json(rows_json);
+    match goldenmatch_bridge::api::dedupe(&table_data, &config_json) {
         Ok(result) => result.golden_json.unwrap_or_else(|| result.stats_json),
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -246,9 +249,9 @@ pub fn goldenmatch_match(
 /// ```
 #[pg_extern]
 pub fn goldenmatch_autoconfig(table_name: String, mode: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::autoconfig(&rows_json, &mode) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::autoconfig(&table_data, &mode) {
         Ok(result) => result.config_json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -271,9 +274,9 @@ pub fn goldenmatch_autoconfig(table_name: String, mode: String) -> String {
 /// returns both, persist the result of one call to a temp table.
 #[pg_extern]
 pub fn goldenmatch_autoconfig_telemetry(table_name: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::autoconfig(&rows_json, "standard") {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::autoconfig(&table_data, "standard") {
         Ok(result) => result.telemetry_json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -289,9 +292,9 @@ pub fn goldenmatch_autoconfig_telemetry(table_name: String) -> String {
 /// `goldenmatch_autoconfig()` and want to apply it unchanged.
 #[pg_extern]
 pub fn goldenmatch_dedupe_full(table_name: String, config_json: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::dedupe_full(&rows_json, &config_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::dedupe_full(&table_data, &config_json) {
         Ok(result) => result.golden_json.unwrap_or_else(|| result.stats_json),
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -303,9 +306,9 @@ pub fn goldenmatch_dedupe_full(table_name: String, config_json: String) -> Strin
 /// without re-running the controller.
 #[pg_extern]
 pub fn goldenmatch_dedupe_full_telemetry(table_name: String, config_json: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::dedupe_full(&rows_json, &config_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::dedupe_full(&table_data, &config_json) {
         Ok(result) => result
             .telemetry_json
             .unwrap_or_else(|| "{\"available\":false}".to_string()),

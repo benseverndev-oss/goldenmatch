@@ -230,15 +230,15 @@ pub struct MatchResult {
 /// Deduplicate a table's data (passed as JSON records).
 ///
 /// Calls `goldenmatch.dedupe_df()` under the hood.
-pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, BridgeError> {
+pub fn dedupe(table: &convert::TableData, config_json: &str) -> Result<DedupeResult, BridgeError> {
     crate::init()?;
 
     Python::with_gil(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        // Build DataFrame from JSON
-        let df = convert::json_to_arrow_df(py, rows_json)?;
+        // Build the pa.Table from the SPI handoff (columnar Arrow, or JSON fallback).
+        let df = convert::table_to_arrow_df(py, table)?;
 
         // Parse config JSON to kwargs. A full GoldenMatchConfig blob (with
         // golden_rules / matchkeys / standardization / negative_evidence) is
@@ -298,14 +298,17 @@ pub fn dedupe(rows_json: &str, config_json: &str) -> Result<DedupeResult, Bridge
 /// `negative_evidence` (Path Y), per-matchkey `comparison`/`scorer`/`weight`,
 /// `standardization` rules, `golden_rules`, etc. Use this when the SQL caller
 /// wants to express anything that doesn't fit the slim shape.
-pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, BridgeError> {
+pub fn dedupe_full(
+    table: &convert::TableData,
+    config_json: &str,
+) -> Result<DedupeResult, BridgeError> {
     crate::init()?;
 
     Python::with_gil(|py| {
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let df = convert::json_to_arrow_df(py, rows_json)?;
+        let df = convert::table_to_arrow_df(py, table)?;
         let cfg = build_full_config(py, config_json)?;
 
         let kwargs = PyDict::new(py);
@@ -366,7 +369,7 @@ pub fn dedupe_full(rows_json: &str, config_json: &str) -> Result<DedupeResult, B
 /// SQL-surface equivalent of the CLI `goldenmatch autoconfig <files>`.
 /// Callers typically pipe the returned `config_json` into a follow-up
 /// `dedupe_full()` call, or store it on a Postgres `_jobs` row.
-pub fn autoconfig(rows_json: &str, mode: &str) -> Result<AutoConfigResult, BridgeError> {
+pub fn autoconfig(table: &convert::TableData, mode: &str) -> Result<AutoConfigResult, BridgeError> {
     crate::init()?;
 
     let fn_name = match mode {
@@ -380,7 +383,7 @@ pub fn autoconfig(rows_json: &str, mode: &str) -> Result<AutoConfigResult, Bridg
     };
 
     Python::with_gil(|py| {
-        let df = convert::json_to_arrow_df(py, rows_json)?;
+        let df = convert::table_to_arrow_df(py, table)?;
         let autoconfig_mod = py.import("goldenmatch.core.autoconfig")?;
         let cfg = autoconfig_mod.call_method1(fn_name, (df,))?;
 
@@ -659,13 +662,16 @@ pub fn explain_pair(
 }
 
 /// Deduplicate and return scored pairs as structured data.
-pub fn dedupe_pairs(rows_json: &str, config_json: &str) -> Result<Vec<ScoredPair>, BridgeError> {
+pub fn dedupe_pairs(
+    table: &convert::TableData,
+    config_json: &str,
+) -> Result<Vec<ScoredPair>, BridgeError> {
     crate::init()?;
 
     Python::with_gil(|py| {
         let gm = py.import("goldenmatch")?;
 
-        let df = convert::json_to_arrow_df(py, rows_json)?;
+        let df = convert::table_to_arrow_df(py, table)?;
         // Full-config sections (matchkeys/golden_rules/standardization/NE) are
         // routed through `config=`; slim blobs keep the exact/fuzzy kwargs (#1914).
         let kwargs = build_dedupe_kwargs(py, config_json)?;
@@ -687,7 +693,7 @@ pub fn dedupe_pairs(rows_json: &str, config_json: &str) -> Result<Vec<ScoredPair
 
 /// Deduplicate and return cluster assignments as structured data.
 pub fn dedupe_clusters(
-    rows_json: &str,
+    table: &convert::TableData,
     config_json: &str,
 ) -> Result<Vec<ClusterMember>, BridgeError> {
     crate::init()?;
@@ -695,7 +701,7 @@ pub fn dedupe_clusters(
     Python::with_gil(|py| {
         let gm = py.import("goldenmatch")?;
 
-        let df = convert::json_to_arrow_df(py, rows_json)?;
+        let df = convert::table_to_arrow_df(py, table)?;
         // Full-config sections (matchkeys/golden_rules/standardization/NE) are
         // routed through `config=`; slim blobs keep the exact/fuzzy kwargs (#1914).
         let kwargs = build_dedupe_kwargs(py, config_json)?;
@@ -912,7 +918,7 @@ pub fn identity_list(dataset: &str, status: &str, db_path: &str) -> Result<Strin
 /// / `merged` / `edges_added` / `events_emitted` / `conflicts_flagged`), or
 /// `"{}"` when the pipeline reported no identity summary (resolution skipped).
 pub fn resolve_identities(
-    rows_json: &str,
+    table: &convert::TableData,
     config_json: &str,
     dsn: &str,
     dataset: &str,
@@ -931,7 +937,7 @@ pub fn resolve_identities(
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let df = convert::json_to_arrow_df(py, rows_json)?;
+        let df = convert::table_to_arrow_df(py, table)?;
 
         // Merge the identity write-path settings into the stored config dict,
         // then validate into a GoldenMatchConfig. Doing the surgery on the dict
@@ -2059,6 +2065,13 @@ pub fn goldenflow_transform(transform_name: &str, value: &str) -> Result<String,
 mod tests {
     use super::*;
 
+    /// Wrap JSON records as `TableData` for the table-op fns whose first
+    /// arg changed from `&str` to `&TableData` in P4 (#1883). These tests
+    /// exercise the JSON path; the columnar path is covered in `convert`.
+    fn td(records: &str) -> convert::TableData {
+        convert::TableData::Json(records.to_string())
+    }
+
     /// Handle a failed bridge call. CI sets `GOLDENMATCH_BRIDGE_REQUIRE_PY=1` so
     /// a failure of the embedded-Python / goldenmatch call is a HARD test failure
     /// -- the bridge marshalling surface must actually be exercised, not silently
@@ -2136,7 +2149,7 @@ mod tests {
         ]"#;
         let config = r#"{"exact": ["email"]}"#;
 
-        match dedupe(rows, config) {
+        match dedupe(&td(rows), config) {
             Ok(result) => {
                 assert!(!result.stats_json.is_empty());
                 // Structured clusters come from `dedupe_clusters`, not a JSON blob here.
@@ -2191,7 +2204,7 @@ mod tests {
     #[test]
     fn test_dedupe_full_basic() {
         let config = simple_full_config();
-        match dedupe_full(two_row_json(), config) {
+        match dedupe_full(&td(two_row_json()), config) {
             Ok(result) => {
                 assert!(!result.stats_json.is_empty(), "stats_json empty");
                 let v: serde_json::Value =
@@ -2221,7 +2234,7 @@ mod tests {
                 "field_rules": {"name": {"strategy": "longest_value"}}
             }
         }"#;
-        match dedupe(rows, config) {
+        match dedupe(&td(rows), config) {
             Ok(result) => {
                 let golden = result
                     .golden_json
@@ -2240,7 +2253,7 @@ mod tests {
 
     #[test]
     fn test_autoconfig_returns_config_and_telemetry() {
-        match autoconfig(two_row_json(), "standard") {
+        match autoconfig(&td(two_row_json()), "standard") {
             Ok(result) => {
                 assert!(!result.config_json.is_empty(), "config_json empty");
                 assert!(!result.telemetry_json.is_empty(), "telemetry_json empty");
@@ -2262,7 +2275,7 @@ mod tests {
             {"name":"Jon Smith","city":"Austin","dob":"1980-01-01"},
             {"name":"Jane Doe","city":"Dallas","dob":"1975-05-05"}
         ]"#;
-        let res = autoconfig(rows, "probabilistic").expect("probabilistic autoconfig");
+        let res = autoconfig(&td(rows), "probabilistic").expect("probabilistic autoconfig");
         assert!(
             res.config_json.contains("\"probabilistic\""),
             "expected a probabilistic matchkey in config_json, got: {}",
@@ -2273,13 +2286,13 @@ mod tests {
     #[test]
     fn test_autoconfig_mode_standard_unchanged() {
         let rows = r#"[{"name":"A","city":"X"},{"name":"A","city":"X"}]"#;
-        autoconfig(rows, "standard").expect("standard autoconfig");
+        autoconfig(&td(rows), "standard").expect("standard autoconfig");
     }
 
     #[test]
     fn test_autoconfig_unknown_mode_errors() {
         let rows = r#"[{"name":"A"}]"#;
-        assert!(autoconfig(rows, "bogus").is_err());
+        assert!(autoconfig(&td(rows), "bogus").is_err());
     }
 
     // ── match_tables ────────────────────────────────────────────────────────
@@ -2367,7 +2380,7 @@ mod tests {
             {"email": "dave@y.com",  "name": "Dave"}
         ]"#;
         let config = r#"{"exact": ["email"], "threshold": 0.5}"#;
-        match dedupe_pairs(rows, config) {
+        match dedupe_pairs(&td(rows), config) {
             Ok(pairs) => {
                 // At least one duplicate pair for the two carol@ rows.
                 // Scores must be finite and in [0, 1].
@@ -2394,7 +2407,7 @@ mod tests {
             {"email": "frank@y.com", "name": "Frank"}
         ]"#;
         let config = r#"{"exact": ["email"]}"#;
-        match dedupe_clusters(rows, config) {
+        match dedupe_clusters(&td(rows), config) {
             Ok(members) => {
                 for m in &members {
                     assert!(m.cluster_size >= 1, "cluster_size < 1");
@@ -2452,7 +2465,7 @@ mod tests {
         // attempted, so this asserts the contract without a live database
         // (the create/absorb round-trip is exercised end-to-end by the
         // rust_pgrx CI smoke against a real cluster).
-        match resolve_identities("[]", "{}", "   ", "people", "run1") {
+        match resolve_identities(&td("[]"), "{}", "   ", "people", "run1") {
             Ok(json) => panic!("expected empty-DSN rejection, got Ok({json})"),
             Err(BridgeError::InvalidConfig(msg)) => {
                 assert!(msg.contains("DSN"), "unexpected message: {msg}");
