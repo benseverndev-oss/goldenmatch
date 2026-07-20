@@ -48,24 +48,24 @@ SELECT goldenmatch_match_tables('prospects', 'customers', '{"fuzzy": {"name": 0.
 | `goldenmatch_dedupe_pairs(table, config)` | Dedupe -> table of `(id_a, id_b, score)` |
 | `goldenmatch_dedupe_clusters(table, config)` | Dedupe -> table of `(cluster_id, record_id, cluster_size)` |
 
-> **How table ops move data.** The **dedupe / resolve / autoconfig** table ops
-> (`goldenmatch_dedupe_table` / `_pairs` / `_clusters` / `_full`,
-> `goldenmatch_autoconfig`, `gm_run`, `gm_resolve`) read the input **columnar**
-> via SPI and build the engine's `pa.Table` directly — no `row_to_json` pass and
-> no `from_pylist` row→columnar transpose — for the common built-in column types
-> (text/varchar/char, int2/4/8, float4/8, bool). A table with any other column
-> type (numeric/date/timestamp/json/uuid/array/domain/…), or 0 rows, transparently
-> falls back to the `row_to_json` JSON path, which is byte-identical to the
-> columnar result (the per-type mapping is chosen to match `from_pylist`'s schema
-> inference; proven in `goldenmatch-bridge`'s `columnar_matches_json` test). So on
-> a wide numeric/text table the columnar read skips the serialization cost #1883
-> flagged. **Still on the JSON path:** the two-table match ops
-> (`goldenmatch_match_tables` / `_pairs`) and the aux profiling ops
-> (`goldenmatch_profile_table` / `_validate_table` / `_autofix_table` /
-> `_detect_anomalies` / `_preflight` / `_postflight`) — a mechanical follow-up via
-> the same `TableData` seam. The scalar/native-direct functions
-> (`goldenmatch_score`, the `goldenmatch_*_pairs` kernels, …) do **not** go
-> through either path.
+> **How table ops move data.** **Every table-input op** now reads the input
+> **columnar** via SPI and builds the engine's `pa.Table` directly — no
+> `row_to_json` pass and no `from_pylist` row→columnar transpose — for the common
+> built-in column types (text/varchar/char, int2/4/8, float4/8, bool). This
+> covers the dedupe / resolve / autoconfig ops (`goldenmatch_dedupe_table` /
+> `_pairs` / `_clusters` / `_full`, `goldenmatch_autoconfig`, `gm_run`,
+> `gm_resolve`), the two-table match ops (`goldenmatch_match_tables` / `_pairs`),
+> and the aux profiling ops (`goldenmatch_profile_table` / `_validate_table` /
+> `_autofix_table` / `_detect_anomalies` / `_preflight` / `_postflight`). A table
+> with any other column type (numeric/date/timestamp/json/uuid/array/domain/…),
+> or 0 rows, transparently falls back to the `row_to_json` JSON path, which is
+> byte-identical to the columnar result (the per-type mapping is chosen to match
+> `from_pylist`'s schema inference; proven in `goldenmatch-bridge`'s
+> `columnar_matches_json` test). So on a wide numeric/text table the columnar
+> read skips the serialization cost #1883 flagged. The JSON-direct entry points
+> (`goldenmatch_dedupe` / `goldenmatch_match`) and the scalar/native-direct
+> functions (`goldenmatch_score`, the `goldenmatch_*_pairs` kernels, …) do **not**
+> go through the SPI read at all.
 
 ### Scalar functions
 
