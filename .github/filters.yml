@@ -414,6 +414,12 @@ config_matrix:
   - 'packages/python/*/llms.txt'
   - 'packages/python/*/README.md'
   - 'llms.txt'
+  # Agent code map (docs/agent-codemap.json): a static-AST structural map of the
+  # Python source, gated in the same job. Any .py move re-runs it (already covered
+  # above); these cover the generator, its gate, and a hand-edit of the committed JSON.
+  - 'scripts/agent_codemap.py'
+  - 'scripts/test_agent_codemap.py'
+  - 'docs/agent-codemap.json'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
