@@ -36,9 +36,14 @@ axis alongside PR-A…D. **Branch:** `claude/benchmark-failure-gh-7h5ryr`.
 > - prep/base frame ~1.4 GB (held prep → golden), `bucket_slim_projection` +1.4→1.63 GB,
 >   `bucket_partition` +1.77→2.20 GB (the eager `partition_by`), accumulating across
 >   passes to `bucket_score` ~2.55 GB, `cluster` ~2.75 GB, `golden` ~3.14 GB (peak).
-> - Allocator knobs (`MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=0`) recover only
->   ~7% (3333→3105 MB) — confirming the bulk is LIVE-REFERENCED polars frames, not
->   glibc fragmentation. So it is genuinely architectural.
+> - **ALLOCATOR CORRECTION:** the "freed nowhere" was mostly jemalloc RETENTION,
+>   not live references. glibc knobs (`MALLOC_ARENA_MAX`/`TRIM`) recovered only ~7%
+>   because polars uses **jemalloc** (`_RJEM_` prefix). Setting
+>   `_RJEM_MALLOC_CONF="dirty_decay_ms:1000,muzzy_decay_ms:0"` cut the 1M peak
+>   **3278→2208 MB (−33%) at +0.8% wall**, byte-identical — shipped as a workflow
+>   env standard (root CLAUDE.md). So the TRUE live working set at 1M is ~2.2 GB,
+>   and this architectural streaming is a *further* optimization on that live
+>   floor, NOT the urgent lever. Re-prioritized accordingly (see below).
 > - The `score_buckets` slim + `partition_by` frames (~0.8 GB) are held straight
 >   through the peak yet are NOT needed by cluster/golden → this spec's bounded
 >   streaming (never materialize all partitions) shaves that ~0.8 GB / ~25% at 1M,

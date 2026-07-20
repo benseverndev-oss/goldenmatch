@@ -71,6 +71,14 @@ permissions:
 # needs the documented mimalloc-SIGSEGV guard (ARROW_DEFAULT_MEMORY_POOL=system).
 env:
   ARROW_DEFAULT_MEMORY_POOL: system
+  # jemalloc page-decay tuning for polars (its allocator is jemalloc, `_RJEM_`
+  # prefix). Default jemalloc holds freed dirty/muzzy pages ~10s for reuse; a
+  # staged batch pipeline frees large frames between stages, so those retained
+  # pages inflate peak RSS by ~a third with NO live data behind them. Returning
+  # muzzy pages immediately (dirty kept 1s for hot reuse) cut the 1M person FS
+  # peak 3278->2208 MB (-33%) at +0.8% wall (noise), byte-identical output. The
+  # "held frames" the per-stage RSS split showed were mostly RETAINED, not live.
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
   # Build EM-training blocks from a bounded frame sample instead of the full
   # frame. Stage-attribution showed the FS dedupe peak is EM's full-frame
