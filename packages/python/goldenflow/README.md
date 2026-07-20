@@ -781,7 +781,7 @@ catalogue: [`packages/rust/extensions/goldenflow-duckdb/README.md`](../../rust/e
 
 ---
 
-## Public API (34 exports)
+## Public API (36 exports)
 
 ```python
 from goldenflow import (

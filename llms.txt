@@ -23,7 +23,7 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 - DQbench composite 91.04; PPRL 92.4% F1 on FEBRL4; a durable Identity Graph (stable entity_ids that survive across runs)
 
 ## AI-native surface
-- Every package ships an MCP server (50+ tools across the suite), a REST API, and most an A2A agent surface
+- Every package ships an MCP server (119 tools across the suite), a REST API, and most an A2A agent surface
 - One aggregator container exposes the whole suite: `docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`
 - Hosted remote MCP on Smithery, plus the official MCP Registry: `io.github.benzsevern/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`
 

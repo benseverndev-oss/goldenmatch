@@ -3230,6 +3230,8 @@ jobs:
         run: python scripts/check_docs_consistency.py
       - name: Doc links + frontmatter (in-body cross-links resolve; MDX frontmatter valid)
         run: python scripts/check_docs_links.py
+      - name: Benchmark claims consistent with source of truth
+        run: python scripts/check_benchmark_claims.py
 
   # Mintlify render gate (BLOCKING): the docs site's OWN parser/build, which the
   # stdlib check_docs_links.py cannot replicate. `mint validate` builds the site in
@@ -3285,6 +3287,16 @@ jobs:
       - name: Gate unit tests (determinism + markers; run once)
         if: matrix.package == 'goldenmatch'
         run: uv run pytest scripts/test_config_matrix.py -q
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+          GOLDENMATCH_NATIVE: "0"
+          GOLDENCHECK_NATIVE: "0"
+          GOLDENFLOW_NATIVE: "0"
+          GOLDENPIPE_NATIVE: "0"
+          INFERMAP_NATIVE: "0"
+      - name: llms.txt / README capability counts match code (run once; all pkgs synced)
+        if: matrix.package == 'goldenmatch'
+        run: uv run python scripts/check_llms_counts.py
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"

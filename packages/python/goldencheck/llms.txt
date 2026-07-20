@@ -151,7 +151,7 @@ goldencheck scan-db "postgresql://..."  # database scanning
 ```
 
 ## Docs
-- [Full docs](https://benseverndev-oss.github.io/goldencheck/): GitHub Pages
+- [Full docs](https://docs.bensevern.dev/goldencheck/overview)
 - [Wiki](https://github.com/benseverndev-oss/goldencheck/wiki): 40 pages
 - [PyPI](https://pypi.org/project/goldencheck/)
 - [GitHub](https://github.com/benseverndev-oss/goldenmatch/tree/main/packages/python/goldencheck)
