@@ -1,7 +1,10 @@
 """VmRSS(current) + HWM at each FS prep boundary -- isolate WHERE the FS peak
 is reached (SN materialize vs EM train vs score_buckets)."""
-import os, sys, resource
+import os
+import resource
+import sys
 from pathlib import Path
+
 os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL","system")
 os.environ.update(GOLDENMATCH_AUTOCONFIG_MEMORY="0", GOLDENMATCH_NATIVE="1",
                   GOLDENMATCH_FS_NATIVE="1", GOLDENMATCH_FS_CALIBRATED="posterior",
@@ -16,10 +19,11 @@ def rss():
 def mark(tag):
     c,h=rss(); print(f"  [{tag:28s}] VmRSS={c:6.0f}MB  HWM={h:6.0f}MB", flush=True)
 
-import pyarrow.parquet as pq
+import goldenmatch.backends.score_buckets as sb
 import goldenmatch.core.blocker as blk
 import goldenmatch.core.probabilistic as prob
-import goldenmatch.backends.score_buckets as sb
+import pyarrow.parquet as pq
+
 try: from goldenmatch import dedupe_df
 except ImportError: from goldenmatch._api import dedupe_df
 
@@ -28,6 +32,7 @@ def sn_wrap(*a,**k):
     mark("SN-materialize BEFORE"); r=_sn(*a,**k); mark("SN-materialize AFTER"); return r
 blk.materialize_sn_passes=sn_wrap
 import goldenmatch.core.pipeline as pl_mod
+
 if hasattr(pl_mod,"materialize_sn_passes"): pl_mod.materialize_sn_passes=sn_wrap
 
 _te=prob.train_em
@@ -50,6 +55,7 @@ if hasattr(pl_mod,"score_buckets"): pl_mod.score_buckets=sbk_wrap
 
 df=pq.read_table(path)
 from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
 mark("after read_table")
 cfg=auto_configure_probabilistic_df(df)
 for mk in cfg.get_matchkeys():
