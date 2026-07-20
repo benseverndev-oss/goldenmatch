@@ -412,8 +412,10 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
 /// Resolve the identity DSN: the `goldenmatch.identity_dsn` GUC first, then the
 /// `GOLDENMATCH_IDENTITY_DSN` / `GOLDENMATCH_DATABASE_URL` backend env. Returns
 /// `None` (→ a clear error at the call site) when nothing is configured. A
-/// blank/whitespace value is treated as unset.
-fn resolve_identity_dsn() -> Option<String> {
+/// blank/whitespace value is treated as unset. Shared with the read-only
+/// `goldenmatch_identity_*` functions (#1913 P2), which pass the DSN as the
+/// store ref when the caller supplies an empty `db_path`.
+pub(crate) fn resolve_identity_dsn() -> Option<String> {
     if let Some(cstr) = crate::IDENTITY_DSN.get() {
         if let Ok(s) = cstr.to_str() {
             if !s.trim().is_empty() {
