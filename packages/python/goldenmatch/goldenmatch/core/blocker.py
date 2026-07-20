@@ -37,8 +37,16 @@ def _emit_blocking_profile(
     if not _emitter_stack.get():
         return
 
-    # n_rows is computed here, only when an emitter is active.
-    n_rows: int = lf.select(pl.len()).collect().item()
+    # n_rows is computed here, only when an emitter is active. Backend-agnostic:
+    # the polars-free blocking spine (e.g. the autoconfig sample path) hands us an
+    # arrow/seam Frame whose row count comes from ``.height``; a polars LazyFrame
+    # still needs a ``collect()``. Keeps profile emission off the polars round-trip.
+    from goldenmatch.core.frame import is_polars_lazyframe, to_frame
+    n_rows: int = (
+        lf.select(pl.len()).collect().item()
+        if is_polars_lazyframe(lf)
+        else to_frame(lf).height
+    )
 
     # Determine keys_used: prefer passes if truthy, else keys if truthy, else []
     if config.passes:
@@ -1304,14 +1312,16 @@ def build_blocks(lf: Any, config: BlockingConfig) -> list[BlockResult]:
             # op, so that conversion still uses pyarrow under the hood).
             # multi_pass is dual-rep too: it delegates each pass to
             # _build_static_blocks (seam-native via derive_block_key), so it stays
-            # arrow when no polars-only feature (multi-key auto-select or an active
-            # profile emitter) is in play. This is the common zero-config shape
-            # (the #1207 per-identifier union), so keeping it off the polars round
-            # trip is the load-bearing blocking-spine eviction for zero-config.
+            # arrow when no polars-only feature (multi-key auto-select) is in play.
+            # This is the common zero-config shape (the #1207 per-identifier union),
+            # so keeping it off the polars round trip is the load-bearing
+            # blocking-spine eviction for zero-config. An active profile emitter no
+            # longer forces polars here: _emit_blocking_profile reads n_rows off the
+            # seam Frame (.height), so the autoconfig sample path (which always runs
+            # under an emitter) stays arrow-native / polars-free.
             _needs_polars = (
                 config.strategy not in ("static", "adaptive", "multi_pass")
                 or (config.auto_select and config.keys and len(config.keys) > 1)
-                or bool(_emitter_stack.get())
             )
             lf = (
                 cast(pl.DataFrame, pl.from_arrow(native)).lazy()
