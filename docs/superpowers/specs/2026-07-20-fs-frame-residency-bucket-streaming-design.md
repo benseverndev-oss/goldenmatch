@@ -58,6 +58,25 @@ axis alongside PR-A…D. **Branch:** `claude/benchmark-failure-gh-7h5ryr`.
 > below is the ≥RAM tier of Phase 1; the in-RAM `FrameBlockSource` is the first,
 > lowest-risk increment. **CLEARED TO IMPLEMENT Phase 1.**
 
+> **🚨 SCALE-GAP DIAGNOSIS (2026-07-20) — this is the ONLY route past the FS wall,
+> not a micro-opt.** The 1M constant-factor wins (agg blocks, jemalloc decay) just
+> lowered the SLOPE; the single-box FS peak is still linear in N. Measured curve
+> (person, agg + jemalloc-env, this box): 100K 487 MB / 500K 1527 / 1M 2264 / 2M
+> 3572 → **peak ≈ 0.95 GB + 1.3 GB × N(millions)**. Projected 64 GB-box ceiling:
+> 10M ~14 GB (fits), 25M ~33 GB (fits), **50M ~66 GB (OOM edge), 100M ~132 GB
+> (2× over, impossible single-box).** So the hard single-box FS wall is ~45–48M.
+> **CRITICAL FINDING: the FS path has NO out-of-core OR distributed scoring today.**
+> `_fs_use_bucket_route` returns False for `backend=duckdb/ray/chunked` → FS falls
+> to the single-node *legacy batched / external-blocks* scorer, NOT any spill or
+> distribution. The scale-envelope doc's "25–50M duckdb / ≥50M ray" applies to the
+> WEIGHTED path only; FS is bucket-single-node-only, full frame resident, hard wall
+> ~45M. So the DuckDB block source (§Target ≥RAM tier) is not an optional tier — it
+> is the FIRST out-of-core FS path that exists, and Phase 2 (base-frame + golden/
+> cluster residency out-of-core) is what carries FS to 50–100M on one box. This
+> reprioritizes the whole spec: Phase 1 in-RAM streaming is the ≤45M polish; the
+> **DuckDB-resident frame + streaming stages is the actual 50M–100M scale story**
+> and the through-line back to the session's opening "work the DuckDB backend."
+
 **Trigger:** with the Arrow pair-stream fix already landed (`398006b` / #1896:
 "cut the FS memory peak — Arrow pair stream, EM-block-sample") the FS peak RSS is
 no longer the pair stream. Stage-attributed measurement on HEAD (`0ad8f02`, which
