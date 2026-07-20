@@ -78,9 +78,9 @@ def _ru_peak_mb() -> float:
 # ---------------------------------------------------------------- capture ----
 def capture(fixture: str, workdir: str) -> None:
     import goldenmatch.backends.score_buckets as sb
-    import goldenmatch.core.probabilistic as prob
     import polars as pl
     import pyarrow.parquet as pq
+    from goldenmatch.core import probabilistic as prob
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
     try:
