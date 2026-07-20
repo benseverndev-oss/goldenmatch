@@ -4,6 +4,14 @@
   python scripts/gen_config_matrix.py --check [pkg|all]     # exit 1 if any is stale
   python scripts/gen_config_matrix.py --refs  [pkg|all]     # exit 1 if a doc names a dead env knob OR omits a canonical scorer/strategy/...
   python scripts/gen_config_matrix.py --coverage [pkg|all]  # report NL-explanation coverage per package
+  python scripts/gen_config_matrix.py --manifest            # regenerate the agent-navigation JSON (all packages)
+  python scripts/gen_config_matrix.py --manifest-check      # exit 1 if the agent manifest is stale
+
+The agent manifest (docs/agent-manifest.json) is a structured-JSON view of the
+SAME live surface these docs render from -- so agents can look up config /
+vocabularies / CLI / MCP tools / env knobs without grepping. It needs all six
+packages importable, so it lives outside the per-package --check legs; its gate
+home is scripts/test_config_matrix.py (the full-workspace goldenmatch leg).
 
 Each suite package's config surface (pydantic tree / constructor kwargs / vocab
 constants / <PREFIX>_* env scan) is the source of truth; the committed page's
@@ -17,6 +25,7 @@ import sys
 from config_matrix import REGISTRY
 from config_matrix.coverage import coverage, format_report
 from config_matrix.crossref import stale_env_refs, undocumented_vocab
+from config_matrix.manifest import MANIFEST_PATH, manifest_is_current, write_manifest
 from config_matrix.render import docs_are_current, write_docs
 
 
@@ -72,6 +81,18 @@ def main(argv: list[str]) -> int:
         for name in _targets(argv):
             print(f"wrote {write_docs(REGISTRY[name])}")
         return 0
+    if "--manifest" in argv:
+        for p in write_manifest():
+            print(f"wrote {p}")
+        return 0
+    if "--manifest-check" in argv:
+        if manifest_is_current():
+            print(f"OK    agent manifest: {MANIFEST_PATH}")
+            return 0
+        print(f"STALE agent manifest: {MANIFEST_PATH}", file=sys.stderr)
+        print("::error::agent manifest stale. Run: python scripts/gen_config_matrix.py --manifest",
+              file=sys.stderr)
+        return 1
     print(__doc__)
     return 2
 

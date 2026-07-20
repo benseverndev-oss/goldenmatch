@@ -12,6 +12,7 @@ import pytest
 from config_matrix import REGISTRY
 from config_matrix.coverage import coverage
 from config_matrix.crossref import stale_env_refs, undocumented_vocab, vocab_column_gaps
+from config_matrix.manifest import MANIFEST_PATH, manifest_is_current, manifest_json
 from config_matrix.render import (
     MARKER_END,
     MARKER_START,
@@ -165,3 +166,21 @@ def test_render_is_deterministic(name):
     # memory addresses (goldenflow's TransformInfo) or set-ordering leaking in.
     spec = REGISTRY[name]
     assert render_generated_block(spec) == render_generated_block(spec)
+
+
+def test_agent_manifest_current():
+    # The agent-navigation JSON (docs/agent-manifest.json) is a structured view of
+    # the SAME live surface these docs render from. It must match a fresh build, so
+    # a new config knob / CLI option / MCP tool / vocab value / env var can't ship
+    # without regenerating it -- keeping the "don't grep, look it up" store honest.
+    assert manifest_is_current(), (
+        f"{MANIFEST_PATH} is stale vs the live config surface. "
+        "Run: python scripts/gen_config_matrix.py --manifest"
+    )
+
+
+def test_agent_manifest_is_deterministic():
+    # Byte-stable across builds (same discipline as the MDX gate): no set-ordering
+    # or object-repr leaks, so the committed JSON doesn't flap between a Windows dev
+    # box and the Linux CI runner.
+    assert manifest_json() == manifest_json()

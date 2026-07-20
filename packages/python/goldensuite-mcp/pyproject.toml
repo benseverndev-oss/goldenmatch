@@ -58,3 +58,9 @@ goldenanalysis = { workspace = true }
 [tool.hatch.build.targets.wheel]
 packages = ["goldensuite_mcp"]
 
+# Ship the bundled agent manifest so `suite_manifest` works on the deployed
+# (pip-installed) server, where the repo's docs/ tree is absent. Generated + gated
+# byte-identical to docs/agent-manifest.json (scripts/gen_config_matrix.py --manifest).
+[tool.hatch.build.targets.wheel.force-include]
+"goldensuite_mcp/agent-manifest.json" = "goldensuite_mcp/agent-manifest.json"
+
