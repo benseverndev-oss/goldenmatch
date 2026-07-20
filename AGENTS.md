@@ -64,7 +64,11 @@ Scope work to one package where possible: `uv run pytest packages/python/<pkg>`.
 - **Only `.github/workflows/` at the repo root runs.** Workflow files left under
   `packages/*/.github/` are orphaned and silently ignored.
 
-## Look it up instead of grepping: `docs/agent-manifest.json`
+## Look it up instead of grepping: the generated maps
+
+Two committed, CI-gated JSON maps let you answer most "where / what" questions
+without searching the tree — `docs/agent-manifest.json` (config & capability
+surface) and `docs/agent-codemap.json` (source structure).
 
 `docs/agent-manifest.json` is a generated, machine-readable index of every
 package's **config schema, CLI commands, MCP tools, enumerated vocabularies
@@ -84,6 +88,14 @@ regenerate with `python scripts/gen_config_matrix.py --manifest`.
 **Via MCP:** the `goldensuite-mcp` server exposes a `suite_manifest` tool that
 serves slices of this file (overview / one package / one section / keyword
 search) so you don't pull the whole 300 KB for one lookup.
+
+`docs/agent-codemap.json` is the structural companion: a static-AST map of the
+six packages' Python source. Per module it lists the file, a one-line purpose
+(from the module docstring), the top-level classes/functions it defines, and its
+intra-repo imports — so you can answer "which module defines `score_buckets`",
+"what does `goldenmatch.backends.score_buckets` connect to", or "what modules
+make up goldencheck's engine" without grepping. Gated by
+`scripts/test_agent_codemap.py`; regenerate with `python scripts/agent_codemap.py --write`.
 
 ## Where the deep context lives
 

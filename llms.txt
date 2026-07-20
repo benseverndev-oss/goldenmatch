@@ -25,7 +25,7 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 ## AI-native surface
 - Every package ships an MCP server (119 tools across the suite), a REST API, and most an A2A agent surface
 - One aggregator container exposes the whole suite: `docker run ghcr.io/benseverndev-oss/goldensuite-mcp:latest`
-- Hosted remote MCP on Smithery, plus the official MCP Registry: `io.github.benzsevern/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`
+- Hosted remote MCP on Smithery, plus the official MCP Registry: `io.github.benseverndev-oss/{goldenmatch,goldencheck,goldenflow,goldenpipe,infermap}`
 
 ## Polyglot & edge
 - Python (PyPI) + TypeScript (npm), tracked to 4-decimal scorer parity via a cross-language harness
@@ -39,6 +39,12 @@ pip install goldenmatch && goldenmatch dedupe customers.csv   # dedupe a CSV in 
 npm install goldenmatch                                        # TypeScript / Edge
 pip install goldenpipe[full]                                   # Check + Flow + Match together
 ```
+
+## For coding agents (navigate without grepping)
+- `AGENTS.md` (repo root) — orientation map: layout, build/test, the landmines, and where deep context lives.
+- `docs/agent-manifest.json` — generated, CI-gated index of every package's config schema, CLI, MCP tools, vocabularies (with `best_for` hints), env knobs, source-file locations, and Rust crates. "What can I configure or call."
+- `docs/agent-codemap.json` — generated, CI-gated structural map of the Python source: per module, its purpose, what it defines, and its intra-repo imports. "What exists where and how it's wired."
+- Both are derived from the code and gated against drift, so they can't go stale. Via MCP, `goldensuite-mcp`'s `suite_manifest` tool serves slices of the manifest.
 
 ## Docs
 - [Repository + full README](https://github.com/benseverndev-oss/goldenmatch)
