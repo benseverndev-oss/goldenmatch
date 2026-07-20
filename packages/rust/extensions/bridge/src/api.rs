@@ -419,8 +419,8 @@ pub fn autoconfig(table: &convert::TableData, mode: &str) -> Result<AutoConfigRe
 ///
 /// Calls `goldenmatch.match_df()` under the hood.
 pub fn match_tables(
-    target_json: &str,
-    reference_json: &str,
+    target: &convert::TableData,
+    reference: &convert::TableData,
     config_json: &str,
 ) -> Result<MatchResult, BridgeError> {
     crate::init()?;
@@ -429,8 +429,8 @@ pub fn match_tables(
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let target_df = convert::json_to_arrow_df(py, target_json)?;
-        let ref_df = convert::json_to_arrow_df(py, reference_json)?;
+        let target_df = convert::table_to_arrow_df(py, target)?;
+        let ref_df = convert::table_to_arrow_df(py, reference)?;
 
         let config_dict = json_mod.call_method1("loads", (config_json,))?;
 
@@ -509,8 +509,8 @@ pub struct MatchedPair {
 /// `result.matched`); returns an empty `Vec` when there are no matches
 /// (`result.matched is None`).
 pub fn match_pairs(
-    target_json: &str,
-    reference_json: &str,
+    target: &convert::TableData,
+    reference: &convert::TableData,
     config_json: &str,
 ) -> Result<Vec<MatchedPair>, BridgeError> {
     crate::init()?;
@@ -519,8 +519,8 @@ pub fn match_pairs(
         let gm = py.import("goldenmatch")?;
         let json_mod = py.import("json")?;
 
-        let target_df = convert::json_to_arrow_df(py, target_json)?;
-        let ref_df = convert::json_to_arrow_df(py, reference_json)?;
+        let target_df = convert::table_to_arrow_df(py, target)?;
+        let ref_df = convert::table_to_arrow_df(py, reference)?;
 
         // target rows occupy combined __row_id__ space 0..target_len-1; the
         // reference's __ref_row_id__ is offset by target_len.
@@ -1486,14 +1486,15 @@ fn build_probabilistic_frame<'py>(
 
 /// Wrap `goldenmatch.profile_dataframe` -- comprehensive table profile.
 ///
-/// `rows_json` is a JSON array of record objects. Returns the profile report
-/// as a JSON object (or `{"error": ...}` on failure).
-pub fn profile_table(rows_json: &str) -> Result<String, BridgeError> {
+/// `table` is the input records (columnar `TableData::Columns` from the
+/// Arrow-native SPI read, or `TableData::Json` on the fallback path). Returns
+/// the profile report as a JSON object (or `{"error": ...}` on failure).
+pub fn profile_table(table: &convert::TableData) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
-            let df = convert::json_to_arrow_df(py, rows_json)?;
+            let df = convert::table_to_arrow_df(py, table)?;
             let report = gm.call_method1("profile_dataframe", (df,))?;
             py_json_dumps(py, report)
         })();
@@ -1706,10 +1707,11 @@ pub fn compare_clusters(a_json: &str, b_json: &str) -> Result<String, BridgeErro
 }
 
 /// Wrap `goldenmatch.core.validate.validate_dataframe` -- run validation
-/// rules over a table. `rows_json` is the table's records; `rules_json` is a
-/// JSON array of rule objects (`{"column", "rule_type", "params", "action"}`).
-/// Returns `{report, valid_rows, quarantine_rows, quarantine}` JSON.
-pub fn validate_table(rows_json: &str, rules_json: &str) -> Result<String, BridgeError> {
+/// rules over a table. `table` is the table's records (columnar or JSON
+/// `TableData`); `rules_json` is a JSON array of rule objects
+/// (`{"column", "rule_type", "params", "action"}`). Returns
+/// `{report, valid_rows, quarantine_rows, quarantine}` JSON.
+pub fn validate_table(table: &convert::TableData, rules_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
@@ -1717,7 +1719,7 @@ pub fn validate_table(rows_json: &str, rules_json: &str) -> Result<String, Bridg
             let json_mod = py.import("json")?;
             let builtins = py.import("builtins")?;
 
-            let df = convert::json_to_arrow_df(py, rows_json)?;
+            let df = convert::table_to_arrow_df(py, table)?;
             let rules_spec = if rules_json.is_empty() {
                 builtins.call_method0("list")?
             } else {
@@ -1760,14 +1762,14 @@ pub fn validate_table(rows_json: &str, rules_json: &str) -> Result<String, Bridg
 }
 
 /// Wrap `goldenmatch.auto_fix_dataframe` -- apply auto-fixes to a table.
-/// `rows_json` is the table's records. Returns `{fixes, fixed_rows, rows}`
-/// JSON.
-pub fn autofix_table(rows_json: &str) -> Result<String, BridgeError> {
+/// `table` is the table's records (columnar or JSON `TableData`). Returns
+/// `{fixes, fixed_rows, rows}` JSON.
+pub fn autofix_table(table: &convert::TableData) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
-            let df = convert::json_to_arrow_df(py, rows_json)?;
+            let df = convert::table_to_arrow_df(py, table)?;
             let out = gm.call_method1("auto_fix_dataframe", (df,))?;
             let fixed_df = out.get_item(0)?;
             let fixes = out.get_item(1)?;
@@ -1782,14 +1784,18 @@ pub fn autofix_table(rows_json: &str) -> Result<String, BridgeError> {
 }
 
 /// Wrap `goldenmatch.detect_anomalies` -- flag suspicious records in a table.
-/// `rows_json` is the table's records; `sensitivity` is `"low"`/`"medium"`/
-/// `"high"` (empty -> `"medium"`). Returns the JSON array of anomaly dicts.
-pub fn detect_anomalies(rows_json: &str, sensitivity: &str) -> Result<String, BridgeError> {
+/// `table` is the table's records (columnar or JSON `TableData`);
+/// `sensitivity` is `"low"`/`"medium"`/`"high"` (empty -> `"medium"`). Returns
+/// the JSON array of anomaly dicts.
+pub fn detect_anomalies(
+    table: &convert::TableData,
+    sensitivity: &str,
+) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
-            let df = convert::json_to_arrow_df(py, rows_json)?;
+            let df = convert::table_to_arrow_df(py, table)?;
             let sens = if sensitivity.is_empty() {
                 "medium"
             } else {
@@ -1805,16 +1811,16 @@ pub fn detect_anomalies(rows_json: &str, sensitivity: &str) -> Result<String, Br
 }
 
 /// Wrap `goldenmatch.core.autoconfig_verify.preflight` -- validate
-/// `(df, config)` before a run. `rows_json` is the table's records;
-/// `config_json` is a full `GoldenMatchConfig` JSON. Returns
-/// `{has_errors, config_was_modified, findings}` JSON.
-pub fn preflight(rows_json: &str, config_json: &str) -> Result<String, BridgeError> {
+/// `(df, config)` before a run. `table` is the table's records (columnar or
+/// JSON `TableData`); `config_json` is a full `GoldenMatchConfig` JSON.
+/// Returns `{has_errors, config_was_modified, findings}` JSON.
+pub fn preflight(table: &convert::TableData, config_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let verify = py.import("goldenmatch.core.autoconfig_verify")?;
             let dataclasses = py.import("dataclasses")?;
-            let df = convert::json_to_arrow_df(py, rows_json)?;
+            let df = convert::table_to_arrow_df(py, table)?;
             let config = build_full_config(py, config_json)?;
             let report = verify.call_method1("preflight", (df, config))?;
 
@@ -1839,16 +1845,17 @@ pub fn preflight(rows_json: &str, config_json: &str) -> Result<String, BridgeErr
 /// report for `(df, config)`. `postflight` needs `pair_scores`, which aren't
 /// in the table, so we derive them SQL-naturally: run `dedupe_df` on the
 /// table with the given config and feed its `scored_pairs` to `postflight`
-/// (identical to `core_apis._postflight`). Returns
+/// (identical to `core_apis._postflight`). `table` is the table's records
+/// (columnar or JSON `TableData`). Returns
 /// `{signals, adjustments, advisories}` JSON.
-pub fn postflight(rows_json: &str, config_json: &str) -> Result<String, BridgeError> {
+pub fn postflight(table: &convert::TableData, config_json: &str) -> Result<String, BridgeError> {
     crate::init()?;
     Python::with_gil(|py| {
         let result: Result<String, BridgeError> = (|| {
             let gm = py.import("goldenmatch")?;
             let verify = py.import("goldenmatch.core.autoconfig_verify")?;
             let dataclasses = py.import("dataclasses")?;
-            let df = convert::json_to_arrow_df(py, rows_json)?;
+            let df = convert::table_to_arrow_df(py, table)?;
             let config = build_full_config(py, config_json)?;
 
             let dedupe_kwargs = PyDict::new(py);
@@ -2305,7 +2312,7 @@ mod tests {
             {"email": "bob@y.com",   "name": "Bob"}
         ]"#;
         let config = r#"{"exact": ["email"]}"#;
-        match match_tables(target, reference, config) {
+        match match_tables(&td(target), &td(reference), config) {
             Ok(_result) => {
                 // MatchResult fields (matched_json / unmatched_json) are Option<String>;
                 // the call succeeding (Ok) proves the marshalling round-trip works.
@@ -2330,7 +2337,7 @@ mod tests {
         // shape, so it never produces a match here. The bridge only forwards
         // non-None config keys, so `{}` forwards nothing -> the zero-config path.
         let config = r#"{}"#;
-        match match_pairs(target, reference, config) {
+        match match_pairs(&td(target), &td(reference), config) {
             Ok(pairs) => {
                 assert!(!pairs.is_empty(), "expected at least one match");
                 for p in &pairs {
@@ -2612,7 +2619,7 @@ mod tests {
 
     #[test]
     fn test_profile_table() {
-        match profile_table(two_row_json()) {
+        match profile_table(&td(two_row_json())) {
             Ok(json) => {
                 assert!(!json.is_empty(), "profile_table returned empty string");
                 let v: serde_json::Value =
@@ -2784,7 +2791,7 @@ mod tests {
     #[test]
     fn test_validate_table_no_rules() {
         // Empty rules list -> all rows valid, no quarantine.
-        match validate_table(two_row_json(), "[]") {
+        match validate_table(&td(two_row_json()), "[]") {
             Ok(json) => {
                 let v: serde_json::Value =
                     serde_json::from_str(&json).expect("validate_table not valid JSON");
@@ -2807,7 +2814,7 @@ mod tests {
 
     #[test]
     fn test_autofix_table() {
-        match autofix_table(two_row_json()) {
+        match autofix_table(&td(two_row_json())) {
             Ok(json) => {
                 let v: serde_json::Value =
                     serde_json::from_str(&json).expect("autofix_table not valid JSON");
@@ -2827,7 +2834,7 @@ mod tests {
 
     #[test]
     fn test_detect_anomalies_medium() {
-        match detect_anomalies(two_row_json(), "medium") {
+        match detect_anomalies(&td(two_row_json()), "medium") {
             Ok(json) => {
                 let v: serde_json::Value =
                     serde_json::from_str(&json).expect("detect_anomalies not valid JSON");
@@ -2843,7 +2850,7 @@ mod tests {
     #[test]
     fn test_preflight_clean_run() {
         let config = simple_full_config();
-        match preflight(two_row_json(), config) {
+        match preflight(&td(two_row_json()), config) {
             Ok(json) => {
                 // Structural check (not strict from_str): goldenmatch's report
                 // serialization can embed raw control chars in string values,
@@ -2870,7 +2877,7 @@ mod tests {
     #[test]
     fn test_postflight_basic() {
         let config = simple_full_config();
-        match postflight(two_row_json(), config) {
+        match postflight(&td(two_row_json()), config) {
             Ok(json) => {
                 // Structural check (not strict from_str): see preflight note.
                 assert!(!json.is_empty(), "postflight returned empty");
