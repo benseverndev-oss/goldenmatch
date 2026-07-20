@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **Out-of-core single-box streaming Fellegi-Sunter dedupe — the ≥40M scale
+  path (`GOLDENMATCH_FS_OUT_OF_CORE=1`, default OFF).** The probabilistic (FS)
+  route had no out-of-core or distributed path: `_fs_use_bucket_route` hands
+  `backend=duckdb/ray` to a single-node scorer, so the whole prepared frame
+  stayed resident and the single-box FS wall was ~40M on 64 GB
+  (CI-measured: 25M @ 40.3 GB / 16 min; 50M projected to ~82 GB OOM), while F1
+  stayed scale-stable. `backends/fs_out_of_core.py` adds three bounded
+  mechanisms: `score_fs_out_of_core` streams block groups one at a time from a
+  DuckDB-resident (file-spilled) prepared table (scoring peak = one block
+  group, byte-parity with `score_buckets` absent oversized blocks);
+  `stream_fs_dedupe_output` writes unique/dupes via DuckDB `COPY ... TO parquet`
+  with no result frame; `run_fs_dedupe_streaming` ties prep → DuckDB file →
+  free frame → score → cluster → stream. New public
+  `gm.dedupe_to_parquet(*files, out_dir=...)` reaches it (and falls back to the
+  in-memory pipeline + parquet write when the config is not FS-eligible or the
+  flag is off, so it always yields the same files). The default path (no
+  `output_dir`) is byte-unchanged. Spec:
+  `docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md`.
+
+- **FS EM `build_blocks` memory-peak fixes (both default ON, byte-identical
+  output).** The FS memory peak is EM's `build_blocks`, not `score_buckets`.
+  `GOLDENMATCH_FS_EM_BLOCK_SLIM` projects each EM block-frame to
+  `[__row_id__] + blocking fields` before materialization (width 14→6);
+  `GOLDENMATCH_FS_EM_AGG_BLOCKS` builds the EM-only blocks as compact int64
+  row-id arrays via one `group_by().agg()` per pass, never materializing
+  per-block frames (supersedes the slim lever). Measured whole-pipeline peak on
+  person 100K: 2126 → 527 MB (−75%); regime-dependent above ~1M where the
+  EM-sample cap already bounds block count. A `jemalloc` page-decay env
+  (`_RJEM_MALLOC_CONF`) trims the 1M FS peak a further ~33% at ~zero wall.
+
 ## [3.6.0] - 2026-07-20
 
 ### Changed

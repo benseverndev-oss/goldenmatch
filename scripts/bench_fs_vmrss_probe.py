@@ -24,8 +24,10 @@ import goldenmatch.core.blocker as blk
 import goldenmatch.core.probabilistic as prob
 import pyarrow.parquet as pq
 
-try: from goldenmatch import dedupe_df
-except ImportError: from goldenmatch._api import dedupe_df
+try:
+    from goldenmatch import dedupe_df
+except ImportError:
+    from goldenmatch._api import dedupe_df
 
 _sn=blk.materialize_sn_passes
 def sn_wrap(*a,**k):
