@@ -996,6 +996,110 @@ pub fn resolve_identities(
     })
 }
 
+/// Steward manual **merge** of two identities (#1913 P3).
+///
+/// Reassigns `absorb_entity_id`'s source records to `keep_entity_id`, retires
+/// the absorbed identity, and emits a `manual_merge` event on both — the
+/// durable corrections path. Reuses the Python `manual_merge` steward function
+/// unchanged (the same one `goldenmatch identity merge` calls), so no merge
+/// semantics are re-implemented in Rust/SQL.
+///
+/// - `dsn` — libpq connection string for the identity store (empty is rejected).
+/// - `reason` — optional free-text audit note; empty means "no reason recorded".
+///
+/// Returns the result JSON (`{"keep", "absorbed", "at"}`). A `ValueError` from
+/// the store (missing entity, non-active winner) propagates as a `BridgeError`
+/// so the caller can surface it.
+pub fn identity_merge(
+    dsn: &str,
+    keep_entity_id: &str,
+    absorb_entity_id: &str,
+    reason: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    if dsn.trim().is_empty() {
+        return Err(BridgeError::InvalidConfig(
+            "identity_merge requires a non-empty identity DSN (set the \
+             goldenmatch.identity_dsn GUC)"
+                .to_string(),
+        ));
+    }
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let merge_fn = identity.getattr("manual_merge")?;
+        let store = open_identity_store(py, dsn)?;
+        let kwargs = PyDict::new(py);
+        if !reason.is_empty() {
+            kwargs.set_item("reason", reason)?;
+        }
+        // Bind the call result, close the store on BOTH paths (a bad steward id
+        // legitimately raises ValueError), then propagate.
+        let result = merge_fn.call(
+            (store.clone(), keep_entity_id, absorb_entity_id),
+            Some(&kwargs),
+        );
+        let _ = store.call_method0("close");
+        let result = result?;
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (result,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
+/// Steward manual **split** of a record out of an identity (#1913 P3).
+///
+/// Moves `record_id` into a fresh identity and emits a `manual_split` event on
+/// both the original and the new entity. Reuses the Python `manual_split`
+/// steward function (the one `goldenmatch identity split` calls); it takes a
+/// `list[str]` of record ids, so this single-record bridge wraps `record_id` in
+/// a one-element list.
+///
+/// - `dsn` — libpq connection string for the identity store (empty is rejected).
+/// - `reason` — optional free-text audit note; empty means "no reason recorded".
+///
+/// Returns the result JSON (`{"new_entity_id", "moved", "at"}`). A `ValueError`
+/// (missing entity, empty record set) propagates as a `BridgeError`.
+pub fn identity_split(
+    dsn: &str,
+    entity_id: &str,
+    record_id: &str,
+    reason: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    if dsn.trim().is_empty() {
+        return Err(BridgeError::InvalidConfig(
+            "identity_split requires a non-empty identity DSN (set the \
+             goldenmatch.identity_dsn GUC)"
+                .to_string(),
+        ));
+    }
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let split_fn = identity.getattr("manual_split")?;
+        let store = open_identity_store(py, dsn)?;
+        let kwargs = PyDict::new(py);
+        if !reason.is_empty() {
+            kwargs.set_item("reason", reason)?;
+        }
+        // manual_split takes record_ids: list[str] -> wrap the single id.
+        let record_ids = vec![record_id];
+        let result = split_fn.call((store.clone(), entity_id, record_ids), Some(&kwargs));
+        let _ = store.call_method0("close");
+        let result = result?;
+        let json_mod = py.import("json")?;
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (result,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
 // ─── Correction CRUD (Phase 6A of #437 surface sync) ────────────────────
 //
 // File pair-level + field-level + cluster-decision corrections into the
