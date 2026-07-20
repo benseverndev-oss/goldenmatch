@@ -29,12 +29,12 @@ pub fn goldenmatch_match_tables(
     reference_table: String,
     config_json: String,
 ) -> String {
-    let target_json = spi::read_table_as_json(&target_table)
-        .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    let ref_json = spi::read_table_as_json(&reference_table)
-        .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let target_data =
+        spi::read_table(&target_table).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let ref_data =
+        spi::read_table(&reference_table).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
 
-    match goldenmatch_bridge::api::match_tables(&target_json, &ref_json, &config_json) {
+    match goldenmatch_bridge::api::match_tables(&target_data, &ref_data, &config_json) {
         Ok(result) => result.matched_json.unwrap_or_else(|| "[]".to_string()),
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -122,12 +122,12 @@ pub fn goldenmatch_match_pairs(
         name!(score, f64),
     ),
 > {
-    let target_json = spi::read_table_as_json(&target_table)
-        .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    let ref_json = spi::read_table_as_json(&reference_table)
-        .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let target_data =
+        spi::read_table(&target_table).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    let ref_data =
+        spi::read_table(&reference_table).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
 
-    match goldenmatch_bridge::api::match_pairs(&target_json, &ref_json, &config_json) {
+    match goldenmatch_bridge::api::match_pairs(&target_data, &ref_data, &config_json) {
         Ok(pairs) => {
             let rows: Vec<(i64, i64, f64)> = pairs
                 .into_iter()
@@ -219,7 +219,11 @@ pub fn goldenmatch_match(
     reference_json: String,
     config_json: String,
 ) -> String {
-    match goldenmatch_bridge::api::match_tables(&target_json, &reference_json, &config_json) {
+    // JSON-direct entry: wrap each record set for the TableData dispatch (the
+    // columnar path only applies to SPI table reads).
+    let target_data = goldenmatch_bridge::convert::TableData::Json(target_json);
+    let reference_data = goldenmatch_bridge::convert::TableData::Json(reference_json);
+    match goldenmatch_bridge::api::match_tables(&target_data, &reference_data, &config_json) {
         Ok(result) => result.matched_json.unwrap_or_else(|| "[]".to_string()),
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }

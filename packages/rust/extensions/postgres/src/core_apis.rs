@@ -11,8 +11,11 @@
 //!
 //! ## Conventions (match `quick.rs`)
 //! - Table-input functions take a `table_name TEXT` and read it via
-//!   `spi::read_table_as_json` (the same `row_to_json` SPI path as
-//!   `goldenmatch_dedupe_table`), then forward the records JSON to the bridge.
+//!   `spi::read_table` (the same **Arrow-native columnar** SPI path as
+//!   `goldenmatch_dedupe_table`, #1913 P4/#1883), then forward the
+//!   `TableData` to the bridge — which builds the engine's `pa.Table` directly
+//!   for the parity-safe built-in column types and transparently falls back to
+//!   the `row_to_json` JSON path for any other type or a 0-row table.
 //! - JSON-in functions take the JSON payloads directly as `TEXT`.
 //! - Outputs are JSON `TEXT` (the bridge already does `json.dumps`), except
 //!   `goldenmatch_suggest_threshold` which returns `Option<f64>` so it can
@@ -36,9 +39,9 @@ use crate::spi;
 /// ```
 #[pg_extern]
 pub fn goldenmatch_profile_table(table_name: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::profile_table(&rows_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::profile_table(&table_data) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -143,9 +146,9 @@ pub fn goldenmatch_compare_clusters(a_json: String, b_json: String) -> String {
 /// ```
 #[pg_extern]
 pub fn goldenmatch_validate_table(table_name: String, rules_json: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::validate_table(&rows_json, &rules_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::validate_table(&table_data, &rules_json) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -159,9 +162,9 @@ pub fn goldenmatch_validate_table(table_name: String, rules_json: String) -> Str
 /// ```
 #[pg_extern]
 pub fn goldenmatch_autofix_table(table_name: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::autofix_table(&rows_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::autofix_table(&table_data) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -176,9 +179,9 @@ pub fn goldenmatch_autofix_table(table_name: String) -> String {
 /// ```
 #[pg_extern]
 pub fn goldenmatch_detect_anomalies(table_name: String, sensitivity: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::detect_anomalies(&rows_json, &sensitivity) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::detect_anomalies(&table_data, &sensitivity) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -196,9 +199,9 @@ pub fn goldenmatch_detect_anomalies(table_name: String, sensitivity: String) -> 
 /// ```
 #[pg_extern]
 pub fn goldenmatch_preflight(table_name: String, config_json: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::preflight(&rows_json, &config_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::preflight(&table_data, &config_json) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
@@ -215,9 +218,9 @@ pub fn goldenmatch_preflight(table_name: String, config_json: String) -> String 
 /// ```
 #[pg_extern]
 pub fn goldenmatch_postflight(table_name: String, config_json: String) -> String {
-    let rows_json =
-        spi::read_table_as_json(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
-    match goldenmatch_bridge::api::postflight(&rows_json, &config_json) {
+    let table_data =
+        spi::read_table(&table_name).unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+    match goldenmatch_bridge::api::postflight(&table_data, &config_json) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
