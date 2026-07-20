@@ -37,9 +37,6 @@ jobs:
     # gate that runs goldenmatch's pipeline.
     env:
       ARROW_DEFAULT_MEMORY_POOL: system
-      # jemalloc page-decay: return freed polars pages to the OS between
-      # pipeline stages (root CLAUDE.md scale standard; -33% peak at 1M).
-      _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
