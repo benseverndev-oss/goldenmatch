@@ -204,6 +204,66 @@ def _fs_em_sample_rows() -> int | None:
     return n if n > 0 else None  # 0 / negative -> explicit off
 
 
+def _fs_em_block_slim_enabled() -> bool:
+    """Project the EM-training block frame to ``__row_id__`` + the blocking
+    group columns before ``build_blocks`` (DEFAULT ON;
+    ``GOLDENMATCH_FS_EM_BLOCK_SLIM=0`` restores full-width blocks as the parity
+    oracle).
+
+    EM reads ONLY the ``__row_id__`` column of the blocks it samples
+    (``probabilistic._sample_blocked_pairs_with_fields``); the sampled pairs'
+    field values are looked up on the full ``score_frame``
+    (``_row_lookup_for_pairs``), NEVER on the block frames. So the EM blocks
+    carry every source column (wide strings + ``__xform_*``) for nothing --
+    ``build_blocks`` materializes each block on the FULL frame, across every
+    multi_pass/SN pass, which is the FS memory PEAK (~1.4 GB at 100k person; a
+    spike BEFORE scoring). Projecting to the columns ``build_blocks`` actually
+    groups on collapses that to tens of MB with a **byte-identical EMResult**
+    (the row-id membership + per-block ``blocking_fields`` provenance are
+    unchanged). Complementary to ``GOLDENMATCH_FS_EM_SAMPLE_ROWS``: the row
+    sample bounds the block COUNT above the cap, this bounds each block's WIDTH
+    at every scale (incl. the ≤cap no-sample regime)."""
+    v = os.environ.get("GOLDENMATCH_FS_EM_BLOCK_SLIM")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _build_em_blocks(em_frame: Any, blocking: Any) -> list:
+    """``build_blocks`` for the EM-only path, on a ``__row_id__`` + blocking-key
+    projection of ``em_frame`` when ``_fs_em_block_slim_enabled()`` (the memory
+    win). Falls back to the full frame if the projection can't cover a column
+    ``build_blocks`` needs, so output is identical on any config the projection
+    doesn't handle."""
+    # NB: use the MODULE-LEVEL ``build_blocks`` (imported at top of file), not a
+    # local import -- tests monkeypatch ``pipeline.build_blocks`` to spy on it
+    # (test_probabilistic.TestModelReuseSkipsBuildBlocks), and a local re-import
+    # would shadow the patch.
+    from goldenmatch.core.blocker import collect_blocking_fields
+    from goldenmatch.core.frame import to_frame as _tf
+
+    if _fs_em_block_slim_enabled():
+        try:
+            native = _tf(em_frame).native
+            # Column NAMES, representation-agnostic: pyarrow Table.columns is a
+            # list of ChunkedArrays (names live on .column_names), polars
+            # DataFrame.columns is the name list. `.select(names)` works on both.
+            names = list(getattr(native, "column_names", None) or native.columns)
+            fields = collect_blocking_fields(blocking) if blocking else []
+            keep = ["__row_id__"] + [
+                f for f in dict.fromkeys(fields)
+                if f != "__row_id__" and f in names
+            ]
+            if "__row_id__" in names:
+                return build_blocks(native.select(keep), blocking)
+        except Exception:
+            logger.debug(
+                "FS EM block-slim projection failed; using full-width blocks.",
+                exc_info=True,
+            )
+    return build_blocks(em_frame, blocking)
+
+
 def _finalize_review_pairs(
     review_pairs: list[tuple[int, int, float]],
     linked_pairs: list[tuple[int, int, float]],
@@ -473,12 +533,12 @@ def _score_probabilistic_matchkey(
                 "build_blocks peak; score_buckets ignores these blocks.",
                 _em_cap, _em_src.height,
             )
-            blocks = build_blocks(
-                _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED).native,
+            blocks = _build_em_blocks(
+                _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED),
                 config.blocking,
             )
         else:
-            blocks = build_blocks(block_frame, config.blocking)
+            blocks = _build_em_blocks(block_frame, config.blocking)
     elif _fs_need_blocks:
         blocks = build_blocks(block_frame, config.blocking)
     else:
