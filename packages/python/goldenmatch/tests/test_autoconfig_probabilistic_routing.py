@@ -89,7 +89,10 @@ def test_routing_off_is_deterministic(monkeypatch: pytest.MonkeyPatch):
 
 def test_routing_default_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch):
     # Default (env unset) now routes a probabilistic-shaped dataset to FS.
+    # _bio_df is 200 rows (below the FS small-N routing floor), so drop the floor
+    # to 0 to isolate the routing-SHAPE gate from the scale gate.
     monkeypatch.delenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", raising=False)
+    monkeypatch.setenv("GOLDENMATCH_FS_ROUTE_MIN_ROWS", "0")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     cfg = auto_configure_df(_bio_df())
     assert any(mk.type == "probabilistic" for mk in (cfg.matchkeys or []))
@@ -97,6 +100,7 @@ def test_routing_default_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch)
 
 def test_routing_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_ROUTE_MIN_ROWS", "0")  # isolate shape gate (200 rows < floor)
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
     df = _bio_df()
     cfg = auto_configure_df(df)
@@ -104,3 +108,18 @@ def test_routing_on_emits_probabilistic(monkeypatch: pytest.MonkeyPatch):
     # the full default path runs without raising + produces clusters
     r = goldenmatch.dedupe_df(df)
     assert len(r.clusters) >= 1
+
+
+def test_routing_small_n_stays_weighted(monkeypatch: pytest.MonkeyPatch):
+    # Small-N guard: a probabilistic-SHAPED dataset below the FS routing floor
+    # stays on the weighted path (FS EM is data-starved at small N and under-merges
+    # fuzzy-close variants). _bio_df is 200 rows, below the default 500 floor.
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC", "1")
+    monkeypatch.delenv("GOLDENMATCH_FS_ROUTE_MIN_ROWS", raising=False)  # default floor (500)
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    cfg = auto_configure_df(_bio_df())
+    assert all(mk.type != "probabilistic" for mk in (cfg.matchkeys or []))
+    # ...and setting the floor to 0 restores routing on the SAME frame.
+    monkeypatch.setenv("GOLDENMATCH_FS_ROUTE_MIN_ROWS", "0")
+    cfg_routed = auto_configure_df(_bio_df())
+    assert any(mk.type == "probabilistic" for mk in (cfg_routed.matchkeys or []))

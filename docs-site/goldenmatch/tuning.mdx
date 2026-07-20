@@ -611,6 +611,7 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_FS_DEFAULT_BUCKET` | `1` (on) | Route `static`/`multi_pass` FS on the default backend to the memory-bounded **bucket** scorer (the #1798 OOM fix). `0` = legacy **batched** path (eager `build_blocks`, memory grows with N) — the literal "legacy" hatch; also disables the external-blocks route. |
 | `GOLDENMATCH_MATCH_FUSED` | on | Whole-stage **fused** match kernel (weighted **and** FS). A covered FS run routes here under est-RSS pressure on an artifact-free config. `0`/`false`/`off` kill-switch. See [Fused kernel auto-routing](#fused-kernel-auto-routing). |
 | `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC` | `0` | Route zero-config auto-config to the **probabilistic (FS)** matchkey builder instead of the weighted one. |
+| `GOLDENMATCH_FS_ROUTE_MIN_ROWS` | `500` | Small-N floor on FS routing: a probabilistic-shaped dataset with fewer rows stays on the robust **weighted** path (FS EM is data-starved at small N — it commits a RED config and its discrete-level comparison under-merges fuzzy-close variants). `0` disables the floor (route purely by shape). Every dataset that validated the FS-default win sits far above the floor, so routing there is unchanged; only tiny corpora (KG entity sets, small demos) fall back. |
 
 **Scoring engine (native vs numpy vs scalar)**
 

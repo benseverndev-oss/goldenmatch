@@ -852,6 +852,33 @@ def _route_to_probabilistic_enabled() -> bool:
     )
 
 
+# Fellegi-Sunter EM needs enough rows to estimate stable m/u probabilities (u from
+# random non-matching pairs, m from within-block pairs). Below this floor the EM is
+# data-starved — it commits a RED, low-confidence config, and its discrete-level
+# comparison (partial_threshold 0.8) drops fuzzy-close variants to the "disagree"
+# level, under-merging surfaces that the robust weighted fuzzy path catches. Measured
+# on the 150-row goldengraph KG concept universe: FS unified only 8/44 multi-surface
+# concepts vs the weighted path's 19/44 (splitting sets like ['Jaro-Winkler distance',
+# 'Jaro Winkler','jaro_winkler']). The floor is conservative — every dataset that
+# validated the FS-default win sits far above it (dblp_acm ~2600, febrl3 ~5000,
+# historical_50k 50k), so routing there is unchanged; only genuinely small corpora
+# (KG entity sets, tiny demos) fall back to the weighted path. Override with
+# GOLDENMATCH_FS_ROUTE_MIN_ROWS (0 disables the floor -> route purely by shape).
+_FS_ROUTE_MIN_ROWS_DEFAULT = 500
+
+
+def _fs_route_min_rows() -> int:
+    """Row floor below which a probabilistic-shaped dataset stays on the weighted
+    path (FS EM is data-starved at small N). Env-overridable; 0 disables the floor."""
+    raw = os.environ.get("GOLDENMATCH_FS_ROUTE_MIN_ROWS")
+    if raw is None:
+        return _FS_ROUTE_MIN_ROWS_DEFAULT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _FS_ROUTE_MIN_ROWS_DEFAULT
+
+
 # Exact matchkeys on these col_types are a strong identity claim — when one
 # SURVIVES into the config, exact matching carries the dedup and the probabilistic
 # path tends to lose (verified on anchor_person_match: clean-email exact beats FS).
@@ -4341,9 +4368,21 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     # extraction can populate __-cols that are NOT domain matchkey columns, so gate
     # on _DOMAIN_SCORER_MAP membership, not on extracted_columns being non-empty.
     _domain_matchkey_cols = [c for c in extracted_columns if c in _DOMAIN_SCORER_MAP]
-    if (not multi_source and not _domain_matchkey_cols
-            and _route_to_probabilistic_enabled()
-            and _is_probabilistic_shape(matchkeys, profiles)):
+    _prob_route = (not multi_source and not _domain_matchkey_cols
+                   and _route_to_probabilistic_enabled()
+                   and _is_probabilistic_shape(matchkeys, profiles))
+    if _prob_route and total_rows < _fs_route_min_rows():
+        # Small-N guard: FS EM is data-starved below the floor and under-merges
+        # fuzzy-close variants the weighted fuzzy path catches (see _fs_route_min_rows).
+        # Surface the decision rather than silently skipping the route.
+        logger.info(
+            "Probabilistic-shaped dataset (%d rows) is below the FS routing floor "
+            "(%d rows); staying on the weighted path (EM is data-starved at this "
+            "scale). Override with GOLDENMATCH_FS_ROUTE_MIN_ROWS.",
+            total_rows, _fs_route_min_rows(),
+        )
+        _prob_route = False
+    if _prob_route:
         routed = auto_configure_probabilistic_df(df, llm_provider=llm_provider)
         # Parity with the deterministic tail: attach the preflight report so a
         # routed FS config carries the same verification/diagnostic the default
