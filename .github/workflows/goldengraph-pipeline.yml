@@ -45,7 +45,16 @@ jobs:
           python-version: "3.12"
       - name: Install goldenmatch + build/install the goldengraph-native engine wheel
         run: |
-          python -m pip install --upgrade pip maturin pytest goldenmatch
+          python -m pip install --upgrade pip maturin pytest
+          # Install goldenmatch from MONOREPO SOURCE, not PyPI. goldengraph's
+          # zero-config resolve runs goldenmatch's arrow-native FS path, whose
+          # polars-free blocking spine (blocker.py's `to_frame(native)` branch,
+          # the "blocking-spine eviction for zero-config") the last PyPI release
+          # predates -- against a stale published goldenmatch the polars-free
+          # resolve hard-fails at `pl.from_arrow`. Source keeps the lane honest
+          # for the CURRENT monorepo state and stays polars-free (base install,
+          # no [polars] extra -- goldengraph is Arrow-native by design).
+          python -m pip install -e packages/python/goldenmatch
           maturin build --release \
             -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
           python -m pip install dist/*.whl
