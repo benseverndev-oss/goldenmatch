@@ -3,13 +3,16 @@
 per-package gate shows: capability counts side by side, Python<->TypeScript
 disjointedness, and auto-detected gaps/asymmetries.
 
-Everything is derived from the same sources the per-package gates already trust:
-  - live introspection (MCP tools, __all__ exports, A2A skills) via check_llms_counts;
-  - the CLI surface + cross-language partition from parity/<pkg>.yaml;
+Everything is derived from STATIC, import-free sources, so the generated block is
+byte-identical in every environment (no dependency on which optional extras a
+given env installed -- an early version live-imported `<pkg>.mcp.server` and
+flapped between the dev box and CI, which lacks the [mcp] extra):
+  - MCP tool + CLI counts and the cross-language partition from parity/<pkg>.yaml
+    (`shared` + `python_only` = the Python count; api_parity keeps it live-accurate);
+  - `__all__` export count and A2A skills via AST (no import);
   - file presence for the recipes / TS-port columns.
 
-The generated block (between the markers) is rendered from those sources, so
-`--check` fails if docs-site/suite-matrix.mdx drifts from the real suite. This is
+`--check` fails if docs-site/suite-matrix.mdx drifts from those sources. This is
 the capstone of the config-matrix arc: one place that tracks inconsistency,
 disjointedness, and gaps ACROSS packages.
 
@@ -20,7 +23,6 @@ Run:
 from __future__ import annotations
 
 import ast
-import importlib
 import sys
 from pathlib import Path
 
@@ -36,24 +38,34 @@ PKG_DIR = ROOT / "packages" / "python"
 PKGS = ["goldenmatch", "goldencheck", "goldenflow", "goldenpipe", "goldenanalysis", "infermap"]
 
 
-# --- Live introspection (mirrors check_llms_counts; inlined so this capstone has no
-#     cross-gate import dependency) --------------------------------------------------
-def _mcp_tools(pkg: str) -> int | None:
-    try:
-        mod = importlib.import_module(f"{pkg}.mcp.server")
-    except Exception:
+# --- Surface introspection. MCP + CLI counts come from the parity manifests
+#     (static, env-stable, and gated by api_parity to match the live surface), NOT
+#     a live `import <pkg>.mcp.server` -- that needs the [mcp] extra, which the CI
+#     config_matrix sync does not install, so it would flap between environments.
+#     Exports is the runtime `__all__` (base import, no extra); skills is AST-parsed.
+def _py_count(manifest: dict, surface: str) -> int | None:
+    body = manifest.get(surface)
+    if not body:
         return None
-    tools = getattr(mod, "TOOLS", None)
-    return len(tools) if tools is not None else None
+    return len(body.get("shared", [])) + len(body.get("python_only", []))
 
 
 def _exports(pkg: str) -> int | None:
-    try:
-        mod = importlib.import_module(pkg)
-    except Exception:
+    # AST-count the `__all__` literal (no import -> env-stable). A `*spread` element
+    # counts as one, so this is the public-name count as written, which is what a
+    # cross-package overview wants and never flaps by environment.
+    init = PKG_DIR / pkg / pkg / "__init__.py"
+    if not init.exists():
         return None
-    names = getattr(mod, "__all__", None)
-    return len(names) if names else None
+    try:
+        tree = ast.parse(init.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.List):
+            if any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
+                return len(node.value.elts)
+    return None
 
 
 def _a2a_skills(pkg: str) -> int | None:
@@ -90,13 +102,6 @@ def _yn(flag: bool) -> str:
     return "Yes" if flag else "—"
 
 
-def _cli_count(manifest: dict) -> int | None:
-    s = manifest.get("cli_commands")
-    if not s:
-        return None
-    return len(s.get("shared", [])) + len(s.get("python_only", []))
-
-
 def render_block() -> str:
     parity = {p: _load_parity(p) for p in PKGS}
     lines: list[str] = [MARKER_START, ""]
@@ -114,9 +119,9 @@ def render_block() -> str:
     ]
     suite_mcp = 0
     for p in PKGS:
-        mcp, exp, skills = _mcp_tools(p), _exports(p), _a2a_skills(p)
+        mcp, exp, skills = _py_count(parity[p], "mcp_tools"), _exports(p), _a2a_skills(p)
         suite_mcp += mcp or 0
-        cli = _cli_count(parity[p])
+        cli = _py_count(parity[p], "cli_commands")
         has_recipes = (ROOT / "docs-site" / p / "recipes.mdx").exists()
         has_ts = (ROOT / "packages" / "typescript" / p).is_dir()
         lines.append(
