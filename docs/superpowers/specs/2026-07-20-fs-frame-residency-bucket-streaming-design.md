@@ -23,13 +23,35 @@ axis alongside PR-A…D. **Branch:** `claude/benchmark-failure-gh-7h5ryr`.
 > is already the mitigation for the dominant term at ≥1M** (at ≤100K the cap does
 > not bite: sample == full frame, which is why the local probe saw the full spike).
 >
-> **Status: DO NOT IMPLEMENT as written.** The frame-residency + DuckDB-source idea
-> may still matter at ≥1M (where the EM cap is active and `score_buckets` residency
-> scales with N), but that requires a 1M-regime per-stage RSS split to confirm the
-> term breakdown before committing. The byte-parity result (FS-over-DuckDB ==
-> resident, 23,413 pairs) and the harness stand; the *targeting* was wrong. Revise
-> against the 1M split before promoting any PR. See the correction thread in the
-> session for the full measurement.
+> **Status: DO NOT IMPLEMENT as written.** [superseded by the ≥1M UPDATE below]
+
+> **✅ ≥1M UPDATE (2026-07-20) — the split is done; this axis is VALIDATED as the
+> single-node scale lever.** The EM `build_blocks` peak was fixed separately
+> (width-slim `a5739d1` + aggregate row-id blocks `29e77cb`, −75% at 100K). With
+> that gone, the 1M-regime per-stage RSS split (person 1M, local 4c/15GB,
+> `scripts/bench_fs_peak_probe.py` + a resident-VmRSS-per-stage hook) shows the
+> ≥1M peak IS frame residency — but broader than just `score_buckets`. **It is a
+> whole-pipeline LIFECYCLE problem: resident VmRSS climbs monotonically and is
+> freed NOWHERE**, so the peak = the SUM of every stage's live frames held at once:
+> - prep/base frame ~1.4 GB (held prep → golden), `bucket_slim_projection` +1.4→1.63 GB,
+>   `bucket_partition` +1.77→2.20 GB (the eager `partition_by`), accumulating across
+>   passes to `bucket_score` ~2.55 GB, `cluster` ~2.75 GB, `golden` ~3.14 GB (peak).
+> - Allocator knobs (`MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=0`) recover only
+>   ~7% (3333→3105 MB) — confirming the bulk is LIVE-REFERENCED polars frames, not
+>   glibc fragmentation. So it is genuinely architectural.
+> - The `score_buckets` slim + `partition_by` frames (~0.8 GB) are held straight
+>   through the peak yet are NOT needed by cluster/golden → this spec's bounded
+>   streaming (never materialize all partitions) shaves that ~0.8 GB / ~25% at 1M,
+>   byte-parity-proven by the de-risking harness (23,413 pairs, resident==duckdb).
+>
+> **Reframe: this spec is PHASE 1 of the FS single-node scale story, not the whole
+> answer.** Phase 1 = bounded score_buckets streaming (this doc) → drops the ~0.8 GB
+> scoring-frame band (≥1M peak ~3.1 → ~2.3 GB). Phase 2 (separate spec) = the base
+> prepared frame + cluster/golden residency (~1.9 GB floor) — golden needs the full
+> frame today; spilling/streaming it (DuckDB/Arrow out-of-core, connecting to the
+> `score_duckdb` groundwork) is the deeper lever. The DuckDB block source in §Target
+> below is the ≥RAM tier of Phase 1; the in-RAM `FrameBlockSource` is the first,
+> lowest-risk increment. **CLEARED TO IMPLEMENT Phase 1.**
 
 **Trigger:** with the Arrow pair-stream fix already landed (`398006b` / #1896:
 "cut the FS memory peak — Arrow pair stream, EM-block-sample") the FS peak RSS is
