@@ -3200,6 +3200,26 @@ jobs:
               END IF;
               RAISE NOTICE 'gm_resolve run2 (absorb): % nodes=% max_recs=%', s, n_nodes, max_recs;
             END $$;
+            -- #1913 P2: the read-only identity_* functions serve the SAME in-DB
+            -- dataset when db_path is empty (they use the goldenmatch.identity_dsn
+            -- GUC). Closes the loop: resolve then query in one database.
+            DO $$
+            DECLARE lst jsonb; n int; rec jsonb;
+            BEGIN
+              -- Empty db_path -> the in-DB Postgres store, not a SQLite file.
+              lst := goldenmatch.goldenmatch_identity_list('people', '', '')::jsonb;
+              n := jsonb_array_length(lst);
+              IF n <> 2 THEN
+                RAISE EXCEPTION 'identity_list(in-DB): expected 2 identities, got % -> %', n, lst;
+              END IF;
+              -- Resolve a record written by gm_resolve (source defaults to
+              -- "dataframe" when the table has no __source__ column).
+              rec := goldenmatch.goldenmatch_identity_resolve('dataframe:1', '')::jsonb;
+              IF rec->>'entity_id' IS NULL THEN
+                RAISE EXCEPTION 'identity_resolve(in-DB): expected an entity for dataframe:1, got %', rec;
+              END IF;
+              RAISE NOTICE 'identity read (in-DB, empty db_path): list=% resolve.entity=%', n, rec->>'entity_id';
+            END $$;
           EOSQL
           echo "=== PG ${PG_VERSION} smoke passed ==="
 

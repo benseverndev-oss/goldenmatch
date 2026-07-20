@@ -321,48 +321,80 @@ pub fn goldenmatch_dedupe_full_telemetry(table_name: String, config_json: String
 // libpq DSN; for SQLite pass the filesystem path. Empty-string filters
 // (``dataset``, ``status``) mean "no filter on that dimension".
 
+/// Resolve the store reference the identity read functions hand to the bridge.
+///
+/// A non-empty `db_path` is used verbatim (a SQLite file path, or a libpq DSN
+/// the bridge routes to the Postgres backend). An EMPTY `db_path` (#1913 P2)
+/// means "the in-DB dataset": substitute the `goldenmatch.identity_dsn` GUC
+/// (or the `GOLDENMATCH_IDENTITY_DSN` / `GOLDENMATCH_DATABASE_URL` env) so the
+/// read surface serves the same Postgres identity graph `gm_resolve` writes.
+/// Empty is the sentinel because these functions are STRICT (SQL NULL never
+/// reaches them) and already treat empty `dataset`/`status` as "unset".
+fn identity_store_ref(db_path: String) -> String {
+    if !db_path.trim().is_empty() {
+        return db_path;
+    }
+    crate::pipeline::resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: identity read needs a db_path (SQLite path or DSN), \
+             or set `goldenmatch.identity_dsn` (or GOLDENMATCH_IDENTITY_DSN / \
+             GOLDENMATCH_DATABASE_URL) to serve the in-DB dataset"
+        )
+    })
+}
+
 /// Resolve a record_id (form: ``{source}:{source_pk}``) to its identity view.
-/// Returns ``{"found": false}`` when the record has no identity.
+/// Returns ``{"found": false}`` when the record has no identity. Empty
+/// ``db_path`` reads the in-DB Postgres dataset (#1913 P2).
 #[pg_extern]
 pub fn goldenmatch_identity_resolve(record_id: String, db_path: String) -> String {
-    match goldenmatch_bridge::api::identity_resolve(&record_id, &db_path) {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_resolve(&record_id, &store_ref) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
 
-/// Return the full identity view JSON for ``entity_id``.
+/// Return the full identity view JSON for ``entity_id``. Empty ``db_path``
+/// reads the in-DB Postgres dataset (#1913 P2).
 #[pg_extern]
 pub fn goldenmatch_identity_view(entity_id: String, db_path: String) -> String {
-    match goldenmatch_bridge::api::identity_view(&entity_id, &db_path) {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_view(&entity_id, &store_ref) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
 
-/// Return the temporal event log for an identity as a JSON array.
+/// Return the temporal event log for an identity as a JSON array. Empty
+/// ``db_path`` reads the in-DB Postgres dataset (#1913 P2).
 #[pg_extern]
 pub fn goldenmatch_identity_history(entity_id: String, db_path: String) -> String {
-    match goldenmatch_bridge::api::identity_history(&entity_id, &db_path) {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_history(&entity_id, &store_ref) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
 
 /// List ``conflicts_with`` evidence edges as a JSON array. Empty ``dataset``
-/// returns conflicts across all datasets.
+/// returns conflicts across all datasets; empty ``db_path`` reads the in-DB
+/// Postgres dataset (#1913 P2).
 #[pg_extern]
 pub fn goldenmatch_identity_conflicts(dataset: String, db_path: String) -> String {
-    match goldenmatch_bridge::api::identity_conflicts(&dataset, &db_path) {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_conflicts(&dataset, &store_ref) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
 
 /// List identities filtered by ``dataset`` / ``status`` (empty = no filter).
+/// Empty ``db_path`` reads the in-DB Postgres dataset (#1913 P2).
 #[pg_extern]
 pub fn goldenmatch_identity_list(dataset: String, status: String, db_path: String) -> String {
-    match goldenmatch_bridge::api::identity_list(&dataset, &status, &db_path) {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_list(&dataset, &status, &store_ref) {
         Ok(json) => json,
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }

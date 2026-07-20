@@ -728,10 +728,38 @@ pub fn dedupe_clusters(
 //
 // Thin wrappers over ``goldenmatch.identity.query.*`` so the Postgres and
 // DuckDB extensions can serve the same JSON shape the Python/REST/MCP/A2A
-// surfaces serve. Every function takes the path to the identity SQLite/PG
-// store as an explicit argument; session-level settings are awkward to
-// thread through pgrx + pyo3, and explicit args make the SQL contract
-// obvious at the call site.
+// surfaces serve. Every function takes a ``store_ref`` for the identity store:
+// a SQLite file path, OR (since #1913 P2) a libpq DSN, which opens the
+// Postgres backend so the read surface serves the SAME in-DB dataset the
+// gm_resolve write path populates. The pgrx layer supplies the DSN from the
+// ``goldenmatch.identity_dsn`` GUC when the caller passes an empty db_path.
+
+/// True when ``store_ref`` is a libpq connection string (URI or keyword/value
+/// form) rather than a SQLite file path. A filesystem path never contains an
+/// ``=`` (libpq ``key=value``) and doesn't start with a ``postgres`` URI
+/// scheme, so this cleanly separates the two without a new argument.
+fn is_postgres_dsn(store_ref: &str) -> bool {
+    let t = store_ref.trim();
+    t.starts_with("postgresql://") || t.starts_with("postgres://") || t.contains('=')
+}
+
+/// Open an ``IdentityStore`` from a store reference: Postgres backend for a
+/// libpq DSN (#1913 P2), else a SQLite file path (the original behaviour).
+fn open_identity_store<'py>(
+    py: Python<'py>,
+    store_ref: &str,
+) -> Result<Bound<'py, PyAny>, BridgeError> {
+    let identity = py.import("goldenmatch.identity")?;
+    let store_cls = identity.getattr("IdentityStore")?;
+    let kwargs = PyDict::new(py);
+    if is_postgres_dsn(store_ref) {
+        kwargs.set_item("backend", "postgres")?;
+        kwargs.set_item("connection", store_ref)?;
+    } else {
+        kwargs.set_item("path", store_ref)?;
+    }
+    Ok(store_cls.call((), Some(&kwargs))?)
+}
 
 /// Resolve a `{source}:{source_pk}` style ``record_id`` to its identity
 /// view JSON. Returns ``{"found": false}`` when no identity owns the record.
@@ -739,11 +767,8 @@ pub fn identity_resolve(record_id: &str, db_path: &str) -> Result<String, Bridge
     crate::init()?;
     Python::with_gil(|py| {
         let identity = py.import("goldenmatch.identity")?;
-        let store_cls = identity.getattr("IdentityStore")?;
         let find_by_record = identity.getattr("find_by_record")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("path", db_path)?;
-        let store = store_cls.call((), Some(&kwargs))?;
+        let store = open_identity_store(py, db_path)?;
         let view = find_by_record.call1((store.clone(), record_id))?;
         let _ = store.call_method0("close");
         let json_mod = py.import("json")?;
@@ -765,11 +790,8 @@ pub fn identity_view(entity_id: &str, db_path: &str) -> Result<String, BridgeErr
     crate::init()?;
     Python::with_gil(|py| {
         let identity = py.import("goldenmatch.identity")?;
-        let store_cls = identity.getattr("IdentityStore")?;
         let get_entity = identity.getattr("get_entity")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("path", db_path)?;
-        let store = store_cls.call((), Some(&kwargs))?;
+        let store = open_identity_store(py, db_path)?;
         let view = get_entity.call1((store.clone(), entity_id))?;
         let _ = store.call_method0("close");
         let json_mod = py.import("json")?;
@@ -791,11 +813,8 @@ pub fn identity_history(entity_id: &str, db_path: &str) -> Result<String, Bridge
     crate::init()?;
     Python::with_gil(|py| {
         let identity = py.import("goldenmatch.identity")?;
-        let store_cls = identity.getattr("IdentityStore")?;
         let history_fn = identity.getattr("history")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("path", db_path)?;
-        let store = store_cls.call((), Some(&kwargs))?;
+        let store = open_identity_store(py, db_path)?;
         let events = history_fn.call1((store.clone(), entity_id))?;
         let _ = store.call_method0("close");
         let json_mod = py.import("json")?;
@@ -814,11 +833,8 @@ pub fn identity_conflicts(dataset: &str, db_path: &str) -> Result<String, Bridge
     crate::init()?;
     Python::with_gil(|py| {
         let identity = py.import("goldenmatch.identity")?;
-        let store_cls = identity.getattr("IdentityStore")?;
         let find_conflicts = identity.getattr("find_conflicts")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("path", db_path)?;
-        let store = store_cls.call((), Some(&kwargs))?;
+        let store = open_identity_store(py, db_path)?;
         let conflicts_kwargs = PyDict::new(py);
         if dataset.is_empty() {
             conflicts_kwargs.set_item("dataset", py.None())?;
@@ -843,11 +859,8 @@ pub fn identity_list(dataset: &str, status: &str, db_path: &str) -> Result<Strin
     crate::init()?;
     Python::with_gil(|py| {
         let identity = py.import("goldenmatch.identity")?;
-        let store_cls = identity.getattr("IdentityStore")?;
         let list_entities = identity.getattr("list_entities")?;
-        let open_kwargs = PyDict::new(py);
-        open_kwargs.set_item("path", db_path)?;
-        let store = store_cls.call((), Some(&open_kwargs))?;
+        let store = open_identity_store(py, db_path)?;
         let list_kwargs = PyDict::new(py);
         if dataset.is_empty() {
             list_kwargs.set_item("dataset", py.None())?;
@@ -2308,6 +2321,23 @@ mod tests {
             Err(e) => require_or_skip(e, "identity_resolve_not_found"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── identity read store-ref routing (#1913 P2) ──────────────────────────
+
+    #[test]
+    fn test_is_postgres_dsn_classifies_store_refs() {
+        // libpq URI + keyword/value forms -> Postgres backend.
+        assert!(is_postgres_dsn("postgresql://u:p@host:5432/db"));
+        assert!(is_postgres_dsn("postgres://host/db"));
+        assert!(is_postgres_dsn(
+            "host=/var/run/postgresql port=5432 dbname=postgres"
+        ));
+        assert!(is_postgres_dsn("dbname=identity"));
+        // SQLite file paths -> NOT a DSN (no '=' , no postgres URI scheme).
+        assert!(!is_postgres_dsn(".goldenmatch/identity.db"));
+        assert!(!is_postgres_dsn("/var/lib/goldenmatch/identity.sqlite"));
+        assert!(!is_postgres_dsn("C:/data/identity.db"));
     }
 
     // ── resolve_identities (write path, #1913) ──────────────────────────────
