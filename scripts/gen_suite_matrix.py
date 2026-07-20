@@ -205,9 +205,17 @@ def main() -> int:
         return 0
     if mode == "--check":
         current = PAGE.read_text(encoding="utf-8") if PAGE.exists() else ""
-        if current != _compose(block):
+        fresh = _compose(block)
+        if current != fresh:
+            import difflib
+
+            diff = difflib.unified_diff(
+                current.splitlines(), fresh.splitlines(),
+                fromfile="committed", tofile="live", lineterm="",
+            )
             print("suite-matrix.mdx is STALE vs the live suite surface. "
                   "Regenerate: python scripts/gen_suite_matrix.py --write")
+            print("\n".join(list(diff)[:40]))
             return 1
         print("suite-matrix.mdx OK: matches the live cross-package surface.")
         return 0
