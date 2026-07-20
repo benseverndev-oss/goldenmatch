@@ -34,6 +34,34 @@ def _reset_runtime_exclude_columns():
 
 
 @pytest.fixture(autouse=True)
+def _reset_profile_emitter_stack():
+    """Drain the profile-emitter stack before AND after each test.
+
+    ``core.profile_emitter._emitter_stack`` is a ContextVar shared by every
+    test in an xdist worker. A test that leaves an emitter active (a manual
+    ``current_emitter()`` push, or a ``profile_capture()`` that unwound through
+    an unusual path) makes ``has_active_emitter()`` return True for every
+    subsequent test in that worker. That silently flips ``_use_bucket_scorer``
+    onto the legacy per-block path (it deliberately declines while profiling),
+    so pure-function routing assertions (``test_learned_lowering_parity``) and
+    the frames-out lazy-cluster wiring (``test_lazy_cluster_dict``) fail only
+    in the full suite, never in isolation. Same class as
+    ``_reset_runtime_exclude_columns`` above; an empty stack is the clean state.
+    """
+    try:
+        import goldenmatch.core.profile_emitter as _pe
+        _pe._emitter_stack.set(())
+    except ImportError:
+        pass
+    yield
+    try:
+        import goldenmatch.core.profile_emitter as _pe
+        _pe._emitter_stack.set(())
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _disable_autoconfig_memory(monkeypatch):
     """Default-off the cross-run autoconfig memory in every test.
 
