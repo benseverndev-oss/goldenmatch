@@ -1,0 +1,61 @@
+---
+title: "Pipeline recipes"
+description: "Copy-paste GoldenPipe configs that wire the suite together: full clean-and-dedupe, profile-and-report, and dedupe-then-resolve-identities."
+keywords: ["goldenpipe", "recipes", "pipeline", "orchestration", "config"]
+---
+
+The [config matrix](/goldenpipe/config-matrix) lists every stage. This page is the task-shaped shortcut: a few complete pipelines that wire the suite packages together. Every config below is a complete, valid file (CI validates each against the live schema).
+
+```bash
+goldenpipe run recipe.yaml
+```
+
+## Clean and dedupe end to end
+
+**You have** a raw file. **You want** to scan it, standardize it, and dedupe it in one declarative run.
+
+Stages run in order; each `use` names a registered stage (see the [Stages](/goldenpipe/config-matrix#stages) table).
+
+```yaml
+pipeline: clean_and_dedupe
+source: raw.csv
+stages:
+  - name: scan
+    use: goldencheck.scan
+  - name: standardize
+    use: goldenflow.transform
+  - name: dedupe
+    use: goldenmatch.dedupe
+```
+
+## Profile, then report
+
+**You have** a dataset you want a quality read on. **You want** a scan followed by a cross-cutting report, no matching.
+
+```yaml
+pipeline: profile_and_report
+source: data.csv
+stages:
+  - name: infer
+    use: infer_schema
+  - name: scan
+    use: goldencheck.scan
+  - name: report
+    use: goldenanalysis.report
+```
+
+## Dedupe, then resolve durable identities
+
+**You have** records that arrive over time. **You want** to dedupe and then assign stable entity IDs that survive across runs.
+
+```yaml
+pipeline: dedupe_and_resolve
+source: contacts.csv
+stages:
+  - name: standardize
+    use: goldenflow.transform
+  - name: dedupe
+    use: goldenmatch.dedupe
+  - name: identities
+    use: goldenmatch.identity_resolve
+```

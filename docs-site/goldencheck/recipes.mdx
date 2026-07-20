@@ -1,0 +1,60 @@
+---
+title: "Validation recipes"
+description: "Copy-paste GoldenCheck configs for common jobs: validate a customer file, enforce enums and ranges, and catch outliers."
+keywords: ["goldencheck", "recipes", "validation", "schema", "config"]
+---
+
+The [config matrix](/goldencheck/config-matrix) lists every check type. This page is the task-shaped shortcut. `goldencheck scan your.csv` profiles and flags issues with no config; write a config when you want to *enforce* a schema. Every config below is a complete, valid file (CI validates each against the live schema).
+
+```bash
+goldencheck scan your.csv --config recipe.yaml
+```
+
+## Validate a customer file
+
+**You have** a contact file and a contract for what "valid" means. **You want** required fields present, emails well-formed, and IDs unique.
+
+```yaml
+version: 1
+columns:
+  customer_id:
+    type: string
+    required: true
+    unique: true
+  email:
+    type: string
+    required: true
+    format: email
+  phone:
+    type: string
+    nullable: true
+```
+
+## Enforce enums and ranges
+
+**You have** status and numeric columns that must stay within known bounds. **You want** any out-of-range or unexpected value flagged.
+
+```yaml
+version: 1
+columns:
+  status:
+    type: string
+    enum: [active, inactive, pending]
+  age:
+    type: int
+    range: [0, 120]
+```
+
+## Catch numeric outliers
+
+**You have** a measure column where extreme values usually mean bad data. **You want** statistical outliers surfaced.
+
+`outlier_stddev` flags values more than N standard deviations from the mean.
+
+```yaml
+version: 1
+columns:
+  amount:
+    type: float
+    outlier_stddev: 3.0
+```

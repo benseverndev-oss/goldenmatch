@@ -1,0 +1,56 @@
+---
+title: "Transform recipes"
+description: "Copy-paste GoldenFlow configs for common jobs: standardize contact data, clean and dedupe, and reshape columns."
+keywords: ["goldenflow", "recipes", "transforms", "standardize", "config"]
+---
+
+The [config matrix](/goldenflow/config-matrix) lists every transform. This page is the task-shaped shortcut. `goldenflow transform your.csv` auto-detects and fixes most things with no config; reach for one of these when you want to pin the exact transforms. Every config below is a complete, valid file (CI validates each against the live schema).
+
+```bash
+goldenflow transform your.csv --config recipe.yaml
+```
+
+## Standardize contact data
+
+**You have** names, phones, and emails in inconsistent formats. **You want** them normalized to a canonical shape.
+
+```yaml
+transforms:
+  - column: phone
+    ops: [strip, phone_e164]
+  - column: email
+    ops: [strip, email_lowercase]
+  - column: first_name
+    ops: [strip, name_proper]
+  - column: last_name
+    ops: [strip, name_proper]
+```
+
+## Clean, then drop duplicates
+
+**You have** a contact export with formatting noise and repeat rows. **You want** a clean, de-duplicated file in one pass.
+
+Transforms run first, so dedup compares the *normalized* values (two rows that differ only by email casing collapse to one).
+
+```yaml
+transforms:
+  - column: email
+    ops: [strip, email_lowercase]
+dedup:
+  columns: [email]
+  keep: first
+```
+
+## Reshape for a downstream system
+
+**You have** columns that don't match the target schema. **You want** to rename, drop, and standardize in one config.
+
+```yaml
+transforms:
+  - column: signup_date
+    ops: [date_iso8601]
+renames:
+  email_address: email
+  fname: first_name
+drop: [internal_id]
+```
