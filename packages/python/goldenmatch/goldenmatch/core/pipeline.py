@@ -541,7 +541,7 @@ def _run_fs_streaming_dedupe(
         score_frame, mk, blocks=blocks, blocking_fields=blocking_fields,
         target_ids=None,
     )
-    blocks = []  # free EM's training blocks before scoring re-blocks from disk
+    del blocks  # free EM's training blocks before scoring re-blocks from disk
 
     # Score to the review cut, cluster only the linked pairs (>= link_threshold)
     # — the exact in-memory FS split (_prepare_probabilistic_review_scoring +

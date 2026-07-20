@@ -321,6 +321,8 @@ def score_fs_out_of_core(
                     if os.path.exists(p):
                         os.unlink(p)
                 except OSError:
+                    # Best-effort cleanup: a temp DB/WAL unlink failure is
+                    # non-fatal (the OS reaps the tempdir), never break the run.
                     pass
 
 
@@ -513,4 +515,6 @@ def run_fs_dedupe_streaming(
                 if _os.path.exists(p):
                     _os.unlink(p)
             except OSError:
+                # Best-effort cleanup: a temp DB/WAL unlink failure is non-fatal
+                # (the OS reaps the tempdir), never break the run.
                 pass

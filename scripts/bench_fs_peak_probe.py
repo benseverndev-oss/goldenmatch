@@ -54,7 +54,6 @@ class Sampler(threading.Thread):
 def main() -> None:
     path = Path(sys.argv[1])
     import pyarrow.parquet as pq
-
     from goldenmatch.core._native_loader import native_enabled, native_module
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
     from goldenmatch.core.bench import bench_capture
@@ -79,7 +78,7 @@ def main() -> None:
     sampler.start()
     t0 = time.perf_counter()
     with bench_capture() as bench:
-        ded = dedupe_df(df, config=cfg)
+        dedupe_df(df, config=cfg)
     wall = time.perf_counter() - t0
     sampler.halt()
 

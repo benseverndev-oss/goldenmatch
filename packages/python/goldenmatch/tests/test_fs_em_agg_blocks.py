@@ -20,13 +20,12 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
     GoldenMatchConfig,
 )
-from goldenmatch.core.blocker import BlockResult, build_blocks, build_em_blocks_agg
+from goldenmatch.core.blocker import build_blocks, build_em_blocks_agg
 from goldenmatch.core.pipeline import _fs_em_agg_blocks_enabled
 
 from tests.test_probabilistic import _make_dedupe_df, _make_probabilistic_mk

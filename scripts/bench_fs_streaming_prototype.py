@@ -77,11 +77,10 @@ def _ru_peak_mb() -> float:
 
 # ---------------------------------------------------------------- capture ----
 def capture(fixture: str, workdir: str) -> None:
-    import polars as pl
-    import pyarrow.parquet as pq
-
     import goldenmatch.backends.score_buckets as sb
     import goldenmatch.core.probabilistic as prob
+    import polars as pl
+    import pyarrow.parquet as pq
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
     try:
@@ -140,7 +139,7 @@ def capture(fixture: str, workdir: str) -> None:
     sb.score_probabilistic_bucket_native = wrapped_kernel  # imported alias
 
     t0 = time.perf_counter()
-    ded = dedupe_df(df, config=cfg)
+    dedupe_df(df, config=cfg)
     wall = time.perf_counter() - t0
 
     if not frames:
