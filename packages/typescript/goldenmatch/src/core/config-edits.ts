@@ -22,7 +22,7 @@ import { getMatchkeys, VALID_SCORERS } from "./types.js";
 
 const PERTURBABLE_TYPES = new Set<string>(["weighted", "probabilistic"]);
 
-const VALID_BLOCKING_STRATEGIES = new Set<string>([
+export const VALID_BLOCKING_STRATEGIES = new Set<string>([
   "static",
   "adaptive",
   "sorted_neighborhood",
