@@ -191,6 +191,18 @@ def _frame_write_csv(obj: Any, path: Any) -> None:
     obj.write_csv(path)
 
 
+def _frame_write_parquet(obj: Any, path: Any) -> int:
+    """Write a polars DataFrame / pa.Table result frame to parquet; return its
+    row count. Used by ``dedupe_to_parquet``'s in-memory fallback."""
+    if hasattr(obj, "num_rows"):  # pa.Table
+        import pyarrow.parquet as _pq
+
+        _pq.write_table(obj, str(path))
+        return int(obj.num_rows)
+    obj.write_parquet(str(path))
+    return int(obj.height)
+
+
 @dataclass
 class DedupeResult:
     """Result of a deduplication run.
@@ -536,6 +548,90 @@ def dedupe(
         golden_fused_used=bool(result.get("golden_fused_used", False)),
         match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
+
+
+def dedupe_to_parquet(
+    *files: str,
+    out_dir: str,
+    config: str | Any | None = None,
+    exact: list[str] | None = None,
+    fuzzy: dict[str, float] | None = None,
+    blocking: list[str] | None = None,
+    threshold: float | None = None,
+    backend: str | None = None,
+) -> dict:
+    """Deduplicate one or more files, writing unique/dupes/golden to parquet in
+    ``out_dir`` and returning the paths + counts (never in-memory frames).
+
+    The single-box SCALE entry point. When ``GOLDENMATCH_FS_OUT_OF_CORE=1`` and the
+    resolved config is a single Fellegi-Sunter (``probabilistic``) matchkey over
+    ``static``/``multi_pass`` blocking, the score → cluster → output back-half runs
+    OUT-OF-CORE (the prepared frame is spilled to a DuckDB file, output streamed to
+    parquet via ``COPY``), so peak RSS stays bounded and datasets past the ~40M
+    in-memory wall complete where ``dedupe()`` OOMs. For any other config it runs
+    the in-memory pipeline and writes the returned frames to the same parquet
+    layout, so the call always produces the same files.
+
+    Args:
+        *files: Paths to CSV/Excel/Parquet files.
+        out_dir: Directory for ``unique.parquet`` / ``dupes.parquet`` /
+            ``golden.parquet`` (created if absent).
+        config: Path to YAML config, a GoldenMatchConfig, or None for auto-config.
+        exact/fuzzy/blocking/threshold/backend: same as ``dedupe()``.
+
+    Returns:
+        dict with ``output_dir``, ``unique_path`` / ``dupes_path`` /
+        ``golden_path`` (``golden_path`` is None when no multi-member cluster
+        exists), ``unique_count`` / ``dupes_count`` / ``golden_count``, and
+        ``streaming`` (True when the out-of-core path ran).
+    """
+    import os as _os
+
+    from goldenmatch.core.pipeline import run_dedupe
+
+    if isinstance(config, str):
+        cfg = load_config(config)
+    elif config is not None:
+        cfg = config
+    else:
+        cfg = _build_config(exact, fuzzy, blocking, threshold, False, backend)
+
+    if backend and hasattr(cfg, "backend"):
+        cfg.backend = backend
+
+    file_specs = [(str(f), Path(f).stem) for f in files]
+    result = run_dedupe(file_specs, cfg, output_dir=out_dir)
+
+    if result.get("streaming"):
+        # The streaming short-circuit already wrote the parquet files and returned
+        # paths + counts.
+        return result
+
+    # Fallback: the in-memory pipeline ran (config not FS-eligible, or the opt-in
+    # env flag was off). Write its frames to the same parquet layout so the caller
+    # always gets the same files back.
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+    unique = result.get("unique")
+    dupes = result.get("dupes")
+    golden = result.get("golden")
+    unique_count = _frame_write_parquet(unique, unique_path) if unique is not None else 0
+    dupes_count = _frame_write_parquet(dupes, dupes_path) if dupes is not None else 0
+    golden_count = (
+        _frame_write_parquet(golden, golden_path) if golden is not None else 0
+    )
+    return {
+        "output_dir": out_dir,
+        "unique_path": unique_path if unique is not None else None,
+        "dupes_path": dupes_path if dupes is not None else None,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": unique_count,
+        "dupes_count": dupes_count,
+        "golden_count": golden_count,
+        "streaming": False,
+    }
 
 
 @guard_entrypoint("dedupe", "dedupe_df raised an unexpected error")

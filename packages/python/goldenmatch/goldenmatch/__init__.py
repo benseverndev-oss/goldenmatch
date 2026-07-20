@@ -47,6 +47,7 @@ from goldenmatch._api import (
     add_correction,
     dedupe,
     dedupe_df,
+    dedupe_to_parquet,
     evaluate,
     explain_pair_df,
     from_splink,
@@ -341,7 +342,7 @@ __all__ = [
     # Native Core (goldenmatch.native: graph/pair primitives + string scorers)
     "native",
     # High-level API
-    "dedupe", "dedupe_df", "match", "match_df",
+    "dedupe", "dedupe_df", "dedupe_to_parquet", "match", "match_df",
     "score_strings", "score_pair_df", "explain_pair_df",
     "pprl_link", "evaluate", "load_config",
     "DedupeResult", "MatchResult",

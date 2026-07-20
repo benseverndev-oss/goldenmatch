@@ -158,8 +158,9 @@ def score_fs_out_of_core(
 
     from goldenmatch.core.blocker import _build_block_key_expr
     from goldenmatch.core.frame import (
-        is_polars_dataframe,
         is_polars_lazyframe,
+    )
+    from goldenmatch.core.frame import (
         to_frame as _tf,
     )
     from goldenmatch.core.probabilistic import (
@@ -446,6 +447,7 @@ def run_fs_dedupe_streaming(
     *,
     matched_pairs: set[tuple[int, int]] | None = None,
     target_ids: set[int] | None = None,
+    link_threshold: float | None = None,
 ) -> dict:
     """End-to-end SINGLE-BOX STREAMING FS dedupe: prep frame → DuckDB file, FREE
     the frame, score from the store, cluster, STREAM unique/dupes/golden to
@@ -457,7 +459,14 @@ def run_fs_dedupe_streaming(
     cleaned), so ``stream_fs_dedupe_output`` reads the SAME file afterward. The
     prepared frame is resident only during the batched load inside scoring, never
     through clustering or output.
-    """
+
+    ``link_threshold``: when set, only pairs scoring ``>= link_threshold`` are
+    CLUSTERED (lower-scoring pairs are review candidates the in-memory pipeline
+    surfaces separately and never clusters — streaming has no review output, so
+    they are simply dropped). Pass the ``link_threshold`` from
+    ``_prepare_probabilistic_review_scoring`` alongside a review-cut ``scoring_mk``
+    to match the in-memory clustering outcome exactly. ``None`` clusters every
+    returned pair (the kernel scored at ``mk``'s own threshold)."""
     import os as _os
     import tempfile
 
@@ -479,6 +488,10 @@ def run_fs_dedupe_streaming(
             prepared_df, blocking_config, mk, matched_pairs, em_result,
             target_ids=target_ids, db_path=db_path,
         )
+        if link_threshold is not None:
+            # Cluster only linked pairs; sub-link pairs are review candidates the
+            # in-memory pipeline surfaces separately and never clusters.
+            pairs = [p for p in pairs if p[2] >= link_threshold]
         con = duckdb.connect(db_path)
         try:
             # 3: cluster -> assignments for ALL rows (all_ids folds singletons in).

@@ -471,6 +471,95 @@ def _fs_external_blocks_route(config: GoldenMatchConfig) -> bool:
     return not has_active_emitter()
 
 
+def _fs_streaming_dedupe_eligible(
+    config: GoldenMatchConfig, matchkeys: list, output_dir: str | None
+) -> bool:
+    """The single-box STREAMING FS dedupe path (score + cluster + output, all
+    bounded, written straight to parquet) applies only when:
+
+      - the caller asked for file output (``output_dir`` set) AND opted into the
+        out-of-core scale path (``GOLDENMATCH_FS_OUT_OF_CORE=1``);
+      - the config is the covered FS shape: EXACTLY one probabilistic matchkey
+        (a second matchkey needs the in-memory ``matched_pairs`` cross-exclude);
+      - blocking is ``static``/``multi_pass`` (what FS auto-config emits and the
+        out-of-core scorer supports — see ``score_fs_out_of_core``).
+
+    Everything else keeps the in-memory pipeline. Deliberately conservative: this
+    is the opt-in scale option, not a default route change."""
+    from goldenmatch.backends.fs_out_of_core import fs_out_of_core_enabled
+
+    if output_dir is None or not fs_out_of_core_enabled():
+        return False
+    if config.blocking is None:
+        return False
+    if getattr(config.blocking, "strategy", None) not in ("static", "multi_pass"):
+        return False
+    if len(matchkeys) != 1 or matchkeys[0].type != "probabilistic":
+        return False
+    return True
+
+
+def _run_fs_streaming_dedupe(
+    collected_df: Any,
+    config: GoldenMatchConfig,
+    mk: Any,
+    output_dir: str,
+) -> dict:
+    """Prep-done → single-box streaming FS dedupe. Trains EM exactly as
+    ``_score_probabilistic_matchkey`` does (bounded EM-block sample; the streaming
+    scorer re-derives blocks from disk, so these blocks feed ONLY EM's within-
+    block-pair sample), then hands the prepared frame to ``run_fs_dedupe_streaming``
+    (score from a DuckDB file → cluster → stream unique/dupes/golden to parquet).
+
+    Returns a result dict of output PATHS + counts (never in-memory frames) —
+    the streaming path exists precisely so the back-half is never materialized."""
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+    from goldenmatch.core.blocker import collect_blocking_fields
+    from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.probabilistic import load_or_train_em
+
+    assert config.blocking is not None, "streaming FS dedupe requires blocking"
+
+    score_frame, blocking = collected_df, config.blocking
+
+    # EM training blocks (bounded sample when the frame exceeds the cap — the
+    # blocks feed ONLY EM's pair sample; the streaming scorer re-blocks from disk).
+    _em_cap = _fs_em_sample_rows()
+    _em_src = _tf(score_frame)
+    if _em_cap is not None and _em_src.height > _em_cap:
+        logger.info(
+            "FS streaming EM-block sample: %d-row sample of %d "
+            "(GOLDENMATCH_FS_EM_SAMPLE_ROWS).", _em_cap, _em_src.height,
+        )
+        blocks = _build_em_blocks(
+            _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED), blocking
+        )
+    else:
+        blocks = _build_em_blocks(score_frame, blocking)
+    blocking_fields = collect_blocking_fields(blocking)
+    em_result = load_or_train_em(
+        score_frame, mk, blocks=blocks, blocking_fields=blocking_fields,
+        target_ids=None,
+    )
+    blocks = []  # free EM's training blocks before scoring re-blocks from disk
+
+    # Score to the review cut, cluster only the linked pairs (>= link_threshold)
+    # — the exact in-memory FS split (_prepare_probabilistic_review_scoring +
+    # _split_probabilistic_pairs), so the clusters match score_buckets.
+    scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(mk, em_result)
+    logger.info(
+        "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
+        em_result.converged, em_result.iterations, em_result.proportion_matched,
+    )
+    res = run_fs_dedupe_streaming(
+        score_frame, blocking, scoring_mk, em_result, config, output_dir,
+        link_threshold=link_threshold,
+    )
+    res["streaming"] = True
+    res["output_dir"] = output_dir
+    return res
+
+
 def _score_probabilistic_matchkey(
     mk: Any,
     config: GoldenMatchConfig,
@@ -626,12 +715,12 @@ def _score_probabilistic_matchkey(
             fs_out_of_core_enabled()
             and target_ids is None
             and not across_files_only
-            and getattr(_sc_blocking, "strategy", None) in ("static", "multi_pass")
+            and getattr(config.blocking, "strategy", None) in ("static", "multi_pass")
         ):
             from goldenmatch.backends.fs_out_of_core import score_fs_out_of_core
 
             pairs = score_fs_out_of_core(
-                _sc_frame, _sc_blocking, scoring_mk, matched_pairs, em_result,
+                score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
                 target_ids=target_ids, db_path="auto",
             )
             pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
@@ -1473,6 +1562,7 @@ def run_dedupe(
     llm_retrain: bool = False,
     llm_provider: str | None = None,
     llm_max_labels: int = 500,
+    output_dir: str | None = None,
 ) -> dict:
     """Run the dedupe pipeline.
 
@@ -1485,6 +1575,10 @@ def run_dedupe(
         output_unique: Whether to output unique records.
         output_report: Whether to generate a report.
         across_files_only: If True, only match across different sources.
+        output_dir: When set with ``GOLDENMATCH_FS_OUT_OF_CORE=1`` on an eligible
+            single-probabilistic-matchkey config, streams unique/dupes/golden to
+            parquet in this directory (the out-of-core scale path) and returns
+            paths + counts instead of in-memory frames.
 
     Returns:
         Dict with keys: clusters, golden, unique, dupes, report.
@@ -1629,6 +1723,7 @@ def run_dedupe(
                 output_golden, output_clusters,
                 output_dupes, output_unique, output_report,
                 across_files_only, llm_retrain, llm_provider, llm_max_labels,
+                output_dir=output_dir,
                 _eager_stages_done=_eager_done,
             )
         # W5b-1 shim (single, post-eager-stages): everything below is still
@@ -1643,6 +1738,7 @@ def run_dedupe(
         output_golden, output_clusters,
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
+        output_dir=output_dir,
         # Seed the prep cache with (id, height) like the dedupe_df path. The
         # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
         # fresh object that's GC-eligible the moment this call returns, so
@@ -2532,6 +2628,7 @@ def _run_dedupe_pipeline(
     llm_max_labels: int = 500,
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
+    output_dir: str | None = None,
     _eager_stages_done: frozenset[str] = frozenset(),
     _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
@@ -2924,6 +3021,24 @@ def _run_dedupe_pipeline(
         combined_lf = collected_df.lazy()
     with stage("auto_suggest_blocking"):
         _run_auto_suggest(collected_df, config)
+
+    # ── Single-box STREAMING FS dedupe short-circuit (opt-in scale path) ──
+    # When the caller asked for file output (output_dir) AND opted into the
+    # out-of-core FS path (GOLDENMATCH_FS_OUT_OF_CORE=1) on the covered FS shape,
+    # score + cluster + write unique/dupes/golden STRAIGHT TO PARQUET with the
+    # back-half never materialized in the driver -- the path that clears 50M+
+    # where the in-memory pipeline OOMs. All prep above (quality/transform/
+    # auto-fix/standardize/domain/matchkeys/precompute) is reused verbatim; only
+    # the score→cluster→output back-half is replaced. Default path (no output_dir)
+    # is byte-unchanged. Returns a dict of PATHS + counts, not frames.
+    if _fs_streaming_dedupe_eligible(config, matchkeys, output_dir):
+        assert output_dir is not None  # narrowed by the eligibility gate
+        _stream_res = _run_fs_streaming_dedupe(
+            collected_df, config, matchkeys[0], output_dir
+        )
+        if memory_store is not None:
+            memory_store.close()
+        return _stream_res
 
     # ── Fused-match whole-stage short-circuit (spec 2026-07-09 Stage F) ──
     # When the controller flagged this run for fused match (est-RSS pressure via

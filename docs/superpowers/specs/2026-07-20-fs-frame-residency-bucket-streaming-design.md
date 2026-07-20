@@ -81,6 +81,37 @@ axis alongside PR-A…D. **Branch:** `claude/benchmark-failure-gh-7h5ryr`.
 > **DuckDB-resident frame + streaming stages is the actual 50M–100M scale story**
 > and the through-line back to the session's opening "work the DuckDB backend."
 
+> **✅ PHASE 2 IMPLEMENTED (2026-07-20) — single-box streaming FS dedupe is wired
+> end-to-end and reachable from a public API.** The three bounded mechanisms and
+> the pipeline hookup all shipped on this branch:
+> - **Scoring out-of-core** (`backends/fs_out_of_core.score_fs_out_of_core`, Increment
+>   A): blocks stream one group at a time from a DuckDB-resident prepared table
+>   (file-spilled) via a sorted-scan-per-pass; byte-parity with `score_buckets`
+>   absent oversized blocks. Opt-in `GOLDENMATCH_FS_OUT_OF_CORE=1`; already routed
+>   inside `_score_probabilistic_matchkey` (in-memory-`dedupe_df` parity test).
+> - **O(N) output out-of-core** (`stream_fs_dedupe_output`, Increment B): unique/
+>   dupes streamed via DuckDB `COPY (…) TO parquet` (no result frame); golden built
+>   only on the bounded multi-member subset.
+> - **End-to-end orchestration** (`run_fs_dedupe_streaming`): prep frame → DuckDB
+>   file → free frame → score → cluster (`build_clusters(all_ids=…)`) → stream output.
+> - **Pipeline hookup + public API** (this increment): `_run_dedupe_pipeline` gained
+>   an `output_dir` param and a short-circuit (sibling to the fused-match one) that,
+>   when eligible (`_fs_streaming_dedupe_eligible`: `output_dir` set +
+>   `GOLDENMATCH_FS_OUT_OF_CORE=1` + single probabilistic matchkey + static/multi_pass
+>   blocking), trains EM exactly as the in-memory path and hands off to
+>   `run_fs_dedupe_streaming` — **reusing ALL prep (quality/transform/auto-fix/
+>   standardize/domain/matchkeys/precompute) verbatim; only the score→cluster→output
+>   back-half is replaced.** Reached via the new public `gm.dedupe_to_parquet(*files,
+>   out_dir=…)`, which falls back to the in-memory pipeline + parquet write when the
+>   config is not FS-eligible or the flag is off, so the call always yields the same
+>   files. Cluster parity uses the exact in-memory split (review-cut `scoring_mk` +
+>   `link_threshold` filter before clustering). Default path (no `output_dir`) is
+>   byte-unchanged. Tests: `tests/test_fs_out_of_core.py` (streaming output routing,
+>   end-to-end, link-threshold filter, `dedupe_to_parquet` streaming + fallback +
+>   row-id partition parity vs `dedupe_df`). **Remaining:** load-peak below ~1×
+>   frame (stream input parquet → DuckDB during prep) + the CI proof that 50M
+>   completes where in-memory OOMs.
+
 **Trigger:** with the Arrow pair-stream fix already landed (`398006b` / #1896:
 "cut the FS memory peak — Arrow pair stream, EM-block-sample") the FS peak RSS is
 no longer the pair stream. Stage-attributed measurement on HEAD (`0ad8f02`, which
