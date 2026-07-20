@@ -50,3 +50,44 @@ Failure-mode split (localize trace, first 10):
 Targets for the next re-run (same config): `answer_match` and especially
 `answer_match (entity-subset)` should rise with PR #1227; the entity-subset
 denominator quantifies how much of the 0.14 ceiling is structural.
+
+## 2026-07-20 -- goldengraph, HotpotQA N=50 (first real HotpotQA point + support_recall wired)
+
+Run: `bench-graphrag-qa` run `29781570857` on branch
+`claude/goldenmatch-knowledge-graphs-6ifpov` @ `56942e3` (PR #1950 -- adds the
+HotpotQA/2WikiMultiHopQA corpora + the OPENAI_BASE_URL empty-string fix that
+unblocked the real-LLM run). Config: `corpus=hotpotqa max_questions=50
+ambiguity=0.5 (ignored -- HotpotQA has no dial) mode=head_to_head extractor=api
+qa_mode=local retrieval_hops=6 node_budget=256`, model `gpt-4o-mini`, budget
+`$10` (spent `$0.155`). Pure-graph LOCAL path (no hybrid passages, no
+chain-decomposition).
+
+Headline:
+
+| metric | value |
+|---|---|
+| answer_match | **0.42** |
+| exact_match | 0.36 |
+| token_f1 | 0.456 |
+| **support_recall** | **0.79** (now WIRED -- adapter stamps doc ids + `ask(provenance_out=)`) |
+| answer_match (entity-subset) | **0.5484** (n=31/50) |
+| answer_type_mix | 31 entity, 11 phrase, 7 date, 1 number |
+
+Read (vs the MuSiQue N=50 point above):
+- **support_recall 0.79** is the first real number for this metric -- graph
+  retrieval surfaces ~79% of the gold supporting paragraphs. The retrieval layer
+  works; the loss is downstream.
+- **The retrieval->answer gap is the story:** support_recall 0.79 vs answer_match
+  0.42. The graph FINDS the evidence but under-converts it to answers ("barely
+  converts at the answer layer", per the ER-answer ablation).
+- **Structural ceiling visible:** 19/50 (38%) golds are non-entity
+  (date/phrase/number) an entity-graph cannot emit; on the entity-answerable
+  subset it is 0.55. Sample failures are the exact pattern -- gold `29 September
+  2014` -> pred `Hamid Karzai` (a date question answered with an entity).
+- Higher than MuSiQue 0.14 because HotpotQA is 2-hop (vs MuSiQue 2-4) and less
+  adversarial. This is the trustworthy baseline the improvement roadmap targets:
+  the highest-leverage next step is ANSWER-side (hybrid passages +
+  chain-decomposition), not retrieval.
+
+Caveat: `llm_judge` read 0.0 across the board -- the judge was not wired into this
+dispatch, so ignore that column; `answer_match`/`support_recall` are the signals.
