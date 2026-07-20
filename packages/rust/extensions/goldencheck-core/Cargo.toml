@@ -47,7 +47,7 @@ csv = "1"
 # use needs no rng). NOTE the version: 0.17 default-features=false STILL pulled
 # `rand` (via `nalgebra`) and broke the wasm build; 0.18 drops it cleanly, so
 # goldencheck-wasm stays green with NO feature gate. Pin 0.18+.
-statrs = { version = "0.18", default-features = false }
+statrs = { version = "0.19", default-features = false }
 
 [dev-dependencies]
 # Property/parity checks for the Benford leading-digit extraction, plus the
