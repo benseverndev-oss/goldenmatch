@@ -872,6 +872,117 @@ pub fn identity_list(dataset: &str, status: &str, db_path: &str) -> Result<Strin
     })
 }
 
+/// Resolve `rows_json` into a Postgres-native identity dataset (#1913 P1).
+///
+/// This is the in-database *write* entrypoint the read-only `identity_*`
+/// wrappers above deliberately lacked. It runs `dedupe_df` with the config's
+/// `identity` section forced to the Postgres backend + the supplied `dsn`, so
+/// the pipeline's post-clustering identity hook writes the durable,
+/// event-sourced graph (nodes / source_records / evidence_edges / events) into
+/// the extension's own database instead of an external SQLite file.
+///
+/// The entire resolution engine is reused unchanged — stable UUIDv7 ids,
+/// create/absorb/merge from `preflight_existing` overlap, the append-only event
+/// log, conflict edges — so re-running against the same `dataset` absorbs new
+/// records into existing ids incrementally (the durable-spine requirement). No
+/// resolution logic is re-implemented in Rust/SQL (see the #1913 design).
+///
+/// - `dsn` — libpq connection string for the identity store (the same database
+///   the extension runs in; the pgrx layer supplies it from the
+///   `goldenmatch.identity_dsn` GUC). Empty is rejected up front.
+/// - `dataset` — identity dataset scoping key; empty preserves whatever the
+///   stored config's `identity.dataset` carries.
+/// - `run_name` — names this resolve run for idempotent event replay; empty
+///   lets the pipeline stamp a timestamp run name.
+///
+/// Returns the identity resolution summary JSON (`created` / `absorbed_records`
+/// / `merged` / `edges_added` / `events_emitted` / `conflicts_flagged`), or
+/// `"{}"` when the pipeline reported no identity summary (resolution skipped).
+pub fn resolve_identities(
+    rows_json: &str,
+    config_json: &str,
+    dsn: &str,
+    dataset: &str,
+    run_name: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    if dsn.trim().is_empty() {
+        return Err(BridgeError::InvalidConfig(
+            "resolve_identities requires a non-empty identity DSN (set the \
+             goldenmatch.identity_dsn GUC)"
+                .to_string(),
+        ));
+    }
+
+    Python::with_gil(|py| {
+        let gm = py.import("goldenmatch")?;
+        let json_mod = py.import("json")?;
+
+        let df = convert::json_to_arrow_df(py, rows_json)?;
+
+        // Merge the identity write-path settings into the stored config dict,
+        // then validate into a GoldenMatchConfig. Doing the surgery on the dict
+        // (rather than on the built Pydantic object) keeps it simple and dodges
+        // assignment-validation quirks; a non-dict/garbage blob coerces to {}.
+        let loaded = json_mod.call_method1("loads", (config_json,))?;
+        let cfg_map: Bound<'_, PyDict> = match loaded.downcast::<PyDict>() {
+            Ok(d) => d.clone(),
+            Err(_) => PyDict::new(py),
+        };
+
+        // Preserve any existing identity sub-config (e.g. source_pk_column,
+        // emit_singletons) and override only the backend/connection/enabled.
+        let identity_map: Bound<'_, PyDict> = match cfg_map.get_item("identity")? {
+            Some(v) => match v.downcast::<PyDict>() {
+                Ok(d) => d.clone(),
+                Err(_) => PyDict::new(py),
+            },
+            None => PyDict::new(py),
+        };
+        identity_map.set_item("enabled", true)?;
+        identity_map.set_item("backend", "postgres")?;
+        identity_map.set_item("connection", dsn)?;
+        if !dataset.is_empty() {
+            identity_map.set_item("dataset", dataset)?;
+        }
+        cfg_map.set_item("identity", &identity_map)?;
+
+        // Name the run for idempotent replay when the caller supplies one.
+        if !run_name.is_empty() {
+            let output_map: Bound<'_, PyDict> = match cfg_map.get_item("output")? {
+                Some(v) => match v.downcast::<PyDict>() {
+                    Ok(d) => d.clone(),
+                    Err(_) => PyDict::new(py),
+                },
+                None => PyDict::new(py),
+            };
+            output_map.set_item("run_name", run_name)?;
+            cfg_map.set_item("output", &output_map)?;
+        }
+
+        let schemas_mod = py.import("goldenmatch.config.schemas")?;
+        let gm_config_cls = schemas_mod.getattr("GoldenMatchConfig")?;
+        let cfg = gm_config_cls.call_method1("model_validate", (cfg_map,))?;
+
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("config", cfg)?;
+        let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
+
+        // Read `identity_summary` off the public DedupeResult (surfaced in the
+        // #1913 PR-A change). `None` -> resolution was disabled/skipped.
+        let summary = result.getattr("identity_summary")?;
+        if summary.is_none() {
+            return Ok("{}".to_string());
+        }
+        let dumps_kwargs = PyDict::new(py);
+        dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+        let s: String = json_mod
+            .call_method("dumps", (summary,), Some(&dumps_kwargs))?
+            .extract()?;
+        Ok(s)
+    })
+}
+
 // ─── Correction CRUD (Phase 6A of #437 surface sync) ────────────────────
 //
 // File pair-level + field-level + cluster-decision corrections into the
@@ -2197,6 +2308,23 @@ mod tests {
             Err(e) => require_or_skip(e, "identity_resolve_not_found"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── resolve_identities (write path, #1913) ──────────────────────────────
+
+    #[test]
+    fn test_resolve_identities_rejects_empty_dsn() {
+        // The empty-DSN guard fires before any Postgres connection is
+        // attempted, so this asserts the contract without a live database
+        // (the create/absorb round-trip is exercised end-to-end by the
+        // rust_pgrx CI smoke against a real cluster).
+        match resolve_identities("[]", "{}", "   ", "people", "run1") {
+            Ok(json) => panic!("expected empty-DSN rejection, got Ok({json})"),
+            Err(BridgeError::InvalidConfig(msg)) => {
+                assert!(msg.contains("DSN"), "unexpected message: {msg}");
+            }
+            Err(e) => require_or_skip(e, "resolve_identities_rejects_empty_dsn"),
+        }
     }
 
     // ── identity_view ───────────────────────────────────────────────────────

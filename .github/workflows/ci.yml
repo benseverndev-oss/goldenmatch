@@ -2839,9 +2839,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.13.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.14.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.13.0--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.13.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.12.0--0.13.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.12.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -2868,6 +2870,9 @@ jobs:
           PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
           sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
           sudo pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow 2>/dev/null || true
+          # psycopg is the identity postgres-backend requirement: gm_resolve's
+          # embedded-Python identity store connects back to this cluster with it.
+          sudo pip install --break-system-packages 'psycopg[binary]' 2>/dev/null || true
           echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
 
       - name: psql smoke (scalar scorer, dedupe, autoconfig)
@@ -3122,6 +3127,61 @@ jobs:
               END IF;
               RAISE NOTICE 'gm_embed smoke passed: dim=%', array_length(v_gm, 1);
             END$$;
+          EOSQL
+          # In-DB identity write path (#1913 P1): gm_resolve resolves a table
+          # into a Postgres-native identity dataset and, on a second run,
+          # ABSORBS a new record into an existing stable id (the incremental /
+          # durable-spine proof). The identity store connects back to THIS
+          # cluster via the goldenmatch.identity_dsn GUC over the loopback
+          # socket (peer auth as postgres). The GUC is set at SESSION level in
+          # the SAME connection that calls gm_resolve: a namespaced custom GUC
+          # is accepted as a placeholder before the extension .so loads, and
+          # _PG_init adopts that value when the first goldenmatch function call
+          # loads the library. (ALTER SYSTEM would fail here — the GUC isn't
+          # registered until the lib loads.) Passed via psql -v so ${PGPORT}
+          # interpolates while the quoted heredoc keeps the DO $$ blocks intact.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 \
+            -v dsn="host=/var/run/postgresql port=${PGPORT} dbname=postgres user=postgres" <<'EOSQL'
+            SET goldenmatch.identity_dsn = :'dsn';
+            CREATE TABLE id_people (id TEXT, email TEXT, name TEXT);
+            INSERT INTO id_people VALUES
+              ('1', 'a@x.com', 'Al'),
+              ('2', 'a@x.com', 'Alice'),
+              ('3', 'b@y.com', 'Bob');
+            -- exact-email matchkey + source_pk_column so record ids are stable
+            -- across runs. gm_resolve injects enabled/backend/connection/dataset.
+            SELECT goldenmatch.gm_configure('idjob',
+              '{"matchkeys":[{"name":"email_key","type":"exact","fields":[{"field":"email","scorer":"exact"}]}],"identity":{"source_pk_column":"id"}}');
+            -- Run 1: creates the graph in this DB (the two a@x.com rows form one
+            -- identity; b@y.com forms another) -> created >= 1.
+            DO $$
+            DECLARE s jsonb;
+            BEGIN
+              s := goldenmatch.gm_resolve('idjob', 'id_people', 'people')::jsonb;
+              IF (s->>'created')::int < 1 THEN
+                RAISE EXCEPTION 'gm_resolve run1: expected created>=1, got %', s;
+              END IF;
+              RAISE NOTICE 'gm_resolve run1: %', s;
+            END $$;
+            -- Add a new record sharing a@x.com; re-resolve must ABSORB it into the
+            -- existing identity (not create a new one) -> absorbed_records >= 1,
+            -- still exactly 2 identities, one now owning 3 source records.
+            INSERT INTO id_people VALUES ('4', 'a@x.com', 'Alex');
+            DO $$
+            DECLARE s jsonb; n_nodes int; max_recs int;
+            BEGIN
+              s := goldenmatch.gm_resolve('idjob', 'id_people', 'people')::jsonb;
+              IF (s->>'absorbed_records')::int < 1 THEN
+                RAISE EXCEPTION 'gm_resolve run2: expected absorbed_records>=1 (incremental), got %', s;
+              END IF;
+              SELECT count(*) INTO n_nodes FROM identity_nodes;
+              SELECT max(c) INTO max_recs
+                FROM (SELECT count(*) c FROM source_records GROUP BY entity_id) q;
+              IF n_nodes <> 2 OR max_recs <> 3 THEN
+                RAISE EXCEPTION 'gm_resolve incremental: expected 2 stable identities + an entity with 3 records, got nodes=% max_recs=%', n_nodes, max_recs;
+              END IF;
+              RAISE NOTICE 'gm_resolve run2 (absorb): % nodes=% max_recs=%', s, n_nodes, max_recs;
+            END $$;
           EOSQL
           echo "=== PG ${PG_VERSION} smoke passed ==="
 
