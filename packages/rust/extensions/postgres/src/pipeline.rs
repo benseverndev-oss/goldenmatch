@@ -56,15 +56,17 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
 
     set_job_status(&job_name, "running");
 
-    let rows_json = match spi::read_table_as_json(&table_name) {
-        Ok(json) => json,
+    // Read once into a single TableData; all three engine calls below share it
+    // (columnar Arrow when the columns are parity-safe, JSON fallback otherwise).
+    let table_data = match spi::read_table(&table_name) {
+        Ok(t) => t,
         Err(e) => {
             set_job_status(&job_name, "failed");
             pgrx::error!("goldenmatch: {}", e);
         }
     };
 
-    let result = match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
+    let result = match goldenmatch_bridge::api::dedupe(&table_data, &config_json) {
         Ok(r) => r,
         Err(e) => {
             set_job_status(&job_name, "failed");
@@ -106,7 +108,7 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
     // pair (#1883). At scale that per-row SPI connect/exec was O(pairs) round
     // trips; chunking bounds the statement size while collapsing them to
     // O(pairs / CHUNK).
-    if let Ok(pairs) = goldenmatch_bridge::api::dedupe_pairs(&rows_json, &config_json) {
+    if let Ok(pairs) = goldenmatch_bridge::api::dedupe_pairs(&table_data, &config_json) {
         for chunk in pairs.chunks(INSERT_CHUNK) {
             let values: Vec<String> = chunk
                 .iter()
@@ -123,7 +125,7 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
     }
 
     // Store cluster assignments (batched, same rationale as the pairs above).
-    if let Ok(members) = goldenmatch_bridge::api::dedupe_clusters(&rows_json, &config_json) {
+    if let Ok(members) = goldenmatch_bridge::api::dedupe_clusters(&table_data, &config_json) {
         for chunk in members.chunks(INSERT_CHUNK) {
             let values: Vec<String> = chunk
                 .iter()
@@ -374,8 +376,8 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
 
     set_job_status(&job_name, "running");
 
-    let rows_json = match spi::read_table_as_json(&table_name) {
-        Ok(json) => json,
+    let table_data = match spi::read_table(&table_name) {
+        Ok(t) => t,
         Err(e) => {
             set_job_status(&job_name, "failed");
             pgrx::error!("goldenmatch: {}", e);
@@ -392,7 +394,7 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
     let run_name = format!("gm_resolve:{}:{}", job_name.replace(':', "_"), stamp);
 
     let summary_json = match goldenmatch_bridge::api::resolve_identities(
-        &rows_json,
+        &table_data,
         &config_json,
         &dsn,
         &dataset,

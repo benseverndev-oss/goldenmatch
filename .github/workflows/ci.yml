@@ -3084,6 +3084,38 @@ jobs:
               END IF;
             END$$;
           EOSQL
+          # P4 (#1883): the dedupe/resolve/autoconfig table ops read the input
+          # COLUMNAR (Arrow-native pa.Table, no row_to_json) for common built-in
+          # column types, with a transparent JSON fallback for exotic types.
+          # Exercise BOTH branches and assert the columnar read clusters correctly.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE p4_typed (id INT, name TEXT, small INT2, age INT4, big INT8,
+                                   f4 FLOAT4, f8 FLOAT8, active BOOL, note TEXT);
+            INSERT INTO p4_typed VALUES
+              (1,'Acme Corp',5,30,100,1.5,2.5,true, NULL),
+              (2,'Acme Corp',5,30,100,1.5,2.5,true, NULL),   -- dup of row 1 on name
+              (3,'Beta LLC', 7,40,200,3.5,4.5,false,NULL);
+            DO $$
+            DECLARE n_members INT;
+            BEGIN
+              -- Columnar path (int2/4/8, float4/8, bool, text, all-NULL text):
+              -- rows 1&2 share `name`, so an exact-name dedupe yields a size-2
+              -- cluster (2 member rows). Proves the typed SPI read + all-NULL
+              -- handling produce the right pa.Table end-to-end.
+              SELECT count(*) INTO n_members
+                FROM goldenmatch.goldenmatch_dedupe_clusters('p4_typed', '{"exact":["name"]}')
+                WHERE cluster_size = 2;
+              IF n_members <> 2 THEN
+                RAISE EXCEPTION 'P4 columnar dedupe: expected 2 rows in a size-2 cluster, got %', n_members;
+              END IF;
+              RAISE NOTICE 'P4 columnar read (int2/4/8,float4/8,bool,text,all-null) assertion passed';
+            END$$;
+            -- Fallback path: a numeric + date column is exotic → whole-table JSON.
+            CREATE TABLE p4_exotic (id INT, name TEXT, amount NUMERIC, ts DATE);
+            INSERT INTO p4_exotic VALUES
+              (1,'Acme',9.99,'2020-01-01'),(2,'Acme',9.99,'2020-01-01'),(3,'Beta',5.00,'2021-06-15');
+            SELECT goldenmatch.goldenmatch_dedupe_table('p4_exotic', '{"exact":["name"]}');
+          EOSQL
           # goldenmatch_match_pairs (0.9.0): two-table linkage RETURNS TABLE.
           # Zero-config ('{}') routes through match_df's auto-config -- a minimal
           # explicit fuzzy config yields zero candidate pairs (no blocking).
