@@ -122,6 +122,36 @@ def test_disk_spill_parity():
     assert disk == mem == _reference_pairs(df, blocking, mk, em)
 
 
+def _partitions(result):
+    return sorted(
+        tuple(sorted(c["members"]))
+        for c in result.clusters.values()
+        if len(c.get("members", [])) > 1
+    )
+
+
+def test_pipeline_opt_in_parity(monkeypatch):
+    """dedupe_df with GOLDENMATCH_FS_OUT_OF_CORE=1 must yield the same clusters
+    as the default in-memory FS route."""
+    from goldenmatch import dedupe_df
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    df = _make_dedupe_df().drop("__row_id__")
+    cfg = GoldenMatchConfig(
+        matchkeys=[_make_probabilistic_mk()],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])]),
+        backend="bucket",
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FS_OUT_OF_CORE", "0")
+    default = dedupe_df(df, config=cfg)
+    monkeypatch.setenv("GOLDENMATCH_FS_OUT_OF_CORE", "1")
+    ooc = dedupe_df(df, config=cfg)
+
+    assert _partitions(ooc) == _partitions(default)
+
+
 def test_non_field_strategy_raises():
     df = _make_dedupe_df()
     mk = _make_probabilistic_mk()

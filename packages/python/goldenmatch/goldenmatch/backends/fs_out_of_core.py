@@ -150,8 +150,8 @@ def score_fs_out_of_core(
     path spills the table to disk). Returns ``list[(a, b, score)]``.
     """
     import duckdb
-    import numpy as np
     import polars as pl
+    import pyarrow as pa
 
     from goldenmatch.core.blocker import _build_block_key_expr
     from goldenmatch.core.frame import (
@@ -210,17 +210,32 @@ def score_fs_out_of_core(
         out: list[tuple[int, int, float]] = []
         seen: set[tuple[int, int]] = set()
 
+        def _score_block(block_pl) -> None:
+            if block_pl.height < 2:
+                return
+            if use_native:
+                pairs = score_probabilistic_bucket_native(
+                    block_pl, [block_pl.height], mk, em_result, frozen_exclude,
+                )
+            else:
+                pairs = prob_scorer(block_pl, frozen_exclude)
+            for a, b, s in pairs:
+                if target_ids is not None and ((a in target_ids) == (b in target_ids)):
+                    continue
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((a, b, s))
+
         for pass_config in passes:
-            # Compute the block key exactly as build_blocks does, then group by it
-            # to get the row-ids per block. The grouping pass pulls ONLY
-            # __row_id__ + this pass's blocking columns from DuckDB (a thin
-            # index, not the full scoring frame); the row DATA is pulled per
-            # block below. (Phase 2 pushes even this key derivation into a
-            # streaming/SQL pass so only the row_id lists transit Python.)
+            # 1) Thin-index grouping: pull ONLY __row_id__ + this pass's blocking
+            #    columns (not the scoring frame), derive the block key exactly as
+            #    build_blocks does, and assign each valid block (>=2 rows, capped
+            #    at max_block_rows) a sequential id -> a flat (row_id, __blk__) map.
             key_expr = _build_block_key_expr(pass_config)
             _key_cols = ["__row_id__"] + [
-                f for f in dict.fromkeys(pass_config.fields)
-                if f != "__row_id__"
+                f for f in dict.fromkeys(pass_config.fields) if f != "__row_id__"
             ]
             _key_sel = ", ".join(f'"{c}"' for c in _key_cols)
             keyed = con.execute(f"SELECT {_key_sel} FROM prep").pl()
@@ -240,40 +255,57 @@ def score_fs_out_of_core(
             )
             del keyed
 
-            for block_key, ids in zip(
-                grouped["__block_key__"].to_list(),
-                grouped["__row_id__"].to_list(),
-            ):
-                if block_key is None or len(ids) < 2:
+            rids: list[int] = []
+            seqs: list[int] = []
+            seq = 0
+            for ids in grouped["__row_id__"].to_list():
+                if ids is None or len(ids) < 2:
                     continue
-                if len(ids) > max_block_rows:
-                    # Oversized: score_buckets auto-splits; we cap to avoid the
-                    # quadratic. Documented parity edge (bench-gated).
-                    ids = ids[:max_block_rows]
-                # Pull ONLY this block's rows from DuckDB (bounded memory).
-                id_list = ",".join(str(int(r)) for r in ids)
-                block_tbl = con.execute(
-                    f"SELECT * FROM prep WHERE __row_id__ IN ({id_list})"
-                ).arrow()
-                block_pl = pl.from_arrow(block_tbl)
+                capped = ids[:max_block_rows] if len(ids) > max_block_rows else ids
+                rids.extend(int(r) for r in capped)
+                seqs.extend([seq] * len(capped))
+                seq += 1
+            del grouped
+            if not rids:
+                continue
 
-                if use_native:
-                    pairs = score_probabilistic_bucket_native(
-                        block_pl, [block_pl.height], mk, em_result, frozen_exclude,
-                    )
-                else:
-                    pairs = prob_scorer(block_pl, frozen_exclude)
+            # 2) One sorted scan: JOIN prep to the (row_id, __blk__) map and
+            #    ORDER BY __blk__ (DuckDB's external sort spills to disk), then
+            #    STREAM the result in Arrow batches. n_passes scans total, NOT
+            #    one query per block (that was O(n_blocks) round-trips -> timed
+            #    out at 1M). Peak = one batch + one carried block.
+            map_tbl = pa.table(
+                {
+                    "__row_id__": pa.array(rids, pa.int64()),
+                    "__blk__": pa.array(seqs, pa.int64()),
+                }
+            )
+            con.register("blkmap_arrow", map_tbl)
+            con.execute("CREATE OR REPLACE TEMP TABLE blkmap AS SELECT * FROM blkmap_arrow")
+            con.unregister("blkmap_arrow")
+            del map_tbl, rids, seqs
 
-                for a, b, s in pairs:
-                    if target_ids is not None and (
-                        (a in target_ids) == (b in target_ids)
-                    ):
-                        continue
-                    key = (a, b) if a < b else (b, a)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append((a, b, s))
+            reader = con.execute(
+                "SELECT p.*, m.__blk__ AS __blk__ FROM prep p "
+                "JOIN blkmap m ON p.__row_id__ = m.__row_id__ ORDER BY m.__blk__"
+            ).fetch_record_batch(1 << 16)
+
+            # 3) Split the sorted stream into blocks by __blk__ runs. partition_by
+            #    keeps row order; the LAST partition of each batch may continue in
+            #    the next, so carry it forward and prepend.
+            carry = None
+            for batch in reader:
+                bpl = pl.from_arrow(pa.Table.from_batches([batch]))
+                if carry is not None:
+                    bpl = pl.concat([carry, bpl])
+                    carry = None
+                parts = bpl.partition_by("__blk__", maintain_order=True)
+                for p in parts[:-1]:
+                    _score_block(p.drop("__blk__"))
+                carry = parts[-1] if parts else None
+            if carry is not None:
+                _score_block(carry.drop("__blk__"))
+            con.execute("DROP TABLE IF EXISTS blkmap")
         return out
     finally:
         con.close()

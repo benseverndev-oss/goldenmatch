@@ -611,6 +611,35 @@ def _score_probabilistic_matchkey(
         # bench dump below is the only remaining reader).
         if not bench_dump_dir:
             blocks = []
+        # Out-of-core scale option (GOLDENMATCH_FS_OUT_OF_CORE=1, default OFF):
+        # score the FS blocks from a DISK-resident DuckDB table instead of the
+        # in-memory score_buckets partitions -- the opt-in path past the ~40M
+        # single-box wall. Dedupe-scope + static/multi_pass only (the scorer's
+        # supported surface; the match lanes and non-field strategies keep the
+        # in-memory route). Byte-identical pair set to score_buckets absent
+        # oversized blocks (see score_fs_out_of_core). NOTE: this Increment wires
+        # SCORING to disk; golden still holds score_frame, so the full peak drop
+        # awaits the golden-from-disk increment.
+        from goldenmatch.backends.fs_out_of_core import fs_out_of_core_enabled
+
+        if (
+            fs_out_of_core_enabled()
+            and target_ids is None
+            and not across_files_only
+            and getattr(_sc_blocking, "strategy", None) in ("static", "multi_pass")
+        ):
+            from goldenmatch.backends.fs_out_of_core import score_fs_out_of_core
+
+            pairs = score_fs_out_of_core(
+                _sc_frame, _sc_blocking, scoring_mk, matched_pairs, em_result,
+                target_ids=target_ids, db_path="auto",
+            )
+            pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+            review_pairs.extend(candidates)
+            all_pairs.extend(pairs)
+            for a, b, _s in pairs:
+                matched_pairs.add((min(a, b), max(a, b)))
+            return
         # Arrow pair stream (PR-B / B2b, flagged): incremental Arrow
         # accumulation, no matched_pairs exclude set built (eligibility
         # guarantees no later consumer). Split link/review on the table, then
