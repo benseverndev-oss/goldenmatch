@@ -4,7 +4,6 @@ write outcome off the public result instead of the internal pipeline dict."""
 from __future__ import annotations
 
 import polars as pl
-
 from goldenmatch import dedupe_df
 from goldenmatch.config.schemas import (
     GoldenMatchConfig,
