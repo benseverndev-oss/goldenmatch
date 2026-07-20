@@ -27,7 +27,8 @@ def main() -> None:
     rows = []
     for f in sorted(glob.glob(os.path.join(d, "*.json"))):
         try:
-            rows.append(json.load(open(f)))
+            with open(f) as fh:
+                rows.append(json.load(fh))
         except (OSError, ValueError):
             continue
     rows.sort(key=lambda r: (r.get("mode", ""), r.get("rows", 0)))

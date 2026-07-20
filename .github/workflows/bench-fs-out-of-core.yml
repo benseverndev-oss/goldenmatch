@@ -1,7 +1,7 @@
 # Validate the single-box OUT-OF-CORE FS dedupe path at scale.
 #
-# workflow_dispatch (+ a temporary branch-scoped push trigger while the file is
-# off main). Answers: does GOLDENMATCH_FS_OUT_OF_CORE=1 +
+# workflow_dispatch only (dispatchable once this file is on the default branch).
+# Answers: does GOLDENMATCH_FS_OUT_OF_CORE=1 +
 # dedupe_to_parquet COMPLETE a 25M/50M-row Fellegi-Sunter dedupe on ONE 64 GB
 # box (where the in-memory FS path OOMs ~82 GB at 50M), and what is the real
 # peak RSS + wall?
@@ -27,17 +27,6 @@ on:
         description: "Runner label (needs 64 GB)"
         required: false
         default: "large-new-64GB"
-  # A workflow_dispatch workflow is only dispatchable once its file is on the
-  # DEFAULT branch. Until this lands on main (PR #1944), a branch-scoped push
-  # trigger on the bench files is how we kick the validation off the PR branch.
-  # Scoped to this branch so it does NOT re-fire when the PR merges to main.
-  push:
-    branches:
-      - claude/benchmark-failure-gh-7h5ryr
-    paths:
-      - ".github/workflows/bench-fs-out-of-core.yml"
-      - "scripts/bench_fs_out_of_core_scale.py"
-      - "scripts/bench_fs_out_of_core_summary.py"
 
 permissions:
   contents: read

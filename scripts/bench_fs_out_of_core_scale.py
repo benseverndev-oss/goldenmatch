@@ -181,6 +181,8 @@ def main() -> None:
                 try:
                     p.unlink(missing_ok=True)
                 except OSError:
+                    # Best-effort fixture teardown; a leftover temp file is
+                    # non-fatal (the runner is ephemeral), never fail the bench.
                     pass
 
     line = json.dumps(result)
