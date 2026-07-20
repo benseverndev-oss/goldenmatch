@@ -83,18 +83,20 @@ def fs_out_of_core_enabled() -> bool:
     )
 
 
-def _fs_arrow_stream_enabled() -> bool:
-    """Arrow-native pair stream + Rust clustering for the streaming FS path
-    (default ON within the out-of-core route).
+def _fs_ooc_arrow_cluster_enabled() -> bool:
+    """Arrow-native pair stream + Rust clustering for the out-of-core streaming FS
+    path (default ON within the already-opt-in out-of-core route).
 
     When on, ``run_fs_dedupe_streaming`` scores into a ``PAIR_STREAM`` ``pa.Table``
     (never a ``list[tuple]``), dedups it with the native ``dedup_pairs_arrow``
     kernel, and clusters with ``build_clusters_arrow_native`` (Rust Union-Find via
     the C Data Interface) — so the scored pairs never enter Python as objects and
-    the Union-Find never builds a ``dict[int, dict]``. ``GOLDENMATCH_FS_ARROW_STREAM=0``
-    restores the ``list[tuple]`` + Python ``build_clusters`` path (the rollback
-    lever from the FS Arrow-pair-stream design)."""
-    v = os.environ.get("GOLDENMATCH_FS_ARROW_STREAM")
+    the Union-Find never builds a ``dict[int, dict]``.
+    ``GOLDENMATCH_FS_OOC_ARROW_CLUSTER=0`` restores the ``list[tuple]`` + Python
+    ``build_clusters`` path (the rollback lever). Distinct from the in-memory
+    ``GOLDENMATCH_FS_ARROW_STREAM`` (which gates ``score_buckets``'s per-bucket
+    Arrow accumulation, a different code path)."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_ARROW_CLUSTER")
     if v is None:
         return True
     return v.strip().lower() in ("1", "true", "yes", "on")
@@ -566,7 +568,7 @@ def _cluster_python(
 ) -> tuple[list[tuple[int, int]], int]:
     """Legacy path: Python Union-Find over the ``list[tuple]`` pair set. Returns
     ``([(row_id, cluster_id), …], n_pairs)``. Kept as the
-    ``GOLDENMATCH_FS_ARROW_STREAM=0`` rollback lever."""
+    ``GOLDENMATCH_FS_OOC_ARROW_CLUSTER=0`` rollback lever."""
     from goldenmatch.core.cluster import build_clusters
 
     if link_threshold is not None:
@@ -652,7 +654,7 @@ def run_fs_dedupe_streaming(
     prepared frame is resident only during the batched load inside scoring, never
     through clustering or output.
 
-    **The scored pairs stay Arrow end-to-end** (default; ``GOLDENMATCH_FS_ARROW_STREAM=0``
+    **The scored pairs stay Arrow end-to-end** (default; ``GOLDENMATCH_FS_OOC_ARROW_CLUSTER=0``
     restores the ``list[tuple]`` + Python Union-Find path). ``score_fs_out_of_core``
     emits a ``PAIR_STREAM`` ``pa.Table`` instead of accumulating ``list[tuple]``,
     ``dedup_pairs_arrow`` collapses cross-pass duplicates in Rust, and
@@ -679,7 +681,7 @@ def run_fs_dedupe_streaming(
     if getattr(config, "golden_rules", None) is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
 
-    arrow_stream = _fs_arrow_stream_enabled()
+    arrow_stream = _fs_ooc_arrow_cluster_enabled()
     fd, db_path = tempfile.mkstemp(prefix="gm_fs_stream_", suffix=".duckdb")
     _os.close(fd)
     _os.unlink(db_path)  # DuckDB creates it

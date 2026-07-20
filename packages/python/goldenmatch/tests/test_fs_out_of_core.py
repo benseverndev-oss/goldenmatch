@@ -179,7 +179,7 @@ def test_emit_arrow_pair_set_matches_tuples():
 
 
 def test_arrow_stream_and_python_cluster_paths_agree(tmp_path, monkeypatch):
-    """The Arrow-native clustering path (default) and the `GOLDENMATCH_FS_ARROW_STREAM=0`
+    """The Arrow-native clustering path (default) and the `GOLDENMATCH_FS_OOC_ARROW_CLUSTER=0`
     Python Union-Find path partition the records IDENTICALLY."""
     import types
 
@@ -191,9 +191,9 @@ def test_arrow_stream_and_python_cluster_paths_agree(tmp_path, monkeypatch):
     em = _train(df, blocking, mk)
     cfg = types.SimpleNamespace(golden_rules=None)
 
-    monkeypatch.setenv("GOLDENMATCH_FS_ARROW_STREAM", "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_ARROW_CLUSTER", "1")
     res_arrow = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "a"))
-    monkeypatch.setenv("GOLDENMATCH_FS_ARROW_STREAM", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_OOC_ARROW_CLUSTER", "0")
     res_py = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "p"))
 
     assert _partition_set_from_parquet(res_arrow["dupes_path"]) == \
