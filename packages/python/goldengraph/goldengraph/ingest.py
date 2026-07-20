@@ -212,14 +212,16 @@ def _gm_cluster(rows: list[dict]) -> list[list[int]]:
     SAME calibrated resolver `resolve()` uses within a document, but over the
     multi-column compound key (`_FEATURE_COLS`) so the controller has real signal
     instead of a near-unique name. Returns multi-member clusters' member indices.
-    goldenmatch + polars import lazily so the package (and injected-matcher tests)
+    goldenmatch + pyarrow import lazily so the package (and injected-matcher tests)
     need neither."""
     import goldenmatch as gm
-    import polars as pl
+    import pyarrow as pa
 
     if not rows:
         return []
-    df = pl.DataFrame({c: [r.get(c, "") for r in rows] for c in _FEATURE_COLS})
+    # Arrow-native (repo standard) -- goldenmatch's dedupe surface is arrow-first,
+    # so we stay polars-free.
+    df = pa.table({c: [r.get(c, "") for r in rows] for c in _FEATURE_COLS})
     result = gm.dedupe_df(df)
     out: list[list[int]] = []
     for info in result.clusters.values():

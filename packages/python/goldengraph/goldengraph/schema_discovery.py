@@ -106,12 +106,14 @@ def _cluster_predicates_gm(predicates):
     string signal to match on -- the honest test of whether calibrated matching beats naive clustering.
     Fail-open: any error -> each predicate its own cluster (caller's deterministic backbone can follow)."""
     import goldenmatch as gm
-    import polars as pl
+    import pyarrow as pa
 
     uniq = sorted({p for p in predicates if _norm(p)})
     if len(uniq) < 2:
         return [[u] for u in uniq]
-    df = pl.DataFrame({"predicate": [_norm(u) for u in uniq]})
+    # Arrow-native (repo standard) -- goldenmatch's dedupe surface is arrow-first,
+    # so we stay polars-free.
+    df = pa.table({"predicate": [_norm(u) for u in uniq]})
     try:
         result = gm.dedupe_df(df, fuzzy={"predicate": 0.82}, confidence_required=False)
     except Exception:

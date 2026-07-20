@@ -88,12 +88,15 @@ def _fuzzy_resolve(mentions: list[Mention], *, use_context: bool) -> list[Resolv
         return []
 
     import goldenmatch as gm
-    import polars as pl
+    import pyarrow as pa
 
     cols = {"name": [m.name for m in mentions], "type": [m.typ for m in mentions]}
     if use_context and any(m.context for m in mentions):
         cols["context"] = [m.context for m in mentions]
-    df = pl.DataFrame(cols)
+    # Arrow-native (repo standard): goldenmatch's dedupe surface is arrow-first
+    # (pa.Table in, pa.Table out — v3.0.0), so we build a pyarrow table and stay
+    # polars-free. `result.clusters` is frame-type-independent.
+    df = pa.table(cols)
     result = gm.dedupe_df(df)
 
     n = len(mentions)
