@@ -1,0 +1,100 @@
+# Validate the single-box OUT-OF-CORE FS dedupe path at scale.
+#
+# workflow_dispatch only. Answers: does GOLDENMATCH_FS_OUT_OF_CORE=1 +
+# dedupe_to_parquet COMPLETE a 25M/50M-row Fellegi-Sunter dedupe on ONE 64 GB
+# box (where the in-memory FS path OOMs ~82 GB at 50M), and what is the real
+# peak RSS + wall?
+#
+# Each (rows, mode) datapoint is an isolated subprocess so ru_maxrss is a clean
+# high-water mark and an OOM-killed run (exit 137) is recorded as a datapoint,
+# not a lost job. The in-memory 50M leg is EXPECTED to OOM -- that contrast is
+# the whole point.
+name: bench-fs-out-of-core
+
+on:
+  workflow_dispatch:
+    inputs:
+      scales:
+        description: "Space-separated row counts to run out-of-core (streaming)"
+        required: false
+        default: "25000000 50000000"
+      in_memory_scale:
+        description: "Row count for the in-memory OOM contrast (empty to skip)"
+        required: false
+        default: "50000000"
+      runner:
+        description: "Runner label (needs 64 GB)"
+        required: false
+        default: "large-new-64GB"
+
+permissions:
+  contents: read
+
+env:
+  ARROW_DEFAULT_MEMORY_POOL: system
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        # native crate's rust-toolchain.toml pins the exact version.
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (FS kernel)
+        run: uv run python scripts/build_native.py
+
+      - name: Out-of-core streaming legs (one isolated subprocess per scale)
+        run: |
+          mkdir -p .bench_fs_ooc results
+          for n in ${{ inputs.scales }}; do
+            echo "::group::streaming rows=$n"
+            uv run python scripts/bench_fs_out_of_core_scale.py \
+              --rows "$n" --mode streaming \
+              --workdir .bench_fs_ooc --out-json "results/streaming_${n}.json" \
+              || echo "{\"rows\": $n, \"mode\": \"streaming\", \"completed\": false, \"killed\": true}" > "results/streaming_${n}.json"
+            echo "::endgroup::"
+          done
+
+      - name: In-memory OOM contrast (expected to be killed at 50M)
+        if: ${{ inputs.in_memory_scale != '' }}
+        run: |
+          n="${{ inputs.in_memory_scale }}"
+          echo "::group::in_memory rows=$n (expected OOM)"
+          uv run python scripts/bench_fs_out_of_core_scale.py \
+            --rows "$n" --mode in_memory \
+            --workdir .bench_fs_ooc --out-json "results/in_memory_${n}.json" \
+            || echo "{\"rows\": $n, \"mode\": \"in_memory\", \"completed\": false, \"killed\": true}" > "results/in_memory_${n}.json"
+          echo "::endgroup::"
+
+      - name: Summarize
+        if: always()
+        run: |
+          cat results/*.json || true
+          uv run python scripts/bench_fs_out_of_core_summary.py results >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: bench-fs-out-of-core
+          path: results/*.json
+          retention-days: 90
