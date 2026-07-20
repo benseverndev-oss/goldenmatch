@@ -233,6 +233,15 @@ class DedupeResult:
     # config; goldenmatch.core.config_lint.Finding). Empty unless the linter
     # flagged something. Advisory in the default warn mode.
     lint_findings: list = field(default_factory=list)
+    # Identity-graph resolution summary for THIS run (#1913): counts of
+    # created / absorbed / merged identities + edges/events written, when
+    # config.identity.enabled routed clustering through the durable identity
+    # store. None when identity resolution was disabled or skipped (the
+    # additive default). Mirrors the pipeline result's identity_summary so
+    # callers -- and the goldenmatch-pg gm_resolve bridge -- can read the
+    # write outcome off the public result without reaching into the pipeline
+    # dict.
+    identity_summary: dict | None = None
     # Native-kernel dispatch summary for THIS run (#1048, #957): did the scoring
     # hot path dispatch to the Rust kernel, or fall back to pure Python?
     # `result.native.hot_path_native` confirms dispatch directly instead of
@@ -523,6 +532,7 @@ def dedupe(
             result.get("postflight_report"), _mem
         ),
         memory_stats=_mem,
+        identity_summary=result.get("identity_summary"),
         golden_fused_used=bool(result.get("golden_fused_used", False)),
         match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
@@ -785,6 +795,7 @@ def dedupe_df(
         memory_stats=_mem,
         recall_certificate=_recall_cert,
         lint_findings=_lint_findings,
+        identity_summary=result.get("identity_summary"),
         native=_native,
         llm_cost=(
             {
