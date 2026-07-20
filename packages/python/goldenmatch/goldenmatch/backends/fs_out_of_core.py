@@ -42,11 +42,32 @@ back to `score_buckets`.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import tempfile
 from typing import Any
 
 from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
+
+
+def _fs_ooc_workers() -> int:
+    """Thread-pool size for out-of-core block scoring. Mirrors the in-memory FS
+    scorer's ``GOLDENMATCH_FS_WORKERS`` (default ``min(16, cpu)``); the native
+    kernel + numpy scorer release the GIL, so threads give real parallelism."""
+    v = os.environ.get("GOLDENMATCH_FS_WORKERS")
+    if v and v.strip().isdigit() and int(v) > 0:
+        return int(v)
+    return min(16, (os.cpu_count() or 4))
+
+
+def _fs_ooc_wave_rows() -> int:
+    """Max resident block-rows scored per parallel wave (bounds peak: one wave of
+    buffered blocks + their pair results, not the whole pass). ``0``/invalid ->
+    the 2M default."""
+    v = os.environ.get("GOLDENMATCH_FS_OOC_WAVE_ROWS")
+    if v and v.strip().isdigit() and int(v) > 0:
+        return int(v)
+    return 2_000_000
 
 
 def fs_out_of_core_enabled() -> bool:
@@ -214,102 +235,135 @@ def score_fs_out_of_core(
         out: list[tuple[int, int, float]] = []
         seen: set[tuple[int, int]] = set()
 
-        def _score_block(block_pl) -> None:
+        # Score blocks in PARALLEL across a bounded wave, mirroring the in-memory
+        # `score_buckets` ThreadPoolExecutor -- the native FS kernel (and the
+        # numpy `prob_scorer`) release the GIL, so N cores give ~Nx on the
+        # scoring phase. `_score_one` is a PURE function (no shared state); the
+        # per-pair target/dedup merge stays single-threaded and IN BLOCK ORDER,
+        # so the emitted pair set + cross-pass first-seen-wins semantics are
+        # byte-identical to the serial path.
+        _workers = _fs_ooc_workers()
+        wave_rows = _fs_ooc_wave_rows()  # cap resident block-rows per wave
+
+        def _score_one(block_pl):
             if block_pl.height < 2:
-                return
+                return ()
             if use_native:
-                pairs = score_probabilistic_bucket_native(
+                return score_probabilistic_bucket_native(
                     block_pl, [block_pl.height], mk, em_result, frozen_exclude,
                 )
-            else:
-                pairs = prob_scorer(block_pl, frozen_exclude)
-            for a, b, s in pairs:
-                if target_ids is not None and ((a in target_ids) == (b in target_ids)):
-                    continue
-                key = (a, b) if a < b else (b, a)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append((a, b, s))
+            return prob_scorer(block_pl, frozen_exclude)
 
-        for pass_config in passes:
-            # 1) Thin-index grouping: pull ONLY __row_id__ + this pass's blocking
-            #    columns (not the scoring frame), derive the block key exactly as
-            #    build_blocks does, and assign each valid block (>=2 rows, capped
-            #    at max_block_rows) a sequential id -> a flat (row_id, __blk__) map.
-            key_expr = _build_block_key_expr(pass_config)
-            _key_cols = ["__row_id__"] + [
-                f for f in dict.fromkeys(pass_config.fields) if f != "__row_id__"
-            ]
-            _key_sel = ", ".join(f'"{c}"' for c in _key_cols)
-            keyed = con.execute(f"SELECT {_key_sel} FROM prep").pl()
-            grouped = (
-                keyed.lazy()
-                .with_columns(key_expr)
-                .filter(
-                    pl.col("__block_key__").is_not_null()
-                    & ~pl.col("__block_key__")
-                        .str.strip_chars()
-                        .str.to_lowercase()
-                        .is_in(["nan", "null", "none"])
+        def _merge(results) -> None:
+            # results: per-block pair lists, IN submission (block) order.
+            for pairs in results:
+                for a, b, s in pairs:
+                    if target_ids is not None and (
+                        (a in target_ids) == (b in target_ids)
+                    ):
+                        continue
+                    key = (a, b) if a < b else (b, a)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append((a, b, s))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_workers) as _ex:
+            buf: list = []
+            buf_rows = 0
+
+            def _flush() -> None:
+                nonlocal buf, buf_rows
+                if not buf:
+                    return
+                # executor.map preserves input order -> block-order merge.
+                _merge(_ex.map(_score_one, buf))
+                buf = []
+                buf_rows = 0
+
+            for pass_config in passes:
+                # 1) Thin-index grouping: pull ONLY __row_id__ + this pass's
+                #    blocking columns (not the scoring frame), derive the block key
+                #    exactly as build_blocks does, and assign each valid block
+                #    (>=2 rows, capped at max_block_rows) a sequential id -> a flat
+                #    (row_id, __blk__) map. The map is built VECTORISED in polars
+                #    (filter/head/with_row_index/explode) -- no per-row Python.
+                key_expr = _build_block_key_expr(pass_config)
+                _key_cols = ["__row_id__"] + [
+                    f for f in dict.fromkeys(pass_config.fields) if f != "__row_id__"
+                ]
+                _key_sel = ", ".join(f'"{c}"' for c in _key_cols)
+                keyed = con.execute(f"SELECT {_key_sel} FROM prep").pl()
+                mapping = (
+                    keyed.lazy()
+                    .with_columns(key_expr)
+                    .filter(
+                        pl.col("__block_key__").is_not_null()
+                        & ~pl.col("__block_key__")
+                            .str.strip_chars()
+                            .str.to_lowercase()
+                            .is_in(["nan", "null", "none"])
+                    )
+                    .group_by("__block_key__")
+                    .agg(pl.col("__row_id__"))
+                    .filter(pl.col("__row_id__").list.len() >= 2)
+                    .with_columns(pl.col("__row_id__").list.head(max_block_rows))
+                    .with_row_index("__blk__")
+                    .select("__blk__", "__row_id__")
+                    .explode("__row_id__")
+                    .select(
+                        pl.col("__row_id__").cast(pl.Int64),
+                        pl.col("__blk__").cast(pl.Int64),
+                    )
+                    .collect()
                 )
-                .group_by("__block_key__")
-                .agg(pl.col("__row_id__"))
-                .collect()
-            )
-            del keyed
-
-            rids: list[int] = []
-            seqs: list[int] = []
-            seq = 0
-            for ids in grouped["__row_id__"].to_list():
-                if ids is None or len(ids) < 2:
+                del keyed
+                if mapping.height == 0:
                     continue
-                capped = ids[:max_block_rows] if len(ids) > max_block_rows else ids
-                rids.extend(int(r) for r in capped)
-                seqs.extend([seq] * len(capped))
-                seq += 1
-            del grouped
-            if not rids:
-                continue
 
-            # 2) One sorted scan: JOIN prep to the (row_id, __blk__) map and
-            #    ORDER BY __blk__ (DuckDB's external sort spills to disk), then
-            #    STREAM the result in Arrow batches. n_passes scans total, NOT
-            #    one query per block (that was O(n_blocks) round-trips -> timed
-            #    out at 1M). Peak = one batch + one carried block.
-            map_tbl = pa.table(
-                {
-                    "__row_id__": pa.array(rids, pa.int64()),
-                    "__blk__": pa.array(seqs, pa.int64()),
-                }
-            )
-            con.register("blkmap_arrow", map_tbl)
-            con.execute("CREATE OR REPLACE TEMP TABLE blkmap AS SELECT * FROM blkmap_arrow")
-            con.unregister("blkmap_arrow")
-            del map_tbl, rids, seqs
+                # 2) One sorted scan: JOIN prep to the (row_id, __blk__) map and
+                #    ORDER BY __blk__ (DuckDB's external sort spills to disk), then
+                #    STREAM the result in Arrow batches. n_passes scans total, NOT
+                #    one query per block (that was O(n_blocks) round-trips -> timed
+                #    out at 1M). Peak = one batch + one wave of buffered blocks.
+                con.register("blkmap_arrow", mapping.to_arrow())
+                con.execute(
+                    "CREATE OR REPLACE TEMP TABLE blkmap AS SELECT * FROM blkmap_arrow"
+                )
+                con.unregister("blkmap_arrow")
+                del mapping
 
-            reader = con.execute(
-                "SELECT p.*, m.__blk__ AS __blk__ FROM prep p "
-                "JOIN blkmap m ON p.__row_id__ = m.__row_id__ ORDER BY m.__blk__"
-            ).fetch_record_batch(1 << 16)
+                reader = con.execute(
+                    "SELECT p.*, m.__blk__ AS __blk__ FROM prep p "
+                    "JOIN blkmap m ON p.__row_id__ = m.__row_id__ ORDER BY m.__blk__"
+                ).fetch_record_batch(1 << 16)
 
-            # 3) Split the sorted stream into blocks by __blk__ runs. partition_by
-            #    keeps row order; the LAST partition of each batch may continue in
-            #    the next, so carry it forward and prepend.
-            carry = None
-            for batch in reader:
-                bpl = pl.from_arrow(pa.Table.from_batches([batch]))
+                # 3) Split the sorted stream into blocks by __blk__ runs, buffer
+                #    them, and score each WAVE in parallel. partition_by keeps row
+                #    order; the LAST partition of each batch may continue in the
+                #    next, so carry it forward and prepend.
+                carry = None
+                for batch in reader:
+                    bpl = pl.from_arrow(pa.Table.from_batches([batch]))
+                    if carry is not None:
+                        bpl = pl.concat([carry, bpl])
+                        carry = None
+                    parts = bpl.partition_by("__blk__", maintain_order=True)
+                    for p in parts[:-1]:
+                        blk = p.drop("__blk__")
+                        buf.append(blk)
+                        buf_rows += blk.height
+                        if buf_rows >= wave_rows:
+                            _flush()
+                    carry = parts[-1] if parts else None
                 if carry is not None:
-                    bpl = pl.concat([carry, bpl])
-                    carry = None
-                parts = bpl.partition_by("__blk__", maintain_order=True)
-                for p in parts[:-1]:
-                    _score_block(p.drop("__blk__"))
-                carry = parts[-1] if parts else None
-            if carry is not None:
-                _score_block(carry.drop("__blk__"))
-            con.execute("DROP TABLE IF EXISTS blkmap")
+                    blk = carry.drop("__blk__")
+                    buf.append(blk)
+                    buf_rows += blk.height
+                # Flush at the END of each pass so pass N's blocks are all merged
+                # before pass N+1 -> preserves the pass-order first-seen dedup.
+                _flush()
+                con.execute("DROP TABLE IF EXISTS blkmap")
         return out
     finally:
         con.close()
