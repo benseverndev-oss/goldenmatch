@@ -38,9 +38,18 @@ class OpenAIClient:
 
     def _ensure_client(self):
         if self._client is None:
+            import os
+
             import openai  # lazy: only needed for the real provider
 
-            self._client = openai.OpenAI()
+            # The bench workflow sets OPENAI_BASE_URL='' on the OpenAI-API path (it
+            # is only non-empty for a local Ollama run). The openai SDK treats an
+            # empty-string base_url as a literal (invalid) URL -> APIConnectionError,
+            # and passing base_url=None does NOT help -- the SDK re-reads the empty
+            # env var itself. So pass an explicit default when the env is empty.
+            base_url = os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            api_key = os.environ.get("OPENAI_API_KEY") or None
+            self._client = openai.OpenAI(base_url=base_url, api_key=api_key)
         return self._client
 
     def complete(self, prompt: str) -> str:
