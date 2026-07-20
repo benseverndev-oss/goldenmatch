@@ -3286,7 +3286,7 @@ jobs:
         run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Gate unit tests (determinism + markers; run once)
         if: matrix.package == 'goldenmatch'
-        run: uv run pytest scripts/test_config_matrix.py -q
+        run: uv run pytest scripts/test_config_matrix.py scripts/test_agent_codemap.py -q
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"

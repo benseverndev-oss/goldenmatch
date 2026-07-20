@@ -14,3 +14,7 @@ pnpm-lock.yaml     linguist-generated=true -diff
 # trip on a CRLF checkout (Windows dev vs Linux CI).
 docs/agent-manifest.json  linguist-generated=true -diff eol=lf
 packages/python/goldensuite-mcp/goldensuite_mcp/agent-manifest.json  linguist-generated=true -diff eol=lf
+# Agent code map: static-AST structural index of the Python source, gated by
+# scripts/test_agent_codemap.py. Force LF so the byte-for-byte gate can't trip on
+# a CRLF checkout (Windows dev vs Linux CI).
+docs/agent-codemap.json  linguist-generated=true -diff eol=lf
