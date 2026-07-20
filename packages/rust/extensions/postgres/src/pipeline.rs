@@ -409,6 +409,71 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
     summary_json
 }
 
+/// Steward manual **merge** of two identities in the in-DB dataset (#1913 P3).
+///
+/// `entity_a` is kept, `entity_b` is absorbed into it (its source records
+/// reassigned, the identity retired), with a `manual_merge` event on both.
+/// Delegates to the Python steward path (`manual_merge`) through the bridge over
+/// the `goldenmatch.identity_dsn` store — the same engine `goldenmatch identity
+/// merge` uses. Returns the result JSON (`{"keep", "absorbed", "at"}`).
+///
+/// `dataset` is accepted for API symmetry with `gm_resolve`; the identity ids
+/// (globally-unique UUIDv7) fully identify the entities, so it is used only as
+/// diagnostic context (entity ids are not dataset-scoped in the store).
+#[pg_extern]
+pub fn gm_identity_merge(dataset: String, entity_a: String, entity_b: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB identity merge needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_merge(&dsn, &entity_a, &entity_b, "") {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_merge(dataset={}, keep={}, absorb={}) failed: {}",
+            dataset,
+            entity_a,
+            entity_b,
+            e
+        ),
+    }
+}
+
+/// Steward manual **split** of a record out of an identity in the in-DB dataset
+/// (#1913 P3).
+///
+/// Moves `record_id` into a fresh identity, with a `manual_split` event on both
+/// the original and the new entity. Delegates to the Python steward path
+/// (`manual_split`) through the bridge over the `goldenmatch.identity_dsn`
+/// store. Returns the result JSON (`{"new_entity_id", "moved", "at"}`).
+///
+/// `dataset` is accepted for API symmetry with `gm_resolve` (used as diagnostic
+/// context only — the identity/record ids are not dataset-scoped in the store).
+#[pg_extern]
+pub fn gm_identity_split(dataset: String, entity_id: String, record_id: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB identity split needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_split(&dsn, &entity_id, &record_id, "") {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_split(dataset={}, entity={}, record={}) failed: {}",
+            dataset,
+            entity_id,
+            record_id,
+            e
+        ),
+    }
+}
+
 /// Resolve the identity DSN: the `goldenmatch.identity_dsn` GUC first, then the
 /// `GOLDENMATCH_IDENTITY_DSN` / `GOLDENMATCH_DATABASE_URL` backend env. Returns
 /// `None` (→ a clear error at the call site) when nothing is configured. A

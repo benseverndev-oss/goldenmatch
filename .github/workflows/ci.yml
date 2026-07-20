@@ -2844,9 +2844,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.14.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.15.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.14.0--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.13.0--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.13.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -3219,6 +3221,48 @@ jobs:
                 RAISE EXCEPTION 'identity_resolve(in-DB): expected an entity for dataframe:1, got %', rec;
               END IF;
               RAISE NOTICE 'identity read (in-DB, empty db_path): list=% resolve.entity=%', n, rec->>'entity_id';
+            END $$;
+            -- #1913 P3: in-SQL steward merge/split writes over the same in-DB
+            -- dataset. Split a record out of the 3-record identity into a fresh
+            -- one, then merge it back — asserting on the return-value contract +
+            -- record ownership (status enum internals stay the Python store's).
+            DO $$
+            DECLARE
+              big_entity text; rec_id text; split_res jsonb; new_eid text;
+              n_nodes int; new_recs int; merge_res jsonb; back_recs int; big_recs int;
+            BEGIN
+              -- The absorbed identity owns 3 records; pick it + one of its records.
+              SELECT entity_id INTO big_entity
+                FROM source_records GROUP BY entity_id ORDER BY count(*) DESC LIMIT 1;
+              SELECT record_id INTO rec_id
+                FROM source_records WHERE entity_id = big_entity LIMIT 1;
+
+              -- SPLIT: move that record into a brand-new identity.
+              split_res := goldenmatch.gm_identity_split('people', big_entity, rec_id)::jsonb;
+              new_eid := split_res->>'new_entity_id';
+              -- `moved` is the JSON array of moved record ids (not a count).
+              IF new_eid IS NULL OR jsonb_array_length(split_res->'moved') <> 1 THEN
+                RAISE EXCEPTION 'gm_identity_split: expected 1 moved record + a new_entity_id, got %', split_res;
+              END IF;
+              SELECT count(*) INTO n_nodes FROM identity_nodes;
+              SELECT count(*) INTO new_recs FROM source_records WHERE entity_id = new_eid;
+              IF n_nodes <> 3 OR new_recs <> 1 THEN
+                RAISE EXCEPTION 'gm_identity_split: expected 3 nodes + the new entity owning 1 record, got nodes=% new_recs=%', n_nodes, new_recs;
+              END IF;
+              RAISE NOTICE 'gm_identity_split: % (nodes=%)', split_res, n_nodes;
+
+              -- MERGE: absorb the split-out identity back into the big one.
+              merge_res := goldenmatch.gm_identity_merge('people', big_entity, new_eid)::jsonb;
+              IF merge_res->>'keep' <> big_entity OR merge_res->>'absorbed' <> new_eid THEN
+                RAISE EXCEPTION 'gm_identity_merge: expected keep=% absorbed=%, got %', big_entity, new_eid, merge_res;
+              END IF;
+              -- The absorbed entity's records move back to the keeper.
+              SELECT count(*) INTO back_recs FROM source_records WHERE entity_id = new_eid;
+              SELECT count(*) INTO big_recs  FROM source_records WHERE entity_id = big_entity;
+              IF back_recs <> 0 OR big_recs <> 3 THEN
+                RAISE EXCEPTION 'gm_identity_merge: expected absorbed entity to own 0 records + keeper to own 3, got absorbed=% keeper=%', back_recs, big_recs;
+              END IF;
+              RAISE NOTICE 'gm_identity_merge: % (keeper records=%)', merge_res, big_recs;
             END $$;
           EOSQL
           echo "=== PG ${PG_VERSION} smoke passed ==="
