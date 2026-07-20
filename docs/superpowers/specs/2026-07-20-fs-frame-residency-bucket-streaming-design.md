@@ -60,11 +60,15 @@ axis alongside PR-A…D. **Branch:** `claude/benchmark-failure-gh-7h5ryr`.
 
 > **🚨 SCALE-GAP DIAGNOSIS (2026-07-20) — this is the ONLY route past the FS wall,
 > not a micro-opt.** The 1M constant-factor wins (agg blocks, jemalloc decay) just
-> lowered the SLOPE; the single-box FS peak is still linear in N. Measured curve
-> (person, agg + jemalloc-env, this box): 100K 487 MB / 500K 1527 / 1M 2264 / 2M
-> 3572 → **peak ≈ 0.95 GB + 1.3 GB × N(millions)**. Projected 64 GB-box ceiling:
-> 10M ~14 GB (fits), 25M ~33 GB (fits), **50M ~66 GB (OOM edge), 100M ~132 GB
-> (2× over, impossible single-box).** So the hard single-box FS wall is ~45–48M.
+> lowered the SLOPE; the single-box FS peak is still linear in N. Local curve
+> (person, agg + jemalloc-env, 4c/15GB): 100K 487 MB / 500K 1527 / 1M 2264 / 2M
+> 3572. **CI-MEASURED on real 64 GB iron (run 29752528246, this branch, person
+> gm_probabilistic_native): 10M 15.4 GB / 4 min / F1 0.967; 25M 40.3 GB / 16 min /
+> F1 0.963 (both fit); 50M preempted (runner reclaimed, NOT OOM).** CI slope
+> ~**1.65 GB/M** (steeper than local — 16c + native): **peak ≈ 1.65 GB × N(M) −
+> 1.1 GB → single-box OOM point ~39–40M**; 50M projects to ~82 GB (OOM), 100M
+> ~163 GB (impossible single-box). **F1 is scale-stable (0.967→0.963), so the wall
+> is purely memory, not quality.** So the hard single-box FS wall is **~40M**.
 > **CRITICAL FINDING: the FS path has NO out-of-core OR distributed scoring today.**
 > `_fs_use_bucket_route` returns False for `backend=duckdb/ray/chunked` → FS falls
 > to the single-node *legacy batched / external-blocks* scorer, NOT any spill or
