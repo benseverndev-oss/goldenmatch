@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import goldenmatch as gm
 import numpy as np
-import polars as pl
+import pyarrow as pa
 
 from .base import ZERO_COST, AdapterBase, Record, cluster_by_pairwise
 
@@ -72,7 +72,7 @@ class GoldenMatchAdapter(AdapterBase):
         if self.mode in ("auto_fields", "auto_fields_semantic", "auto_llm"):
             data["entity_type"] = [r.entity_type for r in ordered]
             data["context"] = [r.context for r in ordered]
-        df = pl.DataFrame(data)
+        df = pa.table(data)
 
         # Zero-config: no exact/fuzzy kwargs -> dedupe_df calls auto_configure_df.
         # auto_fields_semantic turns on the opt-in semantic-blocking candidate union

@@ -21,11 +21,11 @@ def resolve_aliases(alias_nodes, method: str):
         return list(groups.values())
     if method == "er":
         import goldenmatch as gm
-        import polars as pl
+        import pyarrow as pa
 
         if not alias_nodes:
             return []
-        df = pl.DataFrame({"name": [name for _, name in alias_nodes]})
+        df = pa.table({"name": [name for _, name in alias_nodes]})
         result = gm.dedupe_df(df)
         seen: set[int] = set()
         clusters: list[list[str]] = []

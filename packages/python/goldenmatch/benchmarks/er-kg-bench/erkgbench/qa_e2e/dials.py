@@ -59,9 +59,11 @@ def name_only_keys(corpus: QACorpus, g: GoldGraph) -> dict[tuple[str, str], str]
 def goldengraph_keys(corpus: QACorpus, g: GoldGraph) -> dict[tuple[str, str], str]:
     rows = _entity_surfaces(g)
     import goldenmatch as gm
-    import polars as pl
+    import pyarrow as pa
 
-    df = pl.DataFrame(
+    # Arrow-native (repo standard): goldenmatch's dedupe surface is arrow-first,
+    # so we stay polars-free.
+    df = pa.table(
         {"name": [s for (_e, s, _t) in rows], "type": [t for (_e, _s, t) in rows]}
     )
     # rerank OFF: name+type is two fields, under the 3-field cross-encoder trigger.

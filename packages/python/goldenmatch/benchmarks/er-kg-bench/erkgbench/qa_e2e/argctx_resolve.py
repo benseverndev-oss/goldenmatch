@@ -114,7 +114,7 @@ def resolve_gm(feats):
     type signature (exact) + connected-entity-name blob (fuzzy). Fixes the impoverished-features
     problem of the earlier gm-over-strings null. Fail-open: any error -> singletons."""
     import goldenmatch as gm
-    import polars as pl
+    import pyarrow as pa
 
     phrases = sorted(feats)
     if len(phrases) < 2:
@@ -124,7 +124,7 @@ def resolve_gm(feats):
         ts = feats[p]["types"].most_common(1)[0][0] if feats[p]["types"] else ("?", "?")
         names = sorted({n for pair in feats[p]["pairs"] for n in pair})
         rows.append({"type_sig": f"{ts[0]}>{ts[1]}", "neighbors": " | ".join(names), "phrase": p})
-    df = pl.DataFrame({c: [r[c] for r in rows] for c in ("type_sig", "neighbors", "phrase")})
+    df = pa.table({c: [r[c] for r in rows] for c in ("type_sig", "neighbors", "phrase")})
     try:
         result = gm.dedupe_df(df, exact=["type_sig"], fuzzy={"neighbors": 0.5},
                               confidence_required=False)
