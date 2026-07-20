@@ -481,6 +481,11 @@ rust_pgrx:
   # rebuild + re-smoke this lane.
   - 'packages/rust/extensions/goldencheck-core/**'
   - 'packages/rust/extensions/Cargo.toml'
+  # The psql smoke (incl. the #1913 gm_resolve identity write path) lives in
+  # ci.yml, and the lane's dep/SQL install lines are hand-maintained there, so
+  # a change to the workflow (or this filter) must re-run the lane.
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
 rust_cores:
   # ANY Rust extension change re-validates EVERY committed TS wasm
   # parity fixture (the fixture_drift job regenerates them all and

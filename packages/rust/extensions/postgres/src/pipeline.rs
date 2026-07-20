@@ -324,6 +324,113 @@ pub fn gm_drop(job_name: String) -> String {
     })
 }
 
+/// Resolve a configured job's table into a Postgres-native identity dataset
+/// (#1913 P1 — the in-DB stateful write path).
+///
+/// Loads `job_name`'s stored config, reads `table_name`, and hands them to the
+/// bridge `resolve_identities`, which runs `dedupe_df` with the identity graph
+/// pointed at the DSN from the `goldenmatch.identity_dsn` GUC (or the backend
+/// env). The durable graph (nodes / source_records / evidence_edges / events)
+/// is written into that database; re-running against the same `dataset`
+/// absorbs new records into existing stable ids (incremental resolve).
+///
+/// Returns the identity resolution summary JSON (`created` / `absorbed_records`
+/// / `merged` / `edges_added` / `events_emitted` / `conflicts_flagged`).
+///
+/// NOTE (transaction isolation, per the #1913 design §3.1): the identity writes
+/// commit on the bridge's own libpq connection, NOT the caller's SQL
+/// transaction. `gm_resolve` is a batch op; replay is idempotent
+/// (`has_run_event` / edge-UNIQUE guards), so a failed run converges on re-run.
+#[pg_extern]
+pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB identity resolution needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+
+    let config_query = format!(
+        "SELECT config_json::text FROM goldenmatch._jobs WHERE name = '{}'",
+        job_name.replace('\'', "''")
+    );
+    let config_json = Spi::connect(|client| {
+        let result = client
+            .select(&config_query, None, None)
+            .unwrap_or_else(|e| pgrx::error!("goldenmatch: {}", e));
+        for row in result {
+            if let Ok(Some(cfg)) = row.get::<String>(1) {
+                return Ok(cfg);
+            }
+        }
+        Err(format!("Job '{}' not found", job_name))
+    });
+    let config_json = match config_json {
+        Ok(c) => c,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    };
+
+    set_job_status(&job_name, "running");
+
+    let rows_json = match spi::read_table_as_json(&table_name) {
+        Ok(json) => json,
+        Err(e) => {
+            set_job_status(&job_name, "failed");
+            pgrx::error!("goldenmatch: {}", e);
+        }
+    };
+
+    // A distinct run name per call (microsecond clock stamp) so a second
+    // resolve emits fresh absorb/merge events rather than being deduped as a
+    // replay of the first — the incremental-across-runs contract.
+    let stamp = Spi::get_one::<String>("SELECT to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS')")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let run_name = format!("gm_resolve:{}:{}", job_name.replace(':', "_"), stamp);
+
+    let summary_json = match goldenmatch_bridge::api::resolve_identities(
+        &rows_json,
+        &config_json,
+        &dsn,
+        &dataset,
+        &run_name,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            set_job_status(&job_name, "failed");
+            pgrx::error!("goldenmatch: {}", e);
+        }
+    };
+
+    set_job_status(&job_name, "completed");
+    summary_json
+}
+
+/// Resolve the identity DSN: the `goldenmatch.identity_dsn` GUC first, then the
+/// `GOLDENMATCH_IDENTITY_DSN` / `GOLDENMATCH_DATABASE_URL` backend env. Returns
+/// `None` (→ a clear error at the call site) when nothing is configured. A
+/// blank/whitespace value is treated as unset.
+fn resolve_identity_dsn() -> Option<String> {
+    if let Some(cstr) = crate::IDENTITY_DSN.get() {
+        if let Ok(s) = cstr.to_str() {
+            if !s.trim().is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    for var in ["GOLDENMATCH_IDENTITY_DSN", "GOLDENMATCH_DATABASE_URL"] {
+        if let Ok(s) = std::env::var(var) {
+            if !s.trim().is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
 fn set_job_status(job_name: &str, status: &str) {
     let sql = format!(
         "UPDATE goldenmatch._jobs SET status = '{}' WHERE name = '{}'",
