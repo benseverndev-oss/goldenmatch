@@ -43,7 +43,7 @@ def _emit_blocking_profile(
     # arrow->polars round trip just to count rows. A polars LazyFrame (the
     # learned/canopy/ann strategies still pass one) has no ``height`` and needs
     # a collect -- polars is available on that path.
-    _height = getattr(lf, "height", None)
+    _height: Any = getattr(lf, "height", None)
     if callable(_height):
         n_rows = int(_height())  # method-style Frame
     elif _height is not None:
