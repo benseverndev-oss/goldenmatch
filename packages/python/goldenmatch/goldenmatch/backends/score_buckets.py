@@ -1444,17 +1444,18 @@ def score_buckets(
             else:
                 # find_fuzzy_matches (the fallback the slow path uses for
                 # scorers the fast path can't resolve -- ensemble / embedding /
-                # etc.) is polars-only; on the arrow lane give it a polars
-                # block so it does not AttributeError on `.to_dicts()`. Then
-                # every scorer + the NE penalty math run exactly as in the
-                # legacy per-block path (bucket-vs-legacy parity).
-                _fm_block = (
-                    block_df
-                    if isinstance(block_df, pl.DataFrame)
-                    else pl.from_arrow(block_df)
-                )
+                # etc.) accepts BOTH reps natively: it coerces via
+                # ``core.frame.to_frame`` and its NE branch reads rows through a
+                # ``to_pylist`` dual-rep, so a ``pa.Table`` needs no conversion.
+                # Hand it the block as-is -- pre-converting a ``pa.Table`` to
+                # polars here (the old ``pl.from_arrow`` bridge, plus the
+                # ``isinstance(block_df, pl.DataFrame)`` probe) forced the polars
+                # import and broke the arrow lane's polars-free guarantee (e.g.
+                # goldengraph's zero-config resolve installs goldenmatch WITHOUT
+                # polars). Parity with the legacy per-block path is unchanged:
+                # a real polars block still flows through untouched.
                 pairs = find_fuzzy_matches(
-                    _fm_block, mk,
+                    block_df, mk,
                     exclude_pairs=frozen_exclude,
                     pre_scored_pairs=None,
                 )
