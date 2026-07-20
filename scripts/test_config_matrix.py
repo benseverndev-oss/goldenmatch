@@ -115,30 +115,45 @@ def test_full_explanation_coverage_maintained(name):
     )
 
 
-def test_recipe_configs_validate():
-    # Every ```yaml block on the recipes page must be a COMPLETE, valid config --
-    # validated through the same load_config path a real file takes. A renamed or
-    # removed field / scorer / strategy makes the snippet fail schema validation,
-    # so the copy-paste recipes can never rot into referencing a dead knob.
+# package -> (recipes page, "module:load_config", minimum config blocks). Each
+# config-driven package's recipes page is validated through the SAME load_config a
+# real file takes, so a renamed/removed field can't rot the copy-paste recipes.
+_RECIPE_PAGES = {
+    "goldenmatch": ("docs-site/goldenmatch/recipes.mdx", "goldenmatch.config.loader:load_config", 6),
+    "goldencheck": ("docs-site/goldencheck/recipes.mdx", "goldencheck.config.loader:load_config", 3),
+    "goldenflow": ("docs-site/goldenflow/recipes.mdx", "goldenflow.config.loader:load_config", 3),
+    "goldenpipe": ("docs-site/goldenpipe/recipes.mdx", "goldenpipe.config.loader:load_config", 3),
+}
+
+
+@pytest.mark.parametrize("name", list(_RECIPE_PAGES))
+def test_recipe_configs_validate(name):
+    # Every ```yaml block on a package's recipes page must be a COMPLETE, valid
+    # config validated through its real load_config. A renamed/removed field or
+    # vocab value fails schema validation, so the recipes can't reference a dead knob.
+    import importlib
     import os
     import re
     import tempfile
+    from pathlib import Path
 
     from config_matrix.render import ROOT
-    from goldenmatch.config.loader import load_config
 
-    page = ROOT / "docs-site" / "goldenmatch" / "recipes.mdx"
-    blocks = re.findall(r"```yaml\n(.*?)```", page.read_text(encoding="utf-8"), re.DOTALL)
-    assert len(blocks) >= 6, f"expected >=6 config blocks on the recipes page, found {len(blocks)}"
+    rel, target, minimum = _RECIPE_PAGES[name]
+    mod, fn = target.split(":")
+    load_config = getattr(importlib.import_module(mod), fn)
+
+    blocks = re.findall(r"```yaml\n(.*?)```", (ROOT / rel).read_text(encoding="utf-8"), re.DOTALL)
+    assert len(blocks) >= minimum, f"expected >={minimum} config blocks on {rel}, found {len(blocks)}"
     errors = []
     for i, block in enumerate(blocks, 1):
         tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8")
         try:
             tmp.write(block)
             tmp.close()
-            load_config(tmp.name)
+            load_config(Path(tmp.name))  # Path works for every package's loader
         except Exception as exc:  # noqa: BLE001 -- surface which recipe is broken
-            errors.append(f"recipe block #{i}: {str(exc)[:200]}")
+            errors.append(f"{rel} block #{i}: {str(exc)[:200]}")
         finally:
             os.unlink(tmp.name)
     assert not errors, "invalid recipe config(s):\n" + "\n".join(errors)

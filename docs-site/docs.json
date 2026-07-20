@@ -105,6 +105,7 @@
               "goldencheck/overview",
               "goldencheck/checks",
               "goldencheck/config-matrix",
+              "goldencheck/recipes",
               "goldencheck/cli",
               "goldencheck/native",
               "goldencheck/integrations"
@@ -116,6 +117,7 @@
               "goldenflow/overview",
               "goldenflow/transforms",
               "goldenflow/config-matrix",
+              "goldenflow/recipes",
               "goldenflow/cli",
               "goldenflow/performance"
             ]
@@ -125,7 +127,8 @@
             "pages": [
               "goldenpipe/overview",
               "goldenpipe/stages",
-              "goldenpipe/config-matrix"
+              "goldenpipe/config-matrix",
+              "goldenpipe/recipes"
             ]
           },
           {
