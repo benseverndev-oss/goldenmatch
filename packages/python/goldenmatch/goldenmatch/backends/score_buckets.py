@@ -1442,17 +1442,22 @@ def score_buckets(
             if prob_scorer is not None:
                 pairs = prob_scorer(block_df, frozen_exclude)
             else:
-                # find_fuzzy_matches (the fallback the slow path uses for
-                # scorers the fast path can't resolve -- ensemble / embedding /
-                # etc.) is polars-only; on the arrow lane give it a polars
-                # block so it does not AttributeError on `.to_dicts()`. Then
-                # every scorer + the NE penalty math run exactly as in the
-                # legacy per-block path (bucket-vs-legacy parity).
-                _fm_block = (
-                    block_df
-                    if isinstance(block_df, pl.DataFrame)
-                    else pl.from_arrow(block_df)
-                )
+                # find_fuzzy_matches (the fallback for scorers the fast path
+                # can't resolve -- ensemble / qgram / soundex_match / refdata)
+                # reads the block through the `to_frame` seam + a to_dicts/
+                # to_pylist dual-rep, so exact/fuzzy/NE all score arrow-native:
+                # pass the arrow block straight through so the no-polars lane
+                # works. Only `record_embedding` fields still hit polars-only
+                # branches inside find_fuzzy_matches (raw `.to_dicts()` /
+                # `block_df[c]`); give THOSE a polars block -- which needs the
+                # optional polars dep anyway, same as the embedding scorer.
+                import pyarrow as _pa
+                _fm_block = block_df
+                if isinstance(block_df, _pa.Table) and any(
+                    getattr(f, "scorer", None) == "record_embedding"
+                    for f in (mk.fields or [])
+                ):
+                    _fm_block = pl.from_arrow(block_df)
                 pairs = find_fuzzy_matches(
                     _fm_block, mk,
                     exclude_pairs=frozen_exclude,
