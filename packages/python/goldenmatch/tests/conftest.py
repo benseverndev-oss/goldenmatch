@@ -52,13 +52,13 @@ def _reset_profile_emitter_stack():
         import goldenmatch.core.profile_emitter as _pe
         _pe._emitter_stack.set(())
     except ImportError:
-        pass
+        pass  # goldenmatch not importable (import-failure collection tests) -> no stack to reset
     yield
     try:
         import goldenmatch.core.profile_emitter as _pe
         _pe._emitter_stack.set(())
     except ImportError:
-        pass
+        pass  # goldenmatch not importable (import-failure collection tests) -> no stack to reset
 
 
 @pytest.fixture(autouse=True)
