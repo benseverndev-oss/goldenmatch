@@ -34,6 +34,9 @@ env:
   # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads;
   # force the system pool (the #1627 remedy -- this lane runs the full pipeline).
   ARROW_DEFAULT_MEMORY_POOL: system
+  # jemalloc page-decay: return freed polars pages to the OS between
+  # pipeline stages (root CLAUDE.md scale standard; -33% peak at 1M).
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0" # no cross-run memory writes in CI
 
 concurrency:
