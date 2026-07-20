@@ -319,13 +319,19 @@ class RowIdBlock:
 
     __slots__ = ("block_key", "blocking_fields", "strategy", "_ids")
 
-    def __init__(self, block_key, ids, blocking_fields=(), strategy="static"):
+    def __init__(
+        self,
+        block_key: Any,
+        ids: Any,
+        blocking_fields: tuple[str, ...] = (),
+        strategy: str = "static",
+    ) -> None:
         self.block_key = block_key
         self._ids = ids  # numpy int64 array of __row_id__ values
         self.blocking_fields = blocking_fields
         self.strategy = strategy
 
-    def materialize(self):
+    def materialize(self) -> Any:
         """A 1-column ``__row_id__`` seam Frame, built lazily (sampled blocks only)."""
         from goldenmatch.core.frame import to_frame
 

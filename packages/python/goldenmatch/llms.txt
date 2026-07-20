@@ -10,7 +10,7 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 - Remote MCP: https://goldenmatch-mcp-production.up.railway.app/mcp/ (78 tools, Smithery: https://smithery.ai/servers/benzsevern/goldenmatch)
 - A2A Server: `goldenmatch agent-serve --port 8200` (40 skills advertised in the agent card)
 - CLI: `goldenmatch dedupe`, `goldenmatch match`, `goldenmatch autoconfig`, `goldenmatch memory ...`, `goldenmatch identity ...`, + more
-- Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~200 exports
+- Python API: `import goldenmatch` — `dedupe_df()`, `match_df()`, `score_strings()`, `evaluate()`, ~201 exports
 - TypeScript / Edge: `npm install goldenmatch` — same API in browsers, Cloudflare Workers, Vercel Edge, Deno; optional WASM via `await enableWasm()` swaps in the Rust score-core kernel, and `enableSuggestWasm()` brings the config-suggestion "healer" (`dedupe({suggest, heal})`) to TS via suggest-core (pure-TS stays the default + byte-identical fallback)
 - REST API: `goldenmatch serve` on port 8000
 - SQL: Postgres (pgrx extension) + DuckDB UDFs — dedupe / match / score / auto-config + telemetry / identity graph
@@ -148,6 +148,6 @@ GoldenMatch is the headline package of a 6-package suite that composes into one 
 
 ## Docs
 - [Full docs](https://docs.bensevern.dev/goldenmatch/overview): 22 guides
-- [Full API reference](https://docs.bensevern.dev/goldenmatch/python-api): 200 exports
+- [Full API reference](https://docs.bensevern.dev/goldenmatch/python-api): 201 exports
 - [PyPI](https://pypi.org/project/goldenmatch/)
 - [GitHub](https://github.com/benseverndev-oss/goldenmatch)
