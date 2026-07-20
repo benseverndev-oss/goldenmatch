@@ -2818,16 +2818,16 @@ jobs:
         # (and goldenflow, for the goldenflow_* transform functions) at
         # runtime. The package install here is what `init()` in the
         # bridge will find when Postgres starts.
-        # Local base goldenmatch (NO [polars]) -- the bridge core-API surface is
-        # arrow-native, so the pgrx lane runs polars-free against current source
-        # too (drops the #1747 stopgap here as well). goldenflow's base has no
-        # polars dep (it's a [polars] extra), so this stays polars-free.
-        # psycopg[binary] rides along because gm_resolve (#1913) opens the
-        # identity postgres store from THIS embedded interpreter — it must be
-        # importable in the same site as goldenmatch, not just the system
-        # python. (Identity resolution is fail-open, so a missing psycopg would
-        # silently return an empty summary and skip the write.)
-        run: pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow pyarrow 'psycopg[binary]'
+        # [polars] IS required here: the core dedupe/score/autoconfig surface is
+        # arrow-native and runs polars-free, but gm_resolve (#1913) drives the
+        # identity write path (dedupe_df -> _resolve_identities ->
+        # resolve_clusters), which builds polars frames — without polars,
+        # identity resolution fail-opens ("No module named 'polars'") and returns
+        # an empty summary. psycopg[binary] likewise: the identity postgres store
+        # connects from THIS embedded interpreter, so both must be importable in
+        # the same site as goldenmatch. (goldenflow stays base — its transforms
+        # are the polars-native extra we don't exercise here.)
+        run: pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch[polars]" goldenflow pyarrow 'psycopg[binary]'
 
       - name: Install cargo-pgrx
         # 0.12.9 pin matches the pgrx version in
@@ -2874,10 +2874,12 @@ jobs:
         run: |
           PYTHON_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
           sudo rm -f /usr/lib/python3/dist-packages/typing_extensions.py
-          sudo pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch" goldenflow 2>/dev/null || true
-          # psycopg is the identity postgres-backend requirement: gm_resolve's
-          # embedded-Python identity store connects back to this cluster with it.
-          sudo pip install --break-system-packages 'psycopg[binary]' 2>/dev/null || true
+          # [polars] + psycopg mirror the bridge-target install: whichever
+          # interpreter pyo3 embeds (this system python, or PYTHON_SITE via the
+          # .pth below) must be able to import both for gm_resolve's identity
+          # write path (#1913) — polars for resolve_clusters, psycopg for the
+          # postgres identity store.
+          sudo pip install --break-system-packages "${GITHUB_WORKSPACE}/packages/python/goldenmatch[polars]" goldenflow 'psycopg[binary]' 2>/dev/null || true
           echo "${PYTHON_SITE}" | sudo tee /usr/lib/python3/dist-packages/goldenmatch.pth
 
       - name: psql smoke (scalar scorer, dedupe, autoconfig)
