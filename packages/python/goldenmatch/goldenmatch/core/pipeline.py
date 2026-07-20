@@ -2500,6 +2500,14 @@ def _fused_result_from_clusters(
 
     return {
         "clusters": clusters,
+        "cluster_stats": {
+            "multi_member_cluster_count": sum(
+                1 for c in clusters.values() if c.get("size", 0) > 1
+            ),
+            "matched_record_count": sum(
+                c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
+            ),
+        },
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
