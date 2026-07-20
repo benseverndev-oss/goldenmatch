@@ -195,3 +195,24 @@ def test_streaming_output_routes_and_excludes_xform(tmp_path):
     d = pq.read_table(res["dupes_path"])
     assert sorted(d.column("__row_id__").to_pylist()) == [1, 2, 4, 5, 6]
     con.close()
+
+
+def test_end_to_end_streaming_dedupe(tmp_path):
+    """run_fs_dedupe_streaming: prep -> store -> score -> cluster -> streamed
+    parquet output. Rows preserved (unique + dupes == N), planted dups found,
+    a golden per multi-member cluster."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    res = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path))
+
+    assert res["unique_count"] + res["dupes_count"] == df.height  # rows preserved
+    assert res["dupes_count"] >= 2   # the planted same-zip dup pairs
+    assert res["golden_count"] >= 1  # >=1 multi-member cluster -> a golden record

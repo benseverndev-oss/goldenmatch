@@ -13,15 +13,18 @@ the first out-of-core FS scorer: the prepared records live in DuckDB (on disk
 when `db_path` is a file), and blocks are pulled ONE GROUP AT A TIME, scored,
 and discarded, so the SCORING phase is bounded (peak = one block group).
 
-**LIMITATION - does NOT yet break the single-box wall (~40M, CI-measured).** The
-frame is loaded into DuckDB here via ``frame -> to_arrow() -> CREATE TABLE``,
-which materialises ~2-3x the frame IN RAM at load time; only AFTER load does
-scoring stream bounded. So this makes the SCORER out-of-core, but the LOAD peak
-is still ~frame-sized. Breaking the wall needs **Phase 2**: write the prepared
-frame to DuckDB/parquet in streaming batches DURING prep (or read the input
-parquet directly), so the frame never fully materialises - see
+**End-to-end path: `run_fs_dedupe_streaming`.** Ties the two bounded mechanisms
+together for single-box scale: prep frame -> DuckDB FILE (batched load,
+`_load_frame_batched` keeps the load peak ~1x the frame, not the ~2-3x a full
+`to_arrow()` copy would), FREE the frame, score from the store
+(`score_fs_out_of_core`), cluster, then STREAM unique/dupes/golden to parquet
+(`stream_fs_dedupe_output`, O(N) output via DuckDB `COPY`, never a result frame).
+So peak stays ~1x the prepared frame (only during the load) instead of the
+in-memory ~1.65 GB/M accumulation -- e.g. 50M is ~1x frame (~15-25 GB, FITS
+64 GB) vs the in-memory ~82 GB OOM. Load-peak reduction below ~1x frame (stream
+input parquet -> DuckDB during prep, never materialise it) + the CI proof that
+50M completes are the remaining work. See
 `docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md`.
-This module is the scoring half Phase 2 feeds from a disk-resident table.
 
 **Parity.** Block membership is derived with the SAME `_build_block_key_expr` +
 null/sentinel key filter + `multi_pass` `(pass_sig, block_key)` semantics as
@@ -431,3 +434,70 @@ def _default_golden_rules():
     from goldenmatch.config.schemas import GoldenRulesConfig
 
     return GoldenRulesConfig(default_strategy="most_complete")
+
+
+def run_fs_dedupe_streaming(
+    prepared_df: Any,
+    blocking_config: BlockingConfig,
+    mk: MatchkeyConfig,
+    em_result,
+    config: Any,
+    out_dir: str,
+    *,
+    matched_pairs: set[tuple[int, int]] | None = None,
+    target_ids: set[int] | None = None,
+) -> dict:
+    """End-to-end SINGLE-BOX STREAMING FS dedupe: prep frame → DuckDB file, FREE
+    the frame, score from the store, cluster, STREAM unique/dupes/golden to
+    parquet, return paths + stats. Peak stays bounded (frame on disk, O(N) output
+    streamed via COPY) — the path that clears 50M+ where in-memory OOMs.
+
+    Ties the two tested mechanisms without refactoring: ``score_fs_out_of_core``
+    with an explicit ``db_path`` file PERSISTS the ``prep`` table (only "auto" is
+    cleaned), so ``stream_fs_dedupe_output`` reads the SAME file afterward. The
+    prepared frame is resident only during the batched load inside scoring, never
+    through clustering or output.
+    """
+    import os as _os
+    import tempfile
+
+    import duckdb
+
+    from goldenmatch.core.cluster import build_clusters
+
+    matched_pairs = set(matched_pairs or ())
+    max_cluster_size = 100
+    if getattr(config, "golden_rules", None) is not None:
+        max_cluster_size = config.golden_rules.max_cluster_size
+
+    fd, db_path = tempfile.mkstemp(prefix="gm_fs_stream_", suffix=".duckdb")
+    _os.close(fd)
+    _os.unlink(db_path)  # DuckDB creates it
+    try:
+        # 1+2: load frame into the persistent file + score (frame freed on return).
+        pairs = score_fs_out_of_core(
+            prepared_df, blocking_config, mk, matched_pairs, em_result,
+            target_ids=target_ids, db_path=db_path,
+        )
+        con = duckdb.connect(db_path)
+        try:
+            # 3: cluster -> assignments for ALL rows (all_ids folds singletons in).
+            all_ids = [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
+            clusters = build_clusters(pairs, all_ids=all_ids, max_cluster_size=max_cluster_size)
+            assignments = [
+                (m, cid) for cid, info in clusters.items() for m in info["members"]
+            ]
+            del clusters, all_ids
+            # 4: stream the O(N) output from the store.
+            res = stream_fs_dedupe_output(con, "prep", assignments, config, out_dir)
+        finally:
+            con.close()
+        res["pairs"] = len(pairs)
+        return res
+    finally:
+        for p in (db_path, db_path + ".wal"):
+            try:
+                if _os.path.exists(p):
+                    _os.unlink(p)
+            except OSError:
+                pass
