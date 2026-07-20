@@ -11,10 +11,14 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Ben Severn", email = "benzsevern@gmail.com" }]
 # goldenmatch provides the zero-config resolution controller (dedupe_df), the
-# :h1: record fingerprint, and the LLM budget tracker. goldengraph-native (the
-# engine: PyStore/build_graph) is installed alongside via maturin (it is not a
-# PyPI dep yet), mirroring how the native binding is provided in CI.
-dependencies = ["goldenmatch>=2.0"]
+# :h1: record fingerprint, and the LLM budget tracker. goldengraph-native is the
+# compiled knowledge-graph engine (PyStore / build_graph / neighborhood /
+# communities); goldengraph is native-authoritative with NO pure-Python fallback,
+# so the engine wheel is a hard runtime dependency. (In dev/CI the in-tree build
+# at goldengraph/_native.abi3.so shadows the wheel -- see
+# scripts/build_goldengraph_native.py -- so the goldengraph-pipeline lane, which
+# installs with --no-deps, is unaffected by this pin.)
+dependencies = ["goldenmatch>=2.0", "goldengraph-native>=0.1.0"]
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
