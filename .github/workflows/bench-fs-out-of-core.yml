@@ -1,6 +1,7 @@
 # Validate the single-box OUT-OF-CORE FS dedupe path at scale.
 #
-# workflow_dispatch only. Answers: does GOLDENMATCH_FS_OUT_OF_CORE=1 +
+# workflow_dispatch (+ a temporary branch-scoped push trigger while the file is
+# off main). Answers: does GOLDENMATCH_FS_OUT_OF_CORE=1 +
 # dedupe_to_parquet COMPLETE a 25M/50M-row Fellegi-Sunter dedupe on ONE 64 GB
 # box (where the in-memory FS path OOMs ~82 GB at 50M), and what is the real
 # peak RSS + wall?
@@ -26,6 +27,17 @@ on:
         description: "Runner label (needs 64 GB)"
         required: false
         default: "large-new-64GB"
+  # A workflow_dispatch workflow is only dispatchable once its file is on the
+  # DEFAULT branch. Until this lands on main (PR #1944), a branch-scoped push
+  # trigger on the bench files is how we kick the validation off the PR branch.
+  # Scoped to this branch so it does NOT re-fire when the PR merges to main.
+  push:
+    branches:
+      - claude/benchmark-failure-gh-7h5ryr
+    paths:
+      - ".github/workflows/bench-fs-out-of-core.yml"
+      - "scripts/bench_fs_out_of_core_scale.py"
+      - "scripts/bench_fs_out_of_core_summary.py"
 
 permissions:
   contents: read
@@ -37,7 +49,7 @@ env:
 
 jobs:
   bench:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ github.event.inputs.runner || 'large-new-64GB' }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -65,7 +77,7 @@ jobs:
       - name: Out-of-core streaming legs (one isolated subprocess per scale)
         run: |
           mkdir -p .bench_fs_ooc results
-          for n in ${{ inputs.scales }}; do
+          for n in ${{ github.event.inputs.scales || '25000000 50000000' }}; do
             echo "::group::streaming rows=$n"
             uv run python scripts/bench_fs_out_of_core_scale.py \
               --rows "$n" --mode streaming \
@@ -75,9 +87,9 @@ jobs:
           done
 
       - name: In-memory OOM contrast (expected to be killed at 50M)
-        if: ${{ inputs.in_memory_scale != '' }}
+        if: ${{ (github.event.inputs.in_memory_scale || '50000000') != '' }}
         run: |
-          n="${{ inputs.in_memory_scale }}"
+          n="${{ github.event.inputs.in_memory_scale || '50000000' }}"
           echo "::group::in_memory rows=$n (expected OOM)"
           uv run python scripts/bench_fs_out_of_core_scale.py \
             --rows "$n" --mode in_memory \
