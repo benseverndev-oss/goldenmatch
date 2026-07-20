@@ -151,6 +151,57 @@ def test_pipeline_opt_in_parity(monkeypatch):
     assert _partitions(ooc) == _partitions(default)
 
 
+def _arrow_pairs(df, blocking, mk, em) -> set:
+    """The `emit='arrow'` PAIR_STREAM table, deduped canonically, as a pair set
+    (scores dropped — the arrow stream keeps dup edges, deduped downstream)."""
+    tbl = score_fs_out_of_core(df, blocking, mk, set(), em, emit="arrow")
+    a = tbl.column("id_a").to_pylist()
+    b = tbl.column("id_b").to_pylist()
+    return {(min(x, y), max(x, y)) for x, y in zip(a, b)}
+
+
+def test_emit_arrow_pair_set_matches_tuples():
+    """`emit='arrow'` emits the SAME canonical pair set as `emit='tuples'` (the
+    scored pairs, before/after dedup fold to the same edges — Union-Find safe)."""
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(
+        strategy="multi_pass",
+        passes=[
+            BlockingKeyConfig(fields=["zip"]),
+            BlockingKeyConfig(fields=["last_name"]),
+        ],
+    )
+    em = _train(df, blocking, mk)
+    tuples_set = {(min(a, b), max(a, b)) for a, b, _ in
+                  score_fs_out_of_core(df, blocking, mk, set(), em)}
+    assert _arrow_pairs(df, blocking, mk, em) == tuples_set
+
+
+def test_arrow_stream_and_python_cluster_paths_agree(tmp_path, monkeypatch):
+    """The Arrow-native clustering path (default) and the `GOLDENMATCH_FS_ARROW_STREAM=0`
+    Python Union-Find path partition the records IDENTICALLY."""
+    import types
+
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+
+    df = _bigger_df()
+    mk = _make_probabilistic_mk()
+    blocking = BlockingConfig(keys=[BlockingKeyConfig(fields=["zip"])])
+    em = _train(df, blocking, mk)
+    cfg = types.SimpleNamespace(golden_rules=None)
+
+    monkeypatch.setenv("GOLDENMATCH_FS_ARROW_STREAM", "1")
+    res_arrow = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "a"))
+    monkeypatch.setenv("GOLDENMATCH_FS_ARROW_STREAM", "0")
+    res_py = run_fs_dedupe_streaming(df, blocking, mk, em, cfg, str(tmp_path / "p"))
+
+    assert _partition_set_from_parquet(res_arrow["dupes_path"]) == \
+        _partition_set_from_parquet(res_py["dupes_path"])
+    assert res_arrow["unique_count"] == res_py["unique_count"]
+    assert res_arrow["dupes_count"] == res_py["dupes_count"]
+
+
 def test_non_field_strategy_raises():
     df = _make_dedupe_df()
     mk = _make_probabilistic_mk()

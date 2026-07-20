@@ -83,6 +83,23 @@ def fs_out_of_core_enabled() -> bool:
     )
 
 
+def _fs_arrow_stream_enabled() -> bool:
+    """Arrow-native pair stream + Rust clustering for the streaming FS path
+    (default ON within the out-of-core route).
+
+    When on, ``run_fs_dedupe_streaming`` scores into a ``PAIR_STREAM`` ``pa.Table``
+    (never a ``list[tuple]``), dedups it with the native ``dedup_pairs_arrow``
+    kernel, and clusters with ``build_clusters_arrow_native`` (Rust Union-Find via
+    the C Data Interface) — so the scored pairs never enter Python as objects and
+    the Union-Find never builds a ``dict[int, dict]``. ``GOLDENMATCH_FS_ARROW_STREAM=0``
+    restores the ``list[tuple]`` + Python ``build_clusters`` path (the rollback
+    lever from the FS Arrow-pair-stream design)."""
+    v = os.environ.get("GOLDENMATCH_FS_ARROW_STREAM")
+    if v is None:
+        return True
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _resolve_db_path(db_path: str | None) -> str:
     """None → in-memory DuckDB (tests / small frames). ``"auto"`` → a tempfile
     that spills the prepared table to DISK, so post-load resident memory drops
@@ -166,12 +183,28 @@ def score_fs_out_of_core(
     target_ids: set[int] | None = None,
     db_path: str | None = None,
     max_block_rows: int | None = None,
-) -> list[tuple[int, int, float]]:
+    emit: str = "tuples",
+) -> Any:
     """Score FS blocks out-of-core from a DuckDB-resident prepared table.
 
     ``db_path=None`` → in-memory DuckDB (the frame is loaded once, then blocks
     stream from it — bounded downstream, but the load itself is resident; a file
-    path spills the table to disk). Returns ``list[(a, b, score)]``.
+    path spills the table to disk).
+
+    ``emit="tuples"`` (default) returns ``list[(a, b, score)]`` with the
+    cross-pass first-seen canonical dedup — byte-identical to the reference and
+    the shape ``_score_probabilistic_matchkey`` consumes.
+
+    ``emit="arrow"`` returns a ``PAIR_STREAM_SCHEMA`` ``pa.Table``
+    (``id_a``/``id_b`` int64, ``score`` float64) so the scored pairs NEVER
+    accumulate as Python objects across the run: each WAVE's kernel output is
+    converted to Arrow immediately (via ``pairs_to_pair_stream``) and appended,
+    and the cross-pass ``seen`` set is DROPPED — the downstream Rust Union-Find
+    (``build_clusters_arrow_native``) collapses duplicate edges, so the dedup is
+    a memory optimisation, not correctness (the caller runs
+    ``dedup_pairs_max_score_arrow`` on the concatenated stream if it wants a
+    deduped pair count). This is the path that keeps 50M+ off the ~16 GB
+    ``list[tuple]`` Python-object floor. ``target_ids`` still applies per wave.
     """
     import duckdb
     import polars as pl
@@ -232,8 +265,12 @@ def score_fs_out_of_core(
             else list(blocking_config.keys or [])
         )
 
+        _arrow = emit == "arrow"
         out: list[tuple[int, int, float]] = []
         seen: set[tuple[int, int]] = set()
+        pair_tables: list = []  # arrow mode: one PAIR_STREAM pa.Table per wave
+        if _arrow:
+            from goldenmatch.backends.score_buckets import pairs_to_pair_stream
 
         # Score blocks in PARALLEL across a bounded wave, mirroring the in-memory
         # `score_buckets` ThreadPoolExecutor -- the native FS kernel (and the
@@ -256,6 +293,22 @@ def score_fs_out_of_core(
 
         def _merge(results) -> None:
             # results: per-block pair lists, IN submission (block) order.
+            if _arrow:
+                # Convert THIS wave's pairs to one Arrow table and drop the
+                # Python tuples -- pairs never accumulate as objects across the
+                # run. No `seen` dedup (Union-Find collapses dup edges); only the
+                # `target_ids` membership filter (match-across-files) is kept.
+                wave: list[tuple[int, int, float]] = []
+                for pairs in results:
+                    for a, b, s in pairs:
+                        if target_ids is not None and (
+                            (a in target_ids) == (b in target_ids)
+                        ):
+                            continue
+                        wave.append((a, b, s))
+                if wave:
+                    pair_tables.append(pairs_to_pair_stream(wave))
+                return
             for pairs in results:
                 for a, b, s in pairs:
                     if target_ids is not None and (
@@ -364,6 +417,11 @@ def score_fs_out_of_core(
                 # before pass N+1 -> preserves the pass-order first-seen dedup.
                 _flush()
                 con.execute("DROP TABLE IF EXISTS blkmap")
+        if _arrow:
+            if pair_tables:
+                return pa.concat_tables(pair_tables)
+            from goldenmatch.backends.score_buckets import pairs_to_pair_stream
+            return pairs_to_pair_stream([])
         return out
     finally:
         con.close()
@@ -493,6 +551,84 @@ def _default_golden_rules():
     return GoldenRulesConfig(default_strategy="most_complete")
 
 
+def _prep_all_ids(con: Any) -> list[int]:
+    """Every ``__row_id__`` in ``prep`` — the singleton-folding id set. Singletons
+    (rows in no pair) must be present in the cluster assignments or
+    ``stream_fs_dedupe_output``'s INNER JOIN silently drops them."""
+    return [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
+
+
+def _cluster_python(
+    con: Any,
+    pairs: list[tuple[int, int, float]],
+    max_cluster_size: int,
+    link_threshold: float | None,
+) -> tuple[list[tuple[int, int]], int]:
+    """Legacy path: Python Union-Find over the ``list[tuple]`` pair set. Returns
+    ``([(row_id, cluster_id), …], n_pairs)``. Kept as the
+    ``GOLDENMATCH_FS_ARROW_STREAM=0`` rollback lever."""
+    from goldenmatch.core.cluster import build_clusters
+
+    if link_threshold is not None:
+        pairs = [p for p in pairs if p[2] >= link_threshold]
+    all_ids = _prep_all_ids(con)
+    clusters = build_clusters(pairs, all_ids=all_ids, max_cluster_size=max_cluster_size)
+    assignments = [
+        (m, cid) for cid, info in clusters.items() for m in info["members"]
+    ]
+    return assignments, len(pairs)
+
+
+def _cluster_arrow_native(
+    con: Any,
+    pair_table: Any,
+    max_cluster_size: int,
+    link_threshold: float | None,
+) -> tuple[Any, int]:
+    """Arrow-native path: dedup the ``PAIR_STREAM`` table with the Rust
+    ``dedup_pairs_arrow`` kernel, then cluster with ``build_clusters_arrow_native``
+    (Rust Union-Find via the C Data Interface — no Python ``dict[int, dict]``).
+    Returns ``(assignments pa.Table {__row_id__, __cluster_id__}, n_pairs)`` — the
+    Arrow assignments feed ``stream_fs_dedupe_output`` directly, so the scored
+    pairs never become Python objects here."""
+    import polars as pl
+    import pyarrow as pa
+
+    from goldenmatch.core.cluster import build_clusters_arrow_native
+    from goldenmatch.core.pairs import dedup_pairs_max_score_arrow
+
+    # Cross-pass dedup: canonical (min, max), max score — the Arrow-native
+    # replacement for the Python `seen` set. Union-Find membership is invariant to
+    # which duplicate's score survives, so this is cluster-parity-safe.
+    pairs_pl = pl.from_arrow(pair_table)
+    if not isinstance(pairs_pl, pl.DataFrame):
+        pairs_pl = pl.DataFrame(pairs_pl)
+    pairs_pl = dedup_pairs_max_score_arrow(pairs_pl)
+    if link_threshold is not None:
+        # Cluster only linked pairs; sub-link pairs are review candidates the
+        # in-memory pipeline surfaces separately and never clusters. Filtering
+        # AFTER max-score dedup means a pair links iff its BEST cross-pass score
+        # clears the cut (== per-wave filter-then-dedup, since max is monotone).
+        pairs_pl = pairs_pl.filter(pl.col("score") >= link_threshold)
+    n_pairs = pairs_pl.height
+
+    all_ids = _prep_all_ids(con)
+    cf = build_clusters_arrow_native(
+        pairs_pl, all_ids=all_ids, max_cluster_size=max_cluster_size, backend="arrow",
+    )
+    # ClusterFrames.assignments is {cluster_id, member_id} (pa.Table on the native
+    # arrow lane, pl.DataFrame on the columnar fallback). Normalise to a pa.Table
+    # renamed to the (__row_id__, __cluster_id__) shape the streamer joins on.
+    asn = cf.assignments
+    if not isinstance(asn, pa.Table):
+        asn = asn.to_arrow()
+    asn = asn.rename_columns([
+        "__cluster_id__" if c == "cluster_id" else "__row_id__"
+        for c in asn.column_names
+    ])
+    return asn, n_pairs
+
+
 def run_fs_dedupe_streaming(
     prepared_df: Any,
     blocking_config: BlockingConfig,
@@ -516,6 +652,16 @@ def run_fs_dedupe_streaming(
     prepared frame is resident only during the batched load inside scoring, never
     through clustering or output.
 
+    **The scored pairs stay Arrow end-to-end** (default; ``GOLDENMATCH_FS_ARROW_STREAM=0``
+    restores the ``list[tuple]`` + Python Union-Find path). ``score_fs_out_of_core``
+    emits a ``PAIR_STREAM`` ``pa.Table`` instead of accumulating ``list[tuple]``,
+    ``dedup_pairs_arrow`` collapses cross-pass duplicates in Rust, and
+    ``build_clusters_arrow_native`` runs the Union-Find in Rust over the Arrow
+    buffers (no ``dict[int, dict]`` materialisation, no per-pair Python object) —
+    so peak RSS drops from the ~240 B/pair Python floor (~16 GB at 66M pairs) to
+    the ~20 B/pair Arrow stream, and the clustering wall is native. Assignments
+    stream straight into ``stream_fs_dedupe_output`` as an Arrow table.
+
     ``link_threshold``: when set, only pairs scoring ``>= link_threshold`` are
     CLUSTERED (lower-scoring pairs are review candidates the in-memory pipeline
     surfaces separately and never clusters — streaming has no review output, so
@@ -528,13 +674,12 @@ def run_fs_dedupe_streaming(
 
     import duckdb
 
-    from goldenmatch.core.cluster import build_clusters
-
     matched_pairs = set(matched_pairs or ())
     max_cluster_size = 100
     if getattr(config, "golden_rules", None) is not None:
         max_cluster_size = config.golden_rules.max_cluster_size
 
+    arrow_stream = _fs_arrow_stream_enabled()
     fd, db_path = tempfile.mkstemp(prefix="gm_fs_stream_", suffix=".duckdb")
     _os.close(fd)
     _os.unlink(db_path)  # DuckDB creates it
@@ -543,25 +688,23 @@ def run_fs_dedupe_streaming(
         pairs = score_fs_out_of_core(
             prepared_df, blocking_config, mk, matched_pairs, em_result,
             target_ids=target_ids, db_path=db_path,
+            emit="arrow" if arrow_stream else "tuples",
         )
-        if link_threshold is not None:
-            # Cluster only linked pairs; sub-link pairs are review candidates the
-            # in-memory pipeline surfaces separately and never clusters.
-            pairs = [p for p in pairs if p[2] >= link_threshold]
         con = duckdb.connect(db_path)
         try:
-            # 3: cluster -> assignments for ALL rows (all_ids folds singletons in).
-            all_ids = [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
-            clusters = build_clusters(pairs, all_ids=all_ids, max_cluster_size=max_cluster_size)
-            assignments = [
-                (m, cid) for cid, info in clusters.items() for m in info["members"]
-            ]
-            del clusters, all_ids
+            if arrow_stream:
+                assignments, n_pairs = _cluster_arrow_native(
+                    con, pairs, max_cluster_size, link_threshold,
+                )
+            else:
+                assignments, n_pairs = _cluster_python(
+                    con, pairs, max_cluster_size, link_threshold,
+                )
             # 4: stream the O(N) output from the store.
             res = stream_fs_dedupe_output(con, "prep", assignments, config, out_dir)
         finally:
             con.close()
-        res["pairs"] = len(pairs)
+        res["pairs"] = n_pairs
         return res
     finally:
         for p in (db_path, db_path + ".wal"):
