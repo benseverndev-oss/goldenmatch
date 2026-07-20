@@ -129,7 +129,16 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v2
         with:
           tag_name: ${{ env.TAG }}
-          target_commitish: ${{ inputs.ref || github.sha }}
+          # target_commitish MUST be a branch name or commit SHA -- never a tag.
+          # The reusable-call path (cut-goldenmatch-release.yml) passes inputs.ref
+          # = the bare v-tag, which the old `inputs.ref || github.sha` fed here
+          # verbatim -> GitHub 422 `invalid field target_commitish` (the tag ref
+          # is not a valid commitish), which skipped the GitHub Release for
+          # v3.5.0 AND v3.6.0 even though PyPI published fine. github.sha is
+          # always a valid commit: the pushed tag's commit (push), the dispatch
+          # ref's HEAD (dispatch), or the caller's HEAD = the tag's commit
+          # (workflow_call). For an already-created tag GitHub ignores it anyway.
+          target_commitish: ${{ github.sha }}
           name: goldenmatch ${{ env.TAG }}
           body_path: ${{ env.NOTES_FILE }}
           draft: true
