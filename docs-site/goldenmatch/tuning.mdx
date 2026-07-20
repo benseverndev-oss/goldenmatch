@@ -240,6 +240,7 @@ These trade nothing for speed/memory at scale and are safe to leave at their def
 | `GOLDENMATCH_BUCKET_SLIM_PROJECTION` | `1` (on) | After bucket scoring, drop columns downstream stages don't need (smaller per-bucket frames). Measured −3.8 GB peak RSS at 10M, output invariant. | Set `0` only if a custom downstream consumer needs a column it drops. |
 | `GOLDENMATCH_GOLDEN_SLIM_MULTIDF` | `1` (on) | Slim internal columns before the multi-DataFrame golden build. | Rarely; `0` restores the wider frame. |
 | `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Compute no-PK identity hashes in one Arrow batch instead of per row (2.6x on the fingerprint step). | `0` restores per-row, for parity debugging. |
+| `GOLDENMATCH_IDENTITY_WRITE_PIPELINE` | `1` (on) | psycopg pipeline mode for the per-record identity write path (`resolve_clusters` absorb/merge). Streams `upsert`/`emit_event`/`add_edge` statements without a per-statement network round-trip — the dominant cost of a re-resolve against a remote Postgres (Cloud SQL), where a single transaction removed the fsync but not the round-trips. Postgres-only; no-op on SQLite. | `0` restores per-statement writes, for parity debugging. |
 
 **Diagnostic-only — these can SLOW the run:**
 
@@ -558,6 +559,7 @@ Every `GOLDENMATCH_*` variable the package reads (plus the one `GOLDEN_*` except
 | `GOLDENMATCH_FUSED_PRESSURE_FRACTION` | `0.65` | RAM-fraction pressure gate for the match-seam routing. |
 | `GOLDENMATCH_FUSED_RSS_SCALE` / `_BYTES_PER_PAIR` / `_BYTES_PER_CELL` / `_BLOCK_CONCURRENCY` | `0.763` / `64` / `40` / `4` | est-peak-RSS calibration coefficients for the match pressure gate. |
 | `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT` | `1` (on) | Batch no-PK identity hashing. |
+| `GOLDENMATCH_IDENTITY_WRITE_PIPELINE` | `1` (on) | Pipeline the per-record identity writes on remote Postgres (#1912). |
 | `GOLDENMATCH_BUCKET_DEBUG` | `0` | Per-bucket timing breakdown (diagnostic). |
 | `GOLDEN_DIAGNOSTICS` | `1` (on) | Anomaly diagnostics (note: no `MATCH` in the name). On states that are probably a GoldenMatch bug -- a native wheel-skew slow path, an unexpected `dedupe_df`/`match_df` crash, the config linter itself crashing, or a broken native install -- emit a warning with a prefilled GitHub issue URL plus a PII-safe environment report. Never fires on expected fallbacks or user errors, and sends nothing anywhere (a better error message, not telemetry). `0` disables. |
 | `GOLDENMATCH_PREP_STAGED_COLLECT` | `0` | Staged prep collect (experimental, may slow). |

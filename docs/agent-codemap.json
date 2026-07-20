@@ -5743,6 +5743,7 @@
             "IdentityStore",
             "_row_get",
             "_to_dt",
+            "_write_pipeline_enabled",
             "new_entity_id"
           ],
           "imports": [
