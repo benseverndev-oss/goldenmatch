@@ -68,10 +68,19 @@ the first-line `mcp-name:` marker (mirror the infermap MCP layout), then add
 stay Python↔TS in lockstep. (Do NOT wire `api_parity` before a real surface
 exists — the gate has nothing to compare.)
 
-## Follow-up (not done here)
-Runtime call sites still hard-import the engine ad-hoc rather than through the new
-loader: `graph.py::_new_store` (`from goldengraph_native import _native`) and
-`profile.py` resolution (`goldenprofile_native.resolve_json`). Migrate them to
-`goldengraph.core._native_loader.native_module()` so there is one gated entry
-point (and the `GOLDENGRAPH_NATIVE=0/1` contract governs the whole engine, not
-just the JSON parity surface).
+## Single gated engine entry point (2026-07-20)
+Both runtime call sites now go through `goldengraph.core._native_loader` instead
+of hard-importing the wheel ad-hoc, so the `GOLDENGRAPH_NATIVE=0/1` contract
+governs the WHOLE engine, not just the JSON parity surface:
+- `graph.py::_new_store` → `_native_loader.new_store()` (builds `PyStore` via
+  `native_module()`; also picks up the in-tree build, which the old
+  `from goldengraph_native import _native` never did). The test `store` fixture
+  (`tests/conftest.py`) goes through it too.
+- `profile.py::_engine` → `_native_loader.profile_resolve_json()` (the separate
+  `goldenprofile-native` wheel, still lazily imported so importing the loader
+  never requires it — but now under the same gate).
+Both loader entry points raise a clear, actionable error on `=0` (force-disable:
+no pure-Python fallback exists) and on a missing/unbuilt engine, rather than an
+opaque `ImportError` at the call site. Gate logic is unit-tested wheel-free in
+`tests/test_native_loader.py` (loads the loader by file path to dodge
+`goldengraph/__init__`'s heavy deps, mirroring `test_native_parity`).
