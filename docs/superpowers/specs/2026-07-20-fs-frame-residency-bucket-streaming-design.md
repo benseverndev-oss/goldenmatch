@@ -3,6 +3,34 @@
 **Epic:** `docs/superpowers/plans/2026-07-18-fs-rust-arrow-only.md` — a new memory
 axis alongside PR-A…D. **Branch:** `claude/benchmark-failure-gh-7h5ryr`.
 
+> **⚠ MEASUREMENT CORRECTION (2026-07-20, post-commit).** Follow-up profiling
+> prompted by "how does the non-probabilistic path handle this?" invalidated this
+> spec's central premise. **The dominant FS peak is NOT `score_buckets` frame
+> residency — it is `build_blocks` for EM training on the full frame.** Evidence
+> (person 100K, `scripts/bench_fs_vmrss_probe.py` + `bench_fs_peak_probe.py`):
+> - VmRSS jumps 187 MB → 2084 MB **between `auto_configure` and EM training**, i.e.
+>   entirely UPSTREAM of `score_buckets`. At `score_buckets` entry the process is
+>   already at 2084 MB (weighted path: 398 MB).
+> - Forcing `GOLDENMATCH_FS_EM_SAMPLE_ROWS=10000` drops the 100K peak **2096 MB →
+>   715 MB** — so ~1400 MB was EM's full-frame `build_blocks`.
+> - The `score_buckets` slim-projection + `partition_by` machinery (this spec's
+>   target) is SHARED with the weighted path, which peaks at 467 MB — so it is the
+>   *secondary* term (a few hundred MB), not the dominant one.
+>
+> The de-risking prototype under-measured because it replays a clean parquet-read
+> frame through `score_buckets` only, skipping the EM `build_blocks` that actually
+> holds the peak. **The existing `GOLDENMATCH_FS_EM_SAMPLE_ROWS` cap (default 100K)
+> is already the mitigation for the dominant term at ≥1M** (at ≤100K the cap does
+> not bite: sample == full frame, which is why the local probe saw the full spike).
+>
+> **Status: DO NOT IMPLEMENT as written.** The frame-residency + DuckDB-source idea
+> may still matter at ≥1M (where the EM cap is active and `score_buckets` residency
+> scales with N), but that requires a 1M-regime per-stage RSS split to confirm the
+> term breakdown before committing. The byte-parity result (FS-over-DuckDB ==
+> resident, 23,413 pairs) and the harness stand; the *targeting* was wrong. Revise
+> against the 1M split before promoting any PR. See the correction thread in the
+> session for the full measurement.
+
 **Trigger:** with the Arrow pair-stream fix already landed (`398006b` / #1896:
 "cut the FS memory peak — Arrow pair stream, EM-block-sample") the FS peak RSS is
 no longer the pair stream. Stage-attributed measurement on HEAD (`0ad8f02`, which
