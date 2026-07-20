@@ -1582,6 +1582,7 @@
             "_facility_name_ne_enabled",
             "_field_group_detection_enabled",
             "_fs_autoconfig_v2_enabled",
+            "_fs_route_min_rows",
             "_fs_total_pair_budget",
             "_fuzzy_pass_transforms",
             "_get_default_memory",

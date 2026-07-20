@@ -56,15 +56,17 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
 
     set_job_status(&job_name, "running");
 
-    let rows_json = match spi::read_table_as_json(&table_name) {
-        Ok(json) => json,
+    // Read once into a single TableData; all three engine calls below share it
+    // (columnar Arrow when the columns are parity-safe, JSON fallback otherwise).
+    let table_data = match spi::read_table(&table_name) {
+        Ok(t) => t,
         Err(e) => {
             set_job_status(&job_name, "failed");
             pgrx::error!("goldenmatch: {}", e);
         }
     };
 
-    let result = match goldenmatch_bridge::api::dedupe(&rows_json, &config_json) {
+    let result = match goldenmatch_bridge::api::dedupe(&table_data, &config_json) {
         Ok(r) => r,
         Err(e) => {
             set_job_status(&job_name, "failed");
@@ -106,7 +108,7 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
     // pair (#1883). At scale that per-row SPI connect/exec was O(pairs) round
     // trips; chunking bounds the statement size while collapsing them to
     // O(pairs / CHUNK).
-    if let Ok(pairs) = goldenmatch_bridge::api::dedupe_pairs(&rows_json, &config_json) {
+    if let Ok(pairs) = goldenmatch_bridge::api::dedupe_pairs(&table_data, &config_json) {
         for chunk in pairs.chunks(INSERT_CHUNK) {
             let values: Vec<String> = chunk
                 .iter()
@@ -123,7 +125,7 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
     }
 
     // Store cluster assignments (batched, same rationale as the pairs above).
-    if let Ok(members) = goldenmatch_bridge::api::dedupe_clusters(&rows_json, &config_json) {
+    if let Ok(members) = goldenmatch_bridge::api::dedupe_clusters(&table_data, &config_json) {
         for chunk in members.chunks(INSERT_CHUNK) {
             let values: Vec<String> = chunk
                 .iter()
@@ -374,8 +376,8 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
 
     set_job_status(&job_name, "running");
 
-    let rows_json = match spi::read_table_as_json(&table_name) {
-        Ok(json) => json,
+    let table_data = match spi::read_table(&table_name) {
+        Ok(t) => t,
         Err(e) => {
             set_job_status(&job_name, "failed");
             pgrx::error!("goldenmatch: {}", e);
@@ -392,7 +394,7 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
     let run_name = format!("gm_resolve:{}:{}", job_name.replace(':', "_"), stamp);
 
     let summary_json = match goldenmatch_bridge::api::resolve_identities(
-        &rows_json,
+        &table_data,
         &config_json,
         &dsn,
         &dataset,
@@ -407,6 +409,71 @@ pub fn gm_resolve(job_name: String, table_name: String, dataset: String) -> Stri
 
     set_job_status(&job_name, "completed");
     summary_json
+}
+
+/// Steward manual **merge** of two identities in the in-DB dataset (#1913 P3).
+///
+/// `entity_a` is kept, `entity_b` is absorbed into it (its source records
+/// reassigned, the identity retired), with a `manual_merge` event on both.
+/// Delegates to the Python steward path (`manual_merge`) through the bridge over
+/// the `goldenmatch.identity_dsn` store — the same engine `goldenmatch identity
+/// merge` uses. Returns the result JSON (`{"keep", "absorbed", "at"}`).
+///
+/// `dataset` is accepted for API symmetry with `gm_resolve`; the identity ids
+/// (globally-unique UUIDv7) fully identify the entities, so it is used only as
+/// diagnostic context (entity ids are not dataset-scoped in the store).
+#[pg_extern]
+pub fn gm_identity_merge(dataset: String, entity_a: String, entity_b: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB identity merge needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_merge(&dsn, &entity_a, &entity_b, "") {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_merge(dataset={}, keep={}, absorb={}) failed: {}",
+            dataset,
+            entity_a,
+            entity_b,
+            e
+        ),
+    }
+}
+
+/// Steward manual **split** of a record out of an identity in the in-DB dataset
+/// (#1913 P3).
+///
+/// Moves `record_id` into a fresh identity, with a `manual_split` event on both
+/// the original and the new entity. Delegates to the Python steward path
+/// (`manual_split`) through the bridge over the `goldenmatch.identity_dsn`
+/// store. Returns the result JSON (`{"new_entity_id", "moved", "at"}`).
+///
+/// `dataset` is accepted for API symmetry with `gm_resolve` (used as diagnostic
+/// context only — the identity/record ids are not dataset-scoped in the store).
+#[pg_extern]
+pub fn gm_identity_split(dataset: String, entity_id: String, record_id: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB identity split needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_split(&dsn, &entity_id, &record_id, "") {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_split(dataset={}, entity={}, record={}) failed: {}",
+            dataset,
+            entity_id,
+            record_id,
+            e
+        ),
+    }
 }
 
 /// Resolve the identity DSN: the `goldenmatch.identity_dsn` GUC first, then the

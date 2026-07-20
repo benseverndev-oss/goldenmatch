@@ -2847,9 +2847,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.14.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.15.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.14.0--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.13.0--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.13.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -3085,6 +3087,38 @@ jobs:
               END IF;
             END$$;
           EOSQL
+          # P4 (#1883): the dedupe/resolve/autoconfig table ops read the input
+          # COLUMNAR (Arrow-native pa.Table, no row_to_json) for common built-in
+          # column types, with a transparent JSON fallback for exotic types.
+          # Exercise BOTH branches and assert the columnar read clusters correctly.
+          sudo -u postgres psql -p "${PGPORT}" -v ON_ERROR_STOP=1 <<'EOSQL'
+            CREATE TABLE p4_typed (id INT, name TEXT, small INT2, age INT4, big INT8,
+                                   f4 FLOAT4, f8 FLOAT8, active BOOL, note TEXT);
+            INSERT INTO p4_typed VALUES
+              (1,'Acme Corp',5,30,100,1.5,2.5,true, NULL),
+              (2,'Acme Corp',5,30,100,1.5,2.5,true, NULL),   -- dup of row 1 on name
+              (3,'Beta LLC', 7,40,200,3.5,4.5,false,NULL);
+            DO $$
+            DECLARE n_members INT;
+            BEGIN
+              -- Columnar path (int2/4/8, float4/8, bool, text, all-NULL text):
+              -- rows 1&2 share `name`, so an exact-name dedupe yields a size-2
+              -- cluster (2 member rows). Proves the typed SPI read + all-NULL
+              -- handling produce the right pa.Table end-to-end.
+              SELECT count(*) INTO n_members
+                FROM goldenmatch.goldenmatch_dedupe_clusters('p4_typed', '{"exact":["name"]}')
+                WHERE cluster_size = 2;
+              IF n_members <> 2 THEN
+                RAISE EXCEPTION 'P4 columnar dedupe: expected 2 rows in a size-2 cluster, got %', n_members;
+              END IF;
+              RAISE NOTICE 'P4 columnar read (int2/4/8,float4/8,bool,text,all-null) assertion passed';
+            END$$;
+            -- Fallback path: a numeric + date column is exotic → whole-table JSON.
+            CREATE TABLE p4_exotic (id INT, name TEXT, amount NUMERIC, ts DATE);
+            INSERT INTO p4_exotic VALUES
+              (1,'Acme',9.99,'2020-01-01'),(2,'Acme',9.99,'2020-01-01'),(3,'Beta',5.00,'2021-06-15');
+            SELECT goldenmatch.goldenmatch_dedupe_table('p4_exotic', '{"exact":["name"]}');
+          EOSQL
           # goldenmatch_match_pairs (0.9.0): two-table linkage RETURNS TABLE.
           # Zero-config ('{}') routes through match_df's auto-config -- a minimal
           # explicit fuzzy config yields zero candidate pairs (no blocking).
@@ -3222,6 +3256,48 @@ jobs:
                 RAISE EXCEPTION 'identity_resolve(in-DB): expected an entity for dataframe:1, got %', rec;
               END IF;
               RAISE NOTICE 'identity read (in-DB, empty db_path): list=% resolve.entity=%', n, rec->>'entity_id';
+            END $$;
+            -- #1913 P3: in-SQL steward merge/split writes over the same in-DB
+            -- dataset. Split a record out of the 3-record identity into a fresh
+            -- one, then merge it back — asserting on the return-value contract +
+            -- record ownership (status enum internals stay the Python store's).
+            DO $$
+            DECLARE
+              big_entity text; rec_id text; split_res jsonb; new_eid text;
+              n_nodes int; new_recs int; merge_res jsonb; back_recs int; big_recs int;
+            BEGIN
+              -- The absorbed identity owns 3 records; pick it + one of its records.
+              SELECT entity_id INTO big_entity
+                FROM source_records GROUP BY entity_id ORDER BY count(*) DESC LIMIT 1;
+              SELECT record_id INTO rec_id
+                FROM source_records WHERE entity_id = big_entity LIMIT 1;
+
+              -- SPLIT: move that record into a brand-new identity.
+              split_res := goldenmatch.gm_identity_split('people', big_entity, rec_id)::jsonb;
+              new_eid := split_res->>'new_entity_id';
+              -- `moved` is the JSON array of moved record ids (not a count).
+              IF new_eid IS NULL OR jsonb_array_length(split_res->'moved') <> 1 THEN
+                RAISE EXCEPTION 'gm_identity_split: expected 1 moved record + a new_entity_id, got %', split_res;
+              END IF;
+              SELECT count(*) INTO n_nodes FROM identity_nodes;
+              SELECT count(*) INTO new_recs FROM source_records WHERE entity_id = new_eid;
+              IF n_nodes <> 3 OR new_recs <> 1 THEN
+                RAISE EXCEPTION 'gm_identity_split: expected 3 nodes + the new entity owning 1 record, got nodes=% new_recs=%', n_nodes, new_recs;
+              END IF;
+              RAISE NOTICE 'gm_identity_split: % (nodes=%)', split_res, n_nodes;
+
+              -- MERGE: absorb the split-out identity back into the big one.
+              merge_res := goldenmatch.gm_identity_merge('people', big_entity, new_eid)::jsonb;
+              IF merge_res->>'keep' <> big_entity OR merge_res->>'absorbed' <> new_eid THEN
+                RAISE EXCEPTION 'gm_identity_merge: expected keep=% absorbed=%, got %', big_entity, new_eid, merge_res;
+              END IF;
+              -- The absorbed entity's records move back to the keeper.
+              SELECT count(*) INTO back_recs FROM source_records WHERE entity_id = new_eid;
+              SELECT count(*) INTO big_recs  FROM source_records WHERE entity_id = big_entity;
+              IF back_recs <> 0 OR big_recs <> 3 THEN
+                RAISE EXCEPTION 'gm_identity_merge: expected absorbed entity to own 0 records + keeper to own 3, got absorbed=% keeper=%', back_recs, big_recs;
+              END IF;
+              RAISE NOTICE 'gm_identity_merge: % (keeper records=%)', merge_res, big_recs;
             END $$;
           EOSQL
           echo "=== PG ${PG_VERSION} smoke passed ==="

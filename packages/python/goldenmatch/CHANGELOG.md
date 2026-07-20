@@ -6,7 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-07-20
+
 ### Changed
+
+- **Zero-config now routes probabilistic-shaped datasets to Fellegi-Sunter
+  by default (#1874).** A dataset with no surviving strong-identity exact
+  matchkey (identifier/email/phone) and 2+ fuzzy fields is served by the
+  EM-weighted FS path instead of exact+weighted matchkeys -- measured F1
+  lifts on error-heavy PII (historical_50k 0.62 -> 0.78) with no regression
+  where a strong key survives. Kill-switch:
+  `GOLDENMATCH_AUTOCONFIG_ROUTE_PROBABILISTIC=0`.
 
 - **Config-healer loop cost is now bounded and tunable (#1404).** `heal` (and
   the `review_config` / `suggest_from_result` verify path it drives) could run up
@@ -26,6 +36,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
     `GOLDENMATCH_HEAL_MIN_HEALTH_GAIN` stops the loop once cluster-health gain
     flattens (fail-open — a result without clusters never triggers a stop). Off
     by default. `GOLDENMATCH_HEAL_STEP_CAP` also exposes the outer cap.
+
+### Added
+
+- **`DedupeResult.identity_summary` (#1913).** The per-run identity-
+  resolution summary (entities created/absorbed/merged) is now surfaced on
+  the public result -- `None` when identity resolution is disabled. Backs the
+  in-Postgres `gm_resolve` write path in `goldenmatch-pg`.
+- **Small-N Fellegi-Sunter routing floor (#1947).** Below
+  `GOLDENMATCH_FS_ROUTE_MIN_ROWS` rows (default 500) a probabilistic-shaped
+  dataset stays on the robust weighted path -- FS EM is data-starved at small
+  N and under-merges fuzzy-close variants. `0` disables the floor. Every
+  dataset that validated the FS default is far above it, so routing there is
+  unchanged.
+
+### Fixed
+
+- **Net-zero-evidence filter kills scale-growing FS over-merge (#1899,
+  default ON).** Pairs whose only agreement is on absent (unobserved) fields
+  no longer accrue spurious match weight; ported to the numpy and native
+  kernels.
+- **FS at 1M rows (#1896).** A pairs-budget blocking gate stops a low-
+  cardinality pass from compounding into a megablock, and an Arrow pair-
+  stream plus EM block-sample cut the FS memory peak.
+- **Unobserved `record_embedding` masked out of the weighted score
+  (#1859).** A record with no embedding no longer contributes max agreement.
+- **Arrow-native auto-config blocking profile emitter (#1946).** The
+  controller's sample iterations no longer force an arrow->polars round trip
+  just to count rows, so zero-config runs correctly (no degraded RED-sentinel
+  config) on a base, polars-free install. Byte-identical with polars present.
 
 ## [3.5.0] - 2026-07-18
 
