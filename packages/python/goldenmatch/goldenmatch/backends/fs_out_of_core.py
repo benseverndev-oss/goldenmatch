@@ -11,9 +11,17 @@ legacy scorer, so FS has NO out-of-core or distributed path today (the
 scale-envelope doc's duckdb/ray tiers are weighted-path only). This module is
 the first out-of-core FS scorer: the prepared records live in DuckDB (on disk
 when `db_path` is a file), and blocks are pulled ONE GROUP AT A TIME, scored,
-and discarded — so peak = one block group + the DuckDB table's own buffers,
-flat in N. Phase 1 of
+and discarded, so the SCORING phase is bounded (peak = one block group).
+
+**LIMITATION - does NOT yet break the single-box wall (~40M, CI-measured).** The
+frame is loaded into DuckDB here via ``frame -> to_arrow() -> CREATE TABLE``,
+which materialises ~2-3x the frame IN RAM at load time; only AFTER load does
+scoring stream bounded. So this makes the SCORER out-of-core, but the LOAD peak
+is still ~frame-sized. Breaking the wall needs **Phase 2**: write the prepared
+frame to DuckDB/parquet in streaming batches DURING prep (or read the input
+parquet directly), so the frame never fully materialises - see
 `docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md`.
+This module is the scoring half Phase 2 feeds from a disk-resident table.
 
 **Parity.** Block membership is derived with the SAME `_build_block_key_expr` +
 null/sentinel key filter + `multi_pass` `(pass_sig, block_key)` semantics as
