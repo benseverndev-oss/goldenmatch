@@ -1850,7 +1850,7 @@ class LazyClusterDict(dict):
 
     __slots__ = ("_builder", "_built")
 
-    def __init__(self, builder):
+    def __init__(self, builder: Any):
         super().__init__()
         self._builder = builder
         self._built = False
@@ -1863,7 +1863,7 @@ class LazyClusterDict(dict):
                 dict.update(self, built)
 
     # -- read paths: materialize before answering ---------------------------
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any):
         self._ensure()
         return dict.__getitem__(self, key)
 
@@ -1875,15 +1875,15 @@ class LazyClusterDict(dict):
         self._ensure()
         return dict.__iter__(self)
 
-    def __contains__(self, key):
+    def __contains__(self, key: Any):
         self._ensure()
         return dict.__contains__(self, key)
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any):
         self._ensure()
         return dict.__eq__(self, other)
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any):
         self._ensure()
         return dict.__ne__(self, other)
 
@@ -1897,15 +1897,15 @@ class LazyClusterDict(dict):
         self._ensure()
         return reversed(list(dict.keys(self)))
 
-    def __or__(self, other):
+    def __or__(self, other: Any):
         self._ensure()
         return dict(self) | other
 
-    def __ror__(self, other):
+    def __ror__(self, other: Any):
         self._ensure()
         return other | dict(self)
 
-    def get(self, key, default=None):
+    def get(self, key: Any, default: Any = None):
         self._ensure()
         return dict.get(self, key, default)
 
@@ -1926,15 +1926,15 @@ class LazyClusterDict(dict):
         return dict(self)
 
     # -- mutate paths: materialize first so a write doesn't get clobbered ----
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: Any):
         self._ensure()
         dict.__setitem__(self, key, value)
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: Any):
         self._ensure()
         dict.__delitem__(self, key)
 
-    def pop(self, *args):
+    def pop(self, *args: Any):
         self._ensure()
         return dict.pop(self, *args)
 
@@ -1942,15 +1942,15 @@ class LazyClusterDict(dict):
         self._ensure()
         return dict.popitem(self)
 
-    def setdefault(self, key, default=None):
+    def setdefault(self, key: Any, default: Any = None):
         self._ensure()
         return dict.setdefault(self, key, default)
 
-    def update(self, *args, **kwargs):
+    def update(self, *args: Any, **kwargs: Any):
         self._ensure()
         dict.update(self, *args, **kwargs)
 
-    def __ior__(self, other):
+    def __ior__(self, other: Any):
         self._ensure()
         dict.update(self, other)
         return self
@@ -1964,7 +1964,7 @@ class LazyClusterDict(dict):
         self._ensure()
         return dict(self)
 
-    def __deepcopy__(self, memo):
+    def __deepcopy__(self, memo: Any):
         import copy as _copy
 
         self._ensure()

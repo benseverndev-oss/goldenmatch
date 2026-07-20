@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 403,
+      "module_count": 404,
       "modules": [
         {
           "module": "goldenmatch",
@@ -89,11 +89,13 @@
             "_frame_head_dicts",
             "_frame_height",
             "_frame_write_csv",
+            "_frame_write_parquet",
             "_run_config_lint",
             "_to_result_table",
             "add_correction",
             "dedupe",
             "dedupe_df",
+            "dedupe_to_parquet",
             "evaluate",
             "explain_pair_df",
             "from_splink",
@@ -291,6 +293,29 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy"
+          ]
+        },
+        {
+          "module": "goldenmatch.backends.fs_out_of_core",
+          "file": "packages/python/goldenmatch/goldenmatch/backends/fs_out_of_core.py",
+          "purpose": "Out-of-core Fellegi-Sunter block scoring — stream block groups from a",
+          "defines": [
+            "_default_golden_rules",
+            "_load_frame_batched",
+            "_needed_columns",
+            "_resolve_db_path",
+            "fs_out_of_core_enabled",
+            "run_fs_dedupe_streaming",
+            "score_fs_out_of_core",
+            "stream_fs_dedupe_output"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.blocker",
+            "goldenmatch.core.cluster",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.golden",
+            "goldenmatch.core.probabilistic"
           ]
         },
         {
@@ -2038,6 +2063,7 @@
           "purpose": "Blocker for GoldenMatch — groups records into blocks for comparison.",
           "defines": [
             "BlockResult",
+            "RowIdBlock",
             "_ann_sub_block",
             "_auto_split_block",
             "_build_ann_blocks",
@@ -2053,6 +2079,7 @@
             "_percentile",
             "_sub_block",
             "build_blocks",
+            "build_em_blocks_agg",
             "collect_blocking_fields",
             "measure_blocking_profile",
             "select_best_blocking_key"
@@ -2221,6 +2248,7 @@
           "purpose": "Union-Find clustering for GoldenMatch.",
           "defines": [
             "ClusterFrames",
+            "LazyClusterDict",
             "UnionFind",
             "_build_clusters_dict_path",
             "_build_mst",
@@ -3491,6 +3519,7 @@
             "_apply_memory_pre",
             "_apply_postflight",
             "_as_polars_df",
+            "_build_em_blocks",
             "_cast_user_cols_to_str",
             "_columnar_pipeline_enabled",
             "_default_distributed_partitions",
@@ -3503,8 +3532,11 @@
             "_frame_lane_eligible",
             "_fs_arrow_stream_eligible",
             "_fs_arrow_stream_enabled",
+            "_fs_em_agg_blocks_enabled",
+            "_fs_em_block_slim_enabled",
             "_fs_em_sample_rows",
             "_fs_external_blocks_route",
+            "_fs_streaming_dedupe_eligible",
             "_fs_use_bucket_route",
             "_fused_needed_src_cols",
             "_fused_result_from_clusters",
@@ -3524,6 +3556,7 @@
             "_resolve_identities",
             "_run_auto_suggest",
             "_run_dedupe_pipeline",
+            "_run_fs_streaming_dedupe",
             "_run_fused_fs_match_short_circuit",
             "_run_fused_match_short_circuit",
             "_run_match_pipeline",
@@ -3545,6 +3578,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.backends.datafusion_backend",
+            "goldenmatch.backends.fs_out_of_core",
             "goldenmatch.backends.ray_backend",
             "goldenmatch.backends.score_buckets",
             "goldenmatch.backends.score_duckdb",
