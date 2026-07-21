@@ -426,7 +426,9 @@ def _local_chain_enabled() -> bool:
     baseline arm of the local-vs-auto A/B."""
     import os
 
-    return os.environ.get("GOLDENGRAPH_QA_LOCAL_CHAIN", "1") not in ("0", "false", "")
+    # Case/whitespace-insensitive so FALSE / False / " false " all disable, matching the
+    # documented "0/false" contract (an empty value also disables, as before).
+    return os.environ.get("GOLDENGRAPH_QA_LOCAL_CHAIN", "1").strip().lower() not in ("0", "false", "")
 
 
 def ask(

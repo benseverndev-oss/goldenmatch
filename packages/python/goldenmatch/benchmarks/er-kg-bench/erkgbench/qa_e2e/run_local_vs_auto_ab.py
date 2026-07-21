@@ -94,6 +94,13 @@ def main(argv: list[str] | None = None) -> int:
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
     if not modes:
         raise SystemExit("--modes must list at least one answer mode (e.g. 'local,auto')")
+    # run_engine_ab needs engine.answer(..., mode=) -- only the goldengraph engine has it.
+    # Reject other engines up front rather than fail later with a cryptic TypeError.
+    if not args.self_test and args.engine != "goldengraph":
+        raise SystemExit(
+            f"local-vs-auto A/B requires an engine whose answer() takes a per-call mode "
+            f"override; only 'goldengraph' qualifies, got {args.engine!r}"
+        )
     # Honor --model by exporting OPENAI_MODEL BEFORE building the engine / reading
     # _chat_model() (both are env-driven); omitted -> the env/default is used.
     if args.model:

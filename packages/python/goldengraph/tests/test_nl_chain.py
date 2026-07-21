@@ -340,6 +340,21 @@ def test_embed_bridge_min_env_parsing_and_clamping(monkeypatch):
     assert _embed_bridge_min() == 1.0
 
 
+def test_local_chain_gate_case_and_whitespace_insensitive(monkeypatch):
+    # The GOLDENGRAPH_QA_LOCAL_CHAIN gate must honor its documented "0/false" contract
+    # regardless of case/whitespace -- else FALSE/" false " silently leave it enabled.
+    from goldengraph.answer import _local_chain_enabled
+
+    monkeypatch.delenv("GOLDENGRAPH_QA_LOCAL_CHAIN", raising=False)
+    assert _local_chain_enabled() is True  # default ON
+    for off in ("0", "false", "False", "FALSE", " false ", " 0 ", ""):
+        monkeypatch.setenv("GOLDENGRAPH_QA_LOCAL_CHAIN", off)
+        assert _local_chain_enabled() is False, off
+    for on in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("GOLDENGRAPH_QA_LOCAL_CHAIN", on)
+        assert _local_chain_enabled() is True, on
+
+
 def test_nl_unknown_anchor_abstains():
     g = _film_graph()
     p = _profile("Who directed Titanic?", g)  # Titanic is not in the slice
