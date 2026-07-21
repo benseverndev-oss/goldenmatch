@@ -141,9 +141,15 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
 /// `qgram_similarity` guards it anyway).
 fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     const N: usize = 3;
-    let pad = "#".repeat(N - 1);
-    let padded = format!("{pad}{}{pad}", s.to_lowercase());
-    let chars: Vec<char> = padded.chars().collect();
+    // Build the padded codepoint sequence directly into one Vec -- (N-1) `#`
+    // sentinels, the lowercased chars, then (N-1) `#` -- with no intermediate
+    // padding/`format!` `String` allocations (only `to_lowercase`, which Unicode
+    // case mapping requires).
+    let lower = s.to_lowercase();
+    let mut chars: Vec<char> = Vec::with_capacity(lower.chars().count() + 2 * (N - 1));
+    chars.extend(std::iter::repeat('#').take(N - 1));
+    chars.extend(lower.chars());
+    chars.extend(std::iter::repeat('#').take(N - 1));
     let mut set = std::collections::HashSet::new();
     if chars.len() < N {
         return set;

@@ -1036,10 +1036,13 @@ def _qgram_score_single(val_a: str, val_b: str, n: int = 3) -> float:
 def _qgram_score_matrix(values: list, n: int = 3) -> np.ndarray:
     """NxN character-n-gram Jaccard matrix on raw strings.
 
-    Clear O(N^2) loop -- qgram is a short-code scorer, blocks are small and
-    it stays on the Python path (no native dispatch). None values score 0.0
-    against everything (including the diagonal), mirroring how the bloom
-    matrices treat missing values.
+    Clear O(N^2) loop. This is the matrix fallback: qgram configs now route
+    through the bucket backend, which scores via the score-core kernel
+    (``score_one`` id 5) or its byte-identical per-pair mirror
+    ``_qgram_score_single``; this matrix path serves the non-bucket
+    (``find_fuzzy_matches``) route and is the parity reference. None values
+    score 0.0 against everything (including the diagonal), mirroring how the
+    bloom matrices treat missing values.
     """
     size = len(values)
     out = np.zeros((size, size), dtype=np.float64)

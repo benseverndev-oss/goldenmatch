@@ -12,9 +12,10 @@ things must agree, and this file pins all three:
 3. the bucket kernel `score_block_pairs` dispatching scorer id 5 == the per-pair
    mirror -- the end-to-end path the metric now counts.
 
-Parity is asserted EXACTLY (not approx): both sides compute the same integer
-`|A & B| / |A | B|` division, so the f64 results are bit-identical on the ASCII /
-common-Latin inputs a short-code scorer sees. (Rust `to_lowercase` vs Python
+Parity is asserted EXACTLY (not approx): both sides compute the same
+`|A ∩ B| / |A ∪ B|` ratio of integer set counts (an f64 division of two ints),
+so the results are bit-identical on the ASCII / common-Latin inputs a short-code
+scorer sees. (Rust `to_lowercase` vs Python
 `str.lower()` can differ on exotic codepoints -- the documented ASCII/Latin-scope
 edge; the corpus stays in that scope.)
 """
