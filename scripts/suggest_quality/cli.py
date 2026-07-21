@@ -875,18 +875,23 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
 
     Fails (exit 1) when:
       - zero ok records this run (gate certifies nothing)
-      - a blessed built-rule pair is MISSING from this run
-      - any built-rule pair's recovery_pct_live drops > RECOVERY_GATE_TOL vs blessed
-      - headline_live drops > RECOVERY_GATE_TOL vs blessed
-      - any built-rule pair's recovery_pct_raw drops > RECOVERY_GATE_TOL vs blessed
-      - headline_raw drops > RECOVERY_GATE_TOL vs blessed
+      - a blessed built-rule pair is MISSING from this run (absent for a reason
+        OTHER than a degenerate ceiling -- see below)
+      - any built-rule pair's recovery_pct_live/raw drops > RECOVERY_GATE_TOL vs blessed
+      - the COMMON-population headline_live/raw drops > RECOVERY_GATE_TOL vs blessed
 
-    NEW pairs (in this run but not in baseline) are informational.
+    NEW pairs (in this run but not in baseline) are informational. A blessed pair
+    whose dataset was SKIPPED this run for a degenerate zero-config ceiling (#1620)
+    is advisory, not a failure -- recovery% is unmeasurable against a broken
+    ceiling, so re-failing the guard's own deliberate skip is wrong (re-bless to
+    drop it). Headlines compare over the COMMON measurable population so a dataset
+    leaving the set (degenerate) can't phantom-shift the mean and fail the gate.
     """
     baseline = _loads_gym_baseline()
     base_pairs: dict[str, dict] = baseline.get("pairs", {})
-    base_hl_live = baseline.get("headline_live")
-    base_hl_raw = baseline.get("headline_raw")
+    # NB: headlines are recomputed over the COMMON measurable population below
+    # (not read from the stored baseline scalars), so a dataset dropping out this
+    # run can't phantom-shift the mean.
 
     ok_records = [r for r in records if r.get("status") == "ok"]
 
@@ -905,6 +910,17 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
     for r in records:
         key = f"{r.get('dataset', '')}/{r.get('name', '')}"
         cur_pairs[key] = r
+
+    # Datasets skipped THIS run for a degenerate zero-config ceiling (#1620): the
+    # gym literally cannot measure recovery% there (recovery is scored against the
+    # ceiling), so a blessed pair going absent for THIS reason is an advisory, not
+    # a MISSING failure -- that just re-fails the guard's own deliberate skip. A
+    # pair absent for ANY OTHER reason (dataset erroring / genuinely removed) stays
+    # MISSING and still fails.
+    degenerate_skipped: set[str] = {
+        r.get("dataset") for r in records
+        if r.get("status") == "skipped_degenerate_ceiling"
+    }
 
     _COL_W = 42
     _MET_W = 22
@@ -928,7 +944,12 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
 
         cur = cur_pairs.get(key)
         if cur is None or cur.get("status") != "ok":
-            rows.append((key, "*", "ok", "absent/non-ok", "  n/a", "MISSING"))
+            dataset_name = key.split("/", 1)[0]
+            if dataset_name in degenerate_skipped:
+                # Unmeasurable this run (degenerate ceiling) -> advisory, not a fail.
+                rows.append((key, "*", "ok", "degenerate ceiling", "  n/a", "SKIPPED"))
+            else:
+                rows.append((key, "*", "ok", "absent/non-ok", "  n/a", "MISSING"))
             continue
 
         for metric_key, label in [
@@ -958,27 +979,52 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
                     rows.append((key, label, "n/a", f"{float(v):.4f}", "  n/a", "NEW"))
 
     # Headline checks.
-    cur_scorecard = _build_gym_scorecard(records, native_version, git_sha)
-    cur_hl_live = cur_scorecard.get("headline_live")
-    cur_hl_raw = cur_scorecard.get("headline_raw")
+    #
+    # The blessed headline_live/raw are means over the baseline's built-rule ok
+    # pairs. If a dataset drops out this run (degenerate ceiling) the global mean
+    # is recomputed over a DIFFERENT population, so a direct scalar-vs-scalar
+    # compare phantom-fails (the ncvr_synthetic drop shifted headline_raw 0.75 ->
+    # 0.67 with zero per-pair regression). Compare the headline over the COMMON
+    # measurable population instead -- built-rule pairs that are ok in BOTH the
+    # baseline and this run -- so a dataset leaving the set can't move the delta,
+    # while a genuine drop on a still-measured dataset is fully caught.
+    common_keys = [
+        key for key, bpair in base_pairs.items()
+        if bpair.get("builds_on_existing_rule") and bpair.get("status") == "ok"
+        and key.split("/", 1)[0] not in degenerate_skipped
+        and (cur_pairs.get(key) or {}).get("status") == "ok"
+    ]
 
-    for label, base_v, cur_v in [
-        ("headline_live", base_hl_live, cur_hl_live),
-        ("headline_raw", base_hl_raw, cur_hl_raw),
-    ]:
+    def _mean_over(source: dict, metric: str) -> float | None:
+        vals = [float(source[k][metric]) for k in common_keys
+                if source.get(k, {}).get(metric) is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    population_changed = any(
+        key.split("/", 1)[0] in degenerate_skipped
+        for key, bpair in base_pairs.items()
+        if bpair.get("builds_on_existing_rule") and bpair.get("status") == "ok"
+    )
+
+    for label, metric in [("headline_live", "recovery_pct_live"),
+                          ("headline_raw", "recovery_pct_raw")]:
+        base_v = _mean_over(base_pairs, metric)
+        cur_v = _mean_over(cur_pairs, metric)
         if base_v is None or cur_v is None:
             if cur_v is not None:
                 rows.append(("(headline)", label, "n/a", f"{float(cur_v):.4f}", "  n/a", "NEW"))
             continue
-        delta = float(cur_v) - float(base_v)
+        delta = cur_v - base_v
         status = "FAIL" if delta < -RECOVERY_GATE_TOL else "OK"
+        note = " (common set)" if population_changed else ""
         rows.append((
-            "(headline)", label,
-            f"{float(base_v):.4f}", f"{float(cur_v):.4f}", f"{delta:+.4f}", status,
+            "(headline)", label + note,
+            f"{base_v:.4f}", f"{cur_v:.4f}", f"{delta:+.4f}", status,
         ))
 
     for pair_key, met, base_s, cur_s, delta_s, status in rows:
-        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "x"}.get(status, "?")
+        mark = {"FAIL": "x", "OK": ".", "NEW": "+", "MISSING": "x",
+                "SKIPPED": "~"}.get(status, "?")
         print(
             f"  {pair_key:<{_COL_W}} {met:<{_MET_W}} "
             f"{base_s:>{_VAL_W}}  {cur_s:>{_VAL_W}}  {delta_s:>8}  {mark} ({status})"
@@ -992,12 +1038,19 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
     n_ok = sum(1 for *_, s in rows if s == "OK")
     n_new = sum(1 for *_, s in rows if s == "NEW")
     n_missing = sum(1 for *_, s in rows if s == "MISSING")
+    n_skipped = sum(1 for *_, s in rows if s == "SKIPPED")
 
+    # SKIPPED is advisory (a blessed dataset became degenerate this run -- recovery
+    # is unmeasurable, not regressed); only real FAILs and genuine MISSINGs gate.
     verdict = "FAIL" if (n_fail > 0 or n_missing > 0) else "PASS"
     print(
         f"  verdict: {verdict}  "
-        f"({n_ok} ok, {n_fail} fail, {n_new} new, {n_missing} missing)"
+        f"({n_ok} ok, {n_fail} fail, {n_new} new, {n_missing} missing, "
+        f"{n_skipped} skipped)"
     )
+    if n_skipped:
+        print(f"  note: {n_skipped} blessed pair(s) SKIPPED (degenerate ceiling this "
+              f"run) -- advisory; re-bless to drop them from the baseline.")
 
     return 0 if verdict == "PASS" else 1
 
