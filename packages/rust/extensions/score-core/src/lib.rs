@@ -264,6 +264,107 @@ fn soundex_code(c: char) -> Option<char> {
     }
 }
 
+// ---- initialism_match (abbreviation matcher) --------------------------------
+// Mirrors `goldenmatch.core.acronym.derive_initialism` +
+// `core.scorer._initialism_match_single`. `legal_forms` is the caller-shipped
+// entity-form variant set (`refdata.business.entity_form_variants()`, ~77 entries,
+// already lowercase-normalized); passing it in keeps this fn pyo3-/refdata-free.
+
+/// Remove every `(...)` group, mirroring the Python `\([^)]*\)` substitution:
+/// a `(` with the nearest following `)` (and everything between) is dropped; a
+/// `(` with no later `)` is kept literally (the regex requires the close).
+fn strip_parentheticals(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '(' {
+            if let Some(rel) = chars[i + 1..].iter().position(|&c| c == ')') {
+                i += rel + 2; // skip "(...)" inclusive
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Python `token.strip().rstrip(".,").lower()` (the per-token legal-form key).
+fn normalize_token_for_legal(token: &str) -> String {
+    token
+        .trim()
+        .trim_end_matches(['.', ','])
+        .to_lowercase()
+}
+
+/// Python `str.isupper()`: at least one cased char and no lowercase char.
+fn py_isupper(s: &str) -> bool {
+    s.chars().any(char::is_uppercase) && !s.chars().any(char::is_lowercase)
+}
+
+/// Python `str.isalpha()`: non-empty and every char alphabetic.
+fn py_isalpha(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(char::is_alphabetic)
+}
+
+/// Abbreviation block key for a name, byte-for-byte with
+/// `acronym.derive_initialism`: strip parentheticals; tokenize on whitespace,
+/// dropping punctuation-only tokens (no ASCII letter) and legal-form tokens
+/// (normalized form in `legal_forms`); then a lone all-caps alphabetic 2-6 char
+/// token returns itself uppercased, >=2 tokens return the first-ASCII-letter of
+/// each uppercased, else `""`.
+pub fn derive_initialism(text: &str, legal_forms: &std::collections::HashSet<String>) -> String {
+    let stripped = strip_parentheticals(text);
+    let mut cleaned: Vec<&str> = Vec::new();
+    for token in stripped.split_whitespace() {
+        if !token.chars().any(|c| c.is_ascii_alphabetic()) {
+            continue; // punctuation-only / digits-only (`_ANY_ALPHA` = [A-Za-z])
+        }
+        if legal_forms.contains(&normalize_token_for_legal(token)) {
+            continue;
+        }
+        cleaned.push(token);
+    }
+    if cleaned.len() == 1 {
+        let tok = cleaned[0];
+        let n = tok.chars().count();
+        if py_isupper(tok) && py_isalpha(tok) && (2..=6).contains(&n) {
+            return tok.to_uppercase();
+        }
+        return String::new();
+    }
+    if cleaned.is_empty() {
+        return String::new();
+    }
+    // First ASCII letter of each token (`_FIRST_ALPHA` = [A-Za-z]), uppercased.
+    let mut initials = String::with_capacity(cleaned.len());
+    for token in &cleaned {
+        if let Some(c) = token.chars().find(|c| c.is_ascii_alphabetic()) {
+            initials.push(c.to_ascii_uppercase());
+        }
+    }
+    if initials.chars().count() < 2 {
+        return String::new();
+    }
+    initials
+}
+
+/// `1.0` if either string is the other's initialism, or the two initialisms are
+/// equal (non-empty); else `0.0`. Byte-for-byte with `_initialism_match_single`.
+pub fn initialism_match(a: &str, b: &str, legal_forms: &std::collections::HashSet<String>) -> f64 {
+    let ia = derive_initialism(a, legal_forms);
+    let ib = derive_initialism(b, legal_forms);
+    let matched = (!ia.is_empty() && ia == b)
+        || (!ib.is_empty() && a == ib)
+        || (!ia.is_empty() && !ib.is_empty() && ia == ib);
+    if matched {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
 /// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match.
@@ -425,6 +526,44 @@ mod tests {
         // full jellyfish parity: soundex("123")="1000" != soundex("456")="4000"
         assert_eq!(score_one(6, "123", "456"), 0.0);
         assert_eq!(score_one(6, "123", "123"), 1.0);
+    }
+
+    fn _legal_forms() -> std::collections::HashSet<String> {
+        // subset of refdata.business.entity_form_variants() relevant to the tests
+        ["inc", "corp", "corporation", "llc", "ltd", "gmbh", "ab", "company", "co"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn derive_initialism_matches_python_reference() {
+        let lf = _legal_forms();
+        // ground truth from goldenmatch.core.acronym.derive_initialism
+        assert_eq!(derive_initialism("IBM", &lf), "IBM"); // lone acronym -> itself
+        assert_eq!(derive_initialism("Apple", &lf), ""); // lone non-acronym
+        assert_eq!(derive_initialism("International Business Machines", &lf), "IBM");
+        assert_eq!(
+            derive_initialism("International Business Machines Corporation (Armonk, NY)", &lf),
+            "IBM" // parenthetical stripped, "Corporation" dropped
+        );
+        assert_eq!(derive_initialism("Acme Industries LLC", &lf), "AI"); // keep descriptive
+        assert_eq!(derive_initialism("GmbH", &lf), ""); // lone legal form -> dropped
+        assert_eq!(derive_initialism("AB", &lf), ""); // "ab" is a legal form (Aktiebolag)
+        assert_eq!(derive_initialism("ABCDEFG", &lf), ""); // 7 chars > acronym cap
+        assert_eq!(derive_initialism("3M Company", &lf), ""); // "3M" not alpha; Company dropped
+        assert_eq!(derive_initialism("a b c", &lf), "ABC"); // first-alpha of each, upper
+    }
+
+    #[test]
+    fn initialism_match_matches_python_reference() {
+        let lf = _legal_forms();
+        assert_eq!(initialism_match("International Business Machines", "IBM", &lf), 1.0);
+        assert_eq!(initialism_match("IBM", "International Business Machines", &lf), 1.0);
+        assert_eq!(initialism_match("Apple", "Apricot", &lf), 0.0);
+        // known false positive: same initials -> 1.0 by design
+        assert_eq!(initialism_match("International Business Machines", "Indian Banana Market", &lf), 1.0);
+        assert_eq!(initialism_match("Acme Industries LLC", "AI", &lf), 1.0);
     }
 
     #[test]
