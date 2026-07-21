@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Arrow-native auto-config no longer silently degrades blocking on
+  wide/sparse frames (#1852, mode 2).** With
+  `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1` (default since 2026-07-14), three
+  `build_blocking` helpers still ran raw-polars idioms on the input frame:
+  `_id_pass_scale_safe_nonnull` (the #1207 per-identifier union gate),
+  `_name_path_primary`'s geo-compound sizing, and `_llm_suggest_blocking_keys`.
+  On a `pa.Table` the first two AttributeError'd into a bare `except` that
+  returned `False`/`continue`, so the strong-identifier blocking union and
+  name+geo compounding silently collapsed to name-only blocking — a recall/
+  precision divergence between the arrow and polars lanes (the `_llm_*` path
+  crashed outright on an arrow+LLM-blocking run). All three now route through
+  the backend-neutral `Frame` seam, so arrow and polars select identical
+  blocking passes. Locked by a wide/sparse config-equality parity test
+  (`test_build_blocking_id_union_arrow_parity`). Complements the earlier
+  `_build_compound_blocking` fix (mode 1, the crash).
+
 ## [3.6.0] - 2026-07-20
 
 ### Changed

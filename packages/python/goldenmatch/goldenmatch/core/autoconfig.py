@@ -1946,22 +1946,32 @@ def _llm_suggest_blocking_keys(
 
     Returns a validated BlockingConfig or None if suggestions are invalid.
     """
+    # #1852: coerce to the Frame seam once so the cardinality/block stats run
+    # polars-free on a ``pa.Table`` (arrow-native lane). The raw ``df[...]`` /
+    # ``df.group_by(...)`` idioms below AttributeError'd on arrow; the first one
+    # (``df[p.name].n_unique()``) is unguarded, so an arrow+LLM-blocking run
+    # crashed outright rather than degrading.
+    from goldenmatch.core.frame import to_frame as _tf
+
+    frame = _tf(df)
+    frame_height = frame.height
+
     # Build prompt with cardinality stats (all non-numeric columns, including date)
     col_stats = []
     for p in profiles:
         if p.col_type == "numeric":
             continue
-        n_unique = df[p.name].n_unique()
-        max_block = df.group_by(p.name).len().get_column("len").max()
+        n_unique = frame.column(p.name).n_unique()
+        max_block = frame.group_len([p.name]).column("len").max()
         col_stats.append(
-            f"  {p.name}: type={p.col_type}, {n_unique:,} unique / {df.height:,} rows, "
+            f"  {p.name}: type={p.col_type}, {n_unique:,} unique / {frame_height:,} rows, "
             f"max_block={max_block:,}"
         )
 
     prompt = (
         "You are a data deduplication expert. Given these column profiles with cardinality stats:\n"
         + "\n".join(col_stats)
-        + f"\n\nDataset: {df.height:,} rows. Max safe block size: {max_safe_block:,}.\n"
+        + f"\n\nDataset: {frame_height:,} rows. Max safe block size: {max_safe_block:,}.\n"
         "Suggest 2-3 multi-pass compound blocking key combinations.\n"
         "Each pass: 2 columns that together keep max block under the safe limit.\n"
         "Prioritize recall — different passes should cover different match scenarios "
@@ -1992,7 +2002,7 @@ def _llm_suggest_blocking_keys(
         return None
 
     # Validate each suggestion
-    valid_columns = set(df.columns)
+    valid_columns = set(frame.columns)
     validated_passes: list[BlockingKeyConfig] = []
 
     for suggestion in suggested_passes:
@@ -2005,7 +2015,7 @@ def _llm_suggest_blocking_keys(
             continue
 
         try:
-            max_block = int(df.group_by(fields).len().get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]  # polars max() typed as PythonLiteral; "len" column is int64 at runtime
+            max_block = int(frame.group_len(fields).column("len").max() or 0)  # #1852: seam
         except Exception:
             logger.info("LLM suggestion rejected — group_by failed for %s", fields)
             continue
@@ -3216,15 +3226,21 @@ def build_blocking(
         non-null rows), so a bounded id (zip) or a mistyped low-cardinality
         ``identifier`` with a genuinely large non-null block is still dropped.
         """
-        try:
-            sub = df.filter(pl.col(field).is_not_null())
-            if sub.height == 0:
-                return False
-            g = sub.group_by(field).len()
-            sb = int(g.get_column("len").max() or 0)  # pyright: ignore[reportArgumentType]
-            sd = int(g.height)
-        except Exception:  # pragma: no cover -- defensive
+        # #1852: route through the ``_bf`` Frame seam so this runs polars-free on
+        # a ``pa.Table`` (the default under GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1).
+        # The old ``df.filter(pl.col(...))`` idioms AttributeError'd on arrow and
+        # the bare ``except`` swallowed it into ``return False`` -- every strong-id
+        # pass was then silently rejected, so the #1207 union collapsed to the
+        # name-only fallback on the arrow lane (the "silent zero/degraded blocking"
+        # of #1852). ``filter_valid_key`` drops exactly the null + sentinel keys
+        # the runtime static blocker drops (what this non-null projection means),
+        # so the measured block matches what actually forms.
+        sub = _bf.filter_valid_key(field)
+        if sub.height == 0:
             return False
+        g = sub.group_len([field])
+        sb = int(g.column("len").max() or 0)
+        sd = int(g.height)
         # Full-N projection unchanged: sample_n / effective_n_full stay the FULL
         # row counts; only the measured block/distinct exclude the null bucket.
         pb = _typed_projected_block(_col_types, [field], sb, effective_n_full, sample_n, sd)
@@ -3398,12 +3414,13 @@ def build_blocking(
             # Pick the geo column that reduces max block size the most
             geo_results: list[tuple[ColumnProfile, int]] = []
             for g in geo_cols:
-                try:
-                    max_block = df.group_by([g.name, best_name]).len().get_column("len").max()
-                    if max_block is not None:
-                        geo_results.append((g, int(max_block)))  # pyright: ignore[reportArgumentType]  # polars max() returns PythonLiteral
-                except Exception:
-                    continue
+                # #1852: ``_bf`` seam (was ``df.group_by(...)``, which
+                # AttributeError'd on a ``pa.Table`` -> the ``except: continue``
+                # silently skipped every geo column, so name+geo compounding never
+                # formed on the arrow lane).
+                max_block = _bf.group_len([g.name, best_name]).column("len").max()
+                if max_block is not None:
+                    geo_results.append((g, int(max_block)))
             if geo_results:
                 geo_results.sort(key=lambda x: x[1])
                 candidate, candidate_block = geo_results[0]
