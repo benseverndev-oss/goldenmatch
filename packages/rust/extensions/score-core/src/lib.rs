@@ -288,16 +288,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         3 if a == b => 1.0,
         4 => date_similarity(a, b),
         5 => qgram_similarity(a, b),
-        // id=6 = soundex_match: binary 1.0/0.0 on soundex-code equality. Naive
-        // equality (two empty codes compare EQUAL -> 1.0), matching the bucket
-        // per-pair mirror `1.0 if jf.soundex(a)==jf.soundex(b) else 0.0`.
-        6 => {
-            if soundex(a) == soundex(b) {
-                1.0
-            } else {
-                0.0
-            }
-        }
+        // id=6 = soundex_match: binary 1.0/0.0 on soundex-code equality. Guard
+        // arm collapses the if/else into the match (clippy::collapsible-match),
+        // like id 3; a soundex mismatch falls through to the 0.0 catch-all.
+        // Matches the bucket per-pair mirror `1.0 if jf.soundex(a)==jf.soundex(b) else 0.0`.
+        6 if soundex(a) == soundex(b) => 1.0,
         _ => 0.0,
     }
 }
