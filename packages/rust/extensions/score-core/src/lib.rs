@@ -150,13 +150,15 @@ fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     chars.extend(std::iter::repeat_n('#', N - 1));
     chars.extend(lower.chars());
     chars.extend(std::iter::repeat_n('#', N - 1));
-    let mut set = std::collections::HashSet::new();
     if chars.len() < N {
-        return set;
+        return std::collections::HashSet::new();
     }
-    // Grams are stored as a fixed `[char; N]` (N=3) rather than an allocated
-    // `String`, so scoring many pairs doesn't heap-allocate per trigram; the
-    // set membership semantics are identical (codepoint-wise equality).
+    // The gram count is known (chars.len() - N + 1), so pre-size the set to avoid
+    // rehashing while inserting. Grams are stored as a fixed `[char; N]` (N=3)
+    // rather than an allocated `String`, so scoring many pairs doesn't
+    // heap-allocate per trigram; set membership semantics are identical
+    // (codepoint-wise equality).
+    let mut set = std::collections::HashSet::with_capacity(chars.len() - N + 1);
     for i in 0..=(chars.len() - N) {
         set.insert([chars[i], chars[i + 1], chars[i + 2]]);
     }
@@ -180,11 +182,14 @@ pub fn qgram_similarity(a: &str, b: &str) -> f64 {
     }
     let sa = qgram_set(a);
     let sb = qgram_set(b);
-    let union = sa.union(&sb).count();
+    // One hash-lookup pass for the intersection, then |A ∪ B| = |A| + |B| - |A ∩ B|
+    // arithmetically (avoids a second `union()` pass over the sets).
+    let inter = sa.intersection(&sb).count();
+    let union = sa.len() + sb.len() - inter;
     if union == 0 {
         return 0.0;
     }
-    sa.intersection(&sb).count() as f64 / union as f64
+    inter as f64 / union as f64
 }
 
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
