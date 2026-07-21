@@ -283,6 +283,38 @@ pub fn initialism_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::score_one(7, a, b)
 }
 
+/// Install the business alias table for `alias_match` (score-core id 8): the
+/// normalized legal-form variant list (rebuilt into the strip-legal-form regex)
+/// + the surface->canonical alias map. `OnceLock` first-wins (returns `True`
+/// only on the first call). Must be called before routing alias_match native.
+#[pyfunction]
+pub fn set_business_aliases(
+    variants: Vec<String>,
+    surface_to_canonical: Vec<(String, String)>,
+) -> bool {
+    goldenmatch_score_core::set_business_aliases(variants, surface_to_canonical)
+}
+
+/// Install the given-name canonical map for `alias_match`: `normalized ->
+/// min(canonical set)` (lex-first resolution done host-side). `OnceLock`
+/// first-wins. Must be called before routing alias_match native.
+#[pyfunction]
+pub fn set_given_name_canonicals(pairs: Vec<(String, String)>) -> bool {
+    goldenmatch_score_core::set_given_name_canonicals(pairs)
+}
+
+/// Alias-match similarity (score-core id 8): 1.0 iff both values share a
+/// non-empty business OR given-name canonical, against the globally-installed
+/// tables. Own #[pyfunction] capability marker like the other bucket kernels: a
+/// stale published wheel lacking this symbol would hit score_one's catch-all
+/// (silent 0.0) for id 8, so the Python caller gates the native route on
+/// `hasattr(_native, "alias_match_similarity")` AND a successful table install,
+/// falling back to the pure `_alias_match_single` mirror otherwise.
+#[pyfunction]
+pub fn alias_match_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::score_one(8, a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)

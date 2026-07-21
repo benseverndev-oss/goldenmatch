@@ -24,3 +24,17 @@ rapidfuzz = "0.5.0"
 # `soundex` replicates `jellyfish.soundex` byte-for-byte, incl. its Unicode step
 # `unicodedata.normalize("NFKD", s).upper()`; this provides the NFKD normalizer.
 unicode-normalization = "0.1"
+# `alias_match`'s business canonicalization ports `refdata.business.strip_legal_form`,
+# which strips a trailing legal-form suffix via a data-built regex
+# `[\s,\-.]+(?:<variant>...)[\s.,]*$` (IGNORECASE). Rebuilt here from the host-shipped
+# variant list so the kernel canonicalizes byte-for-byte with the Python reference.
+# OPTIONAL behind the default `alias` feature: `alias_match` (id 8) is a Python-bucket
+# kernel only, so the wasm surface (`score-wasm`) turns the feature OFF to keep the
+# heavy `regex` engine out of the edge bundle. `native`/`datafusion-udf` inherit the
+# default and get it.
+regex = { version = "1", optional = true }
+
+[features]
+default = ["alias"]
+# `alias` pulls in `regex` and compiles the alias_match (score_one id 8) subsystem.
+alias = ["dep:regex"]

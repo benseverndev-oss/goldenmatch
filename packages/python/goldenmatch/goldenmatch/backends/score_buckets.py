@@ -243,6 +243,14 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # legal-form set until the host ships `entity_form_variants()`), else it
     # declines to the pure-Python per-pair mirror (`_initialism_match_single`).
     "initialism_match": 7,
+    # id 8 = alias_match (business + given-name canonical equality, score-core
+    # score_one). Two-part wheel-skew guard at the gating site below: routing to
+    # native id 8 requires BOTH the `alias_match_similarity` capability symbol (a
+    # stale pre-alias wheel hits score_one's catch-all -> silent 0.0) AND a
+    # successful install of the business + given-name tables (id 8 scores against
+    # empty tables until the host ships them), else it declines to the pure-Python
+    # per-pair mirror (`_alias_match_single`).
+    "alias_match": 8,
 }
 
 
@@ -287,6 +295,70 @@ def _ensure_legal_forms_installed() -> bool:
     except Exception:
         _LEGAL_FORMS_INSTALLED = False
     return _LEGAL_FORMS_INSTALLED
+
+
+# Same tri-state as _LEGAL_FORMS_INSTALLED, for the alias_match business +
+# given-name canonical tables.
+_ALIAS_TABLES_INSTALLED: bool | None = None
+
+
+def _ensure_alias_tables_installed() -> bool:
+    """Install the business + given-name canonical tables into score-core's
+    process-global state (via the native ``set_business_aliases`` /
+    ``set_given_name_canonicals`` shims) exactly once, so ``score_one`` id 8
+    (alias_match) canonicalizes the same way the pure ``_alias_match_single`` does.
+
+    Ships:
+      * business ``strip_legal_form`` variants (``business._state.variants_normalized``)
+        -- rebuilt kernel-side into the trailing-suffix regex -- plus the raw
+        ``surface_to_canonical`` alias map.
+      * a PRE-RESOLVED given-name ``normalized -> min(canonical set)`` map, so the
+        kernel needs no alias graph, only a normalize + lookup.
+
+    Returns True once installed on a kernel exposing ``set_business_aliases``,
+    ``set_given_name_canonicals`` AND ``alias_match_similarity``; False when the
+    loaded kernel lacks a symbol (a stale pre-alias wheel) or the refdata packs
+    are unavailable, so the gating site declines the native id-8 route and lets
+    the pure ``_alias_match_single`` mirror score the block. Idempotent +
+    memoized; the OnceLocks are first-wins and the tables are deterministic.
+    """
+    global _ALIAS_TABLES_INSTALLED
+    if _ALIAS_TABLES_INSTALLED is not None:
+        return _ALIAS_TABLES_INSTALLED
+    _mod = native_module()
+    if (
+        _mod is None
+        or not hasattr(_mod, "set_business_aliases")
+        or not hasattr(_mod, "set_given_name_canonicals")
+        or not hasattr(_mod, "alias_match_similarity")
+    ):
+        _ALIAS_TABLES_INSTALLED = False
+        return False
+    try:
+        from goldenmatch.refdata import business as _business
+        from goldenmatch.refdata import business_aliases as _ba
+        from goldenmatch.refdata import given_names as _gn
+
+        _business._load()
+        _ba._load()
+        _gn._load()
+        # Refdata packs must be present for the kernel to canonicalize; without
+        # them the pure mirror is the only faithful path.
+        if _business._state is None or _ba._state is None or _gn._state is None:
+            _ALIAS_TABLES_INSTALLED = False
+            return False
+        # Bool returns (first-wins) intentionally ignored: deterministic content.
+        _mod.set_business_aliases(
+            list(_business._state.variants_normalized),
+            list(_ba._state.surface_to_canonical.items()),
+        )
+        _mod.set_given_name_canonicals(
+            [(k, min(v)) for k, v in _gn._state.canonicals.items()]
+        )
+        _ALIAS_TABLES_INSTALLED = True
+    except Exception:
+        _ALIAS_TABLES_INSTALLED = False
+    return _ALIAS_TABLES_INSTALLED
 
 
 # Single source in core._hashing (re-exported here for back-compat). The
@@ -394,6 +466,19 @@ def _resolve_score_pair_callable(
         # declines to THIS mirror otherwise.
         from goldenmatch.core.scorer import _initialism_match_single
         return _initialism_match_single
+    if scorer_name == "alias_match":
+        # Business + given-name canonical equality (1.0/0.0). Per-pair mirror of
+        # the matrix path (core/scorer.py:_alias_score_matrix) AND of
+        # score-core::alias_match (native id 8); parity-asserted in
+        # tests/test_native_alias_parity.py. Making it fast-path eligible routes
+        # alias_match configs through the bucket backend (native id 8 or this
+        # per-pair mirror) instead of the slow matrix path. The native id-8 kernel
+        # needs the business + given-name tables installed
+        # (`set_business_aliases`/`set_given_name_canonicals`); the gating site
+        # below guards on both the `alias_match_similarity` symbol AND a successful
+        # install, and declines to THIS mirror otherwise.
+        from goldenmatch.core.scorer import _alias_match_single
+        return _alias_match_single
     if scorer_name == "dice":
         # Delegate to the existing per-pair implementation in core/scorer.py
         # (_dice_score_single, bigram set Dice coefficient). Matrix path is
@@ -1118,6 +1203,13 @@ def score_buckets(
             # forms. Only evaluated when a field actually uses initialism (avoids
             # the refdata load + install on every unrelated block).
             _initialism_ok = has_initialism and _ensure_legal_forms_installed()
+            has_alias = any(spec[3] == "alias_match" for spec in _field_specs)
+            # alias_match (id 8) has the same TWO-part guard as initialism: the
+            # capability symbol AND a successful business+given-name table install
+            # (id 8 scores against empty tables until the host ships them).
+            # `_ensure_alias_tables_installed` folds both into one memoized bool;
+            # only evaluated when a field actually uses alias_match.
+            _alias_ok = has_alias and _ensure_alias_tables_installed()
             # Wheel-skew: decline native entirely when a field uses a scorer whose
             # capability symbol the loaded kernel lacks (score_one would silently
             # zero that id); the pure-Python per-pair mirror scores the block.
@@ -1126,6 +1218,7 @@ def score_buckets(
                 or (has_qgram and not _qgram_ok)
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)
+                or (has_alias and not _alias_ok)
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
