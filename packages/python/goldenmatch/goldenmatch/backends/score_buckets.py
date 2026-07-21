@@ -539,27 +539,29 @@ def _resolve_score_pair_callable(
         from goldenmatch.core.scorer import _phash_score_single
         return _phash_score_single
     if scorer_name == "ensemble":
-        # ensemble is fast-path eligible by DEFAULT (2026-07-21). It rides the
-        # same float64 bucket fast path as jaro_winkler/token_sort/soundex_match:
-        # `_ensemble_score_single` per-pair (tiny blocks) + the byte-identical
-        # `_vec_field_matrix('ensemble')` vectorized lane (mid blocks, ensemble is
-        # in `_VEC_SUPPORTED`). Both are float64, so they agree with each other.
+        # ensemble DECLINES by default (2026-07-21): declining routes the whole
+        # weighted matchkey to `find_fuzzy_matches` (a single ThreadPoolExecutor
+        # over blocks, with intra-field early-termination) -- byte-identical to
+        # the historical behaviour. Making it fast-path eligible instead keeps the
+        # matchkey on `score_buckets`, whose per-bucket workers EACH call
+        # `find_fuzzy_matches` -> a NESTED ThreadPoolExecutor. On large fuzzy-only
+        # blocks (e.g. the NCVR-shape weighted matchkey) the N-outer x M-inner
+        # GIL-releasing threads oversubscribe a few-core CI runner and the pass
+        # never finishes within the per-test timeout -> the worker is os._exit'd
+        # (diagnosed via a faulthandler hang-dump: parked in `_score_single_pass`
+        # `pool.map`). So the 1.47x Febrl3 win does NOT generalise; on this shape
+        # the bucket routing is pathologically slow. The native `score_one` id 12
+        # kernel still EXISTS + is dispatched by the arrow block kernel (the 15/19
+        # `scorer_kernels` metric) -- it's just not the default scorer-resolution
+        # path. Re-enabling default-on needs the nested-pool fix (thread
+        # max_workers=1 into the inner find_fuzzy_matches) first, tracked as a
+        # follow-up. See docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
         #
-        # The historical decline (float32 find_fuzzy_matches) was justified by a
-        # buggy per-pair reimpl that "regressed Febrl3 recall 0.922 -> 0.782" --
-        # but the RE-MEASUREMENT (docs/superpowers/specs/
-        # 2026-07-21-ensemble-kernel-measurement.md) showed that under autoconfig-v2
-        # the faithful float64 kernel gives BYTE-IDENTICAL Febrl3 TP/FP/FN to the
-        # float32 matrix (the 14pt drop could not come from the true ~3e-8
-        # float32-vs-float64 gap; it was a reimpl bug). The vec lane makes the
-        # mid-block path vectorized, so ensemble is no slower than the plain
-        # scorers it now sits beside.
-        #
-        # KILL-SWITCH: `GOLDENMATCH_ENSEMBLE_KERNEL=0` (or `off`/`false`) restores
-        # the historical decline (float32 find_fuzzy_matches path) for rollback /
-        # byte-for-byte reproduction of pre-2026-07-21 output.
+        # OPT-IN: `GOLDENMATCH_ENSEMBLE_KERNEL=1` (or `on`/`true`) enables the
+        # float64 bucket fast path (`_ensemble_score_single` per-pair + the
+        # `_vec_field_matrix('ensemble')` vec lane) for the shapes where it wins.
         mode = os.environ.get("GOLDENMATCH_ENSEMBLE_KERNEL", "").strip().lower()
-        if mode in ("0", "off", "false", "no"):
+        if mode not in ("1", "on", "true", "yes"):
             return None
         from goldenmatch.core.scorer import _ensemble_score_single
         return _ensemble_score_single

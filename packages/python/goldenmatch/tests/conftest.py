@@ -11,47 +11,6 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 
-# --- TEMPORARY crash diagnostic (GOLDENMATCH_CRASH_DIAG=1) ------------------
-# Gated, inert unless the env var is set. Enables faulthandler (so a SIGSEGV in
-# any thread dumps a C traceback -> distinguishes a real crash from an OOM
-# SIGKILL, which is uncatchable) and logs process RSS high-water at each test
-# start, so the LAST line before a worker dies names the culprit test + the RSS
-# just before death. Used to diagnose the `python_goldenmatch (3)` worker crash
-# on tests/test_suggest_full_dist.py. Remove once diagnosed.
-if os.environ.get("GOLDENMATCH_CRASH_DIAG") == "1":
-    import faulthandler as _fh
-
-    # Write the fault handler dump to a per-process FILE (not stderr): when an
-    # xdist worker crashes hard, its buffered stderr is lost, so a SIGSEGV/SIGABRT
-    # C-traceback never reaches the master log. A file survives the worker death.
-    # Also log the currently-running test to the same file so the LAST line names
-    # the culprit even without a signal (e.g. a hard _exit()).
-    _fh_path = f"/tmp/gm_fh_{os.getpid()}.txt"
-    _fh_file = open(_fh_path, "w", buffering=1)  # line-buffered
-    _fh.enable(file=_fh_file, all_threads=True)
-
-    def pytest_runtest_logstart(nodeid, location):  # noqa: D401
-        try:
-            import resource
-            hwm = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-            _fh_file.write(f"[crashdiag] VmHWM~{hwm:.0f}MB start {nodeid}\n")
-            _fh_file.flush()
-            # Arm a hang-catcher: if THIS test runs longer than 90s (the crashing
-            # test's siblings finish in <=46s, and the worker dies before the 120s
-            # pytest-timeout can os._exit it), dump EVERY thread's stack to the
-            # surviving file -> the exact native frame where it's parked.
-            _fh.dump_traceback_later(90, repeat=False, file=_fh_file, exit=False)
-        except Exception:  # never let the diagnostic break a run
-            pass
-
-    def pytest_runtest_logfinish(nodeid, location):  # noqa: D401
-        try:
-            _fh.cancel_dump_traceback_later()  # test finished in time; disarm
-        except Exception:
-            pass
-# --- end crash diagnostic ---------------------------------------------------
-
-
 # Routing env vars that flip which scoring path the pipeline takes. A test that
 # mutates one of these via raw ``os.environ[...] = ...`` (rather than
 # monkeypatch) and doesn't restore it in a bulletproof ``finally`` leaks the

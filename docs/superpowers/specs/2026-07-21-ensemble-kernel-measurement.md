@@ -1,8 +1,21 @@
 # Ensemble scorer: re-opening the "kernelize it regresses recall" measurement
 
 **Date:** 2026-07-21
-**Status:** Measured. Safe opt-in kernel landed; default-flip + native-id (metric 14/19 → 15/19)
-deferred pending a large-block perf eval (see Decision).
+**Status:** Measured. Native `score_one` id 12 kernel landed (metric **14/19 → 15/19**). The
+default-on flip was tried and **REVERTED to opt-in** (`GOLDENMATCH_ENSEMBLE_KERNEL`, default off).
+
+> **UPDATE (2026-07-21, supersedes the "DEFAULT-ON" sections below).** Flipping the default on shipped
+> briefly but caused a CI worker crash on a large fuzzy-only NCVR pipeline test. A faulthandler
+> hang-dump pinned the cause: making `ensemble` fast-path eligible keeps the whole weighted matchkey on
+> `score_buckets`, whose per-bucket `ThreadPoolExecutor` workers EACH call `find_fuzzy_matches` — a
+> **nested** ThreadPoolExecutor. On large fuzzy-only blocks the N-outer × M-inner GIL-releasing threads
+> oversubscribe a few-core runner and the pass never finishes within the 120s per-test timeout, which
+> `os._exit`s the worker (not OOM — 636 MB; no signal). Declining (the default) routes the matchkey
+> straight to a single `find_fuzzy_matches` pool with intra-field early-termination — byte-identical to
+> historical behaviour and fast. So the 1.47× Febrl3 win does **not** generalise. The kernel stays
+> **opt-in** (`GOLDENMATCH_ENSEMBLE_KERNEL=1`); the native id-12 kernel still backs the 15/19 metric.
+> Re-enabling default-on needs the nested-pool fix (thread `max_workers=1` into the inner
+> `find_fuzzy_matches`) first — a follow-up.
 
 ## Background — the deferral this re-opens
 
