@@ -682,10 +682,25 @@ pub fn phash_similarity(a: &str, b: &str) -> f64 {
     1.0 - dist as f64 / nbits as f64
 }
 
+/// `ensemble`: element-wise max of jaro_winkler, the UNSCALED token_sort, and a
+/// `0.8` soundex bonus -- composes `score_one(0)`/`(2)`/`(6)`. Byte-for-byte with
+/// the bucket per-pair mirror `_ensemble_score_single`
+/// (`max(JaroWinkler.similarity, token_sort_ratio/100, 0.8 if soundex(a)==soundex(b) else 0)`)
+/// to the same tolerance jaro_winkler / token_sort individually hold vs rapidfuzz:
+/// `score_one(2)` is already the UNSCALED `fuzz::ratio` on [0, 1], so it maps
+/// directly onto the Python `/100` form (no divide), and `score_one(6)` is the
+/// binary 1.0/0.0 soundex-equality, so `0.8 * score_one(6)` is the exact bonus.
+pub fn ensemble_similarity(a: &str, b: &str) -> f64 {
+    let jw = score_one(0, a, b);
+    let ts = score_one(2, a, b);
+    let sx = score_one(6, a, b);
+    jw.max(ts).max(0.8 * sx)
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
 /// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match,
-/// 8=alias_match, 9=dice, 10=jaccard, 11=phash.
+/// 8=alias_match, 9=dice, 10=jaccard, 11=phash, 12=ensemble.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -732,6 +747,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         9 => dice_similarity(a, b),
         10 => jaccard_similarity(a, b),
         11 => phash_similarity(a, b),
+        // id=12 = ensemble: max(jaro_winkler, unscaled token_sort, 0.8*soundex).
+        // Composes ids 0/2/6 (each already parity-validated vs its per-pair
+        // mirror), so it matches `_ensemble_score_single` by construction. The
+        // Python guard gates it on the `ensemble_similarity` capability symbol.
+        12 => ensemble_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -999,6 +1019,30 @@ mod tests {
         // Unparseable hex -> 0.0 (kernel can't raise like the single fns do).
         assert_eq!(score_one(9, "zz", "abcd"), 0.0);
         assert_eq!(score_one(11, "", ""), 0.0); // nbits == 0
+    }
+
+    #[test]
+    fn score_one_id12_is_ensemble_max_of_components() {
+        // ensemble = max(jaro_winkler, unscaled token_sort, 0.8*soundex_match).
+        // Arm 12 must equal the standalone ensemble_similarity, which equals the
+        // component max.
+        for (a, b) in [
+            ("John Smith", "Smith John"),
+            ("Robert", "Rupert"),
+            ("cafe", "café"),
+            ("", ""),
+            ("abc", "xyz"),
+        ] {
+            let jw = score_one(0, a, b);
+            let ts = score_one(2, a, b);
+            let sx = score_one(6, a, b);
+            let want = jw.max(ts).max(0.8 * sx);
+            assert_eq!(score_one(12, a, b), want, "score_one(12) for {a:?}/{b:?}");
+            assert_eq!(ensemble_similarity(a, b), want, "ensemble_similarity {a:?}/{b:?}");
+        }
+        // Identical strings -> 1.0 (jw dominates). Soundex-only agreement floors at 0.8.
+        assert_eq!(score_one(12, "robert", "robert"), 1.0);
+        assert!(score_one(12, "Robert", "Rupert") >= 0.8 - 1e-12); // both R163
     }
 
     #[test]

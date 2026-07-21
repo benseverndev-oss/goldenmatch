@@ -115,7 +115,7 @@ def _warn_stale_native_wheel_once(n_exclude: int) -> None:
 # strings). The parity test catches this; do not add them back without a matrix
 # form that matches the per-pair callable bit-for-bit.
 _VEC_SUPPORTED: frozenset[str] = frozenset(
-    {"soundex_match", "jaro_winkler", "levenshtein", "token_sort"}
+    {"soundex_match", "jaro_winkler", "levenshtein", "token_sort", "ensemble"}
 )
 
 
@@ -140,6 +140,19 @@ def _vec_field_matrix(values: list, scorer_name: str):
     if scorer_name == "jaccard":
         from goldenmatch.core.scorer import _jaccard_score_matrix
         return _jaccard_score_matrix(values).astype(np.float64, copy=False)
+    if scorer_name == "ensemble":
+        # float64 max(jaro_winkler, token_sort/100, soundex*0.8) -- byte-identical
+        # to the per-pair `_ensemble_score_single` (same three components, same 0.8
+        # bonus, all float64). The soundex bonus reuses `_soundex_score_matrix`,
+        # the SAME matrix the per-pair soundex_match callable is byte-parity with
+        # (asserted in tests/test_score_buckets_vectorized_fallback.py), so the
+        # ensemble vec form agrees with `_ensemble_score_single`'s
+        # `jellyfish.soundex(a)==jellyfish.soundex(b)` empty-code-match semantics.
+        from goldenmatch.core.scorer import _soundex_score_matrix
+        jw = np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
+        ts = np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+        sx = _soundex_score_matrix(values).astype(np.float64) * 0.8
+        return np.maximum(np.maximum(jw, ts), sx)
     if scorer_name == "jaro_winkler":
         return np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
     if scorer_name == "levenshtein":
@@ -263,6 +276,13 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     "dice": 9,
     "jaccard": 10,
     "phash": 11,
+    # id 12 = ensemble: max(jaro_winkler, unscaled token_sort, 0.8*soundex),
+    # composing score_one 0/2/6 (score-core `ensemble_similarity`). Matches the
+    # per-pair `_ensemble_score_single` to machine epsilon (1.1e-16 on real
+    # Febrl3 name/address pairs). Guarded on the `ensemble_similarity` capability
+    # symbol so a stale wheel (pre-ensemble score_one) declines to the pure
+    # per-pair mirror instead of silently scoring the whole matchkey 0.0.
+    "ensemble": 12,
 }
 
 
@@ -519,39 +539,32 @@ def _resolve_score_pair_callable(
         from goldenmatch.core.scorer import _phash_score_single
         return _phash_score_single
     if scorer_name == "ensemble":
-        # DECLINE the fast path for ensemble by DEFAULT (return None ->
-        # find_fuzzy_matches float32-matrix path, the source of truth). A prior
-        # per-pair reimplementation (max(jw, ts, sx*0.8)) claimed matrix-path
-        # equivalence but measurably diverged on an OLDER autoconfig: on Febrl3
-        # (3 ensemble fields) it dropped recall 0.922 -> 0.782 vs polars-direct
-        # (F1 0.9332 -> 0.8768) -- the float64 per-pair combine scored STRICTER
-        # than the float32 matrix combine at the >= threshold boundary, pushing
-        # true pairs below threshold.
+        # ensemble DECLINES by default (2026-07-21): declining routes the whole
+        # weighted matchkey to `find_fuzzy_matches` (a single ThreadPoolExecutor
+        # over blocks, with intra-field early-termination) -- byte-identical to
+        # the historical behaviour. Making it fast-path eligible instead keeps the
+        # matchkey on `score_buckets`, whose per-bucket workers EACH call
+        # `find_fuzzy_matches` -> a NESTED ThreadPoolExecutor. On large fuzzy-only
+        # blocks (e.g. the NCVR-shape weighted matchkey) the N-outer x M-inner
+        # GIL-releasing threads oversubscribe a few-core CI runner and the pass
+        # never finishes within the per-test timeout -> the worker is os._exit'd
+        # (diagnosed via a faulthandler hang-dump: parked in `_score_single_pass`
+        # `pool.map`). So the 1.47x Febrl3 win does NOT generalise; on this shape
+        # the bucket routing is pathologically slow. The native `score_one` id 12
+        # kernel still EXISTS + is dispatched by the arrow block kernel (the 15/19
+        # `scorer_kernels` metric) -- it's just not the default scorer-resolution
+        # path. Re-enabling default-on needs the nested-pool fix (thread
+        # max_workers=1 into the inner find_fuzzy_matches) first, tracked as a
+        # follow-up. See docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
         #
-        # `GOLDENMATCH_ENSEMBLE_KERNEL` RE-OPENS that measurement (the deferral
-        # explicitly invited it): `1`/`f64` returns the float64 per-pair kernel;
-        # `f32` returns the variant that quantizes each per-pair score to float32
-        # to reproduce the matrix path's per-field float32 storage. Default
-        # (unset) is byte-identical to the historical decline. The recall delta
-        # under the current autoconfig is measured in
-        # docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
+        # OPT-IN: `GOLDENMATCH_ENSEMBLE_KERNEL=1` (or `on`/`true`) enables the
+        # float64 bucket fast path (`_ensemble_score_single` per-pair + the
+        # `_vec_field_matrix('ensemble')` vec lane) for the shapes where it wins.
         mode = os.environ.get("GOLDENMATCH_ENSEMBLE_KERNEL", "").strip().lower()
-        if mode in ("1", "on", "true", "f32", "float32"):
-            # SAFE variant: quantize each per-pair score to float32 so it is
-            # BYTE-IDENTICAL to the matrix path's per-field float32 storage
-            # (`f32(max(a,b,c)) == max(f32(a),f32(b),f32(c))` since f32 cast is
-            # monotonic and commutes with max). Field-level parity is asserted
-            # in tests/test_ensemble_kernel_parity.py -- the exact bar the
-            # historical decline demanded before reintroduction.
-            from goldenmatch.core.scorer import _ensemble_score_single_f32
-            return _ensemble_score_single_f32
-        if mode in ("f64", "float64"):
-            # DIVERGENT variant (measurement only): float64, diverges from the
-            # matrix by <= 3e-8 (0.0043% of field-pairs cross a threshold). Kept
-            # for the A/B in the measurement spec; NOT recommended for use.
-            from goldenmatch.core.scorer import _ensemble_score_single
-            return _ensemble_score_single
-        return None
+        if mode not in ("1", "on", "true", "yes"):
+            return None
+        from goldenmatch.core.scorer import _ensemble_score_single
+        return _ensemble_score_single
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
         return None
@@ -1241,12 +1254,14 @@ def score_buckets(
             _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
             _jaccard_ok = _mod is not None and hasattr(_mod, "jaccard_similarity")
             _phash_ok = _mod is not None and hasattr(_mod, "phash_similarity")
+            _ensemble_ok = _mod is not None and hasattr(_mod, "ensemble_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             has_dice = any(spec[3] == "dice" for spec in _field_specs)
             has_jaccard = any(spec[3] == "jaccard" for spec in _field_specs)
             has_phash = any(spec[3] == "phash" for spec in _field_specs)
+            has_ensemble = any(spec[3] == "ensemble" for spec in _field_specs)
             has_initialism = any(spec[3] == "initialism_match" for spec in _field_specs)
             # initialism_match (id 7) has a TWO-part guard: the capability symbol
             # AND a successful legal-form install (id 7 scores against an empty
@@ -1276,6 +1291,7 @@ def score_buckets(
                 or (has_dice and not _dice_ok)
                 or (has_jaccard and not _jaccard_ok)
                 or (has_phash and not _phash_ok)
+                or (has_ensemble and not _ensemble_ok)
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]

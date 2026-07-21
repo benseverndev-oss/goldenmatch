@@ -19,6 +19,17 @@ from goldenmatch.backends.score_buckets import (
     _score_block_vec,
 )
 
+
+@pytest.fixture(autouse=True)
+def _enable_ensemble_kernel(monkeypatch):
+    # `ensemble` is OPT-IN in `_resolve_score_pair_callable` (default-on caused a
+    # nested-ThreadPoolExecutor slowdown on large fuzzy-only blocks; see the
+    # resolver comment). These tests exercise the vec lane / kernel resolver
+    # directly, so enable it -- otherwise `_ref_per_pair` resolves ensemble to
+    # None and the parametrized `ensemble` case can't build its reference.
+    monkeypatch.setenv("GOLDENMATCH_ENSEMBLE_KERNEL", "1")
+
+
 # A block of realistic-ish strings with near-duplicates so scores span the
 # whole 0..1 range and threshold decisions are exercised at the edges.
 _NAMES = [
@@ -116,6 +127,27 @@ def test_multi_field_and_exclusions_parity():
                            0, n, total_weight, 0.6, fe)
     ref = _ref_per_pair(row_ids, field_arrays, scorers, weights,
                         0, n, total_weight, 0.6, fe)
+    _assert_byte_identical(vec, ref)
+
+
+@pytest.mark.parametrize("threshold", [0.0, 0.5, 0.8])
+def test_ensemble_soundex_edge_parity(threshold):
+    # ensemble's soundex bonus reuses _soundex_score_matrix, which must agree
+    # with the per-pair jellyfish.soundex equality on the tricky inputs:
+    # empty-soundex-code values (non-alpha / digits), single chars, and
+    # jellyfish-raising inputs (the per-pair try/except -> 0.0). If the matrix
+    # soundex diverged from the per-pair soundex on empty codes, the ensemble
+    # `max(jw, ts, sx)` would flip here.
+    edge = [
+        "123", "456", "", " ", "a", "A", "!!", "O'Brien", "OBrien",
+        "de la Cruz", "12ab", "Smith", "smith", "SMITH",
+    ]
+    n = len(edge)
+    row_ids = list(range(n))
+    vec = _score_block_vec(row_ids, [list(edge)], ["ensemble"], [1.0],
+                           0, n, 1.0, threshold, frozenset())
+    ref = _ref_per_pair(row_ids, [list(edge)], ["ensemble"], [1.0],
+                        0, n, 1.0, threshold, frozenset())
     _assert_byte_identical(vec, ref)
 
 

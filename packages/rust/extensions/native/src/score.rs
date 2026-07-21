@@ -337,6 +337,14 @@ pub fn phash_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::phash_similarity(a, b)
 }
 
+/// ensemble: max(jaro_winkler, unscaled token_sort, 0.8*soundex_match). Composes
+/// score_one 0/2/6; byte-for-byte with the bucket per-pair mirror
+/// `_ensemble_score_single` to the same tolerance jw/token_sort hold vs rapidfuzz.
+#[pyfunction]
+pub fn ensemble_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::ensemble_similarity(a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)

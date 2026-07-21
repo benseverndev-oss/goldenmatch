@@ -322,6 +322,7 @@ scorer_kernels:
   - alias_match
   - date
   - dice
+  - ensemble
   - initialism_match
   - jaccard
   - phash
@@ -339,7 +340,6 @@ scorer_kernels:
 # kernelize (with the blocker); `declined --` = won't (with why); `n/a --` = not a
 # string kernel. Removing a scorer's kernel without adding it here fails CI.
 scorer_kernels_deferred:
-  ensemble: "deferred -- re-measured 2026-07-21 (docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md): the old 0.922->0.782 Febrl3 regression does NOT reproduce under autoconfig-v2 (byte-identical TP/FP/FN), and a float32-cast per-pair kernel is provably field-exact with the matrix source of truth. Landed opt-in (GOLDENMATCH_ENSEMBLE_KERNEL). Not yet in _NATIVE_SCORER_IDS (needs a native arrow-block id) + default-on pending a large-block perf eval / vec-lane port, so it is not yet kernel-backed for the metric"
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   radial: "declined -- bespoke rotation-aligned Pearson on radial profiles; angular alignment search, low perf upside (small blocks)"

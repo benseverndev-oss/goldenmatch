@@ -108,6 +108,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::dice_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::jaccard_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::phash_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(score::ensemble_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs_arrow, m)?)?;
