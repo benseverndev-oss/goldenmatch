@@ -235,6 +235,18 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::date_similarity(a, b)
 }
 
+/// Character-trigram Jaccard (q-gram) similarity (score-core id 5). Exposed as
+/// its own #[pyfunction] capability marker, exactly like `date_similarity`:
+/// `score_one` / `score_block_pairs` dispatch id 5, but a stale published wheel
+/// (pre-qgram) would hit score_one's catch-all and silently return 0.0 for id 5,
+/// so the Python caller gates the native q-gram route on
+/// `hasattr(_native, "qgram_similarity")` and falls back to the pure-Python
+/// per-pair mirror (`_qgram_score_single`) otherwise.
+#[pyfunction]
+pub fn qgram_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::qgram_similarity(a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)

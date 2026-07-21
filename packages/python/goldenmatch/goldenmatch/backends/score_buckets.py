@@ -221,6 +221,12 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # score_field_matrix path), where id 4 is soundex_match -- different kernel,
     # different namespace; date is not wired into that path.
     "date": 4,
+    # id 5 = qgram (char-trigram Jaccard, score-core score_one). Same wheel-skew
+    # story as date: routing is GUARDED on the `qgram_similarity` capability
+    # symbol at the gating site below, so a stale wheel (pre-qgram, whose
+    # score_one catch-all scores id 5 as 0.0) declines to the pure-Python
+    # per-pair mirror (`_qgram_score_single`) instead of silently zeroing.
+    "qgram": 5,
 }
 
 
@@ -309,6 +315,14 @@ def _resolve_score_pair_callable(
         # (native id 4); byte-identical to the kernel (native-parity asserted).
         from goldenmatch.core.scorer import _date_similarity_py
         return _date_similarity_py
+    if scorer_name == "qgram":
+        # Character-trigram Jaccard (n=3). Per-pair mirror of the matrix path
+        # (_qgram_score_matrix) AND of score-core::qgram_similarity (native
+        # id 5); the three are parity-asserted in tests/test_native_qgram_parity.py.
+        # Making qgram fast-path eligible routes qgram configs through the bucket
+        # backend (native or this per-pair mirror) instead of the slow matrix path.
+        from goldenmatch.core.scorer import _qgram_score_single
+        return _qgram_score_single
     if scorer_name == "dice":
         # Delegate to the existing per-pair implementation in core/scorer.py
         # (_dice_score_single, bigram set Dice coefficient). Matrix path is
@@ -1018,8 +1032,14 @@ def score_buckets(
             # per-pair path (which mirrors the kernel) score the whole block.
             _mod = native_module()
             _date_ok = _mod is not None and hasattr(_mod, "date_similarity")
+            _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
-            if all(i is not None for i in ids) and not (has_date and not _date_ok):
+            has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
+            # Wheel-skew: decline native entirely when a field uses a scorer whose
+            # capability symbol the loaded kernel lacks (score_one would silently
+            # zero that id); the pure-Python per-pair mirror scores the block.
+            _skew_block = (has_date and not _date_ok) or (has_qgram and not _qgram_ok)
+            if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
 
     # Track 1 Fix B: build the native ExcludeSet ONCE here, BEFORE the bucket

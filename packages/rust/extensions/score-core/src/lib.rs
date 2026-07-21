@@ -133,9 +133,54 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
     }
 }
 
+/// Character-trigram (q-gram) Jaccard set for one raw string, mirroring Python
+/// `goldenmatch.core.scorer._qgram_set` (n=3): lowercase, pad each side with
+/// `n-1` `#` sentinels, and take the set of length-`n` codepoint substrings.
+/// Padding means even the empty string yields the all-`#` gram, so the set is
+/// never empty for n>=2 (the Python `if not union` branch is unreachable, but
+/// `qgram_similarity` guards it anyway).
+fn qgram_set(s: &str) -> std::collections::HashSet<String> {
+    const N: usize = 3;
+    let pad = "#".repeat(N - 1);
+    let padded = format!("{pad}{}{pad}", s.to_lowercase());
+    let chars: Vec<char> = padded.chars().collect();
+    let mut set = std::collections::HashSet::new();
+    if chars.len() < N {
+        return set;
+    }
+    for i in 0..=(chars.len() - N) {
+        set.insert(chars[i..i + N].iter().collect::<String>());
+    }
+    set
+}
+
+/// Character-trigram (q-gram) Jaccard similarity on two raw strings, the
+/// reference for `goldenmatch.core.scorer._qgram_score_single` (n=3):
+/// `|A & B| / |A | B|` over the padded q-gram sets. Identical strings (incl.
+/// both empty) score 1.0; an empty union scores 0.0.
+///
+/// Unicode note: lowercasing uses Rust `str::to_lowercase` (Unicode default
+/// case mapping), which matches Python `str.lower()` across ASCII and common
+/// Latin. A handful of exotic codepoints can differ -- the same ASCII/Latin
+/// scoped parity edge documented for the infermap scorers. q-gram is a
+/// short-code scorer (SKUs / codes / names), so inputs are ASCII-dominant in
+/// practice.
+pub fn qgram_similarity(a: &str, b: &str) -> f64 {
+    if a == b {
+        return 1.0;
+    }
+    let sa = qgram_set(a);
+    let sb = qgram_set(b);
+    let union = sa.union(&sb).count();
+    if union == 0 {
+        return 0.0;
+    }
+    sa.intersection(&sb).count() as f64 / union as f64
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact, 4=date.
+/// 2=token_sort, 3=exact, 4=date, 5=qgram.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -156,6 +201,7 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // with a!=b falls through to the catch-all 0.0, same as every other id.
         3 if a == b => 1.0,
         4 => date_similarity(a, b),
+        5 => qgram_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -205,6 +251,37 @@ mod tests {
         assert_eq!(date_similarity("abc", "abc"), 1.0);
         let s = date_similarity("1980-01-01", "Jan 1 1980");
         assert!((s - levenshtein_similarity("1980-01-01", "Jan 1 1980")).abs() < 1e-12);
+    }
+
+    #[test]
+    fn qgram_identity_and_jaccard() {
+        // identical (incl. empty) -> 1.0
+        assert_eq!(qgram_similarity("abc", "abc"), 1.0);
+        assert_eq!(qgram_similarity("", ""), 1.0);
+        // case-insensitive: same q-gram sets after lowercasing
+        assert_eq!(qgram_similarity("ABC", "abc"), 1.0);
+        // disjoint short strings share only the all-`#` padding gram is false here:
+        // "ab" -> {##a,#ab,ab#} lower; "xy" -> {##x,#xy,xy#}; no overlap -> 0.0
+        assert_eq!(qgram_similarity("ab", "xy"), 0.0);
+        // one empty, one not: union non-empty, intersection empty -> 0.0
+        assert_eq!(qgram_similarity("", "x"), 0.0);
+        // partial overlap is strictly between 0 and 1
+        let s = qgram_similarity("abcd", "abce");
+        assert!(s > 0.0 && s < 1.0, "got {s}");
+    }
+
+    #[test]
+    fn qgram_matches_hand_computed_jaccard() {
+        // "abc" -> {##a,#ab,abc,bc#,c##}; "abd" -> {##a,#ab,abd,bd#,d##}
+        // intersection {##a,#ab} = 2, union = 8 -> 0.25
+        let s = qgram_similarity("abc", "abd");
+        assert!((s - 0.25).abs() < 1e-12, "got {s}");
+    }
+
+    #[test]
+    fn score_one_id5_is_qgram() {
+        assert_eq!(score_one(5, "abc", "abc"), 1.0);
+        assert_eq!(score_one(5, "abc", "abd"), qgram_similarity("abc", "abd"));
     }
 
     #[test]
