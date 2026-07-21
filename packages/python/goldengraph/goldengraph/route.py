@@ -262,11 +262,49 @@ def _find_anchor(query: str, entity_names) -> tuple[str | None, int]:
 _REL_MARKERS = frozenset({"of", "by"})
 
 
-def _extract_nl_chain_slots(query: str, predicates, entity_names):
+def _embed_bridge_min() -> float:
+    """Cosine floor for the semantic relation bridge (`GOLDENGRAPH_NL_EMBED_BRIDGE_MIN`,
+    default 0.55). Set high enough that a filler noun doesn't spuriously bind a
+    predicate; a non-float falls back to the default."""
+    import os
+
+    try:
+        return float(os.environ.get("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "0.55"))
+    except ValueError:
+        return 0.55
+
+
+def _cos(a, b) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _embed_bridge_predicate(token_vec, pred_index, pred_vecs, threshold) -> str | None:
+    """The predicate whose phrase embedding is closest (cosine) to ``token_vec``,
+    or None below ``threshold``. Ties resolve to the first (lexicographically
+    smallest, since ``pred_index`` is pre-sorted) via the strict-improvement test."""
+    best_pred, best_cos = None, -1.0
+    for (pred, _ptoks), pv in zip(pred_index, pred_vecs):
+        c = _cos(token_vec, pv)
+        if c > best_cos:
+            best_pred, best_cos = pred, c
+    return best_pred if best_cos >= threshold else None
+
+
+def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=None):
     """(anchor, relation_chain) from a natural-language multi-hop question, or
     (None, None). Grounded in the slice vocab. The returned order is a proximity
     HINT -- the caller's walk validates it against the graph (only the ordering
-    that reaches a terminal completes), so a wrong hint is self-correcting."""
+    that reaches a terminal completes), so a wrong hint is self-correcting.
+
+    With an ``embedder``, an unmapped relation-position word (before an "of"/"by"
+    marker) that the lexical stem rule couldn't ground -- a true SYNONYM like
+    "spouse" for the "married_to" predicate -- is bridged by embedding cosine, so
+    such questions fire the chain instead of abstaining. The bridge is scoped to
+    the guard-triggering words only (not every content word), so it lifts the
+    documented synonym boundary without opening a spurious-match surface."""
     if not predicates or not entity_names:
         return None, None
     anchor, anchor_pos = _find_anchor(query, entity_names)
@@ -303,14 +341,37 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names):
         hits.append((abs(cp - max(anchor_pos, 0)), pred))
     if not hits:
         return None, None
+    # SEMANTIC BRIDGE (opt-in via `embedder`): the guard below abstains on an
+    # unmapped relation-position word. Before abstaining, try to ground exactly
+    # those words -- the true synonyms the lexical stem rule can't reach ("spouse"
+    # -> "married_to") -- by embedding cosine against the predicate phrases. Scoped
+    # to the guard-triggering words only (uncovered AND before an "of"/"by" marker),
+    # so it lifts the synonym boundary without embedding every content word.
+    if embedder is not None:
+        unresolved = [(ci, content[ci][0], content[ci][1])
+                      for ci, (_cp, _ct, nx) in enumerate(content)
+                      if ci not in covered and nx in _REL_MARKERS]
+        if unresolved:
+            try:
+                pred_vecs = embedder.embed([p.replace("_", " ") for p, _ in pred_index])
+                tok_vecs = embedder.embed([t for _ci, _cp, t in unresolved])
+            except Exception:  # noqa: BLE001 - embedder failure -> no bridge, guard abstains
+                pred_vecs = tok_vecs = None
+            if pred_vecs is not None and tok_vecs is not None:
+                thr = _embed_bridge_min()
+                for (ci, cp, _t), tv in zip(unresolved, tok_vecs):
+                    pred = _embed_bridge_predicate(tv, pred_index, pred_vecs, thr)
+                    if pred is not None:
+                        covered.add(ci)
+                        hits.append((abs(cp - max(anchor_pos, 0)), pred))
     # COMPLETENESS GUARD: abstain if an UNMAPPED content word sits in a relation
     # position (immediately before "of"/"by") -- that's a hop we couldn't ground
-    # (e.g. "spouse of" with no stem to "married_to"). Firing the partial chain
-    # would walk short and return a WRONG intermediate node (the None-fallthrough
-    # can't catch a chain that completes early). Abstaining routes to today's
-    # retrieval+synthesis path -- never worse than the status quo. Filler nouns
-    # ("the film Inception") are NOT before a marker, so they don't trip this; the
-    # uncovered-synonym case is the documented boundary (needs the embed/LLM tier).
+    # (e.g. "spouse of" with no stem to "married_to" AND no embedder to bridge it).
+    # Firing the partial chain would walk short and return a WRONG intermediate node
+    # (the None-fallthrough can't catch a chain that completes early). Abstaining
+    # routes to today's retrieval+synthesis path -- never worse than the status quo.
+    # Filler nouns ("the film Inception") are NOT before a marker, so they don't
+    # trip this; the uncovered-synonym case is what the semantic bridge above lifts.
     for ci, (_cp, _ct, nx) in enumerate(content):
         if ci not in covered and nx in _REL_MARKERS:
             return None, None
@@ -321,12 +382,13 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names):
     return anchor, tuple(pred for _dist, pred in hits)
 
 
-def classify_query(query: str, *, predicates=None, entity_names=None) -> QueryProfile:
+def classify_query(query: str, *, predicates=None, entity_names=None, embedder=None) -> QueryProfile:
     """Heuristic intent + slot extraction. `predicates` is the slice's stored predicate
     ids (underscored); `entity_names` is the slice's entity canonical names. Both ground
     the template-free NL multi-hop chain extractor -- when they yield an anchor + relation
     chain, a natural-language multi-hop question routes to the deterministic `chain` walk
-    instead of LLM synthesis-over-the-ball. When either is absent, behavior is unchanged."""
+    instead of LLM synthesis-over-the-ball. When either is absent, behavior is unchanged.
+    An optional `embedder` lets the extractor bridge synonym relation words to predicates."""
     intent = _detect_intent(query)
     if intent is QueryIntent.AGGREGATE:
         anchor, relation = _extract_agg_slots(query, predicates)
@@ -346,7 +408,7 @@ def classify_query(query: str, *, predicates=None, entity_names=None) -> QueryPr
     # director of X?" classifies as LOOKUP). Grounded + conservative; trace_chain's
     # None-fallthrough makes a mis-parse degrade to the general path, never a wrong answer.
     if intent in (QueryIntent.MULTI_HOP, QueryIntent.LOOKUP):
-        anchor, chain = _extract_nl_chain_slots(query, predicates, entity_names)
+        anchor, chain = _extract_nl_chain_slots(query, predicates, entity_names, embedder=embedder)
         if anchor and chain:
             return QueryProfile(intent=QueryIntent.MULTI_HOP, anchor_surface=anchor,
                                 relation_chain=chain, confidence=0.85, chain_ordered=False)
@@ -392,12 +454,12 @@ class QueryClassifier(Protocol):
     def classify(self, query: str, *, predicates=None) -> QueryProfile: ...
 
 
-def resolve_profile(query: str, *, predicates=None, entity_names=None,
+def resolve_profile(query: str, *, predicates=None, entity_names=None, embedder=None,
                     llm_classifier: QueryClassifier | None = None) -> QueryProfile:
     """Two-tier: heuristic FIRST; escalate to the injected classifier ONLY when the heuristic is
     below MIN_CONF AND a classifier is given; the classifier's result wins only if strictly more
     confident (so a confidently-abstaining tier-2 keeps the heuristic -> safe local route)."""
-    h = classify_query(query, predicates=predicates, entity_names=entity_names)
+    h = classify_query(query, predicates=predicates, entity_names=entity_names, embedder=embedder)
     if h.confidence >= MIN_CONF or llm_classifier is None:
         return h
     ll = llm_classifier.classify(query, predicates=predicates)

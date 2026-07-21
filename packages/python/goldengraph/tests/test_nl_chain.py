@@ -194,6 +194,51 @@ def test_nl_noun_synonym_abstains():
     assert plan_query(p).mode != "chain"
 
 
+class _SynEmbedder:
+    """Deterministic 3-D stub: 'spouse' ~ 'married to'; 'friend' orthogonal to both
+    predicates. Lets the semantic bridge be tested without a real model."""
+
+    _V = {
+        "married to": [1.0, 0.0, 0.0],
+        "directed by": [0.0, 1.0, 0.0],
+        "spouse": [0.95, 0.05, 0.0],   # cosine ~0.998 with "married to"
+        "friend": [0.0, 0.0, 1.0],     # cosine 0 with both predicates
+    }
+
+    def embed(self, texts):
+        return [self._V.get(t, [0.0, 0.0, 0.0]) for t in texts]
+
+
+def test_nl_synonym_bridged_by_embedder():
+    # "spouse" has no shared stem with "married to", so it abstains without an
+    # embedder (test_nl_noun_synonym_abstains). WITH one, the semantic bridge grounds
+    # it and the full 2-hop chain fires -> Emma Thomas.
+    g = _film_graph()
+    p = classify_query(
+        "Who is the spouse of the director of Inception?",
+        predicates=_slice_predicates(g),
+        entity_names=_slice_entity_names(g),
+        embedder=_SynEmbedder(),
+    )
+    assert p.relation_chain == ("directed by", "married to")
+    assert plan_query(p).mode == "chain"
+    assert _trace_chain_any_order(g, p.anchor_surface, p.relation_chain) == "Emma Thomas"
+
+
+def test_nl_embedder_low_similarity_still_abstains():
+    # An unmapped relation word that embeds FAR from every predicate ("friend")
+    # must NOT be force-bridged -- the cosine floor keeps it uncovered, so the
+    # guard still abstains rather than fabricate a hop.
+    g = _film_graph()
+    p = classify_query(
+        "Who is the friend of the director of Inception?",
+        predicates=_slice_predicates(g),
+        entity_names=_slice_entity_names(g),
+        embedder=_SynEmbedder(),
+    )
+    assert p.relation_chain is None
+
+
 def test_nl_unknown_anchor_abstains():
     g = _film_graph()
     p = _profile("Who directed Titanic?", g)  # Titanic is not in the slice
