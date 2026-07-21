@@ -23,7 +23,7 @@ import copy
 import pickle
 
 import pytest
-from goldenmatch.core.cluster import LazyClusterDict
+from goldenmatch.core.cluster import LazyClusterDict, cluster_frames_to_dict
 
 
 def test_lazy_dict_defers_until_read():
@@ -242,12 +242,12 @@ def _config():
 
 
 def test_pipeline_leaves_clusters_lazy_and_ships_stats(monkeypatch):
-    from goldenmatch.core.pipeline import run_dedupe_df
+    import goldenmatch.core.pipeline as pipeline_mod
 
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
 
-    result = run_dedupe_df(_fixture_df(), _config(), source_name="t")
+    result = pipeline_mod.run_dedupe_df(_fixture_df(), _config(), source_name="t")
 
     # frames-out path -> clusters is the lazy handle, not yet materialized.
     clusters = result["clusters"]
@@ -271,20 +271,20 @@ def test_pipeline_leaves_clusters_lazy_and_ships_stats(monkeypatch):
 
 def test_dedupe_df_stats_do_not_force_cluster_build(monkeypatch):
     import goldenmatch as gm
-    import goldenmatch.core.cluster as cluster_mod
     import goldenmatch.core.pipeline as pipeline_mod
 
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_FRAMES_OUT", "1")
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
 
     runs = {"n": 0}
-    orig = cluster_mod.cluster_frames_to_dict
+    orig = cluster_frames_to_dict
 
     def counting(frames):
         runs["n"] += 1
         return orig(frames)
 
-    monkeypatch.setattr(cluster_mod, "cluster_frames_to_dict", counting)
+    # pipeline calls cluster_frames_to_dict via its own module-level import, so
+    # patching pipeline_mod is what intercepts the lazy build here.
     monkeypatch.setattr(pipeline_mod, "cluster_frames_to_dict", counting)
 
     res = gm.dedupe_df(_fixture_df(), config=_config())

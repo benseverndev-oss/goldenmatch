@@ -664,6 +664,11 @@ def dedupe_to_parquet(
     if golden is not None:
         _golden_rows = golden.num_rows if hasattr(golden, "num_rows") else golden.height
     golden_count = _frame_write_parquet(golden, golden_path) if _golden_rows else 0
+    if not golden_count and _os.path.exists(golden_path):
+        # Remove a golden.parquet left by a PRIOR run into the same out_dir so
+        # the on-disk file set matches the returned golden_path=None (unique/
+        # dupes are always rewritten; only golden is conditional).
+        _os.unlink(golden_path)
     return {
         "output_dir": out_dir,
         "unique_path": unique_path if unique is not None else None,

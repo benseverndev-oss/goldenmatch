@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Out-of-core streaming FS refinements (review follow-ups, opt-in path only).**
+  `_prep_all_ids` returns a `range` instead of a 25–50M-element Python list when
+  `__row_id__` is contiguous (the pipeline-generated common case), avoiding a
+  multi-GB transient before the pyarrow int64 array on the ≥40M streaming path.
+  `stream_fs_dedupe_output` and `dedupe_to_parquet`'s in-memory fallback now
+  remove a stale `golden.parquet` left by a prior run into the same `out_dir`
+  when a run produces no golden rows, so the on-disk file set matches the
+  returned `golden_path=None`.
+
 ### Added
 
 - **Bounded bucket streaming for the in-RAM FS route

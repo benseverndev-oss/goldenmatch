@@ -45,6 +45,7 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import tempfile
+from collections.abc import Sequence
 from typing import Any
 
 from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
@@ -549,6 +550,12 @@ def stream_fs_dedupe_output(
         )
         golden_count = len(records)
         pl.DataFrame(records).write_parquet(golden_path)
+    elif _os.path.exists(golden_path):
+        # No golden rows this run: remove a golden.parquet left by a PRIOR run
+        # into the same out_dir, so the on-disk file set matches the returned
+        # golden_path=None / golden_count=0 (unique/dupes are COPY-overwritten;
+        # only golden is conditionally written, so only it can go stale).
+        _os.unlink(golden_path)
 
     import pyarrow.parquet as _pq
 
@@ -568,10 +575,25 @@ def _default_golden_rules():
     return GoldenRulesConfig(default_strategy="most_complete")
 
 
-def _prep_all_ids(con: Any) -> list[int]:
+def _prep_all_ids(con: Any) -> Sequence[int]:
     """Every ``__row_id__`` in ``prep`` — the singleton-folding id set. Singletons
     (rows in no pair) must be present in the cluster assignments or
-    ``stream_fs_dedupe_output``'s INNER JOIN silently drops them."""
+    ``stream_fs_dedupe_output``'s INNER JOIN silently drops them.
+
+    When the ids are CONTIGUOUS (min..max with no gaps — the pipeline-generated
+    common case, since ``__row_id__`` is a dense global row index), return a
+    ``range`` instead of materialising a 25-50M-element Python list (which
+    ``fetchall()`` would, then get copied again into the downstream pyarrow
+    int64 array in ``build_clusters_arrow_native``). ``__row_id__`` is unique per
+    row, so ``max - min + 1 == count`` iff the set is exactly ``{min..max}``.
+    Falls back to the explicit list when there are gaps (e.g. a filtered prep)."""
+    lo, hi, n = con.execute(
+        "SELECT min(__row_id__), max(__row_id__), count(*) FROM prep"
+    ).fetchone()
+    if not n:
+        return []
+    if int(hi) - int(lo) + 1 == int(n):
+        return range(int(lo), int(hi) + 1)
     return [r[0] for r in con.execute("SELECT __row_id__ FROM prep").fetchall()]
 
 

@@ -246,6 +246,57 @@ def test_streaming_output_routes_and_excludes_xform(tmp_path):
     con.close()
 
 
+def test_streaming_output_removes_stale_golden_on_reuse(tmp_path):
+    """No multi-member clusters this run -> golden_path None AND a golden.parquet
+    left by a prior run into the same out_dir is removed (file set matches the
+    returned paths)."""
+    import types
+
+    import duckdb
+    from goldenmatch.backends.fs_out_of_core import stream_fs_dedupe_output
+
+    # a golden.parquet from a "prior run" already sits in the out_dir
+    stale = tmp_path / "golden.parquet"
+    pl.DataFrame({"x": [1]}).write_parquet(stale)
+    assert stale.exists()
+
+    con = duckdb.connect(":memory:")
+    prep = pl.DataFrame({"__row_id__": [1, 2, 3], "name": ["a", "b", "c"]})
+    con.register("p", prep.to_arrow())
+    con.execute("CREATE TABLE prep AS SELECT * FROM p")
+    con.unregister("p")
+    assignments = [(1, 10), (2, 20), (3, 30)]  # all singletons -> no golden
+    res = stream_fs_dedupe_output(
+        con, "prep", assignments, types.SimpleNamespace(golden_rules=None), str(tmp_path)
+    )
+    con.close()
+
+    assert res["golden_count"] == 0
+    assert res["golden_path"] is None
+    assert not stale.exists()  # stale prior-run golden removed
+
+
+def test_prep_all_ids_range_when_contiguous_else_list():
+    """_prep_all_ids returns a range (no 25-50M-elem list) when __row_id__ is
+    contiguous, and falls back to an explicit list when there are gaps."""
+    import duckdb
+    from goldenmatch.backends.fs_out_of_core import _prep_all_ids
+
+    con = duckdb.connect(":memory:")
+    con.execute("CREATE TABLE prep(__row_id__ BIGINT)")
+    con.executemany("INSERT INTO prep VALUES (?)", [(i,) for i in range(6)])
+    got = _prep_all_ids(con)
+    assert isinstance(got, range) and list(got) == [0, 1, 2, 3, 4, 5]
+
+    con.execute("DELETE FROM prep WHERE __row_id__ = 3")  # introduce a gap
+    got = _prep_all_ids(con)
+    assert isinstance(got, list) and sorted(got) == [0, 1, 2, 4, 5]
+
+    con.execute("DELETE FROM prep")
+    assert list(_prep_all_ids(con)) == []
+    con.close()
+
+
 def test_end_to_end_streaming_dedupe(tmp_path):
     """run_fs_dedupe_streaming: prep -> store -> score -> cluster -> streamed
     parquet output. Rows preserved (unique + dupes == N), planted dups found,
