@@ -3659,7 +3659,7 @@ def _maybe_promote_blocking_to_adaptive(
 
 def _maybe_prune_blocking_passes(
     blocking: BlockingConfig | None,
-    df: pl.DataFrame,
+    df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (the arrow lane)
 ) -> BlockingConfig | None:
     """Opt-in weak-positive-aware pruning of multi-pass blocking passes.
 
@@ -3688,8 +3688,22 @@ def _maybe_prune_blocking_passes(
         floor = 1
     try:
         from goldenmatch.core.blocking_pass_selection import select_passes
+        from goldenmatch.core.frame import is_polars_lazyframe
 
-        result = select_passes(df, list(passes), min_marginal_weak_positive=floor)
+        # select_passes is polars-native (with_row_index / group_by), but the FS
+        # routed / arrow lane passes `df` as a pyarrow Table (or a LazyFrame).
+        # Coerce first so pruning actually RUNS -- without this the arrow lane
+        # threw AttributeError, was swallowed below into "keep all passes", and
+        # this whole opt-in was a silent no-op for every arrow-lane FS caller.
+        prune_df = df
+        if is_polars_lazyframe(prune_df):
+            prune_df = prune_df.collect()
+        elif not isinstance(prune_df, pl.DataFrame):
+            # pl.from_arrow on a Table always yields a DataFrame (Series only for
+            # an Array/ChunkedArray input, which this never is).
+            prune_df = cast("pl.DataFrame", pl.from_arrow(prune_df))
+
+        result = select_passes(prune_df, list(passes), min_marginal_weak_positive=floor)
     except Exception:
         logger.warning("blocking pass selection failed; keeping all passes", exc_info=True)
         return blocking
