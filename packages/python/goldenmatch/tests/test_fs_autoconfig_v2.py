@@ -71,6 +71,29 @@ def test_default_unset_is_v2(monkeypatch):
     assert "gender" not in fields
 
 
+def test_card1_shared_identifier_admitted_pk_excluded():
+    """A card==1.0 exact field is ambiguous: a shared identity-bearing VALUE
+    (email/phone a duplicate carries verbatim -- F-S's single strongest signal)
+    OR a per-record surrogate (a row PK). The ratio is measured on a SAMPLE that
+    under-represents duplicates, so a blanket >= 1.0 exclusion silently drops the
+    best comparison field and collapses EM to zero matches at scale (measured:
+    zero-config FS F1 0.0 at 1M realistic person data). Admit email/phone;
+    keep excluding the ambiguous bare `identifier` (covers row PKs)."""
+    profiles = [
+        _p("first_name", "name", card=0.42),
+        _p("surname", "name", card=0.74),
+        _p("email", "email", card=1.0),          # shared identifier -> ADMIT
+        _p("phone", "phone", card=1.0),           # shared identifier -> ADMIT
+        _p("record_id", "identifier", card=1.0),  # row PK -> EXCLUDE (hygiene)
+    ]
+    mks = build_probabilistic_matchkeys(profiles)
+    fields = _fields(mks)
+    assert "email" in fields, "card==1.0 email is the strongest F-S signal, must admit"
+    assert "phone" in fields, "card==1.0 phone must admit"
+    assert "record_id" not in fields, "per-record surrogate PK stays excluded"
+    assert _scorer_of(mks, "email") == "exact"
+
+
 def test_explicit_off_is_legacy(monkeypatch):
     monkeypatch.setenv(ON, "0")
     fields = _fields(build_probabilistic_matchkeys(_person_profiles()))
