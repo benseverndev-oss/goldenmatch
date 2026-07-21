@@ -5306,11 +5306,34 @@ def _project_pass_pairs(
         )
     if not counts:
         return (0, 0)
+    import math
+
     scale = effective_n_full != sample_n
+    if scale:
+        # Saturation-aware block-size growth. Extrapolating each block's SIZE by
+        # the full row ratio (the old `cnt * effective_n_full / sample_n`) is only
+        # correct for a SATURATED low-cardinality key -- one whose distinct values
+        # are all already in the sample, so bigger N just grows each block. A
+        # NEAR-UNIQUE key instead keeps producing NEW values as N grows: its
+        # blocks stay ~constant size and the block COUNT grows. Growing a
+        # near-unique key's SIZE invents ~C(ratio, 2) PHANTOM pairs per sample
+        # singleton -- which made a near-unique compound like `(zip, email)`
+        # project ~2.2B pairs at 30M and get DROPPED by the pair-gate, collapsing
+        # blocking to a single pass (the 30M zero-config FS recall collapse). Grow
+        # size only by the key's sample COLLISION headroom (1 - distinct/sample_n):
+        # a fully-saturated key (d->0) still grows by the full ratio (byte-
+        # identical to the old behavior), a near-unique key (d->1) barely grows so
+        # its singletons stay singletons (0 pairs). Block COUNT growth is implicit
+        # -- more distinct keys at full N, each ~constant size.
+        ratio = effective_n_full / sample_n
+        d = len(counts) / sample_n if sample_n else 0.0
+        growth = 1.0 + (ratio - 1.0) * (1.0 - d)
+    else:
+        growth = 1.0
     max_block = 0
     pairs = 0
     for cnt in counts.values():
-        b = -(-(cnt * effective_n_full) // sample_n) if scale else cnt  # ceil
+        b = math.ceil(cnt * growth) if scale else cnt
         if b > max_block:
             max_block = b
         pairs += b * (b - 1) // 2

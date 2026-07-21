@@ -23,9 +23,11 @@ from goldenmatch.core.autoconfig import (
     _bound_probabilistic_blocking_pairs,
     _diversify_probabilistic_blocking,
     _fs_total_pair_budget,
+    _project_pass_pairs,
     auto_configure_probabilistic_df,
     build_probabilistic_matchkeys,
 )
+from goldenmatch.core.frame import to_frame
 
 ON = "GOLDENMATCH_FS_AUTOCONFIG_V2"
 
@@ -356,6 +358,28 @@ def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):
     compound = next((p for p in (out.passes or []) if set(p.fields) == {"city", "surname"}), None)
     assert compound is not None
     assert compound.field_transforms == {"city": ["strip"], "surname": ["substring:0:1"]}
+
+
+def test_projection_no_phantom_pairs_for_near_unique_key_at_scale():
+    # THE 30M recall-collapse root cause: extrapolating a block's SIZE by the full
+    # row ratio invents ~C(ratio, 2) phantom pairs per sample singleton. A
+    # NEAR-UNIQUE key (all-distinct) should project to ~0 candidate pairs at any
+    # scale (its blocks stay singletons, the COUNT grows), NOT quadratically.
+    bframe = to_frame(pl.DataFrame({
+        "uid": [f"u{i}" for i in range(10)],      # all distinct (near-unique)
+        "const": ["x"] * 10,                      # one giant block (low cardinality)
+    }))
+    # sample_n=10, effective_n_full=10_000_000 -> ratio 1e6.
+    near_unique = _project_pass_pairs(bframe, [("uid", ())], 10_000_000, 10)
+    assert near_unique is not None
+    # Near-unique: singletons stay singletons -> ~0 pairs (the OLD code projected
+    # ~10 * C(1e6, 2) ~= 5e12 phantom pairs and dropped the pass).
+    assert near_unique[1] == 0
+    # Contrast: a saturated low-cardinality key DOES grow quadratically (one block
+    # of 10 -> ~1e7 rows -> ~5e13 pairs), so real coarse passes are still gated.
+    saturated = _project_pass_pairs(bframe, [("const", ())], 10_000_000, 10)
+    assert saturated is not None
+    assert saturated[1] > 10_000_000_000  # quadratic growth preserved
 
 
 def test_pair_gate_prefers_identity_field_reducer(monkeypatch):

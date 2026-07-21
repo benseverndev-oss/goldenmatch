@@ -8,27 +8,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
-- **Zero-config Fellegi-Sunter recall no longer collapses at scale (recall-safe
-  blocking-pass compounding + memory-aware pair budget).** The FS blocking
-  pair-budget bound (`_bound_probabilistic_blocking_pairs`) must shrink
-  candidate pairs at scale (they grow ~N²), and it did so by COMPOUNDING an
-  over-budget coarse pass with its "most selective" reducer — a **name initial**.
-  On corrupted person data that reducer is corruption-prone: a typo'd
-  `first_name` breaks the compound key, so a `zip` pass duplicates share exactly
-  (`zip + first-initial`) drops from recall 1.0 to 0.82. At scale the budget
-  forces compounding on EVERY pass, so recall collapsed **1.0 at ≤2.4M → 0.82 at
-  4.8M → ~0.02 at 30M** (F1 0.030, the 30M single-box proof) — entirely
-  scale-dependent and invisible below ~5M. Two complementary fixes:
-  - **Reducer preference (the primary fix).** The bound now compounds with an
-    **exact-agreement identity field (email / identifier / phone) at full value**
-    when one is present, before falling back to the corruption-prone name/geo
-    initials. Duplicates share those fields exactly, so the compound keeps every
+- **Zero-config Fellegi-Sunter recall no longer collapses at scale (candidate-pair
+  projection fix + recall-safe compounding + memory-aware budget).** Zero-config
+  FS recall collapsed **1.0 at ≤2.4M → 0.82 at 4.8M → ~0.02 at 30M** (F1 0.030,
+  the 30M single-box proof) — entirely scale-dependent and invisible below ~5M.
+  Three fixes, the first being the actual scale-dependent root cause:
+  - **Candidate-pair projection (the root cause).** `_project_pass_pairs`
+    extrapolated each blocking block's SIZE by the full row ratio
+    (`cnt * n_full / sample_n`). That is only right for a SATURATED low-cardinality
+    key; a NEAR-UNIQUE key keeps producing new values as N grows (blocks stay
+    ~constant size, the COUNT grows), so growing its size invents ~`C(ratio, 2)`
+    PHANTOM pairs per sample singleton. At 30M (ratio ~150) a near-unique
+    `(zip, email)` compound was projected at ~2.2B pairs and DROPPED by the
+    pair-gate, collapsing blocking to a single `first_name` pass (dups have typo'd
+    first names → recall ~0.02). Fixed by growing block size only by the key's
+    sample collision headroom (`1 - distinct/sample_n`): saturated keys grow by the
+    full ratio (byte-identical), near-unique keys barely grow (singletons stay
+    singletons → 0 phantom pairs). Small data (`n_full == sample_n`, the whole
+    bench-probabilistic panel) is unaffected — no extrapolation runs.
+  - **Recall-safe compounding.** When the pair-gate DOES bound an over-budget
+    coarse pass, it now compounds with an **exact-agreement identity field
+    (email / identifier / phone) at full value**, before the corruption-prone
+    name/geo initials. Duplicates share those exactly, so the compound keeps every
     true pair together while collapsing the block to near-singletons — recall-safe
-    AND a *stronger* pair reducer (measured on the 30M person shape: `zip` alone =
-    116M pairs @ recall 1.0; `zip + first-initial` = 6.8M @ **0.82**; `zip +
-    email` = **0.9M @ 1.0**). Because the identity compound yields ~duplicate-count
-    pairs regardless of N, recall stays 1.0 at any scale even under the tight
-    small-box budget.
+    AND a stronger reducer (30M person shape: `zip + first-initial` = recall 0.82;
+    `zip + email` = recall 1.0 at 0.9M pairs). The old "most selective" reducer (a
+    name initial) split true pairs on any typo'd name.
   - **Memory-aware budget.** `_fs_total_pair_budget` is now
     `max(300M floor, available_ram_gb * ~40M)` (anchored to the 25M-on-64GB proof
     where ~2.1B bounded pairs peaked at ~28 GB), so a big box does less
