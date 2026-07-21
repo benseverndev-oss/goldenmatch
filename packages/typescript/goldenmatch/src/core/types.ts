@@ -145,6 +145,14 @@ export type MatchkeyConfig =
 export interface BlockingKeyConfig {
   readonly fields: readonly string[];
   readonly transforms: readonly string[];
+  /**
+   * Per-field transform chains (#1826/#1832). A field listed here derives its
+   * block-key component with its OWN chain; fields absent here fall back to the
+   * key-level `transforms`. Mirrors Python `BlockingKeyConfig.field_transforms`,
+   * so a Python-written config with per-field blocking transforms produces the
+   * same block membership in the TS runtime instead of silently ignoring them.
+   */
+  readonly fieldTransforms?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface SortKeyField {
