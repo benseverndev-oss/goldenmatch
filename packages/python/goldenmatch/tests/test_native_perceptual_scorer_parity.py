@@ -1,26 +1,38 @@
 """Parity for the radial / audio_fp bucket kernels (score-core ids 13/14) vs the
 pure Python references `_radial_score_single` / `_audio_fp_score_single`.
 
-Unlike the ensemble kernel (rapidfuzz-rs vs rapidfuzz-cpp, machine-epsilon), these
-are pure integer parse + f64 reductions (Pearson over signed-byte radial profiles;
-best-offset BER over 32-bit audio sub-fingerprints), so parity is asserted BYTE-EXACT
-(`==`) -- the same bar the integer-popcount bloom scorers hold. A wrong parse, a
-divergent summation order, or a mis-clamped alignment would break `==` immediately.
+Two different parity bars, by numeric shape:
+  * `audio_fp` is BYTE-EXACT (`==`): its BER is integer popcount + one f64 divide
+    (no floating reduction), so the native kernel and the pure mirror agree to the
+    bit, the same bar the integer-popcount bloom scorers hold.
+  * `radial` uses a tight FLOAT TOLERANCE: its Pearson sums three f64 reductions
+    (mean, the two variances, the covariance), and LLVM auto-vectorizes those
+    reduction loops in the release build with a SIMD summation order that differs
+    from Python's strict left-to-right `sum()` by ~1 ULP -- and the exact ULP is
+    CPU/codegen-dependent (it agreed on the dev box, diverged on a CI runner). This
+    is the same reduction-order reality the ensemble kernel handles with a tolerance;
+    a real reimpl bug (wrong formula / mis-clamp / wrong parse) shifts the score by
+    >> the tolerance. The score-core cargo test still pins radial's EXACT anchors
+    (identity/rotation -> 1.0, constant/mismatch -> 0.0, which are reduction-order
+    invariant).
 
 On UNPARSEABLE hex the pure mirrors RAISE (Python `int(..., 16)`) while the kernel
 declines to 0.0 (score_one cannot raise); that native-only contract is asserted in
 the score-core cargo test, so this corpus stays on valid hex where both agree.
 
-Reaching 19/19 kernel-backed scorers: docs/superpowers/specs/2026-07-21-*.
+Reaching 17/19 kernel-backed scorers: docs-site/suite-matrix.mdx.
 """
 from __future__ import annotations
 
-import math
 import random
 
 import pytest
 from goldenmatch.core import _native_loader
 from goldenmatch.core import scorer as _scorer
+
+# radial Pearson: f64 reduction order diverges ~1 ULP across CPUs (see module
+# docstring). 1e-9 is ~7 orders above the observed drift, far below any real bug.
+_RADIAL_TOL = 1e-9
 
 
 def _rand_hex(rng: random.Random, n_chars: int) -> str:
@@ -87,7 +99,7 @@ def test_radial_native_matches_pure_mirror():
     for a, b in _radial_corpus():
         got = n.radial_similarity(a, b)
         want = _scorer._radial_score_single(a, b)
-        assert got == want or (math.isnan(got) and math.isnan(want)), (
+        assert got == pytest.approx(want, abs=_RADIAL_TOL), (
             f"radial {a!r} {b!r}: {got!r} vs {want!r}"
         )
 
@@ -97,9 +109,7 @@ def test_audio_fp_native_matches_pure_mirror():
     for a, b in _audio_corpus():
         got = n.audio_fp_similarity(a, b)
         want = _scorer._audio_fp_score_single(a, b)
-        assert got == want or (math.isnan(got) and math.isnan(want)), (
-            f"audio_fp {a!r} {b!r}: {got!r} vs {want!r}"
-        )
+        assert got == want, f"audio_fp {a!r} {b!r}: {got!r} vs {want!r}"  # integer -> exact
 
 
 def test_radial_bucket_kernel_id_13_matches_mirror():
@@ -115,7 +125,9 @@ def test_radial_bucket_kernel_id_13_matches_mirror():
         for j in range(i + 1, len(values)):
             want = _scorer._radial_score_single(values[i], values[j])
             if want >= 0.0:  # threshold 0.0 emits every real pair
-                assert got[(i, j)] == want, f"id=13 {values[i]!r} {values[j]!r}"
+                assert got[(i, j)] == pytest.approx(want, abs=_RADIAL_TOL), (
+                    f"id=13 {values[i]!r} {values[j]!r}"
+                )
 
 
 def test_audio_fp_bucket_kernel_id_14_matches_mirror():
