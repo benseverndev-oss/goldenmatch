@@ -265,13 +265,19 @@ _REL_MARKERS = frozenset({"of", "by"})
 def _embed_bridge_min() -> float:
     """Cosine floor for the semantic relation bridge (`GOLDENGRAPH_NL_EMBED_BRIDGE_MIN`,
     default 0.55). Set high enough that a filler noun doesn't spuriously bind a
-    predicate; a non-float falls back to the default."""
+    predicate. A non-float, non-finite (`nan`/`inf`), or out-of-range value falls
+    back / clamps to a sane cosine floor -- `nan` would silently disable the bridge
+    and a negative floor would make it bind anything, both env-misconfig footguns."""
+    import math
     import os
 
     try:
-        return float(os.environ.get("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "0.55"))
+        v = float(os.environ.get("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "0.55"))
     except ValueError:
         return 0.55
+    if not math.isfinite(v):
+        return 0.55
+    return min(1.0, max(0.0, v))  # cosine floor is only meaningful in [0, 1]
 
 
 def _cos(a, b) -> float:
@@ -353,11 +359,21 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=No
                       if ci not in covered and nx in _REL_MARKERS]
         if unresolved:
             try:
-                pred_vecs = embedder.embed([p.replace("_", " ") for p, _ in pred_index])
-                tok_vecs = embedder.embed([t for _ci, _cp, t in unresolved])
+                # Materialize (a generator/array both -> list) so the length check
+                # below is real and zip can't silently truncate candidates.
+                pred_vecs = list(embedder.embed([p.replace("_", " ") for p, _ in pred_index]))
+                tok_vecs = list(embedder.embed([t for _ci, _cp, t in unresolved]))
             except Exception:  # noqa: BLE001 - embedder failure -> no bridge, guard abstains
                 pred_vecs = tok_vecs = None
-            if pred_vecs is not None and tok_vecs is not None:
+            # A wrong-length return is an embedder contract violation; treat it as a
+            # failure (no bridge -> the guard abstains) rather than let zip drop
+            # candidates and shift which predicate wins.
+            if (
+                pred_vecs is not None
+                and tok_vecs is not None
+                and len(pred_vecs) == len(pred_index)
+                and len(tok_vecs) == len(unresolved)
+            ):
                 thr = _embed_bridge_min()
                 for (ci, cp, _t), tv in zip(unresolved, tok_vecs):
                     pred = _embed_bridge_predicate(tv, pred_index, pred_vecs, thr)

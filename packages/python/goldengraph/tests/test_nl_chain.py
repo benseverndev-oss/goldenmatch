@@ -225,6 +225,24 @@ def test_nl_synonym_bridged_by_embedder():
     assert _trace_chain_any_order(g, p.anchor_surface, p.relation_chain) == "Emma Thomas"
 
 
+def test_nl_broken_embedder_length_mismatch_abstains():
+    # An embedder that returns the wrong number of vectors is a contract violation;
+    # the bridge must treat it as a failure (abstain), not let zip silently drop
+    # candidates and fabricate a partial chain.
+    class _BadEmbedder:
+        def embed(self, texts):
+            return [[1.0, 0.0, 0.0]]  # always length 1, regardless of input count
+
+    g = _film_graph()
+    p = classify_query(
+        "Who is the spouse of the director of Inception?",
+        predicates=_slice_predicates(g),
+        entity_names=_slice_entity_names(g),
+        embedder=_BadEmbedder(),
+    )
+    assert p.relation_chain is None
+
+
 def test_nl_embedder_low_similarity_still_abstains():
     # An unmapped relation word that embeds FAR from every predicate ("friend")
     # must NOT be force-bridged -- the cosine floor keeps it uncovered, so the
