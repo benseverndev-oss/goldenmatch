@@ -139,7 +139,7 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
 /// Padding means even the empty string yields the all-`#` gram, so the set is
 /// never empty for n>=2 (the Python `if not union` branch is unreachable, but
 /// `qgram_similarity` guards it anyway).
-fn qgram_set(s: &str) -> std::collections::HashSet<String> {
+fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     const N: usize = 3;
     let pad = "#".repeat(N - 1);
     let padded = format!("{pad}{}{pad}", s.to_lowercase());
@@ -148,15 +148,18 @@ fn qgram_set(s: &str) -> std::collections::HashSet<String> {
     if chars.len() < N {
         return set;
     }
+    // Grams are stored as a fixed `[char; N]` (N=3) rather than an allocated
+    // `String`, so scoring many pairs doesn't heap-allocate per trigram; the
+    // set membership semantics are identical (codepoint-wise equality).
     for i in 0..=(chars.len() - N) {
-        set.insert(chars[i..i + N].iter().collect::<String>());
+        set.insert([chars[i], chars[i + 1], chars[i + 2]]);
     }
     set
 }
 
 /// Character-trigram (q-gram) Jaccard similarity on two raw strings, the
 /// reference for `goldenmatch.core.scorer._qgram_score_single` (n=3):
-/// `|A & B| / |A | B|` over the padded q-gram sets. Identical strings (incl.
+/// `|A ∩ B| / |A ∪ B|` over the padded q-gram sets. Identical strings (incl.
 /// both empty) score 1.0; an empty union scores 0.0.
 ///
 /// Unicode note: lowercasing uses Rust `str::to_lowercase` (Unicode default

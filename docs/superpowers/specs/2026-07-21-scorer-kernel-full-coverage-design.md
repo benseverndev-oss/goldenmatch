@@ -111,7 +111,8 @@ on us, and step 4 is the real work.
 1. **`score-core`** (`packages/rust/extensions/score-core/src/lib.rs`): add the primitive
    (`pub fn <scorer>_similarity` + a `score_one` id, or a dedicated fn). Exports today:
    `jaro_winkler_similarity`, `levenshtein_similarity`, `token_sort_ratio`,
-   `token_sort_normalized_ratio`, `date_similarity`, `score_one(id: 0..4)`.
+   `token_sort_normalized_ratio`, `date_similarity`, `qgram_similarity`,
+   `score_one(id: 0..5)` (id 5 = qgram, added by the Wave-1 qgram cut).
 2. **`native` wheel** (`packages/rust/extensions/native/src/score.rs`): add a `#[pyfunction]` shim,
    register it in `native/src/lib.rs` (`m.add_function(...)` -- required for the `native_symbols`
    gate), and wire the id into `score_field_matrix` (`:1220`) and/or `score_block_pairs*`.

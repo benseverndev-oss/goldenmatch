@@ -88,6 +88,7 @@ def test_qgram_bucket_kernel_id5_matches_mirror():
         for j in range(i + 1, len(values)):
             expected = _qgram_score_single(values[i], values[j])
             if expected >= threshold:
-                assert got[(i, j)] == pytest.approx(expected, abs=1e-12), (
-                    f"{values[i]!r} {values[j]!r}"
-                )
+                # Exact: one qgram field, weight 1.0, total_weight 1.0 -> the
+                # kernel's emitted score is score_one(id 5) in f64 with no
+                # downcast, so it is bit-identical to the pure mirror.
+                assert got[(i, j)] == expected, f"{values[i]!r} {values[j]!r}"
