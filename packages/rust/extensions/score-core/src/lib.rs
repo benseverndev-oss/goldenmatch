@@ -264,9 +264,135 @@ fn soundex_code(c: char) -> Option<char> {
     }
 }
 
+// ---- initialism_match (abbreviation matcher) --------------------------------
+// Mirrors `goldenmatch.core.acronym.derive_initialism` +
+// `core.scorer._initialism_match_single`. `legal_forms` is the caller-shipped
+// entity-form variant set (`refdata.business.entity_form_variants()`, ~77 entries,
+// already lowercase-normalized); passing it in keeps this fn pyo3-/refdata-free.
+
+/// Remove every `(...)` group, mirroring the Python `\([^)]*\)` substitution:
+/// a `(` with the nearest following `)` (and everything between) is dropped; a
+/// `(` with no later `)` is kept literally (the regex requires the close).
+fn strip_parentheticals(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '(' {
+            if let Some(rel) = chars[i + 1..].iter().position(|&c| c == ')') {
+                i += rel + 2; // skip "(...)" inclusive
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Python `token.strip().rstrip(".,").lower()` (the per-token legal-form key).
+fn normalize_token_for_legal(token: &str) -> String {
+    token
+        .trim()
+        .trim_end_matches(['.', ','])
+        .to_lowercase()
+}
+
+/// Python `str.isupper()`: at least one cased char and no lowercase char.
+fn py_isupper(s: &str) -> bool {
+    s.chars().any(char::is_uppercase) && !s.chars().any(char::is_lowercase)
+}
+
+/// Python `str.isalpha()`: non-empty and every char alphabetic.
+fn py_isalpha(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(char::is_alphabetic)
+}
+
+/// Abbreviation block key for a name, byte-for-byte with
+/// `acronym.derive_initialism`: strip parentheticals; tokenize on whitespace,
+/// dropping punctuation-only tokens (no ASCII letter) and legal-form tokens
+/// (normalized form in `legal_forms`); then a lone all-caps alphabetic 2-6 char
+/// token returns itself uppercased, >=2 tokens return the first-ASCII-letter of
+/// each uppercased, else `""`.
+pub fn derive_initialism(text: &str, legal_forms: &std::collections::HashSet<String>) -> String {
+    let stripped = strip_parentheticals(text);
+    let mut cleaned: Vec<&str> = Vec::new();
+    for token in stripped.split_whitespace() {
+        if !token.chars().any(|c| c.is_ascii_alphabetic()) {
+            continue; // punctuation-only / digits-only (`_ANY_ALPHA` = [A-Za-z])
+        }
+        if legal_forms.contains(&normalize_token_for_legal(token)) {
+            continue;
+        }
+        cleaned.push(token);
+    }
+    if cleaned.len() == 1 {
+        let tok = cleaned[0];
+        let n = tok.chars().count();
+        if py_isupper(tok) && py_isalpha(tok) && (2..=6).contains(&n) {
+            return tok.to_uppercase();
+        }
+        return String::new();
+    }
+    if cleaned.is_empty() {
+        return String::new();
+    }
+    // First ASCII letter of each token (`_FIRST_ALPHA` = [A-Za-z]), uppercased.
+    let mut initials = String::with_capacity(cleaned.len());
+    for token in &cleaned {
+        if let Some(c) = token.chars().find(|c| c.is_ascii_alphabetic()) {
+            initials.push(c.to_ascii_uppercase());
+        }
+    }
+    if initials.chars().count() < 2 {
+        return String::new();
+    }
+    initials
+}
+
+/// `1.0` if either string is the other's initialism, or the two initialisms are
+/// equal (non-empty); else `0.0`. Byte-for-byte with `_initialism_match_single`.
+pub fn initialism_match(a: &str, b: &str, legal_forms: &std::collections::HashSet<String>) -> f64 {
+    let ia = derive_initialism(a, legal_forms);
+    let ib = derive_initialism(b, legal_forms);
+    let matched = (!ia.is_empty() && ia == b)
+        || (!ib.is_empty() && a == ib)
+        || (!ia.is_empty() && !ib.is_empty() && ia == ib);
+    if matched {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+// The legal-form variant set for `initialism_match` is process-global state,
+// installed once by the host (`refdata.business.entity_form_variants()`, ~77
+// entries), so that `score_one(7, ...)` stays a UNIFORM `(id, a, b)` call — the
+// dispatch signature can't carry a per-call table without breaking the
+// `_NATIVE_SCORER_IDS == score_one` id-map invariant every other scorer holds.
+static LEGAL_FORMS: std::sync::OnceLock<std::collections::HashSet<String>> =
+    std::sync::OnceLock::new();
+
+/// Install the caller-shipped legal-form variant set for `initialism_match`.
+/// `OnceLock` semantics: only the FIRST call wins (returns `true`); later calls
+/// are ignored (`false`). The host ships the deterministic 77-entry
+/// `entity_form_variants()` once before routing initialism through the kernel;
+/// until then `score_one(7, ...)` scores against an EMPTY set (no legal-form
+/// dropping), which is why the Python fast-path guard also gates on this being
+/// set. Content is deterministic, so the first-wins race is benign.
+pub fn set_legal_forms(forms: std::collections::HashSet<String>) -> bool {
+    LEGAL_FORMS.set(forms).is_ok()
+}
+
+/// The installed legal-form set, or an empty set if the host never called
+/// `set_legal_forms` (kernel stays defined but drops no legal forms).
+fn legal_forms() -> &'static std::collections::HashSet<String> {
+    LEGAL_FORMS.get_or_init(std::collections::HashSet::new)
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match.
+/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -293,6 +419,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // like id 3; a soundex mismatch falls through to the 0.0 catch-all.
         // Matches the bucket per-pair mirror `1.0 if jf.soundex(a)==jf.soundex(b) else 0.0`.
         6 if soundex(a) == soundex(b) => 1.0,
+        // id=7 = initialism_match against the host-installed legal-form set (empty
+        // until `set_legal_forms` is called). Byte-for-byte with
+        // `_initialism_match_single`; the Python fast-path guard requires the
+        // table to be installed before routing here.
+        7 => initialism_match(a, b, legal_forms()),
         _ => 0.0,
     }
 }
@@ -425,6 +556,59 @@ mod tests {
         // full jellyfish parity: soundex("123")="1000" != soundex("456")="4000"
         assert_eq!(score_one(6, "123", "456"), 0.0);
         assert_eq!(score_one(6, "123", "123"), 1.0);
+    }
+
+    fn _legal_forms() -> std::collections::HashSet<String> {
+        // subset of refdata.business.entity_form_variants() relevant to the tests
+        ["inc", "corp", "corporation", "llc", "ltd", "gmbh", "ab", "company", "co"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn derive_initialism_matches_python_reference() {
+        let lf = _legal_forms();
+        // ground truth from goldenmatch.core.acronym.derive_initialism
+        assert_eq!(derive_initialism("IBM", &lf), "IBM"); // lone acronym -> itself
+        assert_eq!(derive_initialism("Apple", &lf), ""); // lone non-acronym
+        assert_eq!(derive_initialism("International Business Machines", &lf), "IBM");
+        assert_eq!(
+            derive_initialism("International Business Machines Corporation (Armonk, NY)", &lf),
+            "IBM" // parenthetical stripped, "Corporation" dropped
+        );
+        assert_eq!(derive_initialism("Acme Industries LLC", &lf), "AI"); // keep descriptive
+        assert_eq!(derive_initialism("GmbH", &lf), ""); // lone legal form -> dropped
+        assert_eq!(derive_initialism("AB", &lf), ""); // "ab" is a legal form (Aktiebolag)
+        assert_eq!(derive_initialism("ABCDEFG", &lf), ""); // 7 chars > acronym cap
+        assert_eq!(derive_initialism("3M Company", &lf), ""); // "3M" not alpha; Company dropped
+        assert_eq!(derive_initialism("a b c", &lf), "ABC"); // first-alpha of each, upper
+    }
+
+    #[test]
+    fn initialism_match_matches_python_reference() {
+        let lf = _legal_forms();
+        assert_eq!(initialism_match("International Business Machines", "IBM", &lf), 1.0);
+        assert_eq!(initialism_match("IBM", "International Business Machines", &lf), 1.0);
+        assert_eq!(initialism_match("Apple", "Apricot", &lf), 0.0);
+        // known false positive: same initials -> 1.0 by design
+        assert_eq!(initialism_match("International Business Machines", "Indian Banana Market", &lf), 1.0);
+        assert_eq!(initialism_match("Acme Industries LLC", "AI", &lf), 1.0);
+    }
+
+    #[test]
+    fn score_one_id7_is_initialism_match_against_global_table() {
+        // This is the ONLY test that installs the process-global legal-form set
+        // (OnceLock first-wins), so it never races a different-content setter;
+        // every other initialism test passes a LOCAL table to the `*_single` fns.
+        assert!(set_legal_forms(_legal_forms()));
+        // Table-INDEPENDENT (no legal-form tokens involved): dispatch works.
+        assert_eq!(score_one(7, "International Business Machines", "IBM"), 1.0);
+        assert_eq!(score_one(7, "Apple", "Apricot"), 0.0);
+        // Table-DEPENDENT: only 1.0 because "LLC" is dropped as a legal form
+        // ("Acme Industries LLC" -> initials "AI"). With an empty table it would
+        // be "AIL" != "AI" -> 0.0, so this asserts the global table is wired.
+        assert_eq!(score_one(7, "Acme Industries LLC", "AI"), 1.0);
     }
 
     #[test]

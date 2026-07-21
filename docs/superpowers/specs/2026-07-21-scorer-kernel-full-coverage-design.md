@@ -1,7 +1,7 @@
 # Full `-core` kernel coverage for the scorer surface (5/19 -> full)
 
 **Date:** 2026-07-21
-**Status:** Proposed (scoping / design). **Wave 1 landing incrementally:** `qgram` (5/19 -> 6/19) and `soundex_match` (6/19 -> 7/19) are now kernel-backed; the baseline figures below describe the pre-work starting point.
+**Status:** Proposed (scoping / design). **Landing incrementally:** `qgram` (5/19 -> 6/19) and `soundex_match` (6/19 -> 7/19) landed in Wave 1; `initialism_match` (7/19 -> 8/19) is the first Wave-2 cut; the baseline figures below describe the pre-work starting point.
 **Motivation:** The generated suite-matrix reports **"5 of 19 scorers are kernel-backed"**
 (`docs-site/suite-matrix.mdx`, computed by `gen_suite_matrix.py::_substrate_lines` from the
 `scorer_kernels` parity surface). This spec scopes what it takes to close that gap -- and argues
@@ -20,13 +20,20 @@ The other **14 were fallback-only** at that baseline: `dice`, `jaccard`, `qgram`
 `ensemble`, `embedding`, `record_embedding`, `alias_match`, `audio_fp`, `initialism_match`, `phash`,
 `radial`, `given_name_aliased_jw`, `name_freq_weighted_jw`.
 
-**Update:** `qgram` and `soundex_match` are now kernelized (Wave 1) -- each has a `score-core`
-kernel on the Python arrow-bucket fast path, so the current state is **7/19** with **12** fallbacks
-remaining. Both read as `python_only` in the `scorer_kernels` partition (no TS WASM port yet, like
-`date`). `soundex_match`'s kernel replicates `jellyfish.soundex` byte-for-byte INCLUDING its Unicode
-step (NFKD normalize + `str.upper` via the `unicode-normalization` crate), so native==pure on leading
-non-alpha / accented input too -- which also closes the same latent gap in the field-matrix path
-(both now dispatch the shared `score-core::soundex`).
+**Update:** `qgram` and `soundex_match` (Wave 1) and `initialism_match` (Wave 2 start) are now
+kernelized -- each has a `score-core` kernel on the Python arrow-bucket fast path, so the current
+state is **8/19** with **11** fallbacks remaining. All three read as `python_only` in the
+`scorer_kernels` partition (no TS WASM port yet, like `date`). `soundex_match`'s kernel replicates
+`jellyfish.soundex` byte-for-byte INCLUDING its Unicode step (NFKD normalize + `str.upper` via the
+`unicode-normalization` crate), so native==pure on leading non-alpha / accented input too -- which
+also closes the same latent gap in the field-matrix path (both now dispatch the shared
+`score-core::soundex`). `initialism_match` ports `derive_initialism` + `_initialism_match_single`
+byte-for-byte into `score-core` (`score_one` id 7); because a per-pair kernel can't take a legal-form
+table argument without breaking the uniform `(id, a, b)` dispatch, the ~77-entry
+`entity_form_variants()` set is installed once into a process-global `OnceLock` via a native
+`set_legal_form_variants` shim, and the Python fast-path guard routes native only when BOTH the
+`initialism_similarity` capability symbol is present AND the install succeeded (else it declines to
+the pure `_initialism_match_single` mirror).
 
 "Kernel-backed" in the metric means *a kernel exists in at least one language* (a union), so the
 denominator (19) also counts scorers that live in only one language. The metric is emitted by
@@ -66,7 +73,7 @@ each replaces an O(N^2) pure-Python double loop.
 |---|---|---|---|
 | `qgram` | `core/scorer.py:1019` (`_qgram_score_matrix:1036`) | char-trigram Jaccard on raw strings (`#`-padded n-gram sets) | none -- pure string primitive |
 | `soundex_match` | `core/scorer.py:701`; field-map `id 4` at `:484` | `1.0` if `jellyfish.soundex(a)==soundex(b)` | **half-done** -- already in `_NATIVE_FIELD_SCORER_IDS`, not the bucket path; finish the wiring |
-| `initialism_match` | `core/scorer.py:101`, `:716` | `1.0` if one string is the other's initialism (`derive_initialism`) | cross-keyed (raw vs derived), so a *pairwise* kernel, not a hash-group |
+| `initialism_match` ✅ | `core/scorer.py:101`, `:716` | `1.0` if one string is the other's initialism (`derive_initialism`) | **landed** -- `score_one` id 7; needed the legal-form table in-kernel (installed once via a global `OnceLock` + `set_legal_form_variants` shim, keeping the `(id, a, b)` dispatch uniform) |
 | `given_name_aliased_jw` | `refdata/scorer.py:177` | `max(jw, 1.0 if known given-name alias)` (William<->Bill) | needs the alias table in-kernel |
 | `name_freq_weighted_jw` | `refdata/scorer.py:69` | `jw * (floor + (1-floor)*mean_rarity)` from census/`tf_freqs` | needs the freq table in-kernel; TS port is static-only (declared delta) |
 | `alias_match` | `core/scorer.py:125`, `:741` | `1.0` if same business/given-name canonical | needs canonicalization tables in-kernel |
@@ -100,8 +107,8 @@ minimal. Recommend **defer or explicitly decline**.
 
 | Wave | Scorers | Risk | Rationale |
 |---|---|---|---|
-| **1** | `qgram` ✅, `soundex_match` ✅ (both landed), `initialism_match` | low | pure strings on the proven template; `soundex_match` reused the existing Rust kernel, upgraded to full jellyfish Unicode parity |
-| **2** | `given_name_aliased_jw`, `name_freq_weighted_jw`, `alias_match` | medium | string base + refdata table shipped in-kernel (mechanism exists); table fidelity is the risk |
+| **1** | `qgram` ✅, `soundex_match` ✅ (both landed) | low | pure strings on the proven template; `soundex_match` reused the existing Rust kernel, upgraded to full jellyfish Unicode parity |
+| **2** | `initialism_match` ✅ (landed), `given_name_aliased_jw`, `name_freq_weighted_jw`, `alias_match` | medium | string base + refdata table shipped in-kernel (mechanism exists); table fidelity is the risk. `initialism_match` proved the in-kernel table mechanism: the ~77-entry `entity_form_variants()` set is installed once into a `score-core` `OnceLock` via a native `set_legal_form_variants` shim, keeping `score_one(id, a, b)` uniform |
 | **3** | `phash`, `dice`, `jaccard` | low-med | wiring existing kernels (`perceptual-core`, `bloom.rs`), not new algorithms |
 | **free** | `ensemble` | trivial | composes Wave-1 kernels; kernel-backed by construction |
 | **4 (defer/decline)** | `audio_fp`, `radial` | -- | bespoke alignment search, low perf upside |
@@ -119,8 +126,9 @@ on us, and step 4 is the real work.
 1. **`score-core`** (`packages/rust/extensions/score-core/src/lib.rs`): add the primitive
    (`pub fn <scorer>_similarity` + a `score_one` id, or a dedicated fn). Exports today:
    `jaro_winkler_similarity`, `levenshtein_similarity`, `token_sort_ratio`,
-   `token_sort_normalized_ratio`, `date_similarity`, `qgram_similarity`,
-   `score_one(id: 0..5)` (id 5 = qgram, added by the Wave-1 qgram cut).
+   `token_sort_normalized_ratio`, `date_similarity`, `qgram_similarity`, `soundex`,
+   `set_legal_forms` + `initialism_match`, `score_one(id: 0..7)` (id 5 = qgram, id 6 =
+   soundex_match, id 7 = initialism_match against the installed legal-form set).
 2. **`native` wheel** (`packages/rust/extensions/native/src/score.rs`): add a `#[pyfunction]` shim,
    register it in `native/src/lib.rs` (`m.add_function(...)` -- required for the `native_symbols`
    gate), and wire the id into `score_field_matrix` (`:1220`) and/or `score_block_pairs*`.
