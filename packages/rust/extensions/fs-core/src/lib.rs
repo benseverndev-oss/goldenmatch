@@ -560,8 +560,19 @@ where
     G: Fn(usize, usize) -> Option<&'d str>,
 {
     let mut total_weight = 0.0_f64;
-    let mut pair_min = p.base_min;
-    let mut pair_max = p.base_max;
+    // #1854 full-range normalization: the min-max range spans ALL matchkey
+    // fields, not only the ones observed for this pair. `base_min`/`base_max`
+    // are the full NE-aware endpoints MINUS the field_min/max sums (see
+    // `FsPairParams`), so adding the FULL sums back reconstructs the complete
+    // [min_weight, min_weight + weight_range] range regardless of observation.
+    // Without this the range shrank with the evidence, so a pair agreeing on its
+    // ONE observed field had total == pair_max and normalized to 1.0 -- maximal
+    // confidence from minimal evidence. `total_weight` still accumulates over
+    // observed fields only. This kernel is the unobserved-missing path; when
+    // every field is observed the result is identical to accumulating per field,
+    // so callers that pass fully-observed pairs are unchanged.
+    let pair_min = p.base_min + p.field_mins.iter().sum::<f64>();
+    let pair_max = p.base_max + p.field_maxs.iter().sum::<f64>();
     let mut has_regular_evidence = false;
     for f in 0..p.scorer_ids.len() {
         if let (Some(a), Some(b)) = (get_field(f, i), get_field(f, j)) {
@@ -593,8 +604,8 @@ where
                 p.field_thresholds[f],
             );
             total_weight += p.match_weights[f][level];
-            pair_min += p.field_mins[f];
-            pair_max += p.field_maxs[f];
+            // (range no longer accumulated per observed field -- it is the full
+            // all-fields range computed above; #1854.)
             // Winkler TF adjustment: on an exact-equal TOP-level agreement, bump
             // the weight by the value's rarity. `a == b` mirrors the numpy
             // `equal & (lvl == top)` mask (equal transformed values → top level).
@@ -724,9 +735,12 @@ mod tests {
     }
 
     #[test]
-    fn pair_null_field_uses_observed_range_only() {
-        // One field null on one side -> that field contributes no evidence and is
-        // excluded from the pair's min-max range (pair_min/pair_max unchanged).
+    fn pair_null_field_uses_full_range_1854() {
+        // #1854: one field null on one side -> that field contributes no evidence
+        // (total_weight) BUT the min-max normalization range still spans BOTH
+        // fields (the full range), so agreeing on the one observed field does NOT
+        // saturate to 1.0 -- it is correctly uncertain. (Pre-#1854 this asserted
+        // 1.0 from the shrunk observed-only range; that was the bug.)
         let mw = vec![vec![-2.0_f64, 3.0], vec![-2.0, 3.0]];
         let field_mins = [-2.0_f64, -2.0];
         let field_maxs = [3.0_f64, 3.0];
@@ -755,8 +769,9 @@ mod tests {
             emb_dims: &[],
             require_positive_evidence: false,
         };
-        // field 1 is null for row 1 -> only field 0 observed; agree -> 1.0 of the
-        // single-field observed range.
+        // field 1 is null for row 1 -> only field 0 observed and agrees (+3.0).
+        // Full range is [min_weight=-4, max=6]; normalized = (3-(-4))/(6-(-4)) =
+        // 0.7 -- uncertain, NOT the pre-#1854 saturated 1.0.
         let get = |f: usize, r: usize| match (f, r) {
             (0, _) => Some("alice"),
             (1, 0) => Some("smith"),
@@ -766,8 +781,19 @@ mod tests {
         let noop_ne = |_: usize, _: usize| None;
         let s = score_fs_pair(0, 1, &p, get, noop_ne);
         assert!(
-            (s - 1.0).abs() < 1e-12,
-            "observed-only agreement = 1.0, got {s}"
+            (s - 0.7).abs() < 1e-12,
+            "full-range partial-observation agreement = 0.7, got {s}"
+        );
+        // Contrast: with BOTH fields observed and agreeing, it saturates to 1.0.
+        let get_both = |f: usize, _r: usize| match f {
+            0 => Some("alice"),
+            1 => Some("smith"),
+            _ => None,
+        };
+        let s_both = score_fs_pair(0, 1, &p, get_both, noop_ne);
+        assert!(
+            (s_both - 1.0).abs() < 1e-12,
+            "full agreement on all fields = 1.0, got {s_both}"
         );
     }
 
