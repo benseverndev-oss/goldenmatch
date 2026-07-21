@@ -566,6 +566,10 @@ jobs:
             packages/python/goldenmatch/tests/test_nlevel_em.py \
             packages/python/goldenmatch/tests/test_nlevel_schema.py \
             packages/python/goldenmatch/tests/test_fs_bucket_native.py \
+            packages/python/goldenmatch/tests/test_fs_tf_route_matrix_1805.py \
+            packages/python/goldenmatch/tests/test_fs_match_mode_bucket_1805.py \
+            packages/python/goldenmatch/tests/test_fs_model_path_native_parity_1805.py \
+            packages/python/goldenmatch/tests/test_fs_frame_lane_parity_1805.py \
             -k "not native and not Native" \
             -n auto --timeout=120 --timeout-method=thread -q
 
