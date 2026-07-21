@@ -22,6 +22,11 @@ crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host unit tests link
 # engine): alias_match is a Python-bucket-only kernel with no wasm export, so the
 # edge bundle stays free of the heavy `regex` dependency.
 goldenmatch-score-core = { path = "../score-core", default-features = false }
+# `fs-core` carries the name scorers (name_freq_weighted_jw / given_name_aliased_jw)
+# as `*_sim` fns over INJECTED reference-data tables -- it bundles no data and its
+# only dep is `score-core` (default-features = false, so no regex reaches the edge
+# bundle). The TS loader injects the census / alias tables at `enableWasm()`.
+goldenmatch-fs-core = { path = "../fs-core" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

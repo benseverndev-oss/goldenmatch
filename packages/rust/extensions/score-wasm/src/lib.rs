@@ -7,12 +7,51 @@
 //! `token_sort_normalized_ratio` (the TS-parity lowercase+strip normalize), NOT
 //! the un-normalized `score_one(2)` (which the FFI/native path depends on); every
 //! other id (incl. 4=date, the #1858 date-aware scorer) delegates to `score_one`.
+//! ids 20/21 are the score-wasm-only name scorers over `fs-core` (`given_name_-
+//! aliased_jw` / `name_freq_weighted_jw`), scoring against reference-data tables
+//! the TS loader injects once at `enableWasm()`.
 //!
 //! Boundary design: the batch `score_matrix` entry crosses the JS<->WASM boundary
 //! ONCE per NxN block (values arrive as one separator-joined string), never per
-//! pair — per the perf-audit lesson that boundary cost dwarfs a single scorer.
+//! pair -- per the perf-audit lesson that boundary cost dwarfs a single scorer.
 
+use goldenmatch_fs_core::{
+    given_name_aliased_sim, name_freq_weighted_sim, AliasTable, SurnameIdfTable,
+};
 use goldenmatch_score_core::{score_one, token_sort_normalized_ratio};
+use std::sync::OnceLock;
+
+// Injected reference-data tables for the two name scorers (ids 20/21). The TS
+// loader passes the SAME census / alias data the pure path uses into the setters
+// once at `enableWasm()`; fs-core bundles no data, so nothing is embedded in the
+// wasm bundle. `OnceLock` first-wins; the data is deterministic.
+static SURNAME_IDF: OnceLock<SurnameIdfTable> = OnceLock::new();
+static NAME_ALIASES: OnceLock<AliasTable> = OnceLock::new();
+
+// Name-scorer ids, distinct from `score_one`'s 0..=8 (>= 20 leaves headroom for
+// score_one growth) so `score_matrix_impl` can branch on them.
+const ID_GIVEN_NAME_ALIASED_JW: u8 = 20;
+const ID_NAME_FREQ_WEIGHTED_JW: u8 = 21;
+
+/// Install the surname-IDF table from host-shipped census `(name, count)` pairs
+/// (`SurnameIdfTable::from_counts` computes the idf with the shared
+/// `surnames.surname_idf` formula). Shared by the wasm setter + native tests.
+pub fn install_surname_idf(names: Vec<String>, counts: Vec<f64>) {
+    let _ = SURNAME_IDF.set(SurnameIdfTable::from_counts(names.into_iter().zip(counts)));
+}
+
+/// Install the given-name alias table from parallel `(form, canonical)` EDGE
+/// arrays (`forms[i]` is a member of canonical `canonicals[i]`) -- grouped by
+/// form into `AliasTable::from_forms`. Two flat arrays keep the wasm-bindgen
+/// boundary simple (no nested Vec).
+pub fn install_name_aliases(forms: Vec<String>, canonicals: Vec<String>) {
+    let mut grouped: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (form, canon) in forms.into_iter().zip(canonicals) {
+        grouped.entry(form).or_default().push(canon);
+    }
+    let _ = NAME_ALIASES.set(AliasTable::from_forms(grouped));
+}
 
 /// Full row-major NxN similarity matrix for `values` under `scorer_id`.
 /// Diagonal = 0.0 and the matrix is symmetric, matching the pure-TS
@@ -25,10 +64,20 @@ pub fn score_matrix_impl(values: &[&str], scorer_id: u8) -> Vec<f64> {
         for j in (i + 1)..n {
             // id=2 (token_sort) uses the TS-parity normalized path (lowercase +
             // strip + token-sort), NOT score_one(2)'s un-normalized fuzz::ratio.
-            let s = if scorer_id == 2 {
-                token_sort_normalized_ratio(values[i], values[j])
-            } else {
-                score_one(scorer_id, values[i], values[j])
+            // ids 20/21 = the fs-core name scorers over the installed tables; if a
+            // table isn't installed the sim degrades to plain JW -- the same
+            // table-absent fallback the pure TS path takes.
+            let s = match scorer_id {
+                2 => token_sort_normalized_ratio(values[i], values[j]),
+                ID_GIVEN_NAME_ALIASED_JW => match NAME_ALIASES.get() {
+                    Some(t) => given_name_aliased_sim(values[i], values[j], t),
+                    None => score_one(0, values[i], values[j]),
+                },
+                ID_NAME_FREQ_WEIGHTED_JW => match SURNAME_IDF.get() {
+                    Some(t) => name_freq_weighted_sim(values[i], values[j], t),
+                    None => score_one(0, values[i], values[j]),
+                },
+                _ => score_one(scorer_id, values[i], values[j]),
             };
             out[i * n + j] = s;
             out[j * n + i] = s;
@@ -72,6 +121,38 @@ mod tests {
     }
 
     #[test]
+    fn name_scorer_ids_20_21_dispatch_to_fs_core() {
+        // The ONLY test that installs the process-global name-scorer tables
+        // (OnceLock first-wins), so it never races a different-content setter.
+        install_name_aliases(
+            vec![
+                "william".into(), "bill".into(), "robert".into(), "bob".into(),
+            ],
+            vec![
+                "william".into(), "william".into(), "robert".into(), "robert".into(),
+            ],
+        );
+        // Tiny census table: smith common, smyth rare, jones mid.
+        install_surname_idf(
+            vec!["smith".into(), "smyth".into(), "jones".into()],
+            vec![2_000_000.0, 100.0, 500_000.0],
+        );
+
+        // id 20 = given_name_aliased_jw: William/Bill share a canonical -> 1.0.
+        let m = score_matrix_impl(&["William", "Bill"], ID_GIVEN_NAME_ALIASED_JW);
+        assert_eq!(m[1], 1.0);
+        // Non-alias falls back to plain JW.
+        let m2 = score_matrix_impl(&["William", "Walter"], ID_GIVEN_NAME_ALIASED_JW);
+        assert_eq!(m2[1], score_one(0, "William", "Walter"));
+
+        // id 21 = name_freq_weighted_jw: dispatches to the fs-core sim over the
+        // installed table (byte-identical to calling the sim directly).
+        let table = SURNAME_IDF.get().unwrap();
+        let m3 = score_matrix_impl(&["smith", "smyth"], ID_NAME_FREQ_WEIGHTED_JW);
+        assert_eq!(m3[1], name_freq_weighted_sim("smith", "smyth", table));
+    }
+
+    #[test]
     fn token_sort_id2_normalizes_and_is_order_invariant() {
         // id=2 must use the TS-parity normalized path: order-invariant + case/
         // punctuation-insensitive. "John SMITH" vs "smith john" -> 1.0.
@@ -87,7 +168,7 @@ mod tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::score_matrix_impl;
+    use super::{install_name_aliases, install_surname_idf, score_matrix_impl};
     use wasm_bindgen::prelude::*;
 
     /// JS entry: `values` is one string with fields joined by `sep` (a 1-char
@@ -101,5 +182,20 @@ mod wasm {
             values.split(sep).collect()
         };
         score_matrix_impl(&parts, scorer_id)
+    }
+
+    /// Install the surname-IDF table for `name_freq_weighted_jw` (id 21). Called
+    /// once by the TS loader at `enableWasm()` with the census `(name, count)`
+    /// data the pure path uses (`censusSurnames.ts`).
+    #[wasm_bindgen]
+    pub fn set_surname_idf(names: Vec<String>, counts: Vec<f64>) {
+        install_surname_idf(names, counts);
+    }
+
+    /// Install the given-name alias table for `given_name_aliased_jw` (id 20) from
+    /// parallel `(form, canonical)` edge arrays.
+    #[wasm_bindgen]
+    pub fn set_name_aliases(forms: Vec<String>, canonicals: Vec<String>) {
+        install_name_aliases(forms, canonicals);
     }
 }

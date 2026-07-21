@@ -25,9 +25,16 @@ describe("ScorerBackend singleton", () => {
     expect(getScorerBackend()).toBeNull();
   });
 
-  it("covers jaro_winkler / levenshtein / token_sort / exact", () => {
+  it("covers the 4 score_one scorers + the 2 fs-core name scorers", () => {
     expect([...WASM_COVERED_SCORERS].sort()).toEqual(
-      ["exact", "jaro_winkler", "levenshtein", "token_sort"],
+      [
+        "exact",
+        "given_name_aliased_jw",
+        "jaro_winkler",
+        "levenshtein",
+        "name_freq_weighted_jw",
+        "token_sort",
+      ],
     );
   });
 });

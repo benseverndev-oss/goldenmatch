@@ -27,7 +27,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { enableWasm, disableWasm } from "../../src/core/wasm/index.js";
-import { scoreMatrix } from "../../src/core/scorer.js";
+import { scoreMatrix, scoreField } from "../../src/core/scorer.js";
 
 const artifact = fileURLToPath(
   new URL("../../src/core/wasm/artifacts/score_wasm_bg.wasm", import.meta.url),
@@ -75,6 +75,43 @@ d("WASM scorer matches rapidfuzz/Python goldens", () => {
       // crossing); the off-diagonal cell is the pair score.
       const m = scoreMatrix([a, b], scorer);
       expect(m[0]![1]!).toBeCloseTo(expected, 4);
+    });
+  }
+});
+
+// The two fs-core name scorers (ids 20/21) score over the census / alias tables
+// the loader injects at enableWasm(). Their reference is the pure-TS `scoreField`
+// name branch (NOT a rapidfuzz golden), matched to 4dp — the surface bar (WASM
+// rapidfuzz JW vs the pure-TS JW differ within tolerance; #879 aligned them).
+// These cases also PROVE injection ran: without the census table the borderline
+// common-surname pair would score plain JW (~0.90) instead of the down-weighted
+// value (~0.56), and without the alias table William/Bill would score ~0.55
+// instead of 1.0 — both far outside 4dp.
+type NameCase = readonly [scorer: string, a: string, b: string, note: string];
+const NAME_CASES: readonly NameCase[] = [
+  ["given_name_aliased_jw", "William", "Bill", "alias -> 1.0 (proves alias inject)"],
+  ["given_name_aliased_jw", "Robert", "Bob", "alias -> 1.0"],
+  ["given_name_aliased_jw", "William", "Walter", "non-alias -> plain JW"],
+  ["name_freq_weighted_jw", "Smith", "Smyth", "borderline common -> down-weighted (proves census inject)"],
+  ["name_freq_weighted_jw", "Smith", "Smith", "exact (jw>=0.95) -> plain JW = 1.0"],
+  ["name_freq_weighted_jw", "Xzzyqwb", "Xzzyqwc", "OOV borderline -> plain JW"],
+];
+
+d("WASM name scorers match the pure-TS scoreField reference (4dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [scorer, a, b, note] of NAME_CASES) {
+    it(`${scorer}("${a}","${b}") ${note}`, () => {
+      // scoreField never consults the WASM backend — it is the pure-TS
+      // reference regardless of enable state.
+      const ref = scoreField(a, b, scorer);
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], scorer);
+      expect(m[0]![1]!).toBeCloseTo(ref!, 4);
     });
   }
 });
