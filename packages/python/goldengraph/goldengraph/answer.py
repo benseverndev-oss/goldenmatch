@@ -376,6 +376,61 @@ def _retrieve_local_bridged(slice_graph, seeds, *, max_hops: int, node_budget: i
     return {"entities": list(ents.values()), "edges": edges}
 
 
+def _resolve_and_plan(query, slice_graph, *, embedder, query_classifier=None,
+                      query_schema=None, slice_entities=None):
+    """Shared front half of routing: resolve the query profile against the slice's
+    OWN vocab (entity names + edge predicates), canonicalize its relation(s) through
+    the discovered schema so a relabeled cluster doesn't strand the query, then plan.
+    Returns ``(profile, plan)``. Single-sourced so mode='auto' and the default
+    local/hybrid chain attempt share ONE routing implementation."""
+    if slice_entities is None:
+        slice_entities = list(slice_graph.entities())
+    profile = resolve_profile(
+        query,
+        predicates=_slice_predicates(slice_graph, entities=slice_entities),
+        entity_names=_slice_entity_names(slice_graph, entities=slice_entities),
+        embedder=embedder,  # lets the NL extractor bridge synonym relations to predicates
+        llm_classifier=query_classifier,
+    )
+    if query_schema is not None:
+        if profile.relation:
+            profile.relation = _canon_query_rel(profile.relation, query_schema)
+        if profile.relation_chain:
+            profile.relation_chain = tuple(
+                _canon_query_rel(r, query_schema) for r in profile.relation_chain
+            )
+    return profile, plan_query(profile)
+
+
+def _chain_answer_from_profile(slice_graph, profile, *, provenance_out=None):
+    """Run the deterministic LLM-free multi-hop walk for a chain-plan profile.
+    Engineered template -> authoritative order (single walk); free NL -> the extracted
+    order is a HINT the graph validates (try permutations). Returns the answer, or
+    None (anchor/chain missing, or the walk hit a missing/mislabeled edge) so the
+    caller falls through to retrieval+synthesis -- never worse than the status quo."""
+    if not (profile.anchor_surface and profile.relation_chain):
+        return None
+    if profile.chain_ordered:
+        return trace_chain(slice_graph, profile.anchor_surface,
+                           profile.relation_chain, refs_out=provenance_out)
+    return _trace_chain_any_order(slice_graph, profile.anchor_surface,
+                                  profile.relation_chain, refs_out=provenance_out)
+
+
+def _local_chain_enabled() -> bool:
+    """`GOLDENGRAPH_QA_LOCAL_CHAIN` gate (default ON). On -> mode='local'/'hybrid'
+    attempt the deterministic LLM-free multi-hop chain walk BEFORE synthesis, so the
+    template-free NL routing win reaches the DEFAULT answer path (the bench and most
+    callers run mode='local'), not just mode='auto'. Set to 0/false to restore the
+    pure retrieval+synthesis local/hybrid path, byte-identical to pre-change -- the
+    baseline arm of the local-vs-auto A/B."""
+    import os
+
+    # Case/whitespace-insensitive so FALSE / False / " false " all disable, matching the
+    # documented "0/false" contract (an empty value also disables, as before).
+    return os.environ.get("GOLDENGRAPH_QA_LOCAL_CHAIN", "1").strip().lower() not in ("0", "false", "")
+
+
 def ask(
     query: str,
     store,
@@ -411,26 +466,15 @@ def ask(
     job). Each community is contextualized with its immediate (1-hop) neighborhood.
     """
     slice_graph = store.as_of(valid_t, tx_t)
+    entered_auto = mode == "auto"
     if mode == "auto":
-        slice_entities = list(slice_graph.entities())  # one entities() walk, reused below
-        profile = resolve_profile(
-            query,
-            predicates=_slice_predicates(slice_graph, entities=slice_entities),
-            entity_names=_slice_entity_names(slice_graph, entities=slice_entities),
-            embedder=embedder,  # lets the NL extractor bridge synonym relations to predicates
-            llm_classifier=query_classifier,
+        # Query-side schema canonicalization inside _resolve_and_plan routes the query's
+        # relation(s) through the discovered schema so they match the (relabeled) canonical
+        # edge predicates -- else a cluster relabeled to a synonym strands every query.
+        profile, plan = _resolve_and_plan(
+            query, slice_graph, embedder=embedder,
+            query_classifier=query_classifier, query_schema=query_schema,
         )
-        # Query-side schema canonicalization: route the query's relation(s) through the discovered
-        # schema so they match the (relabeled) canonical edge predicates. Without this, a cluster
-        # relabeled to a non-canonical synonym strands every query that used the canonical word.
-        if query_schema is not None:
-            if profile.relation:
-                profile.relation = _canon_query_rel(profile.relation, query_schema)
-            if profile.relation_chain:
-                profile.relation_chain = tuple(
-                    _canon_query_rel(r, query_schema) for r in profile.relation_chain
-                )
-        plan = plan_query(profile)
         if plan.mode == "aggregate" and profile.anchor_surface and profile.relation:
             return _format_aggregate(
                 aggregate_members(slice_graph, profile.anchor_surface, profile.relation,
@@ -446,15 +490,8 @@ def ask(
                 obj = asof_object(store.as_of(d, tx_t), profile.anchor_surface, profile.relation,
                                   refs_out=provenance_out)
                 return obj if obj is not None else "(unknown)"
-        if plan.mode == "chain" and profile.anchor_surface and profile.relation_chain:
-            # Engineered template -> authoritative order (single walk). Free-NL ->
-            # the order is a hint, so validate it against the graph (try permutations).
-            if profile.chain_ordered:
-                ans = trace_chain(slice_graph, profile.anchor_surface, profile.relation_chain,
-                                  refs_out=provenance_out)
-            else:
-                ans = _trace_chain_any_order(slice_graph, profile.anchor_surface,
-                                             profile.relation_chain, refs_out=provenance_out)
+        if plan.mode == "chain":
+            ans = _chain_answer_from_profile(slice_graph, profile, provenance_out=provenance_out)
             if ans is not None:
                 return ans
             # walk hit a missing/mislabeled edge -> fall through to the general retrieval+synthesis
@@ -469,7 +506,29 @@ def ask(
         return synthesize_global(query, views, llm)
     if mode not in ("local", "hybrid"):
         raise ValueError(f"mode must be 'local', 'hybrid', or 'global', got {mode!r}")
-    seeds = seed_by_query(slice_graph, query, embedder, k=k, index=entity_index)
+    # DEFAULT-PATH chain routing (gated, default on): the template-free NL multi-hop
+    # walk now fires for mode='local'/'hybrid' BEFORE synthesis, so the routing win
+    # reaches the default answer path -- not just mode='auto'. Skip when we arrived via
+    # auto (it already attempted the chain). A None answer (no chain plan, or the walk
+    # hit a missing edge) falls through to today's retrieval+synthesis, unchanged.
+    # Materialize the entity list ONCE and reuse it for both routing (_resolve_and_plan)
+    # and seeding (seed_by_query), so the default-path chain attempt doesn't double-scan
+    # entities on a non-chain / fall-through query. Stays None when the chain attempt is
+    # skipped (gate off / arrived via auto) -> seed_by_query self-scans, byte-identical.
+    slice_entities = None
+    if not entered_auto and _local_chain_enabled():
+        slice_entities = list(slice_graph.entities())
+        profile, plan = _resolve_and_plan(
+            query, slice_graph, embedder=embedder,
+            query_classifier=query_classifier, query_schema=query_schema,
+            slice_entities=slice_entities,
+        )
+        if plan.mode == "chain":
+            ans = _chain_answer_from_profile(slice_graph, profile, provenance_out=provenance_out)
+            if ans is not None:
+                return ans
+    seeds = seed_by_query(slice_graph, query, embedder, k=k, index=entity_index,
+                          entities=slice_entities)
     _retrieve = _retrieve_local_bridged if _bridge_enabled() else _retrieve_local
     subgraph = _retrieve(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the

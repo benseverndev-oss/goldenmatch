@@ -273,9 +273,14 @@ class GoldenGraphQAEngine:
             latency_s=time.perf_counter() - t0,
         )
 
-    def answer(self, handle, question: str) -> AnswerResult:
+    def answer(self, handle, question: str, mode: str | None = None) -> AnswerResult:
         from goldengraph.answer import ask
 
+        # `mode` overrides the engine's configured retrieval mode for THIS call -- the
+        # same-run local-vs-auto A/B (harness.run_engine_ab) uses it to answer the same
+        # question under both modes against one shared graph. None -> the configured
+        # mode, byte-identical to the single-mode path.
+        retrieval_mode = mode or self._retrieval_mode
         t0 = time.perf_counter()
         before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
@@ -289,7 +294,7 @@ class GoldenGraphQAEngine:
             embedder=self._embedder,
             valid_t=handle["valid_t"],
             tx_t=handle["tx_t"],
-            mode=self._retrieval_mode,
+            mode=retrieval_mode,
             hops=self._retrieval_hops,
             node_budget=self._node_budget,
             passages=handle.get("passages"),

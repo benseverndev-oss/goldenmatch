@@ -76,7 +76,14 @@ def _routing(*, seed: int, n_anchors: int):
 
 def _budget_shared() -> bool:
     """ONE Budget across build-LLM (extraction) AND answer-LLM (synthesis): build a tiny store via the
-    facade (extraction spends), then a local ask (synthesis spends) on the SAME budget -> spent grows."""
+    facade (extraction spends), then a local ask (synthesis spends) on the SAME budget -> spent grows.
+
+    This probe measures the SYNTHESIS path's budget plumbing, so LLM-free chain routing is disabled for
+    the ask (`GOLDENGRAPH_QA_LOCAL_CHAIN=0`). Otherwise a chain-routable question like "Who founded
+    Acme?" now answers deterministically with ZERO synthesis spend -- which would read False here for a
+    reason orthogonal to budget sharing (the default-path chain routing, not a plumbing break)."""
+    import os
+
     from goldengraph.budget import Budget
     from goldengraph.graph import GoldenGraph
     from goldengraph_native import _native as ggn
@@ -90,7 +97,15 @@ def _budget_shared() -> bool:
         budget=b, store=ggn.PyStore(), corpus_records=1_000,
     )
     after_build = b.spent_tokens
-    gg.ask("Who founded Acme?", valid_t=_AS_OF, tx_t=_AS_OF, mode="local")
+    prev = os.environ.get("GOLDENGRAPH_QA_LOCAL_CHAIN")
+    os.environ["GOLDENGRAPH_QA_LOCAL_CHAIN"] = "0"  # force synthesis so the budget probe is meaningful
+    try:
+        gg.ask("Who founded Acme?", valid_t=_AS_OF, tx_t=_AS_OF, mode="local")
+    finally:
+        if prev is None:
+            os.environ.pop("GOLDENGRAPH_QA_LOCAL_CHAIN", None)
+        else:
+            os.environ["GOLDENGRAPH_QA_LOCAL_CHAIN"] = prev
     after_ask = b.spent_tokens
     return after_ask > after_build > 0
 
