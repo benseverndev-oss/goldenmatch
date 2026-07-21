@@ -1716,6 +1716,28 @@ def _build_strong_identifier_union(
     )
 
 
+def _is_strong_identifier_union(
+    cfg: BlockingConfig, profiles: list[ColumnProfile]
+) -> bool:
+    """True if ``cfg`` is a #1207 strong-identifier UNION.
+
+    Shape: a ``multi_pass`` config with >=2 passes, at least one of which is a
+    single strong-id field (identifier/email/phone). Both union build paths
+    (the Rust core union and ``_build_strong_identifier_union``) emit exactly
+    this shape, and no other autoconfig blocking path emits a single-field
+    strong-id pass inside a multi_pass config (compound/name passes are
+    multi-field; quality-aware/semantic passes are soundex/substring/simhash).
+    Used by the >=50K learned-blocking gate to avoid clobbering the union.
+    """
+    if cfg.strategy != "multi_pass" or not cfg.passes or len(cfg.passes) < 2:
+        return False
+    col_types = {p.name: p.col_type for p in profiles}
+    return any(
+        len(p.fields) == 1 and col_types.get(p.fields[0]) in _STRONG_EXACT_TYPES
+        for p in cfg.passes
+    )
+
+
 # ── Compound blocking helpers ─────────────────────────────────────────────
 
 
@@ -4535,22 +4557,43 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
     #   b) enough rows to amortize training cost — below 50K, static or
     #      multi_pass blocking is usually faster and comparable in quality.
     if blocking is not None and total_rows >= 50_000:
-        blocking.strategy = "learned"
-        blocking.learned_sample_size = min(total_rows // 4, 5000)
-        blocking.learned_min_recall = 0.95
-        blocking.skip_oversized = True
-        # skip_oversized DROPS whole blocks above max_block_size, so the cap must
-        # not sit below the budget that picked the key (see _learned_block_cap).
-        from goldenmatch.core._native_loader import native_enabled as _native_enabled
+        # #1316: a #1207 strong-identifier UNION is purpose-built for null-sparse
+        # multi-source strong-id data. Forcing learned blocking here DISCARDS it
+        # and under-blocks catastrophically -- measured on the #1207 shape at 50K,
+        # candidate-pair recall collapses 1.0 -> 0.0 (the learner trains on a
+        # <=5K sample, finds no pairs above its recall threshold, falls back to a
+        # single column, and skip_oversized then drops every resulting giant
+        # block). The union's per-id passes are near-unique and naturally bounded
+        # (it already sets skip_oversized + max_block_size), so learned's
+        # block-bounding value is redundant. `build_blocking` already gated the
+        # union on OR-coverage before emitting it, so KEEP any strong-id union it
+        # returned rather than overwriting it. Learned blocking stays the default
+        # for every non-union large shape.
+        if _is_strong_identifier_union(blocking, profiles):
+            logger.info(
+                "Keeping the strong-identifier blocking UNION at %d rows; learned "
+                "blocking under-blocks this null-sparse multi-source shape (see "
+                "#1316).",
+                total_rows,
+            )
+        else:
+            blocking.strategy = "learned"
+            blocking.learned_sample_size = min(total_rows // 4, 5000)
+            blocking.learned_min_recall = 0.95
+            blocking.skip_oversized = True
+            # skip_oversized DROPS whole blocks above max_block_size, so the cap
+            # must not sit below the budget that picked the key (see
+            # _learned_block_cap).
+            from goldenmatch.core._native_loader import native_enabled as _native_enabled
 
-        blocking.max_block_size = _learned_block_cap(
-            total_rows, blocking.max_block_size, _native_enabled("block_scoring"),
-        )
-        logger.info(
-            "Upgraded to learned blocking (dataset has %d rows, sample_size=%d, "
-            "max_block_size=%d)",
-            total_rows, blocking.learned_sample_size, blocking.max_block_size,
-        )
+            blocking.max_block_size = _learned_block_cap(
+                total_rows, blocking.max_block_size, _native_enabled("block_scoring"),
+            )
+            logger.info(
+                "Upgraded to learned blocking (dataset has %d rows, sample_size=%d, "
+                "max_block_size=%d)",
+                total_rows, blocking.learned_sample_size, blocking.max_block_size,
+            )
 
     # 2. Reranking for multi-field matchkeys
     for mk in matchkeys:

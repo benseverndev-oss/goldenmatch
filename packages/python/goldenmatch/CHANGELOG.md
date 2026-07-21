@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Learned blocking no longer clobbers the #1207 strong-identifier union at
+  >=50k rows (#1316).** Auto-config forced `strategy="learned"` unconditionally
+  at `total_rows >= 50_000`, discarding the per-identifier blocking union that
+  null-sparse multi-source strong-id data depends on. Measured on that shape at
+  50k, learned blocking under-blocks catastrophically -- candidate-pair recall
+  collapses from 1.0 (union) to 0.0 (the learner trains on a <=5k sample, finds
+  no pairs above its recall threshold, falls back to one column, and
+  `skip_oversized` drops every resulting oversized block). The >=50k gate now
+  keeps a strong-identifier union it detects and only upgrades non-union large
+  shapes to learned blocking.
 - **Zero-config Fellegi-Sunter admits shared identity identifiers (email/phone)
   at cardinality 1.0.** FS auto-config dropped every `card == 1.0` exact field as
   a "perfect surrogate", but that also discarded identity-bearing identifiers

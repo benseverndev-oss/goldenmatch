@@ -1605,6 +1605,7 @@
             "_is_person_name_column",
             "_is_probabilistic_shape",
             "_is_short_code",
+            "_is_strong_identifier_union",
             "_is_text_corpus",
             "_learned_block_cap",
             "_legacy_auto_configure_v0",
