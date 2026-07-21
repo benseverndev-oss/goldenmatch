@@ -21,3 +21,6 @@ name = "goldenmatch_score_core"
 # Same pin the `native` crate uses, so the scorers are byte-identical across the
 # native ext and the FFI UDFs (parity by construction — one source of truth).
 rapidfuzz = "0.5.0"
+# `soundex` replicates `jellyfish.soundex` byte-for-byte, incl. its Unicode step
+# `unicodedata.normalize("NFKD", s).upper()`; this provides the NFKD normalizer.
+unicode-normalization = "0.1"

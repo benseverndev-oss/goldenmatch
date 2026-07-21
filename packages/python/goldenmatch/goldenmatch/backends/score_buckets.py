@@ -227,6 +227,14 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # score_one catch-all scores id 5 as 0.0) declines to the pure-Python
     # per-pair mirror (`_qgram_score_single`) instead of silently zeroing.
     "qgram": 5,
+    # id 6 = soundex_match (binary soundex-code equality, score-core score_one).
+    # Same wheel-skew story: guarded on the `soundex_similarity` capability symbol
+    # so a stale wheel declines to the pure-Python per-pair jellyfish mirror. NB
+    # score_one id 6 uses NAIVE code equality (two empty codes -> match), matching
+    # `_resolve_score_pair_callable`'s `jf.soundex(a)==jf.soundex(b)` bucket mirror
+    # -- NOT the field-matrix path's id 4=soundex (empty codes non-matching;
+    # a separate id namespace).
+    "soundex_match": 6,
 }
 
 
@@ -1033,12 +1041,18 @@ def score_buckets(
             _mod = native_module()
             _date_ok = _mod is not None and hasattr(_mod, "date_similarity")
             _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
+            _soundex_ok = _mod is not None and hasattr(_mod, "soundex_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
+            has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             # Wheel-skew: decline native entirely when a field uses a scorer whose
             # capability symbol the loaded kernel lacks (score_one would silently
             # zero that id); the pure-Python per-pair mirror scores the block.
-            _skew_block = (has_date and not _date_ok) or (has_qgram and not _qgram_ok)
+            _skew_block = (
+                (has_date and not _date_ok)
+                or (has_qgram and not _qgram_ok)
+                or (has_soundex and not _soundex_ok)
+            )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
 

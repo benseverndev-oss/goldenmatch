@@ -37,10 +37,12 @@ class TestBucketHashSeedSingleSource:
 
 class TestNativeScorerIdMaps:
     # The canonical Rust score-core `score_one` dispatch (lib.rs): the block-pair
-    # kernel. `score_field_matrix` shares 0-3 (it delegates to score_one) but its
-    # id 4 is soundex_match, a DIFFERENT namespace -- pinned separately so the two
-    # can't silently collide.
-    _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4, "qgram": 5}
+    # (bucket) kernel. `score_field_matrix` shares ids 0-3 (it delegates to
+    # score_one) but ids 4+ are a DIFFERENT namespace -- in the bucket map
+    # 4=date/5=qgram/6=soundex_match; in the field-matrix map 4=soundex_match.
+    # `soundex_match` therefore lives in BOTH maps at DIFFERENT ids (bucket 6,
+    # field 4); the two are pinned separately so they can't silently collide.
+    _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4, "qgram": 5, "soundex_match": 6}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):
@@ -51,7 +53,8 @@ class TestNativeScorerIdMaps:
 
     def test_shared_ids_agree_across_the_two_namespaces(self):
         # 0-3 are delegated by score_field_matrix to score_one, so they MUST be
-        # identical in both Python dicts; only id 4 diverges (date vs soundex).
+        # identical in both Python dicts; ids 4+ diverge by namespace (bucket
+        # date/qgram/soundex vs field-matrix soundex).
         for name in ("jaro_winkler", "levenshtein", "token_sort", "exact"):
             assert _NATIVE_SCORER_IDS[name] == _NATIVE_FIELD_SCORER_IDS[name]
 
