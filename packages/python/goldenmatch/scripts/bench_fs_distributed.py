@@ -132,6 +132,22 @@ def _fs_cfg(backend: str):
     )
 
 
+def _zero_config_cfg(df, backend: str):
+    """The ZERO-CONFIG FS path -- auto_configure_probabilistic_df on a bounded
+    head sample (auto-config only ever samples). This is the path the
+    identifier-admission fix lives in: on realistic data whose sample under-
+    represents duplicates it used to drop the shared `email` identifier and
+    collapse the EM model to F1=0. The gate asserts zero-config produces a
+    WORKING config (F1 above --min-f1), so that regression cannot return
+    silently -- qis_gate only covers the weighted path."""
+    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
+    sample = df.head(200_000)
+    cfg = auto_configure_probabilistic_df(sample.to_arrow())
+    cfg.backend = backend
+    return cfg
+
+
 def _peak_rss_gb() -> float:
     # ru_maxrss is KiB on Linux.
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 * 1024.0)
@@ -143,6 +159,11 @@ def main() -> int:
     ap.add_argument("--dup-frac", type=float, default=0.2)
     ap.add_argument("--backend", default="bucket")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--config-mode", choices=["explicit", "zero"], default="explicit",
+                    help="explicit = hand-written FS config; zero = auto-config "
+                         "(the zero-config quality-at-scale gate)")
+    ap.add_argument("--min-f1", type=float, default=None,
+                    help="gate: exit non-zero if F1 < this floor")
     args = ap.parse_args()
 
     print(f"[gen] {args.rows} base rows + {int(args.rows*args.dup_frac)} dups "
@@ -155,8 +176,13 @@ def main() -> int:
     from goldenmatch import dedupe_df
     from goldenmatch.core.evaluate import evaluate_clusters
 
+    cfg = (_zero_config_cfg(df, args.backend) if args.config_mode == "zero"
+           else _fs_cfg(args.backend))
+    print(f"[config] mode={args.config_mode} "
+          f"matchkey_fields={[f.field for m in cfg.get_matchkeys() for f in m.fields]}",
+          flush=True)
     t0 = time.perf_counter()
-    result = dedupe_df(df, config=_fs_cfg(args.backend))
+    result = dedupe_df(df, config=cfg, confidence_required=False)
     wall = time.perf_counter() - t0
     rss = _peak_rss_gb()
 
@@ -179,6 +205,12 @@ def main() -> int:
     print(f"- wall: **{wall:.1f}s**  peak RSS: **{rss:.2f} GB**")
     print(f"- multi-member clusters: {multi}  (GT pairs: {len(gt)})")
     print(f"- **P={ev.precision:.3f}  R={ev.recall:.3f}  F1={ev.f1:.3f}**")
+
+    if args.min_f1 is not None and ev.f1 < args.min_f1:
+        print(f"::error::{args.config_mode}-config FS F1 {ev.f1:.4f} < floor "
+              f"{args.min_f1:.2f} at {df.height} rows -- zero-config quality "
+              f"regression (matchkeys/blocking dropped the identity signal?)")
+        return 1
     return 0
 
 

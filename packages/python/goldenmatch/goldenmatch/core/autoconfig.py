@@ -4823,12 +4823,29 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
 
         scorer, _weight, transforms = scorer_info
 
-        # The one hard gate, applied uniformly to every exact-scorer field
-        # (identifier/email/phone): a perfectly-unique column (card == 1.0) is a
-        # per-record surrogate key -- it is never shared, so an agreement carries
-        # zero shared-identity signal. Exclude it for config hygiene. (Mirrors the
-        # exact path's >= 1.0 upper bound; previously the prob path gated none.)
-        if scorer == "exact" and p.cardinality_ratio >= 1.0:
+        # Perfect-surrogate hygiene gate, but NOT for identity-bearing VALUE types
+        # (email / phone). A card == 1.0 exact field is EITHER a per-record
+        # surrogate (a row PK -- never shared, no identity signal, correctly
+        # excluded) OR a shared real-world identifier a duplicate carries verbatim
+        # -- F-S's single strongest signal. Cardinality alone cannot tell them
+        # apart, AND the ratio is measured on a SAMPLE that under-represents
+        # duplicates (a head sample of base-then-dup data sees a shared email as
+        # perfectly unique), so a blanket >= 1.0 exclusion silently drops the best
+        # comparison field and collapses the whole EM model to zero matches at
+        # scale (measured: zero-config FS F1 0.0 at 1M on realistic person data).
+        # Unlike the exact-matchkey path (a card==1.0 key emits zero blocking pairs
+        # and is useless), an F-S exact field is a COMPARISON field scored on pairs
+        # from OTHER blocking: a true PK self-regulates to neutral (m~=u, ~0 EM
+        # weight) while a shared identifier carries a large weight -- so admitting
+        # is neutral-to-helpful, never harmful (#721 self-regulation). We admit
+        # only `email`/`phone` (unambiguously identity-bearing values) and keep
+        # excluding the ambiguous bare `identifier` type, which also covers row PKs
+        # (e.g. `record_id`) -- those stay out for config hygiene.
+        if (
+            scorer == "exact"
+            and p.cardinality_ratio >= 1.0
+            and p.col_type not in ("email", "phone")
+        ):
             continue
 
         # Lever #2a: drop redundant person-name composites when atomic parts exist.

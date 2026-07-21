@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Zero-config Fellegi-Sunter admits shared identity identifiers (email/phone)
+  at cardinality 1.0.** FS auto-config dropped every `card == 1.0` exact field as
+  a "perfect surrogate", but that also discarded identity-bearing identifiers
+  (email/phone) that duplicates carry verbatim -- FS's single strongest signal.
+  Because cardinality is measured on a config sample that can under-represent
+  duplicates, this silently collapsed the EM model to zero matches at scale
+  (measured: zero-config FS F1 0.0 at 1M on realistic person data; recovers to
+  1.0 with the identifier admitted). `build_probabilistic_matchkeys` now admits
+  `email`/`phone` at `card >= 1.0` (an FS comparison field self-regulates -- a
+  true PK to neutral, a shared identifier to a large weight) while still
+  excluding the ambiguous bare `identifier` type (row PKs) for config hygiene.
+  FS path only; the weighted/exact matchkey path is unchanged.
+
 - **FS `missing="unobserved"`: a partial-observation pair no longer normalizes to
   1.0 (#1854).** The min-max score range accumulated only over the OBSERVED
   fields, so a pair agreeing on its single observed field had `total == pair_max`
