@@ -66,6 +66,15 @@ SELECT goldenmatch_match_tables('prospects', 'customers', '{"fuzzy": {"name": 0.
 > (`goldenmatch_dedupe` / `goldenmatch_match`) and the scalar/native-direct
 > functions (`goldenmatch_score`, the `goldenmatch_*_pairs` kernels, …) do **not**
 > go through the SPI read at all.
+>
+> **`gm_run` runs the engine once.** A `gm_run` job used to invoke the pipeline
+> three times on the same rows (`dedupe` + `dedupe_pairs` + `dedupe_clusters`) —
+> ~3x the compute, and, because the pipeline is non-deterministic run-to-run, it
+> could persist pairs / clusters / golden records from three different runs that
+> disagreed with each other. It now runs a single pipeline pass and persists
+> golden, scored pairs, and cluster assignments from that one consistent result
+> (batched multi-row `INSERT`s, unchanged). The standalone `goldenmatch_dedupe_*`
+> table functions are one pass each already; this only affected `gm_run` (#1883).
 
 ### Scalar functions
 

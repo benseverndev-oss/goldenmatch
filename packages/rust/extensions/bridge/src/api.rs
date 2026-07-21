@@ -212,6 +212,16 @@ pub struct ClusterMember {
     pub cluster_size: i64,
 }
 
+/// Everything a single dedupe pipeline run produces that `gm_run` persists:
+/// golden/stats/telemetry PLUS scored pairs and cluster assignments. Returned
+/// by [`dedupe_bundle`], the combined form of `dedupe` + `dedupe_pairs` +
+/// `dedupe_clusters` (each of which independently calls `dedupe_df`).
+pub struct DedupeBundle {
+    pub result: DedupeResult,
+    pub pairs: Vec<ScoredPair>,
+    pub clusters: Vec<ClusterMember>,
+}
+
 /// A match result row.
 pub struct MatchRow {
     pub target_id: i64,
@@ -349,6 +359,106 @@ pub fn dedupe_full(
             golden_json,
             stats_json,
             telemetry_json,
+        })
+    })
+}
+
+/// Run the dedupe pipeline ONCE and return golden/stats/telemetry + scored
+/// pairs + cluster assignments off the single `DedupeResult`.
+///
+/// This is the combined form of `dedupe` + `dedupe_pairs` + `dedupe_clusters`,
+/// each of which independently calls `dedupe_df`. `gm_run` uses it so a job
+/// runs the engine ONCE instead of three times on the same rows (#1883). It is
+/// also more correct: the pipeline is non-deterministic run-to-run (EM sample
+/// order), so three separate runs could persist pairs, clusters, and golden
+/// records that mutually disagree — one run makes them consistent by
+/// construction. Extraction mirrors the three single-purpose functions exactly
+/// (telemetry source label `"dedupe"`, so the blob is byte-identical to the old
+/// `dedupe()` path).
+pub fn dedupe_bundle(
+    table: &convert::TableData,
+    config_json: &str,
+) -> Result<DedupeBundle, BridgeError> {
+    crate::init()?;
+
+    Python::with_gil(|py| {
+        let gm = py.import("goldenmatch")?;
+        let json_mod = py.import("json")?;
+
+        let df = convert::table_to_arrow_df(py, table)?;
+        // Slim/full config routing identical to `dedupe`/`dedupe_pairs`/
+        // `dedupe_clusters` (full sections via `config=`, slim kwargs otherwise; #1914).
+        let kwargs = build_dedupe_kwargs(py, config_json)?;
+
+        let result = gm.call_method("dedupe_df", (df,), Some(&kwargs))?;
+
+        // -- golden (JSON array of objects), mirrors `dedupe` --
+        let golden_json = if let Ok(golden) = result.getattr("golden") {
+            if !golden.is_none() {
+                Some(convert::arrow_df_to_json(
+                    py,
+                    &golden.into_pyobject(py).unwrap().unbind(),
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // -- stats --
+        let stats = result.getattr("stats")?;
+        let stats_json: String = json_mod.call_method1("dumps", (stats,))?.extract()?;
+
+        // -- telemetry (source label "dedupe" for byte-identity with dedupe()) --
+        let committed_cfg = result
+            .getattr("config")
+            .ok()
+            .filter(|c| !c.is_none())
+            .unwrap_or_else(|| py.None().into_bound(py));
+        let telemetry_json =
+            capture_controller_telemetry(py, committed_cfg, "dedupe").unwrap_or(None);
+
+        // -- scored pairs, mirrors `dedupe_pairs` --
+        let scored_pairs = result.getattr("scored_pairs")?;
+        let pairs_list: Vec<(i64, i64, f64)> = scored_pairs.extract()?;
+        let pairs = pairs_list
+            .into_iter()
+            .map(|(a, b, s)| ScoredPair {
+                id_a: a,
+                id_b: b,
+                score: s,
+            })
+            .collect();
+
+        // -- cluster assignments, mirrors `dedupe_clusters` --
+        let clusters_obj = result.getattr("clusters")?;
+        let clusters_dict: std::collections::HashMap<i64, pyo3::Py<pyo3::types::PyDict>> =
+            clusters_obj.extract()?;
+        let mut clusters = Vec::new();
+        for (cluster_id, info) in clusters_dict {
+            let info_ref = info.bind(py);
+            if let Ok(Some(m)) = info_ref.get_item("members") {
+                let member_ids: Vec<i64> = m.extract()?;
+                let size = member_ids.len() as i64;
+                for record_id in member_ids {
+                    clusters.push(ClusterMember {
+                        cluster_id,
+                        record_id,
+                        cluster_size: size,
+                    });
+                }
+            }
+        }
+
+        Ok(DedupeBundle {
+            result: DedupeResult {
+                golden_json,
+                stats_json,
+                telemetry_json,
+            },
+            pairs,
+            clusters,
         })
     })
 }
@@ -2162,6 +2272,34 @@ mod tests {
                 // Structured clusters come from `dedupe_clusters`, not a JSON blob here.
             }
             Err(e) => require_or_skip(e, "dedupe_basic"),
+        }
+    }
+
+    #[test]
+    fn test_dedupe_bundle_basic() {
+        // The combined #1883 entry: one pipeline run, golden/stats/telemetry +
+        // pairs + clusters. Asserts stats is valid JSON and the same-email dup
+        // (john/JOHN) is grouped into a size-2 cluster off the single run.
+        let rows = r#"[
+            {"email": "john@x.com", "name": "John"},
+            {"email": "john@x.com", "name": "JOHN"},
+            {"email": "jane@y.com", "name": "Jane"}
+        ]"#;
+        let config = r#"{"exact": ["email"]}"#;
+
+        match dedupe_bundle(&td(rows), config) {
+            Ok(bundle) => {
+                assert!(!bundle.result.stats_json.is_empty(), "stats_json empty");
+                let v: serde_json::Value = serde_json::from_str(&bundle.result.stats_json)
+                    .expect("stats_json not valid JSON");
+                assert!(v.is_object(), "stats_json not an object");
+                // The two john@x.com rows must land in one 2-member cluster.
+                assert!(
+                    bundle.clusters.iter().any(|m| m.cluster_size == 2),
+                    "expected a size-2 cluster for the duplicate email"
+                );
+            }
+            Err(e) => require_or_skip(e, "dedupe_bundle_basic"),
         }
     }
 
