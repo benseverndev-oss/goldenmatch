@@ -454,6 +454,20 @@ jobs:
         # shard membership happened to separate them from the clobberer --
         # any new test file reshuffles pytest-split groups and re-exposes it
         # (bit W2a PR #1632). --ignore= takes filesystem paths and is fine.
+      # TEMPORARY crash diagnostic: surface the per-worker faulthandler dumps
+      # (survive xdist worker death) so a native SIGSEGV/SIGABRT C-traceback +
+      # the last-running test are visible in the job log. Remove with the
+      # conftest crashdiag block once diagnosed.
+      - name: crashdiag dumps
+        if: always()
+        run: |
+          echo "=== faulthandler / crashdiag worker files ==="
+          for f in /tmp/gm_fh_*.txt; do
+            [ -e "$f" ] || continue
+            echo "----- $f (tail 60) -----"
+            tail -n 60 "$f"
+          done
+          echo "=== end crashdiag ==="
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
         with:
           name: gm-cov-shard-${{ matrix.shard }}

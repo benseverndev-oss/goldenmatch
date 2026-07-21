@@ -21,14 +21,21 @@ if str(_SCRIPTS) not in sys.path:
 if os.environ.get("GOLDENMATCH_CRASH_DIAG") == "1":
     import faulthandler as _fh
 
-    _fh.enable(all_threads=True)
+    # Write the fault handler dump to a per-process FILE (not stderr): when an
+    # xdist worker crashes hard, its buffered stderr is lost, so a SIGSEGV/SIGABRT
+    # C-traceback never reaches the master log. A file survives the worker death.
+    # Also log the currently-running test to the same file so the LAST line names
+    # the culprit even without a signal (e.g. a hard _exit()).
+    _fh_path = f"/tmp/gm_fh_{os.getpid()}.txt"
+    _fh_file = open(_fh_path, "w", buffering=1)  # line-buffered
+    _fh.enable(file=_fh_file, all_threads=True)
 
     def pytest_runtest_logstart(nodeid, location):  # noqa: D401
         try:
             import resource
             hwm = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-            sys.stderr.write(f"[crashdiag] VmHWM~{hwm:.0f}MB start {nodeid}\n")
-            sys.stderr.flush()
+            _fh_file.write(f"[crashdiag] VmHWM~{hwm:.0f}MB start {nodeid}\n")
+            _fh_file.flush()
         except Exception:  # never let the diagnostic break a run
             pass
 # --- end crash diagnostic ---------------------------------------------------
