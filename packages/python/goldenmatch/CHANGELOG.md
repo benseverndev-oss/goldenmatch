@@ -60,6 +60,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   EM-sample cap already bounds block count. A `jemalloc` page-decay env
   (`_RJEM_MALLOC_CONF`) trims the 1M FS peak a further ~33% at ~zero wall.
 
+### Fixed
+
+- **`DedupeResult.clusters` now exposes real contents to C-level consumers on
+  the frames-out path (re-scoped #1961).** The lazy cluster handle
+  (`LazyClusterDict`, a `dict` subclass that builds on first Python content
+  access) left its underlying storage empty until an override fired. C-level
+  consumers that bypass those overrides — the goldenmatch-pg bridge's pyo3
+  `.extract::<HashMap>()` (`PyDict_Next`), `json.dumps` (empty-dict fast path
+  via `PyDict_GET_SIZE`) — silently observed **zero clusters**, so a dedupe that
+  correctly formed a size-2 cluster serialized as empty (the pg `p4_typed`
+  smoke: "expected 2 rows in a size-2 cluster, got 0"). `DedupeResult.clusters`
+  is now a property that materializes the lazy handle to a plain `dict` on first
+  read, so any consumer sees the real contents; a result whose `.clusters` is
+  never read still never pays the build (the frames-out perf win is preserved).
+  The pg extension's columnar SPI read (#1951 `spi.rs`) was correct and is
+  unchanged.
+
 ## [3.6.0] - 2026-07-20
 
 ### Changed

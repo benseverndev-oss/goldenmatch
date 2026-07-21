@@ -79,6 +79,67 @@ def test_lazy_dict_copy_pickle_deepcopy_materialize_full():
     assert type(unp) is dict and unp[1]["size"] == 2
 
 
+def test_dedupe_result_clusters_are_c_safe_for_lazy_handle():
+    """DedupeResult.clusters must expose REAL contents to C-level consumers.
+
+    Regression for the goldenmatch-pg ``p4_typed`` smoke ("expected 2 rows in a
+    size-2 cluster, got 0"): the frames-out path stores a ``LazyClusterDict``
+    whose underlying dict storage is empty until a Python content method fires
+    ``_ensure()``. C-level consumers -- the pg bridge's pyo3
+    ``.extract::<HashMap>()`` (``PyDict_Next``), ``json.dumps`` (empty-dict fast
+    path via ``PyDict_GET_SIZE``) -- bypass those overrides and silently read
+    ZERO clusters. ``DedupeResult.clusters`` is a property that materializes the
+    lazy handle to a PLAIN dict on first read, closing that hole while keeping
+    the "never built if never read" win.
+    """
+    import ctypes
+    import json as _json
+
+    from goldenmatch._api import DedupeResult
+
+    payload = {1: {"members": [0, 1], "size": 2}, 2: {"members": [2], "size": 1}}
+    calls = {"n": 0}
+
+    def builder():
+        calls["n"] += 1
+        return dict(payload)
+
+    res = DedupeResult(clusters=LazyClusterDict(builder))
+    # Construction must NOT build (the frames-out perf win).
+    assert calls["n"] == 0
+    assert type(res.__dict__.get("_clusters")) is LazyClusterDict
+
+    clusters = res.clusters  # first read -> materialize to a plain dict
+    assert type(clusters) is dict
+    assert calls["n"] == 1
+
+    # C-level views now see the real contents (were 0 / "{}" before the fix).
+    assert ctypes.pythonapi.PyDict_Size(ctypes.py_object(clusters)) == 2
+    assert _json.loads(_json.dumps(clusters)) == {
+        "1": {"members": [0, 1], "size": 2},
+        "2": {"members": [2], "size": 1},
+    }
+    # The pg bridge's own logic: one member-row per member, size-tagged.
+    n_size2 = sum(
+        len(info["members"]) for info in clusters.values() if len(info["members"]) == 2
+    )
+    assert n_size2 == 2
+
+    # Subsequent reads are cached -- no rebuild.
+    _ = len(res.clusters)
+    assert calls["n"] == 1
+
+
+def test_dedupe_result_clusters_default_and_plain_paths():
+    """A DedupeResult with no clusters kwarg (or a plain dict) is a plain dict."""
+    from goldenmatch._api import DedupeResult
+
+    assert DedupeResult().clusters == {}
+    assert type(DedupeResult().clusters) is dict
+    plain = {7: {"members": [7], "size": 1}}
+    assert DedupeResult(clusters=plain).clusters == plain
+
+
 def _fixture_df():
     import polars as pl
 

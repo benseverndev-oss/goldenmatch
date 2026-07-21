@@ -285,6 +285,39 @@ class DedupeResult:
     golden_fused_used: bool = False
     match_fused_capacity_mode: bool = False
 
+    # `clusters` (annotated above so it stays a constructor kwarg) is exposed as
+    # a lazy, C-SAFE property. The frames-out path stores a ``LazyClusterDict``
+    # whose underlying dict storage is EMPTY until a Python content method fires
+    # ``_ensure()``. Python-level reads (``.items()``/``[k]``/``len``) build it,
+    # but C-level consumers read the raw storage DIRECTLY and bypass those
+    # overrides -- pyo3 ``.extract::<HashMap>()`` in the goldenmatch-pg bridge
+    # (``dedupe_clusters``), ``json.dumps`` (empty-dict fast path via
+    # ``PyDict_GET_SIZE``), ``PyDict_Next`` -- so they silently observe ZERO
+    # clusters. That is the pg ``p4_typed`` smoke's "size-2 cluster, got 0". The
+    # getter materializes a LazyClusterDict to a PLAIN dict once, on first read,
+    # so any consumer (C or Python) sees real contents; a result whose
+    # ``.clusters`` is never read never pays the build (the frames-out win).
+    @property
+    def clusters(self) -> dict[int, dict]:  # noqa: F811  (intentional field->property shadow; the field above keeps `clusters` a constructor kwarg)
+        raw = self.__dict__.get("_clusters", None)
+        if type(raw) is dict:
+            return raw  # already a plain dict -- no copy, no rebuild
+        # LazyClusterDict (or a missing/None slot): materialize once. dict()
+        # fires the Python-level items()/_ensure path, so the plain dict we
+        # cache back carries the real cluster contents.
+        materialized: dict[int, dict] = dict(raw) if raw is not None else {}
+        self.__dict__["_clusters"] = materialized
+        return materialized
+
+    @clusters.setter
+    def clusters(self, value: Any) -> None:  # noqa: F811  (setter for the field->property shadow above)
+        # On a plain ``DedupeResult(...)`` with no ``clusters=`` kwarg, dataclass
+        # passes THIS property object as the "default" (the field default was
+        # shadowed by the property); normalize that -- and None -- to ``{}``.
+        if value is None or isinstance(value, property):
+            value = {}
+        self.__dict__["_clusters"] = value
+
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
 
