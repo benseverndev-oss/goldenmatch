@@ -43,7 +43,10 @@ def main() -> None:
             cells.append(str(peak if key == "peak_rss_sampled_mb" else r.get(key, "-")))
         out.append("| " + " | ".join(cells) + " |")
         if r.get("error"):
-            out.append(f"|  | ⚠ {r['error']} |||||||||")
+            # Build the error row from len(COLS) so it can't drift out of shape
+            # if a column is added/removed: warning in the 2nd cell, rest blank.
+            err_cells = ["", f"⚠ {r['error']}"] + [""] * (len(COLS) - 2)
+            out.append("| " + " | ".join(err_cells) + " |")
     print("\n".join(out))
 
 

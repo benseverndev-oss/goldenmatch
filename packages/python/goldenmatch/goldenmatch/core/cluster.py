@@ -1955,6 +1955,16 @@ class LazyClusterDict(dict):
         dict.update(self, other)
         return self
 
+    def clear(self):
+        # Do NOT _ensure() first (that would build ~900K dicts only to drop
+        # them). clear() means "empty, and stay empty": mark built + drop the
+        # builder so a later read can't rebuild and repopulate, then clear the
+        # (already-built or still-empty) backing store. Without this override a
+        # clear() before the first read would silently un-stick on next access.
+        self._built = True
+        self._builder = None
+        dict.clear(self)
+
     # -- pickle/copy: hand back a plain, fully-materialized dict -------------
     def __reduce__(self):
         self._ensure()

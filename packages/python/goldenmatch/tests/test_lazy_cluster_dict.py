@@ -59,6 +59,34 @@ def test_lazy_dict_empty_builder_is_falsy_and_dict():
     assert dict(d) == {}
 
 
+def test_lazy_dict_clear_before_build_stays_empty():
+    """clear() on an unbuilt lazy dict must STICK: a later read must not rebuild
+    and repopulate (real ``dict.clear()`` leaves it empty). It also must not
+    force the build just to clear an empty store."""
+    calls = {"n": 0}
+
+    def builder():
+        calls["n"] += 1
+        return {1: {"members": [1, 2], "size": 2}}
+
+    d = LazyClusterDict(builder)
+    d.clear()
+    assert calls["n"] == 0  # clear() does not force a build
+    # a later content access sees the cleared (empty) state, NOT a rebuild
+    assert len(d) == 0
+    assert dict(d) == {}
+    assert list(d.items()) == []
+    assert calls["n"] == 0
+
+
+def test_lazy_dict_clear_after_build_is_empty():
+    d = LazyClusterDict(lambda: {1: {"members": [1, 2], "size": 2}})
+    assert len(d) == 1  # builds
+    d.clear()
+    assert len(d) == 0
+    assert dict(d) == {}
+
+
 def test_lazy_dict_equals_plain_dict():
     payload = {1: {"members": [1, 2], "size": 2}, 5: {"members": [5], "size": 1}}
     d = LazyClusterDict(lambda: dict(payload))
