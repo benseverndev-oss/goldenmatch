@@ -350,6 +350,7 @@
           "defines": [
             "_bkt_debug_on",
             "_default_n_buckets",
+            "_fs_bounded_stream_enabled",
             "_fs_bucket_native_enabled",
             "_ne_effectively_empty",
             "_resolve_fast_path",

@@ -220,7 +220,12 @@ class DedupeResult:
         config: The GoldenMatchConfig used for this run.
     """
     golden: Any | None = None  # pa.Table (v3.0.0)
-    clusters: dict[int, dict] = field(default_factory=dict)
+    # Intentional field->property shadow: this annotation keeps `clusters` a
+    # constructor kwarg + dataclass field; the property below (same name) is the
+    # C-safe lazy accessor. pyright flags the shadow (reportRedeclaration) and
+    # the field default vs the property type (reportAssignmentType); both are the
+    # known idiom, suppressed here like the ruff F811 on the property.
+    clusters: dict[int, dict] = field(default_factory=dict)  # pyright: ignore[reportRedeclaration, reportAssignmentType]
     dupes: Any | None = None  # pa.Table (v3.0.0)
     unique: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
