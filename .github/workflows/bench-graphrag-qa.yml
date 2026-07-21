@@ -24,7 +24,7 @@ on:
         description: "all | goldengraph | lightrag | ms_graphrag | graphiti | text_rag | goldenmatch_rag | goldenmatch_entity_rag (head_to_head mode only)"
         default: "all"
       mode:
-        description: "head_to_head | local_vs_auto_ab | scorecard | aggregation_llm | temporal_llm | crossover_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold | retrieval_coverage"
+        description: "head_to_head | local_vs_auto_ab | env_ab | scorecard | aggregation_llm | temporal_llm | crossover_llm | kg_capability | router_capability | extraction_f1 | synthesis_gold | retrieval_coverage"
         default: "head_to_head"
       budget_usd:
         description: "hard cost cap per (engine, ambiguity) run"
@@ -38,6 +38,9 @@ on:
       opts:
         description: "newline KEY=VALUE passthrough -> env (overrides the baked bench defaults). Keys: GOLDENGRAPH_QA_MODE(local|hybrid) GOLDENGRAPH_HYBRID_FILTER(none|path) GOLDENGRAPH_QA_PASSAGE_K GOLDENGRAPH_QA_RETRIEVAL_HOPS GOLDENGRAPH_QA_NODE_BUDGET GOLDENGRAPH_CROSS_DOC_LINK GOLDENGRAPH_LINK_THRESHOLD GOLDENGRAPH_PROFILE_LINK GOLDENGRAPH_PROFILE_MERGE_THRESHOLD GOLDENGRAPH_BUILD_WORKERS GOLDENGRAPH_BUILD_DEBUG GOLDENGRAPH_EXTRACTOR(api|rebel|gliner) GOLDENGRAPH_LITERAL_ATTRS GOLDENGRAPH_QA_TRACE GOLDENGRAPH_QA_TRACE_LIMIT GOLDENGRAPH_DISTILL_LOG(1) TEXT_RAG_TOP_K GOLDENMATCH_RAG_TOP_K SCORECARD_BUDGET_USD LOCAL_EMBED_MODEL"
         default: ""
+      ab_env:
+        description: "env_ab mode ONLY: the answer-time env var + values to A/B on ONE shared graph, as NAME:v1,v2[,..]. e.g. GOLDENGRAPH_SYNTH_SAMPLES:1,5 measures self-consistency voting free of build variance."
+        default: "GOLDENGRAPH_SYNTH_SAMPLES:1,5"
 
 permissions:
   contents: read
@@ -235,6 +238,86 @@ jobs:
         with:
           name: graphrag-qa-local-vs-auto-ab
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_local_vs_auto_ab.*
+          if-no-files-found: ignore
+
+  goldengraph_env_ab:
+    needs: setup
+    if: ${{ inputs.mode == 'env_ab' }}
+    runs-on: large-new-64GB
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Resolve bench env (baked defaults, then opts override)
+        env:
+          OPTS: ${{ inputs.opts }}
+        run: |
+          {
+            echo "GOLDENGRAPH_BUILD_WORKERS=12"
+            echo "GOLDENGRAPH_LINK_THRESHOLD=0.82"
+            echo "GOLDENGRAPH_PROFILE_MERGE_THRESHOLD=0.72"
+            echo "GOLDENGRAPH_QA_RETRIEVAL_HOPS=6"
+            echo "GOLDENGRAPH_QA_NODE_BUDGET=256"
+            echo "GOLDENGRAPH_EXTRACTOR=api"
+            printf '%s\n' "$OPTS"
+          } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
+      - name: Parse ab_env (NAME:v1,v2 -> --env / --values)
+        env:
+          AB_ENV: ${{ inputs.ab_env }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import os
+          spec = os.environ["AB_ENV"].strip()
+          name, _, values = spec.partition(":")
+          name = name.strip()
+          values = values.strip()
+          if not name or not values or "," not in values:
+              raise SystemExit(f"ab_env must be NAME:v1,v2[,..], got {spec!r}")
+          print(f"AB_VAR={name}")
+          print(f"AB_VALUES={values}")
+          PY
+      - name: Install goldenmatch + native engine wheel + goldengraph + datasets
+        run: |
+          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
+          maturin build --release \
+            -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
+          maturin build --release \
+            -m packages/rust/extensions/goldenprofile-native/Cargo.toml --out dist
+          python -m pip install dist/*.whl
+          python -m pip install --no-deps -e packages/python/goldengraph
+          python -m pip install --no-deps -e packages/python/goldenmatch
+      - name: Run env A/B (real LLM, budget-capped, one shared graph)
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          POLARS_SKIP_CPU_CHECK: "1"
+          # datasets pulls a fresh-pip pyarrow whose bundled mimalloc SIGSEGVs on the
+          # pipeline's worker threads -- the documented repo standard for any lane that
+          # pip-installs goldenmatch/pyarrow and runs the pipeline (goldengraph resolve).
+          ARROW_DEFAULT_MEMORY_POOL: system
+        run: |
+          mkdir -p results
+          python -m erkgbench.qa_e2e.run_env_ab \
+            --corpus "${{ inputs.corpus }}" \
+            --max-questions "${{ inputs.max_questions }}" \
+            --ambiguity "0.5" \
+            --env "$AB_VAR" \
+            --values "$AB_VALUES" \
+            --budget-usd "${{ inputs.budget_usd }}" \
+            ${{ inputs.judge == 'true' && '--judge' || '' }} \
+            --out-md "results/RESULTS_QA_ENV_AB.md" \
+            --out-json "results/results_qa_env_ab.json"
+          echo "### Env A/B ($AB_VAR)" >> "$GITHUB_STEP_SUMMARY"
+          cat results/RESULTS_QA_ENV_AB.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload env A/B results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: graphrag-qa-env-ab
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/results/results_qa_env_ab.*
           if-no-files-found: ignore
 
   lightrag:
