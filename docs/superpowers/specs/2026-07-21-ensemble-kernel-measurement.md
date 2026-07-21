@@ -64,32 +64,50 @@ RHS (`np.maximum` over three `astype(np.float32)` components); the safe per-pair
 So the float32-cast kernel **cannot flip any `>= threshold` decision the matrix makes** — the exact
 field-level parity bar the decline demanded. Asserted in `tests/test_ensemble_kernel_parity.py`.
 
-## What landed
+## What landed (v1, #1992 — opt-in)
 
 - `core/scorer._ensemble_score_single` (float64) + `_ensemble_score_single_f32` (float32-cast).
-- `_resolve_score_pair_callable` gains an **opt-in** `GOLDENMATCH_ENSEMBLE_KERNEL`:
-  - unset / `0` / `off` → **decline** (default; byte-identical to before this change).
-  - `1` / `on` / `f32` → the **safe** float32-cast kernel (field-exact with the matrix).
-  - `f64` → the divergent float64 twin (measurement A/B only).
+- `_resolve_score_pair_callable` gained an **opt-in** `GOLDENMATCH_ENSEMBLE_KERNEL` (decline by default).
 - `tests/test_ensemble_kernel_parity.py`: field-level parity (f32-cast == matrix; f64 within ULP).
-- Manifest: the `ensemble` deferral reason updated from "declined (regresses recall)" to reflect the
-  re-measurement (regression gone; safe f32-cast kernel exists; opt-in pending the perf eval below).
 
-## Decision — why opt-in, not default-on (yet)
+## Update (v2, 2026-07-21 — DEFAULT-ON via the vec lane)
 
-Recall is **not** the blocker anymore (proven above). The remaining question is **large-block perf**: the
-bucket fast path scores ensemble **per-pair in Python** (the `_score_block_vec` float32 vec lane does not
-yet cover ensemble), whereas the matrix path uses vectorized `cdist`. For the 5M/25M ensemble configs the
-decline note protects, per-pair Python could regress wall time. So:
+The v1 "why opt-in" hesitation was **large-block perf**: the fast path scored ensemble per-pair in
+Python, and a single-block micro-bench showed the vec lane slower than the native-accelerated
+`find_fuzzy_matches` matrix for blocks ≥256. But the decisive number is the **end-to-end wall**, and it
+says the opposite:
 
-- **Default stays decline** (matrix path) until either (a) a scale bench shows the per-pair kernel is not
-  a wall regression on large ensemble blocks, or (b) ensemble is added to the **float32 vec lane**
-  (`_VEC_SUPPORTED` + `_vec_field_matrix`), which is vectorized AND byte-identical to the matrix — the
-  clean default-on path.
-- **Metric (14/19 → 15/19):** counting ensemble as kernel-backed requires it in the *native* arrow-block
-  kernel (`_NATIVE_SCORER_IDS` / a `score_one` id or an fs-core-style composed id), not just a Python
-  per-pair callable. `score_one(2)` token_sort already matches rapidfuzz to float32 (0 crossings), so a
-  native composed ensemble is feasible; it's deferred with the vec-lane work as one follow-on.
+**Febrl3 dedupe wall (median of 4, config pre-built so auto-config is excluded):**
+
+| Path | wall | vs decline |
+|---|---|---|
+| kill-switch (`=0`, decline → float32 matrix) | 10.98s | — |
+| **DEFAULT-ON** (fast path) | **7.46s** | **1.47× faster** |
+
+Recall is byte-identical (TP=6429 FP=5 FN=109 either way). The end-to-end win is because declining an
+ensemble field routes the **entire weighted matchkey** through `find_fuzzy_matches` (which allocates a
+full N×N float32 matrix per block for *every* field); making ensemble fast-path-eligible keeps the whole
+matchkey on the streaming fast path. On Febrl3 the ensemble fields sit in a *mixed* matchkey (with
+`given_name_aliased_jw` / `name_freq_weighted_jw`, not vec-supported), so the win comes from the per-pair
+fast path, not the vec lane — the vec lane is a further speedup for the rarer all-vec-supported ensemble
+matchkey.
+
+Landed:
+- `ensemble` added to `_VEC_SUPPORTED` + a float64 `_vec_field_matrix('ensemble')` case (byte-identical to
+  the per-pair `_ensemble_score_single`; the vec parity test + a soundex-empty-code edge test cover it).
+- `_resolve_score_pair_callable` ensemble is **fast-path eligible by DEFAULT**; `GOLDENMATCH_ENSEMBLE_KERNEL=0`
+  (`off`/`false`) is the **kill-switch** restoring the historical decline.
+
+**The one shape where decline is still faster** (documented, not fixed): a huge *all-vec-supported*
+ensemble block (≥ a few hundred rows), where the vec lane's three float64 `cdist` + `maximum` lose to
+`find_fuzzy_matches`'s native-accelerated float32 components (micro-bench: 0.67× at n=2000). Rare — such
+blocks are bounded by `skip_oversized`/`max_block_size`, and the representative end-to-end is a clear win —
+and the kill-switch covers it. A native arrow-block ensemble id would close both this and the metric.
+
+- **Metric (14/19 → 15/19):** still NOT counted. The default-on fast path uses a Python composite
+  (rapidfuzz + jellyfish + numpy), not a native `score_one`/arrow-block kernel, so ensemble stays in
+  `scorer_kernels_deferred`. `score_one(2)` token_sort already matches rapidfuzz to float32 (0 crossings),
+  so a native composed ensemble id is feasible — the remaining follow-on for the metric bump.
 
 ## Reproduce
 
@@ -115,6 +133,7 @@ def dd(frame):
         if getattr(mk, "rerank", None): mk.rerank = False
     cfg.backend = "bucket"
     return gm.dedupe_df(frame, config=cfg)
-# unset / =f32 / =f64 all give TP=6429 FP=5 FN=109 (P=0.9992 R=0.9833 F1=0.9912)
+# default-on (unset) and kill-switch (=0) both give TP=6429 FP=5 FN=109
+# (P=0.9992 R=0.9833 F1=0.9912); default-on's dedupe wall is ~1.47x faster.
 print(evaluate_febrl3(df, gt, dd))
 ```

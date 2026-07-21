@@ -115,7 +115,7 @@ def _warn_stale_native_wheel_once(n_exclude: int) -> None:
 # strings). The parity test catches this; do not add them back without a matrix
 # form that matches the per-pair callable bit-for-bit.
 _VEC_SUPPORTED: frozenset[str] = frozenset(
-    {"soundex_match", "jaro_winkler", "levenshtein", "token_sort"}
+    {"soundex_match", "jaro_winkler", "levenshtein", "token_sort", "ensemble"}
 )
 
 
@@ -140,6 +140,19 @@ def _vec_field_matrix(values: list, scorer_name: str):
     if scorer_name == "jaccard":
         from goldenmatch.core.scorer import _jaccard_score_matrix
         return _jaccard_score_matrix(values).astype(np.float64, copy=False)
+    if scorer_name == "ensemble":
+        # float64 max(jaro_winkler, token_sort/100, soundex*0.8) -- byte-identical
+        # to the per-pair `_ensemble_score_single` (same three components, same 0.8
+        # bonus, all float64). The soundex bonus reuses `_soundex_score_matrix`,
+        # the SAME matrix the per-pair soundex_match callable is byte-parity with
+        # (asserted in tests/test_score_buckets_vectorized_fallback.py), so the
+        # ensemble vec form agrees with `_ensemble_score_single`'s
+        # `jellyfish.soundex(a)==jellyfish.soundex(b)` empty-code-match semantics.
+        from goldenmatch.core.scorer import _soundex_score_matrix
+        jw = np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
+        ts = np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+        sx = _soundex_score_matrix(values).astype(np.float64) * 0.8
+        return np.maximum(np.maximum(jw, ts), sx)
     if scorer_name == "jaro_winkler":
         return np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
     if scorer_name == "levenshtein":
@@ -519,39 +532,30 @@ def _resolve_score_pair_callable(
         from goldenmatch.core.scorer import _phash_score_single
         return _phash_score_single
     if scorer_name == "ensemble":
-        # DECLINE the fast path for ensemble by DEFAULT (return None ->
-        # find_fuzzy_matches float32-matrix path, the source of truth). A prior
-        # per-pair reimplementation (max(jw, ts, sx*0.8)) claimed matrix-path
-        # equivalence but measurably diverged on an OLDER autoconfig: on Febrl3
-        # (3 ensemble fields) it dropped recall 0.922 -> 0.782 vs polars-direct
-        # (F1 0.9332 -> 0.8768) -- the float64 per-pair combine scored STRICTER
-        # than the float32 matrix combine at the >= threshold boundary, pushing
-        # true pairs below threshold.
+        # ensemble is fast-path eligible by DEFAULT (2026-07-21). It rides the
+        # same float64 bucket fast path as jaro_winkler/token_sort/soundex_match:
+        # `_ensemble_score_single` per-pair (tiny blocks) + the byte-identical
+        # `_vec_field_matrix('ensemble')` vectorized lane (mid blocks, ensemble is
+        # in `_VEC_SUPPORTED`). Both are float64, so they agree with each other.
         #
-        # `GOLDENMATCH_ENSEMBLE_KERNEL` RE-OPENS that measurement (the deferral
-        # explicitly invited it): `1`/`f64` returns the float64 per-pair kernel;
-        # `f32` returns the variant that quantizes each per-pair score to float32
-        # to reproduce the matrix path's per-field float32 storage. Default
-        # (unset) is byte-identical to the historical decline. The recall delta
-        # under the current autoconfig is measured in
-        # docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
+        # The historical decline (float32 find_fuzzy_matches) was justified by a
+        # buggy per-pair reimpl that "regressed Febrl3 recall 0.922 -> 0.782" --
+        # but the RE-MEASUREMENT (docs/superpowers/specs/
+        # 2026-07-21-ensemble-kernel-measurement.md) showed that under autoconfig-v2
+        # the faithful float64 kernel gives BYTE-IDENTICAL Febrl3 TP/FP/FN to the
+        # float32 matrix (the 14pt drop could not come from the true ~3e-8
+        # float32-vs-float64 gap; it was a reimpl bug). The vec lane makes the
+        # mid-block path vectorized, so ensemble is no slower than the plain
+        # scorers it now sits beside.
+        #
+        # KILL-SWITCH: `GOLDENMATCH_ENSEMBLE_KERNEL=0` (or `off`/`false`) restores
+        # the historical decline (float32 find_fuzzy_matches path) for rollback /
+        # byte-for-byte reproduction of pre-2026-07-21 output.
         mode = os.environ.get("GOLDENMATCH_ENSEMBLE_KERNEL", "").strip().lower()
-        if mode in ("1", "on", "true", "f32", "float32"):
-            # SAFE variant: quantize each per-pair score to float32 so it is
-            # BYTE-IDENTICAL to the matrix path's per-field float32 storage
-            # (`f32(max(a,b,c)) == max(f32(a),f32(b),f32(c))` since f32 cast is
-            # monotonic and commutes with max). Field-level parity is asserted
-            # in tests/test_ensemble_kernel_parity.py -- the exact bar the
-            # historical decline demanded before reintroduction.
-            from goldenmatch.core.scorer import _ensemble_score_single_f32
-            return _ensemble_score_single_f32
-        if mode in ("f64", "float64"):
-            # DIVERGENT variant (measurement only): float64, diverges from the
-            # matrix by <= 3e-8 (0.0043% of field-pairs cross a threshold). Kept
-            # for the A/B in the measurement spec; NOT recommended for use.
-            from goldenmatch.core.scorer import _ensemble_score_single
-            return _ensemble_score_single
-        return None
+        if mode in ("0", "off", "false", "no"):
+            return None
+        from goldenmatch.core.scorer import _ensemble_score_single
+        return _ensemble_score_single
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
         return None

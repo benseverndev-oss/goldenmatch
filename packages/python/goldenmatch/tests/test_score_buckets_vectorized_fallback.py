@@ -119,6 +119,27 @@ def test_multi_field_and_exclusions_parity():
     _assert_byte_identical(vec, ref)
 
 
+@pytest.mark.parametrize("threshold", [0.0, 0.5, 0.8])
+def test_ensemble_soundex_edge_parity(threshold):
+    # ensemble's soundex bonus reuses _soundex_score_matrix, which must agree
+    # with the per-pair jellyfish.soundex equality on the tricky inputs:
+    # empty-soundex-code values (non-alpha / digits), single chars, and
+    # jellyfish-raising inputs (the per-pair try/except -> 0.0). If the matrix
+    # soundex diverged from the per-pair soundex on empty codes, the ensemble
+    # `max(jw, ts, sx)` would flip here.
+    edge = [
+        "123", "456", "", " ", "a", "A", "!!", "O'Brien", "OBrien",
+        "de la Cruz", "12ab", "Smith", "smith", "SMITH",
+    ]
+    n = len(edge)
+    row_ids = list(range(n))
+    vec = _score_block_vec(row_ids, [list(edge)], ["ensemble"], [1.0],
+                           0, n, 1.0, threshold, frozenset())
+    ref = _ref_per_pair(row_ids, [list(edge)], ["ensemble"], [1.0],
+                        0, n, 1.0, threshold, frozenset())
+    _assert_byte_identical(vec, ref)
+
+
 def test_offset_block_parity():
     # The lane is called with a non-zero offset into the bucket-wide arrays;
     # row_ids[offset:end] indexing must line up with the matrix.
