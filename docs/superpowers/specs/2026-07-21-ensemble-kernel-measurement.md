@@ -1,21 +1,24 @@
 # Ensemble scorer: re-opening the "kernelize it regresses recall" measurement
 
 **Date:** 2026-07-21
-**Status:** Measured. Native `score_one` id 12 kernel landed (metric **14/19 → 15/19**). The
-default-on flip was tried and **REVERTED to opt-in** (`GOLDENMATCH_ENSEMBLE_KERNEL`, default off).
+**Status:** SHIPPED. Native `score_one` id 12 kernel (metric **14/19 → 15/19**) + ensemble
+**default-on** (`GOLDENMATCH_ENSEMBLE_KERNEL=1`), made safe by the fast-path perf guard below.
 
-> **UPDATE (2026-07-21, supersedes the "DEFAULT-ON" sections below).** Flipping the default on shipped
-> briefly but caused a CI worker crash on a large fuzzy-only NCVR pipeline test. A faulthandler
-> hang-dump pinned the cause: making `ensemble` fast-path eligible keeps the whole weighted matchkey on
-> `score_buckets`, whose per-bucket `ThreadPoolExecutor` workers EACH call `find_fuzzy_matches` — a
-> **nested** ThreadPoolExecutor. On large fuzzy-only blocks the N-outer × M-inner GIL-releasing threads
-> oversubscribe a few-core runner and the pass never finishes within the 120s per-test timeout, which
-> `os._exit`s the worker (not OOM — 636 MB; no signal). Declining (the default) routes the matchkey
-> straight to a single `find_fuzzy_matches` pool with intra-field early-termination — byte-identical to
-> historical behaviour and fast. So the 1.47× Febrl3 win does **not** generalise. The kernel stays
-> **opt-in** (`GOLDENMATCH_ENSEMBLE_KERNEL=1`); the native id-12 kernel still backs the 15/19 metric.
-> Re-enabling default-on needs the nested-pool fix (thread `max_workers=1` into the inner
-> `find_fuzzy_matches`) first — a follow-up.
+> **UPDATE 2 (2026-07-21, supersedes UPDATE 1 and the "DEFAULT-ON" sections below) — default-on
+> RE-ENABLED via a source fix.** UPDATE 1's "nested ThreadPoolExecutor" framing was imprecise.
+> `rapidfuzz.cdist` defaults to `workers=1` (sequential), so there is no inner thread pool. The real
+> cause, found by INSTRUMENTING the workload (`GOLDENMATCH_BUCKET_DEBUG=1`): making `ensemble`
+> resolvable flips a **name-scorer matchkey** onto `score_buckets`' fast path, and its
+> `name_freq_weighted_jw` / `given_name_aliased_jw` fields are neither vec-supported nor native-id, so
+> they run the **O(N²) per-pair Python loop** in `_score_one_bucket_fast`. MEASURED on the same 65 NCVR
+> blocks: fast path **26.97 s** vs `find_fuzzy_matches` (vectorized) **1.40 s** — a **19×** slowdown that
+> blows the 120 s per-test timeout on a slow CI runner (→ `os._exit`, the "hang"). **Fix:** a PERF GUARD
+> in `_resolve_fast_path` (following the existing NE-parity-decline precedent) declines the fast path
+> whenever a field's scorer is neither in `_VEC_SUPPORTED` nor `_NATIVE_SCORER_IDS` (i.e. would force
+> per-pair Python) → routes to the vectorized `find_fuzzy_matches`. Verified locally: default-on
+> bucket_score dropped **26.97 s → 1.31 s**, output identical (918 pairs / 65 blocks). All-native and
+> all-vec matchkeys keep the fast path; ensemble is now default-on and the 1.47× Febrl3 win stands.
+> (This is a general fast-path fix — any name-scorer matchkey now avoids the slow per-pair path.)
 
 ## Background — the deferral this re-opens
 

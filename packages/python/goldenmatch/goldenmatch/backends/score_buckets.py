@@ -539,29 +539,30 @@ def _resolve_score_pair_callable(
         from goldenmatch.core.scorer import _phash_score_single
         return _phash_score_single
     if scorer_name == "ensemble":
-        # ensemble DECLINES by default (2026-07-21): declining routes the whole
-        # weighted matchkey to `find_fuzzy_matches` (a single ThreadPoolExecutor
-        # over blocks, with intra-field early-termination) -- byte-identical to
-        # the historical behaviour. Making it fast-path eligible instead keeps the
-        # matchkey on `score_buckets`, whose per-bucket workers EACH call
-        # `find_fuzzy_matches` -> a NESTED ThreadPoolExecutor. On large fuzzy-only
-        # blocks (e.g. the NCVR-shape weighted matchkey) the N-outer x M-inner
-        # GIL-releasing threads oversubscribe a few-core CI runner and the pass
-        # never finishes within the per-test timeout -> the worker is os._exit'd
-        # (diagnosed via a faulthandler hang-dump: parked in `_score_single_pass`
-        # `pool.map`). So the 1.47x Febrl3 win does NOT generalise; on this shape
-        # the bucket routing is pathologically slow. The native `score_one` id 12
-        # kernel still EXISTS + is dispatched by the arrow block kernel (the 15/19
-        # `scorer_kernels` metric) -- it's just not the default scorer-resolution
-        # path. Re-enabling default-on needs the nested-pool fix (thread
-        # max_workers=1 into the inner find_fuzzy_matches) first, tracked as a
-        # follow-up. See docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
+        # ensemble is fast-path eligible by DEFAULT (2026-07-21, re-enabled after
+        # the perf guard below made it safe). It rides the float64 bucket fast
+        # path: `_ensemble_score_single` per-pair (tiny blocks) + the
+        # byte-identical `_vec_field_matrix('ensemble')` vectorized lane (mid
+        # blocks; ensemble is in `_VEC_SUPPORTED`) + the native `score_one` id 12
+        # arrow kernel on all-native matchkeys. Measured 1.47x faster end-to-end
+        # on Febrl3, byte-identical recall.
         #
-        # OPT-IN: `GOLDENMATCH_ENSEMBLE_KERNEL=1` (or `on`/`true`) enables the
-        # float64 bucket fast path (`_ensemble_score_single` per-pair + the
-        # `_vec_field_matrix('ensemble')` vec lane) for the shapes where it wins.
+        # The earlier default-on attempt (#1995) hung a CI worker: making ensemble
+        # resolvable flipped a NAME-SCORER matchkey (name_freq_weighted_jw /
+        # given_name_aliased_jw -- neither vec-supported nor native-id) onto the
+        # fast path, where those fields ran the O(N^2) per-pair Python loop, 19x
+        # slower than the vectorized find_fuzzy_matches (26.97s vs 1.40s on the
+        # same 65 NCVR blocks), blowing the per-test timeout. That is fixed at the
+        # SOURCE by the PERF GUARD in `_resolve_fast_path` (declines the fast path
+        # whenever a field would force per-pair Python) -- so an ensemble field can
+        # no longer drag a per-pair-Python matchkey onto the slow path. See
+        # docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
+        #
+        # KILL-SWITCH: `GOLDENMATCH_ENSEMBLE_KERNEL=0` (or `off`/`false`) restores
+        # the historical decline (float32 find_fuzzy_matches) for rollback /
+        # byte-for-byte reproduction of pre-2026-07-21 output.
         mode = os.environ.get("GOLDENMATCH_ENSEMBLE_KERNEL", "").strip().lower()
-        if mode not in ("1", "on", "true", "yes"):
+        if mode in ("0", "off", "false", "no"):
             return None
         from goldenmatch.core.scorer import _ensemble_score_single
         return _ensemble_score_single
@@ -767,6 +768,30 @@ def _resolve_fast_path(
         total_weight += float(weight)
     if total_weight <= 0:
         _decline(f"total_weight={total_weight}")
+        return None
+    # PERF GUARD (nested-pool / per-pair-Python fix, 2026-07-21): a field whose
+    # scorer is NEITHER vec-supported (`_score_block_vec` / `_VEC_SUPPORTED`) NOR
+    # native-kernel-backed (`_NATIVE_SCORER_IDS`) forces the O(N^2) per-pair
+    # Python loop in `_score_one_bucket_fast`, which is DRAMATICALLY slower than
+    # the vectorized `find_fuzzy_matches` (MEASURED 19x: 26.97s vs 1.40s on the
+    # same 65 NCVR blocks for a matchkey with `name_freq_weighted_jw` /
+    # `given_name_aliased_jw` -- neither vec nor native-id). On a slow CI runner
+    # that 19x blows the per-test timeout -> the worker is os._exit'd. Decline to
+    # `find_fuzzy_matches`, which vectorizes every scorer. All-native matchkeys
+    # still ride the arrow kernel and all-vec matchkeys still ride the vec lane;
+    # this only declines when a genuinely per-pair-Python field is present, where
+    # the fast path was never actually fast. (This is what makes the ensemble
+    # kernel safe to default-on: an ensemble field on a name-scorer matchkey no
+    # longer drags the whole matchkey onto the slow per-pair path.)
+    _fast_scorers = [s for _, _, _, s in field_specs]
+    _per_pair_scorers = [
+        s for s in _fast_scorers if s not in _VEC_SUPPORTED and s not in _NATIVE_SCORER_IDS
+    ]
+    if _per_pair_scorers:
+        _decline(
+            f"scorer(s) {_per_pair_scorers} force the per-pair Python loop "
+            f"(not vec, not native) -> find_fuzzy_matches is faster (perf guard)"
+        )
         return None
     # NE PARITY GUARD: the slow path (_apply_negative_evidence) applies a penalty
     # for EVERY NE scorer `score_field` can score -- it only skips a scorer that
