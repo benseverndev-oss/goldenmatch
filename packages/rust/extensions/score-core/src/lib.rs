@@ -147,9 +147,9 @@ fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     // case mapping requires).
     let lower = s.to_lowercase();
     let mut chars: Vec<char> = Vec::with_capacity(lower.chars().count() + 2 * (N - 1));
-    chars.extend(std::iter::repeat('#').take(N - 1));
+    chars.extend(std::iter::repeat_n('#', N - 1));
     chars.extend(lower.chars());
-    chars.extend(std::iter::repeat('#').take(N - 1));
+    chars.extend(std::iter::repeat_n('#', N - 1));
     let mut set = std::collections::HashSet::new();
     if chars.len() < N {
         return set;
