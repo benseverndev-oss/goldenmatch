@@ -98,6 +98,23 @@ All scripts are stdlib-only and anchored to the repo root via `Path(__file__)`.
   the missing README table row / `docs.json` nav entry / fix the broken nav link
   or orphan page, or bump the lagging CHANGELOG/version.
 
+- **Tier 1 - `scripts/check_docs_sections.py`** (REQUIRED CI gate, a step in the
+  `docs_consistency` job). The SOURCE OF TRUTH for "what a package section looks
+  like" — the within-section shape the other gates never enforced. Per package
+  section (`SECTIONS`, the 6 suite packages): (a) **spine** — every section has
+  the required pages (`overview`, `config-matrix`, `recipes`) as real `.mdx`; (b)
+  **overview-first** — the nav group opens with `<pkg>/overview`; (c) **page
+  order** — FLAT sections order pages canonically (overview → concept pages in
+  authored order → the reference band `config-matrix`→`recipes`→`cli`→
+  `native`/`performance`→`integrations`); nested sections (goldenmatch) are
+  spine/overview-checked only. Plus, over EVERY `docs-site/**/*.mdx`: (d)
+  **frontmatter** — `title`+`description`+`keywords` all present and non-empty;
+  (e) **title style** — sentence case (first word + proper nouns/acronyms
+  capitalized, nothing else). Generated pages (config-matrix / config-linter /
+  suite-matrix) must pass too — fix their GENERATOR, not the file. Adding a
+  package = add it to `SECTIONS`. Pure-logic unit tests in
+  `scripts/test_docs_sections.py`.
+
 - **Tier 2 - `scripts/check_docs_staleness.py`** (ADVISORY CI job, `--base`/
   `--head`, default `origin/main..HEAD`). Diff-aware. The **flag rule** (gating
   within the job): adding/removing a `GOLDENMATCH_*` env flag in

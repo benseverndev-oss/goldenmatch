@@ -3404,6 +3404,8 @@ jobs:
         run: python scripts/check_docs_consistency.py
       - name: Doc links + frontmatter (in-body cross-links resolve; MDX frontmatter valid)
         run: python scripts/check_docs_links.py
+      - name: Doc sections (canonical per-section shape; spine + order + frontmatter + title case)
+        run: python scripts/check_docs_sections.py
       - name: Benchmark claims consistent with source of truth
         run: python scripts/check_benchmark_claims.py
 
@@ -3460,7 +3462,7 @@ jobs:
         run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - name: Gate unit tests (determinism + markers; run once)
         if: matrix.package == 'goldenmatch'
-        run: uv run pytest scripts/test_config_matrix.py scripts/test_agent_codemap.py -q
+        run: uv run pytest scripts/test_config_matrix.py scripts/test_agent_codemap.py scripts/test_docs_sections.py -q
         env:
           POLARS_SKIP_CPU_CHECK: "1"
           GOLDENMATCH_NATIVE: "0"

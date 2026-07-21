@@ -1,0 +1,70 @@
+---
+title: "Mapping recipes"
+description: "Copy-paste InferMap snippets for common jobs: map a messy export to your canonical schema, reuse a saved mapping as a validation gate, and add a custom alias or domain pack."
+keywords: ["infermap", "recipes", "schema mapping", "column matching", "config", "validation", "alias"]
+---
+
+The [config matrix](/infermap/config-matrix) lists every `MapEngine` knob and vocabulary, and [Mapping](/infermap/mapping) explains how the scorers combine. This page is the task-shaped shortcut: a few complete snippets for the jobs you actually reach for.
+
+## Map a messy export to your canonical schema
+
+**You have** a source file whose column names don't match your target. **You want** the best 1:1 mapping and the renamed frame.
+
+```python
+import infermap
+import polars as pl
+
+result = infermap.map("crm_export.csv", "canonical_customers.csv")
+for m in result.mappings:
+    print(f"{m.source} -> {m.target}  ({m.confidence:.0%})  {m.reason}")
+
+renamed = result.apply(pl.read_csv("crm_export.csv"))   # rename source columns to target names
+```
+
+Each mapping carries a confidence in `0.0..1.0` and a human-readable reason, so a low-confidence pair is easy to spot and override before you apply it.
+
+## Reuse a saved mapping as a validation gate
+
+**You have** recurring files from the same source. **You want** to pin the mapping once and fail fast when a new drop is missing a required field.
+
+```python
+result = infermap.map("crm_export.csv", "canonical_customers.csv")
+result.to_config("crm_mapping.yaml")            # commit this
+```
+
+Then validate each incoming file against the pinned config — non-zero exit on a missing required field makes it a CI gate:
+
+```bash
+infermap validate new_drop.csv --config crm_mapping.yaml \
+  --required first_name,last_name,email --strict
+```
+
+Apply the pinned mapping without re-inferring:
+
+```bash
+infermap apply new_drop.csv --config crm_mapping.yaml --output clean.csv
+```
+
+## Add a custom alias or domain pack
+
+**You have** source names your target schema doesn't know about (`cust_ref` really is `customer_id`). **You want** InferMap to resolve them without lowering `min_confidence`.
+
+```yaml
+# mapping_rules.yaml — engine config (domains, aliases, scorer weights)
+domains: [finance]
+aliases:
+  customer_id: [cust_ref, acct_no]
+  email: [email_addr, contact_email]
+scorers:
+  FuzzyName:
+    weight: 0.4
+```
+
+```python
+from infermap import MapEngine
+
+engine = MapEngine(config_path="mapping_rules.yaml")   # loads domains + aliases + scorer weights
+result = engine.map("crm_export.csv", "canonical_customers.csv")
+```
+
+Aliases feed the `AliasScorer` (weight 0.95), so a known alias resolves with high confidence instead of relying on the fuzzy-name tie-breaker. (Note this is the engine **config** file — distinct from the saved **mapping** an earlier `result.to_config(...)` writes, which `infermap apply`/`from_config` consume.)
