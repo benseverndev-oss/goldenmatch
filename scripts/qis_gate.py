@@ -112,54 +112,76 @@ def evaluate_gate(
     committed baseline) to a list of violations. No IO, no goldenmatch --
     unit-testable.
 
-    ``rung_f1`` maps row-count -> measured pairwise F1, or None if that rung
-    REFUSED (the controller committed a RED config on a >=100K input and
-    ``dedupe_df`` raised; we do NOT force-run the degenerate config -- it can OOM
-    at scale). ``rung_refused`` maps row-count -> whether it refused. ``baseline``
-    maps STRING row-count -> blessed F1 (JSON-safe keys), or None to skip the
-    baseline-delta check (first-ever run before a bless).
+    ``rung_f1`` maps row-count -> measured pairwise F1. A refused rung (the
+    controller committed a RED config on a >=100K input) still carries its F1
+    here: ``measure_rungs`` re-runs the committed config with
+    ``allow_red_config=True`` and scores it, because RED is a CONFIDENCE flag,
+    not proof of low quality -- so pass/fail is decided on the measured F1, per
+    this gate's contract, NOT on the refuse verdict. ``rung_f1[n]`` is only
+    ``None`` when the F1 genuinely could not be measured (the force-run was
+    skipped or errored -- e.g. an OOM-risk pair explosion); that UNMEASURABLE
+    case is the one that is itself a violation. ``rung_refused`` maps row-count
+    -> whether it refused (diagnostic context surfaced in the summary, not a
+    pass/fail input on its own). ``baseline`` maps STRING row-count -> blessed
+    F1 (JSON-safe keys), or None to skip the baseline-delta check (first-ever
+    run before a bless).
 
-    A refuse is itself a violation: refusing at scale while the reference rung
-    stays confident is the scale-regression fingerprint. The smallest rung is the
-    reference; if IT refuses, that is flagged directly (no valid reference to
-    compare against)."""
+    A refused-but-measured rung is floored/scale-checked like any other -- a RED
+    config whose F1 still clears the floor and tracks the reference is NOT a
+    quality regression (a real scale regression shows up as an F1 DROP, which
+    the floor + scale-invariance checks catch). Only an UNMEASURABLE rung
+    (f1=None) is auto-flagged: at the reference scale there is no confident
+    baseline; above a measured reference it is the scale-regression fingerprint.
+    The smallest rung is the reference; if its F1 is unmeasurable, that is
+    flagged directly (no valid reference to compare against)."""
     if not rung_f1:
         raise ValueError("evaluate_gate: no rung measurements supplied")
     refused = rung_refused or {}
 
     reference_n = min(rung_f1)
     reference_f1 = rung_f1[reference_n]
-    reference_refused = refused.get(reference_n, False)
+    # The reference is usable for scale-invariance only if its F1 was measured
+    # (a refused-but-measured reference is fine; an UNMEASURABLE one is not).
+    reference_unmeasured = reference_f1 is None
     res = GateResult(rung_f1=dict(rung_f1), reference_n=reference_n)
 
     for n in sorted(rung_f1):
         f1 = rung_f1[n]
+        was_refused = refused.get(n, False)
 
-        # A REFUSED rung has no F1 to floor/compare -- the refusal is the signal.
-        if refused.get(n) or f1 is None:
+        # An UNMEASURABLE rung (f1=None) has no F1 to floor/compare. This is only
+        # reached when the committed config could not be scored at all (the
+        # allow_red_config force-run was skipped or errored -- e.g. OOM-risk pair
+        # explosion). A refused rung whose F1 WAS recovered does NOT land here --
+        # it flows through the floor/scale checks below, RED being context only.
+        if f1 is None:
+            qualifier = "REFUSED (RED config) and F1 could not be measured" if was_refused \
+                else "F1 could not be measured"
             if n == reference_n:
                 res.violations.append(
                     Violation(n, "scale_invariance", 0.0, abs_floor,
-                              "zero-config REFUSED (RED config) even at the reference "
+                              f"zero-config {qualifier} even at the reference "
                               "scale -- no confident baseline could be established")
                 )
-            elif not reference_refused:
+            elif not reference_unmeasured:
                 res.violations.append(
                     Violation(n, "scale_invariance", 0.0, reference_f1 or 0.0,
-                              f"zero-config REFUSED (RED config) at n={n} while confident "
+                              f"zero-config {qualifier} at n={n} while measurable "
                               f"at the n={reference_n} reference (f1={reference_f1:.4f})")
                 )
             continue
 
-        # (3) absolute floor -- every measured rung, including the reference.
+        # (3) absolute floor -- every measured rung, including the reference and
+        # any refused-but-measured rung (RED with an intact F1 is not a regression).
         if f1 < abs_floor:
             res.violations.append(
                 Violation(n, "absolute_floor", f1, abs_floor,
-                          f"below the hard zero-config floor {abs_floor:.2f}")
+                          f"below the hard zero-config floor {abs_floor:.2f}"
+                          + (" (committed a RED config)" if was_refused else ""))
             )
 
-        # (1) scale-invariance -- rungs above a confident reference.
-        if n > reference_n and not reference_refused and reference_f1 is not None:
+        # (1) scale-invariance -- rungs above a measurable reference.
+        if n > reference_n and not reference_unmeasured and reference_f1 is not None:
             inv_threshold = reference_f1 - scale_tol
             if f1 < inv_threshold:
                 res.violations.append(
@@ -200,30 +222,72 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
     ``dedupe_df(df)`` RAISES ``ControllerNotConfidentError`` when the controller
     commits a RED config on a >=100K input (the refuse-at-scale guard). For a
     QUALITY gate we must still measure what zero-config WOULD produce, so we catch
-    the refusal and re-run with ``confidence_required=False`` (runs the committed
-    config anyway) and record ``red=True`` as diagnostic context. A rung that goes
-    RED while the smaller rungs stay GREEN is a strong hint of a scale-specific
-    regression -- but the gate's pass/fail is decided on measurable F1, not the
-    verdict (RED with intact F1 is not necessarily a quality regression)."""
+    the refusal and re-run the SAME committed config with ``allow_red_config=True``
+    -- the single post-#715 escape hatch (``confidence_required=False`` no longer
+    bypasses the RED-refuse) -- score its F1, and record ``refused=True`` as
+    diagnostic context. RED is a CONFIDENCE flag (e.g. the corrupted-realistic
+    shape excludes every exact-identity column and falls back to fuzzy-name
+    blocking, which the confidence heuristic dislikes); the committed config can
+    still cluster at high F1, so pass/fail is decided on that measured F1, not on
+    the verdict. A rung that goes RED while the smaller rungs stay GREEN is a hint
+    of a scale-specific issue, but only a genuine F1 DROP (floor / scale-
+    invariance) fails the gate.
+
+    The force-run is measurement mode, mirroring ``quality_invariant_scale.run_rung``:
+    ``_skip_finalize=True`` (skip the controller's full-df verification profile --
+    it doubles wall + peak RSS) and strip the auto-set cross-encoder rerank and the
+    runtime-broken exact-NE so the fast score paths engage. If that force-run
+    itself errors (a degenerate RED config CAN blow up to near-cartesian pairs and
+    OOM at scale -- the reason we don't force EVERY rung), we record the rung as
+    UNMEASURABLE (``f1=None``); ``evaluate_gate`` then flags it honestly instead of
+    fabricating a 0.0 -- never a false green."""
     sys.path.insert(0, str(REPO / "scripts"))
     import quality_invariant_scale as qis  # noqa: E402
     import goldenmatch  # noqa: E402
     from goldenmatch.core.autoconfig_controller import ControllerNotConfidentError  # noqa: E402
 
+    def _score(result) -> dict:
+        predicted: dict[int, list[int]] = {}
+        for cid, c in (result.clusters or {}).items():
+            members = c.get("members") or []
+            if len(members) > 1:
+                predicted[int(cid)] = list(members)
+        return qis.score_quality(predicted, gt)
+
+    def _measure_red(df) -> Optional[dict]:
+        """Score the committed RED config via the allow_red_config force-run.
+        Returns the metrics dict, or None if the config could not be measured
+        (force-run errored / OOM-risk) -- an honest UNMEASURABLE, not a 0.0."""
+        try:
+            cfg = goldenmatch.auto_configure_df(
+                df, confidence_required=False, allow_red_config=True, _skip_finalize=True)
+            for mk in (cfg.matchkeys or []):
+                if getattr(mk, "type", None) == "weighted" and getattr(mk, "rerank", False):
+                    mk.rerank = False
+                if getattr(mk, "type", None) == "exact" and getattr(mk, "negative_evidence", None):
+                    mk.negative_evidence = []
+            return _score(goldenmatch.dedupe_df(df, config=cfg))
+        except Exception as exc:  # noqa: BLE001  -- OOM/degenerate config: report, don't crash
+            print(f"[qis-gate] n={n}: RED force-run unmeasurable ({type(exc).__name__}: "
+                  f"{str(exc)[:120]})", file=sys.stderr, flush=True)
+            return None
+
+    _NONE = {"f1": None, "p": None, "r": None}
     out: dict[int, dict] = {}
     for n in rungs:
         df, gt = qis.generate_with_gt(n, seed=seed, shape=shape, corruption=corruption)
         try:
             result = goldenmatch.dedupe_df(df)
         except ControllerNotConfidentError:
-            # RED config on a >=100K input. Do NOT re-run with
-            # confidence_required=True/False to force it -- the degenerate config
-            # can blow up to near-cartesian pairs and OOM the runner at scale.
-            # The refusal IS the signal; record it and move on.
-            out[n] = {"refused": True,
-                      "pairwise": {"f1": None, "p": None, "r": None},
-                      "b_cubed": {"f1": None, "p": None, "r": None},
-                      "cluster": {"f1": None, "p": None, "r": None}}
+            # RED config on a >=100K input. Measure the committed config's actual
+            # F1 (allow_red_config) rather than treating the refusal as a failure.
+            rec = _measure_red(df)
+            if rec is None:
+                out[n] = {"refused": True, "pairwise": dict(_NONE),
+                          "b_cubed": dict(_NONE), "cluster": dict(_NONE)}
+            else:
+                rec["refused"] = True
+                out[n] = rec
             continue
         predicted: dict[int, list[int]] = {}
         for cid, c in (result.clusters or {}).items():
@@ -238,14 +302,18 @@ def measure_rungs(rungs: list[int], *, seed: int, shape: str, corruption: str) -
 
 def _scorecard_from_records(records: dict[int, dict], *, seed: int, shape: str,
                             corruption: str) -> dict:
-    """Build the committed baseline scorecard from measured rung records. Refused
-    rungs (no F1) are recorded in ``detail`` but omitted from the flat ``f1`` map
-    that drives the baseline-delta check -- there is no confident value to bless."""
+    """Build the committed baseline scorecard from measured rung records. A rung
+    is blessed on its MEASURED F1 -- including a refused-but-measured rung, whose
+    RED config F1 is real (RED is a confidence flag, not a quality verdict). Only
+    UNMEASURABLE rungs (f1=None: the force-run was skipped/errored) are omitted
+    from the flat ``f1`` map that drives baseline-delta -- there is no value to
+    bless. The ``refused`` verdict is retained per-rung in ``detail`` for trend
+    context."""
     def _r(x):
         return None if x is None else round(x, 6)
 
     f1 = {str(n): _r(records[n][METRIC]["f1"])
-          for n in sorted(records) if not records[n].get("refused")}
+          for n in sorted(records) if records[n][METRIC]["f1"] is not None}
     full = {
         str(n): {
             "pairwise": {k: _r(records[n]["pairwise"][k]) for k in ("f1", "p", "r")},
@@ -281,7 +349,12 @@ def write_step_summary(result: GateResult, records: dict[int, dict]) -> None:
 
     for n in sorted(records):
         r = records[n]
-        verdict = "🔴 RED (refused)" if r.get("refused") else "🟢 confident"
+        if not r.get("refused"):
+            verdict = "🟢 confident"
+        elif r["pairwise"]["f1"] is not None:
+            verdict = "🟡 RED (refused) — F1 measured via allow_red_config"
+        else:
+            verdict = "🔴 RED (refused) — F1 unmeasurable"
         lines.append(f"| {n:,} | {_f(r['pairwise']['f1'])} | "
                      f"{_f(r['b_cubed']['f1'])} | {_f(r['cluster']['f1'])} | {verdict} |")
     lines.append("")

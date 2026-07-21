@@ -74,9 +74,10 @@ def test_missing_baseline_rung_skips_delta_only():
     assert not any(rung == 500_000 and c == "baseline_delta" for rung, c in checks)
 
 
-def test_refuse_at_scale_is_a_violation():
-    # THE observed live signature: confident/high F1 at <=50K, REFUSES (RED) at
-    # 100K+. Refused rungs carry f1=None + refused=True; no force-run.
+def test_unmeasurable_refuse_at_scale_is_a_violation():
+    # Refused AND unmeasurable (the allow_red_config force-run was skipped/errored
+    # -- f1=None): confident at <=50K, then no measurable F1 at 100K+. This is the
+    # honest-can't-measure case (never a fabricated 0.0), and it IS a violation.
     rung_f1 = {50_000: 0.998, 100_000: None, 500_000: None}
     refused = {50_000: False, 100_000: True, 500_000: True}
     r = mod.evaluate_gate(rung_f1, None, rung_refused=refused)
@@ -84,12 +85,41 @@ def test_refuse_at_scale_is_a_violation():
     assert (100_000, "scale_invariance") in checks
     assert (500_000, "scale_invariance") in checks
     assert not r.ok
-    # The message names the refuse explicitly.
-    assert any("REFUSED" in v.detail for v in r.violations)
+    # The message names the refuse + unmeasurability explicitly.
+    assert any("REFUSED" in v.detail and "could not be measured" in v.detail
+               for v in r.violations)
 
 
-def test_reference_rung_refusing_is_flagged():
-    # If even the smallest gated rung refuses, there's no confident reference.
+def test_refused_but_measured_rung_is_not_auto_failed():
+    # THE #1933 false-positive fix: a rung REFUSES (RED) but its committed config's
+    # F1 was recovered via allow_red_config and clears the floor + tracks the
+    # reference. RED is a confidence flag, not a quality verdict -> NO violation.
+    rung_f1 = {50_000: 0.998, 100_000: 0.99, 500_000: 0.985}
+    refused = {50_000: False, 100_000: True, 500_000: True}  # 100K/500K RED-but-measured
+    r = mod.evaluate_gate(rung_f1, None, rung_refused=refused)
+    assert r.ok, [v.line() for v in r.violations]
+
+
+def test_single_refused_but_measured_reference_passes():
+    # THE heavy-tier 5M scenario: one rung, it refuses, but the RED config's F1 is
+    # measured and clears the floor -> OK (no confident-reference paradox, since the
+    # reference IS measured; only the absolute floor applies to a single rung).
+    r = mod.evaluate_gate({5_000_000: 0.93}, None, rung_refused={5_000_000: True})
+    assert r.ok, [v.line() for v in r.violations]
+
+
+def test_refused_but_measured_rung_below_floor_still_fails():
+    # A real quality collapse is still caught even when the rung is RED: the
+    # measured F1 drops below the floor -> absolute_floor fires (RED noted).
+    r = mod.evaluate_gate({5_000_000: 0.42}, None, rung_refused={5_000_000: True})
+    checks = {(v.rung, v.check) for v in r.violations}
+    assert (5_000_000, "absolute_floor") in checks
+    assert not r.ok
+    assert any("RED config" in v.detail for v in r.violations)
+
+
+def test_reference_rung_unmeasurable_is_flagged():
+    # If even the smallest gated rung has no measurable F1, there's no reference.
     r = mod.evaluate_gate({50_000: None, 100_000: None}, None,
                           rung_refused={50_000: True, 100_000: True})
     checks = {(v.rung, v.check) for v in r.violations}
@@ -97,14 +127,14 @@ def test_reference_rung_refusing_is_flagged():
     assert not r.ok
 
 
-def test_confident_rungs_still_scored_when_a_later_rung_refuses():
-    # A refused rung must not suppress F1 checks on the confident ones.
+def test_confident_rungs_still_scored_when_a_later_rung_unmeasurable():
+    # An unmeasurable rung must not suppress F1 checks on the confident ones.
     rung_f1 = {50_000: 0.55, 100_000: None}
     refused = {50_000: False, 100_000: True}
     r = mod.evaluate_gate(rung_f1, None, rung_refused=refused)
     checks = {(v.rung, v.check) for v in r.violations}
     assert (50_000, "absolute_floor") in checks       # 0.55 < 0.80 floor
-    assert (100_000, "scale_invariance") in checks     # refused vs GREEN reference
+    assert (100_000, "scale_invariance") in checks     # unmeasurable vs GREEN reference
 
 
 def test_empty_measurements_raises():
