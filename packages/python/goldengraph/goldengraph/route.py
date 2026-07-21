@@ -198,17 +198,24 @@ def _stem_match(a: str, b: str) -> bool:
     return _common_prefix_len(a, b) >= 5
 
 
-def _best_predicate_for_token(token: str, predicates) -> str | None:
+def _predicate_token_index(predicates) -> list[tuple[str, list[str]]]:
+    """Precompute ``[(predicate, salient_tokens), ...]`` ONCE per query: predicates
+    SORTED (so a score tie resolves to the lexicographically-smallest predicate
+    deterministically -- `predicates` is typically a set) and each predicate's
+    salient tokens extracted once. Reused across every content word, so the sort
+    and tokenization don't repeat per token."""
+    return [(pred, _predicate_salient_tokens(pred)) for pred in sorted(predicates)]
+
+
+def _best_predicate_for_token(token: str, pred_index) -> str | None:
     """The predicate whose salient token best matches ``token`` (exact beats a
-    longer shared stem), or None. One predicate per query word so a repeated
-    relation word yields a repeated hop (multiplicity, not a set). Iterates
-    predicates in SORTED order with a strict-improvement test, so on a score tie
-    the lexicographically-smallest predicate wins deterministically -- `predicates`
-    is typically a set (`_slice_predicates`), and routing must not depend on its
-    iteration order."""
+    longer shared stem), or None -- one predicate per query word, so a repeated
+    relation word yields a repeated hop (multiplicity, not a set). ``pred_index``
+    is the ``_predicate_token_index`` list (pre-sorted; a strict-improvement test
+    keeps the first = lexicographically-smallest predicate on a tie)."""
     best_pred, best_score = None, -1
-    for pred in sorted(predicates):
-        for pt in _predicate_salient_tokens(pred):
+    for pred, ptoks in pred_index:
+        for pt in ptoks:
             if _stem_match(token, pt):
                 score = 1000 if token == pt else _common_prefix_len(token, pt)
                 if score > best_score:
@@ -285,10 +292,11 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names):
     # Map EACH content word to its best predicate (one hop per word) -- so a
     # repeated relation word ("the employer of the employer of X") yields a
     # repeated hop. hits carries the ordered per-occurrence relations.
+    pred_index = _predicate_token_index(predicates)  # sort + tokenize once, not per word
     hits: list[tuple[int, str]] = []  # (distance-from-anchor, predicate), per occurrence
     covered: set[int] = set()         # indices into `content` that grounded to a predicate
     for ci, (cp, ct, _nx) in enumerate(content):
-        pred = _best_predicate_for_token(ct, predicates)
+        pred = _best_predicate_for_token(ct, pred_index)
         if pred is None:
             continue
         covered.add(ci)
