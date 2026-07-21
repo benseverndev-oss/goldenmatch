@@ -4,6 +4,15 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.3] - 2026-07-21
+
+- Floor bump: `goldenmatch[polars]>=3.7`. 3.7.0 lands the zero-config
+  Fellegi-Sunter scale-recall fix (saturation-aware candidate-pair projection +
+  recall-safe identity-field compounding + memory-aware pair budget — F1
+  recovered from 0.03 to 1.0 at 25M single-box, verified on CI), plus the
+  out-of-core single-box streaming FS path (`>=40M`) and bounded bucket
+  streaming. Mandating the new baseline keeps the advertised suite honest.
+
 ## [0.3.2] - 2026-07-19
 
 - Floor bump: `goldenmatch-native>=0.1.19`. 0.1.19 adds the
