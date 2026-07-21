@@ -8,27 +8,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
-- **Zero-config Fellegi-Sunter recall no longer collapses at scale (memory-aware
-  blocking pair budget).** The FS blocking pair-budget bound
-  (`_bound_probabilistic_blocking_pairs`) used a FLAT 300M candidate-pair ceiling
-  — calibrated for a ~4-8 GB box. On the 64 GB runner the 25M single-box FS
-  envelope targets, that ceiling is ~16x too tight, so at scale the bound
-  COMPOUNDED recall-critical single-field passes (a pure `zip` pass that
-  duplicates share exactly) with corruption-prone fields (a typo'd `first_name`)
-  to fit the budget — and the compound key then breaks on the very duplicates the
-  pass existed to catch. Measured blocking recall collapse: **1.0 at ≤2.4M → 0.82
-  at 4.8M → ~0.02 at 30M** (F1 0.030, the 30M single-box proof), entirely
-  scale-dependent and invisible below ~5M. `_fs_total_pair_budget` is now
-  MEMORY-AWARE (`max(300M floor, available_ram_gb * ~40M)`, anchored to the
-  measured 25M-on-64GB proof where ~2.1B bounded pairs peaked at ~28 GB): at any
-  ≥~32 GB box the budget clears ~1B, the pure coarse passes survive, and blocking
-  recall is 1.0 — **measured F1 0.9005 → 1.0000 at 4.8M** (P=R=1.0), byte-
-  identical below the trigger (small boxes keep the 300M floor + all #1803
-  tuning). An undersized box degrades honestly (less recall, no OOM) instead of
-  silently at scale. Not EM: the EM within-block-pair sample cap is irrelevant to
-  this (100K/200K/400K give identical F1). The `gate-fs-zeroconfig` nightly now
-  runs at 10M (was 1M — below where this class is visible) with `set -o pipefail`
-  so the F1-floor failure is no longer masked by `| tee`.
+- **Zero-config Fellegi-Sunter recall no longer collapses at scale (recall-safe
+  blocking-pass compounding + memory-aware pair budget).** The FS blocking
+  pair-budget bound (`_bound_probabilistic_blocking_pairs`) must shrink
+  candidate pairs at scale (they grow ~N²), and it did so by COMPOUNDING an
+  over-budget coarse pass with its "most selective" reducer — a **name initial**.
+  On corrupted person data that reducer is corruption-prone: a typo'd
+  `first_name` breaks the compound key, so a `zip` pass duplicates share exactly
+  (`zip + first-initial`) drops from recall 1.0 to 0.82. At scale the budget
+  forces compounding on EVERY pass, so recall collapsed **1.0 at ≤2.4M → 0.82 at
+  4.8M → ~0.02 at 30M** (F1 0.030, the 30M single-box proof) — entirely
+  scale-dependent and invisible below ~5M. Two complementary fixes:
+  - **Reducer preference (the primary fix).** The bound now compounds with an
+    **exact-agreement identity field (email / identifier / phone) at full value**
+    when one is present, before falling back to the corruption-prone name/geo
+    initials. Duplicates share those fields exactly, so the compound keeps every
+    true pair together while collapsing the block to near-singletons — recall-safe
+    AND a *stronger* pair reducer (measured on the 30M person shape: `zip` alone =
+    116M pairs @ recall 1.0; `zip + first-initial` = 6.8M @ **0.82**; `zip +
+    email` = **0.9M @ 1.0**). Because the identity compound yields ~duplicate-count
+    pairs regardless of N, recall stays 1.0 at any scale even under the tight
+    small-box budget.
+  - **Memory-aware budget.** `_fs_total_pair_budget` is now
+    `max(300M floor, available_ram_gb * ~40M)` (anchored to the 25M-on-64GB proof
+    where ~2.1B bounded pairs peaked at ~28 GB), so a big box does less
+    compounding to begin with and keeps coarse passes pure. Byte-identical below
+    the trigger (small boxes keep the 300M floor + all #1803 tuning).
+  Measured **F1 0.9005 → 1.0000 at 4.8M** (P=R=1.0); the identity reducer holds
+  recall 1.0 at 4.8M even at a tight 300M budget (3.3M candidate pairs). Not EM:
+  the EM within-block-pair sample cap is irrelevant to this (100K/200K/400K give
+  identical F1); blocking recall exactly tracks pipeline recall. The
+  `gate-fs-zeroconfig` nightly now runs at 10M (was 1M — below where this class is
+  visible) with `set -o pipefail` so the F1-floor failure is no longer masked by
+  `| tee`.
 - **Weak-positive blocking-pass pruning now runs on the FS arrow lane.**
   `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1` invoked `select_passes` (polars-native:
   `with_row_index` / `group_by`) directly on `df`, but the FS routed / arrow

@@ -5437,13 +5437,32 @@ def _bound_probabilistic_blocking_pairs(
     if not passes:
         return blocking
 
-    # Reducer discriminators, most selective first: name initials, then city,
-    # then zip/identifier/phone prefix. Each shrinks a coarse block ∝ its own
-    # cardinality (a surname-initial split cuts a soundex block ~18x).
+    # Reducer discriminators to AND into an over-budget coarse pass. Ordered by
+    # RECALL-SAFETY first, selectivity second:
+    #
+    #   1. Exact-agreement identity fields (email / identifier / phone) at FULL
+    #      value. Duplicates share these EXACTLY, so ANDing one into a coarse pass
+    #      keeps every true pair together while collapsing the block to near-
+    #      singletons -- recall-safe AND the strongest pair reducer (measured on
+    #      the 30M person shape: `zip` alone = 116M pairs @ recall 1.0; `zip +
+    #      first-initial` = 6.8M pairs but recall 0.82; `zip + email` = 0.9M pairs
+    #      @ recall 1.0). This is THE fix for the 30M recall collapse: at scale the
+    #      pair budget forces compounding on EVERY pass, and a corruption-prone
+    #      name-initial reducer then SPLITS true pairs on any typo'd name.
+    #   2/3. Selective name/geo/city initials + zip/id/phone prefixes -- the
+    #      fallback when no identity field is present or clears the budget. These
+    #      are corruption-prone (a name typo breaks the compound), so they run
+    #      only after the identity fields.
     by_type: dict[str, list[str]] = {}
     for p in profiles:
         by_type.setdefault(p.col_type, []).append(p.name)
     reducers: list[tuple[str, tuple[str, ...]]] = []
+    for f in (
+        by_type.get("email", [])
+        + by_type.get("identifier", [])
+        + by_type.get("phone", [])
+    ):
+        reducers.append((f, ()))  # full value -- exact-shared identity
     for f in by_type.get("name", []):
         reducers.append((f, ("substring:0:1",)))
     for f in by_type.get("geo", []) + by_type.get("city", []):

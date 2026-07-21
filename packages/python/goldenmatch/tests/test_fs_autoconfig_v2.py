@@ -358,6 +358,29 @@ def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):
     assert compound.field_transforms == {"city": ["strip"], "surname": ["substring:0:1"]}
 
 
+def test_pair_gate_prefers_identity_field_reducer(monkeypatch):
+    # THE 30M recall-collapse fix: when an exact-agreement identity field (email)
+    # is present, an over-budget coarse pass is compounded with EMAIL AT FULL VALUE
+    # -- duplicates share email exactly, so the compound keeps every true pair
+    # together (recall-safe) -- NOT with a corruption-prone name-initial, which
+    # SPLITS true pairs on any typo'd name (measured 30M person: zip+first-initial
+    # = recall 0.82; zip+email = recall 1.0). Email is tried FIRST.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    df = pl.DataFrame({
+        "city": ["Xtown"] * 6,
+        "surname": ["Ash", "Bell", "Cole", "Dean", "East", "Frost"],
+        "email": [f"u{i}@x.com" for i in range(6)],
+    })
+    profs = [_p("city", "geo"), _p("surname", "name"), _p("email", "email")]
+    out = _bound_probabilistic_blocking_pairs(_coarse_blocking("city"), profs, df)
+    compound = next((p for p in (out.passes or []) if "email" in p.fields), None)
+    assert compound is not None, "coarse pass must be compounded with the identity field"
+    assert set(compound.fields) == {"city", "email"}
+    # Email at FULL value (empty transform), NOT the surname initial.
+    assert compound.field_transforms == {"city": ["strip"], "email": []}
+
+
 def test_pair_gate_drops_coarse_pass_when_no_reducer_helps(monkeypatch):
     # surname is constant -> the [city, surname] compound is STILL one 15-pair
     # block, so no reducer brings city under budget -> the coarse pass is DROPPED,
