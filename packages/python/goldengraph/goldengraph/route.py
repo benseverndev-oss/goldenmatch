@@ -364,7 +364,8 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=No
                 pred_vecs = list(embedder.embed([p.replace("_", " ") for p, _ in pred_index]))
                 tok_vecs = list(embedder.embed([t for _ci, _cp, t in unresolved]))
             except Exception:  # noqa: BLE001 - embedder failure -> no bridge, guard abstains
-                pred_vecs = tok_vecs = None
+                pred_vecs = None
+                tok_vecs = None  # split (not chained) so the static analyzer sees the use
             # A wrong-length return is an embedder contract violation; treat it as a
             # failure (no bridge -> the guard abstains) rather than let zip drop
             # candidates and shift which predicate wins.
