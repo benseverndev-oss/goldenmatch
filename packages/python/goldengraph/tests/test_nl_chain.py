@@ -257,6 +257,88 @@ def test_nl_embedder_low_similarity_still_abstains():
     assert p.relation_chain is None
 
 
+def test_nl_synonym_only_single_hop_bridged_by_embedder():
+    # A synonym-ONLY hop (the sole relation word is a pure synonym with NO lexical
+    # hit) has empty lexical `hits`. The bridge now runs even with no lexical hits
+    # (the empty-`hits` early return was moved AFTER the bridge), so
+    # "Who is the spouse of Christopher Nolan?" grounds spouse->married to and walks
+    # the single hop instead of abstaining.
+    g = _film_graph()
+    p = classify_query(
+        "Who is the spouse of Christopher Nolan?",
+        predicates=_slice_predicates(g),
+        entity_names=_slice_entity_names(g),
+        embedder=_SynEmbedder(),
+    )
+    assert p.relation_chain == ("married to",)
+    assert plan_query(p).mode == "chain"
+    assert _trace_chain_any_order(g, p.anchor_surface, p.relation_chain) == "Emma Thomas"
+
+
+def test_nl_synonym_only_single_hop_abstains_without_embedder():
+    # Back-compat: the SAME synonym-only hop with NO embedder must still abstain.
+    # (The removed pre-bridge early return is replaced by the post-guard empty-hits
+    # check, so the no-embedder path is byte-identical to before.)
+    g = _film_graph()
+    p = _profile("Who is the spouse of Christopher Nolan?", g)
+    assert p.relation_chain is None
+
+
+def test_nl_malformed_embedder_vectors_degrade_to_abstain():
+    # A right-LENGTH but malformed embedder return (None / non-numeric entries)
+    # parses fine at embed() time but raises inside _cos() during the similarity
+    # loop. The bridge wraps the WHOLE computation, so this degrades to
+    # "no bridge -> guard abstains" instead of propagating and crashing the query.
+    class _MalformedEmbedder:
+        def embed(self, texts):
+            return [None for _ in texts]  # correct count, but _cos(None, ...) raises
+
+    g = _film_graph()
+    p = classify_query(
+        "Who is the spouse of the director of Inception?",
+        predicates=_slice_predicates(g),
+        entity_names=_slice_entity_names(g),
+        embedder=_MalformedEmbedder(),
+    )
+    assert p.relation_chain is None
+
+
+def test_embed_bridge_min_env_parsing_and_clamping(monkeypatch):
+    # The cosine floor is read from GOLDENGRAPH_NL_EMBED_BRIDGE_MIN. A misconfigured
+    # env var must never silently disable the bridge (nan) or make it bind anything
+    # (a negative / out-of-range floor): non-float and non-finite fall back to the
+    # 0.55 default, and any finite value is clamped into the meaningful [0, 1] range.
+    from goldengraph.route import _embed_bridge_min
+
+    # unset -> default
+    monkeypatch.delenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", raising=False)
+    assert _embed_bridge_min() == 0.55
+
+    # a valid in-range value passes through untouched
+    monkeypatch.setenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "0.7")
+    assert _embed_bridge_min() == 0.7
+
+    # non-float -> default (not a crash)
+    monkeypatch.setenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "not-a-number")
+    assert _embed_bridge_min() == 0.55
+
+    # nan would make every cosine comparison False and silently disable the bridge
+    monkeypatch.setenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "nan")
+    assert _embed_bridge_min() == 0.55
+
+    # inf is non-finite -> default
+    monkeypatch.setenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "inf")
+    assert _embed_bridge_min() == 0.55
+
+    # a negative floor would bind anything -> clamp up to 0.0
+    monkeypatch.setenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "-0.3")
+    assert _embed_bridge_min() == 0.0
+
+    # above 1.0 is not a meaningful cosine floor -> clamp down to 1.0
+    monkeypatch.setenv("GOLDENGRAPH_NL_EMBED_BRIDGE_MIN", "1.5")
+    assert _embed_bridge_min() == 1.0
+
+
 def test_nl_unknown_anchor_abstains():
     g = _film_graph()
     p = _profile("Who directed Titanic?", g)  # Titanic is not in the slice

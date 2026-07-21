@@ -148,3 +148,24 @@ extraction) only runs in `mode="auto"` -- so exercising this end-to-end in the
 bench needs `GOLDENGRAPH_QA_MODE=auto`. Making the chain-attempt fire inside
 local/hybrid before synthesis (so the win is default, not auto-only) is the next
 follow-up.
+
+### Post-#1969 hardening (2026-07-21, review-driven)
+Three fixes on top of the semantic bridge, all in `_extract_nl_chain_slots`:
+- **Synonym-ONLY hops now bridge.** The `if not hits: return None, None` early return
+  ran BEFORE the bridge, so a 1-hop query whose sole relation word is a pure synonym
+  ("Who is the spouse of Christopher Nolan?") had empty lexical `hits` and abstained
+  even with a valid embedder — contradicting the tier's intent. The early return moved
+  AFTER the bridge (now a post-guard `if not hits`), so the bridge runs with zero
+  lexical hits; the no-embedder path stays byte-identical (empty hits still abstains).
+- **The WHOLE bridge is exception-wrapped, not just `embed()`.** A malformed-but-right-
+  length embedder return (scalar / `None` / non-numeric entries) raises inside
+  `_cos()`/`_embed_bridge_predicate` during the similarity loop, NOT at `embed()` time.
+  The `try/except` now spans the embed calls + length check + cosine loop, so any
+  vector-shape failure degrades to "no bridge -> completeness guard abstains" (the
+  advertised failure mode) instead of propagating and crashing the query.
+- **`GOLDENGRAPH_NL_EMBED_BRIDGE_MIN` env parsing is test-locked** (`_embed_bridge_min`):
+  non-float and non-finite (`nan`/`inf`) fall back to the 0.55 default; any finite value
+  clamps into `[0, 1]` — so a misconfigured env var can neither silently disable the
+  bridge (`nan`) nor make it bind anything (a negative floor).
+Tests: `tests/test_nl_chain.py` (synonym-only fires with embedder / abstains without;
+malformed-embedder degrades; env parse+clamp).
