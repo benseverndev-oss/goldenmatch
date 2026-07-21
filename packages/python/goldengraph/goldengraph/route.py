@@ -125,10 +125,19 @@ def _extract_temporal_slots(query: str, predicates):
 #     ordered by surface proximity to the anchor (the first hop's relation is
 #     syntactically adjacent to the anchor in of-/possessive nesting, for both
 #     "R2 of R1 of ANCHOR" and "ANCHOR's R1's R2").
-# It is deliberately conservative: it only produces a chain when a real anchor
-# AND >=1 real predicate are found, and `trace_chain` (edge-existence + the
-# None-fallthrough in ask()) rejects any mis-parse -- so a wrong extraction
-# degrades to today's retrieval+synthesis path, never to a confidently-wrong walk.
+# It is deliberately conservative and layered so a mis-parse degrades to today's
+# retrieval+synthesis path instead of a confident wrong answer:
+#   1. it only produces a chain when a REAL anchor AND >=1 real predicate ground;
+#   2. the completeness guard (below) abstains when an unmapped content word sits
+#      before an "of"/"by" marker -- the truncated-chain case that WOULD complete
+#      early at a wrong intermediate node;
+#   3. `_trace_chain_any_order` returns only when the graph confirms the hinted
+#      order, or (hint failed) a unique fallback order completes; otherwise None.
+# The residual it does NOT catch: a mis-parse whose (grounded) relations happen to
+# form a DIFFERENT chain that still completes to a valid terminal -- rare given the
+# grounding + guard, and no worse than the LLM synthesis path it replaces. So the
+# guarantee is "a mis-parse that fails to walk falls through", not "every wrong
+# reading is impossible"; `ask()` only falls back when the walk returns None.
 
 _REL_STOPWORDS = frozenset({
     # function words / determiners / prepositions / conjunctions

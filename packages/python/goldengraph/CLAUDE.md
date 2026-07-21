@@ -105,9 +105,13 @@ query-name embedding — were already refuted, see `results/RESULTS_PATH_AWARE_R
   so a repeated relation ("the employer of the employer of X") yields a repeated
   hop. Dedup-to-set was the whole accuracy gap (repeat-relation chains 0%→97.6%).
 - **Order is a HINT, the graph validates it:** the extracted order is proximity-to-
-  anchor; `answer._trace_chain_any_order` tries permutations and accepts the first
-  that completes (only the true order has a matching first edge in the ≤1-edge-per-
-  (entity,relation) graph). `QueryProfile.chain_ordered` distinguishes the
+  anchor. `answer._trace_chain_any_order` first walks the HINT order and trusts it
+  when it completes (that is the reading the question expressed); only if the hint
+  fails does it try the other permutations, and then it returns a result ONLY when
+  exactly one fallback order completes (distinct fallback terminals ⇒ ambiguous ⇒
+  abstain to None). Requiring uniqueness across ALL orders including the hint was
+  measured 96.8%→29.8% (the dense graph makes many orders complete differently and
+  the hint is the correct one). `QueryProfile.chain_ordered` distinguishes the
   authoritative template order (single walk) from the NL hint (permute).
 - **Conservative by construction — never worse than status quo:** fires only with a
   grounded anchor + ≥1 grounded predicate; a COMPLETENESS GUARD abstains when an
