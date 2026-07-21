@@ -40,7 +40,7 @@ class TestNativeScorerIdMaps:
     # kernel. `score_field_matrix` shares 0-3 (it delegates to score_one) but its
     # id 4 is soundex_match, a DIFFERENT namespace -- pinned separately so the two
     # can't silently collide.
-    _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4}
+    _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4, "qgram": 5}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):

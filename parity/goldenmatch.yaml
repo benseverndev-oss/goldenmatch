@@ -305,7 +305,8 @@ blocking_strategies:
 # path) -- Python `_NATIVE_SCORER_IDS` (backends.score_buckets) vs TS
 # `WASM_COVERED_SCORERS` (core/wasm/backend SCORER_ID). Every scorer in the
 # `scorers` surface NOT listed here is a pure-language fallback with no kernel.
-# python_only: `date` has an arrow-native kernel on Python but no TS WASM port yet.
+# python_only: `date` and `qgram` have an arrow-native (bucket) kernel on Python
+# but no TS WASM port yet.
 scorer_kernels:
   shared:
   - exact
@@ -314,4 +315,5 @@ scorer_kernels:
   - token_sort
   python_only:
   - date
+  - qgram
   ts_only: []
