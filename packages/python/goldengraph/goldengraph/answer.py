@@ -509,16 +509,24 @@ def ask(
     # reaches the default answer path -- not just mode='auto'. Skip when we arrived via
     # auto (it already attempted the chain). A None answer (no chain plan, or the walk
     # hit a missing edge) falls through to today's retrieval+synthesis, unchanged.
+    # Materialize the entity list ONCE and reuse it for both routing (_resolve_and_plan)
+    # and seeding (seed_by_query), so the default-path chain attempt doesn't double-scan
+    # entities on a non-chain / fall-through query. Stays None when the chain attempt is
+    # skipped (gate off / arrived via auto) -> seed_by_query self-scans, byte-identical.
+    slice_entities = None
     if not entered_auto and _local_chain_enabled():
+        slice_entities = list(slice_graph.entities())
         profile, plan = _resolve_and_plan(
             query, slice_graph, embedder=embedder,
             query_classifier=query_classifier, query_schema=query_schema,
+            slice_entities=slice_entities,
         )
         if plan.mode == "chain":
             ans = _chain_answer_from_profile(slice_graph, profile, provenance_out=provenance_out)
             if ans is not None:
                 return ans
-    seeds = seed_by_query(slice_graph, query, embedder, k=k, index=entity_index)
+    seeds = seed_by_query(slice_graph, query, embedder, k=k, index=entity_index,
+                          entities=slice_entities)
     _retrieve = _retrieve_local_bridged if _bridge_enabled() else _retrieve_local
     subgraph = _retrieve(slice_graph, seeds, max_hops=hops, node_budget=node_budget)
     # Hand the synthesis the seed entity NAMES (the query-relevant anchors) so the

@@ -63,7 +63,8 @@ class GoldenmatchEmbedder:
         return np.vstack(parts)
 
 
-def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5, index=None) -> list[int]:
+def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5, index=None,
+                  entities=None) -> list[int]:
     """Top-`k` entity ids in `slice_graph` (a `PyGraph` from `as_of`) nearest the
     query by cosine over canonical-name embeddings. Tie-break: ascending
     `entity_id` (deterministic — stub/zero vectors tie often).
@@ -79,12 +80,17 @@ def seed_by_query(slice_graph, query: str, embedder: Embedder, *, k: int = 5, in
     anchors, and embedding a raw value (a bare date / amount) both wastes budget and
     risks an empty/over-long input that 400s the WHOLE provider batch. Empty /
     whitespace names are dropped for the same reason (a provider rejects an empty
-    input). Without this, a literal-attrs run 400s on every answer at seed time."""
+    input). Without this, a literal-attrs run 400s on every answer at seed time.
+
+    `entities` (a precomputed ``list(slice_graph.entities())``) lets a caller that already
+    materialized the entity list -- e.g. the default-path chain router in ``ask`` -- reuse
+    it instead of re-scanning the graph. None (default) self-scans; byte-identical."""
     if index is not None:
         return index.query(query, embedder, k=k)
+    source = slice_graph.entities() if entities is None else entities
     ents = [
         e
-        for e in slice_graph.entities()
+        for e in source
         if not str(e.get("typ", "")).startswith("literal:")
         and str(e.get("canonical_name", "")).strip()
     ]

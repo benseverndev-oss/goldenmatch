@@ -17,7 +17,7 @@ routes to today's retrieval+synthesis path -- never worse than the status quo.
 
 from __future__ import annotations
 
-import goldengraph.answer as answer_mod  # module object for monkeypatching seed/synth seam
+from goldengraph import answer as answer_mod  # module object for monkeypatching seed/synth seam
 from goldengraph.answer import (
     _slice_entity_names,
     _slice_predicates,
