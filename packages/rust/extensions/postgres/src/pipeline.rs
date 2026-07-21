@@ -56,8 +56,8 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
 
     set_job_status(&job_name, "running");
 
-    // Read once into a single TableData; all three engine calls below share it
-    // (columnar Arrow when the columns are parity-safe, JSON fallback otherwise).
+    // Read once into a single TableData (columnar Arrow when the columns are
+    // parity-safe, JSON fallback otherwise).
     let table_data = match spi::read_table(&table_name) {
         Ok(t) => t,
         Err(e) => {
@@ -66,13 +66,20 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
         }
     };
 
-    let result = match goldenmatch_bridge::api::dedupe(&table_data, &config_json) {
-        Ok(r) => r,
+    // Run the engine ONCE (#1883): the bundle carries golden/stats/telemetry +
+    // scored pairs + cluster assignments off a single pipeline run, instead of
+    // three separate `dedupe`/`dedupe_pairs`/`dedupe_clusters` calls that each
+    // re-ran the full pipeline (~3x the compute) and — because the pipeline is
+    // non-deterministic run-to-run — could persist mutually-inconsistent
+    // pairs/clusters/golden. One run makes the three outputs consistent.
+    let bundle = match goldenmatch_bridge::api::dedupe_bundle(&table_data, &config_json) {
+        Ok(b) => b,
         Err(e) => {
             set_job_status(&job_name, "failed");
             pgrx::error!("goldenmatch: {}", e);
         }
     };
+    let result = bundle.result;
 
     // Store results
     let escaped = job_name.replace('\'', "''");
@@ -108,7 +115,8 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
     // pair (#1883). At scale that per-row SPI connect/exec was O(pairs) round
     // trips; chunking bounds the statement size while collapsing them to
     // O(pairs / CHUNK).
-    if let Ok(pairs) = goldenmatch_bridge::api::dedupe_pairs(&table_data, &config_json) {
+    {
+        let pairs = &bundle.pairs;
         for chunk in pairs.chunks(INSERT_CHUNK) {
             let values: Vec<String> = chunk
                 .iter()
@@ -125,7 +133,8 @@ pub fn gm_run(job_name: String, table_name: String) -> String {
     }
 
     // Store cluster assignments (batched, same rationale as the pairs above).
-    if let Ok(members) = goldenmatch_bridge::api::dedupe_clusters(&table_data, &config_json) {
+    {
+        let members = &bundle.clusters;
         for chunk in members.chunks(INSERT_CHUNK) {
             let values: Vec<String> = chunk
                 .iter()
