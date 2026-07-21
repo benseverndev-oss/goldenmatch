@@ -112,6 +112,25 @@ def _fs_arrow_stream_enabled() -> bool:
     )
 
 
+def _fs_columnar_cluster_enabled() -> bool:
+    """``GOLDENMATCH_FS_COLUMNAR_CLUSTER`` (default OFF) opts the eligible FS
+    bucket dedupe path onto B2c (#1811): the Arrow pair stream is threaded
+    STRAIGHT to the columnar cluster path (``build_clusters_columnar`` +
+    ``_columnar_pairs_df``), so the driver-resident ``all_pairs`` Python
+    ``list[tuple]`` is NEVER built. At 14M on tight-blocking/dup-dense data the
+    above-threshold pair set runs to hundreds of millions of tuples (~150 B
+    each) held on the driver through scoring -> clustering -- the late-stage OOM
+    of #1811. Superset of ``GOLDENMATCH_FS_ARROW_STREAM`` (B2b, which only drops
+    the ``matched_pairs`` exclude set): B2c uses the Arrow emit unconditionally
+    when active and reuses the shipped, parity-gated columnar cluster/dedup
+    downstream. Clusters are NOT byte-identical to the list path (the FS bucket
+    pipeline is ~0.1%-nondeterministic run-to-run regardless); parity is a
+    pair-set-overlap gate, not byte equality."""
+    return os.environ.get(
+        "GOLDENMATCH_FS_COLUMNAR_CLUSTER", "0"
+    ).strip().lower() in ("1", "true", "yes")
+
+
 def _fs_arrow_stream_eligible(
     config: GoldenMatchConfig,
     matchkeys: list,
@@ -577,9 +596,17 @@ def _score_probabilistic_matchkey(
     bench_emitted_pairs: set[tuple[int, int]] | None = None,
     log_em: bool = False,
     em_results: dict | None = None,
+    use_columnar: bool = False,
+    columnar_out: list | None = None,
 ) -> None:
     """Score one probabilistic (Fellegi-Sunter) matchkey, folding results into
     ``all_pairs`` / ``review_pairs`` and updating ``matched_pairs`` in place.
+
+    B2c (#1811): when ``use_columnar`` is set (dedupe caller only,
+    eligibility-gated), the bucket route emits the Arrow pair stream and appends
+    the link-threshold-filtered pair DataFrame to ``columnar_out`` INSTEAD of
+    extending ``all_pairs`` -- the driver never holds the pair tuple list. The
+    two match callers never pass it, so their behavior is unchanged.
 
     The single routing/scoring body shared by the dedupe pipeline, both match
     lanes (``_run_match_pipeline`` / ``_run_match_scoring_and_output``) and the
@@ -736,6 +763,37 @@ def _score_probabilistic_matchkey(
         # clusters byte-identical to the list path; the win is the exclude-set +
         # scoring-accumulation peak RSS. Dedupe-scope only (target_ids is None) --
         # the match lanes need per-target filtering the stream doesn't vectorize.
+        if use_columnar:
+            # B2c (#1811): thread the Arrow pair stream STRAIGHT to the columnar
+            # cluster path -- never build the driver-resident all_pairs list.
+            # The caller (eligibility-gated: single FS mk, no across-files, no
+            # semantic blocking, no bench-dump) folds columnar_out into
+            # _columnar_pairs_df + sets _use_columnar, so the shipped columnar
+            # cluster/dedup downstream consumes it without materializing a list.
+            import polars as _pl_b2c
+
+            from goldenmatch.backends.score_buckets import score_buckets_arrow
+            _pair_table = score_buckets_arrow(
+                score_frame,
+                config.blocking,
+                scoring_mk,
+                matched_pairs,
+                n_buckets=config.n_buckets,
+                em_result=em_result,
+            )
+            _cdf = _pl_b2c.from_arrow(_pair_table)
+            del _pair_table
+            # from_arrow of a pa.Table yields a DataFrame; narrow for pyright.
+            assert isinstance(_cdf, _pl_b2c.DataFrame)
+            if _cdf.height:
+                # Keep only the linked (>= link_threshold) pairs; the review band
+                # is not clustered (matches _split_pair_stream's `pairs`).
+                _cdf = _cdf.filter(_pl_b2c.col("score") >= link_threshold)
+            if columnar_out is not None:
+                columnar_out.append(_cdf)
+            # matched_pairs intentionally NOT populated (single matchkey) and
+            # review_pairs left empty (no review queue on the columnar scale path).
+            return
         _use_arrow_stream = (
             target_ids is None
             and _fs_arrow_stream_enabled()
@@ -3111,7 +3169,30 @@ def _run_dedupe_pipeline(
     _use_columnar = _columnar_pipeline_enabled() and _is_columnar_eligible(
         config, matchkeys, across_files_only,
     )
+    # B2c (#1811): FS (probabilistic) sibling of the weighted columnar lane.
+    # Mirrors _is_columnar_eligible's downstream-safety checks (single matchkey,
+    # default backend, no llm/boost/semantic/across-files that consume the pair
+    # list) but for a probabilistic matchkey. When active, the FS scoring pass
+    # populates _columnar_pairs_df + flips _use_columnar (below the prob loop),
+    # so the shipped columnar cluster/dedup path runs and all_pairs stays empty.
+    _mk0 = matchkeys[0] if len(matchkeys) == 1 else None
+    _use_fs_columnar = (
+        not _use_columnar
+        and _fs_columnar_cluster_enabled()
+        and not across_files_only
+        and config.blocking is not None
+        and getattr(config, "llm_scorer", None) is None
+        and getattr(config, "boost", None) is None
+        and getattr(config, "semantic_blocking", None) is None
+        and _mk0 is not None
+        and getattr(_mk0, "type", None) == "probabilistic"
+        # _fs_use_bucket_route already excludes the true scale backends
+        # (ray/duckdb/datafusion/chunked) while allowing backend "bucket"/None --
+        # the routes B2c's Arrow emit + columnar cluster are valid for.
+        and _fs_use_bucket_route(config, _mk0)
+    )
     _columnar_pairs_df: pl.DataFrame | None = None
+    _fs_columnar_sink: list = []
 
     # D2s-d1: collected_df is dual-rep from here down (Frame at D2s-d2);
     # always-on reads go through the seam. Decline-listed blocks (throughput
@@ -3373,6 +3454,7 @@ def _run_dedupe_pipeline(
                             _columnar_pairs_df = score_blocks_columnar(
                                 blocks, mk, matched_pairs, track_matched=False,
                             )
+                            assert _columnar_pairs_df is not None
                             fuzzy_pair_count += _columnar_pairs_df.height
                             continue
                         except Exception:
@@ -3455,7 +3537,16 @@ def _run_dedupe_pipeline(
                 bench_candidate_pairs=_bench_candidate_pairs,
                 bench_emitted_pairs=_bench_emitted_pairs,
                 log_em=True,
+                use_columnar=_use_fs_columnar,
+                columnar_out=_fs_columnar_sink,
             )
+
+    # B2c: fold the FS columnar pair frame into the shipped columnar downstream.
+    # Only fires when eligibility held and the pass produced a frame; otherwise
+    # the list path ran unchanged.
+    if _use_fs_columnar and _fs_columnar_sink:
+        _columnar_pairs_df = _fs_columnar_sink[0]
+        _use_columnar = True
 
     if _bench_dump_dir:
         _dump_bench_pairs(
