@@ -320,3 +320,22 @@ scorer_kernels:
   - qgram
   - soundex_match
   ts_only: []
+# scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
+# that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
+# reason -- the `check_scorer_coverage` gate FAILS on any uncovered scorer, so a new
+# scorer, or a kernel that regresses to a pure-language fallback, can no longer sit
+# unaddressed the way "5 of 19 kernel-backed" did (nothing forced per-scorer
+# classification). Deferral is a conscious act with a rationale: `deferred --` = will
+# kernelize (with the blocker); `declined --` = won't (with why); `n/a --` = not a
+# string kernel. Removing a scorer's kernel without adding it here fails CI.
+scorer_kernels_deferred:
+  dice: "deferred -- dual-semantics: bigram-set Dice per-pair vs PPRL bloom-filter hex Dice in the matrix path; disambiguate which the scorer name means before kernelizing"
+  jaccard: "deferred -- dual-semantics like dice (bigram-set vs PPRL bloom-filter hex); disambiguate before kernelizing"
+  ensemble: "declined -- a per-pair reimpl measurably regressed Febrl3 recall (0.922->0.782); the float32 matrix ensemble is the source of truth, so it stays off the bucket/fast path. Kernelizing means re-opening that measurement"
+  embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
+  record_embedding: "n/a -- model-backed multi-field embedding"
+  given_name_aliased_jw: "deferred -- ts_only scorer; its kernel home is the TS WASM surface (WASM_COVERED_SCORERS), not the Python bucket"
+  name_freq_weighted_jw: "deferred -- ts_only; also uses a dynamic per-dataset tf table that does not fit the static-global in-kernel table mechanism"
+  phash: "deferred -- hex-hamming similarity, but matrix-semantics-dependent like dice/jaccard: _phash_score_matrix pads all block hashes to the block-GLOBAL max bit-length (sim = 1 - dist/max_len) while a score_one per-pair kernel can only pad pairwise -> diverges on mixed-length blocks; invalid hex also differs (matrix -> 0, single raises). True parity needs a block-aware kernel, not the score_one id pattern"
+  radial: "declined -- bespoke rotation-aligned Pearson on radial profiles; angular alignment search, low perf upside (small blocks)"
+  audio_fp: "declined -- bespoke best-offset-aligned BER on hex audio fingerprints; alignment search, low perf upside"

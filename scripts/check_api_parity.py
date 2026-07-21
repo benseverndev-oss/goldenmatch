@@ -53,6 +53,11 @@ def check_structure(manifest: dict) -> list[ParityFailure]:
     for surface, body in manifest.items():
         if surface == "package":
             continue
+        # `scorer_kernels_deferred` is a classification MAP (scorer -> reason),
+        # not a shared/python_only/ts_only partition surface; its shape is
+        # validated by check_scorer_coverage, so skip the partition checks here.
+        if surface == "scorer_kernels_deferred":
+            continue
         if surface not in SURFACES:
             f.append(ParityFailure(surface, "", "unknown_surface", f"unknown surface '{surface}' (allowed: {', '.join(SURFACES)})"))
             continue
@@ -66,6 +71,74 @@ def check_structure(manifest: dict) -> list[ParityFailure]:
                 if n in seen:
                     f.append(ParityFailure(surface, n, "not_disjoint", f"'{n}' appears in both {surface}.{seen[n]} and {surface}.{k}"))
                 seen[n] = k
+    return f
+
+
+def check_scorer_coverage(manifest: dict) -> list[ParityFailure]:
+    """Coverage gate for the scorer surface (goldenmatch): every scorer in the
+    ``scorers`` surface must be EITHER kernel-backed (present in
+    ``scorer_kernels``) OR explicitly classified in ``scorer_kernels_deferred``
+    with a non-empty reason.
+
+    This is the floor that keeps the ``N of 19 kernel-backed`` metric honest: a
+    NEW scorer, or a kernel that regresses back to a pure-language fallback,
+    lands as ``uncovered`` and FAILS -- so a fallback-only scorer can no longer
+    sit unaddressed the way ``5 of 19`` did (nothing forced per-scorer
+    classification). Deferral is a conscious act with a rationale, not silence.
+
+    Only runs when both surfaces are present (goldenmatch); other packages have
+    no scorer surface and are unaffected.
+    """
+    f: list[ParityFailure] = []
+    if "scorers" not in manifest or "scorer_kernels" not in manifest:
+        return f
+
+    def _union(surface: str) -> set[str]:
+        body = manifest.get(surface, {}) or {}
+        return {
+            n
+            for key in ("shared", "python_only", "ts_only")
+            for n in body.get(key, [])
+        }
+
+    all_scorers = _union("scorers")
+    kernel_backed = _union("scorer_kernels")
+    deferred = manifest.get("scorer_kernels_deferred", {}) or {}
+    if not isinstance(deferred, dict):
+        return [
+            ParityFailure(
+                "scorer_kernels_deferred", "", "malformed_deferred",
+                "scorer_kernels_deferred must be a mapping of scorer -> reason",
+            )
+        ]
+    deferred_names = set(deferred)
+    # 1. fallback-only AND unclassified -> kernelize it or defer it with a reason.
+    for n in sorted(all_scorers - kernel_backed - deferred_names):
+        f.append(ParityFailure(
+            "scorer_kernels", n, "uncovered_scorer",
+            f"'{n}' has no kernel and no deferral -> kernelize it (add to "
+            f"scorer_kernels) or add it to scorer_kernels_deferred with a reason",
+        ))
+    # 2. deferred but now kernel-backed -> the annotation is stale.
+    for n in sorted(deferred_names & kernel_backed):
+        f.append(ParityFailure(
+            "scorer_kernels_deferred", n, "stale_deferral",
+            f"'{n}' is now kernel-backed -> remove it from scorer_kernels_deferred",
+        ))
+    # 3. deferred but not a real scorer -> typo or removed scorer.
+    for n in sorted(deferred_names - all_scorers):
+        f.append(ParityFailure(
+            "scorer_kernels_deferred", n, "unknown_deferral",
+            f"'{n}' is deferred but is not in the scorers surface -> remove it",
+        ))
+    # 4. every live deferral needs a non-empty reason.
+    for n in sorted(deferred_names & all_scorers):
+        reason = deferred.get(n)
+        if not isinstance(reason, str) or not reason.strip():
+            f.append(ParityFailure(
+                "scorer_kernels_deferred", n, "missing_reason",
+                f"'{n}' deferral needs a non-empty reason string",
+            ))
     return f
 
 
@@ -87,6 +160,7 @@ def run_checks(manifest: dict, py_desc: dict, ts_desc: dict) -> list[ParityFailu
         if s not in manifest:
             continue
         fails += check_partition(s, manifest[s], set(py_desc.get(s, [])), set(ts_desc.get(s, [])))
+    fails += check_scorer_coverage(manifest)
     return fails
 
 

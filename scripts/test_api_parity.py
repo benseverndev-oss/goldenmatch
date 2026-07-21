@@ -113,6 +113,101 @@ def test_run_checks_reports_across_surfaces():
     assert {f.kind for f in fails} == {"undeclared_py_only", "undeclared_ts_only"}
 
 
+def _cov_manifest(kernel_backed, all_scorers, deferred):
+    """Minimal manifest for the scorer-coverage gate."""
+    return {
+        "package": "gm",
+        "scorers": {"shared": sorted(all_scorers), "python_only": [], "ts_only": []},
+        "scorer_kernels": {"shared": sorted(kernel_backed), "python_only": [], "ts_only": []},
+        "scorer_kernels_deferred": deferred,
+    }
+
+
+def test_scorer_coverage_all_covered_passes():
+    m = _cov_manifest(
+        kernel_backed={"exact", "jaro_winkler"},
+        all_scorers={"exact", "jaro_winkler", "ensemble", "phash"},
+        deferred={"ensemble": "declined -- reason", "phash": "deferred -- reason"},
+    )
+    assert gate.check_scorer_coverage(m) == []
+
+
+def test_scorer_coverage_uncovered_scorer_fails():
+    # `phash` has no kernel and no deferral -> must be classified.
+    m = _cov_manifest(
+        kernel_backed={"exact"},
+        all_scorers={"exact", "ensemble", "phash"},
+        deferred={"ensemble": "declined -- reason"},
+    )
+    fails = gate.check_scorer_coverage(m)
+    assert kinds(fails) == ["uncovered_scorer"]
+    assert fails[0].name == "phash"
+
+
+def test_scorer_coverage_regression_kernel_to_fallback_fails():
+    # A scorer that WAS kernel-backed is dropped from scorer_kernels without a
+    # deferral -> lands as uncovered. This is the coverage floor: coverage can't
+    # silently regress.
+    m = _cov_manifest(
+        kernel_backed={"exact"},                    # qgram removed from kernels
+        all_scorers={"exact", "qgram"},
+        deferred={},
+    )
+    fails = gate.check_scorer_coverage(m)
+    assert kinds(fails) == ["uncovered_scorer"]
+    assert fails[0].name == "qgram"
+
+
+def test_scorer_coverage_stale_deferral_fails():
+    # `qgram` is kernel-backed but still listed as deferred -> remove the annotation.
+    m = _cov_manifest(
+        kernel_backed={"exact", "qgram"},
+        all_scorers={"exact", "qgram"},
+        deferred={"qgram": "deferred -- stale"},
+    )
+    fails = gate.check_scorer_coverage(m)
+    assert kinds(fails) == ["stale_deferral"]
+
+
+def test_scorer_coverage_unknown_deferral_fails():
+    # `bogus` is deferred but not a real scorer.
+    m = _cov_manifest(
+        kernel_backed={"exact"},
+        all_scorers={"exact"},
+        deferred={"bogus": "deferred -- typo"},
+    )
+    fails = gate.check_scorer_coverage(m)
+    assert kinds(fails) == ["unknown_deferral"]
+
+
+def test_scorer_coverage_missing_reason_fails():
+    for empty in ("", "   ", None):
+        m = _cov_manifest(
+            kernel_backed={"exact"},
+            all_scorers={"exact", "phash"},
+            deferred={"phash": empty},
+        )
+        fails = gate.check_scorer_coverage(m)
+        assert kinds(fails) == ["missing_reason"], empty
+
+
+def test_scorer_coverage_absent_surfaces_skipped():
+    # Packages without a scorer surface (goldencheck, ...) are unaffected.
+    assert gate.check_scorer_coverage({"package": "goldencheck"}) == []
+
+
+def test_scorer_coverage_malformed_deferred_fails():
+    m = _cov_manifest(kernel_backed=set(), all_scorers={"exact"}, deferred=["not", "a", "map"])
+    fails = gate.check_scorer_coverage(m)
+    assert kinds(fails) == ["malformed_deferred"]
+
+
+def test_structure_allows_deferred_map():
+    # scorer_kernels_deferred is a classification map, not a partition surface.
+    m = {"scorer_kernels_deferred": {"phash": "deferred -- reason"}}
+    assert not any(f.kind == "unknown_surface" for f in gate.check_structure(m))
+
+
 import os, subprocess, sys, json, pathlib
 
 def test_python_emitter_goldenmatch_smoke():
