@@ -417,6 +417,7 @@ def ask(
             query,
             predicates=_slice_predicates(slice_graph, entities=slice_entities),
             entity_names=_slice_entity_names(slice_graph, entities=slice_entities),
+            embedder=embedder,  # lets the NL extractor bridge synonym relations to predicates
             llm_classifier=query_classifier,
         )
         # Query-side schema canonicalization: route the query's relation(s) through the discovered

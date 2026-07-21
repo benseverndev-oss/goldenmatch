@@ -126,3 +126,25 @@ query-name embedding — were already refuted, see `results/RESULTS_PATH_AWARE_R
   (96.8%) — up from **0%** LLM-free before (they fell to ~0.15–0.28 paid synthesis).
   By hop: 2-hop 100%, 3-hop 93%, 4-hop 97%. Tests: `tests/test_nl_chain.py`
   (wheel-free; fires, safe abstentions, ordering, multiplicity, end-to-end `ask`).
+
+## NL chain routing — semantic synonym bridge (2026-07-21)
+Follow-up to the template-free NL routing (#1966): the lexical stem rule grounds
+morphological variants ("director"->"directed_by") but not pure synonyms
+("spouse"->"married_to", no shared characters), which hit the completeness guard
+and abstained. `route._extract_nl_chain_slots(..., embedder=)` now bridges exactly
+those guard-triggering words (uncovered AND before an "of"/"by" marker) by embedding
+cosine against the predicate phrases: `_embed_bridge_predicate` picks the closest
+predicate above `GOLDENGRAPH_NL_EMBED_BRIDGE_MIN` (default 0.55). Scoped to the
+guard words only (not every content word) so it lifts the synonym boundary without
+a spurious-match surface; `embedder is None` is byte-identical to #1966 (all prior
+tests unchanged). `embedder` threads `ask` -> `resolve_profile` -> `classify_query`
+(the embedder `ask` already carries). Needs a SEMANTIC embedder to bridge true
+synonyms -- the no-torch char-ngram embedder only shares the morphological cases the
+stem rule already covers. Tests: `tests/test_nl_chain.py` (`_SynEmbedder` stub:
+spouse~married_to fires; an orthogonal word stays below the floor and abstains).
+NOTE the reachability gotcha: the bench's goldengraph engine runs `ask` in
+`mode="local"` by default (`engines/goldengraph.py`), and the NL routing (chain
+extraction) only runs in `mode="auto"` -- so exercising this end-to-end in the
+bench needs `GOLDENGRAPH_QA_MODE=auto`. Making the chain-attempt fire inside
+local/hybrid before synthesis (so the win is default, not auto-only) is the next
+follow-up.
