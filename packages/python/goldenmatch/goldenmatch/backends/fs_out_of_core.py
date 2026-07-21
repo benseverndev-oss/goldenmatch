@@ -86,6 +86,16 @@ def _fs_ooc_wave_rows() -> int:
     return 2_000_000
 
 
+def _ooc_debug_on() -> bool:
+    """``GOLDENMATCH_FS_OOC_DEBUG=1`` prints a per-phase progress line for the
+    out-of-core FS scorer (load, and per blocking pass: block-map build +
+    scan+score wall + block count). Off by default, output-invariant. Gives the
+    long-running >=25M streaming leg live progress instead of a blank spinner."""
+    return os.environ.get("GOLDENMATCH_FS_OOC_DEBUG", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def fs_out_of_core_enabled() -> bool:
     """Opt-in scale switch for the out-of-core FS path (default OFF).
 
@@ -237,8 +247,11 @@ def score_fs_out_of_core(
     )
     from goldenmatch.core.probabilistic import (
         _fs_native_eligible,
+        _fs_vectorized_enabled,
+        _fs_vectorized_supported,
         probabilistic_block_scorer,
         score_probabilistic_bucket_native,
+        score_probabilistic_vectorized_batch,
     )
 
     if blocking_config.strategy not in ("static", "multi_pass"):
@@ -268,9 +281,15 @@ def score_fs_out_of_core(
         # frame (never the full `to_arrow()` copy that made this ~2-3x). With a
         # file db_path the table spills to disk, so post-load resident drops to
         # the DuckDB buffer cache, not the frame. This is the Phase-2 memory fix.
+        import time as _time
+        _dbg = _ooc_debug_on()
+        _t_load = _time.perf_counter()
         _load_frame_batched(con, proj)
         del proj, native
         con.execute("CREATE INDEX ix_rid ON prep(__row_id__)")
+        if _dbg:
+            print(f"[fs-ooc] load+index {_time.perf_counter()-_t_load:.1f}s",
+                  flush=True)
 
         # Choose the FS scorer once (native kernel vs vectorized), like score_buckets.
         use_native = _fs_native_eligible(mk)
@@ -299,8 +318,24 @@ def score_fs_out_of_core(
         # byte-identical to the serial path.
         _workers = _fs_ooc_workers()
         wave_rows = _fs_ooc_wave_rows()  # cap resident block-rows per wave
+        # Batch the wave into FEW scorer calls instead of one-per-block. Person
+        # data makes tens of thousands of tiny blocks per pass; one native call
+        # per block was ~60s/pass (the measured OOC wall). The native kernel
+        # isolates blocks by a `size_list` (one call scores a whole
+        # block-contiguous frame), and the numpy vectorized scorer amortizes one
+        # SxS matrix per field across a batch of blocks -- exactly the in-memory
+        # `_score_one_bucket` batched-native call + `score_probabilistic_blocks_
+        # batched`. Byte-identical pair set + scores (blocks are independent; the
+        # size_list / per-block spans isolate them), so the existing parity tests
+        # against the per-block reference gate this.
+        _use_vec_batch = (
+            not use_native
+            and _fs_vectorized_enabled()
+            and _fs_vectorized_supported(mk)
+        )
 
         def _score_one(block_pl):
+            # Per-block fallback (unsupported scorer path).
             if block_pl.height < 2:
                 return ()
             if use_native:
@@ -308,6 +343,38 @@ def score_fs_out_of_core(
                     block_pl, [block_pl.height], mk, em_result, frozen_exclude,
                 )
             return prob_scorer(block_pl, frozen_exclude)
+
+        def _score_native_chunk(blocks):
+            # ONE native call for a group of block-frames: concat them
+            # block-contiguous + pass their per-block sizes. The kernel scores
+            # WITHIN each block only, so this is byte-identical to scoring the
+            # blocks one at a time. OOC blocks are capped at max_block_rows and
+            # are all >=2 rows (the mapping filters), so no oversized handling.
+            if not blocks:
+                return ()
+            frame = blocks[0] if len(blocks) == 1 else pl.concat(blocks)
+            return score_probabilistic_bucket_native(
+                frame, [b.height for b in blocks], mk, em_result, frozen_exclude,
+            )
+
+        def _chunk_blocks(blocks, k):
+            # Partition block-frames into <= k order-preserving groups of ~equal
+            # rows so the thread pool still parallelizes (one native call each).
+            if k <= 1 or len(blocks) <= 1:
+                return [blocks]
+            target = max(1, sum(b.height for b in blocks) // k)
+            groups: list = []
+            cur: list = []
+            cur_rows = 0
+            for b in blocks:
+                cur.append(b)
+                cur_rows += b.height
+                if cur_rows >= target and len(groups) < k - 1:
+                    groups.append(cur)
+                    cur, cur_rows = [], 0
+            if cur:
+                groups.append(cur)
+            return groups
 
         def _merge(results) -> None:
             # results: per-block pair lists, IN submission (block) order.
@@ -347,12 +414,26 @@ def score_fs_out_of_core(
                 nonlocal buf, buf_rows
                 if not buf:
                     return
-                # executor.map preserves input order -> block-order merge.
-                _merge(_ex.map(_score_one, buf))
+                if use_native:
+                    # One native call per ~worker-sized chunk (executor.map
+                    # preserves order -> block-order merge).
+                    _merge(_ex.map(_score_native_chunk, _chunk_blocks(buf, _workers)))
+                elif _use_vec_batch:
+                    # One SxS batch over the whole wave (numpy vectorized path).
+                    _merge((
+                        score_probabilistic_vectorized_batch(
+                            buf, mk, em_result, frozen_exclude
+                        ),
+                    ))
+                else:
+                    # Unsupported scorer: per-block fallback (order preserved).
+                    _merge(_ex.map(_score_one, buf))
                 buf = []
                 buf_rows = 0
 
             for pass_config in passes:
+                if _dbg:
+                    _t_pass = _time.perf_counter()
                 # 1) Thin-index grouping: pull ONLY __row_id__ + this pass's
                 #    blocking columns (not the scoring frame), derive the block key
                 #    exactly as build_blocks does, and assign each valid block
@@ -389,6 +470,10 @@ def score_fs_out_of_core(
                     .collect()
                 )
                 del keyed
+                if _dbg:
+                    _map_dt = _time.perf_counter() - _t_pass
+                    _map_h = mapping.height
+                    _t_scan = _time.perf_counter()
                 if mapping.height == 0:
                     continue
 
@@ -435,6 +520,11 @@ def score_fs_out_of_core(
                 # before pass N+1 -> preserves the pass-order first-seen dedup.
                 _flush()
                 con.execute("DROP TABLE IF EXISTS blkmap")
+                if _dbg:
+                    print(f"[fs-ooc] pass [{','.join(pass_config.fields)}] "
+                          f"blockrows={_map_h} map {_map_dt:.1f}s "
+                          f"scan+score {_time.perf_counter()-_t_scan:.1f}s",
+                          flush=True)
         if _arrow:
             if pair_tables:
                 return pa.concat_tables(pair_tables)
