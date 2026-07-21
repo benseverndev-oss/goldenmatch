@@ -3659,7 +3659,7 @@ def _maybe_promote_blocking_to_adaptive(
 
 def _maybe_prune_blocking_passes(
     blocking: BlockingConfig | None,
-    df: pl.DataFrame,
+    df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (the arrow lane)
 ) -> BlockingConfig | None:
     """Opt-in weak-positive-aware pruning of multi-pass blocking passes.
 
@@ -3699,7 +3699,9 @@ def _maybe_prune_blocking_passes(
         if is_polars_lazyframe(prune_df):
             prune_df = prune_df.collect()
         elif not isinstance(prune_df, pl.DataFrame):
-            prune_df = pl.from_arrow(prune_df)
+            # pl.from_arrow on a Table always yields a DataFrame (Series only for
+            # an Array/ChunkedArray input, which this never is).
+            prune_df = cast("pl.DataFrame", pl.from_arrow(prune_df))
 
         result = select_passes(prune_df, list(passes), min_marginal_weak_positive=floor)
     except Exception:
