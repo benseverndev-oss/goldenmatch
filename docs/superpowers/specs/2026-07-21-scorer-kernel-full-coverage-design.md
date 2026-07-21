@@ -1,7 +1,7 @@
 # Full `-core` kernel coverage for the scorer surface (5/19 -> full)
 
 **Date:** 2026-07-21
-**Status:** Proposed (scoping / design)
+**Status:** Proposed (scoping / design). **Wave 1 `qgram` landed in this same PR** (5/19 -> 6/19); the baseline figures below describe the pre-PR starting point.
 **Motivation:** The generated suite-matrix reports **"5 of 19 scorers are kernel-backed"**
 (`docs-site/suite-matrix.mdx`, computed by `gen_suite_matrix.py::_substrate_lines` from the
 `scorer_kernels` parity surface). This spec scopes what it takes to close that gap -- and argues
@@ -11,14 +11,18 @@ that a literal "19/19" is the wrong target.
 
 The Rust / Arrow-native `-core` kernels are the reference implementation for scoring; each language
 surface either dispatches to the kernel (the fast path) or runs a byte-identical pure-language
-fallback. Today only **5 scorers** have a kernel:
+fallback. At the pre-PR baseline only **5 scorers** had a kernel:
 
 - **shared** (Python arrow bucket kernel + TS WASM): `exact`, `jaro_winkler`, `levenshtein`, `token_sort`
 - **python-only** (arrow bucket kernel, TS falls back): `date`
 
-The other **14 are fallback-only**: `dice`, `jaccard`, `qgram`, `soundex_match`, `ensemble`,
-`embedding`, `record_embedding`, `alias_match`, `audio_fp`, `initialism_match`, `phash`, `radial`,
-`given_name_aliased_jw`, `name_freq_weighted_jw`.
+The other **14 were fallback-only** at that baseline: `dice`, `jaccard`, `qgram`, `soundex_match`,
+`ensemble`, `embedding`, `record_embedding`, `alias_match`, `audio_fp`, `initialism_match`, `phash`,
+`radial`, `given_name_aliased_jw`, `name_freq_weighted_jw`.
+
+**Update (this PR):** `qgram` is now kernelized (Wave 1) -- it has a `score-core` kernel on the
+Python arrow-bucket fast path, so the current state is **6/19** with **13** fallbacks remaining.
+`qgram` reads as `python_only` in the `scorer_kernels` partition (no TS WASM port yet, like `date`).
 
 "Kernel-backed" in the metric means *a kernel exists in at least one language* (a union), so the
 denominator (19) also counts scorers that live in only one language. The metric is emitted by
@@ -92,7 +96,7 @@ minimal. Recommend **defer or explicitly decline**.
 
 | Wave | Scorers | Risk | Rationale |
 |---|---|---|---|
-| **1** | `qgram`, `soundex_match`, `initialism_match` | low | pure strings on the proven template; `soundex_match` is half-wired already |
+| **1** | `qgram` ✅ (landed this PR), `soundex_match`, `initialism_match` | low | pure strings on the proven template; `soundex_match` is half-wired already |
 | **2** | `given_name_aliased_jw`, `name_freq_weighted_jw`, `alias_match` | medium | string base + refdata table shipped in-kernel (mechanism exists); table fidelity is the risk |
 | **3** | `phash`, `dice`, `jaccard` | low-med | wiring existing kernels (`perceptual-core`, `bloom.rs`), not new algorithms |
 | **free** | `ensemble` | trivial | composes Wave-1 kernels; kernel-backed by construction |
