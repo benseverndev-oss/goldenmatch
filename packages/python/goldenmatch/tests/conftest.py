@@ -23,6 +23,13 @@ _ROUTING_ENV_VARS = (
     "GOLDENMATCH_BUCKET_DEFAULT",
     "GOLDENMATCH_COLUMNAR_PIPELINE",
     "GOLDENMATCH_FRAME",
+    # test_autoconfig_arrow_native_parity._arrow_native(False) sets this to "0"
+    # via raw os.environ with no restore in the helper. It gates the
+    # auto_configure_df arrow-native boundary (autoconfig.py: _arrow_native_ac);
+    # a leaked "0" forces the polars-import branch, which the no-polars tripwire
+    # subprocess in test_match_arrow_parity inherits via os.environ and fails on
+    # ("polars blocked (match arrow tripwire)"). Snapshot/restore closes it.
+    "GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE",
 )
 
 
