@@ -3,6 +3,7 @@ the harness builds the KG once, answers every question, scores via metrics, and
 enforces a hard USD cap via goldenmatch's BudgetTracker."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -423,6 +424,95 @@ def run_engine_ab(
         "total_cost_usd": round(enforce.total_cost_usd, 6),
         "n_answered": answered,
     }
+
+
+def run_engine_ab_env(
+    engine, corpus, *, model: str, budget_usd: float, arms, judge=None
+) -> dict:
+    """Same-graph env-A/B: build the KG ONCE, then answer every question under EACH
+    env-config arm against the IDENTICAL graph. The ONLY variable is the answer-time
+    environment (e.g. `GOLDENGRAPH_SYNTH_SAMPLES=1` vs `=5`), so build variance -- which
+    otherwise swamps a downstream-only change under head_to_head's rebuild-per-run
+    (support_recall swung +-0.26 on a retrieval-only metric voting cannot touch) -- is
+    removed by construction.
+
+    `arms` is a list of `(label, env_dict)`; each `env_dict` maps env-var name -> value
+    (str) applied around the answer call and restored afterward, so the arms don't leak
+    into each other or the build. Unlike `run_engine_ab`, the engine's `answer()` is
+    called WITHOUT a `mode=` kwarg -- the knob under test lives entirely in the env, so
+    ANY env-gated behavior is A/B-able without an engine-level mode hook.
+
+    One shared budget bounds the WHOLE run (build + every arm); a question is only started
+    when the budget can afford answering it under every arm, so the arms stay aligned
+    (same n_answered). Per-arm answer cost is attributed separately for the report.
+
+    Returns `{"arms": {label: scorecard}, "comparison": {...}, "build_cost_usd",
+    "total_cost_usd", "n_answered"}`."""
+    arms = list(arms)
+    labels = [label for label, _ in arms]
+    # Duplicate labels would collapse the `scored`/`arms` dict keys into one arm and
+    # silently produce a misleading one-arm "A/B" -- reject rather than mislead.
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"run_engine_ab_env arm labels must be unique, got {labels!r}")
+    enforce = BudgetTracker(BudgetConfig(max_cost_usd=budget_usd))
+    # Attribution-only trackers (effectively uncapped) for per-arm answer cost.
+    arm_trackers = {label: BudgetTracker(BudgetConfig(max_cost_usd=10**9)) for label in labels}
+
+    build = engine.build_kg(corpus)
+    enforce.record_usage(build.input_tokens, build.output_tokens, model)
+    build_cost = enforce.total_cost_usd
+
+    scored: dict[str, list[dict]] = {label: [] for label in labels}
+    answered = 0
+    for q in corpus.questions:
+        # A question costs one answer PER arm; only start it if the budget can afford
+        # the whole set, so every arm answers exactly the same questions.
+        if enforce.budget_exhausted or not enforce.can_send(
+            _estimate_tokens(q.question) * len(arms)
+        ):
+            break
+        for label, env in arms:
+            with _env_overrides(env):
+                ans = engine.answer(build.handle, q.question)
+            enforce.record_usage(ans.input_tokens, ans.output_tokens, model)
+            arm_trackers[label].record_usage(ans.input_tokens, ans.output_tokens, model)
+            scored[label].append(_score_question(ans, q, judge))
+        answered += 1
+
+    arm_cards = {
+        label: _build_scorecard(
+            engine, corpus, model, scored[label],
+            answered=answered,
+            cost_usd=arm_trackers[label].total_cost_usd,
+            budget_exhausted=enforce.budget_exhausted,
+        )
+        for label in labels
+    }
+    return {
+        "arms": arm_cards,
+        "comparison": _ab_comparison(arm_cards, labels),
+        "build_cost_usd": round(build_cost, 6),
+        "total_cost_usd": round(enforce.total_cost_usd, 6),
+        "n_answered": answered,
+    }
+
+
+@contextlib.contextmanager
+def _env_overrides(env: dict):
+    """Apply `env` (name->value) to os.environ for the duration, then restore the prior
+    state EXACTLY -- keys that were absent are deleted, keys that were set are put back to
+    their old value. So an arm's config can't leak into the next arm or the shared build."""
+    saved: dict[str, str | None] = {k: os.environ.get(k) for k in env}
+    try:
+        for k, v in env.items():
+            os.environ[k] = str(v)
+        yield
+    finally:
+        for k, old in saved.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
 
 
 #: The headline metrics compared side-by-side across the A/B arms.
