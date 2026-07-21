@@ -28,25 +28,31 @@ class ResolvedEntity:
 
 
 def _key_payload(name: str, typ: str) -> dict:
-    """The dict fed to `record_fingerprint` for cross-document reconciliation. Default is (name, typ) --
-    but an open-vocab extractor assigns a DIFFERENT `typ` to one entity per document (measured: 97.6% of
-    cross-doc fragmentation is type jitter -- 'schema matching' typed Process/Algorithm/method/... across
-    docs), so its record_keys never overlap and the store never unifies it. `GOLDENGRAPH_XDOC_KEY` relaxes
-    the key: `name` = name only (type-agnostic); `name_ci` = name, case-folded (also absorbs the ~case-only
-    name jitter); `name_ci_type` = case-folded name + the COARSE type (homograph-safe: same-name entities
-    of different coarse class stay separate, while per-doc type jitter within a class still collapses). Pure
-    + goldenmatch-free so the normalization is unit-tested without the fingerprint."""
+    """The dict fed to `record_fingerprint` for cross-document reconciliation. An open-vocab extractor
+    assigns a DIFFERENT `typ` to one entity per document (measured: 97.6% of cross-doc fragmentation is
+    type jitter -- 'schema matching' typed Process/Algorithm/method/... across docs; and the same entity
+    is name-cased differently), so an exact (name, typ) key never overlaps and the store never unifies it
+    -- the multi-hop "shatter". `GOLDENGRAPH_XDOC_KEY` selects the key:
+      - `name_ci_type` (**DEFAULT**, since 2026-07-21): case-folded name + the COARSE canonical type --
+        homograph-safe (same-name entities of different coarse class stay separate) while per-doc type
+        jitter within a class collapses. Measured to cut the multi-hop shatter ~78% (support_recall
+        0.59->0.85 on MuSiQue N=100) with no precision regression.
+      - `name`      = name only (type-agnostic, most aggressive; homograph-merge risk).
+      - `name_ci`   = name, case-folded (absorbs case-only name jitter, keeps raw type off the key).
+      - `exact`     = the legacy verbatim (name, typ) key (opt out of the relaxation).
+    Pure + goldenmatch-free so the normalization is unit-tested without the fingerprint."""
     import os
 
     mode = os.environ.get("GOLDENGRAPH_XDOC_KEY", "").strip().lower()
+    if mode == "exact":
+        return {"name": name, "typ": typ}
     if mode == "name":
         return {"name": name}
     if mode == "name_ci":
         return {"name": name.strip().lower()}
-    if mode == "name_ci_type":
-        from .schema import canonicalize_entity_type
-        return {"name": name.strip().lower(), "typ": canonicalize_entity_type(typ)}
-    return {"name": name, "typ": typ}
+    # Default (unset) and explicit `name_ci_type`: case-folded name + coarse type.
+    from .schema import canonicalize_entity_type
+    return {"name": name.strip().lower(), "typ": canonicalize_entity_type(typ)}
 
 
 def _record_key(name: str, typ: str) -> str:

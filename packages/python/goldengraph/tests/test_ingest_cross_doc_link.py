@@ -189,20 +189,29 @@ def test_store_without_as_of_is_a_noop():
     assert ingest._cross_doc_link(_Bare(), batch, at=5) == 0
 
 
-def test_gating_default_off(monkeypatch):
+def test_gating_default_on(monkeypatch):
+    # DEFAULT ON since the 2026-07-21 anti-shatter flip; =0 opts out (case-insensitive).
     monkeypatch.delenv("GOLDENGRAPH_CROSS_DOC_LINK", raising=False)
-    assert ingest._cross_doc_link_enabled() is False
+    assert ingest._cross_doc_link_enabled() is True
     monkeypatch.setenv("GOLDENGRAPH_CROSS_DOC_LINK", "1")
     assert ingest._cross_doc_link_enabled() is True
-    monkeypatch.setenv("GOLDENGRAPH_CROSS_DOC_LINK", "0")
-    assert ingest._cross_doc_link_enabled() is False
+    for off in ("0", "false", "False", ""):
+        monkeypatch.setenv("GOLDENGRAPH_CROSS_DOC_LINK", off)
+        assert ingest._cross_doc_link_enabled() is False, off
 
 
 # --- goldenprofile anti-shatter matcher (PR #1217 engine) -----------------
 
-def test_profile_link_gating_default_off(monkeypatch):
+def test_profile_link_gating_auto_default(monkeypatch):
+    # DEFAULT 'auto': ON iff goldenprofile-native is importable, so a default-on build
+    # degrades to the embedding matcher instead of hard-failing without the wheel.
     monkeypatch.delenv("GOLDENGRAPH_PROFILE_LINK", raising=False)
-    assert ingest._profile_link_enabled() is False
+    ingest._goldenprofile_available.cache_clear()
+    monkeypatch.setattr(ingest, "_goldenprofile_available", lambda: True)
+    assert ingest._profile_link_enabled() is True   # auto + wheel present -> on
+    monkeypatch.setattr(ingest, "_goldenprofile_available", lambda: False)
+    assert ingest._profile_link_enabled() is False  # auto + wheel absent -> off (degrade)
+    # explicit overrides ignore availability
     monkeypatch.setenv("GOLDENGRAPH_PROFILE_LINK", "1")
     assert ingest._profile_link_enabled() is True
     monkeypatch.setenv("GOLDENGRAPH_PROFILE_LINK", "0")
