@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .harness import AnswerResult, BuildResult, run_engine_ab
@@ -78,13 +79,25 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated answer modes to A/B, in order (delta = 2nd - 1st). "
         "Default 'local,auto' -- the headline comparison.",
     )
-    p.add_argument("--model", default="gpt-4o-mini")
+    p.add_argument(
+        "--model", default=None,
+        help="chat model override. When given, sets OPENAI_MODEL so _chat_model() + the "
+        "engine both honor it; omit to use the env/default (gpt-4o-mini).",
+    )
     p.add_argument("--budget-usd", type=float, default=25.0)
     p.add_argument("--judge", action="store_true", help="score the format-fair LLM-judge metric too")
     p.add_argument("--judge-model", default="gpt-4o-mini")
     p.add_argument("--out-md", required=True)
     p.add_argument("--out-json", required=True)
     args = p.parse_args(argv)
+
+    modes = [m.strip() for m in args.modes.split(",") if m.strip()]
+    if not modes:
+        raise SystemExit("--modes must list at least one answer mode (e.g. 'local,auto')")
+    # Honor --model by exporting OPENAI_MODEL BEFORE building the engine / reading
+    # _chat_model() (both are env-driven); omitted -> the env/default is used.
+    if args.model:
+        os.environ["OPENAI_MODEL"] = args.model
 
     out_md = Path(args.out_md).resolve()
     out_json = Path(args.out_json).resolve()
@@ -96,7 +109,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     engine = _MockABEngine() if args.self_test else _build_engine(args.engine)
     judge = _make_judge(args.judge_model) if (args.judge and not args.self_test) else None
-    modes = [m.strip() for m in args.modes.split(",") if m.strip()]
 
     result = run_engine_ab(
         engine, corpus, model=_chat_model(), budget_usd=args.budget_usd, modes=modes, judge=judge,

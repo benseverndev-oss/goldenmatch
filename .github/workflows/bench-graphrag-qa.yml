@@ -213,6 +213,10 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
           POLARS_SKIP_CPU_CHECK: "1"
+          # datasets pulls a fresh-pip pyarrow whose bundled mimalloc SIGSEGVs on the
+          # pipeline's worker threads -- the documented repo standard for any lane that
+          # pip-installs goldenmatch/pyarrow and runs the pipeline (goldengraph resolve).
+          ARROW_DEFAULT_MEMORY_POOL: system
         run: |
           mkdir -p results
           python -m erkgbench.qa_e2e.run_local_vs_auto_ab \
