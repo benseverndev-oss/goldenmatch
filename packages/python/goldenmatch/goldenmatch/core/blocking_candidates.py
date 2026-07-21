@@ -271,12 +271,14 @@ def find_composite_blocking_keys(
     """Search for a 2-column composite blocking key.
 
     Enumerates pairs of mid-cardinality columns (each with ratio in
-    ``[0.05, 0.5]`` so the joint cardinality lands in a sane band).
-    For each pair, computes joint cardinality via the backend-neutral
-    ``frame.joint_n_unique([c1, c2])`` seam (equivalent to
-    ``df.select(c1, c2).n_unique()`` on the polars lane; arrow-safe -- see
-    #1852 tail) and picks the pair whose joint cardinality is closest to
-    ``n_rows / target_avg_block_size``.
+    ``[0.05, 0.5]`` so the joint cardinality lands in a sane band). Each
+    candidate column is materialized once through the backend-neutral Frame
+    seam (``frame.column(name).to_list()``); for each pair the joint
+    cardinality is ``len(set(zip(c1, c2)))`` -- identical null-combo semantics
+    to ``frame.joint_n_unique([c1, c2])`` / the old
+    ``df.select(c1, c2).n_unique()`` (arrow-safe -- see #1852 tail), but without
+    re-materializing a shared column across the O(M^2) pairs. Picks the pair
+    whose joint cardinality is closest to ``n_rows / target_avg_block_size``.
 
     Returns the column names of the best pair, or ``None`` when no
     pair lands in ``[n_rows/100, n_rows/2]`` (avg block size 2-100).
@@ -324,13 +326,24 @@ def find_composite_blocking_keys(
     best_pair: tuple[str, str] | None = None
     best_distance = float("inf")
 
+    # #1965 review: materialize each candidate column's values ONCE. Joint
+    # cardinality is then `len(set(zip(col1, col2)))` per pair -- byte-identical
+    # to `frame.joint_n_unique` (null combos counted) but without re-running the
+    # arrow `to_pylist` on a shared column for every one of the O(M^2) pairs.
+    frame_cols = set(frame.columns)
+    col_values = {
+        name: frame.column(name).to_list()
+        for name in mid_card_names
+        if name in frame_cols
+    }
+
     for i, c1 in enumerate(mid_card_names):
         for c2 in mid_card_names[i + 1:]:
-            if c1 not in frame.columns or c2 not in frame.columns:
+            if c1 not in frame_cols or c2 not in frame_cols:
                 evaluated.append((c1, c2, 0, "field_missing_from_df"))
                 continue
             try:
-                joint_card = frame.joint_n_unique([c1, c2])
+                joint_card = len(set(zip(col_values[c1], col_values[c2])))
             except Exception as exc:  # pragma: no cover -- defensive
                 logger.debug(
                     "find_composite_blocking_keys: skipping (%s, %s): %s",
