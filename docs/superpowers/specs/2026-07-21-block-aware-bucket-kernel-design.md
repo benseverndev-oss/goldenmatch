@@ -1,10 +1,12 @@
 # Block-aware bucket scoring for the bloom/hash scorers (dice / jaccard / phash)
 
 **Date:** 2026-07-21
-**Status:** Proposed (design / scoping). Follow-on to the `-core` scorer-kernel coverage work
-(`2026-07-21-scorer-kernel-full-coverage-design.md`, which took the metric 5/19 → 9/19 and added
-the `scorer_kernels` coverage floor). This scopes the next three fallbacks — `dice`, `jaccard`,
-`phash` — which the coverage manifest currently marks `deferred` as "matrix-semantics-dependent."
+**Status:** **Phases 1 & 2 landed** (dice/jaccard/phash kernelized as `score_one` ids 9/10/11,
+**9/19 → 12/19**); Phase 3 (the general block-aware matrix-scorer mechanism) remains designed-but-not-built.
+Follow-on to the `-core` scorer-kernel coverage work (`2026-07-21-scorer-kernel-full-coverage-design.md`,
+which took the metric 5/19 → 9/19 and added the `scorer_kernels` coverage floor). This scoped the next
+three fallbacks — `dice`, `jaccard`, `phash` — which the coverage manifest previously marked `deferred`
+as "matrix-semantics-dependent."
 
 ## TL;DR
 
@@ -211,12 +213,19 @@ established path. Matrix scorers are the escape hatch for the minority whose val
 
 ## Rollout
 
-1. **Phase 1 PR**: dice + jaccard `score_one` ids 9/10 (+ optional exact vec-matrix), byte-parity
-   tests, manifest move deferred→kernels, 11/19. Low risk, no output change.
-2. **Phase 2 PR**: phash per-pair id 11 (Option A) after confirming fixed-length-pHash assumption;
-   12/19. One documented behavior characterization.
-3. **Phase 3**: build the matrix-scorer mechanism only if Option B is required or a block-global
+1. **Phase 1 ✅ landed**: dice + jaccard `score_one` ids 9/10 (integer popcount, byte-exact),
+   byte-parity tests (`test_native_bloom_hash_parity.py`, 0 mismatches over thousands of pairs),
+   manifest move deferred→kernels. No output change (they already ran on the bucket per-pair path).
+2. **Phase 2 ✅ landed**: phash per-pair id 11 (Option A). This made phash bucket-eligible for the
+   first time (it previously declined to the matrix path); it now uses the PAIRWISE float64
+   `_phash_score_single` — byte-identical for fixed-length pHashes, a float64 precision improvement
+   elsewhere. **12/19.**
+3. **Phase 3 — not built.** The matrix-scorer mechanism (§Phase 3) stays designed-only; build it
+   only if byte-exact-with-`_phash_score_matrix` becomes a requirement or a genuinely block-global
    scorer lands. Design captured here so it isn't re-derived.
+
+The optional exact-float64 vec-matrix forms for dice/jaccard/phash (so the `_score_block_vec` lane
+can batch them) are a deferred perf follow-up — the kernels don't need them.
 
 Each phase re-runs the byte-parity discipline (kernel == the per-pair reference over an adversarial
 hex corpus) and the `scorer_kernels` coverage gate (which now *forces* the deferred→kernels move).

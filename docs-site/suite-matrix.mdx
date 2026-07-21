@@ -26,14 +26,14 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 
 The Rust / Arrow-native / fused `-core` kernels are the source of truth for scoring; each language surface either dispatches to the kernel (the fast path) or runs a byte-identical pure-language **fallback**. This tracks which scorers a kernel actually backs vs which are fallback-only. Sources: Python `_NATIVE_SCORER_IDS` (arrow bucket kernel) and TS `WASM_COVERED_SCORERS` (`-core` WASM), gated as the `scorer_kernels` api_parity surface.
 
-**9 of 19 scorers are kernel-backed** (the reference fast path); the other 10 are pure-language fallbacks with no `-core` kernel.
+**12 of 19 scorers are kernel-backed** (the reference fast path); the other 7 are pure-language fallbacks with no `-core` kernel.
 
 | Substrate | Scorers |
 |---|---|
 | Rust `-core` kernel — Python + TS | `exact`, `jaro_winkler`, `levenshtein`, `token_sort` |
-| Rust `-core` kernel — Python arrow-native only (TS falls back) | `alias_match`, `date`, `initialism_match`, `qgram`, `soundex_match` |
+| Rust `-core` kernel — Python arrow-native only (TS falls back) | `alias_match`, `date`, `dice`, `initialism_match`, `jaccard`, `phash`, `qgram`, `soundex_match` |
 | WASM `-core` kernel — TS only (Python falls back) | — |
-| Language fallback — no `-core` kernel | `audio_fp`, `dice`, `embedding`, `ensemble`, `given_name_aliased_jw`, `jaccard`, `name_freq_weighted_jw`, `phash`, `radial`, `record_embedding` |
+| Language fallback — no `-core` kernel | `audio_fp`, `embedding`, `ensemble`, `given_name_aliased_jw`, `name_freq_weighted_jw`, `radial`, `record_embedding` |
 
 ## Cross-language parity (Python ↔ TypeScript)
 

@@ -568,10 +568,124 @@ pub fn alias_match(a: &str, b: &str) -> f64 {
 }
 } // mod alias
 
+// ---- bloom / hash scorers (dice / jaccard / phash) --------------------------
+// Byte-exact ports of `core.scorer._dice_score_single` / `_jaccard_score_single`
+// / `_phash_score_single`: hex-decode -> INTEGER popcount -> a single f64 divide.
+// The Python single functions use `np.unpackbits(...).sum()` (an integer count)
+// then one float64 division, so `count_ones()` here is bit-exact -- unlike the
+// numpy MATRIX forms (`_dice_score_matrix` etc.), which compute in float32 and
+// round to ~1e-7. Pure primitives (no table/regex) -> no feature gate.
+//
+// Padding is PAIRWISE, matching `_pad_to_equal_length`. dice/jaccard are
+// padding-INVARIANT (their denominators are popcounts, unchanged by trailing
+// zero bytes), so this is also matrix-parity for them; phash's denominator is
+// bit-LENGTH, so it matches the PAIRWISE `_phash_score_single` (NOT the
+// block-global `_phash_score_matrix` -- the Option-A choice in the
+// `2026-07-21-block-aware-bucket-kernel-design.md` spec).
+
+/// Decode an even-length hex string to bytes, or `None` if malformed. The Python
+/// single functions raise `ValueError` on bad hex (`bytes.fromhex`); a `score_one`
+/// kernel can't raise, so unparseable hex -> `None` -> score `0.0` (never crashes
+/// the block loop). PPRL CLK / image pHash inputs are always valid fixed-width hex,
+/// so this edge doesn't arise in practice; it's asserted in the parity test.
+/// (Python `bytes.fromhex` also skips ASCII whitespace between pairs; CLK/pHash hex
+/// has none, so this strict decoder is byte-parity on the real inputs.)
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let bytes = s.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = (bytes[i] as char).to_digit(16)?;
+        let lo = (bytes[i + 1] as char).to_digit(16)?;
+        out.push((hi * 16 + lo) as u8);
+        i += 2;
+    }
+    Some(out)
+}
+
+fn popcount_bytes(b: &[u8]) -> u32 {
+    b.iter().map(|x| x.count_ones()).sum()
+}
+
+/// `_norm_phash_hex`: strip an optional `0x`/`0X` prefix, left-pad an odd length
+/// to even so the hex decodes. (Python `s[:2]` on a <2-char string is the string
+/// itself and never matches `"0x"`/`"0X"`, so the prefix strip needs len >= 2.)
+fn norm_phash_hex(s: &str) -> String {
+    let s = if s.len() >= 2 && (s.starts_with("0x") || s.starts_with("0X")) {
+        &s[2..]
+    } else {
+        s
+    };
+    if !s.len().is_multiple_of(2) {
+        format!("0{s}")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Dice coefficient `2*|A&B| / (|A|+|B|)` on two hex bloom filters; byte-for-byte
+/// with `_dice_score_single`. Padding-invariant (popcount denominators).
+pub fn dice_similarity(a: &str, b: &str) -> f64 {
+    let (pa, pb) = match (decode_hex(a), decode_hex(b)) {
+        (Some(x), Some(y)) => (x, y),
+        _ => return 0.0,
+    };
+    let m = pa.len().min(pb.len());
+    let inter: u32 = (0..m).map(|i| (pa[i] & pb[i]).count_ones()).sum();
+    let total = popcount_bytes(&pa) + popcount_bytes(&pb);
+    if total == 0 {
+        0.0
+    } else {
+        2.0 * inter as f64 / total as f64
+    }
+}
+
+/// Jaccard `|A&B| / |A|B|` on two hex bloom filters; byte-for-byte with
+/// `_jaccard_score_single`. `|A|B| = |A|+|B|-|A&B|` (inclusion-exclusion), which
+/// is padding-invariant.
+pub fn jaccard_similarity(a: &str, b: &str) -> f64 {
+    let (pa, pb) = match (decode_hex(a), decode_hex(b)) {
+        (Some(x), Some(y)) => (x, y),
+        _ => return 0.0,
+    };
+    let m = pa.len().min(pb.len());
+    let inter: u32 = (0..m).map(|i| (pa[i] & pb[i]).count_ones()).sum();
+    let total = popcount_bytes(&pa) + popcount_bytes(&pb);
+    let union = total - inter;
+    if union == 0 {
+        0.0
+    } else {
+        inter as f64 / union as f64
+    }
+}
+
+/// Perceptual-hash Hamming similarity `1 - dist / nbits` on two hex pHashes;
+/// byte-for-byte with `_phash_score_single`. PAIRWISE padding: `nbits` is the
+/// longer of the two hashes in bits (a trailing byte XOR implicit zero is the
+/// byte itself, so it counts in `dist`). Empty -> `nbits == 0` -> `0.0`.
+pub fn phash_similarity(a: &str, b: &str) -> f64 {
+    let (pa, pb) = match (decode_hex(&norm_phash_hex(a)), decode_hex(&norm_phash_hex(b))) {
+        (Some(x), Some(y)) => (x, y),
+        _ => return 0.0,
+    };
+    let nbits = pa.len().max(pb.len()) * 8;
+    if nbits == 0 {
+        return 0.0;
+    }
+    let m = pa.len().min(pb.len());
+    let mut dist: u32 = (0..m).map(|i| (pa[i] ^ pb[i]).count_ones()).sum();
+    dist += popcount_bytes(&pa[m..]); // tail of the longer ^ 0 = the byte itself
+    dist += popcount_bytes(&pb[m..]); // (exactly one of these slices is non-empty)
+    1.0 - dist as f64 / nbits as f64
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
 /// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match,
-/// 8=alias_match.
+/// 8=alias_match, 9=dice, 10=jaccard, 11=phash.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -611,6 +725,13 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // 0.0 catch-all there, which wasm never routes.
         #[cfg(feature = "alias")]
         8 => alias_match(a, b),
+        // ids 9/10/11 = dice / jaccard / phash (bloom-hex + hex-hamming, integer
+        // popcount). Byte-exact with the `_*_score_single` per-pair references the
+        // bucket path already uses; the Python guard gates each on its capability
+        // symbol so a stale wheel declines to those mirrors.
+        9 => dice_similarity(a, b),
+        10 => jaccard_similarity(a, b),
+        11 => phash_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -848,6 +969,36 @@ mod tests {
         assert_eq!(score_one(8, "Bob", "Bill"), 0.0); // different canonicals
         // Empty both -> no canonical -> 0.0.
         assert_eq!(score_one(8, "", ""), 0.0);
+    }
+
+    #[test]
+    fn score_one_ids_9_10_11_are_dice_jaccard_phash() {
+        // Ground truth from core.scorer._dice_score_single / _jaccard_score_single
+        // / _phash_score_single. Exact f64 (integer popcount + one f64 divide, same
+        // op order as the Python single functions) -- no float32 rounding.
+        // dice = 2*|A&B| / (|A|+|B|)
+        assert_eq!(score_one(9, "ab12", "cd34"), 2.0 * 4.0 / 15.0);
+        assert_eq!(score_one(9, "ffff", "0f0f"), 2.0 * 8.0 / 24.0);
+        assert_eq!(score_one(9, "ab", "abcd"), 2.0 * 5.0 / 15.0); // pairwise pad invariant
+        assert_eq!(score_one(9, "00ff", "ff00"), 0.0); // disjoint
+        assert_eq!(score_one(9, "abcd", "abcd"), 1.0);
+        assert_eq!(score_one(9, "0000", "ffff"), 0.0); // empty A -> total>0, inter 0
+        // jaccard = |A&B| / |A|B|
+        assert_eq!(score_one(10, "ab12", "cd34"), 4.0 / 11.0);
+        assert_eq!(score_one(10, "ffff", "0f0f"), 0.5);
+        assert_eq!(score_one(10, "ab", "abcd"), 0.5);
+        assert_eq!(score_one(10, "abcd", "abcd"), 1.0);
+        assert_eq!(score_one(10, "00ff", "ff00"), 0.0);
+        // phash = 1 - dist/nbits (PAIRWISE nbits)
+        assert_eq!(score_one(11, "ab12", "cd34"), 0.5625);
+        assert_eq!(score_one(11, "ffff", "0f0f"), 0.5);
+        assert_eq!(score_one(11, "ab", "abcd"), 0.6875); // pairwise pad: nbits=16
+        assert_eq!(score_one(11, "abcd", "abcd"), 1.0);
+        assert_eq!(score_one(11, "0x00ff", "ff00"), 0.0); // 0x prefix stripped
+        assert_eq!(score_one(11, "f", "f"), 1.0); // odd length left-padded to "0f"
+        // Unparseable hex -> 0.0 (kernel can't raise like the single fns do).
+        assert_eq!(score_one(9, "zz", "abcd"), 0.0);
+        assert_eq!(score_one(11, "", ""), 0.0); // nbits == 0
     }
 
     #[test]
