@@ -42,7 +42,7 @@ class TestNativeScorerIdMaps:
     # 4=date/5=qgram/6=soundex_match; in the field-matrix map 4=soundex_match.
     # `soundex_match` therefore lives in BOTH maps at DIFFERENT ids (bucket 6,
     # field 4); the two are pinned separately so they can't silently collide.
-    _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4, "qgram": 5, "soundex_match": 6, "initialism_match": 7}
+    _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4, "qgram": 5, "soundex_match": 6, "initialism_match": 7, "alias_match": 8}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):

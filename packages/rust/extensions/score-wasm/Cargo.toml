@@ -18,7 +18,10 @@ name = "goldenmatch_score_wasm"
 crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host unit tests link
 
 [dependencies]
-goldenmatch-score-core = { path = "../score-core" }
+# default-features = false drops the `alias` feature (score_one id 8 + the `regex`
+# engine): alias_match is a Python-bucket-only kernel with no wasm export, so the
+# edge bundle stays free of the heavy `regex` dependency.
+goldenmatch-score-core = { path = "../score-core", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

@@ -11,6 +11,11 @@
 use rapidfuzz::distance::{damerau_levenshtein, jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
 use unicode_normalization::UnicodeNormalization;
+// `alias_match` (score_one id 8) + its `regex`-backed strip_legal_form live behind
+// the default `alias` feature; `pub use` re-exports the public fns at the crate
+// root so callers keep the flat `goldenmatch_score_core::{alias_match, ...}` path.
+#[cfg(feature = "alias")]
+pub use alias::{alias_match, set_business_aliases, set_given_name_canonicals};
 
 // Fellegi–Sunter EM training core (pyo3-free numeric heart). PR-C / C1 of the
 // FS Rust+Arrow-only epic; the `native` crate will add the Arrow/#[pyfunction]
@@ -390,9 +395,183 @@ fn legal_forms() -> &'static std::collections::HashSet<String> {
     LEGAL_FORMS.get_or_init(std::collections::HashSet::new)
 }
 
+// ---- alias_match (business + given-name canonical equality) ------------------
+// Ports `refdata.business_aliases.canonical_company_form` +
+// `refdata.given_names.canonical_form` + `core.scorer._alias_match_single`. Two
+// host-installed tables keep `score_one(id, a, b)` uniform (no per-call table arg):
+//  * business: the `strip_legal_form` variant list, rebuilt here into the SAME
+//    trailing-suffix regex Python compiles, plus the surface->canonical alias map.
+//  * given-name: a PRE-RESOLVED `normalized -> min(canonical set)` map -- the
+//    Python `min(canon_set)` lex-first resolution is done host-side, so the kernel
+//    needs no alias graph, only a normalize + lookup.
+#[cfg(feature = "alias")]
+mod alias {
+    use regex::Regex;
+
+struct BusinessAliasTable {
+    strip_re: Regex,
+    surface_to_canonical: std::collections::HashMap<String, String>,
+}
+
+static BUSINESS_ALIAS: std::sync::OnceLock<BusinessAliasTable> = std::sync::OnceLock::new();
+static GIVEN_NAME_CANON: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+    std::sync::OnceLock::new();
+
+/// Collapse whitespace runs to a single space and trim, mirroring Python
+/// `re.sub(r"\s+", " ", s).strip()`. NOTE: `char::is_whitespace()` uses the
+/// Unicode White_Space property, which (like the `regex` crate's `\s`) differs
+/// from Python `re`'s `\s` on the C1 separators `\x1c`-`\x1f`/`\x85`; an
+/// ASCII-scoped parity edge shared with the other refdata ports (business names
+/// are ASCII/Latin in practice).
+fn collapse_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_ws = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+            }
+            prev_ws = true;
+        } else {
+            out.push(ch);
+            prev_ws = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Rust port of `refdata.business.strip_legal_form`: whitespace-collapse, then
+/// iteratively (bounded to 4, like Python) remove a trailing legal-form suffix
+/// via the installed regex. The `$`-anchored pattern strips exactly the LAST
+/// token per pass, so compound suffixes ("Acme Holdings Inc.") peel one at a time.
+fn strip_legal_form(value: &str, table: &BusinessAliasTable) -> String {
+    let mut cleaned = collapse_ws(value);
+    if cleaned.is_empty() {
+        return cleaned;
+    }
+    for _ in 0..4 {
+        // `Regex::replace` == Python `pattern.sub("", ...)`: the `$` anchor admits
+        // one match, then `.trim()` mirrors the Python `.strip()`.
+        let new = table.strip_re.replace(&cleaned, "").trim().to_string();
+        if new == cleaned || new.is_empty() {
+            // Python: `cleaned = new if new else cleaned` -- keep `cleaned` when a
+            // strip would empty the string; otherwise `new == cleaned` (no-op).
+            if !new.is_empty() {
+                cleaned = new;
+            }
+            break;
+        }
+        cleaned = new;
+    }
+    cleaned
+}
+
+/// Business `_normalize`: `strip_legal_form` -> whitespace-collapse -> lowercase,
+/// byte-for-byte with `refdata.business_aliases._normalize`.
+fn business_normalize(name: &str, table: &BusinessAliasTable) -> String {
+    let stripped = strip_legal_form(name, table);
+    collapse_ws(&stripped).to_lowercase()
+}
+
+/// `refdata.business_aliases.canonical_company_form` (table always installed here):
+/// normalize, then map surface->canonical with a passthrough default.
+fn canonical_company_form(name: &str, table: &BusinessAliasTable) -> String {
+    let norm = business_normalize(name, table);
+    if norm.is_empty() {
+        return String::new();
+    }
+    table
+        .surface_to_canonical
+        .get(&norm)
+        .cloned()
+        .unwrap_or(norm)
+}
+
+/// Given-name `_normalize`: keep only alphabetic chars, lowercase -- byte-for-byte
+/// with `refdata.given_names._normalize` (`"".join(c for c in s if c.isalpha()).lower()`).
+fn given_normalize(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphabetic())
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// `refdata.given_names.canonical_form` via the pre-resolved lex-first map:
+/// normalize, then look up `min(canonical set)` with a passthrough default.
+fn canonical_given_form(name: &str, gmap: &std::collections::HashMap<String, String>) -> String {
+    let norm = given_normalize(name);
+    if norm.is_empty() {
+        return String::new();
+    }
+    gmap.get(&norm).cloned().unwrap_or(norm)
+}
+
+/// Install the business alias table. `variants` are the normalized legal-form
+/// variants (`refdata.business._state.variants_normalized`), rebuilt here into the
+/// SAME regex Python compiles -- `[\s,\-.]+(?:v...)[\s.,]*$` (IGNORECASE), variants
+/// sorted DESCENDING by char length so multi-word forms are preferred (Python's
+/// `sorted(key=lambda s: (-len(s), s))`). `surface_to_canonical` is the raw alias
+/// map. `OnceLock` first-wins; returns `false` if already set or the regex fails.
+pub fn set_business_aliases(
+    variants: Vec<String>,
+    surface_to_canonical: Vec<(String, String)>,
+) -> bool {
+    let mut sorted = variants;
+    sorted.sort_by(|a, b| {
+        b.chars()
+            .count()
+            .cmp(&a.chars().count())
+            .then_with(|| a.cmp(b))
+    });
+    let alt = sorted
+        .iter()
+        .map(|v| regex::escape(v))
+        .collect::<Vec<_>>()
+        .join("|");
+    let pattern = format!(r"(?i)[\s,\-.]+(?:{alt})[\s.,]*$");
+    let strip_re = match Regex::new(&pattern) {
+        Ok(re) => re,
+        Err(_) => return false,
+    };
+    BUSINESS_ALIAS
+        .set(BusinessAliasTable {
+            strip_re,
+            surface_to_canonical: surface_to_canonical.into_iter().collect(),
+        })
+        .is_ok()
+}
+
+/// Install the given-name canonical map (`normalized -> min(canonical set)`,
+/// lex-first resolution done host-side). `OnceLock` first-wins.
+pub fn set_given_name_canonicals(pairs: Vec<(String, String)>) -> bool {
+    GIVEN_NAME_CANON.set(pairs.into_iter().collect()).is_ok()
+}
+
+/// `1.0` if both values canonicalize to the same NON-EMPTY business alias OR the
+/// same given-name canonical; else `0.0`. Byte-for-byte with
+/// `_alias_match_single`. Returns `0.0` for a half whose table isn't installed --
+/// the Python fast-path guard requires BOTH installed before routing here.
+pub fn alias_match(a: &str, b: &str) -> f64 {
+    if let Some(table) = BUSINESS_ALIAS.get() {
+        let cb_a = canonical_company_form(a, table);
+        if !cb_a.is_empty() && cb_a == canonical_company_form(b, table) {
+            return 1.0;
+        }
+    }
+    if let Some(gmap) = GIVEN_NAME_CANON.get() {
+        let cg_a = canonical_given_form(a, gmap);
+        if !cg_a.is_empty() && cg_a == canonical_given_form(b, gmap) {
+            return 1.0;
+        }
+    }
+    0.0
+}
+} // mod alias
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match.
+/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match,
+/// 8=alias_match.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -424,6 +603,14 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // `_initialism_match_single`; the Python fast-path guard requires the
         // table to be installed before routing here.
         7 => initialism_match(a, b, legal_forms()),
+        // id=8 = alias_match: 1.0 iff both values share a non-empty business OR
+        // given-name canonical, against the host-installed tables (empty until
+        // `set_business_aliases`/`set_given_name_canonicals`). Byte-for-byte with
+        // `_alias_match_single`; the Python fast-path guard requires both installed.
+        // Behind the `alias` feature (off for the wasm surface); id 8 falls to the
+        // 0.0 catch-all there, which wasm never routes.
+        #[cfg(feature = "alias")]
+        8 => alias_match(a, b),
         _ => 0.0,
     }
 }
@@ -609,6 +796,58 @@ mod tests {
         // ("Acme Industries LLC" -> initials "AI"). With an empty table it would
         // be "AIL" != "AI" -> 0.0, so this asserts the global table is wired.
         assert_eq!(score_one(7, "Acme Industries LLC", "AI"), 1.0);
+    }
+
+    #[cfg(feature = "alias")]
+    #[test]
+    fn score_one_id8_is_alias_match_against_global_tables() {
+        // The ONLY test that installs the alias OnceLocks (business + given-name),
+        // so no different-content setter races it. Representative subsets of
+        // refdata.business._state.variants_normalized / business_aliases +
+        // given_names (norm -> min(canonical)).
+        let variants: Vec<String> = [
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "gmbh",
+            "co", "company", "holdings", "limited liability company",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let biz: Vec<(String, String)> = [
+            ("acme", "acme"),
+            ("google", "alphabet"),
+            ("alphabet", "alphabet"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        let given: Vec<(String, String)> = [
+            ("bob", "robert"),
+            ("robert", "robert"),
+            ("bill", "william"),
+            ("william", "william"),
+            ("kate", "catherine"),
+            ("catherine", "catherine"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        assert!(set_business_aliases(variants, biz));
+        assert!(set_given_name_canonicals(given));
+
+        // Business: legal-form strip + alias map (ground truth from the Python ref).
+        assert_eq!(score_one(8, "Acme Inc", "Acme Incorporated"), 1.0);
+        assert_eq!(score_one(8, "Acme, LLC", "Acme"), 1.0);
+        assert_eq!(score_one(8, "Acme Holdings Inc.", "acme"), 1.0); // iterative strip
+        assert_eq!(score_one(8, "Acme Limited Liability Company", "Acme"), 1.0); // multi-word
+        assert_eq!(score_one(8, "Google", "Alphabet"), 1.0); // alias map
+        assert_eq!(score_one(8, "Acme", "Globex"), 0.0); // distinct passthrough
+        // Given-name: nickname canonical equality.
+        assert_eq!(score_one(8, "Bob", "Robert"), 1.0);
+        assert_eq!(score_one(8, "Bill", "William"), 1.0);
+        assert_eq!(score_one(8, "Kate", "Catherine"), 1.0);
+        assert_eq!(score_one(8, "Bob", "Bill"), 0.0); // different canonicals
+        // Empty both -> no canonical -> 0.0.
+        assert_eq!(score_one(8, "", ""), 0.0);
     }
 
     #[test]

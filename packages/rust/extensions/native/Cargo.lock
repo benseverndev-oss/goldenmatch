@@ -603,6 +603,7 @@ name = "goldenmatch-score-core"
 version = "0.1.0"
 dependencies = [
  "rapidfuzz",
+ "regex",
  "unicode-normalization",
 ]
 
