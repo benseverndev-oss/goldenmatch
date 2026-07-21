@@ -537,6 +537,13 @@ jobs:
         # native, so those tests can't hold here by construction. This lane proves
         # the pure-Python behavior path, not native dispatch (that's the `native`
         # lane's job).
+        #
+        # FS suite (#1805): native is authoritative-by-default for Fellegi-Sunter,
+        # and every native FS parity test is skipif-gated on the kernel, so the
+        # pure-Python FS path had NO dedicated fallback coverage beyond
+        # test_probabilistic.py. The full FS suite (NE + n-level + bucket + the
+        # probabilistic variants) now runs here under GOLDENMATCH_NATIVE=0 with the
+        # native-dispatch assertions deselected, closing that hole.
         run: |
           uv run pytest \
             packages/python/goldenmatch/tests/test_cluster.py \
@@ -546,6 +553,19 @@ jobs:
             packages/python/goldenmatch/tests/test_pipeline.py \
             packages/python/goldenmatch/tests/test_pairs.py \
             packages/python/goldenmatch/tests/test_probabilistic.py \
+            packages/python/goldenmatch/tests/test_probabilistic_vectorized.py \
+            packages/python/goldenmatch/tests/test_probabilistic_determinism.py \
+            packages/python/goldenmatch/tests/test_probabilistic_parallel.py \
+            packages/python/goldenmatch/tests/test_probabilistic_bench_dump.py \
+            packages/python/goldenmatch/tests/test_fs_ne_e2e.py \
+            packages/python/goldenmatch/tests/test_fs_ne_em.py \
+            packages/python/goldenmatch/tests/test_fs_ne_guards.py \
+            packages/python/goldenmatch/tests/test_fs_ne_schema.py \
+            packages/python/goldenmatch/tests/test_fs_ne_scoring.py \
+            packages/python/goldenmatch/tests/test_nlevel_banding.py \
+            packages/python/goldenmatch/tests/test_nlevel_em.py \
+            packages/python/goldenmatch/tests/test_nlevel_schema.py \
+            packages/python/goldenmatch/tests/test_fs_bucket_native.py \
             -k "not native and not Native" \
             -n auto --timeout=120 --timeout-method=thread -q
 
