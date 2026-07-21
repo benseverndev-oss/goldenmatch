@@ -1,0 +1,83 @@
+# Zero-config Fellegi-Sunter quality-at-scale gate.
+#
+# qis_gate exercises the WEIGHTED zero-config path; the PROBABILISTIC (F-S) path
+# was never gated at scale -- which is how zero-config FS silently found ZERO
+# duplicates (F1=0) at 1M on realistic person data (a shared `email` identifier
+# dropped by the perfect-surrogate rule, collapsing the EM model). This gate runs
+# TRUE zero-config FS (auto_configure_probabilistic_df) on realistic-cardinality
+# data and FAILS if F1 falls below the floor, so that class cannot regress
+# silently again. The per-PR guard for the specific identifier-admission rule is
+# the unit test tests/test_fs_autoconfig_v2.py; this is the broader end-to-end
+# watch (scheduled + on demand), analogous to bench-quality-scale / qis_gate.
+#
+# SCALE MATTERS -- keep `rows` >= 1_000_000. The regression is scale-dependent:
+# measured pre-fix F1 was 0.0 at 1M but a healthy 0.997 at 240K (the atomic name
+# fields alone still discriminate at small N; the EM model only collapses once
+# the identifier is the load-bearing signal at scale). A sub-1M gate is falsely
+# green -- it passes even with the bug present.
+name: gate-fs-zeroconfig
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Base row count (dups added on top at dup_frac)"
+        required: false
+        default: "1000000"
+      min_f1:
+        description: "F1 floor -- fail below this"
+        required: false
+        default: "0.90"
+      runner:
+        description: "Runner label"
+        required: false
+        default: "large-new-64GB"
+  schedule:
+    - cron: "0 4 * * *"  # nightly 04:00 UTC
+
+permissions:
+  contents: read
+
+env:
+  ARROW_DEFAULT_MEMORY_POOL: system
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+jobs:
+  gate:
+    runs-on: ${{ github.event.inputs.runner || 'large-new-64GB' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Build native extension (FS kernel)
+        run: uv run python scripts/build_native.py
+
+      - name: Zero-config FS F1 gate
+        env:
+          GOLDENMATCH_NATIVE: "1"
+          GOLDENMATCH_FS_NATIVE: "1"
+        run: |
+          uv run python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
+            --rows "${{ github.event.inputs.rows || '1000000' }}" \
+            --dup-frac 0.2 \
+            --backend bucket \
+            --config-mode zero \
+            --min-f1 "${{ github.event.inputs.min_f1 || '0.90' }}" \
+            | tee "$GITHUB_STEP_SUMMARY"
