@@ -1,7 +1,14 @@
 # goldenmatch-pg: in-database stateful identity resolution (write path)
 
-- **Issue:** #1913
-- **Status:** design (pre-implementation)
+- **Issue:** #1913 (closed — completed)
+- **Status:** implemented (P1–P4 shipped, `rust_pgrx` CI-proven). As-built:
+  P1 `gm_resolve` (#1940), P2 in-DB `goldenmatch_identity_*` reads on empty
+  `db_path` (#1941), P3 `gm_identity_merge` / `gm_identity_split` (#1949),
+  P4 Arrow-native columnar table read (#1951, #1957). §3.1's own-libpq-connection
+  choice (not SPI) shipped as designed; same-transaction atomicity (§9) remains a
+  deferred open question. The `rust_pgrx` smoke (`.github/workflows/ci.yml`,
+  `ci-required`, PG 15/16/17) exercises create → absorb → in-DB read → split →
+  merge end-to-end.
 - **Related:** #1912 (per-record identity writes are round-trip-bound — an in-DB
   write path should be set-based / pipelined from the start), #1883 (table read
   is a JSON handoff, not Arrow), the Identity Graph v2 contract
