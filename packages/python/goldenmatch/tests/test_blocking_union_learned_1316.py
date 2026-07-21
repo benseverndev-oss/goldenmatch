@@ -100,14 +100,14 @@ def test_non_union_blocking_still_upgrades_to_learned(monkeypatch):
     weighted path that reaches the >=50K gate), but force `build_blocking` to
     return a plain static config so the gate must fall through to learned.
     """
-    import goldenmatch.core.autoconfig as ac
-
     df = _null_sparse_person_df(n=6000)
     static_cfg = BlockingConfig(
         strategy="static",
         keys=[BlockingKeyConfig(fields=["last_name"], transforms=["strip"])],
     )
-    monkeypatch.setattr(ac, "build_blocking", lambda *a, **k: static_cfg)
+    monkeypatch.setattr(
+        "goldenmatch.core.autoconfig.build_blocking", lambda *a, **k: static_cfg
+    )
 
     cfg = _legacy_auto_configure_v0(df, n_rows_full=_LARGE)
     b = cfg.blocking
