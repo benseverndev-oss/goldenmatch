@@ -4,9 +4,21 @@ Pure test of the normalization (`_key_payload`) -- no goldenmatch / fingerprint 
 from goldengraph.resolve import _key_payload
 
 
-def test_default_key_uses_name_and_type(monkeypatch):
+def test_default_key_is_name_ci_type(monkeypatch):
+    # DEFAULT (unset) is now name_ci_type (2026-07-21 anti-shatter flip): case-folded
+    # name + coarse type, so per-doc type/case jitter collapses cross-doc.
     monkeypatch.delenv("GOLDENGRAPH_XDOC_KEY", raising=False)
+    assert _key_payload("Schema Matching", "Process") == {"name": "schema matching", "typ": "concept"}
+    # same entity, jittered type/case across docs -> ONE key by default
+    assert _key_payload("Schema Matching", "Process") == _key_payload("schema matching", "Algorithm")
+
+
+def test_exact_mode_restores_legacy_name_type(monkeypatch):
+    # `exact` is the opt-out that restores the pre-flip verbatim (name, typ) key.
+    monkeypatch.setenv("GOLDENGRAPH_XDOC_KEY", "exact")
     assert _key_payload("Schema Matching", "Process") == {"name": "Schema Matching", "typ": "Process"}
+    # verbatim -> type/case jitter no longer collapses (the old shatter behavior)
+    assert _key_payload("Schema Matching", "Process") != _key_payload("schema matching", "Algorithm")
 
 
 def test_name_mode_drops_type(monkeypatch):

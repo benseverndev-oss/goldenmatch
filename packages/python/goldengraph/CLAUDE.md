@@ -193,3 +193,31 @@ Three fixes on top of the semantic bridge, all in `_extract_nl_chain_slots`:
   bridge (`nan`) nor make it bind anything (a negative floor).
 Tests: `tests/test_nl_chain.py` (synonym-only fires with embedder / abstains without;
 malformed-embedder degrades; env parse+clamp).
+
+## Anti-shatter cross-doc linking is DEFAULT ON (2026-07-21)
+The "multi-hop shatter" — the same entity mentioned in two documents living as two
+un-merged graph nodes, so a multi-hop question can't traverse across docs — was the #1
+addressable QA-failure class (measured 28% of MuSiQue N=100 misses; support_recall only
+0.59). ROOT CAUSE was NOT a missing capability: the anti-shatter stack existed and was
+well-built, but it was **off by default** (`GOLDENGRAPH_CROSS_DOC_LINK`/`PROFILE_LINK`
+unset → cross-doc merge fell back to an exact `record_key`, which the docstring itself
+says type/case jitter defeats ~97.6% of the time). The bench even *built the goldenprofile
+wheel for the matcher and never set the flag.*
+- **`resolve._key_payload` default is now `name_ci_type`** (case-folded name + COARSE
+  canonical type; homograph-safe). `GOLDENGRAPH_XDOC_KEY=exact` restores the legacy
+  verbatim `(name, typ)` key; `name`/`name_ci` are the more/less aggressive relaxations.
+- **`ingest._cross_doc_link_enabled` default 0→1** (`GOLDENGRAPH_CROSS_DOC_LINK=0` opts out).
+- **`ingest._profile_link_enabled` default `auto`** — ON when the separate
+  `goldenprofile-native` wheel is importable (cached `_goldenprofile_available()` probe),
+  else OFF so the linker degrades to the embedding-cosine matcher instead of hard-failing
+  an install lacking the wheel. `=1` forces on (raises later if truly absent), `=0` off.
+- **MEASURED (MuSiQue N=100, trace A/B, run 29851193442 vs the linking-off baseline):**
+  RETRIEVAL-shatter misses **27→6 (−78%)**; shatter-probe SCORING-miss under-merges
+  **18→4**; **support_recall 0.59→0.85**; entity-subset answer_match 0.231→0.277 (+20% rel).
+  Overall answer_match barely moved (0.17→0.18) because fixing retrieval SHIFTED the
+  bottleneck to synthesis (now the #1 bucket, ~36%: answer is in the ball, synthesizer
+  picks the wrong node) + extraction of non-entity answers. No precision regression.
+- Local suite runs the DEGRADED path (no `goldenprofile-native` wheel → profile-link
+  auto-off → embedding matcher); the full-stack path is exercised in the `goldengraph_native`
+  / pipeline CI lanes (which build the wheel) and was proven end-to-end by the bench A/B.
+  NEXT lever (chosen): probe the synthesis-precision gap (answer retrieved, answered wrong).

@@ -13,6 +13,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from functools import lru_cache
 
 import numpy as np
 
@@ -155,16 +156,42 @@ def build_batch(
 
 
 def _cross_doc_link_enabled() -> bool:
-    return os.environ.get("GOLDENGRAPH_CROSS_DOC_LINK", "0") not in ("0", "false", "")
+    """Merge same entity across documents during ingest (the anti-shatter linker).
+    DEFAULT ON since 2026-07-21: with it off, cross-doc reconciliation was exact
+    `record_key` only, which type/case jitter defeated -> the multi-hop "shatter"
+    (measured 28% of QA misses on MuSiQue; enabling the stack cut it ~78%). Set
+    `GOLDENGRAPH_CROSS_DOC_LINK=0` to restore the exact-key-only behavior."""
+    return os.environ.get("GOLDENGRAPH_CROSS_DOC_LINK", "1").strip().lower() not in ("0", "false", "")
+
+
+@lru_cache(maxsize=1)
+def _goldenprofile_available() -> bool:
+    """True iff the separate `goldenprofile-native` wheel is importable, so the
+    profile matcher can run. Cached: probed once per process."""
+    try:
+        import goldenprofile_native  # noqa: F401  # pyright: ignore[reportMissingImports]
+    except Exception:  # noqa: BLE001 - any import failure -> matcher degrades, never crashes ingest
+        return False
+    return True
 
 
 def _profile_link_enabled() -> bool:
-    """Use the goldenprofile Semantic Signature engine as the cross-doc matcher
-    (`GOLDENGRAPH_PROFILE_LINK=1`). It replaces the ad-hoc embedding-cosine matcher
-    with the anti-shatter fusion scorer: a hard name+category gate (kills the Row-4
-    over-merge) plus a defining-attribute term that can only ADD confidence, never
-    veto (kills the Row-3 under-merge from divergent bridge neighborhoods)."""
-    return os.environ.get("GOLDENGRAPH_PROFILE_LINK", "0") not in ("0", "false", "")
+    """Use the goldenprofile Semantic Signature engine as the cross-doc matcher.
+    It replaces the ad-hoc embedding-cosine matcher with the anti-shatter fusion
+    scorer: a hard name+category gate (kills the over-merge) plus a defining-attribute
+    term that can only ADD confidence, never veto (kills the under-merge from divergent
+    bridge neighborhoods).
+
+    DEFAULT `auto` since 2026-07-21: ON when the `goldenprofile-native` wheel is
+    importable, else OFF so the linker degrades to the embedding-cosine matcher rather
+    than hard-failing an install that lacks the (separate) wheel. `GOLDENGRAPH_PROFILE_LINK=1`
+    forces it on (raises later if the wheel is truly absent); `=0` forces it off."""
+    val = os.environ.get("GOLDENGRAPH_PROFILE_LINK", "auto").strip().lower()
+    if val in ("0", "false", ""):
+        return False
+    if val in ("1", "true"):
+        return True
+    return _goldenprofile_available()  # "auto"
 
 
 def _profile_cluster(
