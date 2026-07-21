@@ -246,6 +246,86 @@ def _localize_trace(engine, handle, corpus, *, limit: int = _TRACE_LIMIT) -> Non
         print(f"== shatter-probe verdicts {{{verdict_mix}}} ==", flush=True)
 
 
+def _score_question(ans, q, judge) -> dict:
+    """Score ONE answer against its gold. Single-sourced so `run_engine` and
+    `run_engine_ab` compute identical metrics. Returns the derived scalars plus the
+    persisted per-question record."""
+    am = metrics.answer_match(ans.text, q.gold_answer)
+    em = metrics.exact_match(ans.text, q.gold_answer)
+    f1 = metrics.token_f1(ans.text, q.gold_answer)
+    rec = metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
+    atype = metrics.classify_answer_type(q.gold_answer)
+    aj: float | None = None
+    if judge is not None:
+        # An empty prediction is a non-answer -- score it NO without a call.
+        aj = (
+            metrics.parse_judge(judge(metrics.judge_prompt(q.question, q.gold_answer, ans.text)))
+            if ans.text.strip()
+            else 0.0
+        )
+    return {
+        "am": am, "em": em, "f1": f1, "rec": rec, "atype": atype, "aj": aj,
+        # Persist the per-question record so a near-zero aggregate is debuggable
+        # post-hoc (wrong reasoning vs. async-corrupted output vs. phrasing the
+        # matcher misses). The prediction is truncated so a verbose engine can't
+        # bloat the artifact.
+        "record": {
+            "id": q.id,
+            "question": q.question,
+            "gold_answer": q.gold_answer,
+            "prediction": _truncate(ans.text),
+            "hop_count": q.hop_count,
+            "answer_type": atype,
+            "answer_match": am,
+            "answer_judge": aj,
+            "exact_match": em,
+            "token_f1": round(f1, 4),
+        },
+    }
+
+
+def _build_scorecard(engine, corpus, model, scored, *, answered, cost_usd, budget_exhausted) -> dict:
+    """Aggregate a list of `_score_question` outputs into the result dict. Byte-for-byte
+    the shape `run_engine` has always returned (locked by tests/test_qa_harness.py)."""
+    matches = [s["am"] for s in scored]
+    ems = [s["em"] for s in scored]
+    f1s = [s["f1"] for s in scored]
+    recalls = [s["rec"] for s in scored]
+    # answer_match restricted to entity-answerable golds -- the honest denominator for
+    # an entity-graph engine that can only ever emit a node (metrics.classify_answer_type).
+    matches_entity = [s["am"] for s in scored if s["atype"] == "entity"]
+    # Format-fair LLM-judge equivalence (None-safe: aj is a float only when a judge ran).
+    judges = [s["aj"] for s in scored if s["aj"] is not None]
+    judges_entity = [s["aj"] for s in scored if s["aj"] is not None and s["atype"] == "entity"]
+    type_counts: dict[str, int] = {}
+    for s in scored:
+        type_counts[s["atype"]] = type_counts.get(s["atype"], 0) + 1
+    # Decay = correctness by hop count (answer_match is the free-text correctness signal).
+    decay_rows = [(s["record"]["hop_count"], s["am"]) for s in scored]
+    return {
+        "engine": engine.name,
+        "fidelity": engine.fidelity,
+        "corpus": corpus.name,
+        "model": model,
+        "ambiguity": corpus.questions[0].ambiguity_level if corpus.questions else 0.0,
+        "n_questions": len(corpus.questions),
+        "n_answered": answered,
+        "answer_match": _mean(matches),
+        "answer_match_entity": _mean(matches_entity),
+        "n_entity_answerable": len(matches_entity),
+        "answer_type_counts": type_counts,
+        "answer_judge": _mean(judges) if judges else None,
+        "answer_judge_entity": _mean(judges_entity) if judges_entity else None,
+        "exact_match": _mean(ems),
+        "token_f1": _mean(f1s),
+        "support_recall": _mean(recalls),
+        "decay_curve": metrics.decay_curve(decay_rows),
+        "cost_usd": round(cost_usd, 6),
+        "budget_exhausted": budget_exhausted,
+        "per_question": [s["record"] for s in scored],
+    }
+
+
 def run_engine(
     engine: QAEngine, corpus, *, model: str, budget_usd: float, judge=None
 ) -> dict:
@@ -265,101 +345,102 @@ def run_engine(
     ):
         _localize_trace(engine, build.handle, corpus)
 
-    ems: list[float] = []
-    matches: list[float] = []
-    f1s: list[float] = []
-    recalls: list[float] = []
-    # answer_match restricted to entity-answerable golds -- the honest denominator
-    # for an entity-graph engine that can only ever emit a node (see
-    # metrics.classify_answer_type). Non-entity golds (dates/amounts/phrases) are
-    # unanswerable-by-construction and would otherwise mask the real accuracy.
-    matches_entity: list[float] = []
-    # Format-fair LLM-judge equivalence (None-safe: stays empty when no judge).
-    judges: list[float] = []
-    judges_entity: list[float] = []
-    type_counts: dict[str, int] = {}
-    decay_rows: list[tuple[int, float]] = []
-    records: list[dict] = []
+    scored: list[dict] = []
     answered = 0
     for q in corpus.questions:
         if tracker.budget_exhausted or not tracker.can_send(_estimate_tokens(q.question)):
             break
         ans = engine.answer(build.handle, q.question)
         tracker.record_usage(ans.input_tokens, ans.output_tokens, model)
-        am = metrics.answer_match(ans.text, q.gold_answer)
-        em = metrics.exact_match(ans.text, q.gold_answer)
-        f1 = metrics.token_f1(ans.text, q.gold_answer)
-        rec = metrics.supporting_fact_recall(ans.retrieved_fact_ids, q.gold_supporting_fact_ids)
-        atype = metrics.classify_answer_type(q.gold_answer)
-        type_counts[atype] = type_counts.get(atype, 0) + 1
-        aj: float | None = None
-        if judge is not None:
-            # An empty prediction is a non-answer -- score it NO without a call.
-            aj = (
-                metrics.parse_judge(judge(metrics.judge_prompt(q.question, q.gold_answer, ans.text)))
-                if ans.text.strip()
-                else 0.0
-            )
-            judges.append(aj)
-            if atype == "entity":
-                judges_entity.append(aj)
-        if atype == "entity":
-            matches_entity.append(am)
-        matches.append(am)
-        ems.append(em)
-        f1s.append(f1)
-        recalls.append(rec)
-        # Decay = correctness by hop count. answer_match (containment) is the
-        # meaningful correctness signal for free-text answers; exact_match reads ~0.
-        decay_rows.append((q.hop_count, am))
-        # Persist the per-question record so a near-zero aggregate is debuggable
-        # post-hoc (wrong reasoning vs. async-corrupted output vs. phrasing the
-        # matcher misses) -- the aggregate alone made the bench a black box. The
-        # prediction is truncated so a verbose engine can't bloat the artifact.
-        records.append(
-            {
-                "id": q.id,
-                "question": q.question,
-                "gold_answer": q.gold_answer,
-                "prediction": _truncate(ans.text),
-                "hop_count": q.hop_count,
-                "answer_type": atype,
-                "answer_match": am,
-                "answer_judge": aj,
-                "exact_match": em,
-                "token_f1": round(f1, 4),
-            }
-        )
+        scored.append(_score_question(ans, q, judge))
         answered += 1
 
-    return {
-        "engine": engine.name,
-        "fidelity": engine.fidelity,
-        "corpus": corpus.name,
-        "model": model,
-        # The corpus is single-ambiguity per run; record it so an ambiguity sweep can be
-        # aggregated into the decay curve (0.0 for MuSiQue / empty corpora).
-        "ambiguity": corpus.questions[0].ambiguity_level if corpus.questions else 0.0,
-        "n_questions": len(corpus.questions),
-        "n_answered": answered,
-        "answer_match": _mean(matches),
-        # answer_match over entity-answerable golds only + how many there were, so
-        # the headline can be read against the right denominator.
-        "answer_match_entity": _mean(matches_entity),
-        "n_entity_answerable": len(matches_entity),
-        "answer_type_counts": type_counts,
-        # Format-fair LLM-judge equivalence (None when no judge ran), overall + on
-        # the entity-answerable subset -- the apples-to-apples cross-engine number.
-        "answer_judge": _mean(judges) if judges else None,
-        "answer_judge_entity": _mean(judges_entity) if judges_entity else None,
-        "exact_match": _mean(ems),
-        "token_f1": _mean(f1s),
-        "support_recall": _mean(recalls),
-        "decay_curve": metrics.decay_curve(decay_rows),
-        "cost_usd": round(tracker.total_cost_usd, 6),
-        "budget_exhausted": tracker.budget_exhausted,
-        "per_question": records,
+    return _build_scorecard(
+        engine, corpus, model, scored,
+        answered=answered,
+        cost_usd=tracker.total_cost_usd,
+        budget_exhausted=tracker.budget_exhausted,
+    )
+
+
+def run_engine_ab(
+    engine, corpus, *, model: str, budget_usd: float, modes, judge=None
+) -> dict:
+    """Same-run A/B: build the KG ONCE, then answer every question under EACH mode in
+    `modes` against the IDENTICAL graph, so the only variable is answer-time routing
+    (e.g. local vs auto). Removes build variance from the comparison -- the deltas are
+    purely the mode's effect.
+
+    The engine's `answer()` must accept a `mode=` override (goldengraph does). One
+    shared budget bounds the WHOLE run (build + both arms); a question is only started
+    when the budget can afford answering it under every mode, so the arms stay aligned
+    (same n_answered). Per-arm answer cost is attributed separately for the report.
+
+    Returns `{"arms": {mode: scorecard}, "comparison": {...}, "build_cost_usd",
+    "total_cost_usd", "n_answered"}`."""
+    modes = list(modes)
+    enforce = BudgetTracker(BudgetConfig(max_cost_usd=budget_usd))
+    # Attribution-only trackers (effectively uncapped) for per-arm answer cost.
+    arm_trackers = {m: BudgetTracker(BudgetConfig(max_cost_usd=10**9)) for m in modes}
+
+    build = engine.build_kg(corpus)
+    enforce.record_usage(build.input_tokens, build.output_tokens, model)
+    build_cost = enforce.total_cost_usd
+
+    scored: dict[str, list[dict]] = {m: [] for m in modes}
+    answered = 0
+    for q in corpus.questions:
+        # A question costs one answer PER mode; only start it if the budget can afford
+        # the whole set, so both arms answer exactly the same questions.
+        if enforce.budget_exhausted or not enforce.can_send(
+            _estimate_tokens(q.question) * len(modes)
+        ):
+            break
+        for m in modes:
+            ans = engine.answer(build.handle, q.question, mode=m)
+            enforce.record_usage(ans.input_tokens, ans.output_tokens, model)
+            arm_trackers[m].record_usage(ans.input_tokens, ans.output_tokens, model)
+            scored[m].append(_score_question(ans, q, judge))
+        answered += 1
+
+    arms = {
+        m: _build_scorecard(
+            engine, corpus, model, scored[m],
+            answered=answered,
+            cost_usd=arm_trackers[m].total_cost_usd,
+            budget_exhausted=enforce.budget_exhausted,
+        )
+        for m in modes
     }
+    return {
+        "arms": arms,
+        "comparison": _ab_comparison(arms, modes),
+        "build_cost_usd": round(build_cost, 6),
+        "total_cost_usd": round(enforce.total_cost_usd, 6),
+        "n_answered": answered,
+    }
+
+
+#: The headline metrics compared side-by-side across the A/B arms.
+_AB_METRICS = (
+    "answer_match", "answer_match_entity", "exact_match",
+    "token_f1", "support_recall", "answer_judge",
+)
+
+
+def _ab_comparison(arms: dict, modes: list) -> dict:
+    """Per-metric side-by-side of the arms, plus an explicit `<b> - <a>` delta for the
+    common 2-mode case (e.g. auto - local) so the headline is legible without math."""
+    out: dict = {}
+    for k in _AB_METRICS:
+        out[k] = {m: arms[m].get(k) for m in modes}
+        if len(modes) == 2:
+            a, b = arms[modes[0]].get(k), arms[modes[1]].get(k)
+            out[k]["delta"] = (
+                round(b - a, 4) if isinstance(a, (int, float)) and isinstance(b, (int, float))
+                else None
+            )
+    return out
 
 
 def _truncate(text: str, limit: int = 2000) -> str:

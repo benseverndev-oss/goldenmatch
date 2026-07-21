@@ -421,3 +421,84 @@ def test_ask_auto_routes_nl_question_to_llm_free_chain():
         mode="auto",
     )
     assert out == "Emma Thomas"
+
+
+# --- end-to-end through ask(mode="local"/"hybrid"): chain routing is the DEFAULT ---
+
+def test_ask_local_routes_nl_question_to_llm_free_chain():
+    # The headline of the default-path change: mode="local" (the bench + most callers'
+    # default) now attempts the deterministic chain walk BEFORE synthesis, so the NL
+    # routing win reaches the default -- not just mode="auto". _UnusedLLM asserts
+    # synthesis never runs (the chain answered first, LLM-free).
+    g = _film_graph()
+    out = ask(
+        "Who is married to the person who directed Inception?",
+        _StubStore(g),
+        llm=_UnusedLLM(),
+        embedder=_UnusedEmbedder(),
+        valid_t=100,
+        tx_t=100,
+        mode="local",
+    )
+    assert out == "Emma Thomas"
+
+
+def test_ask_hybrid_routes_nl_question_to_llm_free_chain():
+    # mode="hybrid" gets the same default-path chain attempt.
+    g = _film_graph()
+    out = ask(
+        "Who is married to the person who directed Inception?",
+        _StubStore(g),
+        llm=_UnusedLLM(),
+        embedder=_UnusedEmbedder(),
+        valid_t=100,
+        tx_t=100,
+        mode="hybrid",
+    )
+    assert out == "Emma Thomas"
+
+
+def test_ask_local_chain_gate_off_falls_through_to_synthesis(monkeypatch):
+    # GOLDENGRAPH_QA_LOCAL_CHAIN=0 restores the pre-change local path: NO chain attempt,
+    # straight to retrieval+synthesis (the baseline arm of the local-vs-auto A/B).
+    # Monkeypatch the seed + synth seam so the assertion doesn't depend on embedder/LLM
+    # internals -- reaching synthesize_local at all proves the chain was skipped.
+    import goldengraph.answer as answer_mod
+
+    monkeypatch.setenv("GOLDENGRAPH_QA_LOCAL_CHAIN", "0")
+    monkeypatch.setattr(answer_mod, "seed_by_query", lambda *a, **k: [])
+    monkeypatch.setattr(answer_mod, "synthesize_local", lambda *a, **k: "SYNTH")
+
+    g = _film_graph()
+    out = ask(
+        "Who is married to the person who directed Inception?",
+        _StubStore(g),
+        llm=_UnusedLLM(),
+        embedder=_UnusedEmbedder(),
+        valid_t=100,
+        tx_t=100,
+        mode="local",
+    )
+    assert out == "SYNTH"  # chain skipped -> synthesis ran
+
+
+def test_ask_local_non_chain_query_falls_through_to_synthesis(monkeypatch):
+    # Even with the gate ON (default), a non-chain local query (no groundable relation)
+    # must NOT be hijacked by the chain attempt -- it falls through to synthesis exactly
+    # as before. Guards against the default-path change over-firing.
+    import goldengraph.answer as answer_mod
+
+    monkeypatch.setattr(answer_mod, "seed_by_query", lambda *a, **k: [])
+    monkeypatch.setattr(answer_mod, "synthesize_local", lambda *a, **k: "SYNTH")
+
+    g = _film_graph()
+    out = ask(
+        "What is Inception?",  # anchor present, no relation -> chain abstains
+        _StubStore(g),
+        llm=_UnusedLLM(),
+        embedder=_UnusedEmbedder(),
+        valid_t=100,
+        tx_t=100,
+        mode="local",
+    )
+    assert out == "SYNTH"

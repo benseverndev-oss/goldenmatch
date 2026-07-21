@@ -142,12 +142,36 @@ tests unchanged). `embedder` threads `ask` -> `resolve_profile` -> `classify_que
 synonyms -- the no-torch char-ngram embedder only shares the morphological cases the
 stem rule already covers. Tests: `tests/test_nl_chain.py` (`_SynEmbedder` stub:
 spouse~married_to fires; an orthogonal word stays below the floor and abstains).
-NOTE the reachability gotcha: the bench's goldengraph engine runs `ask` in
-`mode="local"` by default (`engines/goldengraph.py`), and the NL routing (chain
-extraction) only runs in `mode="auto"` -- so exercising this end-to-end in the
-bench needs `GOLDENGRAPH_QA_MODE=auto`. Making the chain-attempt fire inside
-local/hybrid before synthesis (so the win is default, not auto-only) is the next
-follow-up.
+NOTE the reachability gotcha (NOW RESOLVED, see next section): the bench's goldengraph
+engine runs `ask` in `mode="local"` by default (`engines/goldengraph.py`), and the NL
+routing (chain extraction) originally only ran in `mode="auto"`.
+
+## NL chain routing is the DEFAULT local/hybrid path (2026-07-21)
+Closes the reachability gotcha above: the template-free chain walk now fires for
+`mode="local"` and `mode="hybrid"` BEFORE synthesis, so the routing win reaches the
+DEFAULT answer path (the bench + most callers run `mode="local"`), not just `mode="auto"`.
+- **`answer.ask`** — factored the auto path's routing into two shared helpers
+  (`_resolve_and_plan` = resolve profile + schema-canon + plan; `_chain_answer_from_profile`
+  = the ordered/any-order walk) so `auto` and the new local/hybrid attempt share ONE
+  implementation. In the local/hybrid branch, before seed retrieval, it runs the chain
+  attempt and returns on a completed walk; a None (no chain plan, or the walk hit a
+  missing edge) falls through to today's retrieval+synthesis, unchanged. Skipped when we
+  arrived via `auto` (it already tried the chain).
+- **Gate `GOLDENGRAPH_QA_LOCAL_CHAIN` (default ON; `=0`/`false` restores the pre-change
+  pure-synthesis local/hybrid path, byte-identical)** — `_local_chain_enabled()`. Off is
+  the baseline arm of the A/B. A non-chain local query (no groundable relation) is never
+  hijacked (plan.mode != "chain" -> falls through), so this only ADDS answers, never
+  changes an existing synthesis answer.
+- **Same-run local-vs-auto A/B** (`benchmarks/er-kg-bench/erkgbench/qa_e2e`):
+  `harness.run_engine_ab` builds the KG ONCE and answers every question under BOTH modes
+  against the identical graph (removing build variance), scoring per-arm via the
+  single-sourced `_score_question`/`_build_scorecard` (the same metrics `run_engine` uses).
+  Entry `run_local_vs_auto_ab.py` (`--self-test` CI-validates the plumbing); the
+  goldengraph engine's `answer(handle, q, mode=)` gained a per-call mode override.
+  Dispatchable via `bench-graphrag-qa.yml` mode `local_vs_auto_ab`. Tests:
+  `tests/test_nl_chain.py` (mode=local/hybrid route to the LLM-free chain; gate-off +
+  non-chain query fall through to synthesis) + `tests/test_qa_local_vs_auto_ab.py`
+  (one shared build, aligned arms, delta).
 
 ### Post-#1969 hardening (2026-07-21, review-driven)
 Three fixes on top of the semantic bridge, all in `_extract_nl_chain_slots`:
