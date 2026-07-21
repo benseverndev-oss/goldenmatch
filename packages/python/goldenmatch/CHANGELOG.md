@@ -8,6 +8,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Zero-config Fellegi-Sunter recall no longer collapses at scale (memory-aware
+  blocking pair budget).** The FS blocking pair-budget bound
+  (`_bound_probabilistic_blocking_pairs`) used a FLAT 300M candidate-pair ceiling
+  — calibrated for a ~4-8 GB box. On the 64 GB runner the 25M single-box FS
+  envelope targets, that ceiling is ~16x too tight, so at scale the bound
+  COMPOUNDED recall-critical single-field passes (a pure `zip` pass that
+  duplicates share exactly) with corruption-prone fields (a typo'd `first_name`)
+  to fit the budget — and the compound key then breaks on the very duplicates the
+  pass existed to catch. Measured blocking recall collapse: **1.0 at ≤2.4M → 0.82
+  at 4.8M → ~0.02 at 30M** (F1 0.030, the 30M single-box proof), entirely
+  scale-dependent and invisible below ~5M. `_fs_total_pair_budget` is now
+  MEMORY-AWARE (`max(300M floor, available_ram_gb * ~40M)`, anchored to the
+  measured 25M-on-64GB proof where ~2.1B bounded pairs peaked at ~28 GB): at any
+  ≥~32 GB box the budget clears ~1B, the pure coarse passes survive, and blocking
+  recall is 1.0 — **measured F1 0.9005 → 1.0000 at 4.8M** (P=R=1.0), byte-
+  identical below the trigger (small boxes keep the 300M floor + all #1803
+  tuning). An undersized box degrades honestly (less recall, no OOM) instead of
+  silently at scale. Not EM: the EM within-block-pair sample cap is irrelevant to
+  this (100K/200K/400K give identical F1). The `gate-fs-zeroconfig` nightly now
+  runs at 10M (was 1M — below where this class is visible) with `set -o pipefail`
+  so the F1-floor failure is no longer masked by `| tee`.
 - **Weak-positive blocking-pass pruning now runs on the FS arrow lane.**
   `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1` invoked `select_passes` (polars-native:
   `with_row_index` / `group_by`) directly on `df`, but the FS routed / arrow

@@ -322,16 +322,25 @@ def _coarse_blocking(*fields):
     )
 
 
-def test_pair_budget_is_flat_global_total(monkeypatch):
-    # The budget is a flat memory-derived TOTAL across passes (not per-pass, not
-    # N-scaled): candidate pairs grow ~N² while memory is fixed, so a linear
-    # floor can't both keep a pass safe at 100K and bound it at 1M.
+def test_pair_budget_is_flat_in_n_but_memory_aware(monkeypatch):
+    # The budget is a memory-derived TOTAL across passes (not per-pass): it does
+    # NOT scale with N (candidate pairs grow ~N² while the memory ceiling is a
+    # property of the box), but it DOES scale with available RAM. RAM is injected
+    # here for determinism.
     monkeypatch.delenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", raising=False)
-    assert _fs_total_pair_budget(1_000_000) == _fs_total_pair_budget(10)
-    assert _fs_total_pair_budget(50_000) == 300_000_000
-    # The env override wins and is read as an integer.
+    # Flat in N at fixed RAM.
+    assert _fs_total_pair_budget(1_000_000, available_ram_gb=8.0) == _fs_total_pair_budget(
+        10, available_ram_gb=8.0
+    )
+    # Small box: floored at 300M (8 GB * 40M = 320M > floor; 4 GB * 40M = 160M -> floor).
+    assert _fs_total_pair_budget(50_000, available_ram_gb=4.0) == 300_000_000
+    # Big box: memory-aware lift above the floor (64 GB -> 2.56B pairs), so the
+    # recall-critical coarse passes survive at the 25M-on-64GB envelope.
+    assert _fs_total_pair_budget(50_000, available_ram_gb=64.0) == 2_560_000_000
+    assert _fs_total_pair_budget(50_000, available_ram_gb=64.0) > 1_000_000_000
+    # The env override wins over everything and is read as an integer.
     monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
-    assert _fs_total_pair_budget(1_000_000) == 5
+    assert _fs_total_pair_budget(1_000_000, available_ram_gb=64.0) == 5
 
 
 def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):

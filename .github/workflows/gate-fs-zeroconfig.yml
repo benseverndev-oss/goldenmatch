@@ -1,20 +1,27 @@
 # Zero-config Fellegi-Sunter quality-at-scale gate.
 #
 # qis_gate exercises the WEIGHTED zero-config path; the PROBABILISTIC (F-S) path
-# was never gated at scale -- which is how zero-config FS silently found ZERO
-# duplicates (F1=0) at 1M on realistic person data (a shared `email` identifier
-# dropped by the perfect-surrogate rule, collapsing the EM model). This gate runs
-# TRUE zero-config FS (auto_configure_probabilistic_df) on realistic-cardinality
-# data and FAILS if F1 falls below the floor, so that class cannot regress
-# silently again. The per-PR guard for the specific identifier-admission rule is
-# the unit test tests/test_fs_autoconfig_v2.py; this is the broader end-to-end
-# watch (scheduled + on demand), analogous to bench-quality-scale / qis_gate.
+# was never gated at scale. This gate runs TRUE zero-config FS
+# (auto_configure_probabilistic_df) on realistic-cardinality data and FAILS if F1
+# falls below the floor, so a scale-dependent quality regression cannot land
+# silently again. Analogous to bench-quality-scale / qis_gate; the per-PR unit
+# guards are tests/test_fs_autoconfig_v2.py.
 #
-# SCALE MATTERS -- keep `rows` >= 1_000_000. The regression is scale-dependent:
-# measured pre-fix F1 was 0.0 at 1M but a healthy 0.997 at 240K (the atomic name
-# fields alone still discriminate at small N; the EM model only collapses once
-# the identifier is the load-bearing signal at scale). A sub-1M gate is falsely
-# green -- it passes even with the bug present.
+# TWO regression classes it has caught, BOTH scale-dependent:
+#   1. The #1981 email-admission bug: a shared `email` identifier dropped by the
+#      perfect-surrogate rule collapsed the EM model -- F1=0.0 at 1M, healthy at
+#      240K (atomic name fields still discriminate at small N).
+#   2. The blocking pair-budget compounding bug (2026-07-21): a flat candidate-
+#      pair budget forced recall-critical single-field passes (a pure `zip` pass
+#      dups share exactly) to be COMPOUNDED with corruption-prone fields to fit
+#      the ceiling -- blocking recall collapsed 1.0 -> 0.82 at ~5M -> ~0.02 at
+#      30M. NOT visible below ~5M (F1=1.0 at <=2.4M). Fixed by a memory-aware
+#      budget (auto_configure_probabilistic_df + _fs_total_pair_budget).
+#
+# SCALE MATTERS -- keep `rows` >= 5_000_000. Class 2 is INVISIBLE below ~5M (the
+# atomic name fields alone still discriminate, and the pair budget does not bind),
+# so a 1M gate is falsely green for it even though it caught class 1. The default
+# runs at 10M so both classes fail the floor when present.
 name: gate-fs-zeroconfig
 
 on:
@@ -23,7 +30,7 @@ on:
       rows:
         description: "Base row count (dups added on top at dup_frac)"
         required: false
-        default: "1000000"
+        default: "10000000"
       min_f1:
         description: "F1 floor -- fail below this"
         required: false
@@ -74,8 +81,13 @@ jobs:
           GOLDENMATCH_NATIVE: "1"
           GOLDENMATCH_FS_NATIVE: "1"
         run: |
+          # pipefail is LOAD-BEARING: the script exits 1 when F1 < --min-f1 (the
+          # whole point of the gate), but `| tee` would otherwise mask that exit
+          # code with tee's 0 -- so the gate reported SUCCESS on a real F1=0.03
+          # regression at 30M. Without this the gate does not gate.
+          set -o pipefail
           uv run python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
-            --rows "${{ github.event.inputs.rows || '1000000' }}" \
+            --rows "${{ github.event.inputs.rows || '10000000' }}" \
             --dup-frac 0.2 \
             --backend bucket \
             --config-mode zero \
