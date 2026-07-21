@@ -4039,6 +4039,8 @@
             "_dice_score_single",
             "_emit_scoring_profile",
             "_empty_pair_stream_df",
+            "_ensemble_score_single",
+            "_ensemble_score_single_f32",
             "_exact_score_matrix",
             "_filter_target_ids_df",
             "_find_exact_match_ids",
