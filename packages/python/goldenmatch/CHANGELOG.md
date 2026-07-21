@@ -59,6 +59,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Changed
 
+- **Out-of-core FS scorer batches blocks into the native kernel (opt-in path,
+  parity-exact) + `GOLDENMATCH_FS_OOC_DEBUG` progress.** `score_fs_out_of_core`
+  scored one block per `score_probabilistic_bucket_native` call; on person data
+  (tens of thousands of tiny blocks per pass) that made the FFI fan-out the wall
+  (~60s for a single 200K pass, hours at 25M). It now hands a whole
+  block-contiguous wave to the kernel in one call per worker-chunk, with the
+  per-block `size_list` isolating blocks — mirroring the in-memory
+  `_score_one_bucket` batched call, so the emitted pair set + scores are
+  byte-identical (the existing parity tests against the per-block reference
+  gate it). The numpy vectorized path likewise batches via
+  `score_probabilistic_vectorized_batch`; unsupported scorers keep the per-block
+  fallback. Measured ~8× on the per-pass scoring at 200K. `GOLDENMATCH_FS_OOC_DEBUG=1`
+  prints a per-phase / per-pass timing line (load, block-map, scan+score, block
+  count) so a long >=25M streaming leg shows live progress instead of a blank
+  spinner. NOTE: this fixes the per-block fan-out only; the OOC path still runs
+  one full-dataset scan+score per blocking pass, so low-cardinality passes and
+  multi-pass depth remain a separate scale lever.
 - **Out-of-core streaming FS refinements (review follow-ups, opt-in path only).**
   `_prep_all_ids` returns a `range` instead of a 25–50M-element Python list when
   `__row_id__` is contiguous (the pipeline-generated common case), avoiding a

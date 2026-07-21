@@ -308,6 +308,7 @@
             "_fs_ooc_workers",
             "_load_frame_batched",
             "_needed_columns",
+            "_ooc_debug_on",
             "_prep_all_ids",
             "_resolve_db_path",
             "_sql_ident",
