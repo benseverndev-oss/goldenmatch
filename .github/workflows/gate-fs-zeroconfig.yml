@@ -74,6 +74,11 @@ jobs:
           GOLDENMATCH_NATIVE: "1"
           GOLDENMATCH_FS_NATIVE: "1"
         run: |
+          # pipefail is LOAD-BEARING: the script exits 1 when F1 < --min-f1
+          # (the whole point of the gate), but `| tee` would otherwise mask that
+          # exit code with tee's 0 -- so the gate reported SUCCESS on a real
+          # F1=0.03 regression at 30M. Without this the gate does not gate.
+          set -o pipefail
           uv run python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
             --rows "${{ github.event.inputs.rows || '1000000' }}" \
             --dup-frac 0.2 \
