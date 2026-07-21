@@ -203,13 +203,7 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         # at all. Soundex is wrapped defensively (jellyfish.soundex can raise on
         # non-alpha input) so that component just drops instead of failing the
         # whole pair.
-        jw = JaroWinkler.similarity(val_a, val_b)
-        ts = token_sort_ratio(val_a, val_b) / 100.0
-        try:
-            sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
-        except Exception:
-            sx = 0.0
-        return max(jw, ts, sx)
+        return _ensemble_score_single(val_a, val_b)
     elif scorer == "initialism_match":
         return _initialism_match_single(val_a, val_b)
     elif scorer == "alias_match":
@@ -1060,7 +1054,9 @@ def _ensemble_score_single(val_a: str, val_b: str) -> float:
     return max(jw, ts, sx)
 
 
-def _ensemble_score_single_f32(val_a: str, val_b: str) -> float:
+def _ensemble_score_single_f32(  # pyright: ignore[reportUnusedFunction]  # consumed via a lazy cross-module import in backends/score_buckets.py
+    val_a: str, val_b: str
+) -> float:
     """``_ensemble_score_single`` with the result quantized to float32.
 
     Mirrors the matrix path's per-field float32 storage: each ensemble component

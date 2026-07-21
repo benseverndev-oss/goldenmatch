@@ -23,7 +23,6 @@ See docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
 from __future__ import annotations
 
 import numpy as np
-
 from goldenmatch.core.scorer import (
     _ensemble_score_single,
     _ensemble_score_single_f32,
