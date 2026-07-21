@@ -32,12 +32,18 @@ function buildBlockKey(
   keyConfig: BlockingKeyConfig,
 ): string | null {
   const parts: string[] = [];
+  const perField = keyConfig.fieldTransforms;
   for (const field of keyConfig.fields) {
     const raw = row[field];
     if (raw === null || raw === undefined) return null;
     const str = String(raw);
-    if (keyConfig.transforms.length > 0) {
-      const val = applyTransforms(str, keyConfig.transforms);
+    // #1832: a field listed in fieldTransforms derives its component with its
+    // OWN chain; others fall back to the key-level transforms. Mirrors Python
+    // blocker.py's per-field derivation so a Python-written config with per-field
+    // blocking transforms produces the SAME block membership here.
+    const transforms = perField?.[field] ?? keyConfig.transforms;
+    if (transforms.length > 0) {
+      const val = applyTransforms(str, transforms);
       if (val === null || val === undefined) return null;
       parts.push(val);
     } else {

@@ -513,54 +513,66 @@ function convertOneBlockingRule(rule: unknown, idx: number, report: ConversionRe
     recognized.push(r);
   }
 
-  // Dedupe repeated fields (order-preserving): `l.a = r.a AND l.a = r.a` is
-  // one field, not two identical key components.
-  const fields: string[] = [];
-  for (const r of recognized) if (!fields.includes(r.field)) fields.push(r.field);
-
-  // BlockingKeyConfig.transforms is ONE chain applied uniformly to every
-  // field in the key -- there is no per-field transform slot. A mixed rule
-  // (plain equality on one column + SUBSTR on another) is therefore
-  // approximated as a single key carrying the substring transform for ALL
-  // fields. This is safe for blocking (candidate generation only needs to be
-  // a superset of true matches). If two conjuncts specify SUBSTR at
-  // different offsets, there is no single chain that represents both, so the
-  // rule is dropped.
-  const transformValues = new Set<string>(
-    recognized.filter((r) => r.transform !== null).map((r) => r.transform as string),
-  );
-  if (transformValues.size > 1) {
-    report.warn(rulePath, `conflicting SUBSTR offsets across fields, rule dropped: ${sqlNorm}`, null);
-    return null;
-  }
-  const transforms = transformValues.size > 0 ? [[...transformValues][0]!] : [];
-
-  const key: BlockingKeyConfig = { fields, transforms };
-  const plainFields: string[] = [];
+  // Per-field transform chain (order-preserving on first sight of each field).
+  // Each field derives its OWN block-key component via `field_transforms`, so a
+  // mixed rule (plain equality on one column + SUBSTR on another) maps EXACTLY
+  // rather than widening the SUBSTR to every field (the pre-#1832 lossy
+  // approximation). `l.a = r.a AND l.a = r.a` is still one field.
+  //
+  // Same-field collisions:
+  //   - two DIFFERENT SUBSTR offsets on one field have no representable chain
+  //     (neither offset subsumes the other) -> the rule is dropped;
+  //   - plain equality AND SUBSTR on one field keep the SUBSTR (it subsumes the
+  //     equality: `a = b` implies `substr(a) = substr(b)`), so candidates stay a
+  //     superset of Splink's.
+  const perFieldTransform = new Map<string, string | null>();
   for (const r of recognized) {
-    if (r.transform === null && !plainFields.includes(r.field)) plainFields.push(r.field);
+    const existing = perFieldTransform.get(r.field);
+    if (existing === undefined) {
+      perFieldTransform.set(r.field, r.transform);
+    } else if (existing === r.transform) {
+      // identical repeat -- nothing to do
+    } else if (existing !== null && r.transform !== null) {
+      report.warn(rulePath, `conflicting SUBSTR offsets on field ${r.field}, rule dropped: ${sqlNorm}`, null);
+      return null;
+    } else {
+      // one plain + one SUBSTR on the same field: keep the SUBSTR
+      perFieldTransform.set(r.field, existing ?? r.transform);
+    }
   }
-  if (transforms.length > 0 && plainFields.length > 0) {
-    // LOSSY: the key-level chain applies the substring transform to field(s)
-    // Splink compared with plain equality. Warn (not info) so strict=true
-    // gates on it, matching the approx-warn convention used for comparison
-    // levels above.
-    report.warn(
-      rulePath,
-      `approximate mapping, blocking key widened: ${transforms[0]} applied to all fields ` +
-        `including plain-equality field(s) ${JSON.stringify(plainFields)} (GoldenMatch transforms ` +
-        "are key-level); candidates are a superset of Splink's, precision may drop (superset " +
-        "guarantee assumes skip_oversized stays False, the converter's emitted default) " +
-        `(${sqlNorm})`,
-      null,
-    );
-  } else {
+
+  const fields = [...perFieldTransform.keys()];
+  const chainFor = (f: string): readonly string[] => {
+    const t = perFieldTransform.get(f);
+    return t != null ? [t] : [];
+  };
+
+  // Uniform iff every field carries the same transform value -- keep the
+  // key-level `transforms` representation (byte-compatible with pre-#1832 for
+  // all-plain and all-same-SUBSTR rules). Otherwise emit per-field chains.
+  const first = perFieldTransform.get(fields[0]!) ?? null;
+  const uniform = fields.every((f) => (perFieldTransform.get(f) ?? null) === first);
+
+  if (uniform) {
+    const transforms = first != null ? [first] : [];
+    const key: BlockingKeyConfig = { fields, transforms };
     report.info(
       rulePath,
       `converted to blocking key fields=${JSON.stringify(fields)} transforms=${JSON.stringify(transforms)}`,
       null,
     );
+    return key;
   }
+
+  const fieldTransforms: Record<string, readonly string[]> = {};
+  for (const f of fields) fieldTransforms[f] = chainFor(f);
+  const key: BlockingKeyConfig = { fields, transforms: [], fieldTransforms };
+  report.info(
+    rulePath,
+    `converted to blocking key with per-field transforms fields=${JSON.stringify(fields)} ` +
+      `fieldTransforms=${JSON.stringify(fieldTransforms)}`,
+    null,
+  );
   return key;
 }
 

@@ -138,7 +138,14 @@ function camelizeKeys(obj: unknown): unknown {
   if (typeof obj === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
-      result[snakeToCamel(key)] = camelizeKeys(val);
+      const camelKey = snakeToCamel(key);
+      // `field_transforms` is a map keyed by USER FIELD NAMES (data, not config
+      // keys). Preserve its value verbatim so a field like `first_name` keeps
+      // its key and still matches the `fields` array (#1832) -- recursing would
+      // rewrite the inner key to `firstName` and silently break the per-field
+      // lookup in buildBlockKey (the values are string[] chains, nothing to
+      // camelize anyway).
+      result[camelKey] = camelKey === "fieldTransforms" ? val : camelizeKeys(val);
     }
     return result;
   }
@@ -521,11 +528,24 @@ function parseBlockingKeyConfig(
   ctx: string,
 ): BlockingKeyConfig {
   const obj = asObj(raw, ctx);
+  // #1832: honor per-field transform chains so a Python-written config carrying
+  // `field_transforms` produces the SAME block membership in TS. Absent it, the
+  // loader dropped the key and blocks came out FINER than intended (silent
+  // recall loss vs the config's declared per-field derivation).
+  const fieldTransforms =
+    typeof obj.fieldTransforms === "object" && obj.fieldTransforms !== null
+      ? Object.fromEntries(
+          Object.entries(obj.fieldTransforms as Record<string, unknown>).map(
+            ([f, chain]) => [f, Array.isArray(chain) ? (chain as string[]) : []],
+          ),
+        )
+      : undefined;
   return {
     fields: Array.isArray(obj.fields) ? (obj.fields as string[]) : [],
     transforms: Array.isArray(obj.transforms)
       ? (obj.transforms as string[])
       : [],
+    ...(fieldTransforms !== undefined ? { fieldTransforms } : {}),
   };
 }
 

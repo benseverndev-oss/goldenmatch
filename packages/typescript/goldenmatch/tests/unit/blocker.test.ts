@@ -66,6 +66,50 @@ describe("buildStaticBlocks", () => {
     expect(blocks[0]!.rows.length).toBe(2);
   });
 
+  it("honors per-field transforms (#1832): substr on one field, plain on the other", () => {
+    // fieldTransforms truncates `dob` to its year; `surname` stays plain. The
+    // two rows share year(dob) and surname, so they block together even though
+    // their full dob strings differ. A key-level chain (no fieldTransforms)
+    // would either truncate surname too or not truncate dob at all.
+    const rows: Row[] = [
+      { __row_id__: 0, surname: "Smith", dob: "1990-01-15" },
+      { __row_id__: 1, surname: "Smith", dob: "1990-11-30" },
+    ];
+    const config: BlockingConfig = makeBlockingConfig({
+      strategy: "static",
+      keys: [
+        {
+          fields: ["surname", "dob"],
+          transforms: [],
+          fieldTransforms: { dob: ["substring:0:4"] },
+        },
+      ],
+    });
+    const blocks = buildStaticBlocks(rows, config);
+    expect(blocks.length).toBe(1);
+    expect(blocks[0]!.rows.length).toBe(2);
+  });
+
+  it("per-field transforms keep distinct fields apart (#1832)", () => {
+    // Same surname + same dob-year would collide, but different years must not.
+    const rows: Row[] = [
+      { __row_id__: 0, surname: "Smith", dob: "1990-01-15" },
+      { __row_id__: 1, surname: "Smith", dob: "1991-01-15" },
+    ];
+    const config: BlockingConfig = makeBlockingConfig({
+      strategy: "static",
+      keys: [
+        {
+          fields: ["surname", "dob"],
+          transforms: [],
+          fieldTransforms: { dob: ["substring:0:4"] },
+        },
+      ],
+    });
+    const blocks = buildStaticBlocks(rows, config);
+    expect(blocks.length).toBe(0);
+  });
+
   it("oversized block with skipOversized=true is dropped", () => {
     const rows: Row[] = Array.from({ length: 10 }, (_, i) => ({
       __row_id__: i,

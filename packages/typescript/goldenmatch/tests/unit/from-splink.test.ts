@@ -512,7 +512,10 @@ describe("convertBlocking", () => {
     expect(report.hasWarnings).toBe(false);
   });
 
-  it("widens a mixed equality+SUBSTR conjunction with a warning", () => {
+  it("maps a mixed equality+SUBSTR conjunction to per-field transforms (#1832)", () => {
+    // Pre-#1832 this widened the SUBSTR onto the plain-equality field and warned.
+    // Now each field derives its OWN block-key component via fieldTransforms, so
+    // the mapping is exact (no widening, no precision loss) and info-only.
     const rule = 'l."surname" = r."surname" AND SUBSTR(l."dob", 1, 4) = SUBSTR(r."dob", 1, 4)';
     const report = new ConversionReport();
     const config = convertBlocking([rule], report);
@@ -522,14 +525,22 @@ describe("convertBlocking", () => {
     expect(config?.keys.length).toBe(1);
     const key = config!.keys[0]!;
     expect(key.fields).toEqual(["surname", "dob"]);
-    expect(key.transforms).toEqual(["substring:0:4"]);
+    // Key-level transforms empty; per-field chains carry the exact mapping.
+    expect(key.transforms).toEqual([]);
+    expect(key.fieldTransforms).toEqual({ surname: [], dob: ["substring:0:4"] });
+    expect(report.hasWarnings).toBe(false);
+    expect(report.findings.filter((f) => f.severity === "info").length).toBe(1);
+  });
+
+  it("drops a rule with conflicting SUBSTR offsets on the SAME field (#1832)", () => {
+    const rule = 'SUBSTR(l."dob", 1, 4) = SUBSTR(r."dob", 1, 4) AND SUBSTR(l."dob", 1, 6) = SUBSTR(r."dob", 1, 6)';
+    const report = new ConversionReport();
+    const config = convertBlocking([rule], report);
+
+    expect(config).toBeNull();
     const warnings = report.findings.filter((f) => f.severity === "warning");
     expect(warnings.length).toBe(1);
-    expect(report.hasWarnings).toBe(true);
-    const msg = warnings[0]!.message;
-    expect(msg.includes("widened") || msg.includes("approximate")).toBe(true);
-    expect(msg).toContain("surname");
-    expect(msg).toContain("skip_oversized");
+    expect(warnings[0]!.message).toContain("conflicting SUBSTR offsets on field dob");
   });
 
   it("treats a pure SUBSTR rule as info-only", () => {
@@ -650,15 +661,20 @@ describe("convertBlocking", () => {
     expect(warnings[0]!.message).toContain("not a SQL string");
   });
 
-  it("drops a rule with conflicting SUBSTR offsets", () => {
+  it("maps different-field SUBSTR offsets to per-field transforms (#1832)", () => {
+    // Pre-#1832 different SUBSTR offsets across fields were unrepresentable
+    // (one key-level chain) so the whole rule was dropped. Per-field chains now
+    // carry each offset exactly.
     const rule = "SUBSTR(l.a, 1, 4) = SUBSTR(r.a, 1, 4) AND SUBSTR(l.b, 1, 2) = SUBSTR(r.b, 1, 2)";
     const report = new ConversionReport();
     const config = convertBlocking([rule], report);
 
-    expect(config).toBeNull();
-    const warnings = report.findings.filter((f) => f.severity === "warning");
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]!.message).toContain("conflicting SUBSTR offsets");
+    expect(config).not.toBeNull();
+    const key = config!.keys[0]!;
+    expect(key.fields).toEqual(["a", "b"]);
+    expect(key.transforms).toEqual([]);
+    expect(key.fieldTransforms).toEqual({ a: ["substring:0:4"], b: ["substring:0:2"] });
+    expect(report.hasWarnings).toBe(false);
   });
 
   it("drops SUBSTR with start=0", () => {
@@ -709,7 +725,9 @@ describe("convertBlocking", () => {
 
     expect(config).not.toBeNull();
     expect(config?.keys[0]!.fields).toEqual(["surname", "dob"]);
-    expect(config?.keys[0]!.transforms).toEqual(["substring:0:4"]);
+    // #1832: mixed rule -> per-field chains, not a widened key-level transform.
+    expect(config?.keys[0]!.transforms).toEqual([]);
+    expect(config?.keys[0]!.fieldTransforms).toEqual({ surname: [], dob: ["substring:0:4"] });
   });
 
   it("strips whole-rule paren wrapping", () => {

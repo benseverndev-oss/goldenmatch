@@ -73,6 +73,32 @@ describe("parseConfig", () => {
     expect(config.blocking?.keys.length).toBe(1);
   });
 
+  it("parses snake_case field_transforms with verbatim field-name keys (#1832)", () => {
+    // A Python-written config carries `field_transforms` keyed by field names
+    // (some snake_case). The outer key camelizes to `fieldTransforms`, but the
+    // INNER field-name keys must stay verbatim so they match the `fields` array
+    // and buildBlockKey's per-field lookup resolves.
+    const raw = {
+      blocking: {
+        strategy: "static",
+        keys: [
+          {
+            fields: ["surname", "first_name", "dob"],
+            transforms: [],
+            field_transforms: { dob: ["substring:0:4"], first_name: ["lowercase"] },
+          },
+        ],
+      },
+    };
+    const config = parseConfig(raw);
+    const key = config.blocking?.keys[0];
+    expect(key?.fields).toEqual(["surname", "first_name", "dob"]);
+    expect(key?.fieldTransforms).toEqual({
+      dob: ["substring:0:4"],
+      first_name: ["lowercase"],
+    });
+  });
+
   it("normalizes golden_rules.default -> defaultStrategy", () => {
     const raw = {
       golden_rules: {
