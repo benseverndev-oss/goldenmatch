@@ -7,9 +7,15 @@ diverging from the exact path (#715). The admission rule (decided 2026-06-05):
   * identifiers ARE admitted as exact-scorer comparison fields (no lower
     cardinality floor -- F-S self-regulates a weak identifier via a higher u /
     smaller EM weight, so we don't hard-gate low cardinality);
-  * the ONLY hard gate is ``cardinality_ratio >= 1.0`` (a perfect surrogate key
-    carries no shared-identity signal), applied uniformly to EVERY exact-scorer
-    field -- which newly covers email/phone too (previously ungated).
+  * the ``cardinality_ratio >= 1.0`` hard gate (a perfect surrogate key carries
+    no shared-identity signal) excludes the ambiguous bare ``identifier`` type
+    (row PKs), but NOT identity-bearing VALUE types (``email``/``phone``): a
+    shared email/phone a duplicate carries verbatim is F-S's single strongest
+    signal, and the ratio is measured on a sample that can under-represent
+    duplicates -- excluding it collapsed the EM model to zero matches at scale
+    (F1=0 at 1M). An F-S exact field is a COMPARISON field (not a pair-generating
+    exact matchkey), so a true PK self-regulates to neutral (m~=u) while a shared
+    identifier carries a large weight -- admitting email/phone is never harmful.
 
 m/u estimation + blocking-field exclusion are EM's job at train time, not this
 builder's -- these tests only assert field membership + scorer.
@@ -62,15 +68,28 @@ def test_surrogate_key_identifier_excluded():
     assert "full_name" in fields  # the rest of the matchkey is intact
 
 
-def test_surrogate_key_email_excluded_uniform_gate():
-    """The card>=1.0 gate is uniform across exact-scorer fields: a perfectly
-    unique email is now excluded too (previously ungated in the prob path)."""
+def test_card1_email_admitted_not_treated_as_surrogate():
+    """A card == 1.0 email is a shared identity-bearing VALUE, NOT a per-record
+    surrogate: it is admitted (unlike the bare `identifier` PK above). The ratio
+    is sample-measured and can read 1.0 when duplicates are under-represented, so
+    excluding it collapsed zero-config FS to F1=0 at scale. F-S self-regulates a
+    truly-never-shared value to neutral, so admitting is safe."""
     profiles = [
         ColumnProfile("email", "Utf8", "email", 0.9,
                       null_rate=0.0, cardinality_ratio=1.0),
         _name(),
     ]
-    assert "email" not in _prob_fields(build_probabilistic_matchkeys(profiles))
+    assert "email" in _prob_fields(build_probabilistic_matchkeys(profiles))
+
+
+def test_card1_phone_admitted_not_treated_as_surrogate():
+    """Same carve-out for phone -- an identity-bearing value type."""
+    profiles = [
+        ColumnProfile("phone", "Utf8", "phone", 0.9,
+                      null_rate=0.0, cardinality_ratio=1.0),
+        _name(),
+    ]
+    assert "phone" in _prob_fields(build_probabilistic_matchkeys(profiles))
 
 
 def test_high_card_email_still_admitted():
