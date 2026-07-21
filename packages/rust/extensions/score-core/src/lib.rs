@@ -697,10 +697,177 @@ pub fn ensemble_similarity(a: &str, b: &str) -> f64 {
     jw.max(ts).max(0.8 * sx)
 }
 
+/// `radial_from_hex`: parse a 2-hex-char-per-bin signed-byte radial-variance
+/// profile (`0x` prefix tolerated) back to a list of ints; byte-for-byte with the
+/// Python `radial_from_hex`. Odd trailing char is dropped (`usable` truncation);
+/// a non-hex char -> `None` (the Python `int(..., 16)` would raise there, and the
+/// score_one arm cannot, so it declines to 0.0).
+fn radial_from_hex(s: &str) -> Option<Vec<i64>> {
+    let s = if s.len() >= 2 && (s.starts_with("0x") || s.starts_with("0X")) {
+        &s[2..]
+    } else {
+        s
+    };
+    let bytes = s.as_bytes();
+    let usable = bytes.len() - (bytes.len() % 2);
+    let mut out = Vec::with_capacity(usable / 2);
+    let mut i = 0;
+    while i < usable {
+        // `bytes[i] as char` maps a non-ASCII byte to a non-hex char -> None,
+        // so this never panics on a multibyte input the way `&s[i..i+2]` would.
+        let hi = (bytes[i] as char).to_digit(16)?;
+        let lo = (bytes[i + 1] as char).to_digit(16)?;
+        let b = (hi * 16 + lo) as i64; // 0..=255
+        out.push(if b >= 128 { b - 256 } else { b });
+        i += 2;
+    }
+    Some(out)
+}
+
+/// Pearson correlation of two equal-length int sequences; 0.0 if either is
+/// constant. Byte-for-byte with the Python `_pearson`: the mean is
+/// `sum(int)/len` (exact integer sum, one float divide) and every reduction
+/// accumulates left-to-right in f64, so the summation order matches.
+fn pearson(a: &[i64], b: &[i64]) -> f64 {
+    let n = a.len() as f64;
+    let sa: i64 = a.iter().sum();
+    let sb: i64 = b.iter().sum();
+    let ma = sa as f64 / n;
+    let mb = sb as f64 / n;
+    let mut da = 0.0f64;
+    for &x in a {
+        let d = x as f64 - ma;
+        da += d * d;
+    }
+    let mut db = 0.0f64;
+    for &y in b {
+        let d = y as f64 - mb;
+        db += d * d;
+    }
+    if da == 0.0 || db == 0.0 {
+        return 0.0;
+    }
+    let mut num = 0.0f64;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        num += (x as f64 - ma) * (y as f64 - mb);
+    }
+    num / (da * db).sqrt()
+}
+
+/// Rotation-aligned radial-profile similarity in [0, 1]: the max Pearson over
+/// every cyclic angular shift of `b`, clamped. Mismatched/empty profiles -> 0.0.
+/// Byte-for-byte with the Python `radial_align_similarity`.
+fn radial_align(a: &[i64], b: &[i64]) -> f64 {
+    let la = a.len();
+    if la == 0 || b.len() != la {
+        return 0.0;
+    }
+    let mut best = -1.0f64;
+    let mut rotated = vec![0i64; la];
+    for shift in 0..la {
+        // rotated = b[shift:] + b[:shift]
+        for (k, slot) in rotated.iter_mut().enumerate() {
+            *slot = b[(shift + k) % la];
+        }
+        let c = pearson(a, &rotated);
+        if c > best {
+            best = c;
+        }
+    }
+    // == Python `max(0.0, min(1.0, best))`; `best` is a Pearson value or the -1.0
+    // seed, never NaN, so clamp is safe and bit-identical.
+    best.clamp(0.0, 1.0)
+}
+
+/// `radial` scorer (score_one id 13): rotation-aligned Pearson of two hex
+/// radial-variance profiles; byte-for-byte with `_radial_score_single`
+/// (`radial_align_similarity(radial_from_hex(a), radial_from_hex(b))`). A parse
+/// failure -> 0.0 (the score_one contract cannot raise).
+pub fn radial_similarity(a: &str, b: &str) -> f64 {
+    match (radial_from_hex(a), radial_from_hex(b)) {
+        (Some(x), Some(y)) => radial_align(&x, &y),
+        _ => 0.0,
+    }
+}
+
+/// `audio_fp_from_hex`: parse a concatenated 8-hex-char-per-word fingerprint
+/// (`0x` prefix tolerated) back to a list of u32 sub-fingerprints; byte-for-byte
+/// with the Python `audio_fp_from_hex`. Trailing chars past the last full word
+/// are dropped; a non-hex char -> `None` (score_one declines to 0.0).
+fn audio_fp_from_hex(s: &str) -> Option<Vec<u32>> {
+    let s = if s.len() >= 2 && (s.starts_with("0x") || s.starts_with("0X")) {
+        &s[2..]
+    } else {
+        s
+    };
+    let bytes = s.as_bytes();
+    let usable = bytes.len() - (bytes.len() % 8);
+    let mut out = Vec::with_capacity(usable / 8);
+    let mut i = 0;
+    while i < usable {
+        let mut w: u32 = 0;
+        for j in 0..8 {
+            let d = (bytes[i + j] as char).to_digit(16)?;
+            w = w * 16 + d; // 8 hex digits fit u32 with no overflow
+        }
+        out.push(w);
+        i += 8;
+    }
+    Some(out)
+}
+
+/// Best (minimum) bit-error-rate over all frame offsets of two audio
+/// fingerprints; byte-for-byte with the Python `audio_ber_aligned` (min_overlap
+/// 8, `AUDIO_BANDS - 1 == 32` bits per sub-fingerprint). Empty input -> 1.0.
+fn audio_ber_aligned(a: &[u32], b: &[u32]) -> f64 {
+    let la = a.len() as i64;
+    let lb = b.len() as i64;
+    if la == 0 || lb == 0 {
+        return 1.0;
+    }
+    let need = 8.min(la).min(lb);
+    let nb = 32.0f64; // AUDIO_BANDS - 1
+    let mut best = 1.0f64;
+    let mut off = -(lb - 1);
+    while off < la {
+        let lo = off.max(0);
+        let hi = la.min(off + lb);
+        let overlap = hi - lo;
+        if overlap < need {
+            off += 1;
+            continue;
+        }
+        let mut bits: u64 = 0;
+        let mut i = lo;
+        while i < hi {
+            bits += (a[i as usize] ^ b[(i - off) as usize]).count_ones() as u64;
+            i += 1;
+        }
+        let ber = bits as f64 / (overlap as f64 * nb);
+        if ber < best {
+            best = ber;
+        }
+        off += 1;
+    }
+    best
+}
+
+/// `audio_fp` scorer (score_one id 14): offset-aligned similarity `1 - best BER`
+/// of two hex audio fingerprints; byte-for-byte with `_audio_fp_score_single`
+/// (`1.0 - audio_ber_aligned(audio_fp_from_hex(a), audio_fp_from_hex(b))`). A
+/// parse failure -> 0.0.
+pub fn audio_fp_similarity(a: &str, b: &str) -> f64 {
+    match (audio_fp_from_hex(a), audio_fp_from_hex(b)) {
+        (Some(x), Some(y)) => 1.0 - audio_ber_aligned(&x, &y),
+        _ => 0.0,
+    }
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
 /// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match,
-/// 8=alias_match, 9=dice, 10=jaccard, 11=phash, 12=ensemble.
+/// 8=alias_match, 9=dice, 10=jaccard, 11=phash, 12=ensemble, 13=radial,
+/// 14=audio_fp.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -752,6 +919,13 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // mirror), so it matches `_ensemble_score_single` by construction. The
         // Python guard gates it on the `ensemble_similarity` capability symbol.
         12 => ensemble_similarity(a, b),
+        // ids 13/14 = radial / audio_fp (perceptual profile scorers: hex-parse +
+        // alignment search, f64 reductions). Byte-exact with the per-pair
+        // `_radial_score_single` / `_audio_fp_score_single` mirrors. The Python
+        // guard gates each on its capability symbol so a stale wheel declines to
+        // those mirrors instead of silently zeroing via this catch-all.
+        13 => radial_similarity(a, b),
+        14 => audio_fp_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -1043,6 +1217,47 @@ mod tests {
         // Identical strings -> 1.0 (jw dominates). Soundex-only agreement floors at 0.8.
         assert_eq!(score_one(12, "robert", "robert"), 1.0);
         assert!(score_one(12, "Robert", "Rupert") >= 0.8 - 1e-12); // both R163
+    }
+
+    #[test]
+    fn score_one_ids_13_14_are_radial_audio_fp() {
+        // Ground truth from core.scorer._radial_score_single / _audio_fp_score_single.
+        // --- radial (id 13): rotation-aligned Pearson, clamped to [0, 1] ---
+        // identity of a NON-constant profile -> 1.0 (pearson(a,a)==1 at shift 0)
+        assert_eq!(score_one(13, "01ff02", "01ff02"), 1.0); // [1,-1,2]
+        // a cyclic rotation of the same profile recovers 1.0 (the whole point)
+        assert_eq!(score_one(13, "01ff02", "ff0201"), 1.0); // [-1,2,1] is a shift
+        // constant profile -> variance 0 -> pearson 0 -> 0.0
+        assert_eq!(score_one(13, "010101", "020202"), 0.0);
+        // mismatched length / empty / unparseable -> 0.0
+        assert_eq!(score_one(13, "0102", "010203"), 0.0);
+        assert_eq!(score_one(13, "", ""), 0.0);
+        assert_eq!(score_one(13, "zz", "01ff02"), 0.0);
+        // --- audio_fp (id 14): 1 - best offset BER over 32-bit sub-fingerprints ---
+        assert_eq!(score_one(14, "00000001", "00000001"), 1.0); // aligned identical
+        assert_eq!(score_one(14, "ffffffff", "00000000"), 0.0); // all 32 bits differ
+        assert_eq!(score_one(14, "0x00000001", "00000001"), 1.0); // 0x prefix stripped
+        assert_eq!(score_one(14, "", ""), 0.0); // empty -> BER 1.0 -> 1-1
+        assert_eq!(score_one(14, "zz", "00000001"), 0.0); // unparseable
+        // offset search: [0,1] vs [1] aligns the shared word -> BER 0 -> 1.0
+        assert_eq!(score_one(14, "0000000000000001", "00000001"), 1.0);
+        // arm N == the standalone fn across a mixed set
+        for (a, b) in [
+            ("01ff02", "020304"),
+            ("0abbe11c", "1cffaa0b"),
+            ("", "01"),
+            ("bad", "01ff"),
+        ] {
+            assert_eq!(score_one(13, a, b), radial_similarity(a, b));
+        }
+        for (a, b) in [
+            ("00000001", "0000000200000003"),
+            ("deadbeef", "deadbeef"),
+            ("", "00000001"),
+            ("zzzzzzzz", "00000001"),
+        ] {
+            assert_eq!(score_one(14, a, b), audio_fp_similarity(a, b));
+        }
     }
 
     #[test]
