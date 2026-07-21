@@ -190,3 +190,62 @@ class TestResolveFastPath:
         assert ne_specs[0][0] == phone_col
         assert ne_specs[0][2] == 0.8  # threshold
         assert ne_specs[0][3] == 0.5  # penalty
+
+
+class TestPerPairPythonPerfGuard:
+    """PERF GUARD (2026-07-21): a field whose scorer is neither vec-supported
+    (`_VEC_SUPPORTED`) nor native-kernel-backed (`_NATIVE_SCORER_IDS`) forces the
+    O(N^2) per-pair Python loop in `_score_one_bucket_fast`, MEASURED 19x slower
+    than the vectorized `find_fuzzy_matches` on a real NCVR name-scorer matchkey
+    (26.97s vs 1.40s) -- enough to blow the per-test timeout on a slow CI runner.
+    `_resolve_fast_path` must DECLINE so such a matchkey uses find_fuzzy_matches.
+
+    This is what makes the ensemble kernel safe to default-on: an ensemble field
+    resolving no longer drags a name-scorer matchkey onto the slow per-pair path.
+    """
+
+    def _prepared_df_for(self, *fields: MatchkeyField) -> pl.DataFrame:
+        from goldenmatch.core.matchkey import _xform_sig
+        cols = {"__row_id__": [0, 1, 2]}
+        for f in fields:
+            cols[_xform_sig(f)] = ["alice", "alicia", "bob"]
+        return pl.DataFrame(cols)
+
+    def test_declines_when_field_forces_per_pair_python(self):
+        # name_freq_weighted_jw is neither vec-supported nor native-id -> per-pair.
+        f1 = MatchkeyField(field="name", scorer="name_freq_weighted_jw", weight=1.0)
+        f2 = MatchkeyField(field="alias", scorer="given_name_aliased_jw", weight=1.0)
+        mk = MatchkeyConfig(name="names", type="weighted", threshold=0.7, fields=[f1, f2])
+        result = _resolve_fast_path(
+            mk, self._prepared_df_for(f1, f2),
+            across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is None, (
+            "a matchkey with a per-pair-Python scorer (name_freq_weighted_jw) "
+            "must decline the fast path -> find_fuzzy_matches (perf guard)"
+        )
+
+    def test_engages_for_vec_supported_scorers(self):
+        # jaro_winkler is both vec-supported and native-id -> the fast path is
+        # a real win; the guard must NOT decline it.
+        f1 = MatchkeyField(field="first", scorer="jaro_winkler", weight=1.0)
+        f2 = MatchkeyField(field="last", scorer="jaro_winkler", weight=1.0)
+        mk = MatchkeyConfig(name="jw", type="weighted", threshold=0.7, fields=[f1, f2])
+        result = _resolve_fast_path(
+            mk, self._prepared_df_for(f1, f2),
+            across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is not None, "all-vec/native matchkey must keep the fast path"
+
+    def test_ensemble_field_alone_still_engages(self):
+        # ensemble IS vec-supported (+ native id 12), so an ensemble matchkey with
+        # only vec/native fields keeps the fast path -- the guard only bites when a
+        # genuinely per-pair-Python field (name scorers) is present.
+        f1 = MatchkeyField(field="a", scorer="ensemble", weight=1.0)
+        f2 = MatchkeyField(field="b", scorer="jaro_winkler", weight=1.0)
+        mk = MatchkeyConfig(name="ens", type="weighted", threshold=0.7, fields=[f1, f2])
+        result = _resolve_fast_path(
+            mk, self._prepared_df_for(f1, f2),
+            across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is not None, "ensemble+jw (both vec/native) must keep the fast path"
