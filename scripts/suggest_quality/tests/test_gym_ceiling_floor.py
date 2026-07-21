@@ -49,19 +49,35 @@ def _stub_pipeline(monkeypatch, ceilings_in_order: list[float]) -> None:
     )
 
 
+def _skip_records(records: list[dict]) -> set:
+    return {r.get("dataset") for r in records
+            if r.get("status") == "skipped_degenerate_ceiling"}
+
+
+def _evaluated(records: list[dict]) -> set:
+    # datasets with a real per-perturbation record (not a skip sentinel)
+    return {r.get("dataset") for r in records
+            if r.get("status") != "skipped_degenerate_ceiling"}
+
+
 def test_degenerate_ceiling_dataset_is_skipped(monkeypatch) -> None:
     # datasets processed in list order -> ceilings consumed in that order.
     _stub_pipeline(monkeypatch, [0.96, 0.26])
     records = gym.run_catalog([_ds("competent"), _ds("degenerate")], [_Pert()])
 
-    datasets_seen = {r.get("dataset") for r in records}
-    assert "competent" in datasets_seen        # competent ceiling -> evaluated
-    assert "degenerate" not in datasets_seen    # 0.26 < 0.50 floor -> skipped
+    assert "competent" in _evaluated(records)   # competent ceiling -> evaluated
+    assert "competent" not in _skip_records(records)
+    # 0.26 < 0.50 floor -> NOT evaluated, but emits a VISIBLE skip sentinel so the
+    # gate can tell a degenerate skip from an erroring/absent dataset.
+    assert "degenerate" not in _evaluated(records)
+    assert "degenerate" in _skip_records(records)
 
 
 def test_nan_ceiling_is_skipped(monkeypatch) -> None:
     _stub_pipeline(monkeypatch, [math.nan])
-    assert gym.run_catalog([_ds("nan_ceiling")], [_Pert()]) == []
+    records = gym.run_catalog([_ds("nan_ceiling")], [_Pert()])
+    assert _skip_records(records) == {"nan_ceiling"}
+    assert _evaluated(records) == set()  # no per-perturbation records
 
 
 def test_ceiling_at_floor_is_kept(monkeypatch) -> None:
@@ -69,14 +85,16 @@ def test_ceiling_at_floor_is_kept(monkeypatch) -> None:
     # is a valid target.
     _stub_pipeline(monkeypatch, [gym._CEILING_FLOOR_DEFAULT])
     records = gym.run_catalog([_ds("at_floor")], [_Pert()])
-    assert {r.get("dataset") for r in records} == {"at_floor"}
+    assert _evaluated(records) == {"at_floor"}
+    assert _skip_records(records) == set()
 
 
 def test_floor_is_env_overridable(monkeypatch) -> None:
     # Raising the floor above a previously-competent ceiling now skips it.
     monkeypatch.setenv("GOLDENMATCH_SUGGEST_GYM_CEILING_FLOOR", "0.98")
     _stub_pipeline(monkeypatch, [0.96])
-    assert gym.run_catalog([_ds("now_too_low")], [_Pert()]) == []
+    records = gym.run_catalog([_ds("now_too_low")], [_Pert()])
+    assert _skip_records(records) == {"now_too_low"}
 
 
 def test_ceiling_floor_reader(monkeypatch) -> None:

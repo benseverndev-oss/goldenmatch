@@ -268,6 +268,20 @@ def run_catalog(datasets, perturbations) -> list[dict]:
                 "nan" if math.isnan(f1_ceiling) else f"{f1_ceiling:.4f}",
                 floor,
             )
+            # Emit a dataset-level SKIP SENTINEL so the skip is VISIBLE to the
+            # gate. Without it, a blessed dataset that later drifts into a
+            # degenerate ceiling is indistinguishable from an erroring/absent one
+            # -- both leave no record -- and the gate re-fails it as MISSING,
+            # contradicting the whole point of this guard (recovery% here is
+            # unmeasurable, so it should be an advisory, not a hard failure).
+            # status != "ok" so it never enters ok_records / the headline mean.
+            results.append({
+                "status": "skipped_degenerate_ceiling",
+                "dataset": dataset.name,
+                "name": "*",
+                "f1_ceiling": None if math.isnan(f1_ceiling) else f1_ceiling,
+                "ceiling_floor": floor,
+            })
             continue
 
         # ── Loop perturbations ────────────────────────────────────────────────
