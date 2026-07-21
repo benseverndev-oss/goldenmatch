@@ -1406,16 +1406,27 @@ class TestModelReuseSkipsBuildBlocks:
         )
 
     def _counting_build_blocks(self, monkeypatch):
+        # Count EITHER EM-block builder: the default FS path builds the EM-only
+        # blocks as row-id arrays via blocker.build_em_blocks_agg (no per-block
+        # frames); the legacy / bench-dump routes still call pipeline.build_blocks
+        # directly. "Blocks built" == either fired.
+        from goldenmatch.core import blocker as blocker_mod
         from goldenmatch.core import pipeline as pipeline_mod
 
         calls = {"n": 0}
-        real = pipeline_mod.build_blocks
+        real_bb = pipeline_mod.build_blocks
+        real_agg = blocker_mod.build_em_blocks_agg
 
-        def _counting(*a, **k):
+        def _counting_bb(*a, **k):
             calls["n"] += 1
-            return real(*a, **k)
+            return real_bb(*a, **k)
 
-        monkeypatch.setattr(pipeline_mod, "build_blocks", _counting)
+        def _counting_agg(*a, **k):
+            calls["n"] += 1
+            return real_agg(*a, **k)
+
+        monkeypatch.setattr(pipeline_mod, "build_blocks", _counting_bb)
+        monkeypatch.setattr(blocker_mod, "build_em_blocks_agg", _counting_agg)
         return calls
 
     def test_preloaded_model_bucket_route_skips_build_blocks(

@@ -204,6 +204,103 @@ def _fs_em_sample_rows() -> int | None:
     return n if n > 0 else None  # 0 / negative -> explicit off
 
 
+def _fs_em_block_slim_enabled() -> bool:
+    """Project the EM-training block frame to ``__row_id__`` + the blocking
+    group columns before ``build_blocks`` (DEFAULT ON;
+    ``GOLDENMATCH_FS_EM_BLOCK_SLIM=0`` restores full-width blocks as the parity
+    oracle).
+
+    EM reads ONLY the ``__row_id__`` column of the blocks it samples
+    (``probabilistic._sample_blocked_pairs_with_fields``); the sampled pairs'
+    field values are looked up on the full ``score_frame``
+    (``_row_lookup_for_pairs``), NEVER on the block frames. So the EM blocks
+    carry every source column (wide strings + ``__xform_*``) for nothing --
+    ``build_blocks`` materializes each block on the FULL frame, across every
+    multi_pass/SN pass, which is the FS memory PEAK (~1.4 GB at 100k person; a
+    spike BEFORE scoring). Projecting to the columns ``build_blocks`` actually
+    groups on collapses that to tens of MB with a **byte-identical EMResult**
+    (the row-id membership + per-block ``blocking_fields`` provenance are
+    unchanged). Complementary to ``GOLDENMATCH_FS_EM_SAMPLE_ROWS``: the row
+    sample bounds the block COUNT above the cap, this bounds each block's WIDTH
+    at every scale (incl. the ≤cap no-sample regime)."""
+    v = os.environ.get("GOLDENMATCH_FS_EM_BLOCK_SLIM")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _fs_em_agg_blocks_enabled() -> bool:
+    """Build the EM-training blocks as compact row-id arrays via one
+    ``group_by().agg()`` per pass instead of per-block frames (DEFAULT ON;
+    ``GOLDENMATCH_FS_EM_AGG_BLOCKS=0`` restores the frame-based
+    ``build_blocks`` path).
+
+    Supersedes the slim-projection lever for static/multi_pass FS blocking: EM
+    reads only ``__row_id__`` + each block's ``blocking_fields``, so building
+    blocks as arrays (``blocker.build_em_blocks_agg``) eliminates BOTH the
+    per-block-object floor AND the per-pass full-frame transient that the
+    width-projection alone can't reach -- whole-pipeline peak 2126->549 MB at
+    100k person, byte-identical output (absent oversized blocks; the
+    bench-probabilistic panel gates the oversized case -- see
+    ``build_em_blocks_agg``)."""
+    v = os.environ.get("GOLDENMATCH_FS_EM_AGG_BLOCKS")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _build_em_blocks(em_frame: Any, blocking: Any) -> list:
+    """Build the EM-only training blocks.
+
+    Preferred: ``blocker.build_em_blocks_agg`` (row-id arrays, no per-block
+    frames) for static/multi_pass when ``_fs_em_agg_blocks_enabled()``. Else the
+    ``build_blocks`` path, on a ``__row_id__`` + blocking-key projection of
+    ``em_frame`` when ``_fs_em_block_slim_enabled()`` (a lesser memory win).
+    Both fall back to full-width ``build_blocks`` on anything they can't cover,
+    so output is identical on any config the fast paths don't handle."""
+    # NB: use the MODULE-LEVEL ``build_blocks`` (imported at top of file), not a
+    # local import -- tests monkeypatch ``pipeline.build_blocks`` to spy on it
+    # (test_probabilistic.TestModelReuseSkipsBuildBlocks), and a local re-import
+    # would shadow the patch.
+    from goldenmatch.core.blocker import collect_blocking_fields
+    from goldenmatch.core.frame import to_frame as _tf
+
+    if _fs_em_agg_blocks_enabled() and getattr(blocking, "strategy", None) in (
+        "static",
+        "multi_pass",
+    ):
+        try:
+            from goldenmatch.core.blocker import build_em_blocks_agg
+
+            return build_em_blocks_agg(em_frame, blocking)
+        except Exception:
+            logger.debug(
+                "FS EM agg-block builder failed; falling back to build_blocks.",
+                exc_info=True,
+            )
+
+    if _fs_em_block_slim_enabled():
+        try:
+            native = _tf(em_frame).native
+            # Column NAMES, representation-agnostic: pyarrow Table.columns is a
+            # list of ChunkedArrays (names live on .column_names), polars
+            # DataFrame.columns is the name list. `.select(names)` works on both.
+            names = list(getattr(native, "column_names", None) or native.columns)
+            fields = collect_blocking_fields(blocking) if blocking else []
+            keep = ["__row_id__"] + [
+                f for f in dict.fromkeys(fields)
+                if f != "__row_id__" and f in names
+            ]
+            if "__row_id__" in names:
+                return build_blocks(native.select(keep), blocking)
+        except Exception:
+            logger.debug(
+                "FS EM block-slim projection failed; using full-width blocks.",
+                exc_info=True,
+            )
+    return build_blocks(em_frame, blocking)
+
+
 def _finalize_review_pairs(
     review_pairs: list[tuple[int, int, float]],
     linked_pairs: list[tuple[int, int, float]],
@@ -374,6 +471,95 @@ def _fs_external_blocks_route(config: GoldenMatchConfig) -> bool:
     return not has_active_emitter()
 
 
+def _fs_streaming_dedupe_eligible(
+    config: GoldenMatchConfig, matchkeys: list, output_dir: str | None
+) -> bool:
+    """The single-box STREAMING FS dedupe path (score + cluster + output, all
+    bounded, written straight to parquet) applies only when:
+
+      - the caller asked for file output (``output_dir`` set) AND opted into the
+        out-of-core scale path (``GOLDENMATCH_FS_OUT_OF_CORE=1``);
+      - the config is the covered FS shape: EXACTLY one probabilistic matchkey
+        (a second matchkey needs the in-memory ``matched_pairs`` cross-exclude);
+      - blocking is ``static``/``multi_pass`` (what FS auto-config emits and the
+        out-of-core scorer supports — see ``score_fs_out_of_core``).
+
+    Everything else keeps the in-memory pipeline. Deliberately conservative: this
+    is the opt-in scale option, not a default route change."""
+    from goldenmatch.backends.fs_out_of_core import fs_out_of_core_enabled
+
+    if output_dir is None or not fs_out_of_core_enabled():
+        return False
+    if config.blocking is None:
+        return False
+    if getattr(config.blocking, "strategy", None) not in ("static", "multi_pass"):
+        return False
+    if len(matchkeys) != 1 or matchkeys[0].type != "probabilistic":
+        return False
+    return True
+
+
+def _run_fs_streaming_dedupe(
+    collected_df: Any,
+    config: GoldenMatchConfig,
+    mk: Any,
+    output_dir: str,
+) -> dict:
+    """Prep-done → single-box streaming FS dedupe. Trains EM exactly as
+    ``_score_probabilistic_matchkey`` does (bounded EM-block sample; the streaming
+    scorer re-derives blocks from disk, so these blocks feed ONLY EM's within-
+    block-pair sample), then hands the prepared frame to ``run_fs_dedupe_streaming``
+    (score from a DuckDB file → cluster → stream unique/dupes/golden to parquet).
+
+    Returns a result dict of output PATHS + counts (never in-memory frames) —
+    the streaming path exists precisely so the back-half is never materialized."""
+    from goldenmatch.backends.fs_out_of_core import run_fs_dedupe_streaming
+    from goldenmatch.core.blocker import collect_blocking_fields
+    from goldenmatch.core.frame import to_frame as _tf
+    from goldenmatch.core.probabilistic import load_or_train_em
+
+    assert config.blocking is not None, "streaming FS dedupe requires blocking"
+
+    score_frame, blocking = collected_df, config.blocking
+
+    # EM training blocks (bounded sample when the frame exceeds the cap — the
+    # blocks feed ONLY EM's pair sample; the streaming scorer re-blocks from disk).
+    _em_cap = _fs_em_sample_rows()
+    _em_src = _tf(score_frame)
+    if _em_cap is not None and _em_src.height > _em_cap:
+        logger.info(
+            "FS streaming EM-block sample: %d-row sample of %d "
+            "(GOLDENMATCH_FS_EM_SAMPLE_ROWS).", _em_cap, _em_src.height,
+        )
+        blocks = _build_em_blocks(
+            _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED), blocking
+        )
+    else:
+        blocks = _build_em_blocks(score_frame, blocking)
+    blocking_fields = collect_blocking_fields(blocking)
+    em_result = load_or_train_em(
+        score_frame, mk, blocks=blocks, blocking_fields=blocking_fields,
+        target_ids=None,
+    )
+    del blocks  # free EM's training blocks before scoring re-blocks from disk
+
+    # Score to the review cut, cluster only the linked pairs (>= link_threshold)
+    # — the exact in-memory FS split (_prepare_probabilistic_review_scoring +
+    # _split_probabilistic_pairs), so the clusters match score_buckets.
+    scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(mk, em_result)
+    logger.info(
+        "F-S EM: converged=%s, iterations=%d, match_rate=%.4f",
+        em_result.converged, em_result.iterations, em_result.proportion_matched,
+    )
+    res = run_fs_dedupe_streaming(
+        score_frame, blocking, scoring_mk, em_result, config, output_dir,
+        link_threshold=link_threshold,
+    )
+    res["streaming"] = True
+    res["output_dir"] = output_dir
+    return res
+
+
 def _score_probabilistic_matchkey(
     mk: Any,
     config: GoldenMatchConfig,
@@ -473,12 +659,12 @@ def _score_probabilistic_matchkey(
                 "build_blocks peak; score_buckets ignores these blocks.",
                 _em_cap, _em_src.height,
             )
-            blocks = build_blocks(
-                _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED).native,
+            blocks = _build_em_blocks(
+                _em_src.sample(_em_cap, seed=_FS_EM_SAMPLE_SEED),
                 config.blocking,
             )
         else:
-            blocks = build_blocks(block_frame, config.blocking)
+            blocks = _build_em_blocks(block_frame, config.blocking)
     elif _fs_need_blocks:
         blocks = build_blocks(block_frame, config.blocking)
     else:
@@ -514,6 +700,35 @@ def _score_probabilistic_matchkey(
         # bench dump below is the only remaining reader).
         if not bench_dump_dir:
             blocks = []
+        # Out-of-core scale option (GOLDENMATCH_FS_OUT_OF_CORE=1, default OFF):
+        # score the FS blocks from a DISK-resident DuckDB table instead of the
+        # in-memory score_buckets partitions -- the opt-in path past the ~40M
+        # single-box wall. Dedupe-scope + static/multi_pass only (the scorer's
+        # supported surface; the match lanes and non-field strategies keep the
+        # in-memory route). Byte-identical pair set to score_buckets absent
+        # oversized blocks (see score_fs_out_of_core). NOTE: this Increment wires
+        # SCORING to disk; golden still holds score_frame, so the full peak drop
+        # awaits the golden-from-disk increment.
+        from goldenmatch.backends.fs_out_of_core import fs_out_of_core_enabled
+
+        if (
+            fs_out_of_core_enabled()
+            and target_ids is None
+            and not across_files_only
+            and getattr(config.blocking, "strategy", None) in ("static", "multi_pass")
+        ):
+            from goldenmatch.backends.fs_out_of_core import score_fs_out_of_core
+
+            pairs = score_fs_out_of_core(
+                score_frame, config.blocking, scoring_mk, matched_pairs, em_result,
+                target_ids=target_ids, db_path="auto",
+            )
+            pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)
+            review_pairs.extend(candidates)
+            all_pairs.extend(pairs)
+            for a, b, _s in pairs:
+                matched_pairs.add((min(a, b), max(a, b)))
+            return
         # Arrow pair stream (PR-B / B2b, flagged): incremental Arrow
         # accumulation, no matched_pairs exclude set built (eligibility
         # guarantees no later consumer). Split link/review on the table, then
@@ -666,6 +881,7 @@ def _get_block_scorer(config: GoldenMatchConfig):
     return score_blocks_parallel
 from goldenmatch.core.cluster import (
     ClusterFrames,
+    LazyClusterDict,
     build_cluster_frames,
     build_clusters_columnar,
     cluster_frames_to_dict,
@@ -1346,6 +1562,7 @@ def run_dedupe(
     llm_retrain: bool = False,
     llm_provider: str | None = None,
     llm_max_labels: int = 500,
+    output_dir: str | None = None,
 ) -> dict:
     """Run the dedupe pipeline.
 
@@ -1358,9 +1575,17 @@ def run_dedupe(
         output_unique: Whether to output unique records.
         output_report: Whether to generate a report.
         across_files_only: If True, only match across different sources.
+        output_dir: When set with ``GOLDENMATCH_FS_OUT_OF_CORE=1`` on an eligible
+            single-probabilistic-matchkey config, streams unique/dupes/golden to
+            parquet in this directory (the out-of-core scale path) and returns
+            paths + counts instead of in-memory frames.
 
     Returns:
-        Dict with keys: clusters, golden, unique, dupes, report.
+        Dict with keys: clusters, golden, unique, dupes, report. EXCEPT when the
+        ``output_dir`` out-of-core streaming short-circuit engages (see
+        ``output_dir`` above): then the dict instead carries ``streaming=True``,
+        ``output_dir``, the written ``unique_path``/``dupes_path``/``golden_path``
+        (paths, not frames), and ``unique_count``/``dupes_count``/``golden_count``.
     """
     matchkeys = config.get_matchkeys()
 
@@ -1502,6 +1727,7 @@ def run_dedupe(
                 output_golden, output_clusters,
                 output_dupes, output_unique, output_report,
                 across_files_only, llm_retrain, llm_provider, llm_max_labels,
+                output_dir=output_dir,
                 _eager_stages_done=_eager_done,
             )
         # W5b-1 shim (single, post-eager-stages): everything below is still
@@ -1516,6 +1742,7 @@ def run_dedupe(
         output_golden, output_clusters,
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
+        output_dir=output_dir,
         # Seed the prep cache with (id, height) like the dedupe_df path. The
         # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
         # fresh object that's GC-eligible the moment this call returns, so
@@ -2277,6 +2504,14 @@ def _fused_result_from_clusters(
 
     return {
         "clusters": clusters,
+        "cluster_stats": {
+            "multi_member_cluster_count": sum(
+                1 for c in clusters.values() if c.get("size", 0) > 1
+            ),
+            "matched_record_count": sum(
+                c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
+            ),
+        },
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),
@@ -2405,6 +2640,7 @@ def _run_dedupe_pipeline(
     llm_max_labels: int = 500,
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
+    output_dir: str | None = None,
     _eager_stages_done: frozenset[str] = frozenset(),
     _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
@@ -2797,6 +3033,24 @@ def _run_dedupe_pipeline(
         combined_lf = collected_df.lazy()
     with stage("auto_suggest_blocking"):
         _run_auto_suggest(collected_df, config)
+
+    # ── Single-box STREAMING FS dedupe short-circuit (opt-in scale path) ──
+    # When the caller asked for file output (output_dir) AND opted into the
+    # out-of-core FS path (GOLDENMATCH_FS_OUT_OF_CORE=1) on the covered FS shape,
+    # score + cluster + write unique/dupes/golden STRAIGHT TO PARQUET with the
+    # back-half never materialized in the driver -- the path that clears 50M+
+    # where the in-memory pipeline OOMs. All prep above (quality/transform/
+    # auto-fix/standardize/domain/matchkeys/precompute) is reused verbatim; only
+    # the score→cluster→output back-half is replaced. Default path (no output_dir)
+    # is byte-unchanged. Returns a dict of PATHS + counts, not frames.
+    if _fs_streaming_dedupe_eligible(config, matchkeys, output_dir):
+        assert output_dir is not None  # narrowed by the eligibility gate
+        _stream_res = _run_fs_streaming_dedupe(
+            collected_df, config, matchkeys[0], output_dir
+        )
+        if memory_store is not None:
+            memory_store.close()
+        return _stream_res
 
     # ── Fused-match whole-stage short-circuit (spec 2026-07-09 Stage F) ──
     # When the controller flagged this run for fused match (est-RSS pressure via
@@ -4159,8 +4413,38 @@ def _run_dedupe_pipeline(
     else:
         scored_pairs = dedup_pairs_max_score(all_pairs)
 
+    # Cluster aggregates for stats WITHOUT forcing the dict. `_extract_stats`
+    # previously recomputed multi-member cluster count + matched-record count by
+    # iterating `clusters.values()`, which forced the frames-out dict build on
+    # the dedupe_df hot path (the SP-C win otherwise leaves `results["clusters"]`
+    # lazy). Compute both from the metadata frame (one `size` column read) on the
+    # frames-out path, or from the already-built dict on the columnar/gate-off
+    # path -- so `_extract_stats` reads these instead of walking the dict.
+    if cluster_frames is not None:
+        from goldenmatch.core.frame import to_frame as _tf_cs
+
+        _sizes = _tf_cs(cluster_frames.metadata).column("size").to_list()
+        _multi_member = sum(1 for s in _sizes if s > 1)
+        _matched_records = sum(s for s in _sizes if s > 1)
+    else:
+        _multi_member = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
+        _matched_records = sum(
+            c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
+        )
+
     results = {
-        "clusters": _clusters_dict(),
+        # Frames-out path keeps this LAZY: cluster_frames_to_dict (~900K dict
+        # allocations at 1M) runs only if a consumer actually reads .clusters.
+        # The columnar/gate-off path already bound a real dict cheaply.
+        "clusters": (
+            LazyClusterDict(_clusters_dict)
+            if cluster_frames is not None
+            else _clusters_dict()
+        ),
+        "cluster_stats": {
+            "multi_member_cluster_count": _multi_member,
+            "matched_record_count": _matched_records,
+        },
         "golden": _dict_frame_to_arrow(golden_df),
         "unique": _dict_frame_to_arrow(unique_df),
         "dupes": _dict_frame_to_arrow(dupes_df),

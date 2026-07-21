@@ -491,7 +491,8 @@ _PEPY_RE = re.compile(r"pepy\.tech/projects\?q=(?P<q>[A-Za-z0-9+._-]+)")
 # goldenmatch-hnsw has its publish workflow but has not cut its first PyPI
 # release yet (pypistats 404s until then); move it into PYPI_PACKAGES + the
 # README pepy.tech ?q= list once published, same as the goldengraph note in
-# suite_download_badges.py.
+# suite_download_badges.py. (goldengraph-native is now registered directly in
+# PYPI_PACKAGES via #1958, so it is NOT excepted here.)
 _PYPI_PUBLISH_BADGE_EXCEPTIONS = {"goldenmatch-pg", "goldenmatch-hnsw", "infermap-native"}
 
 

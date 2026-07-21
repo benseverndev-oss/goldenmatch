@@ -6,7 +6,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **Bounded bucket streaming for the in-RAM FS route
+  (`GOLDENMATCH_FS_BLOCK_SOURCE=frame`, default OFF) — cuts the ≥1M
+  frame-residency peak.** The scale branch of the FS (probabilistic) bucket
+  scorer (`score_buckets._score_single_pass`, height ≥ n_buckets) used to
+  `partition_by` the keyed frame into all `n_buckets` eager frames up front — a
+  ~2× transient at partition time whose freed pages jemalloc retains straight
+  through cluster/golden, the dominant remaining single-node FS peak once the EM
+  `build_blocks` fixes landed. With the flag on, the scale branch keeps the
+  single bucketed frame resident and slices each bucket out on demand
+  (`filter_eq` inside the worker), so peak holds the bucketed frame plus at most
+  `max_workers` in-flight slices instead of all N partitions. Byte-identical to
+  the eager path: `filter_eq` preserves within-bucket row order ==
+  `partition_by(maintain_order)`, so each bucket's scorer output is unchanged,
+  and cross-bucket append order is order-invariant downstream (pairs
+  canonicalized). **Measured (synthetic person 1M, local 4c/15GB, jemalloc-decay
+  env): whole-pipeline peak 3244 → 2875 MB (−11.4%), byte-identical output
+  (850,714 clusters both).** Default OFF keeps the eager path until a CI ≥1M
+  peak gate validates the flip; scoped to the FS route (the weighted path is
+  untouched); the DuckDB (above-RAM) source is the separate
+  `GOLDENMATCH_FS_OUT_OF_CORE` path below. Spec:
+  `docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md`.
+
+- **Out-of-core single-box streaming Fellegi-Sunter dedupe — the ≥40M scale
+  path (`GOLDENMATCH_FS_OUT_OF_CORE=1`, default OFF).** The probabilistic (FS)
+  route had no out-of-core or distributed path: `_fs_use_bucket_route` hands
+  `backend=duckdb/ray` to a single-node scorer, so the whole prepared frame
+  stayed resident and the single-box FS wall was ~40M on 64 GB
+  (CI-measured: 25M @ 40.3 GB / 16 min; 50M projected to ~82 GB OOM), while F1
+  stayed scale-stable. `backends/fs_out_of_core.py` adds three bounded
+  mechanisms: `score_fs_out_of_core` streams block groups one at a time from a
+  DuckDB-resident (file-spilled) prepared table (scoring peak = one block
+  group, byte-parity with `score_buckets` absent oversized blocks);
+  `stream_fs_dedupe_output` writes unique/dupes via DuckDB `COPY ... TO parquet`
+  with no result frame; `run_fs_dedupe_streaming` ties prep → DuckDB file →
+  free frame → score → cluster → stream. New public
+  `gm.dedupe_to_parquet(*files, out_dir=...)` reaches it (and falls back to the
+  in-memory pipeline + parquet write when the config is not FS-eligible or the
+  flag is off, so it always yields the same files). The default path (no
+  `output_dir`) is byte-unchanged. Spec:
+  `docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md`.
+
+- **FS EM `build_blocks` memory-peak fixes (both default ON, byte-identical
+  output).** The FS memory peak is EM's `build_blocks`, not `score_buckets`.
+  `GOLDENMATCH_FS_EM_BLOCK_SLIM` projects each EM block-frame to
+  `[__row_id__] + blocking fields` before materialization (width 14→6);
+  `GOLDENMATCH_FS_EM_AGG_BLOCKS` builds the EM-only blocks as compact int64
+  row-id arrays via one `group_by().agg()` per pass, never materializing
+  per-block frames (supersedes the slim lever). Measured whole-pipeline peak on
+  person 100K: 2126 → 527 MB (−75%); regime-dependent above ~1M where the
+  EM-sample cap already bounds block count. A `jemalloc` page-decay env
+  (`_RJEM_MALLOC_CONF`) trims the 1M FS peak a further ~33% at ~zero wall.
+
 ### Fixed
+
+- **`DedupeResult.clusters` now exposes real contents to C-level consumers on
+  the frames-out path (re-scoped #1961).** The lazy cluster handle
+  (`LazyClusterDict`, a `dict` subclass that builds on first Python content
+  access) left its underlying storage empty until an override fired. C-level
+  consumers that bypass those overrides — the goldenmatch-pg bridge's pyo3
+  `.extract::<HashMap>()` (`PyDict_Next`), `json.dumps` (empty-dict fast path
+  via `PyDict_GET_SIZE`) — silently observed **zero clusters**, so a dedupe that
+  correctly formed a size-2 cluster serialized as empty (the pg `p4_typed`
+  smoke: "expected 2 rows in a size-2 cluster, got 0"). `DedupeResult.clusters`
+  is now a property that materializes the lazy handle to a plain `dict` on first
+  read, so any consumer sees the real contents; a result whose `.clusters` is
+  never read still never pays the build (the frames-out perf win is preserved).
+  The pg extension's columnar SPI read (#1951 `spi.rs`) was correct and is
+  unchanged.
 
 - **Arrow-native auto-config no longer silently degrades blocking on
   wide/sparse frames (#1852, mode 2).** With

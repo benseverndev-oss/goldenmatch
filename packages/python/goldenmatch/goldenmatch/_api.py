@@ -191,6 +191,18 @@ def _frame_write_csv(obj: Any, path: Any) -> None:
     obj.write_csv(path)
 
 
+def _frame_write_parquet(obj: Any, path: Any) -> int:
+    """Write a polars DataFrame / pa.Table result frame to parquet; return its
+    row count. Used by ``dedupe_to_parquet``'s in-memory fallback."""
+    if hasattr(obj, "num_rows"):  # pa.Table
+        import pyarrow.parquet as _pq
+
+        _pq.write_table(obj, str(path))
+        return int(obj.num_rows)
+    obj.write_parquet(str(path))
+    return int(obj.height)
+
+
 @dataclass
 class DedupeResult:
     """Result of a deduplication run.
@@ -208,7 +220,12 @@ class DedupeResult:
         config: The GoldenMatchConfig used for this run.
     """
     golden: Any | None = None  # pa.Table (v3.0.0)
-    clusters: dict[int, dict] = field(default_factory=dict)
+    # Intentional field->property shadow: this annotation keeps `clusters` a
+    # constructor kwarg + dataclass field; the property below (same name) is the
+    # C-safe lazy accessor. pyright flags the shadow (reportRedeclaration) and
+    # the field default vs the property type (reportAssignmentType); both are the
+    # known idiom, suppressed here like the ruff F811 on the property.
+    clusters: dict[int, dict] = field(default_factory=dict)  # pyright: ignore[reportRedeclaration, reportAssignmentType]
     dupes: Any | None = None  # pa.Table (v3.0.0)
     unique: Any | None = None  # pa.Table (v3.0.0)
     stats: dict = field(default_factory=dict)
@@ -272,6 +289,39 @@ class DedupeResult:
     # classic). The marker makes that capacity-survival tradeoff never silent.
     golden_fused_used: bool = False
     match_fused_capacity_mode: bool = False
+
+    # `clusters` (annotated above so it stays a constructor kwarg) is exposed as
+    # a lazy, C-SAFE property. The frames-out path stores a ``LazyClusterDict``
+    # whose underlying dict storage is EMPTY until a Python content method fires
+    # ``_ensure()``. Python-level reads (``.items()``/``[k]``/``len``) build it,
+    # but C-level consumers read the raw storage DIRECTLY and bypass those
+    # overrides -- pyo3 ``.extract::<HashMap>()`` in the goldenmatch-pg bridge
+    # (``dedupe_clusters``), ``json.dumps`` (empty-dict fast path via
+    # ``PyDict_GET_SIZE``), ``PyDict_Next`` -- so they silently observe ZERO
+    # clusters. That is the pg ``p4_typed`` smoke's "size-2 cluster, got 0". The
+    # getter materializes a LazyClusterDict to a PLAIN dict once, on first read,
+    # so any consumer (C or Python) sees real contents; a result whose
+    # ``.clusters`` is never read never pays the build (the frames-out win).
+    @property
+    def clusters(self) -> dict[int, dict]:  # noqa: F811  (intentional field->property shadow; the field above keeps `clusters` a constructor kwarg)
+        raw = self.__dict__.get("_clusters", None)
+        if type(raw) is dict:
+            return raw  # already a plain dict -- no copy, no rebuild
+        # LazyClusterDict (or a missing/None slot): materialize once. dict()
+        # fires the Python-level items()/_ensure path, so the plain dict we
+        # cache back carries the real cluster contents.
+        materialized: dict[int, dict] = dict(raw) if raw is not None else {}
+        self.__dict__["_clusters"] = materialized
+        return materialized
+
+    @clusters.setter
+    def clusters(self, value: Any) -> None:  # noqa: F811  (setter for the field->property shadow above)
+        # On a plain ``DedupeResult(...)`` with no ``clusters=`` kwarg, dataclass
+        # passes THIS property object as the "default" (the field default was
+        # shadowed by the property); normalize that -- and None -- to ``{}``.
+        if value is None or isinstance(value, property):
+            value = {}
+        self.__dict__["_clusters"] = value
 
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
@@ -536,6 +586,94 @@ def dedupe(
         golden_fused_used=bool(result.get("golden_fused_used", False)),
         match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
     )
+
+
+def dedupe_to_parquet(
+    *files: str,
+    out_dir: str,
+    config: str | Any | None = None,
+    exact: list[str] | None = None,
+    fuzzy: dict[str, float] | None = None,
+    blocking: list[str] | None = None,
+    threshold: float | None = None,
+    backend: str | None = None,
+) -> dict:
+    """Deduplicate one or more files, writing unique/dupes/golden to parquet in
+    ``out_dir`` and returning the paths + counts (never in-memory frames).
+
+    The single-box SCALE entry point. When ``GOLDENMATCH_FS_OUT_OF_CORE=1`` and the
+    resolved config is a single Fellegi-Sunter (``probabilistic``) matchkey over
+    ``static``/``multi_pass`` blocking, the score → cluster → output back-half runs
+    OUT-OF-CORE (the prepared frame is spilled to a DuckDB file, output streamed to
+    parquet via ``COPY``), so peak RSS stays bounded and datasets past the ~40M
+    in-memory wall complete where ``dedupe()`` OOMs. For any other config it runs
+    the in-memory pipeline and writes the returned frames to the same parquet
+    layout, so the call always produces the same files.
+
+    Args:
+        *files: Paths to CSV/Excel/Parquet files.
+        out_dir: Directory for ``unique.parquet`` / ``dupes.parquet`` /
+            ``golden.parquet`` (created if absent).
+        config: Path to YAML config, a GoldenMatchConfig, or None for auto-config.
+        exact/fuzzy/blocking/threshold/backend: same as ``dedupe()``.
+
+    Returns:
+        dict with ``output_dir``, ``unique_path`` / ``dupes_path`` /
+        ``golden_path`` (``golden_path`` is None when no multi-member cluster
+        exists), ``unique_count`` / ``dupes_count`` / ``golden_count``, and
+        ``streaming`` (True when the out-of-core path ran).
+    """
+    import os as _os
+
+    from goldenmatch.core.pipeline import run_dedupe
+
+    if isinstance(config, str):
+        cfg = load_config(config)
+    elif config is not None:
+        cfg = config
+    else:
+        cfg = _build_config(exact, fuzzy, blocking, threshold, False, backend)
+
+    if backend and hasattr(cfg, "backend"):
+        cfg.backend = backend
+
+    file_specs = [(str(f), Path(f).stem) for f in files]
+    result = run_dedupe(file_specs, cfg, output_dir=out_dir)
+
+    if result.get("streaming"):
+        # The streaming short-circuit already wrote the parquet files and returned
+        # paths + counts.
+        return result
+
+    # Fallback: the in-memory pipeline ran (config not FS-eligible, or the opt-in
+    # env flag was off). Write its frames to the same parquet layout so the caller
+    # always gets the same files back.
+    _os.makedirs(out_dir, exist_ok=True)
+    unique_path = _os.path.join(out_dir, "unique.parquet")
+    dupes_path = _os.path.join(out_dir, "dupes.parquet")
+    golden_path = _os.path.join(out_dir, "golden.parquet")
+    unique = result.get("unique")
+    dupes = result.get("dupes")
+    golden = result.get("golden")
+    unique_count = _frame_write_parquet(unique, unique_path) if unique is not None else 0
+    dupes_count = _frame_write_parquet(dupes, dupes_path) if dupes is not None else 0
+    # Only write golden.parquet when it actually has rows (mirrors the streaming
+    # path): a 0-row golden frame must not leave a stray empty file on disk while
+    # the returned golden_path is None -- keep the file set and the paths consistent.
+    _golden_rows = 0
+    if golden is not None:
+        _golden_rows = golden.num_rows if hasattr(golden, "num_rows") else golden.height
+    golden_count = _frame_write_parquet(golden, golden_path) if _golden_rows else 0
+    return {
+        "output_dir": out_dir,
+        "unique_path": unique_path if unique is not None else None,
+        "dupes_path": dupes_path if dupes is not None else None,
+        "golden_path": golden_path if golden_count else None,
+        "unique_count": unique_count,
+        "dupes_count": dupes_count,
+        "golden_count": golden_count,
+        "streaming": False,
+    }
 
 
 @guard_entrypoint("dedupe", "dedupe_df raised an unexpected error")
@@ -1420,8 +1558,22 @@ def _extract_stats(result: dict) -> dict:
             _frame_height(golden),
         )
 
-    total_clusters = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
-    matched_records = sum(c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1)
+    # Prefer the pipeline's frame-derived aggregates (`cluster_stats`) when
+    # present -- reading them avoids walking `clusters.values()`, which on the
+    # frames-out path would force the lazy cluster-dict build (~3.6s at 1M) that
+    # the SP-C path exists to defer. Byte-identical to the dict walk (both count
+    # multi-member clusters + sum their sizes); the fallback stays for callers
+    # whose result predates `cluster_stats` (columnar/gate-off already bind a
+    # real dict, so their walk is cheap anyway).
+    _cluster_stats = result.get("cluster_stats")
+    if _cluster_stats is not None:
+        total_clusters = _cluster_stats["multi_member_cluster_count"]
+        matched_records = _cluster_stats["matched_record_count"]
+    else:
+        total_clusters = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
+        matched_records = sum(
+            c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
+        )
     match_rate = matched_records / total_records if total_records > 0 else 0.0
 
     return {

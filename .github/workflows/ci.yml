@@ -1658,6 +1658,9 @@ jobs:
           # documented Arrow remedy). Verified locally: 20/20 clean with this set vs
           # 20/20 SIGSEGV without. See packages/rust/extensions/CLAUDE.md.
           ARROW_DEFAULT_MEMORY_POOL: system
+          # jemalloc page-decay: return freed polars pages to the OS between
+          # pipeline stages (root CLAUDE.md scale standard; -33% peak at 1M).
+          _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
       - run: cargo clippy --workspace -- -D warnings
       # The standalone pyo3-free sibling crates (graph-core, score-core) are
       # each their own [workspace], so `cargo test --workspace` above (which
