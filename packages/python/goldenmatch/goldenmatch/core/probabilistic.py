@@ -2312,13 +2312,16 @@ def score_probabilistic(
             pair_max_weight = ne_max_weight
             has_regular_evidence = False
             for k, f in enumerate(mk.fields):
+                weights = em_result.match_weights[f.field]
+                # #1854 full-range normalization: every field widens the min-max
+                # range (before the observed guard), so a pair agreeing on its
+                # one observed field can't saturate the shrunk range to 1.0.
+                pair_min_weight += min(weights)
+                pair_max_weight += max(weights)
                 if vec[k] < 0:
                     continue
                 has_regular_evidence = True
-                weights = em_result.match_weights[f.field]
                 total_weight += weights[vec[k]]
-                pair_min_weight += min(weights)
-                pair_max_weight += max(weights)
                 per_row = tf_row_vals.get(f.field)
                 if per_row is not None:
                     total_weight += _scalar_tf_contribution(
@@ -2735,8 +2738,14 @@ def score_probabilistic_vectorized(
             observed = np.ones_like(observed, dtype=bool)
         has_regular_evidence |= observed
         total_weight += np.where(observed, weights[lvl], 0.0)
-        pair_min_weight += np.where(observed, float(weights.min()), 0.0)
-        pair_max_weight += np.where(observed, float(weights.max()), 0.0)
+        # #1854 full-range normalization: the min-max range spans EVERY field,
+        # not only the observed ones -- otherwise a pair agreeing on its single
+        # observed field has total == pair_max and saturates to 1.0 (maximal
+        # confidence from minimal evidence). `total_weight` stays observed-gated.
+        # Under missing="disagree" `observed` is all-True (set above), so this is
+        # identical to the previous np.where; it changes only the unobserved path.
+        pair_min_weight += float(weights.min())
+        pair_max_weight += float(weights.max())
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n)
 
     for ne in (mk.negative_evidence or []):
@@ -2856,8 +2865,14 @@ def score_probabilistic_vectorized_batch(
             observed = np.ones_like(observed, dtype=bool)
         has_regular_evidence |= observed
         total_weight += np.where(observed, weights[lvl], 0.0)
-        pair_min_weight += np.where(observed, float(weights.min()), 0.0)
-        pair_max_weight += np.where(observed, float(weights.max()), 0.0)
+        # #1854 full-range normalization: the min-max range spans EVERY field,
+        # not only the observed ones -- otherwise a pair agreeing on its single
+        # observed field has total == pair_max and saturates to 1.0 (maximal
+        # confidence from minimal evidence). `total_weight` stays observed-gated.
+        # Under missing="disagree" `observed` is all-True (set above), so this is
+        # identical to the previous np.where; it changes only the unobserved path.
+        pair_min_weight += float(weights.min())
+        pair_max_weight += float(weights.max())
         _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, S)
 
     for ne in (mk.negative_evidence or []):
@@ -3679,13 +3694,15 @@ def score_pair_probabilistic(
     total_weight = 0.0
     has_regular_evidence = False
     for k, f in enumerate(mk.fields):
+        weights = em_result.match_weights[f.field]
+        # #1854 full-range normalization: every field widens the min-max range
+        # (before the observed guard) so minimal evidence can't saturate to 1.0.
+        pair_min_weight += min(weights)
+        pair_max_weight += max(weights)
         if vec[k] < 0:
             continue
         has_regular_evidence = True
-        weights = em_result.match_weights[f.field]
         total_weight += weights[vec[k]]
-        pair_min_weight += min(weights)
-        pair_max_weight += max(weights)
         if getattr(f, "tf_adjustment", False):
             total_weight += _scalar_tf_contribution(
                 _transform_field_value(row_a.get(f.field), f),

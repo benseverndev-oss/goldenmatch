@@ -407,11 +407,15 @@ class TestScorePairProbabilistic:
             match_weights={"name": [-3.0, 3.0], "email": [-3.0, 3.0]},
             converged=True, iterations=1, proportion_matched=0.1,
         )
+        # #1854: agreeing on name (+3.0) with email UNOBSERVED normalizes against
+        # the FULL two-field range [-6, +6] -> (3+6)/12 = 0.75. It no longer
+        # saturates to 1.0 off the shrunk single-field range (minimal evidence is
+        # not certainty).
         assert score_pair_probabilistic(
             {"name": "Ada", "email": None},
             {"name": "Ada", "email": "different@example.com"},
             mk, em,
-        ) == 1.0
+        ) == 0.75
         assert score_pair_probabilistic({}, {}, mk, em) == 0.5
 
     def test_sparse_training_excludes_missing_pairs_from_level_counts(self):
@@ -1897,7 +1901,10 @@ class TestNativeFSParity:
         numpy_pairs = sorted(p.score_probabilistic_vectorized(df, mk, em, set()))
         native_pairs = sorted(p.score_probabilistic_native(df, mk, em, set()))
         assert native_pairs == numpy_pairs
-        assert dict(((a, b), s) for a, b, s in native_pairs)[(1, 2)] == 1.0
+        # #1854: (1,2) agrees on first_name + zip with last_name UNOBSERVED for
+        # row 1; the full-field range keeps it below 1.0 (0.8467) instead of
+        # saturating off the observed-only range. Native and numpy agree exactly.
+        assert dict(((a, b), s) for a, b, s in native_pairs)[(1, 2)] == 0.8467
         assert dict(((a, b), s) for a, b, s in native_pairs)[(2, 3)] == 0.5
         # With the net-zero-evidence filter on, the Rust kernel and numpy STILL
         # agree (the load-bearing parity): both keep the positive-evidence (1,2)

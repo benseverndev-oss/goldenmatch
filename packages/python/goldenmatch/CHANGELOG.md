@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **FS `missing="unobserved"`: a partial-observation pair no longer normalizes to
+  1.0 (#1854).** The min-max score range accumulated only over the OBSERVED
+  fields, so a pair agreeing on its single observed field had `total == pair_max`
+  and rescaled to 1.0 — maximal confidence from minimal evidence. The range now
+  spans EVERY matchkey field (the sum stays over observed only), so a
+  one-of-many-observed agreement is correctly uncertain (e.g. 0.75 on a
+  two-field key). Cross-surface: `fs-core::score_fs_pair` (the native/unobserved
+  runtime + fs-wasm), the four Python reference paths in `core/probabilistic.py`
+  (vectorized ×2, scalar, `score_pair_probabilistic`). Identical when every field
+  is observed (`missing="disagree"` and fully-populated pairs are byte-unchanged;
+  auto-config routes null-heavy data to `disagree`, so the default path is
+  unaffected). Measured under forced `unobserved`: historical_50k
+  f1_probabilistic recovers to ~0.63 from the collapsed ~0.33; febrl3 −0.002
+  (within the quality-gate tolerance).
+
 ### Changed
 
 - **Out-of-core streaming FS refinements (review follow-ups, opt-in path only).**

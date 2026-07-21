@@ -130,12 +130,12 @@
       "f1_probabilistic": {
         "attribution": {
           "blocking_recall": 0.0,
-          "final_recall": 0.9758,
-          "threshold_loss": -0.9758
+          "final_recall": 0.9688,
+          "threshold_loss": -0.9688
         },
-        "f1": 0.9969,
+        "f1": 0.9867,
         "precision": 1.0,
-        "recall": 0.9939
+        "recall": 0.9738
       },
       "kind": "real",
       "signals": {
