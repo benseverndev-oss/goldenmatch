@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Weak-positive blocking-pass pruning now runs on the FS arrow lane.**
+  `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1` invoked `select_passes` (polars-native:
+  `with_row_index` / `group_by`) directly on `df`, but the FS routed / arrow
+  lane passes a pyarrow `Table` -- so it threw `AttributeError`, was swallowed
+  into "keep all passes", and pruning was a silent no-op for every arrow-lane FS
+  caller. `_maybe_prune_blocking_passes` now coerces a Table / LazyFrame to
+  polars first. With the pruner actually running on a representative sample it
+  cuts a redundant 6-pass zero-config FS scheme (3 first-name + 2 last-name
+  transform variants + zip) to 3 passes (one name axis per field + zip),
+  measured **71s -> 32.6s at 1M, F1 unchanged 1.000** (P=R=1.0) on realistic
+  person data -- recall-safe because it drops only redundant transform *variants*
+  of the same field, keeping each blocking *axis*. Still opt-in; a default-on
+  flip for the FS path is gated on the `bench-probabilistic` panel.
 - **Learned blocking no longer clobbers the #1207 strong-identifier union at
   >=50k rows (#1316).** Auto-config forced `strategy="learned"` unconditionally
   at `total_rows >= 50_000`, discarding the per-identifier blocking union that

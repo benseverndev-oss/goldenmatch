@@ -104,6 +104,17 @@ class TestAutoconfigHook:
         out = _maybe_prune_blocking_passes(self._cfg(), _dataset())
         assert [p.fields for p in out.passes] == [["b"]]
 
+    def test_enabled_prunes_arrow_lane(self, monkeypatch):
+        # The FS routed/arrow lane passes a pyarrow Table, not a polars frame.
+        # Before the coercion fix select_passes threw AttributeError
+        # (`with_row_index`), which was swallowed into "keep all passes" -- so
+        # pruning was a silent no-op for EVERY arrow-lane FS caller. Same input,
+        # same expected pruning as the polars lane.
+        monkeypatch.setenv("GOLDENMATCH_BLOCKING_PRUNE_PASSES", "1")
+        monkeypatch.setenv("GOLDENMATCH_BLOCKING_PASS_MIN_WEAKPOS", "3")
+        out = _maybe_prune_blocking_passes(self._cfg(), _dataset().to_arrow())
+        assert [p.fields for p in out.passes] == [["b"]]
+
     def test_noop_for_non_multipass(self, monkeypatch):
         monkeypatch.setenv("GOLDENMATCH_BLOCKING_PRUNE_PASSES", "1")
         cfg = BlockingConfig(strategy="static", keys=[_PASS_A])
