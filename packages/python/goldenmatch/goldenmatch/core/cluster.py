@@ -1857,8 +1857,13 @@ class LazyClusterDict(dict):
 
     def _ensure(self) -> None:
         if not self._built:
-            self._built = True
+            # Flip _built AFTER a successful build: if the builder raises, the
+            # object must NOT be left in a permanently-empty "built" state that
+            # silently masks the failure on a later access (a retry re-runs the
+            # builder and re-raises). The builder doesn't read this dict, so
+            # there is no re-entrancy that would need the flag flipped first.
             built = self._builder()
+            self._built = True
             if built:
                 dict.update(self, built)
 

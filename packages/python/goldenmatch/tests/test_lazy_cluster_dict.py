@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import pickle
 
+import pytest
 from goldenmatch.core.cluster import LazyClusterDict
 
 
@@ -85,6 +86,26 @@ def test_lazy_dict_clear_after_build_is_empty():
     d.clear()
     assert len(d) == 0
     assert dict(d) == {}
+
+
+def test_lazy_dict_builder_failure_is_not_poisoned():
+    """A raising builder must not poison the dict into a permanently-empty
+    'built' state: the first access re-raises, and a later access RETRIES the
+    builder (re-raising) instead of silently returning empty."""
+    calls = {"n": 0}
+
+    def builder():
+        calls["n"] += 1
+        raise RuntimeError("build failed")
+
+    d = LazyClusterDict(builder)
+    with pytest.raises(RuntimeError, match="build failed"):
+        len(d)
+    assert calls["n"] == 1
+    # not poisoned: a second access retries the builder and re-raises
+    with pytest.raises(RuntimeError, match="build failed"):
+        len(d)
+    assert calls["n"] == 2
 
 
 def test_lazy_dict_equals_plain_dict():
