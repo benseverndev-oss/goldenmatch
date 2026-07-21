@@ -36,7 +36,18 @@ if os.environ.get("GOLDENMATCH_CRASH_DIAG") == "1":
             hwm = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
             _fh_file.write(f"[crashdiag] VmHWM~{hwm:.0f}MB start {nodeid}\n")
             _fh_file.flush()
+            # Arm a hang-catcher: if THIS test runs longer than 90s (the crashing
+            # test's siblings finish in <=46s, and the worker dies before the 120s
+            # pytest-timeout can os._exit it), dump EVERY thread's stack to the
+            # surviving file -> the exact native frame where it's parked.
+            _fh.dump_traceback_later(90, repeat=False, file=_fh_file, exit=False)
         except Exception:  # never let the diagnostic break a run
+            pass
+
+    def pytest_runtest_logfinish(nodeid, location):  # noqa: D401
+        try:
+            _fh.cancel_dump_traceback_later()  # test finished in time; disarm
+        except Exception:
             pass
 # --- end crash diagnostic ---------------------------------------------------
 
