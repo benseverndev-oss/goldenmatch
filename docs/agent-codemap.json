@@ -352,6 +352,7 @@
           "defines": [
             "_bkt_debug_on",
             "_default_n_buckets",
+            "_ensure_legal_forms_installed",
             "_fs_bounded_stream_enabled",
             "_fs_bucket_native_enabled",
             "_ne_effectively_empty",
@@ -377,7 +378,8 @@
             "goldenmatch.core.matchkey",
             "goldenmatch.core.probabilistic",
             "goldenmatch.core.scorer",
-            "goldenmatch.plugins.registry"
+            "goldenmatch.plugins.registry",
+            "goldenmatch.refdata.business"
           ]
         },
         {
