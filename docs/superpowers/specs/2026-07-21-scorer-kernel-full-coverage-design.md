@@ -1,7 +1,7 @@
 # Full `-core` kernel coverage for the scorer surface (5/19 -> full)
 
 **Date:** 2026-07-21
-**Status:** Proposed (scoping / design). **Wave 1 `qgram` landed in this same PR** (5/19 -> 6/19); the baseline figures below describe the pre-PR starting point.
+**Status:** Proposed (scoping / design). **Wave 1 landing incrementally:** `qgram` (5/19 -> 6/19) and `soundex_match` (6/19 -> 7/19) are now kernel-backed; the baseline figures below describe the pre-work starting point.
 **Motivation:** The generated suite-matrix reports **"5 of 19 scorers are kernel-backed"**
 (`docs-site/suite-matrix.mdx`, computed by `gen_suite_matrix.py::_substrate_lines` from the
 `scorer_kernels` parity surface). This spec scopes what it takes to close that gap -- and argues
@@ -20,9 +20,13 @@ The other **14 were fallback-only** at that baseline: `dice`, `jaccard`, `qgram`
 `ensemble`, `embedding`, `record_embedding`, `alias_match`, `audio_fp`, `initialism_match`, `phash`,
 `radial`, `given_name_aliased_jw`, `name_freq_weighted_jw`.
 
-**Update (this PR):** `qgram` is now kernelized (Wave 1) -- it has a `score-core` kernel on the
-Python arrow-bucket fast path, so the current state is **6/19** with **13** fallbacks remaining.
-`qgram` reads as `python_only` in the `scorer_kernels` partition (no TS WASM port yet, like `date`).
+**Update:** `qgram` and `soundex_match` are now kernelized (Wave 1) -- each has a `score-core`
+kernel on the Python arrow-bucket fast path, so the current state is **7/19** with **12** fallbacks
+remaining. Both read as `python_only` in the `scorer_kernels` partition (no TS WASM port yet, like
+`date`). `soundex_match`'s kernel replicates `jellyfish.soundex` byte-for-byte INCLUDING its Unicode
+step (NFKD normalize + `str.upper` via the `unicode-normalization` crate), so native==pure on leading
+non-alpha / accented input too -- which also closes the same latent gap in the field-matrix path
+(both now dispatch the shared `score-core::soundex`).
 
 "Kernel-backed" in the metric means *a kernel exists in at least one language* (a union), so the
 denominator (19) also counts scorers that live in only one language. The metric is emitted by
@@ -96,7 +100,7 @@ minimal. Recommend **defer or explicitly decline**.
 
 | Wave | Scorers | Risk | Rationale |
 |---|---|---|---|
-| **1** | `qgram` ✅ (landed this PR), `soundex_match`, `initialism_match` | low | pure strings on the proven template; `soundex_match` is half-wired already |
+| **1** | `qgram` ✅, `soundex_match` ✅ (both landed), `initialism_match` | low | pure strings on the proven template; `soundex_match` reused the existing Rust kernel, upgraded to full jellyfish Unicode parity |
 | **2** | `given_name_aliased_jw`, `name_freq_weighted_jw`, `alias_match` | medium | string base + refdata table shipped in-kernel (mechanism exists); table fidelity is the risk |
 | **3** | `phash`, `dice`, `jaccard` | low-med | wiring existing kernels (`perceptual-core`, `bloom.rs`), not new algorithms |
 | **free** | `ensemble` | trivial | composes Wave-1 kernels; kernel-backed by construction |

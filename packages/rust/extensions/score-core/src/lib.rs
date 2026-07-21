@@ -10,6 +10,7 @@
 //! rapidfuzz.
 use rapidfuzz::distance::{damerau_levenshtein, jaro_winkler, levenshtein};
 use rapidfuzz::fuzz;
+use unicode_normalization::UnicodeNormalization;
 
 // Fellegi–Sunter EM training core (pyo3-free numeric heart). PR-C / C1 of the
 // FS Rust+Arrow-only epic; the `native` crate will add the Arrow/#[pyfunction]
@@ -192,9 +193,80 @@ pub fn qgram_similarity(a: &str, b: &str) -> f64 {
     inter as f64 / union as f64
 }
 
+/// American Soundex matching `jellyfish.soundex` byte-for-byte, INCLUDING its
+/// Unicode handling. Mirrors the jellyfish reference exactly
+/// (`jellyfish/_jellyfish.py::soundex`):
+///
+/// - empty input -> `""`.
+/// - `unicodedata.normalize("NFKD", s).upper()`: NFKD decomposition (an accented letter becomes base-letter + combining mark) then Unicode uppercase (`ß` -> `"SS"`).
+/// - seed = the LITERAL first char (kept as-is, not coded); `last` = its would-be code, or None if the seed isn't a coded consonant.
+/// - each subsequent char: a coded consonant appends its code when it differs from `last` (adjacent-dup collapse); ANY other char resets `last` to None UNLESS it is `H`/`W` (which leave `last` untouched).
+/// - stop at 4 output chars; right-pad with `0`.
+///
+/// This is the single reference for every `goldenmatch` soundex surface: the
+/// `native` field-matrix kernel and the bucket `score_one` path both call it.
+/// Rust `nfkd()` (the `unicode-normalization` crate) plus `str::to_uppercase`
+/// implement the same Unicode algorithms as Python's `unicodedata.normalize`
+/// and `str.upper`, so the result is byte-identical to jellyfish (batteried in
+/// `tests/test_native_soundex_parity.py`).
+pub fn soundex(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let normalized: String = s.nfkd().collect::<String>().to_uppercase();
+    let chars: Vec<char> = normalized.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let mut result = String::with_capacity(4);
+    result.push(chars[0]); // literal seed (jellyfish `result = [s[0]]`)
+    let mut count = 1usize;
+    let mut last = soundex_code(chars[0]); // would-be code of the seed, or None
+    for &c in &chars[1..] {
+        match soundex_code(c) {
+            Some(code) => {
+                if Some(code) != last {
+                    result.push(code);
+                    count += 1;
+                }
+                last = Some(code);
+            }
+            None => {
+                // Non-coded char (vowel / mark / digit / symbol): reset the
+                // dedup state, EXCEPT H/W which jellyfish leaves alone.
+                if c != 'H' && c != 'W' {
+                    last = None;
+                }
+            }
+        }
+        if count == 4 {
+            break;
+        }
+    }
+    for _ in count..4 {
+        result.push('0');
+    }
+    result
+}
+
+/// Soundex digit for a coded consonant (uppercase), else `None`. Vowels
+/// (A/E/I/O/U/Y), H, W, and every non-letter map to `None` (jellyfish's
+/// "not in any replacement set" branch).
+fn soundex_code(c: char) -> Option<char> {
+    match c {
+        'B' | 'F' | 'P' | 'V' => Some('1'),
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some('2'),
+        'D' | 'T' => Some('3'),
+        'L' => Some('4'),
+        'M' | 'N' => Some('5'),
+        'R' => Some('6'),
+        _ => None,
+    }
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact, 4=date, 5=qgram.
+/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -216,6 +288,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         3 if a == b => 1.0,
         4 => date_similarity(a, b),
         5 => qgram_similarity(a, b),
+        // id=6 = soundex_match: binary 1.0/0.0 on soundex-code equality. Guard
+        // arm collapses the if/else into the match (clippy::collapsible-match),
+        // like id 3; a soundex mismatch falls through to the 0.0 catch-all.
+        // Matches the bucket per-pair mirror `1.0 if jf.soundex(a)==jf.soundex(b) else 0.0`.
+        6 if soundex(a) == soundex(b) => 1.0,
         _ => 0.0,
     }
 }
@@ -296,6 +373,58 @@ mod tests {
     fn score_one_id5_is_qgram() {
         assert_eq!(score_one(5, "abc", "abc"), 1.0);
         assert_eq!(score_one(5, "abc", "abd"), qgram_similarity("abc", "abd"));
+    }
+
+    #[test]
+    fn soundex_matches_jellyfish_reference() {
+        // Canonical alphabetic jellyfish values.
+        assert_eq!(soundex("Robert"), "R163");
+        assert_eq!(soundex("Rupert"), "R163"); // Robert/Rupert collide
+        assert_eq!(soundex("Ashcraft"), "A261"); // H/W skip rule
+        assert_eq!(soundex("Tymczak"), "T522");
+        assert_eq!(soundex("Pfister"), "P236"); // adjacent same-code (P,F -> 1) coalesces
+        assert_eq!(soundex("Honeyman"), "H555");
+        // Empty -> empty (jellyfish `if not s`).
+        assert_eq!(soundex(""), "");
+        // Leading non-alpha: jellyfish seeds on the LITERAL first char (NOT the
+        // first letter) and codes the rest -- full-parity cases probed from
+        // jellyfish itself.
+        assert_eq!(soundex("123"), "1000");
+        assert_eq!(soundex("3M"), "3500");
+        assert_eq!(soundex("4abc"), "4120");
+        // Mid-string non-letter resets the dedup state (S..1..S -> both S's coded).
+        assert_eq!(soundex("S1S"), "S200");
+        // Unicode: NFKD fold + uppercase. Ürüm -> U + r(6) + m(5); ß.upper()="SS".
+        assert_eq!(soundex("Ürüm"), "U650");
+        assert_eq!(soundex("José"), "J200");
+        assert_eq!(soundex("ß"), "S000");
+    }
+
+    #[test]
+    fn soundex_pads_short_codes_to_four() {
+        assert_eq!(soundex("Lee").len(), 4);
+        assert_eq!(soundex("A"), "A000");
+    }
+
+    #[test]
+    fn soundex_code_table() {
+        assert_eq!(soundex_code('B'), Some('1')); // B F P V
+        assert_eq!(soundex_code('C'), Some('2')); // C G J K Q S X Z
+        assert_eq!(soundex_code('D'), Some('3')); // D T
+        assert_eq!(soundex_code('L'), Some('4')); // L
+        assert_eq!(soundex_code('M'), Some('5')); // M N
+        assert_eq!(soundex_code('R'), Some('6')); // R
+        assert_eq!(soundex_code('A'), None); // vowels
+        assert_eq!(soundex_code('1'), None); // non-letter
+    }
+
+    #[test]
+    fn score_one_id6_is_soundex_match() {
+        assert_eq!(score_one(6, "Robert", "Rupert"), 1.0); // same code
+        assert_eq!(score_one(6, "Robert", "Smith"), 0.0); // different code
+        // full jellyfish parity: soundex("123")="1000" != soundex("456")="4000"
+        assert_eq!(score_one(6, "123", "456"), 0.0);
+        assert_eq!(score_one(6, "123", "123"), 1.0);
     }
 
     #[test]

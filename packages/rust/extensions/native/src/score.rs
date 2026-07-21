@@ -247,6 +247,18 @@ pub fn qgram_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::qgram_similarity(a, b)
 }
 
+/// Soundex-match similarity (score-core id 6): binary 1.0/0.0 on soundex-code
+/// equality. Exposed as its own #[pyfunction] capability marker, like
+/// `date_similarity`/`qgram_similarity`: `score_one`/`score_block_pairs`
+/// dispatch id 6, but a stale published wheel (pre-soundex-bucket) would hit
+/// score_one's catch-all and silently return 0.0 for id 6, so the Python caller
+/// gates the native soundex route on `hasattr(_native, "soundex_similarity")`
+/// and falls back to the pure-Python per-pair jellyfish mirror otherwise.
+#[pyfunction]
+pub fn soundex_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::score_one(6, a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)
@@ -1123,57 +1135,11 @@ pub fn score_block_pairs_fs_arrow(
 // upper triangle + mirrors -- saves ~half the work on symmetric calls.
 // ----------------------------------------------------------------------------
 
-/// Soundex code matching `jellyfish.soundex` byte-for-byte. ASCII letters
-/// only; non-letter input returns the empty string (caller treats empty
-/// codes as non-matching, mirroring Python's `_soundex_score_matrix`).
-fn soundex(s: &str) -> String {
-    // Take the first alphabetic char as the seed letter (uppercased).
-    let mut iter = s.chars();
-    let first = loop {
-        match iter.next() {
-            Some(c) if c.is_ascii_alphabetic() => break c.to_ascii_uppercase(),
-            Some(_) => continue,
-            None => return String::new(),
-        }
-    };
-    let mut out = String::with_capacity(4);
-    out.push(first);
-    let mut last_code = soundex_code(first);
-    for c in iter {
-        if !c.is_ascii_alphabetic() {
-            continue;
-        }
-        let code = soundex_code(c.to_ascii_uppercase());
-        // Skip Hs and Ws between consonants (jellyfish ignores them but does
-        // not reset last_code).
-        if code == b'0' && (c.eq_ignore_ascii_case(&'H') || c.eq_ignore_ascii_case(&'W')) {
-            continue;
-        }
-        if code != b'0' && code != last_code {
-            out.push(code as char);
-            if out.len() == 4 {
-                break;
-            }
-        }
-        last_code = code;
-    }
-    while out.len() < 4 {
-        out.push('0');
-    }
-    out
-}
-
-fn soundex_code(c: char) -> u8 {
-    match c {
-        'B' | 'F' | 'P' | 'V' => b'1',
-        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => b'2',
-        'D' | 'T' => b'3',
-        'L' => b'4',
-        'M' | 'N' => b'5',
-        'R' => b'6',
-        _ => b'0',
-    }
-}
+// `soundex` moved to `goldenmatch-score-core` (the single reference for the
+// soundex surfaces): the field-matrix path below and the bucket `score_one`
+// path (id 6) now share `goldenmatch_score_core::soundex`. See score-core's
+// `soundex` + its `soundex_matches_jellyfish_reference` test.
+use goldenmatch_score_core::soundex;
 
 /// Read an Arrow Utf8 / LargeUtf8 column into a Vec<String>, mapping null
 /// entries to empty strings (matches the slow path's caller convention --
@@ -1389,35 +1355,8 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn soundex_characterizes_implementation_output() {
-        assert_eq!(soundex("Robert"), "R163");
-        assert_eq!(soundex("Ashcraft"), "A261");
-        assert_eq!(soundex("Tymczak"), "T522");
-    }
-
-    #[test]
-    fn soundex_pads_short_codes_to_four() {
-        assert_eq!(soundex("Lee").len(), 4);
-        assert_eq!(soundex("A"), "A000");
-    }
-
-    #[test]
-    fn soundex_non_alpha_is_empty() {
-        assert_eq!(soundex("123"), "");
-        assert_eq!(soundex(""), "");
-    }
-
-    #[test]
-    fn soundex_code_table() {
-        assert_eq!(soundex_code('B'), b'1'); // B F P V
-        assert_eq!(soundex_code('C'), b'2'); // C G J K Q S X Z
-        assert_eq!(soundex_code('D'), b'3'); // D T
-        assert_eq!(soundex_code('L'), b'4'); // L
-        assert_eq!(soundex_code('M'), b'5'); // M N
-        assert_eq!(soundex_code('R'), b'6'); // R
-        assert_eq!(soundex_code('A'), b'0'); // vowels / other
-    }
+    // soundex tests moved to `goldenmatch-score-core` (the impl now lives there;
+    // native re-uses it via `use goldenmatch_score_core::soundex`).
 
     #[test]
     fn fs_level_from_sim_custom_thresholds_count_inclusive() {

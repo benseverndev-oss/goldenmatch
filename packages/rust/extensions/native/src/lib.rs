@@ -99,6 +99,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(score::date_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::qgram_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(score::soundex_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_block_pairs_fs_arrow, m)?)?;
