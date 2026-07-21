@@ -57,6 +57,14 @@ def _sql_lit(s: Any) -> str:
     return "'" + str(s).replace("'", "''") + "'"
 
 
+def _sql_ident(name: Any) -> str:
+    """A double-quoted SQL identifier with quote-doubling, so a data-derived
+    column name that contains a double quote can't break (or inject into) an
+    f-string-built ``SELECT``/``COPY`` column list. Matches the connector
+    quoting convention used elsewhere in the repo."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
 def _fs_ooc_workers() -> int:
     """Thread-pool size for out-of-core block scoring. Mirrors the in-memory FS
     scorer's ``GOLDENMATCH_FS_WORKERS`` (default ``min(16, cpu)``); the native
@@ -354,7 +362,7 @@ def score_fs_out_of_core(
                 _key_cols = ["__row_id__"] + [
                     f for f in dict.fromkeys(pass_config.fields) if f != "__row_id__"
                 ]
-                _key_sel = ", ".join(f'"{c}"' for c in _key_cols)
+                _key_sel = ", ".join(_sql_ident(c) for c in _key_cols)
                 keyed = con.execute(f"SELECT {_key_sel} FROM prep").pl()
                 mapping = (
                     keyed.lazy()
@@ -505,7 +513,7 @@ def stream_fs_dedupe_output(
     all_cols = [d[0] for d in con.execute(f"DESCRIBE {prep_table}").fetchall()]
     if record_cols is None:
         record_cols = [c for c in all_cols if not c.startswith("__xform_")]
-    _sel = ", ".join(f'p."{c}"' for c in record_cols)
+    _sel = ", ".join(f"p.{_sql_ident(c)}" for c in record_cols)
 
     _os.makedirs(out_dir, exist_ok=True)
     unique_path = _os.path.join(out_dir, "unique.parquet")

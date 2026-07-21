@@ -1581,7 +1581,11 @@ def run_dedupe(
             paths + counts instead of in-memory frames.
 
     Returns:
-        Dict with keys: clusters, golden, unique, dupes, report.
+        Dict with keys: clusters, golden, unique, dupes, report. EXCEPT when the
+        ``output_dir`` out-of-core streaming short-circuit engages (see
+        ``output_dir`` above): then the dict instead carries ``streaming=True``,
+        ``output_dir``, the written ``unique_path``/``dupes_path``/``golden_path``
+        (paths, not frames), and ``unique_count``/``dupes_count``/``golden_count``.
     """
     matchkeys = config.get_matchkeys()
 
