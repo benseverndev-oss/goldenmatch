@@ -1688,6 +1688,7 @@
             "goldenmatch.core.profiler",
             "goldenmatch.core.quality",
             "goldenmatch.core.quality_exclusions",
+            "goldenmatch.core.runtime_profile",
             "goldenmatch.core.survivorship.groups",
             "goldenmatch.core.tf_tables",
             "goldenmatch.core.throughput_verify",

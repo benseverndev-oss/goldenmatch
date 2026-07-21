@@ -8,6 +8,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Zero-config Fellegi-Sunter recall no longer collapses at scale (candidate-pair
+  projection fix + recall-safe compounding + memory-aware budget).** Zero-config
+  FS recall collapsed **1.0 at ≤2.4M → 0.82 at 4.8M → ~0.02 at 30M** (F1 0.030,
+  the 30M single-box proof) — entirely scale-dependent and invisible below ~5M.
+  Three fixes, the first being the actual scale-dependent root cause:
+  - **Candidate-pair projection (the root cause).** `_project_pass_pairs`
+    extrapolated each blocking block's SIZE by the full row ratio
+    (`cnt * n_full / sample_n`). That is only right for a SATURATED low-cardinality
+    key; a NEAR-UNIQUE key keeps producing new values as N grows (blocks stay
+    ~constant size, the COUNT grows), so growing its size invents ~`C(ratio, 2)`
+    PHANTOM pairs per sample singleton. At 30M (ratio ~150) a near-unique
+    `(zip, email)` compound was projected at ~2.2B pairs and DROPPED by the
+    pair-gate, collapsing blocking to a single `first_name` pass (dups have typo'd
+    first names → recall ~0.02). Fixed by growing block size only by the key's
+    sample collision headroom (`1 - distinct/sample_n`): saturated keys grow by the
+    full ratio (byte-identical), near-unique keys barely grow (singletons stay
+    singletons → 0 phantom pairs). Small data (`n_full == sample_n`, the whole
+    bench-probabilistic panel) is unaffected — no extrapolation runs.
+  - **Recall-safe compounding.** When the pair-gate DOES bound an over-budget
+    coarse pass, it now compounds with an **exact-agreement identity field
+    (email / identifier / phone) at full value**, before the corruption-prone
+    name/geo initials. Duplicates share those exactly, so the compound keeps every
+    true pair together while collapsing the block to near-singletons — recall-safe
+    AND a stronger reducer (30M person shape: `zip + first-initial` = recall 0.82;
+    `zip + email` = recall 1.0 at 0.9M pairs). The old "most selective" reducer (a
+    name initial) split true pairs on any typo'd name.
+  - **Memory-aware budget.** `_fs_total_pair_budget` is now
+    `max(300M floor, available_ram_gb * ~40M)` (anchored to the 25M-on-64GB proof
+    where ~2.1B bounded pairs peaked at ~28 GB), so a big box does less
+    compounding to begin with and keeps coarse passes pure. Byte-identical below
+    the trigger (small boxes keep the 300M floor + all #1803 tuning).
+  Measured **F1 0.9005 → 1.0000 at 4.8M** (P=R=1.0); the identity reducer holds
+  recall 1.0 at 4.8M even at a tight 300M budget (3.3M candidate pairs). Not EM:
+  the EM within-block-pair sample cap is irrelevant to this (100K/200K/400K give
+  identical F1); blocking recall exactly tracks pipeline recall. The
+  `gate-fs-zeroconfig` nightly now runs at 10M (was 1M — below where this class is
+  visible) with `set -o pipefail` so the F1-floor failure is no longer masked by
+  `| tee`.
 - **Weak-positive blocking-pass pruning now runs on the FS arrow lane.**
   `GOLDENMATCH_BLOCKING_PRUNE_PASSES=1` invoked `select_passes` (polars-native:
   `with_row_index` / `group_by`) directly on `df`, but the FS routed / arrow

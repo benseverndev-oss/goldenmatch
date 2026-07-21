@@ -23,9 +23,11 @@ from goldenmatch.core.autoconfig import (
     _bound_probabilistic_blocking_pairs,
     _diversify_probabilistic_blocking,
     _fs_total_pair_budget,
+    _project_pass_pairs,
     auto_configure_probabilistic_df,
     build_probabilistic_matchkeys,
 )
+from goldenmatch.core.frame import to_frame
 
 ON = "GOLDENMATCH_FS_AUTOCONFIG_V2"
 
@@ -322,16 +324,25 @@ def _coarse_blocking(*fields):
     )
 
 
-def test_pair_budget_is_flat_global_total(monkeypatch):
-    # The budget is a flat memory-derived TOTAL across passes (not per-pass, not
-    # N-scaled): candidate pairs grow ~N² while memory is fixed, so a linear
-    # floor can't both keep a pass safe at 100K and bound it at 1M.
+def test_pair_budget_is_flat_in_n_but_memory_aware(monkeypatch):
+    # The budget is a memory-derived TOTAL across passes (not per-pass): it does
+    # NOT scale with N (candidate pairs grow ~N² while the memory ceiling is a
+    # property of the box), but it DOES scale with available RAM. RAM is injected
+    # here for determinism.
     monkeypatch.delenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", raising=False)
-    assert _fs_total_pair_budget(1_000_000) == _fs_total_pair_budget(10)
-    assert _fs_total_pair_budget(50_000) == 300_000_000
-    # The env override wins and is read as an integer.
+    # Flat in N at fixed RAM.
+    assert _fs_total_pair_budget(1_000_000, available_ram_gb=8.0) == _fs_total_pair_budget(
+        10, available_ram_gb=8.0
+    )
+    # Small box: floored at 300M (8 GB * 40M = 320M > floor; 4 GB * 40M = 160M -> floor).
+    assert _fs_total_pair_budget(50_000, available_ram_gb=4.0) == 300_000_000
+    # Big box: memory-aware lift above the floor (64 GB -> 2.56B pairs), so the
+    # recall-critical coarse passes survive at the 25M-on-64GB envelope.
+    assert _fs_total_pair_budget(50_000, available_ram_gb=64.0) == 2_560_000_000
+    assert _fs_total_pair_budget(50_000, available_ram_gb=64.0) > 1_000_000_000
+    # The env override wins over everything and is read as an integer.
     monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
-    assert _fs_total_pair_budget(1_000_000) == 5
+    assert _fs_total_pair_budget(1_000_000, available_ram_gb=64.0) == 5
 
 
 def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):
@@ -347,6 +358,51 @@ def test_pair_gate_bounds_coarse_pass_to_compound(monkeypatch):
     compound = next((p for p in (out.passes or []) if set(p.fields) == {"city", "surname"}), None)
     assert compound is not None
     assert compound.field_transforms == {"city": ["strip"], "surname": ["substring:0:1"]}
+
+
+def test_projection_no_phantom_pairs_for_near_unique_key_at_scale():
+    # THE 30M recall-collapse root cause: extrapolating a block's SIZE by the full
+    # row ratio invents ~C(ratio, 2) phantom pairs per sample singleton. A
+    # NEAR-UNIQUE key (all-distinct) should project to ~0 candidate pairs at any
+    # scale (its blocks stay singletons, the COUNT grows), NOT quadratically.
+    bframe = to_frame(pl.DataFrame({
+        "uid": [f"u{i}" for i in range(10)],      # all distinct (near-unique)
+        "const": ["x"] * 10,                      # one giant block (low cardinality)
+    }))
+    # sample_n=10, effective_n_full=10_000_000 -> ratio 1e6.
+    near_unique = _project_pass_pairs(bframe, [("uid", ())], 10_000_000, 10)
+    assert near_unique is not None
+    # Near-unique: singletons stay singletons -> ~0 pairs (the OLD code projected
+    # ~10 * C(1e6, 2) ~= 5e12 phantom pairs and dropped the pass).
+    assert near_unique[1] == 0
+    # Contrast: a saturated low-cardinality key DOES grow quadratically (one block
+    # of 10 -> ~1e7 rows -> ~5e13 pairs), so real coarse passes are still gated.
+    saturated = _project_pass_pairs(bframe, [("const", ())], 10_000_000, 10)
+    assert saturated is not None
+    assert saturated[1] > 10_000_000_000  # quadratic growth preserved
+
+
+def test_pair_gate_prefers_identity_field_reducer(monkeypatch):
+    # THE 30M recall-collapse fix: when an exact-agreement identity field (email)
+    # is present, an over-budget coarse pass is compounded with EMAIL AT FULL VALUE
+    # -- duplicates share email exactly, so the compound keeps every true pair
+    # together (recall-safe) -- NOT with a corruption-prone name-initial, which
+    # SPLITS true pairs on any typo'd name (measured 30M person: zip+first-initial
+    # = recall 0.82; zip+email = recall 1.0). Email is tried FIRST.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_MAX_PASS_PAIRS", "5")
+    df = pl.DataFrame({
+        "city": ["Xtown"] * 6,
+        "surname": ["Ash", "Bell", "Cole", "Dean", "East", "Frost"],
+        "email": [f"u{i}@x.com" for i in range(6)],
+    })
+    profs = [_p("city", "geo"), _p("surname", "name"), _p("email", "email")]
+    out = _bound_probabilistic_blocking_pairs(_coarse_blocking("city"), profs, df)
+    compound = next((p for p in (out.passes or []) if "email" in p.fields), None)
+    assert compound is not None, "coarse pass must be compounded with the identity field"
+    assert set(compound.fields) == {"city", "email"}
+    # Email at FULL value (empty transform), NOT the surname initial.
+    assert compound.field_transforms == {"city": ["strip"], "email": []}
 
 
 def test_pair_gate_drops_coarse_pass_when_no_reducer_helps(monkeypatch):

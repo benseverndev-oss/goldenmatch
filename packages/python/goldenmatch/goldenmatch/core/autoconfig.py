@@ -5306,35 +5306,79 @@ def _project_pass_pairs(
         )
     if not counts:
         return (0, 0)
+    import math
+
     scale = effective_n_full != sample_n
+    if scale:
+        # Saturation-aware block-size growth. Extrapolating each block's SIZE by
+        # the full row ratio (the old `cnt * effective_n_full / sample_n`) is only
+        # correct for a SATURATED low-cardinality key -- one whose distinct values
+        # are all already in the sample, so bigger N just grows each block. A
+        # NEAR-UNIQUE key instead keeps producing NEW values as N grows: its
+        # blocks stay ~constant size and the block COUNT grows. Growing a
+        # near-unique key's SIZE invents ~C(ratio, 2) PHANTOM pairs per sample
+        # singleton -- which made a near-unique compound like `(zip, email)`
+        # project ~2.2B pairs at 30M and get DROPPED by the pair-gate, collapsing
+        # blocking to a single pass (the 30M zero-config FS recall collapse). Grow
+        # size only by the key's sample COLLISION headroom (1 - distinct/sample_n):
+        # a fully-saturated key (d->0) still grows by the full ratio (byte-
+        # identical to the old behavior), a near-unique key (d->1) barely grows so
+        # its singletons stay singletons (0 pairs). Block COUNT growth is implicit
+        # -- more distinct keys at full N, each ~constant size.
+        ratio = effective_n_full / sample_n
+        d = len(counts) / sample_n if sample_n else 0.0
+        growth = 1.0 + (ratio - 1.0) * (1.0 - d)
+    else:
+        growth = 1.0
     max_block = 0
     pairs = 0
     for cnt in counts.values():
-        b = -(-(cnt * effective_n_full) // sample_n) if scale else cnt  # ceil
+        b = math.ceil(cnt * growth) if scale else cnt
         if b > max_block:
             max_block = b
         pairs += b * (b - 1) // 2
     return (max_block, pairs)
 
 
-_FS_TOTAL_PAIR_BUDGET = 300_000_000
+_FS_TOTAL_PAIR_BUDGET = 300_000_000  # small-box FLOOR (#1803 tuning anchor)
+# Candidate pairs affordable per GB of *available* RAM. Anchored to the measured
+# 25M-on-64GB single-box FS proof: ~2.1B bounded candidate pairs peaked at ~28 GB
+# (with ~55 GB available at start), i.e. ~40M pairs/GB is the proven-safe operating
+# point (the (id,id,score) stream + clustering edge set + frames all fit).
+_FS_PAIR_BUDGET_PER_GB = 40_000_000
 
 
-def _fs_total_pair_budget(n_rows: int) -> int:
+def _fs_total_pair_budget(
+    n_rows: int, available_ram_gb: float | None = None
+) -> int:
     """GLOBAL candidate-pair budget across ALL blocking passes (not per-pass).
 
     FS scoring memory scales with the TOTAL candidate pairs held across passes
     (the scored-pair stream + the clustering edge set), and candidate pairs grow
     ~N² while a per-pass *linear* floor cannot both keep a pass memory-safe at
     100K and bound it at 1M (a 55M-pair surname pass is fine at 100K but the same
-    shape is 5.5B at 1M). So the ceiling is a FLAT, memory-derived total
-    (~150M pairs ≈ a few GB of transient ``(id, id, score)`` stream), NOT scaled
-    by N. Individual mega-BLOCK passes are still gated per-pass by
-    ``_compute_max_safe_block`` (the per-block score-matrix cost). Override with
-    ``GOLDENMATCH_FS_MAX_PASS_PAIRS``.
+    shape is 5.5B at 1M). Individual mega-BLOCK passes are still gated per-pass by
+    ``_compute_max_safe_block`` (the per-block score-matrix cost).
 
-    n_rows is accepted for signature stability / future tuning but the budget is
-    intentionally flat: the physical limit is memory, which does not grow with N.
+    **The budget is MEMORY-AWARE, not flat (2026-07-21).** The physical limit is
+    memory — but memory is a property of the BOX, not a universal constant. A flat
+    300M budget is calibrated for a ~4-8 GB machine; on the 64 GB runner the 25M
+    single-box FS envelope actually targets, it is ~16x too tight, and the
+    over-tight budget forces ``_bound_probabilistic_blocking_pairs`` to COMPOUND
+    recall-critical coarse passes (e.g. a pure ``zip`` pass that duplicates share
+    exactly) with corruption-prone fields — collapsing blocking recall at scale
+    (measured 1.0 -> 0.82 at 4.8M -> ~0.02 at 30M). So the budget scales with
+    ``available_ram_gb`` (``~40M pairs/GB``, the proven-safe 25M-proof point),
+    floored at ``_FS_TOTAL_PAIR_BUDGET`` so small boxes keep today's behavior +
+    all the #1803 tuning. At >=1B (any >=~32 GB box) the pure coarse passes
+    survive and blocking recall is 1.0 at 4.8M/25M; an undersized box degrades
+    honestly (less recall, no OOM) rather than silently at scale.
+
+    ``available_ram_gb`` is injectable for deterministic tests; when ``None`` it is
+    read from ``runtime_profile.capture_runtime_profile`` (psutil), falling back to
+    the flat floor if introspection is unavailable. Override the whole budget with
+    ``GOLDENMATCH_FS_MAX_PASS_PAIRS``. ``n_rows`` is accepted for signature
+    stability / future tuning.
     """
     override = os.environ.get("GOLDENMATCH_FS_MAX_PASS_PAIRS")
     if override:
@@ -5342,7 +5386,15 @@ def _fs_total_pair_budget(n_rows: int) -> int:
             return max(1, int(override))
         except ValueError:
             pass
-    return _FS_TOTAL_PAIR_BUDGET
+    floor = _FS_TOTAL_PAIR_BUDGET
+    if available_ram_gb is None:
+        try:
+            from goldenmatch.core.runtime_profile import capture_runtime_profile
+
+            available_ram_gb = capture_runtime_profile().available_ram_gb
+        except Exception:
+            return floor
+    return max(floor, int(available_ram_gb * _FS_PAIR_BUDGET_PER_GB))
 
 
 def _bound_probabilistic_blocking_pairs(
@@ -5395,18 +5447,45 @@ def _bound_probabilistic_blocking_pairs(
         effective_n_full, _native_enabled("block_scoring")
     )
     total_budget = _fs_total_pair_budget(effective_n_full)
+    if total_budget > _FS_TOTAL_PAIR_BUDGET:
+        # Memory-aware lift above the small-box floor — surfaces the effective
+        # ceiling so a scale run shows why coarse (recall-critical) passes were
+        # or were NOT bounded. See _fs_total_pair_budget.
+        logger.info(
+            "FS pair-gate: candidate-pair budget %d (memory-aware; floor %d) at "
+            "n=%d.", total_budget, _FS_TOTAL_PAIR_BUDGET, effective_n_full,
+        )
 
     passes = list(blocking.passes or []) or list(blocking.keys or [])
     if not passes:
         return blocking
 
-    # Reducer discriminators, most selective first: name initials, then city,
-    # then zip/identifier/phone prefix. Each shrinks a coarse block ∝ its own
-    # cardinality (a surname-initial split cuts a soundex block ~18x).
+    # Reducer discriminators to AND into an over-budget coarse pass. Ordered by
+    # RECALL-SAFETY first, selectivity second:
+    #
+    #   1. Exact-agreement identity fields (email / identifier / phone) at FULL
+    #      value. Duplicates share these EXACTLY, so ANDing one into a coarse pass
+    #      keeps every true pair together while collapsing the block to near-
+    #      singletons -- recall-safe AND the strongest pair reducer (measured on
+    #      the 30M person shape: `zip` alone = 116M pairs @ recall 1.0; `zip +
+    #      first-initial` = 6.8M pairs but recall 0.82; `zip + email` = 0.9M pairs
+    #      @ recall 1.0). This is THE fix for the 30M recall collapse: at scale the
+    #      pair budget forces compounding on EVERY pass, and a corruption-prone
+    #      name-initial reducer then SPLITS true pairs on any typo'd name.
+    #   2/3. Selective name/geo/city initials + zip/id/phone prefixes -- the
+    #      fallback when no identity field is present or clears the budget. These
+    #      are corruption-prone (a name typo breaks the compound), so they run
+    #      only after the identity fields.
     by_type: dict[str, list[str]] = {}
     for p in profiles:
         by_type.setdefault(p.col_type, []).append(p.name)
     reducers: list[tuple[str, tuple[str, ...]]] = []
+    for f in (
+        by_type.get("email", [])
+        + by_type.get("identifier", [])
+        + by_type.get("phone", [])
+    ):
+        reducers.append((f, ()))  # full value -- exact-shared identity
     for f in by_type.get("name", []):
         reducers.append((f, ("substring:0:1",)))
     for f in by_type.get("geo", []) + by_type.get("city", []):
