@@ -197,6 +197,79 @@ def test_build_compound_blocking_accepts_arrow_table():
     ]
 
 
+def _wide_sparse_union_shape():
+    """Deterministic wide/sparse CRM diagonal union: 4 strong-id columns, each
+    present only in ITS OWN source (75% null overall), plus a shared name +
+    geo. No single exact key clears the 0.20 null ceiling, so ``build_blocking``
+    routes into the #1207 per-identifier blocking UNION -- whose scale-safety
+    gate (``_id_pass_scale_safe_nonnull``) used raw ``df.filter(pl.col(...))``
+    under a bare ``except`` that turned the AttributeError on a ``pa.Table``
+    into ``return False`` for EVERY id pass. The union then silently collapsed
+    to the name-only fallback on the arrow lane (the second, subtler #1852
+    failure mode -- degraded blocking, not a crash). No RNG so the pa/pl inputs
+    are byte-identical by construction."""
+    n = 120  # rows per source
+    first = ["John", "Jane", "Bob", "Alice", "Sam", "Mary"]
+    last = ["Smith", "Jones", "Lee", "Brown", "Davis", "Miller"]
+    city = ["Boston", "Austin", "Denver", "Reno"]
+    ids = ["account_id", "owner_id", "order_id", "who_id"]
+    cols: dict[str, list] = {c: [] for c in ["first", "last", "city", *ids]}
+    for idc in ids:
+        for i in range(n):
+            cols["first"].append(first[i % len(first)])
+            cols["last"].append(last[(i // 2) % len(last)])
+            cols["city"].append(city[i % len(city)])
+            for k in ids:
+                cols[k].append(f"{idc[:2].upper()}{i:05d}" if k == idc else None)
+    return cols
+
+
+def _blocking_passes(blk) -> list[tuple[str, ...]]:
+    out: list[tuple[str, ...]] = []
+    if blk is not None:
+        if blk.keys:
+            out += [tuple(k.fields) for k in blk.keys]
+        if getattr(blk, "passes", None):
+            out += [tuple(p.fields) for p in blk.passes]
+    return out
+
+
+def test_build_blocking_id_union_arrow_parity():
+    """#1852 (mode 2): ``build_blocking`` on a wide/sparse frame emits the SAME
+    per-identifier blocking union on a ``pa.Table`` as on a ``pl.DataFrame``.
+
+    Feeds IDENTICAL profiles + n_rows_full to ``build_blocking`` for both
+    backends (as ``test_build_compound_blocking_accepts_arrow_table`` does),
+    so the only variable is the frame backend -- no ``Frame.sample`` in play,
+    hence a byte-deterministic cross-backend assertion. Before #1852 the arrow
+    branch dropped the id union and fell to name-only blocking; the passes then
+    differed (a silent recall/precision divergence, not an exception)."""
+    from goldenmatch.core.autoconfig import build_blocking, profile_columns
+
+    data = _wide_sparse_union_shape()
+    pl_df = pl.DataFrame(data)
+    # One profile set, shared across both backends (isolates build_blocking).
+    profiles = profile_columns(pl_df)
+
+    blk_pl = build_blocking(profiles, pl_df, n_rows_full=pl_df.height)
+    blk_pa = build_blocking(profiles, pa.table(data), n_rows_full=pl_df.height)
+
+    passes_pl = _blocking_passes(blk_pl)
+    passes_pa = _blocking_passes(blk_pa)
+
+    # The id union actually formed (not the name-only fallback): the strong-id
+    # columns appear as passes on the polars baseline...
+    id_cols = {"account_id", "owner_id", "order_id", "who_id"}
+    assert id_cols & {f for fields in passes_pl for f in fields}, (
+        f"baseline should block on the strong ids, got {passes_pl}"
+    )
+    # ...and the arrow lane selects the identical passes.
+    assert passes_pa == passes_pl, (
+        f"arrow blocking diverged from polars: arrow={passes_pa} polars={passes_pl}"
+    )
+    assert blk_pa.strategy == blk_pl.strategy
+
+
 @pytest.mark.parametrize("shape", ["exact-id-plus-names", "shared-email-switchboard"])
 def test_arrow_native_config_matchkey_equivalence(shape):
     """On shapes without a near-tie blocking choice, the arrow-native config's
