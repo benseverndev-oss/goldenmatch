@@ -116,13 +116,44 @@ minimal. Recommend **defer or explicitly decline**.
 |---|---|---|---|
 | **1** | `qgram` ✅, `soundex_match` ✅ (both landed) | low | pure strings on the proven template; `soundex_match` reused the existing Rust kernel, upgraded to full jellyfish Unicode parity |
 | **2** | `initialism_match` ✅, `alias_match` ✅ (both landed), `given_name_aliased_jw`, `name_freq_weighted_jw` | medium | string base + refdata table shipped in-kernel (mechanism exists); table fidelity is the risk. `initialism_match` proved the in-kernel table mechanism (the ~77-entry `entity_form_variants()` set installed once into a `score-core` `OnceLock` via a native `set_legal_form_variants` shim, keeping `score_one(id, a, b)` uniform); `alias_match` extended it to two maps + a rebuilt-in-kernel strip regex |
-| **3** | `phash`, `dice`, `jaccard` | low-med | wiring existing kernels (`perceptual-core`, `bloom.rs`), not new algorithms |
+| **3** | `phash`, `dice`, `jaccard` | **blocked** | NOT "just wiring" -- all three are matrix-semantics-dependent (see the note below), so the per-pair `score_one` pattern can't reach byte-parity; each needs a block-aware kernel or a resolved-semantics decision first |
 | **free** | `ensemble` | trivial | composes Wave-1 kernels; kernel-backed by construction |
 | **4 (defer/decline)** | `audio_fp`, `radial` | -- | bespoke alignment search, low perf upside |
 | **n/a** | `embedding`, `record_embedding` | -- | model-backed; reframe under goldenembed, exclude from denominator |
 
 Landing Waves 1-3 + `ensemble`, and reframing the embedding pair, takes the metric to full
 algorithmic coverage.
+
+> **NOTE — `ensemble` is NOT the "free" win this table implies.** A per-pair reimpl measurably
+> regressed Febrl3 recall (0.922 → 0.782); it's deliberately *declined* from the bucket/fast path
+> and stays on the float32 matrix ensemble (the source of truth). It's now marked `declined` in the
+> coverage floor below; kernelizing it means re-opening that measurement. Likewise `dice`/`jaccard`
+> are dual-semantics (bigram-set per-pair vs PPRL bloom-filter hex in the matrix path) and must be
+> disambiguated first, and `phash` is matrix-semantics-dependent — `_phash_score_matrix` pads all
+> block hashes to the block-GLOBAL max bit-length (`sim = 1 - dist/max_len`), which a per-pair
+> `score_one` kernel can't replicate (it can only pad pairwise), so it diverges on mixed-length
+> blocks. **The clean per-pair string primitives (qgram, soundex, initialism, alias) are exactly the
+> ones that fit the `score_one` pattern; the rest need a block-aware kernel path or a semantics
+> decision, which is why the pragmatic frontier lands at 9/19 + the coverage floor, not a forced
+> 19/19.**
+
+## Coverage floor (the gate that keeps the metric honest)
+
+The reason `5 of 19` sat unaddressed for so long: the metric was **descriptive, not prescriptive**.
+`api_parity` enforced that the `scorer_kernels` manifest *matched reality* (no Python↔TS drift) but
+never that coverage was *high* — a scorer sitting fallback-only forever was perfectly "in agreement,"
+so nothing went red. The fallback path is also byte-identical pure Python, so there was no
+correctness bug forcing attention.
+
+The fix (shipped alongside Wave 2): **`check_scorer_coverage`** in `scripts/check_api_parity.py`
+requires every scorer in the `scorers` surface to be EITHER kernel-backed (in `scorer_kernels`) OR
+listed in a new `scorer_kernels_deferred:` map (scorer → reason) in `parity/goldenmatch.yaml`. An
+uncovered/unclassified scorer FAILS the gate; a kernel that *regresses* to a fallback (removed from
+`scorer_kernels` without a deferral) also fails; a stale deferral (scorer that gained a kernel) fails.
+So a new scorer, or a coverage regression, can no longer sit silent — deferral is a conscious act
+with a rationale (`deferred --` will kernelize / `declined --` won't / `n/a --` not a string kernel),
+not the absence of one. This is the durable close on the root cause, complementing the per-scorer
+cutovers above.
 
 ## Per-scorer work unit (the template)
 
