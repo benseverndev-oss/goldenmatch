@@ -1462,24 +1462,20 @@ def score_buckets(
             if prob_scorer is not None:
                 pairs = prob_scorer(block_df, frozen_exclude)
             else:
-                # find_fuzzy_matches (the fallback for scorers the fast path
-                # can't resolve -- ensemble / qgram / soundex_match / refdata)
-                # reads the block through the `to_frame` seam + a to_dicts/
-                # to_pylist dual-rep, so exact/fuzzy/NE all score arrow-native:
-                # pass the arrow block straight through so the no-polars lane
-                # works. Only `record_embedding` fields still hit polars-only
-                # branches inside find_fuzzy_matches (raw `.to_dicts()` /
-                # `block_df[c]`); give THOSE a polars block -- which needs the
-                # optional polars dep anyway, same as the embedding scorer.
-                import pyarrow as _pa
-                _fm_block = block_df
-                if isinstance(block_df, _pa.Table) and any(
-                    getattr(f, "scorer", None) == "record_embedding"
-                    for f in (mk.fields or [])
-                ):
-                    _fm_block = pl.from_arrow(block_df)
+                # find_fuzzy_matches (the fallback the slow path uses for
+                # scorers the fast path can't resolve -- ensemble / embedding /
+                # etc.) accepts BOTH reps natively: it coerces via
+                # ``core.frame.to_frame`` and its NE branch reads rows through a
+                # ``to_pylist`` dual-rep, so a ``pa.Table`` needs no conversion.
+                # Hand it the block as-is -- pre-converting a ``pa.Table`` to
+                # polars here (the old ``pl.from_arrow`` bridge, plus the
+                # ``isinstance(block_df, pl.DataFrame)`` probe) forced the polars
+                # import and broke the arrow lane's polars-free guarantee (e.g.
+                # goldengraph's zero-config resolve installs goldenmatch WITHOUT
+                # polars). Parity with the legacy per-block path is unchanged:
+                # a real polars block still flows through untouched.
                 pairs = find_fuzzy_matches(
-                    _fm_block, mk,
+                    block_df, mk,
                     exclude_pairs=frozen_exclude,
                     pre_scored_pairs=None,
                 )

@@ -238,6 +238,7 @@ def _compose(block: str) -> str:
         'description: "Cross-package view of the Golden Suite: capability counts, the Rust '
         '-core compute substrate, Python/TypeScript parity, and auto-detected gaps — '
         'generated and gated in CI."\n'
+        'keywords: ["golden suite", "suite matrix", "cross-package", "parity", "capabilities", "rust core", "reference"]\n'
         "---\n\n"
         "The per-package [config matrices](/goldenmatch/config-matrix) each describe one "
         "package. This is the **cross-package** view. The anchor is the **Rust / "

@@ -39,6 +39,37 @@ OPENAI_API_KEY=sk-... python erkgbench/run.py   # adds the goldenmatch(auto+llm)
 ```
 Outputs: `results/RESULTS.md` + `results/results.json`. Lint with `ruff check .`.
 
+## QA-e2e: real multi-hop corpora + `support_recall`
+
+The `erkgbench/qa_e2e/` harness runs the answer-quality head-to-head (goldengraph vs
+LightRAG / MS-GraphRAG / Graphiti / text_rag). Two things landed here:
+
+- **`support_recall` is wired end-to-end** (was hard-zeroed in the 2026-06-23
+  `RESULTS_QA_E2E_BASELINE.md`). The goldengraph adapter stamps each stored edge with
+  its owning document id at ingest and collects the traversed/retrieved edges' doc ids
+  via `ask(provenance_out=)`; the harness intersects those with each question's
+  `gold_supporting_fact_ids`. Locked by `packages/python/goldengraph/tests/test_support_recall_provenance.py`.
+- **Real headline corpora added** — `--corpus hotpotqa` and `--corpus 2wikimultihop`
+  (alongside `engineered` / `musique`). Both fetch a seeded Hub subset on demand
+  (`datasets` is already installed in the bench lanes), or read a local JSONL via
+  `--corpus-path`. Committed fixtures under `erkgbench/qa_e2e/fixtures/` drive the
+  offline loader tests (`tests/test_qa_wiki_corpora.py`); normalization is verified
+  against the live Hub schemas.
+
+Run the real headline benchmark (needs `OPENAI_API_KEY` + the `goldengraph-native`
+wheel — i.e. CI or a real box, NOT the offline dev sandbox):
+
+```bash
+# CI (recommended): the opt-in real-LLM lane
+gh workflow run bench-graphrag-qa.yml -f corpus=hotpotqa -f max_questions=500 -f engine=all -f mode=head_to_head
+gh workflow run bench-graphrag-qa.yml -f corpus=2wikimultihop -f max_questions=500 -f engine=all -f mode=head_to_head
+
+# Local (one engine), fixture smoke needs no key/wheel via --self-test:
+python -m erkgbench.qa_e2e.run_qa_e2e --self-test --corpus hotpotqa \
+  --corpus-path erkgbench/qa_e2e/fixtures/hotpotqa_sample.jsonl \
+  --max-questions 5 --out-md /tmp/hp.md --out-json /tmp/hp.json
+```
+
 ## Layout
 
 ```

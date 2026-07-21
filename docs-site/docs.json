@@ -136,8 +136,9 @@
             "pages": [
               "goldenanalysis/overview",
               "goldenanalysis/analyzers",
-              "goldenanalysis/config-matrix",
               "goldenanalysis/cross-run",
+              "goldenanalysis/config-matrix",
+              "goldenanalysis/recipes",
               "goldenanalysis/native"
             ]
           },
@@ -146,7 +147,8 @@
             "pages": [
               "infermap/overview",
               "infermap/mapping",
-              "infermap/config-matrix"
+              "infermap/config-matrix",
+              "infermap/recipes"
             ]
           },
           {

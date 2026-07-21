@@ -53,6 +53,6 @@ class StubEmbedder:
 
 @pytest.fixture
 def store():
-    from goldengraph_native import _native as gg
+    from goldengraph.core._native_loader import new_store
 
-    return gg.PyStore()
+    return new_store()

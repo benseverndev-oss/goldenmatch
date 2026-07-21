@@ -186,18 +186,15 @@ def synthesize_profiles(
 
 
 def _engine():
-    """Lazy import of the goldenprofile engine. Raises a clear, actionable error
-    when the wheel is absent (mirrors how the goldengraph store requires
-    goldengraph_native)."""
-    try:
-        from goldenprofile_native import resolve_json
-    except ImportError as e:  # pragma: no cover - exercised only without the wheel
-        raise ImportError(
-            "goldenprofile_native is required to resolve profiles. Build it with "
-            "`maturin develop` in packages/rust/extensions/goldenprofile-native, "
-            "or `pip install goldenprofile-native`."
-        ) from e
-    return resolve_json
+    """Lazy handle on the goldenprofile resolution engine, via the gated loader.
+
+    Routing through ``goldengraph.core._native_loader`` keeps ONE gated entry
+    point for the whole engine: the ``GOLDENGRAPH_NATIVE`` contract governs
+    fingerprint resolution too, and the loader raises the clear, actionable error
+    when the wheel is absent (mirrors how the store requires the native engine)."""
+    from .core._native_loader import profile_resolve_json
+
+    return profile_resolve_json()
 
 
 def resolve_profiles(

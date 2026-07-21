@@ -12,7 +12,11 @@ from .corpora import (
     MUSIQUE_HF_DATASET,
     MUSIQUE_HF_SPLIT,
     MUSIQUE_SUBSET_SEED,
+    fetch_2wikimultihop,
+    fetch_hotpotqa,
     fetch_musique,
+    load_2wikimultihop,
+    load_hotpotqa,
     load_musique,
 )
 from .harness import AnswerResult, BuildResult, run_engine, write_results
@@ -38,6 +42,8 @@ def _load_corpus(
     musique_dataset: str = MUSIQUE_HF_DATASET,
     musique_split: str = MUSIQUE_HF_SPLIT,
     musique_seed: int = MUSIQUE_SUBSET_SEED,
+    corpus_path: str | None = None,
+    corpus_seed: int = MUSIQUE_SUBSET_SEED,
 ):
     if name == "engineered":
         return engineered.generate_engineered(
@@ -56,6 +62,17 @@ def _load_corpus(
             max_questions=max_questions,
             seed=musique_seed,
         )
+    # Real Wikipedia multi-hop headliners: no ambiguity dial. A committed/downloaded
+    # JSONL via --corpus-path is read locally; otherwise a seeded subset is fetched
+    # from the Hub on demand (never redistributed in-repo, like MuSiQue).
+    if name == "hotpotqa":
+        if corpus_path:
+            return load_hotpotqa(path=corpus_path, max_questions=max_questions)
+        return fetch_hotpotqa(max_questions=max_questions, seed=corpus_seed)
+    if name == "2wikimultihop":
+        if corpus_path:
+            return load_2wikimultihop(path=corpus_path, max_questions=max_questions)
+        return fetch_2wikimultihop(max_questions=max_questions, seed=corpus_seed)
     raise SystemExit(f"unknown corpus: {name}")
 
 
@@ -214,7 +231,11 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--engine", default=None)
     p.add_argument("--self-test", action="store_true")
-    p.add_argument("--corpus", choices=("engineered", "musique"), required=True)
+    p.add_argument(
+        "--corpus",
+        choices=("engineered", "musique", "hotpotqa", "2wikimultihop"),
+        required=True,
+    )
     p.add_argument("--max-questions", type=int, default=300)
     p.add_argument(
         "--ambiguity",
@@ -232,6 +253,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--musique-dataset", default=MUSIQUE_HF_DATASET)
     p.add_argument("--musique-split", default=MUSIQUE_HF_SPLIT)
     p.add_argument("--musique-seed", type=int, default=MUSIQUE_SUBSET_SEED)
+    p.add_argument(
+        "--corpus-path",
+        default=None,
+        help="JSONL file of raw rows for --corpus hotpotqa / 2wikimultihop (same "
+        "schema as the HuggingFace source). If omitted, a seeded Hub subset is "
+        "fetched on demand.",
+    )
+    p.add_argument(
+        "--corpus-seed",
+        type=int,
+        default=MUSIQUE_SUBSET_SEED,
+        help="deterministic subset seed for the hotpotqa / 2wikimultihop Hub fetch.",
+    )
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--budget-usd", type=float, default=25.0)
     p.add_argument(
@@ -266,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         musique_dataset=args.musique_dataset,
         musique_split=args.musique_split,
         musique_seed=args.musique_seed,
+        corpus_path=args.corpus_path,
+        corpus_seed=args.corpus_seed,
     )
     engine = _MockEngine() if args.self_test else _build_engine(args.engine)
     judge = _make_judge(args.judge_model) if (args.judge and not args.self_test) else None

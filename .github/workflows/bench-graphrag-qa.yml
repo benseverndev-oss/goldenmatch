@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       corpus:
-        description: "engineered | musique"
+        description: "engineered | musique | hotpotqa | 2wikimultihop (the last three fetch a seeded Hub subset on demand; set max_questions for the headline N)"
         default: "engineered"
       max_questions:
         description: "questions to run (use a SMALL value ~12 for a local_llm run -- CPU inference is slow)"
