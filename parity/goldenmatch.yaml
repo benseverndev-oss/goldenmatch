@@ -306,8 +306,8 @@ blocking_strategies:
 # `WASM_COVERED_SCORERS` (core/wasm/backend SCORER_ID). Every scorer in the
 # `scorers` surface NOT listed here is a pure-language fallback with no kernel.
 # python_only: `date`, `qgram`, `soundex_match`, `initialism_match`, `alias_match`,
-# `dice`, `jaccard`, `phash` have an arrow-native (bucket) kernel on Python but no
-# TS WASM port yet.
+# `dice`, `jaccard`, `phash`, `ensemble`, `radial`, `audio_fp` have an arrow-native
+# (bucket) kernel on Python but no TS WASM port yet.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
@@ -320,6 +320,7 @@ scorer_kernels:
   - token_sort
   python_only:
   - alias_match
+  - audio_fp
   - date
   - dice
   - ensemble
@@ -327,6 +328,7 @@ scorer_kernels:
   - jaccard
   - phash
   - qgram
+  - radial
   - soundex_match
   ts_only:
   - given_name_aliased_jw
@@ -342,5 +344,3 @@ scorer_kernels:
 scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
-  radial: "declined -- bespoke rotation-aligned Pearson on radial profiles; angular alignment search, low perf upside (small blocks)"
-  audio_fp: "declined -- bespoke best-offset-aligned BER on hex audio fingerprints; alignment search, low perf upside"

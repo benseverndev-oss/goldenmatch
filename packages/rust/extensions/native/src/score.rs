@@ -345,6 +345,23 @@ pub fn ensemble_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::ensemble_similarity(a, b)
 }
 
+/// radial / audio_fp perceptual profile similarities (score-core ids 13/14):
+/// hex-parse + alignment search, byte-exact with the Python `_radial_score_single`
+/// / `_audio_fp_score_single`. Each is its own #[pyfunction] capability marker
+/// like the other bucket kernels: a stale wheel lacking the symbol hits
+/// score_one's catch-all (silent 0.0) for that id, so the Python caller gates the
+/// native route on `hasattr(_native, "<name>")` and falls back to the pure per-pair
+/// mirror otherwise.
+#[pyfunction]
+pub fn radial_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::radial_similarity(a, b)
+}
+
+#[pyfunction]
+pub fn audio_fp_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::audio_fp_similarity(a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)
