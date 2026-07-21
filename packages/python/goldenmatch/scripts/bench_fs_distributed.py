@@ -153,6 +153,47 @@ def _peak_rss_gb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 * 1024.0)
 
 
+def evaluate_scale_gate(
+    f1: float,
+    wall_seconds: float,
+    peak_rss_gb: float,
+    *,
+    min_f1: float | None = None,
+    max_wall_seconds: float | None = None,
+    max_peak_rss_gb: float | None = None,
+    rows: int = 0,
+    config_mode: str = "explicit",
+) -> list[str]:
+    """Pure gate: return a list of ``::error::`` messages for every threshold the
+    measured run breached (empty list = PASS). Extracted from ``main`` so the
+    scheduled-scale-gate decision (issue #1805 checkbox 3) is unit-testable
+    without running a 5M dedupe -- mirrors ``scripts/qis_gate.py::evaluate_gate``.
+
+    Each threshold is independent and optional (``None`` = not gated), so the
+    same driver serves the ad-hoc ``workflow_dispatch`` bench (no thresholds) and
+    the weekly scheduled gate (all three set). All breaches are reported, not
+    just the first, so one run surfaces every regression.
+    """
+    errors: list[str] = []
+    if min_f1 is not None and f1 < min_f1:
+        errors.append(
+            f"::error::{config_mode}-config FS F1 {f1:.4f} < floor {min_f1:.2f} "
+            f"at {rows} rows -- quality regression (matchkeys/blocking dropped "
+            f"the identity signal?)"
+        )
+    if max_wall_seconds is not None and wall_seconds > max_wall_seconds:
+        errors.append(
+            f"::error::FS dedupe wall {wall_seconds:.1f}s > ceiling "
+            f"{max_wall_seconds:.0f}s at {rows} rows -- scale-perf regression"
+        )
+    if max_peak_rss_gb is not None and peak_rss_gb > max_peak_rss_gb:
+        errors.append(
+            f"::error::FS dedupe peak RSS {peak_rss_gb:.2f} GB > ceiling "
+            f"{max_peak_rss_gb:.1f} GB at {rows} rows -- memory regression"
+        )
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=5_000_000)
@@ -164,6 +205,10 @@ def main() -> int:
                          "(the zero-config quality-at-scale gate)")
     ap.add_argument("--min-f1", type=float, default=None,
                     help="gate: exit non-zero if F1 < this floor")
+    ap.add_argument("--max-wall-seconds", type=float, default=None,
+                    help="gate: exit non-zero if wall > this ceiling")
+    ap.add_argument("--max-peak-rss-gb", type=float, default=None,
+                    help="gate: exit non-zero if peak RSS > this ceiling")
     args = ap.parse_args()
 
     print(f"[gen] {args.rows} base rows + {int(args.rows*args.dup_frac)} dups "
@@ -206,12 +251,17 @@ def main() -> int:
     print(f"- multi-member clusters: {multi}  (GT pairs: {len(gt)})")
     print(f"- **P={ev.precision:.3f}  R={ev.recall:.3f}  F1={ev.f1:.3f}**")
 
-    if args.min_f1 is not None and ev.f1 < args.min_f1:
-        print(f"::error::{args.config_mode}-config FS F1 {ev.f1:.4f} < floor "
-              f"{args.min_f1:.2f} at {df.height} rows -- zero-config quality "
-              f"regression (matchkeys/blocking dropped the identity signal?)")
-        return 1
-    return 0
+    errors = evaluate_scale_gate(
+        ev.f1, wall, rss,
+        min_f1=args.min_f1,
+        max_wall_seconds=args.max_wall_seconds,
+        max_peak_rss_gb=args.max_peak_rss_gb,
+        rows=df.height,
+        config_mode=args.config_mode,
+    )
+    for msg in errors:
+        print(msg)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

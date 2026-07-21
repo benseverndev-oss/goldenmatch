@@ -11,6 +11,12 @@ name: bench-fs-distributed
 #   gh workflow run bench-fs-distributed.yml --ref claude/review-technical-work-en9SG \
 #     -f rows=5000000 -f backend=bucket
 on:
+  # Weekly scheduled FS scale gate (#1805 checkbox 3): the guard against a
+  # >=500K FS regression sitting below every PR gate, the way #1792/#1798 did.
+  # Scheduled runs apply F1 / wall / peak-RSS thresholds; workflow_dispatch stays
+  # measure-only unless the caller passes its own gate flags.
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
   workflow_dispatch:
     inputs:
       rows:
@@ -47,12 +53,18 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ${{ inputs.runner }}
+    # `inputs.*` are empty on the `schedule` trigger, so every input falls back to
+    # its dispatch default via `|| '<default>'` -- the scheduled gate runs 5M on
+    # the 64GB runner with F1/wall/RSS thresholds applied.
+    runs-on: ${{ inputs.runner || 'large-new-64GB' }}
     timeout-minutes: 90
     env:
       # Explicit config is passed, so the controller never runs; keep memory off
       # for determinism (mirrors the other bench lanes).
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # Standing scale knobs (root CLAUDE.md): jemalloc page-decay caps allocator
+      # retention so the peak-RSS gate reflects the true live working set.
+      _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
       GOLDENMATCH_FS_NATIVE: ${{ inputs.fs_native == 'true' && '1' || '0' }}
       # Default backend (polars-direct/None) routes FS through the bucket scorer
       # unless this is 0 -- the legacy batched leg of the item-3 parity A/B.
@@ -86,13 +98,15 @@ jobs:
         run: |
           set -o pipefail
           uv run python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
-            --rows "${{ inputs.rows }}" \
-            --dup-frac "${{ inputs.dup_frac }}" \
-            --backend "${{ inputs.backend }}" | tee /tmp/fs_dist.log
+            --rows "${{ inputs.rows || '5000000' }}" \
+            --dup-frac "${{ inputs.dup_frac || '0.2' }}" \
+            --backend "${{ inputs.backend || 'bucket' }}" \
+            ${{ github.event_name == 'schedule' && '--min-f1 0.85 --max-wall-seconds 2400 --max-peak-rss-gb 55' || '' }} \
+            | tee /tmp/fs_dist.log
           {
             echo "### inputs"
-            echo "- rows=\`${{ inputs.rows }}\`  dup_frac=\`${{ inputs.dup_frac }}\`  backend=\`${{ inputs.backend }}\`"
-            echo "- runner=\`${{ inputs.runner }}\`  FS_NATIVE=\`${{ env.GOLDENMATCH_FS_NATIVE }}\`"
+            echo "- rows=\`${{ inputs.rows || '5000000' }}\`  dup_frac=\`${{ inputs.dup_frac || '0.2' }}\`  backend=\`${{ inputs.backend || 'bucket' }}\`"
+            echo "- runner=\`${{ inputs.runner || 'large-new-64GB' }}\`  FS_NATIVE=\`${{ env.GOLDENMATCH_FS_NATIVE }}\`  gate=\`${{ github.event_name == 'schedule' && 'on' || 'off' }}\`"
             echo ""
             # The driver prints a markdown block after the KEY=VALUE lines.
             sed -n '/## bench-fs-distributed/,$p' /tmp/fs_dist.log
@@ -102,6 +116,45 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: fs-distributed-${{ inputs.rows }}-${{ inputs.backend }}
+          name: fs-distributed-${{ inputs.rows || '5000000' }}-${{ inputs.backend || 'bucket' }}
           path: /tmp/fs_dist.log
+          retention-days: 30
+
+  route_parity:
+    # #1805 checkbox 4: raise the max FS route-vs-route parity scale. The per-PR
+    # suite pins arrow-vs-polars FS membership parity at a few hundred rows
+    # (test_fs_frame_lane_parity_1805); this runs the SAME axis at a moderate
+    # scale the per-PR suite can't afford, so a scale-dependent frame-backend
+    # divergence surfaces. Light enough for a normal runner (no native build).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      ARROW_DEFAULT_MEMORY_POOL: system
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: FS route parity at moderate scale
+        run: |
+          set -o pipefail
+          uv run python packages/python/goldenmatch/scripts/bench_fs_route_parity.py \
+            --rows 20000 --dup-frac 0.2 | tee /tmp/fs_route_parity.log
+          sed -n '/## bench-fs-route-parity/,$p' /tmp/fs_route_parity.log >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fs-route-parity-20000
+          path: /tmp/fs_route_parity.log
           retention-days: 30
