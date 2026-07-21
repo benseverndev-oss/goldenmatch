@@ -50,6 +50,13 @@ from typing import Any
 from goldenmatch.config.schemas import BlockingConfig, MatchkeyConfig
 
 
+def _sql_lit(s: Any) -> str:
+    """A SQL single-quoted string literal with quote-doubling, so a path that
+    contains a single quote can't break (or inject into) a DuckDB ``COPY ... TO``
+    statement built via f-string. Used for the caller-supplied output paths."""
+    return "'" + str(s).replace("'", "''") + "'"
+
+
 def _fs_ooc_workers() -> int:
     """Thread-pool size for out-of-core block scoring. Mirrors the in-memory FS
     scorer's ``GOLDENMATCH_FS_WORKERS`` (default ``min(16, cpu)``); the native
@@ -514,11 +521,11 @@ def stream_fs_dedupe_output(
     # mirroring _finalize's size>1 dupe rule). Both STREAMED via COPY.
     con.execute(
         f"COPY (SELECT {_sel} {base_join} WHERE s.n = 1) "
-        f"TO '{unique_path}' (FORMAT parquet)"
+        f"TO {_sql_lit(unique_path)} (FORMAT parquet)"
     )
     con.execute(
         f"COPY (SELECT {_sel}, a.__cluster_id__ {base_join} WHERE s.n > 1) "
-        f"TO '{dupes_path}' (FORMAT parquet)"
+        f"TO {_sql_lit(dupes_path)} (FORMAT parquet)"
     )
     # golden = non-oversized multi-member; bounded subset -> in-memory builder.
     golden_tbl = con.execute(

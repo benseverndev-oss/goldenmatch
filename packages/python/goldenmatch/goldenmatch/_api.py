@@ -657,9 +657,13 @@ def dedupe_to_parquet(
     golden = result.get("golden")
     unique_count = _frame_write_parquet(unique, unique_path) if unique is not None else 0
     dupes_count = _frame_write_parquet(dupes, dupes_path) if dupes is not None else 0
-    golden_count = (
-        _frame_write_parquet(golden, golden_path) if golden is not None else 0
-    )
+    # Only write golden.parquet when it actually has rows (mirrors the streaming
+    # path): a 0-row golden frame must not leave a stray empty file on disk while
+    # the returned golden_path is None -- keep the file set and the paths consistent.
+    _golden_rows = 0
+    if golden is not None:
+        _golden_rows = golden.num_rows if hasattr(golden, "num_rows") else golden.height
+    golden_count = _frame_write_parquet(golden, golden_path) if _golden_rows else 0
     return {
         "output_dir": out_dir,
         "unique_path": unique_path if unique is not None else None,
