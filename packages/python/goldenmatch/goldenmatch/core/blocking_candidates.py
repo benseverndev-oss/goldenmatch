@@ -272,9 +272,11 @@ def find_composite_blocking_keys(
 
     Enumerates pairs of mid-cardinality columns (each with ratio in
     ``[0.05, 0.5]`` so the joint cardinality lands in a sane band).
-    For each pair, computes joint cardinality via
-    ``df.select(c1, c2).n_unique()`` and picks the pair whose joint
-    cardinality is closest to ``n_rows / target_avg_block_size``.
+    For each pair, computes joint cardinality via the backend-neutral
+    ``frame.joint_n_unique([c1, c2])`` seam (equivalent to
+    ``df.select(c1, c2).n_unique()`` on the polars lane; arrow-safe -- see
+    #1852 tail) and picks the pair whose joint cardinality is closest to
+    ``n_rows / target_avg_block_size``.
 
     Returns the column names of the best pair, or ``None`` when no
     pair lands in ``[n_rows/100, n_rows/2]`` (avg block size 2-100).
