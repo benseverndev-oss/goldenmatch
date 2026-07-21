@@ -203,13 +203,7 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         # at all. Soundex is wrapped defensively (jellyfish.soundex can raise on
         # non-alpha input) so that component just drops instead of failing the
         # whole pair.
-        jw = JaroWinkler.similarity(val_a, val_b)
-        ts = token_sort_ratio(val_a, val_b) / 100.0
-        try:
-            sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
-        except Exception:
-            sx = 0.0
-        return max(jw, ts, sx)
+        return _ensemble_score_single(val_a, val_b)
     elif scorer == "initialism_match":
         return _initialism_match_single(val_a, val_b)
     elif scorer == "alias_match":
@@ -1031,6 +1025,47 @@ def _qgram_score_single(val_a: str, val_b: str, n: int = 3) -> float:
     if not union:
         return 0.0
     return len(set_a & set_b) / len(union)
+
+
+def _ensemble_score_single(val_a: str, val_b: str) -> float:
+    """Per-pair ensemble: ``max(jaro_winkler, token_sort/100, soundex*0.8)``.
+
+    Float64 twin of the ``ensemble`` branch in ``_fuzzy_score_matrix`` and of
+    ``score_field(a, b, "ensemble")`` (same three components, same 0.8 soundex
+    bonus). Extracted as a standalone callable so the bucket fast path can
+    dispatch ensemble per-pair (behind ``GOLDENMATCH_ENSEMBLE_KERNEL``) instead
+    of declining to the float32 matrix path. See
+    ``docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md`` for the
+    recall-parity measurement that governs whether this is default-on.
+
+    NOTE the dtype: the matrix path (``_fuzzy_score_matrix``) computes each
+    component AND the weighted matchkey combine in float32; this returns float64.
+    A borderline pair near ``>= threshold`` can flip between the two, which is
+    exactly the divergence the ensemble decline warned about. The optional
+    ``GOLDENMATCH_ENSEMBLE_KERNEL=f32`` mode casts the per-pair score to float32
+    to quantize it like the matrix's per-field values (parity experiment).
+    """
+    jw = JaroWinkler.similarity(val_a, val_b)
+    ts = token_sort_ratio(val_a, val_b) / 100.0
+    try:
+        sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+    except Exception:
+        sx = 0.0
+    return max(jw, ts, sx)
+
+
+def _ensemble_score_single_f32(  # pyright: ignore[reportUnusedFunction]  # consumed via a lazy cross-module import in backends/score_buckets.py
+    val_a: str, val_b: str
+) -> float:
+    """``_ensemble_score_single`` with the result quantized to float32.
+
+    Mirrors the matrix path's per-field float32 storage: each ensemble component
+    matrix is ``astype(np.float32)`` before the ``np.maximum`` combine, so the
+    per-field value that enters the weighted combine is float32-quantized. This
+    variant reproduces that quantization at the per-pair boundary (the combine
+    itself stays float64 in the fast path, but the dominant rounding is here).
+    """
+    return float(np.float32(_ensemble_score_single(val_a, val_b)))
 
 
 def _qgram_score_matrix(values: list, n: int = 3) -> np.ndarray:

@@ -5207,6 +5207,9 @@
         "ENABLE": [
           "GOLDENMATCH_ENABLE_DISTRIBUTED_RAY"
         ],
+        "ENSEMBLE": [
+          "GOLDENMATCH_ENSEMBLE_KERNEL"
+        ],
         "FACILITY": [
           "GOLDENMATCH_FACILITY_NAME_NE"
         ],

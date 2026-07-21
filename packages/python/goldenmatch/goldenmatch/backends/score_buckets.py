@@ -519,18 +519,38 @@ def _resolve_score_pair_callable(
         from goldenmatch.core.scorer import _phash_score_single
         return _phash_score_single
     if scorer_name == "ensemble":
-        # DECLINE the fast path for ensemble (return None -> find_fuzzy_matches
-        # slow path). A prior per-pair reimplementation (max(jw, ts, sx*0.8))
-        # claimed matrix-path equivalence but measurably diverged: on Febrl3
-        # auto-config (3 ensemble fields) it dropped recall 0.922 -> 0.782 vs
-        # polars-direct (F1 0.9332 -> 0.8768), with bucket near-perfect precision
-        # -- i.e. the reimplementation scored STRICTER than the matrix ensemble,
-        # pushing true pairs below threshold. Declining restores parity
-        # (recall 0.9221, F1 0.9326). The matrix ensemble (core/scorer.py) is the
-        # single source of truth; do NOT reintroduce a per-pair ensemble without
-        # a field-level parity test against find_fuzzy_matches. Native already
-        # declines ensemble (_NATIVE_SCORER_IDS covers only the 4 plain scorers),
-        # and plain-scorer configs (the 5M/25M scale path) keep the fast path.
+        # DECLINE the fast path for ensemble by DEFAULT (return None ->
+        # find_fuzzy_matches float32-matrix path, the source of truth). A prior
+        # per-pair reimplementation (max(jw, ts, sx*0.8)) claimed matrix-path
+        # equivalence but measurably diverged on an OLDER autoconfig: on Febrl3
+        # (3 ensemble fields) it dropped recall 0.922 -> 0.782 vs polars-direct
+        # (F1 0.9332 -> 0.8768) -- the float64 per-pair combine scored STRICTER
+        # than the float32 matrix combine at the >= threshold boundary, pushing
+        # true pairs below threshold.
+        #
+        # `GOLDENMATCH_ENSEMBLE_KERNEL` RE-OPENS that measurement (the deferral
+        # explicitly invited it): `1`/`f64` returns the float64 per-pair kernel;
+        # `f32` returns the variant that quantizes each per-pair score to float32
+        # to reproduce the matrix path's per-field float32 storage. Default
+        # (unset) is byte-identical to the historical decline. The recall delta
+        # under the current autoconfig is measured in
+        # docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md.
+        mode = os.environ.get("GOLDENMATCH_ENSEMBLE_KERNEL", "").strip().lower()
+        if mode in ("1", "on", "true", "f32", "float32"):
+            # SAFE variant: quantize each per-pair score to float32 so it is
+            # BYTE-IDENTICAL to the matrix path's per-field float32 storage
+            # (`f32(max(a,b,c)) == max(f32(a),f32(b),f32(c))` since f32 cast is
+            # monotonic and commutes with max). Field-level parity is asserted
+            # in tests/test_ensemble_kernel_parity.py -- the exact bar the
+            # historical decline demanded before reintroduction.
+            from goldenmatch.core.scorer import _ensemble_score_single_f32
+            return _ensemble_score_single_f32
+        if mode in ("f64", "float64"):
+            # DIVERGENT variant (measurement only): float64, diverges from the
+            # matrix by <= 3e-8 (0.0043% of field-pairs cross a threshold). Kept
+            # for the A/B in the measurement spec; NOT recommended for use.
+            from goldenmatch.core.scorer import _ensemble_score_single
+            return _ensemble_score_single
         return None
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
