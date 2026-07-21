@@ -56,6 +56,29 @@ export function surnameRank(name: string | null): number | null {
   return r === undefined ? null : r;
 }
 
+/**
+ * Raw census `(name, count)` columns for injecting into the score-wasm
+ * `name_freq_weighted_jw` kernel (fs-core's `SurnameIdfTable::from_counts`
+ * recomputes the idf with the SAME `clamp(log(total/count)/log(total/min))`
+ * formula, so the wasm idf matches `surnameIdf` above to f64 tolerance). Returns
+ * every row verbatim — fs-core normalizes the names internally, exactly as
+ * `buildState` does, so the total/min/per-name idf are identical. `null` when
+ * the table is unavailable (nothing to inject → kernel stays plain-JW).
+ */
+export function censusInjectionData(): {
+  names: string[];
+  counts: number[];
+} | null {
+  if (load() === null) return null;
+  const names: string[] = [];
+  const counts: number[] = [];
+  for (const [rawName, , count] of CENSUS_SURNAMES) {
+    names.push(rawName);
+    counts.push(count);
+  }
+  return names.length === 0 ? null : { names, counts };
+}
+
 export function surnameIdf(name: string | null): number | null {
   if (name === null) return null;
   const state = load();

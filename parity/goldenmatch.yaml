@@ -308,6 +308,10 @@ blocking_strategies:
 # python_only: `date`, `qgram`, `soundex_match`, `initialism_match`, `alias_match`,
 # `dice`, `jaccard`, `phash` have an arrow-native (bucket) kernel on Python but no
 # TS WASM port yet.
+# ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
+# name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
+# over fs-core, injected census/alias tables) but have no Python bucket kernel
+# (Python accepts them via the plugin fallback); a real, declared Python<->TS delta.
 scorer_kernels:
   shared:
   - exact
@@ -323,7 +327,9 @@ scorer_kernels:
   - phash
   - qgram
   - soundex_match
-  ts_only: []
+  ts_only:
+  - given_name_aliased_jw
+  - name_freq_weighted_jw
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
 # reason -- the `check_scorer_coverage` gate FAILS on any uncovered scorer, so a new
@@ -336,7 +342,5 @@ scorer_kernels_deferred:
   ensemble: "declined -- a per-pair reimpl measurably regressed Febrl3 recall (0.922->0.782); the float32 matrix ensemble is the source of truth, so it stays off the bucket/fast path. Kernelizing means re-opening that measurement"
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
-  given_name_aliased_jw: "deferred -- ts_only scorer; its kernel home is the TS WASM surface (WASM_COVERED_SCORERS), not the Python bucket"
-  name_freq_weighted_jw: "deferred -- ts_only; also uses a dynamic per-dataset tf table that does not fit the static-global in-kernel table mechanism"
   radial: "declined -- bespoke rotation-aligned Pearson on radial profiles; angular alignment search, low perf upside (small blocks)"
   audio_fp: "declined -- bespoke best-offset-aligned BER on hex audio fingerprints; alignment search, low perf upside"

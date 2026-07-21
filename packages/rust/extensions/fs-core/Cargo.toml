@@ -22,4 +22,9 @@ name = "goldenmatch_fs_core"
 # surfaces). Reference data (census / aliases) is injected by the host, never
 # bundled here (see the 2026-07-17 fs-core design).
 [dependencies]
-goldenmatch-score-core = { path = "../score-core" }
+# `default-features = false` drops score-core's `alias` feature (id 8 + the `regex`
+# engine) -- fs-core uses only jaro_winkler/levenshtein/token_sort/score_one, none
+# behind `alias`, so it stays lean. This keeps the edge `score-wasm` bundle (which
+# depends on fs-core for the name scorers) regex-free; the `native` crate unions
+# `alias` back in via its own direct score-core dependency, so it's unaffected.
+goldenmatch-score-core = { path = "../score-core", default-features = false }

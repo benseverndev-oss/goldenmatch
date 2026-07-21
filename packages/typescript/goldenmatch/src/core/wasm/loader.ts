@@ -13,6 +13,8 @@ import {
 } from "goldenmatch-wasm-runtime";
 import { SCORER_ID } from "./backend.js";
 import type { ScorerBackend } from "./backend.js";
+import { censusInjectionData } from "../refdata/surnames.js";
+import { aliasInjectionEdges } from "../refdata/givenNames.js";
 
 export type { LoadOptions };
 
@@ -42,8 +44,32 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBacke
     // lib type (this package typechecks without the DOM lib).
     default: (input: { module_or_path: Uint8Array }) => Promise<unknown>;
     score_matrix: (values: string, sep: string, scorerId: number) => Float64Array;
+    // Reference-data setters for the two name scorers (ids 20/21). Optional so
+    // an older artifact without them degrades gracefully (kernel falls back to
+    // plain JW for those ids); the CI-built artifact always carries them.
+    set_surname_idf?: (names: string[], counts: Float64Array) => void;
+    set_name_aliases?: (forms: string[], canonicals: string[]) => void;
   };
   await glue.default({ module_or_path: bytes });
+
+  // Inject the census / alias reference-data ONCE (mirrors the native
+  // `set_name_reference_data` pattern) so `name_freq_weighted_jw` /
+  // `given_name_aliased_jw` score over the SAME tables the pure-TS path uses —
+  // fs-core bundles no data. The kernel's OnceLock is first-wins; a second
+  // enableWasm() after disableWasm() re-instantiates a fresh module, so the
+  // per-module set runs against a clean OnceLock each time.
+  if (typeof glue.set_surname_idf === "function") {
+    const census = censusInjectionData();
+    if (census !== null) {
+      glue.set_surname_idf(census.names, Float64Array.from(census.counts));
+    }
+  }
+  if (typeof glue.set_name_aliases === "function") {
+    const aliases = aliasInjectionEdges();
+    if (aliases !== null) {
+      glue.set_name_aliases(aliases.forms, aliases.canonicals);
+    }
+  }
 
   const SEP = "\x1e";
   return {

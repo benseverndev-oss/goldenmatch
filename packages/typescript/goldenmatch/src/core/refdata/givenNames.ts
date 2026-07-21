@@ -52,6 +52,32 @@ export function isAvailable(): boolean {
   return load() !== null;
 }
 
+/**
+ * Parallel `(form, canonical)` EDGE arrays for injecting into the score-wasm
+ * `given_name_aliased_jw` kernel (`set_name_aliases`). Flattened from the SAME
+ * `form -> Set<canonical>` map `buildState` builds for the pure path — so
+ * fs-core's `AliasTable::from_forms` regroups them into the identical
+ * form→canonical-set structure, and `are_equivalent` is byte-parity with
+ * `areEquivalent` below (set-intersection + the reflexive normalize-collide
+ * shortcut, which fs-core also carries). `null` when the table is unavailable.
+ */
+export function aliasInjectionEdges(): {
+  forms: string[];
+  canonicals: string[];
+} | null {
+  const state = load();
+  if (state === null) return null;
+  const forms: string[] = [];
+  const canonicals: string[] = [];
+  for (const [form, cset] of state.canonicals) {
+    for (const c of cset) {
+      forms.push(form);
+      canonicals.push(c);
+    }
+  }
+  return forms.length === 0 ? null : { forms, canonicals };
+}
+
 /** True iff a and b share at least one canonical. Symmetric, reflexive. */
 export function areEquivalent(a: string | null, b: string | null): boolean {
   if (a === null || b === null) return false;
