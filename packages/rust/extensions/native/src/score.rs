@@ -259,6 +259,30 @@ pub fn soundex_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::score_one(6, a, b)
 }
 
+/// Install the host-shipped legal-form variant set (`entity_form_variants()`,
+/// ~77 lowercase-normalized entries) into score-core's process-global table,
+/// which `initialism_match` (score-core id 7) reads. `OnceLock` first-wins:
+/// returns `True` only on the first call; later calls no-op (`False`). The
+/// Python caller MUST call this once before routing `initialism_match` through
+/// the native kernel, else id 7 scores against an empty legal-form set.
+#[pyfunction]
+pub fn set_legal_form_variants(forms: Vec<String>) -> bool {
+    goldenmatch_score_core::set_legal_forms(forms.into_iter().collect())
+}
+
+/// Initialism-match similarity (score-core id 7): 1.0 iff either name is the
+/// other's derived initialism (or the two initialisms are equal), against the
+/// globally-installed legal-form set. Own #[pyfunction] capability marker like
+/// `qgram_similarity`/`soundex_similarity`: a stale published wheel lacking this
+/// symbol would hit score_one's catch-all (silent 0.0) for id 7, so the Python
+/// caller gates the native route on `hasattr(_native, "initialism_similarity")`
+/// AND a successful `set_legal_form_variants`, falling back to the pure path
+/// (`_initialism_match_single`) otherwise.
+#[pyfunction]
+pub fn initialism_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::score_one(7, a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)

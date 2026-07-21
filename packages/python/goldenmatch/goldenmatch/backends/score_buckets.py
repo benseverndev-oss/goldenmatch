@@ -235,7 +235,58 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # -- NOT the field-matrix path's id 4=soundex (empty codes non-matching;
     # a separate id namespace).
     "soundex_match": 6,
+    # id 7 = initialism_match (abbreviation matcher, score-core score_one).
+    # Two-part wheel-skew guard at the gating site below: routing to native id 7
+    # requires BOTH the `initialism_similarity` capability symbol (a stale
+    # pre-initialism wheel hits score_one's catch-all -> silent 0.0) AND a
+    # successful `set_legal_form_variants` install (id 7 scores against an empty
+    # legal-form set until the host ships `entity_form_variants()`), else it
+    # declines to the pure-Python per-pair mirror (`_initialism_match_single`).
+    "initialism_match": 7,
 }
+
+
+# Cached tri-state for the one-time legal-form install into the native kernel:
+# None = not yet attempted, True = installed on a capable kernel, False = kernel
+# lacks the symbols (stale wheel) so the initialism native route is declined.
+_LEGAL_FORMS_INSTALLED: bool | None = None
+
+
+def _ensure_legal_forms_installed() -> bool:
+    """Install ``entity_form_variants()`` into score-core's process-global
+    legal-form table (via the native ``set_legal_form_variants`` shim) exactly
+    once, so ``score_one`` id 7 (initialism_match) drops legal forms the same way
+    the pure ``derive_initialism`` does.
+
+    Returns True once the table is installed on a kernel exposing BOTH
+    ``set_legal_form_variants`` and ``initialism_similarity``; False when the
+    loaded kernel lacks either symbol (a stale pre-initialism wheel), so the
+    gating site declines the native id-7 route and lets the pure per-pair mirror
+    (``_initialism_match_single``) score the block. Idempotent + memoized: the
+    OnceLock is first-wins and the variant set is deterministic, so a benign
+    re-install (another caller won the race) still leaves the correct table.
+    """
+    global _LEGAL_FORMS_INSTALLED
+    if _LEGAL_FORMS_INSTALLED is not None:
+        return _LEGAL_FORMS_INSTALLED
+    _mod = native_module()
+    if (
+        _mod is None
+        or not hasattr(_mod, "set_legal_form_variants")
+        or not hasattr(_mod, "initialism_similarity")
+    ):
+        _LEGAL_FORMS_INSTALLED = False
+        return False
+    try:
+        from goldenmatch.refdata.business import entity_form_variants
+
+        # Bool return (first-wins) is intentionally ignored: whether we or another
+        # caller installed it, the deterministic content is now in place.
+        _mod.set_legal_form_variants(list(entity_form_variants()))
+        _LEGAL_FORMS_INSTALLED = True
+    except Exception:
+        _LEGAL_FORMS_INSTALLED = False
+    return _LEGAL_FORMS_INSTALLED
 
 
 # Single source in core._hashing (re-exported here for back-compat). The
@@ -331,6 +382,18 @@ def _resolve_score_pair_callable(
         # backend (native or this per-pair mirror) instead of the slow matrix path.
         from goldenmatch.core.scorer import _qgram_score_single
         return _qgram_score_single
+    if scorer_name == "initialism_match":
+        # Abbreviation matcher (1.0/0.0). Per-pair mirror of the matrix path
+        # (core/scorer.py:736) AND of score-core::initialism_match (native id 7);
+        # parity-asserted in tests/test_native_initialism_parity.py. Making it
+        # fast-path eligible routes initialism_match configs through the bucket
+        # backend (native id 7 or this per-pair mirror) instead of the slow
+        # matrix path. The native id-7 kernel needs the legal-form table
+        # installed (`set_legal_form_variants`); the gating site below guards on
+        # both the `initialism_similarity` symbol AND a successful install, and
+        # declines to THIS mirror otherwise.
+        from goldenmatch.core.scorer import _initialism_match_single
+        return _initialism_match_single
     if scorer_name == "dice":
         # Delegate to the existing per-pair implementation in core/scorer.py
         # (_dice_score_single, bigram set Dice coefficient). Matrix path is
@@ -1045,6 +1108,16 @@ def score_buckets(
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
+            has_initialism = any(spec[3] == "initialism_match" for spec in _field_specs)
+            # initialism_match (id 7) has a TWO-part guard: the capability symbol
+            # AND a successful legal-form install (id 7 scores against an empty
+            # legal-form set until the host ships `entity_form_variants()`).
+            # `_ensure_legal_forms_installed` folds both checks (symbol presence +
+            # install) into one memoized bool, so an uninstalled/stale kernel
+            # declines to the pure per-pair mirror instead of dropping no legal
+            # forms. Only evaluated when a field actually uses initialism (avoids
+            # the refdata load + install on every unrelated block).
+            _initialism_ok = has_initialism and _ensure_legal_forms_installed()
             # Wheel-skew: decline native entirely when a field uses a scorer whose
             # capability symbol the loaded kernel lacks (score_one would silently
             # zero that id); the pure-Python per-pair mirror scores the block.
@@ -1052,6 +1125,7 @@ def score_buckets(
                 (has_date and not _date_ok)
                 or (has_qgram and not _qgram_ok)
                 or (has_soundex and not _soundex_ok)
+                or (has_initialism and not _initialism_ok)
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]

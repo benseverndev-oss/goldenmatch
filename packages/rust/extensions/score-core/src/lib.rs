@@ -365,9 +365,34 @@ pub fn initialism_match(a: &str, b: &str, legal_forms: &std::collections::HashSe
     }
 }
 
+// The legal-form variant set for `initialism_match` is process-global state,
+// installed once by the host (`refdata.business.entity_form_variants()`, ~77
+// entries), so that `score_one(7, ...)` stays a UNIFORM `(id, a, b)` call — the
+// dispatch signature can't carry a per-call table without breaking the
+// `_NATIVE_SCORER_IDS == score_one` id-map invariant every other scorer holds.
+static LEGAL_FORMS: std::sync::OnceLock<std::collections::HashSet<String>> =
+    std::sync::OnceLock::new();
+
+/// Install the caller-shipped legal-form variant set for `initialism_match`.
+/// `OnceLock` semantics: only the FIRST call wins (returns `true`); later calls
+/// are ignored (`false`). The host ships the deterministic 77-entry
+/// `entity_form_variants()` once before routing initialism through the kernel;
+/// until then `score_one(7, ...)` scores against an EMPTY set (no legal-form
+/// dropping), which is why the Python fast-path guard also gates on this being
+/// set. Content is deterministic, so the first-wins race is benign.
+pub fn set_legal_forms(forms: std::collections::HashSet<String>) -> bool {
+    LEGAL_FORMS.set(forms).is_ok()
+}
+
+/// The installed legal-form set, or an empty set if the host never called
+/// `set_legal_forms` (kernel stays defined but drops no legal forms).
+fn legal_forms() -> &'static std::collections::HashSet<String> {
+    LEGAL_FORMS.get_or_init(std::collections::HashSet::new)
+}
+
 /// Scorer dispatch matching `score_buckets._resolve_score_pair_callable`'s
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
-/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match.
+/// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match.
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -394,6 +419,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // like id 3; a soundex mismatch falls through to the 0.0 catch-all.
         // Matches the bucket per-pair mirror `1.0 if jf.soundex(a)==jf.soundex(b) else 0.0`.
         6 if soundex(a) == soundex(b) => 1.0,
+        // id=7 = initialism_match against the host-installed legal-form set (empty
+        // until `set_legal_forms` is called). Byte-for-byte with
+        // `_initialism_match_single`; the Python fast-path guard requires the
+        // table to be installed before routing here.
+        7 => initialism_match(a, b, legal_forms()),
         _ => 0.0,
     }
 }
@@ -564,6 +594,21 @@ mod tests {
         // known false positive: same initials -> 1.0 by design
         assert_eq!(initialism_match("International Business Machines", "Indian Banana Market", &lf), 1.0);
         assert_eq!(initialism_match("Acme Industries LLC", "AI", &lf), 1.0);
+    }
+
+    #[test]
+    fn score_one_id7_is_initialism_match_against_global_table() {
+        // This is the ONLY test that installs the process-global legal-form set
+        // (OnceLock first-wins), so it never races a different-content setter;
+        // every other initialism test passes a LOCAL table to the `*_single` fns.
+        assert!(set_legal_forms(_legal_forms()));
+        // Table-INDEPENDENT (no legal-form tokens involved): dispatch works.
+        assert_eq!(score_one(7, "International Business Machines", "IBM"), 1.0);
+        assert_eq!(score_one(7, "Apple", "Apricot"), 0.0);
+        // Table-DEPENDENT: only 1.0 because "LLC" is dropped as a legal form
+        // ("Acme Industries LLC" -> initials "AI"). With an empty table it would
+        // be "AIL" != "AI" -> 0.0, so this asserts the global table is wired.
+        assert_eq!(score_one(7, "Acme Industries LLC", "AI"), 1.0);
     }
 
     #[test]
