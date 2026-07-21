@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-07-21
+
 ### Fixed
 
 - **Zero-config Fellegi-Sunter recall no longer collapses at scale (candidate-pair
