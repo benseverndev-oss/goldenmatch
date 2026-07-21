@@ -414,6 +414,12 @@ jobs:
           # crashed` on the suggest-full-dist pipeline test. Force the system pool
           # (the documented Arrow knob; harmless where unneeded).
           ARROW_DEFAULT_MEMORY_POOL: system
+          # TEMPORARY: diagnose the shard-3 worker crash on the suggest-full-dist
+          # pipeline test (faulthandler dump on SIGSEGV + per-test RSS high-water
+          # so the last line before a worker death names the culprit + memory).
+          # Remove with the tests/conftest.py crashdiag block once diagnosed.
+          GOLDENMATCH_CRASH_DIAG: "1"
+          PYTHONFAULTHANDLER: "1"
         run: |
           uv run --with pytest-split pytest packages/python/goldenmatch \
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \

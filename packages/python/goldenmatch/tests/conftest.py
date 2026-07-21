@@ -11,6 +11,29 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 
+# --- TEMPORARY crash diagnostic (GOLDENMATCH_CRASH_DIAG=1) ------------------
+# Gated, inert unless the env var is set. Enables faulthandler (so a SIGSEGV in
+# any thread dumps a C traceback -> distinguishes a real crash from an OOM
+# SIGKILL, which is uncatchable) and logs process RSS high-water at each test
+# start, so the LAST line before a worker dies names the culprit test + the RSS
+# just before death. Used to diagnose the `python_goldenmatch (3)` worker crash
+# on tests/test_suggest_full_dist.py. Remove once diagnosed.
+if os.environ.get("GOLDENMATCH_CRASH_DIAG") == "1":
+    import faulthandler as _fh
+
+    _fh.enable(all_threads=True)
+
+    def pytest_runtest_logstart(nodeid, location):  # noqa: D401
+        try:
+            import resource
+            hwm = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+            sys.stderr.write(f"[crashdiag] VmHWM~{hwm:.0f}MB start {nodeid}\n")
+            sys.stderr.flush()
+        except Exception:  # never let the diagnostic break a run
+            pass
+# --- end crash diagnostic ---------------------------------------------------
+
+
 # Routing env vars that flip which scoring path the pipeline takes. A test that
 # mutates one of these via raw ``os.environ[...] = ...`` (rather than
 # monkeypatch) and doesn't restore it in a bulletproof ``finally`` leaks the
