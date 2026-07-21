@@ -276,6 +276,13 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     "dice": 9,
     "jaccard": 10,
     "phash": 11,
+    # id 12 = ensemble: max(jaro_winkler, unscaled token_sort, 0.8*soundex),
+    # composing score_one 0/2/6 (score-core `ensemble_similarity`). Matches the
+    # per-pair `_ensemble_score_single` to machine epsilon (1.1e-16 on real
+    # Febrl3 name/address pairs). Guarded on the `ensemble_similarity` capability
+    # symbol so a stale wheel (pre-ensemble score_one) declines to the pure
+    # per-pair mirror instead of silently scoring the whole matchkey 0.0.
+    "ensemble": 12,
 }
 
 
@@ -1245,12 +1252,14 @@ def score_buckets(
             _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
             _jaccard_ok = _mod is not None and hasattr(_mod, "jaccard_similarity")
             _phash_ok = _mod is not None and hasattr(_mod, "phash_similarity")
+            _ensemble_ok = _mod is not None and hasattr(_mod, "ensemble_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             has_dice = any(spec[3] == "dice" for spec in _field_specs)
             has_jaccard = any(spec[3] == "jaccard" for spec in _field_specs)
             has_phash = any(spec[3] == "phash" for spec in _field_specs)
+            has_ensemble = any(spec[3] == "ensemble" for spec in _field_specs)
             has_initialism = any(spec[3] == "initialism_match" for spec in _field_specs)
             # initialism_match (id 7) has a TWO-part guard: the capability symbol
             # AND a successful legal-form install (id 7 scores against an empty
@@ -1280,6 +1289,7 @@ def score_buckets(
                 or (has_dice and not _dice_ok)
                 or (has_jaccard and not _jaccard_ok)
                 or (has_phash and not _phash_ok)
+                or (has_ensemble and not _ensemble_ok)
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]

@@ -322,6 +322,7 @@ scorer_kernels:
   - alias_match
   - date
   - dice
+  - ensemble
   - initialism_match
   - jaccard
   - phash
@@ -339,7 +340,6 @@ scorer_kernels:
 # kernelize (with the blocker); `declined --` = won't (with why); `n/a --` = not a
 # string kernel. Removing a scorer's kernel without adding it here fails CI.
 scorer_kernels_deferred:
-  ensemble: "deferred -- re-measured 2026-07-21 (docs/superpowers/specs/2026-07-21-ensemble-kernel-measurement.md): the old 0.922->0.782 Febrl3 regression does NOT reproduce under autoconfig-v2 (byte-identical TP/FP/FN). Now bucket fast-path eligible by DEFAULT (per-pair + the float64 _score_block_vec vec lane); measured 1.47x faster end-to-end on Febrl3, byte-identical recall. GOLDENMATCH_ENSEMBLE_KERNEL=0 is the kill-switch. Still NOT counted for the metric: the fast path is a Python composite (rapidfuzz+jellyfish+numpy), not a native score_one / arrow-block kernel -- a native composed ensemble id is the remaining follow-on (score_one(2) token_sort already matches rapidfuzz to float32, so it's feasible)"
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   radial: "declined -- bespoke rotation-aligned Pearson on radial profiles; angular alignment search, low perf upside (small blocks)"
