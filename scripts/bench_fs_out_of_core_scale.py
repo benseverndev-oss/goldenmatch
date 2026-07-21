@@ -60,15 +60,32 @@ def _vmrss_mb() -> float:
 
 
 class Sampler(threading.Thread):
-    def __init__(self, interval: float = 0.1):
+    def __init__(self, interval: float = 0.1, heartbeat_s: float = 30.0,
+                 label: str = ""):
         super().__init__(daemon=True)
         self.interval = interval
+        self.heartbeat_s = heartbeat_s
+        self.label = label
         self.peak = 0.0
         self._stopev = threading.Event()
 
     def run(self) -> None:
+        # A periodic elapsed/RSS heartbeat so a long, otherwise-opaque
+        # dedupe_to_parquet() call still emits a liveness signal to the CI log
+        # (the whole call is one Python invocation with no per-stage callback).
+        t0 = time.perf_counter()
+        next_beat = self.heartbeat_s
         while not self._stopev.is_set():
-            self.peak = max(self.peak, _vmrss_mb())
+            cur = _vmrss_mb()
+            self.peak = max(self.peak, cur)
+            elapsed = time.perf_counter() - t0
+            if elapsed >= next_beat:
+                print(
+                    f"[fs-ooc-bench {self.label}] +{elapsed:.0f}s "
+                    f"rss={cur:.0f}MB peak={self.peak:.0f}MB",
+                    flush=True,
+                )
+                next_beat += self.heartbeat_s
             time.sleep(self.interval)
 
     def halt(self) -> None:
@@ -136,12 +153,15 @@ def main() -> None:
     result["blocking_strategy"] = _bl
     result["matchkey_types"] = _mks
 
-    sampler = Sampler()
+    sampler = Sampler(label=f"{args.mode}/{args.rows}")
     sampler.start()
     t0 = time.perf_counter()
     try:
         if args.mode == "streaming":
             os.environ["GOLDENMATCH_FS_OUT_OF_CORE"] = "1"
+            # Per-pass scoring progress in the CI log (the heartbeat covers the
+            # opaque stages; this narrates the streaming scorer itself).
+            os.environ["GOLDENMATCH_FS_OOC_DEBUG"] = "1"
             from goldenmatch import dedupe_to_parquet
 
             out_dir = args.workdir / f"out_{args.rows}"
