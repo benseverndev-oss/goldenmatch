@@ -400,8 +400,10 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=No
 
 
 def classify_query(query: str, *, predicates=None, entity_names=None, embedder=None) -> QueryProfile:
-    """Heuristic intent + slot extraction. `predicates` is the slice's stored predicate
-    ids (underscored); `entity_names` is the slice's entity canonical names. Both ground
+    """Heuristic intent + slot extraction. `predicates` is the slice's stored edge
+    predicate strings AS-IS -- underscored ids ("works_at") or space-form phrases
+    ("directed by"), whatever the graph holds; the extractor normalizes both via
+    `_predicate_salient_tokens`. `entity_names` is the slice's entity canonical names. Both ground
     the template-free NL multi-hop chain extractor -- when they yield an anchor + relation
     chain, a natural-language multi-hop question routes to the deterministic `chain` walk
     instead of LLM synthesis-over-the-ball. When either is absent, behavior is unchanged.
