@@ -231,6 +231,26 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
 from goldenmatch.core._hashing import BUCKET_HASH_SEED  # noqa: E402
 
 
+def _fs_bounded_stream_enabled() -> bool:
+    """Whether the FS bucket route scores buckets by BOUNDED STREAMING (slice one
+    bucket off the keyed frame on demand) instead of the eager
+    ``partition_by``-into-all-``n_buckets`` materialization.
+
+    Motivation (``docs/superpowers/specs/2026-07-20-fs-frame-residency-bucket-streaming-design.md``):
+    the eager partition holds ``n_buckets`` frames (~1x the frame) live through the
+    whole ``bucket_score`` loop, on TOP of the transient double at ``partition_by``
+    time -- the dominant remaining single-node FS peak at >=1M after the EM
+    ``build_blocks`` fix. Streaming holds only the keyed frame + ``max_workers``
+    in-flight bucket slices (the spec's in-RAM ``FrameBlockSource``).
+
+    ``GOLDENMATCH_FS_BLOCK_SOURCE=frame`` opts in; default (unset / any other value)
+    keeps the byte-identical eager path until the >=1M peak/wall win is CI-measured
+    and the default is flipped. Scoped to the FS (probabilistic) bucket route; the
+    weighted path is untouched. The DuckDB (above-RAM) source is a follow-on
+    (``score_fs_out_of_core`` already covers the out-of-core FS scoring lane)."""
+    return os.environ.get("GOLDENMATCH_FS_BLOCK_SOURCE", "").strip().lower() == "frame"
+
+
 def _default_n_buckets(height: int | None = None) -> int:
     """CPU-derived floor, data-scaled above it (#1803 item 5).
 
@@ -1503,6 +1523,18 @@ def score_buckets(
             offset += size
         return local_pairs, local_blocks
 
+    # Bounded bucket streaming (FS route only): when on, the scale branch below
+    # does NOT partition the keyed frame into all n_buckets eager frames. It
+    # keeps the single `bucketed` frame resident and slices each bucket out on
+    # demand (filter_eq inside the worker), so peak holds `bucketed` (~1x) plus
+    # at most max_workers in-flight slices instead of the ~2x transient double at
+    # partition time (the "partition" stage jump). Gated to the probabilistic
+    # (FS) path -- fast_path_specs is None there -- and off by default; the
+    # eager path is byte-identical (same rows, same within-bucket order via
+    # filter_eq == partition_by(maintain_order), and cross-bucket order is
+    # unordered downstream: thread-pool scored + pairs canonicalized).
+    _fs_streaming = is_probabilistic and _fs_bounded_stream_enabled()
+
     def _score_single_pass(
         key: BlockingKeyConfig,
     ) -> tuple[list[tuple[int, int, float]], int, int]:
@@ -1566,10 +1598,12 @@ def score_buckets(
         # straight to treating `keyed` as the single bucket and scoring.
         # On the streaming-block sync caller, this hits on every per-block
         # invocation (block size ~8, n_buckets default 32-128).
+        stream_bucket_ids: list | None = None  # set only on the streaming scale branch
         if _prep_frame.height < n_buckets:
             bucketed = keyed
             # Wrap in a single-bucket dict to share the scoring path below
-            # (native frames: pl.DataFrame or pa.Table by lane).
+            # (native frames: pl.DataFrame or pa.Table by lane). The single
+            # bucket is already bounded, so streaming never engages here.
             buckets_dict: dict[Any, Any] = {0: bucketed}
             if _bkt_debug_on():
                 print(
@@ -1600,26 +1634,50 @@ def score_buckets(
 
             with stage("bucket_partition"):
                 _tp = time.perf_counter()
-                # First-level partition via the seam (group_partitions ==
-                # partition_by with unwrapped keys; N eager frames).
                 from goldenmatch.core.frame import to_frame as _tf
 
-                buckets_dict = {
-                    k: part.native
-                    for k, part in _tf(bucketed).group_partitions("__bucket__")
-                }
-                # Free the pre-partition `keyed` and `bucketed` parents.
-                # group_partitions built N independent eager frames; the
-                # original contiguous parents are dead weight now.
-                del keyed
-                del bucketed
-                if _bkt_debug_on():
-                    print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
+                if _fs_streaming:
+                    # Bounded streaming: DON'T build N eager frames. Keep
+                    # `bucketed` resident and record the non-empty bucket ids
+                    # (a bucket id is present iff >=1 row hashed into it, so the
+                    # distinct set IS the non-empty set). unique_by keeps this
+                    # to <= n_buckets rows -- no 1M-int transient. Sorted for a
+                    # deterministic (order-invariant) scoring order.
+                    _stream_frame = _tf(bucketed)
+                    stream_bucket_ids = sorted(
+                        _stream_frame.unique_by(["__bucket__"], keep="first")
+                        .column("__bucket__")
+                        .to_list()
+                    )
+                    buckets_dict = None  # sentinel: streaming, no eager frames
+                    del keyed  # `bucketed` (via _stream_frame) retained for slicing
+                    if _bkt_debug_on():
+                        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: stream bucket-id scan in {time.perf_counter()-_tp:.2f}s -> {len(stream_bucket_ids)} buckets (no eager partition)", flush=True)
+                else:
+                    # First-level partition via the seam (group_partitions ==
+                    # partition_by with unwrapped keys; N eager frames).
+                    buckets_dict = {
+                        k: part.native
+                        for k, part in _tf(bucketed).group_partitions("__bucket__")
+                    }
+                    # Free the pre-partition `keyed` and `bucketed` parents.
+                    # group_partitions built N independent eager frames; the
+                    # original contiguous parents are dead weight now.
+                    del keyed
+                    del bucketed
+                    stream_bucket_ids = None
+                    if _bkt_debug_on():
+                        print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: partition_by(bucket) in {time.perf_counter()-_tp:.2f}s -> {len(buckets_dict)} buckets", flush=True)
 
         with stage("bucket_post_partition_setup"):
-            # len() works on both native frames (pl rows / pa num_rows).
-            non_empty_buckets = [b for b in buckets_dict.values() if len(b) > 0]
-            n_non_empty_buckets = len(non_empty_buckets)
+            if _fs_streaming and stream_bucket_ids is not None:
+                # No materialized frames; every present bucket id is non-empty.
+                non_empty_buckets = None
+                n_non_empty_buckets = len(stream_bucket_ids)
+            else:
+                # len() works on both native frames (pl rows / pa num_rows).
+                non_empty_buckets = [b for b in buckets_dict.values() if len(b) > 0]
+                n_non_empty_buckets = len(non_empty_buckets)
         if _bkt_debug_on():
             print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: {n_non_empty_buckets} non-empty buckets ready for scoring", flush=True)
 
@@ -1656,17 +1714,41 @@ def score_buckets(
                 path_label = "probabilistic_vectorized"
             else:
                 path_label = "find_fuzzy_matches"
+            _streaming_now = _fs_streaming and stream_bucket_ids is not None
+            if _streaming_now:
+                # Slice one bucket off the resident `bucketed` frame on demand,
+                # score it, then free the slice -- so at most max_workers slices
+                # are live at once (bounded). filter_eq preserves within-bucket
+                # order == the eager partition, so `worker`'s output is
+                # byte-identical to the eager path per bucket.
+                from goldenmatch.core.frame import to_frame as _tf
+
+                _bucketed_frame = _tf(bucketed)
+
+                def _stream_worker(bid: Any) -> tuple[list, int]:
+                    slice_native = _bucketed_frame.filter_eq("__bucket__", bid).native
+                    try:
+                        return worker(slice_native)
+                    finally:
+                        del slice_native
+
+                items: Any = stream_bucket_ids
+                run_worker: Any = _stream_worker
+                path_label += "+stream"
+            else:
+                items = non_empty_buckets
+                run_worker = worker
             if _bkt_debug_on():
                 print(f"[score_buckets] t={time.perf_counter()-_t0:.2f}s: starting bucket_score with max_workers={max_workers} path={path_label}", flush=True)
             if max_workers <= 1 or n_non_empty_buckets <= 2:
-                for bucket_df in non_empty_buckets:
-                    pairs, n = worker(bucket_df)
+                for item in items:
+                    pairs, n = run_worker(item)
                     _sink(pairs)
                     del pairs
                     pass_blocks_scored += n
             else:
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    for pairs, n in pool.map(worker, non_empty_buckets):
+                    for pairs, n in pool.map(run_worker, items):
                         _sink(pairs)
                         del pairs
                         pass_blocks_scored += n

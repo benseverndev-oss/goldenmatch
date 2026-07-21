@@ -256,3 +256,43 @@ the same flag; `frame` streaming can flip first (smaller blast radius) with the
   auto floor. Gate: byte-parity frame-vs-duckdb + 5M FS tier bounded RSS.
 - **PR-3** — flip `auto` on after two green scale-envelope runs; document in
   `docs/scale-envelope.md`.
+
+## Implementation status (2026-07-21)
+
+**Phase 1 `FrameBlockSource` (in-RAM bounded streaming) — LANDED, opt-in.**
+`GOLDENMATCH_FS_BLOCK_SOURCE=frame` (`_fs_bounded_stream_enabled()` in
+`backends/score_buckets.py`) turns the scale branch of `_score_single_pass`
+(height ≥ n_buckets) from eager `group_partitions`-into-all-`n_buckets` into
+on-demand per-bucket slicing: the single `bucketed` frame stays resident and
+each bucket is `filter_eq("__bucket__", k).native`-sliced inside the worker,
+freed after scoring — so at most `max_workers` slices are live at once instead
+of all N partitions. Scoped to the FS route (`is_probabilistic`,
+`fast_path_specs is None`); the weighted path is untouched. Lane-agnostic (the
+`filter_eq` / `unique_by` / `column` seam covers both polars + arrow lanes).
+
+- **Parity — byte-identical to eager.** `filter_eq` preserves within-bucket row
+  order == `partition_by(maintain_order)`, so each bucket's `_score_one_bucket`
+  output is unchanged; cross-bucket append order is order-invariant downstream
+  (pairs canonicalized — the `group_partitions` docstring's own contract). Bucket
+  ids iterated in sorted order for determinism. Regression gate:
+  `tests/test_fs_bucket_streaming.py` runs `score_buckets` off-vs-on across the
+  scale branch (static + multi_pass + exclude-set) and asserts identical pair
+  sets + scores.
+- **Measured (synthetic person 1M, local 4c/15GB, `_RJEM_MALLOC_CONF` decay env):
+  whole-pipeline peak 3244 → 2875 MB (−369 MB / −11.4%), byte-identical output
+  (850,714 clusters both).** The eager `partition_by` transient (whose freed
+  pages jemalloc retains through cluster/golden) is what the streaming path never
+  allocates. Lower than the spec's projected ~25% because this synthetic's later
+  cluster/golden residency (base frame + golden) is a larger share of the peak
+  than on the spec's person fixture — consistent with the ≥1M UPDATE's
+  whole-pipeline-lifecycle framing (Phase 2 = base-frame + cluster/golden
+  residency is the remaining floor).
+- **Default stays OFF** until a CI ≥1M peak gate (`bench-er-headtohead` /
+  scale-envelope) validates the flip, per the standing "measure before default
+  flip" discipline.
+
+**Phase 1 `DuckDBBlockSource` + `resolve_fs_block_source(auto)` — NOT YET.** The
+above-RAM out-of-core FS lane already exists as the separate
+`GOLDENMATCH_FS_OUT_OF_CORE` path (`backends/fs_out_of_core.py`); folding it in as
+a `GOLDENMATCH_FS_BLOCK_SOURCE=duckdb` source behind `resolve_fs_block_source` is
+the remaining Phase-1 wiring. `frame` is the only non-default value wired today.
