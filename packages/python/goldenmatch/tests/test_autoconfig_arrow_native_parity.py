@@ -286,3 +286,39 @@ def test_arrow_native_config_matchkey_equivalence(shape):
     finally:
         _arrow_native(False)
     assert _config_matchkeys(cfg_pl) == _config_matchkeys(cfg_pa)
+
+
+def _all_unique_id_shape():
+    """25 rows where every exact-eligible column is a PERFECTLY-UNIQUE surrogate
+    key (cardinality_ratio 1.0). Auto-config excludes all of them (#876 perfect-
+    surrogate guard), goes fuzzy-only, and `build_blocking` then falls into
+    composite search (`find_composite_blocking_keys`) -- the branch that the
+    #1852 wide/sparse gate never reached. Before the composite-search port, that
+    path called `df.height` / `df.select(...).n_unique()` on a `pa.Table` and
+    raised `AttributeError` on the arrow-native lane. Deterministic (no RNG)."""
+    return {
+        "order_id": [f"o{i}" for i in range(25)],
+        "account_id": [f"a{i}" for i in range(25)],
+        "order_number": [f"ORD-{i:04d}" for i in range(25)],
+        "total_amount": [f"{i}.00" for i in range(25)],
+        "status": ["active"] * 25,
+    }
+
+
+def test_auto_configure_all_unique_ids_arrow_parity():
+    """#1852 tail: `auto_configure_df` on an all-unique-surrogate-key frame runs
+    on a `pa.Table` (was `AttributeError: 'pyarrow.lib.Table' has no attribute
+    'height'` in `find_composite_blocking_keys` / `estimate_avg_block_size`) and
+    yields the SAME matchkeys as the polars baseline."""
+    from goldenmatch.core.autoconfig import auto_configure_df
+
+    data = _all_unique_id_shape()
+    _arrow_native(False)
+    cfg_pl = auto_configure_df(pl.DataFrame(data), _skip_finalize=True)
+    _arrow_native(True)
+    try:
+        # Must not raise on the arrow-native lane (the crash this fixes).
+        cfg_pa = auto_configure_df(pa.table(data), _skip_finalize=True)
+    finally:
+        _arrow_native(False)
+    assert _config_matchkeys(cfg_pl) == _config_matchkeys(cfg_pa)
