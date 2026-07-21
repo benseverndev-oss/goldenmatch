@@ -17,6 +17,7 @@ routes to today's retrieval+synthesis path -- never worse than the status quo.
 
 from __future__ import annotations
 
+import goldengraph.answer as answer_mod  # module object for monkeypatching seed/synth seam
 from goldengraph.answer import (
     _slice_entity_names,
     _slice_predicates,
@@ -463,8 +464,6 @@ def test_ask_local_chain_gate_off_falls_through_to_synthesis(monkeypatch):
     # straight to retrieval+synthesis (the baseline arm of the local-vs-auto A/B).
     # Monkeypatch the seed + synth seam so the assertion doesn't depend on embedder/LLM
     # internals -- reaching synthesize_local at all proves the chain was skipped.
-    import goldengraph.answer as answer_mod
-
     monkeypatch.setenv("GOLDENGRAPH_QA_LOCAL_CHAIN", "0")
     monkeypatch.setattr(answer_mod, "seed_by_query", lambda *a, **k: [])
     monkeypatch.setattr(answer_mod, "synthesize_local", lambda *a, **k: "SYNTH")
@@ -486,8 +485,6 @@ def test_ask_local_non_chain_query_falls_through_to_synthesis(monkeypatch):
     # Even with the gate ON (default), a non-chain local query (no groundable relation)
     # must NOT be hijacked by the chain attempt -- it falls through to synthesis exactly
     # as before. Guards against the default-path change over-firing.
-    import goldengraph.answer as answer_mod
-
     monkeypatch.setattr(answer_mod, "seed_by_query", lambda *a, **k: [])
     monkeypatch.setattr(answer_mod, "synthesize_local", lambda *a, **k: "SYNTH")
 
