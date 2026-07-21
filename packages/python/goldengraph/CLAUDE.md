@@ -84,3 +84,45 @@ no pure-Python fallback exists) and on a missing/unbuilt engine, rather than an
 opaque `ImportError` at the call site. Gate logic is unit-tested wheel-free in
 `tests/test_native_loader.py` (loads the loader by file path to dodge
 `goldengraph/__init__`'s heavy deps, mirroring `test_native_parity`).
+
+## Template-free NL multi-hop routing (2026-07-21)
+`trace_chain` (answer.py) is the deterministic, LLM-free multi-hop walk, but it
+only fired when a question matched the engineered `_CHAIN_RE` template ("Starting
+from X, follow the relation R1, then R2."). Real questions ("Who is married to the
+person who directed Inception?") fell through to LLM synthesis over the retrieved
+ball — the diagnosed #1 answer-quality gap (a ball that CONTAINS the chain,
+bridge-recall ~1.0, still answered only ~0.275; synthesis-given-gold-chain is 1.0,
+so the loss is path-selection, not reasoning; the two cheap fixes — topology prune,
+query-name embedding — were already refuted, see `results/RESULTS_PATH_AWARE_RETRIEVAL.md`).
+- **`route._extract_nl_chain_slots`** recovers `(anchor, relation_chain)` from free
+  NL, grounded in the slice's own vocab: anchor = the longest stored ENTITY NAME in
+  the question; relations = PREDICATE ids whose salient token appears (bridged to
+  the question's noun form by a `_stem_match` shared-≥5-char-stem rule, so
+  "director"→"directed_by", "location"→"located_in"). Wired into `classify_query`
+  for MULTI_HOP **and** LOOKUP intents (needs `entity_names`, threaded from
+  `answer._slice_entity_names`); when the vocab is absent it's a no-op (back-compat).
+- **Multiplicity, not a set:** each content word maps to one predicate occurrence,
+  so a repeated relation ("the employer of the employer of X") yields a repeated
+  hop. Dedup-to-set was the whole accuracy gap (repeat-relation chains 0%→97.6%).
+- **Order is a HINT, the graph validates it:** the extracted order is proximity-to-
+  anchor. `answer._trace_chain_any_order` first walks the HINT order and trusts it
+  when it completes (that is the reading the question expressed); only if the hint
+  fails does it try the other permutations, and then it returns a result ONLY when
+  exactly one fallback order completes (distinct fallback terminals ⇒ ambiguous ⇒
+  abstain to None). Requiring uniqueness across ALL orders including the hint was
+  measured 96.8%→29.8% (the dense graph makes many orders complete differently and
+  the hint is the correct one). `QueryProfile.chain_ordered` distinguishes the
+  authoritative template order (single walk) from the NL hint (permute).
+- **Conservative by construction — never worse than status quo:** fires only with a
+  grounded anchor + ≥1 grounded predicate; a COMPLETENESS GUARD abstains when an
+  unmapped content word sits before an "of"/"by" relation marker (an ungrounded hop
+  like the pure synonym "spouse"→"married_to"), because a truncated chain would
+  complete early and return a WRONG intermediate node (the None-fallthrough can't
+  catch that). Abstaining routes to today's retrieval+synthesis path. Pure noun
+  synonyms with no shared stem are the documented boundary (needs the embedding /
+  `LLMQueryClassifier` tier).
+- **Measured (engineered corpus, gold chains, StubGraph, LLM-FREE):** NL phrasings
+  reach **96.8%** answer accuracy — parity with the engineered-template ceiling
+  (96.8%) — up from **0%** LLM-free before (they fell to ~0.15–0.28 paid synthesis).
+  By hop: 2-hop 100%, 3-hop 93%, 4-hop 97%. Tests: `tests/test_nl_chain.py`
+  (wheel-free; fires, safe abstentions, ordering, multiplicity, end-to-end `ask`).

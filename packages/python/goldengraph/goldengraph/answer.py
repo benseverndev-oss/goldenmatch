@@ -144,16 +144,77 @@ def trace_chain(slice_graph, anchor_surface: str, relation_chain, *, refs_out=No
     return names[0] if names else None
 
 
+def _trace_chain_any_order(slice_graph, anchor_surface, relation_chain, *, refs_out=None):
+    """Order-tolerant `trace_chain` for a template-free NL chain. The extracted
+    order is a proximity HINT that encodes the question's own phrasing (the relation
+    syntactically nearest the anchor is the first hop), so:
+
+    1. If the HINT order completes, trust it -- that is the reading the question
+       actually expressed; validating it against the graph is enough.
+    2. If the hint order does NOT complete, fall back to the other orderings but
+       require a UNIQUE completing terminal -- if two fallback orders complete to
+       DIFFERENT nodes we are genuinely guessing, so abstain (return None -> ask()
+       falls through to retrieval+synthesis). This is the 'never worse than status
+       quo' guard for the case where the hint gave no signal.
+
+    (Requiring uniqueness across ALL orders including the hint was measured to drop
+    LLM-free accuracy 96.8% -> 29.8% on the engineered corpus: the dense graph makes
+    many orders complete to different nodes, and the hint order is the correct one --
+    so discarding the hint's signal abstains on cases that were answered correctly.)
+    Provenance is collected only for the winning answer. Capped for long chains
+    (>4 relations -> hint only) so the permutation set can't blow up."""
+    from itertools import permutations
+
+    hint = tuple(relation_chain)
+    if len(hint) <= 1 or len(hint) > 4:
+        return trace_chain(slice_graph, anchor_surface, hint, refs_out=refs_out)
+    # 1) trust the hint order when the graph confirms it.
+    hint_refs: set = set()
+    ans = trace_chain(slice_graph, anchor_surface, hint, refs_out=hint_refs)
+    if ans is not None:
+        if refs_out is not None:
+            refs_out.update(hint_refs)
+        return ans
+    # 2) hint failed -> the other DISTINCT orderings must agree on ONE terminal.
+    seen_orders = {hint}
+    answers: dict[str, set] = {}
+    for p in permutations(hint):
+        if p in seen_orders:
+            continue
+        seen_orders.add(p)
+        local: set = set()
+        a = trace_chain(slice_graph, anchor_surface, p, refs_out=local)
+        if a is not None and a not in answers:
+            answers[a] = local
+    if len(answers) != 1:  # 0 = nothing completes; >1 = ambiguous -> abstain
+        return None
+    a, local = next(iter(answers.items()))
+    if refs_out is not None:
+        refs_out.update(local)
+    return a
+
+
 def _format_aggregate(members: set[str]) -> str:
     return ", ".join(sorted(members)) if members else "(none found)"
 
 
-def _slice_predicates(slice_graph) -> set[str]:
-    """Distinct edge predicates in the slice -- the relation vocabulary for slot extraction."""
-    ids = [e["entity_id"] for e in slice_graph.entities()]
+def _slice_predicates(slice_graph, *, entities=None) -> set[str]:
+    """Distinct edge predicates in the slice -- the relation vocabulary for slot
+    extraction. Pass a precomputed ``entities`` list to avoid re-walking
+    ``slice_graph.entities()`` when the caller already has it."""
+    ents = entities if entities is not None else slice_graph.entities()
+    ids = [e["entity_id"] for e in ents]
     if not ids:
         return set()
     return {e["predicate"] for e in slice_graph.query(ids, 1).get("edges", ())}
+
+
+def _slice_entity_names(slice_graph, *, entities=None) -> set[str]:
+    """Distinct entity canonical names in the slice -- the anchor vocabulary that
+    grounds the template-free NL chain extractor (route._extract_nl_chain_slots).
+    Pass a precomputed ``entities`` list to reuse a single ``entities()`` call."""
+    ents = entities if entities is not None else slice_graph.entities()
+    return {e["canonical_name"] for e in ents if e.get("canonical_name")}
 
 
 def _canon_query_rel(rel, schema):
@@ -351,8 +412,12 @@ def ask(
     """
     slice_graph = store.as_of(valid_t, tx_t)
     if mode == "auto":
+        slice_entities = list(slice_graph.entities())  # one entities() walk, reused below
         profile = resolve_profile(
-            query, predicates=_slice_predicates(slice_graph), llm_classifier=query_classifier
+            query,
+            predicates=_slice_predicates(slice_graph, entities=slice_entities),
+            entity_names=_slice_entity_names(slice_graph, entities=slice_entities),
+            llm_classifier=query_classifier,
         )
         # Query-side schema canonicalization: route the query's relation(s) through the discovered
         # schema so they match the (relabeled) canonical edge predicates. Without this, a cluster
@@ -381,8 +446,14 @@ def ask(
                                   refs_out=provenance_out)
                 return obj if obj is not None else "(unknown)"
         if plan.mode == "chain" and profile.anchor_surface and profile.relation_chain:
-            ans = trace_chain(slice_graph, profile.anchor_surface, profile.relation_chain,
-                              refs_out=provenance_out)
+            # Engineered template -> authoritative order (single walk). Free-NL ->
+            # the order is a hint, so validate it against the graph (try permutations).
+            if profile.chain_ordered:
+                ans = trace_chain(slice_graph, profile.anchor_surface, profile.relation_chain,
+                                  refs_out=provenance_out)
+            else:
+                ans = _trace_chain_any_order(slice_graph, profile.anchor_surface,
+                                             profile.relation_chain, refs_out=provenance_out)
             if ans is not None:
                 return ans
             # walk hit a missing/mislabeled edge -> fall through to the general retrieval+synthesis
