@@ -1636,14 +1636,18 @@ def score_buckets(
                     # Bounded streaming: DON'T build N eager frames. Keep
                     # `bucketed` resident and record the non-empty bucket ids
                     # (a bucket id is present iff >=1 row hashed into it, so the
-                    # distinct set IS the non-empty set). unique_by keeps this
-                    # to <= n_buckets rows -- no 1M-int transient. Sorted for a
-                    # deterministic (order-invariant) scoring order.
+                    # distinct set IS the non-empty set). Take the distinct ids
+                    # off the single `__bucket__` column via Column.unique()
+                    # (vectorized -- pc.unique on the arrow lane, .unique() on
+                    # polars), NOT frame-level unique_by (which materializes a
+                    # full deduped frame across ALL columns and, on the arrow
+                    # lane, loops through .to_pylist() -- an O(N) transient that
+                    # would defeat the whole point of streaming). The distinct
+                    # set is <= n_buckets ints. Sorted for a deterministic
+                    # (order-invariant) scoring order.
                     _stream_frame = _tf(bucketed)
                     stream_bucket_ids = sorted(
-                        _stream_frame.unique_by(["__bucket__"], keep="first")
-                        .column("__bucket__")
-                        .to_list()
+                        _stream_frame.column("__bucket__").unique().to_list()
                     )
                     buckets_dict = None  # sentinel: streaming, no eager frames
                     del keyed  # `bucketed` (via _stream_frame) retained for slicing

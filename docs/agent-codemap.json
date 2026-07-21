@@ -310,6 +310,7 @@
             "_needed_columns",
             "_prep_all_ids",
             "_resolve_db_path",
+            "_sql_lit",
             "fs_out_of_core_enabled",
             "run_fs_dedupe_streaming",
             "score_fs_out_of_core",
