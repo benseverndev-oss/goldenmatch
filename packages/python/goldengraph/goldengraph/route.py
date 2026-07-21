@@ -345,8 +345,11 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=No
             continue
         covered.add(ci)
         hits.append((abs(cp - max(anchor_pos, 0)), pred))
-    if not hits:
-        return None, None
+    # NOTE: do NOT early-return on empty `hits` here -- a synonym-ONLY hop (e.g. a
+    # 1-hop "Who is the spouse of X?", where the sole relation word is a pure
+    # synonym the lexical rule can't ground) has no lexical hit yet, and the
+    # semantic bridge below is exactly what should ground it. The final
+    # empty-`hits` check (after bridge + guard) handles the genuine no-relation case.
     # SEMANTIC BRIDGE (opt-in via `embedder`): the guard below abstains on an
     # unmapped relation-position word. Before abstaining, try to ground exactly
     # those words -- the true synonyms the lexical stem rule can't reach ("spouse"
@@ -358,29 +361,28 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=No
                       for ci, (_cp, _ct, nx) in enumerate(content)
                       if ci not in covered and nx in _REL_MARKERS]
         if unresolved:
+            # The WHOLE bridge is wrapped: not just the embed() calls but the
+            # cosine loop too, because a malformed-but-right-length embedder return
+            # (a scalar, None, or non-numeric entries) raises inside _cos()/
+            # _embed_bridge_predicate rather than at embed() time. ANY failure ->
+            # no bridge -> the completeness guard abstains (the advertised mode).
             try:
                 # Materialize (a generator/array both -> list) so the length check
                 # below is real and zip can't silently truncate candidates.
                 pred_vecs = list(embedder.embed([p.replace("_", " ") for p, _ in pred_index]))
                 tok_vecs = list(embedder.embed([t for _ci, _cp, t in unresolved]))
-            except Exception:  # noqa: BLE001 - embedder failure -> no bridge, guard abstains
-                pred_vecs = None
-                tok_vecs = None  # split (not chained) so the static analyzer sees the use
-            # A wrong-length return is an embedder contract violation; treat it as a
-            # failure (no bridge -> the guard abstains) rather than let zip drop
-            # candidates and shift which predicate wins.
-            if (
-                pred_vecs is not None
-                and tok_vecs is not None
-                and len(pred_vecs) == len(pred_index)
-                and len(tok_vecs) == len(unresolved)
-            ):
-                thr = _embed_bridge_min()
-                for (ci, cp, _t), tv in zip(unresolved, tok_vecs):
-                    pred = _embed_bridge_predicate(tv, pred_index, pred_vecs, thr)
-                    if pred is not None:
-                        covered.add(ci)
-                        hits.append((abs(cp - max(anchor_pos, 0)), pred))
+                # A wrong-length return is an embedder contract violation; treat it
+                # as a failure (no bridge) rather than let zip drop candidates and
+                # shift which predicate wins.
+                if len(pred_vecs) == len(pred_index) and len(tok_vecs) == len(unresolved):
+                    thr = _embed_bridge_min()
+                    for (ci, cp, _t), tv in zip(unresolved, tok_vecs):
+                        pred = _embed_bridge_predicate(tv, pred_index, pred_vecs, thr)
+                        if pred is not None:
+                            covered.add(ci)
+                            hits.append((abs(cp - max(anchor_pos, 0)), pred))
+            except Exception:  # noqa: BLE001 - any embedder/vector failure -> no bridge, guard abstains
+                pass
     # COMPLETENESS GUARD: abstain if an UNMAPPED content word sits in a relation
     # position (immediately before "of"/"by") -- that's a hop we couldn't ground
     # (e.g. "spouse of" with no stem to "married_to" AND no embedder to bridge it).
@@ -392,6 +394,12 @@ def _extract_nl_chain_slots(query: str, predicates, entity_names, *, embedder=No
     for ci, (_cp, _ct, nx) in enumerate(content):
         if ci not in covered and nx in _REL_MARKERS:
             return None, None
+    # No relation grounded at all (a pure lookup like "What is Inception?", or a
+    # synonym-only hop the bridge couldn't reach) -> abstain rather than return an
+    # empty chain. (This replaces the pre-bridge early return, moved AFTER the
+    # bridge so synonym-only hops get their chance to ground.)
+    if not hits:
+        return None, None
     # proximity-to-anchor order is the first-tried HINT (the walk validates it).
     # Keep every occurrence -- multiplicity matters (a relation can repeat in a
     # chain), so do NOT dedup.
