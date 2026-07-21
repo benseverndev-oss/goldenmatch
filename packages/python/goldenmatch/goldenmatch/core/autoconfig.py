@@ -4422,7 +4422,9 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
         )
         _prob_route = False
     if _prob_route:
-        routed = auto_configure_probabilistic_df(df, llm_provider=llm_provider)
+        routed = auto_configure_probabilistic_df(
+            df, llm_provider=llm_provider, n_rows_full=total_rows
+        )
         # Parity with the deterministic tail: attach the preflight report so a
         # routed FS config carries the same verification/diagnostic the default
         # path does (the config-lint + auto-repair surface). Standardization is
@@ -5031,6 +5033,8 @@ def _detect_standardization_config(profiles: list[ColumnProfile]) -> Any:
 def auto_configure_probabilistic_df(
     df: Any,  # pl.DataFrame | pl.LazyFrame | pa.Table (arrow lane)
     llm_provider: str | None = None,
+    *,
+    n_rows_full: int | None = None,
 ) -> GoldenMatchConfig:
     """Build a Fellegi-Sunter *probabilistic* config straight from a DataFrame.
 
@@ -5074,7 +5078,14 @@ def auto_configure_probabilistic_df(
     # diversified ones) by candidate pairs Σ C(block,2), not just block rows —
     # the row ceiling let ~12.9B-pair configs (dob-YEAR + name-soundex mega-
     # passes) through and OOM-killed gm_probabilistic at 1M. See #1803.
-    blocking = _bound_probabilistic_blocking_pairs(blocking, profiles, df)
+    # `n_rows_full` is load-bearing: auto-config profiles a SAMPLE, and the bound
+    # extrapolates each pass's Σ C(block,2) to the full population. Without it the
+    # bound measures pairs at sample scale (a 66M-at-1.2M pass looks like ~1.8M at
+    # a 200K sample) and never prunes, leaving redundant recall passes that make
+    # the wall ~20x the discriminative-key config at scale.
+    blocking = _bound_probabilistic_blocking_pairs(
+        blocking, profiles, df, n_rows_full=n_rows_full
+    )
     return GoldenMatchConfig(
         matchkeys=matchkeys,
         blocking=blocking,

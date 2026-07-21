@@ -143,7 +143,7 @@ def _zero_config_cfg(df, backend: str):
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
     sample = df.head(200_000)
-    cfg = auto_configure_probabilistic_df(sample.to_arrow())
+    cfg = auto_configure_probabilistic_df(sample.to_arrow(), n_rows_full=df.height)
     cfg.backend = backend
     return cfg
 

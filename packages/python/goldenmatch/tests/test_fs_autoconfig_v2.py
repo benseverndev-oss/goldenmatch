@@ -23,6 +23,7 @@ from goldenmatch.core.autoconfig import (
     _bound_probabilistic_blocking_pairs,
     _diversify_probabilistic_blocking,
     _fs_total_pair_budget,
+    auto_configure_probabilistic_df,
     build_probabilistic_matchkeys,
 )
 
@@ -413,7 +414,6 @@ def test_pair_gate_default_budget_is_noop_at_unit_scale(monkeypatch):
 def test_v2_config_runs_end_to_end(monkeypatch):
     monkeypatch.setenv(ON, "1")
     from goldenmatch import dedupe_df
-    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
 
     df = pl.DataFrame({
         "first_name": ["John", "Jon", "Mary", "Marie", "Robert", "Bob",
@@ -429,3 +429,29 @@ def test_v2_config_runs_end_to_end(monkeypatch):
     assert "dob" in fields  # lever #1 active under v2
     result = dedupe_df(df, config=cfg)
     assert result.dupes is not None and result.dupes.num_rows > 0
+
+
+def test_auto_config_threads_n_rows_full_to_pair_bound(monkeypatch):
+    """auto_configure_probabilistic_df MUST pass n_rows_full to the pair-budget
+    bound so it extrapolates each pass's Sum C(block,2) to the FULL population and
+    prunes oversized passes at scale. Without the thread the bound measures pairs
+    at SAMPLE scale (a 66M-at-1.2M pass reads as ~1.8M at a 200K sample), never
+    fires, and the zero-config FS wall is ~6x the pruned config (410s vs 71s at
+    1.2M). Locks the wiring so it cannot be silently dropped."""
+    seen: dict = {}
+    orig = _bound_probabilistic_blocking_pairs
+
+    def spy(blocking, profiles, df=None, *, n_rows_full=None):
+        seen["n_rows_full"] = n_rows_full
+        return orig(blocking, profiles, df, n_rows_full=n_rows_full)
+
+    monkeypatch.setattr(
+        "goldenmatch.core.autoconfig._bound_probabilistic_blocking_pairs", spy
+    )
+    df = pl.DataFrame({
+        "first_name": ["ana", "bob", "cat", "dan"] * 25,
+        "last_name": ["xu", "yi", "zed", "wu"] * 25,
+        "email": [f"u{i}@e.com" for i in range(100)],
+    })
+    auto_configure_probabilistic_df(df, n_rows_full=5_000_000)
+    assert seen.get("n_rows_full") == 5_000_000
