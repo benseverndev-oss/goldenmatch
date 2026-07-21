@@ -315,6 +315,28 @@ pub fn alias_match_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::score_one(8, a, b)
 }
 
+/// Dice / Jaccard / phash bloom-hex similarities (score-core ids 9/10/11): integer
+/// popcount over hex-decoded bloom filters / pHashes, byte-exact with the Python
+/// `_dice_score_single` / `_jaccard_score_single` / `_phash_score_single`. Each is
+/// its own #[pyfunction] capability marker like the other bucket kernels: a stale
+/// wheel lacking the symbol hits score_one's catch-all (silent 0.0) for that id,
+/// so the Python caller gates the native route on `hasattr(_native, "<name>")` and
+/// falls back to the pure per-pair mirror otherwise.
+#[pyfunction]
+pub fn dice_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::dice_similarity(a, b)
+}
+
+#[pyfunction]
+pub fn jaccard_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::jaccard_similarity(a, b)
+}
+
+#[pyfunction]
+pub fn phash_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::phash_similarity(a, b)
+}
+
 #[pyfunction]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::token_sort_ratio(a, b)

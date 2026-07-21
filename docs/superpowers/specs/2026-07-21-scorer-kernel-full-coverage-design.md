@@ -116,7 +116,7 @@ minimal. Recommend **defer or explicitly decline**.
 |---|---|---|---|
 | **1** | `qgram` ✅, `soundex_match` ✅ (both landed) | low | pure strings on the proven template; `soundex_match` reused the existing Rust kernel, upgraded to full jellyfish Unicode parity |
 | **2** | `initialism_match` ✅, `alias_match` ✅ (both landed), `given_name_aliased_jw`, `name_freq_weighted_jw` | medium | string base + refdata table shipped in-kernel (mechanism exists); table fidelity is the risk. `initialism_match` proved the in-kernel table mechanism (the ~77-entry `entity_form_variants()` set installed once into a `score-core` `OnceLock` via a native `set_legal_form_variants` shim, keeping `score_one(id, a, b)` uniform); `alias_match` extended it to two maps + a rebuilt-in-kernel strip regex |
-| **3** | `phash`, `dice`, `jaccard` | **blocked** | NOT "just wiring" -- all three are matrix-semantics-dependent (see the note below), so the per-pair `score_one` pattern can't reach byte-parity; each needs a block-aware kernel or a resolved-semantics decision first |
+| **3** | `dice` ✅, `jaccard` ✅, `phash` ✅ (all landed) | low | The "matrix-semantics" worry was a misdiagnosis: the per-pair single functions use INTEGER popcount (byte-exact via `count_ones()`), and the single-vs-matrix gap was only the numpy matrix path's float32. dice/jaccard are padding-invariant; phash uses the pairwise `_phash_score_single` (Option A). `score_one` ids 9/10/11, **9/19 -> 12/19**. See `2026-07-21-block-aware-bucket-kernel-design.md` |
 | **free** | `ensemble` | trivial | composes Wave-1 kernels; kernel-backed by construction |
 | **4 (defer/decline)** | `audio_fp`, `radial` | -- | bespoke alignment search, low perf upside |
 | **n/a** | `embedding`, `record_embedding` | -- | model-backed; reframe under goldenembed, exclude from denominator |
@@ -132,10 +132,12 @@ algorithmic coverage.
 > disambiguated first, and `phash` is matrix-semantics-dependent — `_phash_score_matrix` pads all
 > block hashes to the block-GLOBAL max bit-length (`sim = 1 - dist/max_len`), which a per-pair
 > `score_one` kernel can't replicate (it can only pad pairwise), so it diverges on mixed-length
-> blocks. **The clean per-pair string primitives (qgram, soundex, initialism, alias) are exactly the
-> ones that fit the `score_one` pattern; the rest need a block-aware kernel path or a semantics
-> decision, which is why the pragmatic frontier lands at 9/19 + the coverage floor, not a forced
-> 19/19.**
+> blocks — but its per-pair `_phash_score_single` (pairwise) is a perfectly good bucket reference
+> (Option A), so phash kernelized after all. **UPDATE:** dice/jaccard/phash all landed as `score_one`
+> ids 9/10/11 (**12/19**) — the "matrix-semantics" worry was a misdiagnosis (the single functions use
+> integer popcount; only the numpy *matrix* path was float32). The real frontier now: `ensemble`
+> (measured regression), the ts_only name scorers (TS-WASM track), and the model-backed/bespoke pair
+> — none a clean `score_one` cut. See `2026-07-21-block-aware-bucket-kernel-design.md`.
 
 ## Coverage floor (the gate that keeps the metric honest)
 

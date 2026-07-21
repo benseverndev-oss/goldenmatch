@@ -251,6 +251,18 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # empty tables until the host ships them), else it declines to the pure-Python
     # per-pair mirror (`_alias_match_single`).
     "alias_match": 8,
+    # ids 9/10/11 = dice / jaccard / phash (bloom-hex + hex-hamming, score-core
+    # score_one). Byte-exact with the per-pair `_dice_score_single` /
+    # `_jaccard_score_single` / `_phash_score_single` (integer popcount + one f64
+    # divide -- the numpy MATRIX forms are float32, a separate path). Guarded on
+    # the `dice_similarity` / `jaccard_similarity` / `phash_similarity` capability
+    # symbols so a stale wheel declines to those pure mirrors. dice/jaccard are
+    # padding-invariant; phash matches the PAIRWISE `_phash_score_single` (Option A
+    # in docs/superpowers/specs/2026-07-21-block-aware-bucket-kernel-design.md),
+    # NOT the block-global `_phash_score_matrix`.
+    "dice": 9,
+    "jaccard": 10,
+    "phash": 11,
 }
 
 
@@ -480,16 +492,32 @@ def _resolve_score_pair_callable(
         from goldenmatch.core.scorer import _alias_match_single
         return _alias_match_single
     if scorer_name == "dice":
-        # Delegate to the existing per-pair implementation in core/scorer.py
-        # (_dice_score_single, bigram set Dice coefficient). Matrix path is
-        # vectorized via _dice_score_matrix; per-pair is the same coefficient
-        # one pair at a time. Unblocks fast path for workloads where
-        # auto-config or explicit config picks dice on a string field.
+        # Bloom-hex Dice coefficient (2*|A&B|/(|A|+|B|)). Per-pair mirror of
+        # score-core::dice_similarity (native id 9); parity-asserted in
+        # tests/test_native_bloom_hash_parity.py. Integer popcount, so it's
+        # byte-exact with the kernel (the numpy _dice_score_matrix is float32, a
+        # separate path). The gating site guards on the `dice_similarity` symbol
+        # and declines to THIS mirror otherwise.
         from goldenmatch.core.scorer import _dice_score_single
         return _dice_score_single
     if scorer_name == "jaccard":
+        # Bloom-hex Jaccard (|A&B|/|A|B|). Per-pair mirror of
+        # score-core::jaccard_similarity (native id 10); same integer-popcount
+        # byte-parity story as dice.
         from goldenmatch.core.scorer import _jaccard_score_single
         return _jaccard_score_single
+    if scorer_name == "phash":
+        # Perceptual-hash Hamming similarity (1 - dist/nbits). Per-pair mirror of
+        # score-core::phash_similarity (native id 11). NOTE: this makes phash
+        # fast-path eligible for the FIRST time -- it previously declined to the
+        # slow `find_fuzzy_matches` MATRIX path (`_phash_score_matrix`, float32 +
+        # block-GLOBAL max-length padding). The bucket path uses this PAIRWISE
+        # float64 `_phash_score_single` instead (Option A in
+        # docs/superpowers/specs/2026-07-21-block-aware-bucket-kernel-design.md):
+        # byte-identical for fixed-length pHashes (the normal 64-bit case), and a
+        # precision improvement (float64) elsewhere. Guarded on `phash_similarity`.
+        from goldenmatch.core.scorer import _phash_score_single
+        return _phash_score_single
     if scorer_name == "ensemble":
         # DECLINE the fast path for ensemble (return None -> find_fuzzy_matches
         # slow path). A prior per-pair reimplementation (max(jw, ts, sx*0.8))
@@ -1190,9 +1218,15 @@ def score_buckets(
             _date_ok = _mod is not None and hasattr(_mod, "date_similarity")
             _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
             _soundex_ok = _mod is not None and hasattr(_mod, "soundex_similarity")
+            _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
+            _jaccard_ok = _mod is not None and hasattr(_mod, "jaccard_similarity")
+            _phash_ok = _mod is not None and hasattr(_mod, "phash_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
+            has_dice = any(spec[3] == "dice" for spec in _field_specs)
+            has_jaccard = any(spec[3] == "jaccard" for spec in _field_specs)
+            has_phash = any(spec[3] == "phash" for spec in _field_specs)
             has_initialism = any(spec[3] == "initialism_match" for spec in _field_specs)
             # initialism_match (id 7) has a TWO-part guard: the capability symbol
             # AND a successful legal-form install (id 7 scores against an empty
@@ -1219,6 +1253,9 @@ def score_buckets(
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)
                 or (has_alias and not _alias_ok)
+                or (has_dice and not _dice_ok)
+                or (has_jaccard and not _jaccard_ok)
+                or (has_phash and not _phash_ok)
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
