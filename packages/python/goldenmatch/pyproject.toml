@@ -173,7 +173,7 @@ sail = [
     # on 3.12 -- the sail lane runs on 3.12 and otherwise dies at Spark Connect
     # session setup with `ModuleNotFoundError: No module named 'distutils'`.
     # Drop when pyspark >= 4 (Spark-4-Connect) is usable and no longer needs it.
-    "setuptools>=68; python_version >= '3.12'",
+    "setuptools>=83.0.0; python_version >= '3.12'",
 ]
 agent = [
     "aiohttp>=3.14.0",
