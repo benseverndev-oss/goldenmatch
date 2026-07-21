@@ -379,6 +379,10 @@ def run_engine_ab(
     Returns `{"arms": {mode: scorecard}, "comparison": {...}, "build_cost_usd",
     "total_cost_usd", "n_answered"}`."""
     modes = list(modes)
+    # Duplicate modes would collapse the `scored`/`arms` dict keys into a single arm and
+    # silently produce a misleading one-arm "A/B" -- reject rather than mislead.
+    if len(set(modes)) != len(modes):
+        raise ValueError(f"run_engine_ab modes must be unique, got {modes!r}")
     enforce = BudgetTracker(BudgetConfig(max_cost_usd=budget_usd))
     # Attribution-only trackers (effectively uncapped) for per-arm answer cost.
     arm_trackers = {m: BudgetTracker(BudgetConfig(max_cost_usd=10**9)) for m in modes}

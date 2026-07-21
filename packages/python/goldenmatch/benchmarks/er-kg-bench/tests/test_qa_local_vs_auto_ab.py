@@ -66,6 +66,19 @@ def test_ab_builds_once_and_splits_arms():
     assert res["total_cost_usd"] > 0.0
 
 
+def test_ab_rejects_duplicate_modes():
+    # Duplicate modes collapse the arms dict into one -> a misleading one-arm "A/B".
+    # run_engine_ab must reject them rather than silently mislead.
+    import pytest
+
+    engine = _ModeVaryingEngine()
+    with pytest.raises(ValueError, match="unique"):
+        run_engine_ab(
+            engine, _toy_corpus(2), model="gpt-4o-mini", budget_usd=25.0,
+            modes=["local", "local"],
+        )
+
+
 def test_ab_budget_cap_keeps_arms_aligned():
     # A tiny budget stops the loop, but a question is only started when BOTH arms can
     # be afforded -> the arms never desync (equal n_answered), even mid-truncation.
