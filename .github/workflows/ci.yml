@@ -406,6 +406,14 @@ jobs:
       - name: pytest (shard ${{ matrix.shard }} of ${{ env.GM_SPLITS }})
         env:
           COVERAGE_FILE: coverage_shard${{ matrix.shard }}.dat
+          # This shard `uv pip install`s the datafusion + documents extras on top
+          # of the workspace sync, which can pull a fresh-PyPI pyarrow whose
+          # bundled mimalloc SIGSEGVs in `mi_thread_init` on the polars /
+          # ThreadPoolExecutor worker threads the pipeline spawns (the documented
+          # recurring class in the root CLAUDE.md). It surfaced as a `worker 'gwN'
+          # crashed` on the suggest-full-dist pipeline test. Force the system pool
+          # (the documented Arrow knob; harmless where unneeded).
+          ARROW_DEFAULT_MEMORY_POOL: system
         run: |
           uv run --with pytest-split pytest packages/python/goldenmatch \
             -n auto --splits "${GM_SPLITS}" --group ${{ matrix.shard }} \
