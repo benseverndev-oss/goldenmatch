@@ -41,9 +41,11 @@ def plan_er_execution(docs, *, corpus_records: int | None = None):
 
 
 def _new_store():
-    from goldengraph_native import _native as ggn  # native wheel; e2e lane only
+    # One gated entry point: the loader honors GOLDENGRAPH_NATIVE and finds either
+    # the in-tree build or the goldengraph-native wheel (native wheel: e2e lane).
+    from .core._native_loader import new_store
 
-    return ggn.PyStore()
+    return new_store()
 
 
 class GoldenGraph:
