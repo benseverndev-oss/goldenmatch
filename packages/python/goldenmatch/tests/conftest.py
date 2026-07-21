@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,41 @@ import pytest
 _SCRIPTS = Path(__file__).parent.parent / "scripts"
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
+
+
+# Routing env vars that flip which scoring path the pipeline takes. A test that
+# mutates one of these via raw ``os.environ[...] = ...`` (rather than
+# monkeypatch) and doesn't restore it in a bulletproof ``finally`` leaks the
+# value to every later test in the same xdist worker. Since these decide
+# ``_use_bucket_scorer`` / the columnar lane, a leak silently flips pure-function
+# routing assertions (``test_learned_lowering_parity``) and the frames-out
+# lazy-cluster wiring (``test_lazy_cluster_dict``) — failures that surface only
+# in the full suite, never in isolation.
+_ROUTING_ENV_VARS = (
+    "GOLDENMATCH_BUCKET_DEFAULT",
+    "GOLDENMATCH_COLUMNAR_PIPELINE",
+    "GOLDENMATCH_FRAME",
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_routing_env_vars():
+    """Snapshot + restore the scoring-route env vars around EVERY test.
+
+    Airtight against cross-test leakage: whatever a test does to these vars
+    (raw ``os.environ`` set/pop, with or without its own cleanup), this fixture
+    restores the pre-test value afterward, so pollution can never accumulate
+    across tests in a worker. Same class as ``_reset_runtime_exclude_columns``
+    / ``_reset_profile_emitter_stack`` below; process-env is the shared state
+    here instead of a ContextVar.
+    """
+    snapshot = {k: os.environ.get(k) for k in _ROUTING_ENV_VARS}
+    yield
+    for k, v in snapshot.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 @pytest.fixture(autouse=True)
