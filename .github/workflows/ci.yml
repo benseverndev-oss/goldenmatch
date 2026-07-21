@@ -85,6 +85,7 @@ jobs:
       native_flow: ${{ steps.filter.outputs.native_flow }}
       goldenflow_nopolars: ${{ steps.filter.outputs.goldenflow_nopolars }}
       goldencheck_nopolars: ${{ steps.filter.outputs.goldencheck_nopolars }}
+      goldenmatch_nopolars: ${{ steps.filter.outputs.goldenmatch_nopolars }}
       goldenmatch_frame_diff: ${{ steps.filter.outputs.goldenmatch_frame_diff }}
       goldenflow_duckdb: ${{ steps.filter.outputs.goldenflow_duckdb }}
       goldenpipe_native: ${{ steps.filter.outputs.goldenpipe_native }}
@@ -2284,6 +2285,49 @@ jobs:
       - name: Polars-absent proof (tests/nopolars)
         run: uv run --no-sync python -m pytest packages/python/goldencheck/tests/nopolars --noconftest -v
 
+  # ci-required. Builds the goldenmatch native scoring kernel, UNINSTALLS polars,
+  # then proves the arrow-native dedupe surface for real: `import goldenmatch` stays
+  # polars-free and zero-config `dedupe_df(pa.Table)` (exactly how goldengraph's
+  # cross-document resolution calls it) completes with polars gone. goldenmatch has
+  # NO polars base dep -- the lazy `_polars_lazy` proxy defers it -- so a red here
+  # means a default path grew a `import polars` (a top-level one, or a hot path that
+  # reaches the proxy, e.g. the #1956 bucket fuzzy fallback that forced pl.from_arrow
+  # and sat red on main for ~2 weeks). Native is built so the planner takes the
+  # `bucket` backend -- the exact path that bug lived on. Gate on it like any other
+  # required lane. Mirrors goldencheck_nopolars.
+  goldenmatch_nopolars:
+    needs: changes
+    if: needs.changes.outputs.goldenmatch_nopolars == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: Build goldenmatch native scoring kernel (so the planner takes the bucket path)
+        # Drops goldenmatch/_native.abi3.so into the package (mirrors the `native`
+        # parity job). With native present the planner picks backend=bucket -- the
+        # branch that reached the polars-forcing fuzzy fallback in #1956.
+        run: uv run python scripts/build_native.py
+      - name: Uninstall polars (goldenmatch has no polars base dep)
+        # goldenmatch is arrow-native by design; polars is never a base dependency.
+        # Remove it (and its split runtime) so the tests below prove the arrow lane
+        # is polars-free for real.
+        run: uv pip uninstall polars polars-runtime-32 polars-runtime-64 || true
+      - name: Confirm polars is gone
+        run: uv run --no-sync python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('polars') is None else 'polars still present')"
+      - name: Polars-absent proof (tests/nopolars)
+        # --no-sync so uv doesn't reinstall polars; --noconftest so the polars-importing
+        # parent tests/conftest.py isn't collected (the nopolars tests are self-contained).
+        run: uv run --no-sync python -m pytest packages/python/goldenmatch/tests/nopolars --noconftest -v
+
   # Polars-eviction Wave 1 proof lane (goldenmatch): runs the file-based
   # dedupe entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
   # frozen fixture datasets and diffs the canonicalized clusters/golden/pairs
@@ -3741,6 +3785,7 @@ jobs:
       - native
       - goldencheck_native
       - goldencheck_nopolars
+      - goldenmatch_nopolars
       - goldenprofile_native
       - goldengraph_native
       - native_wheel

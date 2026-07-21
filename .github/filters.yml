@@ -677,6 +677,21 @@ goldencheck_nopolars:
   - 'packages/python/goldencheck/goldencheck/**'
   - 'packages/python/goldencheck/tests/nopolars/**'
   - 'packages/python/goldencheck/pyproject.toml'
+goldenmatch_nopolars:
+  # Polars-free proof lane: builds the native scoring kernel, UNINSTALLS polars,
+  # then runs the polars-absent tests (tests/nopolars). Proves `import goldenmatch`
+  # + zero-config `dedupe_df(pa.Table)` (goldengraph's arrow-native resolve path)
+  # work with polars gone -- goldenmatch has NO polars base dep, and this is the
+  # contract that regressed silently in #1956 (a bucket fuzzy fallback forced the
+  # polars import) and sat red on `main` for ~2 weeks because nothing required
+  # exercised goldenmatch polars-absent. REQUIRED (in ci-required), like the
+  # goldencheck_nopolars sibling.
+  - 'packages/rust/extensions/native/**'
+  - 'packages/rust/extensions/fingerprint-core/**'
+  - 'packages/python/goldenmatch/goldenmatch/**'
+  - 'packages/python/goldenmatch/tests/nopolars/**'
+  - 'packages/python/goldenmatch/pyproject.toml'
+  - 'scripts/build_native.py'
 goldenmatch_frame_diff:
   # Polars-eviction Wave 1 proof lane: runs the file-based dedupe
   # entry point under BOTH GOLDENMATCH_FRAME=polars and =arrow on
