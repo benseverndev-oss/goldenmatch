@@ -21,6 +21,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   excluding the ambiguous bare `identifier` type (row PKs) for config hygiene.
   FS path only; the weighted/exact matchkey path is unchanged.
 
+- **Zero-config FS blocking pair-budget now prunes at scale (~6x wall).** The FS
+  blocking pair-budget (`_bound_probabilistic_blocking_pairs`) is documented to
+  extrapolate each pass's candidate pairs to the full population, but
+  `auto_configure_probabilistic_df` never passed `n_rows_full` -- so on the
+  auto-config sample the bound measured pairs at sample scale (a 66M-at-1.2M pass
+  reads as ~1.8M at a 200K sample), stayed under budget, and never pruned, leaving
+  redundant giant-block soundex passes. Threading the full row count lets the
+  bound bound the oversized name passes at true scale: measured zero-config FS
+  wall 410s -> 71s at 1.2M (F1 unchanged at 1.000). The FS routing call site and
+  the bench/gate helper now pass `n_rows_full`.
+
 - **FS `missing="unobserved"`: a partial-observation pair no longer normalizes to
   1.0 (#1854).** The min-max score range accumulated only over the OBSERVED
   fields, so a pair agreeing on its single observed field had `total == pair_max`
