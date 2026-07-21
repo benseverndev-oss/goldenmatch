@@ -93,6 +93,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (`test_build_blocking_id_union_arrow_parity`). Complements the earlier
   `_build_compound_blocking` fix (mode 1, the crash).
 
+- **`auto_configure_df(pa.Table)` no longer raises `AttributeError: 'height'`
+  in composite blocking search (#1852 tail).** When every exact-eligible column
+  is a perfectly-unique surrogate key, auto-config goes fuzzy-only and
+  `build_blocking` falls into composite-key search. `find_composite_blocking_keys`
+  and `estimate_avg_block_size` (`core/blocking_candidates.py`) still ran raw
+  polars idioms (`df.height`, `df.select(...).n_unique()`) on the input frame,
+  which is a `pa.Table` by default under `GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1` —
+  crashing on the arrow-native lane. Both are now routed through the backend-
+  neutral `Frame` seam (`to_frame` + `joint_n_unique`), matching the earlier
+  `build_blocking` ports. This branch is only reached on an all-unique-identifier
+  (join-table / order-shaped) frame, which is why the #1852 wide/sparse gate never
+  exercised it; locked by `test_auto_configure_all_unique_ids_arrow_parity`.
+
 ## [3.6.0] - 2026-07-20
 
 ### Changed

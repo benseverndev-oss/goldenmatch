@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.core.quality_exclusions import ColumnProfile
@@ -262,7 +263,7 @@ def classify_column_role(
 
 
 def find_composite_blocking_keys(
-    df: pl.DataFrame,
+    df: pl.DataFrame | Any,  # #1852 tail: also accepts pa.Table (routed via to_frame)
     column_roles: list[ColumnRole],
     *,
     target_avg_block_size: int = DEFAULT_COMPOSITE_TARGET_AVG_BLOCK_SIZE,
@@ -270,10 +271,14 @@ def find_composite_blocking_keys(
     """Search for a 2-column composite blocking key.
 
     Enumerates pairs of mid-cardinality columns (each with ratio in
-    ``[0.05, 0.5]`` so the joint cardinality lands in a sane band).
-    For each pair, computes joint cardinality via
-    ``df.select(c1, c2).n_unique()`` and picks the pair whose joint
-    cardinality is closest to ``n_rows / target_avg_block_size``.
+    ``[0.05, 0.5]`` so the joint cardinality lands in a sane band). Each
+    candidate column is materialized once through the backend-neutral Frame
+    seam (``frame.column(name).to_list()``); for each pair the joint
+    cardinality is ``len(set(zip(c1, c2)))`` -- identical null-combo semantics
+    to ``frame.joint_n_unique([c1, c2])`` / the old
+    ``df.select(c1, c2).n_unique()`` (arrow-safe -- see #1852 tail), but without
+    re-materializing a shared column across the O(M^2) pairs. Picks the pair
+    whose joint cardinality is closest to ``n_rows / target_avg_block_size``.
 
     Returns the column names of the best pair, or ``None`` when no
     pair lands in ``[n_rows/100, n_rows/2]`` (avg block size 2-100).
@@ -282,7 +287,21 @@ def find_composite_blocking_keys(
     a documented follow-up. Pair search covers 95% of
     healthcare/finance/retail shapes.
     """
-    n_rows = df.height
+    # #1852 tail: route column/height/joint-cardinality ops through the
+    # backend-neutral Frame seam so this runs polars-free on a ``pa.Table``
+    # (the default under GOLDENMATCH_AUTOCONFIG_ARROW_NATIVE=1). The raw
+    # ``df.height`` / ``df.columns`` / ``df.select(...).n_unique()`` idioms
+    # AttributeError'd on arrow -- reached only when compound blocking is
+    # ATTEMPTED (all exact-eligible columns are perfect-surrogate keys, so
+    # autoconfig goes fuzzy-only and falls into composite search), which is
+    # why #1852's wide/sparse gate never exercised it. Idempotent for a
+    # ``pl.DataFrame`` -> byte-identical on the polars lane. Local import
+    # mirrors the autoconfig.py convention (no top-level frame import).
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(df)
+
+    n_rows = frame.height
     if n_rows < 2:
         return None
 
@@ -307,13 +326,24 @@ def find_composite_blocking_keys(
     best_pair: tuple[str, str] | None = None
     best_distance = float("inf")
 
+    # #1965 review: materialize each candidate column's values ONCE. Joint
+    # cardinality is then `len(set(zip(col1, col2)))` per pair -- byte-identical
+    # to `frame.joint_n_unique` (null combos counted) but without re-running the
+    # arrow `to_pylist` on a shared column for every one of the O(M^2) pairs.
+    frame_cols = set(frame.columns)
+    col_values = {
+        name: frame.column(name).to_list()
+        for name in mid_card_names
+        if name in frame_cols
+    }
+
     for i, c1 in enumerate(mid_card_names):
         for c2 in mid_card_names[i + 1:]:
-            if c1 not in df.columns or c2 not in df.columns:
+            if c1 not in frame_cols or c2 not in frame_cols:
                 evaluated.append((c1, c2, 0, "field_missing_from_df"))
                 continue
             try:
-                joint_card = int(df.select([c1, c2]).n_unique())
+                joint_card = len(set(zip(col_values[c1], col_values[c2])))
             except Exception as exc:  # pragma: no cover -- defensive
                 logger.debug(
                     "find_composite_blocking_keys: skipping (%s, %s): %s",
@@ -363,7 +393,7 @@ def find_composite_blocking_keys(
 
 
 def estimate_avg_block_size(
-    sample_df: pl.DataFrame,
+    sample_df: pl.DataFrame | Any,  # #1852 tail: also accepts pa.Table (routed via to_frame)
     blocking_field_names: list[str],
     full_population_n_rows: int,
 ) -> float:
@@ -377,13 +407,19 @@ def estimate_avg_block_size(
     Returns 1.0 when no fields are given (caller treats that as a
     degenerate config that should be rejected).
     """
-    if not blocking_field_names or sample_df.height == 0:
+    # #1852 tail: same Frame-seam port as find_composite_blocking_keys so the
+    # degenerate-blocking estimate runs polars-free on a ``pa.Table``.
+    from goldenmatch.core.frame import to_frame
+
+    frame = to_frame(sample_df)
+    sample_height = frame.height
+    if not blocking_field_names or sample_height == 0:
         return 1.0
-    fields_in_df = [f for f in blocking_field_names if f in sample_df.columns]
+    fields_in_df = [f for f in blocking_field_names if f in frame.columns]
     if not fields_in_df:
         return 1.0
     try:
-        sample_distinct = int(sample_df.select(fields_in_df).n_unique())
+        sample_distinct = frame.joint_n_unique(fields_in_df)
     except Exception as exc:  # pragma: no cover -- defensive
         logger.debug("estimate_avg_block_size failed: %s", exc)
         return 1.0
@@ -399,14 +435,14 @@ def estimate_avg_block_size(
     # is preserved.
     if os.environ.get("GOLDENMATCH_BLOCKING_CARDINALITY_SCALER", "").lower() == "observed":
         scaled_distinct = max(
-            int(sample_distinct * (full_population_n_rows / sample_df.height)),
+            int(sample_distinct * (full_population_n_rows / sample_height)),
             1,
         )
     else:
         import math
         scaled_distinct = max(int(
             sample_distinct * math.sqrt(
-                full_population_n_rows / sample_df.height,
+                full_population_n_rows / sample_height,
             ),
         ), 1)
     return full_population_n_rows / scaled_distinct

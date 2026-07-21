@@ -2134,6 +2134,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core.frame",
             "goldenmatch.core.quality_exclusions"
           ]
         },
