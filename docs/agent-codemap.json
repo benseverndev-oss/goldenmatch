@@ -3552,6 +3552,7 @@
             "_frame_lane_eligible",
             "_fs_arrow_stream_eligible",
             "_fs_arrow_stream_enabled",
+            "_fs_columnar_cluster_enabled",
             "_fs_em_agg_blocks_enabled",
             "_fs_em_block_slim_enabled",
             "_fs_em_sample_rows",
