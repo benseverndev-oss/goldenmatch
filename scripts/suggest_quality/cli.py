@@ -34,6 +34,15 @@ _GYM_BASELINE = Path(__file__).resolve().parent / "baselines" / "gym_scorecard.j
 # Tolerance for gym recovery% non-regression (absolute drop allowed).
 RECOVERY_GATE_TOL: float = 0.05
 
+# Per-pair current statuses that are genuinely UNMEASURABLE this run (#1934):
+# ``no_damage`` = the perturbation no longer degrades F1 (the config drifted
+# degenerate enough that the damage is a no-op); ``n/a`` = the perturbation no
+# longer applies to this dataset's ceiling config. Neither is a suggestion-
+# recovery regression -- there is nothing to recover -- so a blessed-ok pair that
+# lands here is advisory (SKIPPED), not a MISSING failure. ``error`` and a truly
+# absent record are NOT in this set: those stay MISSING (a real regression).
+_UNMEASURABLE_PAIR_STATUSES: frozenset[str] = frozenset({"no_damage", "n/a"})
+
 
 # ── determinism helper ────────────────────────────────────────────────────────
 
@@ -875,17 +884,23 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
 
     Fails (exit 1) when:
       - zero ok records this run (gate certifies nothing)
-      - a blessed built-rule pair is MISSING from this run (absent for a reason
-        OTHER than a degenerate ceiling -- see below)
+      - a blessed built-rule pair is MISSING from this run (genuinely absent, or
+        errored -- see the unmeasurable exceptions below)
       - any built-rule pair's recovery_pct_live/raw drops > RECOVERY_GATE_TOL vs blessed
       - the COMMON-population headline_live/raw drops > RECOVERY_GATE_TOL vs blessed
 
-    NEW pairs (in this run but not in baseline) are informational. A blessed pair
-    whose dataset was SKIPPED this run for a degenerate zero-config ceiling (#1620)
-    is advisory, not a failure -- recovery% is unmeasurable against a broken
-    ceiling, so re-failing the guard's own deliberate skip is wrong (re-bless to
-    drop it). Headlines compare over the COMMON measurable population so a dataset
-    leaving the set (degenerate) can't phantom-shift the mean and fail the gate.
+    NEW pairs (in this run but not in baseline) are informational. Two UNMEASURABLE
+    cases are advisory (SKIPPED), not failures, because recovery% is undefined and
+    there is nothing to recover -- re-failing them would just re-fail the guard's
+    own deliberate skip:
+      - the whole dataset was SKIPPED this run for a degenerate zero-config ceiling
+        (#1620/#1975), OR
+      - the dataset RAN but THIS pair is ``no_damage``/``n/a`` this run (#1934 -- the
+        config drifted degenerate enough that the damage no longer bites, even
+        though the ceiling cleared the degenerate-skip floor).
+    ``error`` and truly-absent pairs stay MISSING (real regressions). Headlines
+    compare over the COMMON measurable population so a dataset leaving the set
+    (degenerate) can't phantom-shift the mean and fail the gate.
     """
     baseline = _loads_gym_baseline()
     base_pairs: dict[str, dict] = baseline.get("pairs", {})
@@ -945,10 +960,26 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
         cur = cur_pairs.get(key)
         if cur is None or cur.get("status") != "ok":
             dataset_name = key.split("/", 1)[0]
+            cur_status = None if cur is None else cur.get("status")
             if dataset_name in degenerate_skipped:
-                # Unmeasurable this run (degenerate ceiling) -> advisory, not a fail.
+                # Whole dataset unmeasurable this run (degenerate ceiling,
+                # #1620/#1975) -> advisory, not a fail.
                 rows.append((key, "*", "ok", "degenerate ceiling", "  n/a", "SKIPPED"))
+            elif cur_status in _UNMEASURABLE_PAIR_STATUSES:
+                # #1934: the dataset RAN (ceiling cleared the degenerate-skip
+                # floor), but THIS pair is unmeasurable this run -- either the
+                # damage no longer degrades F1 (``no_damage``: the config drifted
+                # degenerate enough that the perturbation is a no-op) or the
+                # perturbation no longer applies (``n/a``). recovery%% is undefined,
+                # so there is nothing to recover and this is NOT a suggestion-
+                # recovery regression. Advisory, not a fail -- same philosophy as
+                # the dataset-level degenerate-ceiling skip, extended to the
+                # per-pair "runs but bites nothing" case the ceiling floor misses.
+                rows.append(
+                    (key, "*", "ok", f"unmeasurable ({cur_status})", "  n/a", "SKIPPED")
+                )
             else:
+                # Genuinely absent (cur is None) or errored -> real MISSING.
                 rows.append((key, "*", "ok", "absent/non-ok", "  n/a", "MISSING"))
             continue
 
@@ -1049,8 +1080,9 @@ def _cmd_gym_gate(records: list[dict], native_version: str, git_sha: str) -> int
         f"{n_skipped} skipped)"
     )
     if n_skipped:
-        print(f"  note: {n_skipped} blessed pair(s) SKIPPED (degenerate ceiling this "
-              f"run) -- advisory; re-bless to drop them from the baseline.")
+        print(f"  note: {n_skipped} blessed pair(s) SKIPPED (unmeasurable this run -- "
+              f"degenerate ceiling or no_damage/n-a) -- advisory; re-bless to drop "
+              f"them from the baseline.")
 
     return 0 if verdict == "PASS" else 1
 
