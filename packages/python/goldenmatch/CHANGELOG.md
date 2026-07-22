@@ -27,6 +27,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   last TS-only introspection tool. It lists every accepted blocking-strategy name
   (incl. the Python-only `lsh` / `simhash` / `perceptual`), closing the `mcp_tools`
   gap (`ts_only` → `shared`).
+- **`score` and `info` CLI commands (TS-parity).** `goldenmatch score <a> <b>
+  [--scorer NAME]` prints `<scorer>: <0.xxxx>` over `score_strings`; `goldenmatch
+  info` prints the version plus the available scorers / survivorship-strategies /
+  blocking-strategies / transforms, sourced from the actual config allow-lists
+  (`VALID_SCORERS` / `VALID_STRATEGIES` / `BlockingConfig.strategy` /
+  `VALID_SIMPLE_TRANSFORMS`) so the listing can't drift. Both move `cli_commands`
+  `ts_only` → `shared`; only `tui` (≈ the Python `interactive` command) remains
+  TS-only by design.
 
 ## [3.8.0] - 2026-07-22
 

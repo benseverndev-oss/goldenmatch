@@ -822,6 +822,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `schedule` | `--every` | text | `None` | Run interval (e.g. 1h, 30m, 6h, 1d) |
 | `schedule` | `--cron` | text | `None` | Cron schedule (e.g. '0 6 * * *') |
 | `schedule` | `--output-dir` | text | `'.'` | Output directory |
+| `score` | `a` | text | **required** | First string. |
+| `score` | `b` | text | **required** | Second string. |
+| `score` | `--scorer` | text | `'jaro_winkler'` | Scorer: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble. |
 | `sensitivity` | `files` | text | **required** | Input files (path or path:source_name) |
 | `sensitivity` | `--config` | path | **required** | Config YAML path |
 | `sensitivity` | `--sweep` | text | **required** | Sweep spec: field:start:stop:step (repeatable) |

@@ -3230,6 +3230,10 @@
           ]
         },
         {
+          "command": "info",
+          "options": []
+        },
+        {
           "command": "ingest-docs run",
           "options": [
             {
@@ -4026,6 +4030,30 @@
               "required": false,
               "default": "'.'",
               "help": "Output directory"
+            }
+          ]
+        },
+        {
+          "command": "score",
+          "options": [
+            {
+              "name": "a",
+              "type": "text",
+              "required": true,
+              "help": "First string."
+            },
+            {
+              "name": "b",
+              "type": "text",
+              "required": true,
+              "help": "Second string."
+            },
+            {
+              "name": "--scorer",
+              "type": "text",
+              "required": false,
+              "default": "'jaro_winkler'",
+              "help": "Scorer: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble."
             }
           ]
         },

@@ -676,9 +676,11 @@
             "config_load",
             "config_save",
             "config_show",
+            "info_cmd",
             "init_cmd",
             "interactive_cmd",
-            "profile_cmd"
+            "profile_cmd",
+            "score_cmd"
           ],
           "imports": [
             "goldenmatch",
@@ -710,6 +712,7 @@
             "goldenmatch.cli.sync",
             "goldenmatch.cli.watch",
             "goldenmatch.config.loader",
+            "goldenmatch.config.schemas",
             "goldenmatch.config.wizard",
             "goldenmatch.core.analytics",
             "goldenmatch.core.autofix",
