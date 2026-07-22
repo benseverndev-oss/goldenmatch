@@ -26,13 +26,21 @@ dioxus = { version = "0.6", optional = true }
 gloo-net = { version = "0.6", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 
-# The native binary that proves the Rust -> ECharts render path in this sandbox.
+# The native binary that proves the Rust -> ECharts render path.
 [[bin]]
 name = "render"
 path = "src/bin/render.rs"
 
+# The Dioxus/WASM app (full Sensitivity route). Only built when `web` is on, so
+# the native `render` build never sees it. Build it for wasm32:
+#   cargo build --target wasm32-unknown-unknown --features web --bin web
+[[bin]]
+name = "web"
+path = "src/bin/web.rs"
+required-features = ["web"]
+
 [features]
-# Enable for the real Dioxus web build: pulls Dioxus and switches charming to
-# its wasm renderer (WasmRenderer mounts ECharts into a live DOM node). Not
-# buildable in this sandbox (no wasm32 target) — see README for the toolchain.
-web = ["dep:dioxus", "dep:gloo-net", "dep:wasm-bindgen-futures", "charming/wasm"]
+# Enable for the Dioxus web build: pulls Dioxus (web renderer) and switches
+# charming to its wasm renderer (WasmRenderer mounts ECharts into a live DOM
+# node). Build for the wasm32-unknown-unknown target.
+web = ["dep:dioxus", "dioxus/web", "dep:gloo-net", "dep:wasm-bindgen-futures", "charming/wasm"]

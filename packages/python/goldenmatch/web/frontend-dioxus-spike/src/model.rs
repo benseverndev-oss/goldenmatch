@@ -5,7 +5,7 @@
 
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SensitivityPoint {
     pub value: f64,
     pub cluster_count_a: i64,
@@ -17,7 +17,7 @@ pub struct SensitivityPoint {
     pub twi: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct StabilityPoint {
     pub value: f64,
     pub unchanged: i64,
@@ -27,14 +27,14 @@ pub struct StabilityPoint {
     pub twi: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Stability {
     pub best_value: f64,
     pub best_unchanged_pct: f64,
     pub points: Vec<StabilityPoint>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SensitivityResponse {
     pub field: String,
     pub baseline_value: Option<f64>,

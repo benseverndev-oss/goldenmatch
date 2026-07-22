@@ -4,5 +4,5 @@
 pub mod chart;
 pub mod model;
 
-#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[cfg(feature = "web")]
 pub mod dioxus_app;
