@@ -28,6 +28,13 @@
  * 8 digits) OSA and true-DL first diverge only at distance 3, which both bucket to
  * 0.0, so the two are byte-exact for every date pair (exhaustively verified; the
  * non-ISO branch is plain `levenshtein`, itself an exact shared kernel).
+ *
+ * `dice` (id 9) routes through score-core's `dice_similarity` (Sorensen-Dice on two
+ * hex bloom filters: `2*popcount(A&B) / (popcount(A)+popcount(B))`). The pure-TS
+ * `diceCoefficient` does the identical integer popcount + one f64 divide, so the
+ * WASM matrix is byte-exact with the fallback on any valid (even-length) bloom hex —
+ * the shape the `bloom_filter` transform always emits (malformed hex is the only
+ * divergence, and never reaches a real PPRL/CLK column).
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -36,6 +43,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   exact: 3,
   date: 4,
   qgram: 5,
+  dice: 9,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

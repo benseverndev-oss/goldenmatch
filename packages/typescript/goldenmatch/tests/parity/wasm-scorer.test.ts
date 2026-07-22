@@ -188,3 +188,39 @@ d("WASM date matches the pure-TS scoreField reference (exact)", () => {
     });
   }
 });
+
+// dice (score_one id 9) is Sorensen-Dice on two hex bloom filters:
+// 2*popcount(A&B)/(popcount(A)+popcount(B)). WASM `dice_similarity` and the pure-TS
+// `diceCoefficient` do the identical integer popcount + one f64 divide, so the WASM
+// matrix equals the pure-TS fallback byte-exact on any valid (even-length) bloom hex
+// -- the shape the `bloom_filter` transform always emits (varied byte lengths handled
+// by the min-length intersection; malformed hex is the only divergence and never
+// reaches a real CLK column). Inputs are valid CLK-style hex; asserted byte-exact.
+type DiceCase = readonly [a: string, b: string, note: string];
+const DICE_CASES: readonly DiceCase[] = [
+  ["ffff", "ffff", "identical -> 1.0"],
+  ["ff00", "00ff", "disjoint bits -> 0.0"],
+  ["deadbeef", "deadbe", "different byte lengths (min-len intersection)"],
+  ["ABCD", "abcd", "uppercase hex parses same -> 1.0"],
+  ["0000", "ffff", "one side all-zero -> 0.0"],
+  ["0000", "0000", "both all-zero -> total 0 -> 0.0"],
+  ["f0f0a5", "a5f0f0", "partial overlap"],
+];
+
+d("WASM dice matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of DICE_CASES) {
+    it(`dice("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "dice");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "dice");
+      // Integer popcount + one f64 divide on both surfaces -> byte-exact.
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
