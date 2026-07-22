@@ -308,11 +308,15 @@ pub fn resolved_graph_chart(graph: &ResolvedGraph) -> Chart {
         .series(
             Graph::new()
                 .layout(GraphLayout::Force)
+                // layout_animation(false): compute the force layout up front
+                // instead of animating every frame, so thousands of nodes settle
+                // instantly rather than wiggling for tens of seconds.
                 .force(
                     GraphLayoutForce::new()
-                        .gravity(0.05)
-                        .edge_length(45.0)
-                        .friction(0.12),
+                        .gravity(0.06)
+                        .edge_length(28.0)
+                        .friction(0.18)
+                        .layout_animation(false),
                 )
                 .roam(true)
                 .data(GraphData {
