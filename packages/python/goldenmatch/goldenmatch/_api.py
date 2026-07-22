@@ -289,6 +289,12 @@ class DedupeResult:
     # classic). The marker makes that capacity-survival tradeoff never silent.
     golden_fused_used: bool = False
     match_fused_capacity_mode: bool = False
+    # `scored_pairs_shed`: the FS columnar-cluster path (#1811 B2c,
+    # `GOLDENMATCH_FS_COLUMNAR_CLUSTER`) SHED `scored_pairs` above
+    # `GOLDENMATCH_FS_SCORED_PAIRS_MAX` to keep the driver off the O(pairs) list
+    # at scale (#2006). `clusters`/`golden`/`dupes`/`unique` are unaffected --
+    # only the steward-facing raw pair list is empty. Never silent (this marker).
+    scored_pairs_shed: bool = False
 
     # `clusters` (annotated above so it stays a constructor kwarg) is exposed as
     # a lazy, C-SAFE property. The frames-out path stores a ``LazyClusterDict``
@@ -585,6 +591,7 @@ def dedupe(
         identity_summary=result.get("identity_summary"),
         golden_fused_used=bool(result.get("golden_fused_used", False)),
         match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
+        scored_pairs_shed=bool(result.get("scored_pairs_shed", False)),
     )
 
 
@@ -952,6 +959,7 @@ def dedupe_df(
         throughput_posture=result.get("throughput_posture"),
         golden_fused_used=bool(result.get("golden_fused_used", False)),
         match_fused_capacity_mode=bool(result.get("match_fused_capacity_mode", False)),
+        scored_pairs_shed=bool(result.get("scored_pairs_shed", False)),
     )
 
     # Config-suggestion (healer) surface. ADVISORY — wrapped so a healer failure

@@ -131,6 +131,29 @@ def _fs_columnar_cluster_enabled() -> bool:
     ).strip().lower() in ("1", "true", "yes")
 
 
+def _fs_scored_pairs_cap() -> int:
+    """``GOLDENMATCH_FS_SCORED_PAIRS_MAX`` (default 50,000,000) caps how many
+    deduped pairs the B2c (#1811) path will materialize into the driver-resident
+    ``DedupeResult.scored_pairs`` Python ``list[tuple]``.
+
+    #2006 completes the #1811 peak-RSS win: B2c already keeps the pair stream
+    columnar through scoring -> clustering, but the post-cluster step still
+    rebuilt the FULL ``list[tuple]`` for ``scored_pairs`` (``pairs_df_to_list``),
+    which at 14M on tight-blocking data is itself O(hundreds of millions of
+    tuples) -> still OOMs. Above the cap the list is SHED (empty +
+    ``scored_pairs_shed=True`` marker, mirroring the fused-match
+    ``match_fused_capacity_mode`` shed): clusters/golden are already built off
+    ``_columnar_pairs_df`` so the pipeline result is unaffected; only the
+    steward-facing raw pair list is dropped, and never silently (the marker
+    surfaces on ``DedupeResult``). ``0`` disables the cap (always materialize).
+    Scoped to the B2c path only -- the weighted columnar lane is unchanged."""
+    raw = os.environ.get("GOLDENMATCH_FS_SCORED_PAIRS_MAX", "50000000").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 50_000_000
+
+
 def _fs_arrow_stream_eligible(
     config: GoldenMatchConfig,
     matchkeys: list,
@@ -4498,9 +4521,27 @@ def _run_dedupe_pipeline(
     # (a superset of the post-split cluster pair_scores when oversized clusters
     # split). Both pipeline paths normalize identically.
     from goldenmatch.core.pairs import dedup_pairs_max_score
+    scored_pairs_shed = False
     if _use_columnar and _columnar_pairs_df is not None:
-        from goldenmatch.core.scorer import pairs_df_to_list
-        scored_pairs = dedup_pairs_max_score(pairs_df_to_list(_columnar_pairs_df))
+        if _use_fs_columnar:
+            # B2c (#2006): dedup the pair stream COLUMNAR (arrow-native, no
+            # list[tuple] intermediate) and SHED the driver-resident list above
+            # the cap -- the last accumulator #1811 left. Clusters/golden are
+            # already built off _columnar_pairs_df, so shedding only drops the
+            # steward-facing raw pair list, never silently (scored_pairs_shed).
+            from goldenmatch.core.pairs import dedup_pairs_max_score_arrow
+            _scored_df = dedup_pairs_max_score_arrow(_columnar_pairs_df)
+            _cap = _fs_scored_pairs_cap()
+            if _cap and _scored_df.height > _cap:
+                scored_pairs = []
+                scored_pairs_shed = True
+            else:
+                from goldenmatch.core.scorer import pairs_df_to_list
+                scored_pairs = pairs_df_to_list(_scored_df)
+        else:
+            # Weighted columnar lane -- unchanged (byte-identical).
+            from goldenmatch.core.scorer import pairs_df_to_list
+            scored_pairs = dedup_pairs_max_score(pairs_df_to_list(_columnar_pairs_df))
     else:
         scored_pairs = dedup_pairs_max_score(all_pairs)
 
@@ -4552,6 +4593,9 @@ def _run_dedupe_pipeline(
         # Classic path never sheds artifacts; the fused-match short-circuit sets
         # this True on its own early-return (spec 2026-07-09 Stage F/G).
         "match_fused_capacity_mode": False,
+        # B2c (#2006): True when the FS columnar-cluster path shed scored_pairs
+        # above GOLDENMATCH_FS_SCORED_PAIRS_MAX (clusters/golden unaffected).
+        "scored_pairs_shed": scored_pairs_shed,
     }
 
     try:
