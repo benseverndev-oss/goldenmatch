@@ -132,6 +132,29 @@ _ANSWER_LITERAL = (
 )
 _LOCAL_TAIL = "Question: {q}\n{sub}"
 
+# Node-DISAMBIGUATION preamble (env-gated, default off). Targets the measured
+# synthesis-precision failure mode: on entity questions the model returns a plausible
+# NEIGHBOR of the answer rather than the answer -- the containing GROUP instead of the
+# member (Karen Fairchild -> Little Big Town), the famous adjacent PERSON instead of the
+# body (Politburo -> Stalin), a related EVENT instead of the thing (SuperSonics -> 1950
+# NBA draft), the wrong same-type SIBLING (Josh Radnor -> Bob Saget). The existing prompt
+# only guards "don't answer with the entity you HELD"; this guards "don't answer with a
+# plausible neighbor" by forcing an explicit type-check + candidate enumeration before
+# committing. Experiment knob for the same-graph env-A/B (GOLDENGRAPH_SYNTH_SELECT:0,1).
+_SELECT_PREAMBLE = (
+    "Before you commit, DISAMBIGUATE the final node so you do not return a plausible "
+    "NEIGHBOR of the answer instead of the answer itself:\n"
+    "- State the KIND of thing the question asks for: a specific person, an organization "
+    "or governing body, a place, a work or event, or a specific MEMBER of a group rather "
+    "than the group itself.\n"
+    "- From the Entities list, briefly list every node that could be the final answer, "
+    "each with its type.\n"
+    "- Pick the ONE whose type matches what the question asks AND that sits on the far end "
+    "of the final hop. Do NOT default to the most famous or most-mentioned neighbor; do "
+    "NOT return the containing GROUP or parent when a specific member is asked, nor a "
+    "related EVENT or work when the thing itself is asked.\n"
+)
+
 _LOCAL_PROMPT = _LOCAL_HEAD + _ANSWER_ENTITY + _LOCAL_TAIL
 _LOCAL_PROMPT_LITERALS = _LOCAL_HEAD + _ANSWER_LITERAL + _LOCAL_TAIL
 
@@ -142,6 +165,21 @@ def _literals_enabled() -> bool:
     import os
 
     return os.environ.get("GOLDENGRAPH_LITERAL_ATTRS", "0") not in ("0", "false", "")
+
+
+def _select_enabled() -> bool:
+    """`GOLDENGRAPH_SYNTH_SELECT` (default 0/off). On -> insert `_SELECT_PREAMBLE`
+    before the answer clause. Off -> the prompt is byte-identical to the pre-flag one."""
+    return os.environ.get("GOLDENGRAPH_SYNTH_SELECT", "0") not in ("0", "false", "")
+
+
+def _local_prompt() -> str:
+    """Compose the local-synthesis prompt from the head, the optional disambiguation
+    preamble (`GOLDENGRAPH_SYNTH_SELECT`), the answer clause (entity vs literal, per
+    `GOLDENGRAPH_LITERAL_ATTRS`), and the tail. Both flags off == `_LOCAL_PROMPT`."""
+    answer = _ANSWER_LITERAL if _literals_enabled() else _ANSWER_ENTITY
+    select = _SELECT_PREAMBLE if _select_enabled() else ""
+    return _LOCAL_HEAD + select + answer + _LOCAL_TAIL
 _MAP_PROMPT = "Summarize this community as it bears on the question.\nQuestion: {q}\n{sub}"
 _REDUCE_PROMPT = (
     "Answer the question by combining these community summaries.\n"
@@ -189,8 +227,7 @@ def synthesize_local(
     seeds = ", ".join(dict.fromkeys(s for s in (seed_names or []) if s)) or (
         "(none identified -- choose the most relevant entities yourself)"
     )
-    prompt = _LOCAL_PROMPT_LITERALS if _literals_enabled() else _LOCAL_PROMPT
-    filled = prompt.format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
+    filled = _local_prompt().format(q=query, seeds=seeds, sub=_format_subgraph(subgraph))
     n = _synth_samples()
     if n > 1 and hasattr(llm, "complete_many"):
         try:
