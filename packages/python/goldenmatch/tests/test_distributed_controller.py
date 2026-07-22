@@ -58,8 +58,20 @@ def test_controller_distributed_path_does_not_materialize_full_df(tmp_path, monk
     helper -- not on process RSS. The old RSS-growth proxy was meaningless and
     flaky: a materialized 100K-row frame is only ~30 MB, but the threshold was
     400 MB, so the check only ever measured Ray's variable runtime overhead
-    (it grew 703 MB on one shared-runner run, 18 MB on another). A non-degenerate
-    surname pool also avoids the soundex-collapse pair explosion."""
+    (it grew 703 MB on one shared-runner run, 18 MB on another).
+
+    This is a MEMORY test, orthogonal to config health. The cycled 26x30 name
+    pool at 100K rows is a genuinely degenerate shape (780 distinct records,
+    each ~128x duplicated -> "everything matches"), so the controller correctly
+    commits a RED config. Post-#715 the RED-refuse at ``n >= REFUSE_AT_N``
+    (100K) is gated on ``allow_red_config``, NOT ``confidence_required`` (see
+    the #739 note in the package CLAUDE.md) -- so ``confidence_required=False``
+    no longer bypasses it and ``auto_configure_df`` raises
+    ``ControllerNotConfidentError`` before the sample-boundedness assertions run.
+    ``allow_red_config=True`` is the documented "run the degenerate config
+    anyway" escape hatch: it lets the controller RETURN the RED config, so the
+    driver-sample spy still captures the bounded sample heights this test exists
+    to check."""
     import goldenmatch.distributed.sample as sample_mod
     import polars as pl
     from goldenmatch import auto_configure_df
@@ -87,7 +99,7 @@ def test_controller_distributed_path_does_not_materialize_full_df(tmp_path, monk
     monkeypatch.setattr(sample_mod, "take_sample_distributed", _spy)
 
     ds = read_csv_partitioned(str(csv), n_partitions=8)
-    config = auto_configure_df(ds, confidence_required=False)
+    config = auto_configure_df(ds, allow_red_config=True)
     assert config is not None
 
     assert collected_heights, "controller pulled no distributed sample"
