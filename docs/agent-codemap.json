@@ -3557,6 +3557,7 @@
             "_fs_em_block_slim_enabled",
             "_fs_em_sample_rows",
             "_fs_external_blocks_route",
+            "_fs_scored_pairs_cap",
             "_fs_streaming_dedupe_eligible",
             "_fs_use_bucket_route",
             "_fused_needed_src_cols",
