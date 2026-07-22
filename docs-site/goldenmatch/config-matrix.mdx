@@ -864,7 +864,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-81 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+82 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -918,6 +918,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `learn_thresholds` | Force a MemoryLearner pass over accumulated corrections. Returns the list of LearnedAdjustments produced (matchkey_name, threshold, sample_size, learned_at). Requires >= 10 corrections per matchkey before threshold tuning fires; otherwise returns an empty list. |
 | `lineage` | Field-level provenance for the loaded run: for each scored pair, the per-field scores that produced the match, plus cluster id. Optionally write a lineage JSON to a directory. |
 | `lint_routing` | Flag config/env overrides that force a slow path (e.g. CLUSTERING_THRESHOLD=0 when the edge set fits driver RAM). ERROR at scale; would_refuse mirrors the runtime guard. |
+| `list_blocking_strategies` | List all blocking strategy names. |
 | `list_clusters` | List duplicate clusters found in the dataset. Returns cluster IDs, sizes, and member counts. |
 | `list_corrections` | List stored Learning Memory corrections, optionally filtered by dataset. Returns id_a, id_b, decision, source, trust, reason, matchkey_name, dataset, original_score, created_at. |
 | `list_domains` | List available domain extraction rulebooks (built-in + user-defined). |

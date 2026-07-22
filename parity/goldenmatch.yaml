@@ -72,6 +72,7 @@ mcp_tools:
   - identity_resolve
   - identity_split
   - learn_thresholds
+  - list_blocking_strategies
   - list_corrections
   - list_scorers
   - list_strategies
@@ -132,7 +133,6 @@ mcp_tools:
   - build_clusters
   - find_exact_matches
   - find_fuzzy_matches
-  - list_blocking_strategies
   - read_file
   - score_pair
   - score_strings

@@ -4532,6 +4532,10 @@
           "description": "Flag config/env overrides that force a slow path (e.g. CLUSTERING_THRESHOLD=0 when the edge set fits driver RAM). ERROR at scale; would_refuse mirrors the runtime guard."
         },
         {
+          "name": "list_blocking_strategies",
+          "description": "List all blocking strategy names."
+        },
+        {
           "name": "list_clusters",
           "description": "List duplicate clusters found in the dataset. Returns cluster IDs, sizes, and member counts."
         },

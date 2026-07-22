@@ -106,7 +106,7 @@ Zero-config gets you most of the way in one pass; the healing loop closes the ga
 - **96.4% F1 zero-config** on DBLP-ACM (hand-tuned ceiling: 91.8%). [DQBench ER score: 91.04 no-LLM](https://github.com/benseverndev-oss/dqbench)
 - **Learning Memory** — corrections from stewards, unmerges, and LLM votes persist to disk and apply automatically on the next run; survives row reorders via record-hash re-anchoring (v1.6.0)
 - **Privacy-preserving** — match across organizations without sharing raw data (PPRL, 92.4% F1)
-- **81 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
+- **82 MCP tools** — use from Claude Desktop, Claude Code, or any AI assistant ([Smithery](https://smithery.ai/servers/benzsevern/goldenmatch))
 - **Production-ready** — Postgres sync, daemon mode, lineage tracking, review queues
 
 ### Run on unstructured input (document ingest)
@@ -217,7 +217,7 @@ section documents the durable auto-config and scale-safety behaviour.)
 - **In-house embedding (cloud-free)** — back the `embedding` / `record_embedding` scorer with a small numpy + ONNX model trained in-process on your labeled pairs (`goldenmatch.embeddings.inhouse.train_embedder`); set the matchkey field's `model="inhouse:<path>"`. No cloud calls, no torch. **Within ~0.2pp of Vertex AI on structured ER** (Railway-validated 3-way comparison, #506 / PR #543) — febrl3 in-house 0.9488 vs Vertex 0.9512, DBLP-ACM 0.9709 vs 0.9708, synthetic-20k 0.9814 vs 0.9834. Use it when you want embedding-grade recall without a cloud dependency.
 
 ### Integration
-- **REST API + MCP Server** — 81 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
+- **REST API + MCP Server** — 82 MCP tools for matching, explaining, reviewing, data quality, transforms, AutoConfigController telemetry, identity-graph operations, and Learning Memory
 - **A2A Agent** — 47 skills for AI-to-AI autonomous entity resolution (incl. `autoconfig` + `controller_telemetry`)
 - **AutoConfigController telemetry visible from every surface** (v1.7-v1.12 surface-parity arc, PRs #156-#161) — web ControllerPanel, TUI Controller tab (`Ctrl+A`), CLI `goldenmatch autoconfig`, REST `POST /autoconfig` + `GET /controller/telemetry`, Postgres `goldenmatch_autoconfig` + `gm_telemetry`, DuckDB UDF equivalents, MCP/A2A telemetry tools. Every surface returns the same JSON shape (`stop_reason`, `health`, refit decisions, indicator column priors, `negative_evidence` / Path Y).
 - **Database sync** — incremental Postgres matching with persistent ANN index
@@ -731,7 +731,7 @@ Guides you through GPU mode selection, Vertex AI / Colab / local GPU configurati
 | Privacy-preserving (PPRL) | Built-in (92.4% F1) | No | No | No | No |
 | Interactive TUI | Yes | No | No | No | No |
 | Golden record synthesis | 5 strategies | No | No | No | No |
-| MCP server (AI integration) | Yes (81 tools) | No | No | No | No |
+| MCP server (AI integration) | Yes (82 tools) | No | No | No | No |
 | Database sync | Postgres + DuckDB | No | No | No | Spark/DuckDB |
 | Single `pip install` | Yes | Yes | Yes | No (Java/Spark) | Yes |
 | Polars-native | Yes | No (pandas) | No (pandas) | No (Spark) | Yes (DuckDB) |
@@ -1294,7 +1294,7 @@ pip install goldenmatch[mcp]
 goldenmatch mcp-serve data.csv
 ```
 
-81 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
+82 tools available: deduplicate files, match records, explain decisions, review borderline pairs, privacy-preserving linkage, configure rules, scan data quality, run transforms, synthesize golden records, and manage Learning Memory (`list_corrections`, `add_correction`, `learn_thresholds`, `memory_stats`, `memory_export`).
 
 ### Local files with the remote server
 
