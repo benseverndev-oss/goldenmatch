@@ -111,6 +111,7 @@ export {
   qgramScore,
   phashSimilarity,
   radialSimilarity,
+  audioFpSimilarity,
   ensembleScore,
   scoreMatrix,
   asString,

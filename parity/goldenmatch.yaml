@@ -244,6 +244,7 @@ a2a_skills:
 # PluginRegistry validator fallback, so they're NOT in Python VALID_SCORERS).
 scorers:
   shared:
+  - audio_fp
   - date
   - dice
   - embedding
@@ -260,7 +261,6 @@ scorers:
   - token_sort
   python_only:
   - alias_match
-  - audio_fp
   - initialism_match
   ts_only:
   - given_name_aliased_jw
@@ -317,14 +317,16 @@ blocking_strategies:
 # components hold vs rapidfuzz (soundex byte-exact). `phash` (id 11) is also shared:
 # perceptual-hash similarity (1 - hamming/nbits over hex pHashes), integer XOR popcount,
 # byte-exact WASM<->pure-TS like dice/jaccard.
-# python_only: `initialism_match`, `alias_match`, `radial`, `audio_fp` have an
-# arrow-native (bucket) kernel on Python but no TS WASM port yet.
+# python_only: `initialism_match`, `alias_match` have an arrow-native (bucket) kernel
+# on Python but no TS WASM port yet (initialism needs the legal_forms table injected;
+# alias_match is behind score-wasm's off-by-default `alias` cargo feature).
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
 # (Python accepts them via the plugin fallback); a real, declared Python<->TS delta.
 scorer_kernels:
   shared:
+  - audio_fp
   - date
   - dice
   - ensemble
@@ -339,7 +341,6 @@ scorer_kernels:
   - token_sort
   python_only:
   - alias_match
-  - audio_fp
   - initialism_match
   ts_only:
   - given_name_aliased_jw

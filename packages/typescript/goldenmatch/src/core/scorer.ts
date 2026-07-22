@@ -589,6 +589,66 @@ export function radialSimilarity(a: string, b: string): number {
   return Math.min(1.0, Math.max(0.0, best));
 }
 
+/** Parse a concatenated audio fingerprint: 8 hex chars per u32 word, `0x`/`0X`
+ * prefix tolerated, trailing chars past the last full word dropped. Any non-hex
+ * char in the used prefix -> null (mirrors score-core `audio_fp_from_hex`). */
+function audioFpFromHex(s: string): number[] | null {
+  let h = s;
+  if (h.length >= 2 && (h.startsWith("0x") || h.startsWith("0X"))) h = h.slice(2);
+  const usable = h.length - (h.length % 8);
+  if (!/^[0-9a-fA-F]*$/.test(h.slice(0, usable))) return null;
+  const out: number[] = [];
+  for (let i = 0; i < usable; i += 8) {
+    out.push(parseInt(h.slice(i, i + 8), 16)); // 8 hex digits = one u32 word
+  }
+  return out;
+}
+
+/** Popcount of a 32-bit word (SWAR; `>>> 0` normalizes the signed XOR result). */
+function popcount32(v: number): number {
+  v = v >>> 0;
+  v = v - ((v >>> 1) & 0x55555555);
+  v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+  return (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+}
+
+/** Best (minimum) bit-error-rate over all frame offsets of two audio
+ * fingerprints; mirrors score-core `audio_ber_aligned` (need = min(8, la, lb),
+ * 32 bits/band, `bits/(overlap*32)` per offset). Empty input -> BER 1.0. */
+function audioBerAligned(a: readonly number[], b: readonly number[]): number {
+  const la = a.length;
+  const lb = b.length;
+  if (la === 0 || lb === 0) return 1.0;
+  const need = Math.min(8, la, lb);
+  const nb = 32.0; // AUDIO_BANDS - 1
+  let best = 1.0;
+  for (let off = -(lb - 1); off < la; off++) {
+    const lo = Math.max(off, 0);
+    const hi = Math.min(la, off + lb);
+    const overlap = hi - lo;
+    if (overlap < need) continue;
+    let bits = 0;
+    for (let i = lo; i < hi; i++) bits += popcount32(a[i]! ^ b[i - off]!);
+    const ber = bits / (overlap * nb);
+    if (ber < best) best = ber;
+  }
+  return best;
+}
+
+/**
+ * Audio-fingerprint similarity (score_one id 14): `1 - best BER`, the minimum
+ * bit-error-rate over every frame offset of two hex audio fingerprints. Byte-exact
+ * with score-core `audio_fp_similarity` / Python `_audio_fp_score_single` -- the BER
+ * numerator is an integer popcount sum and the rate is a single f64 divide (no
+ * reduction-order divergence). A non-hex value on either side -> 0.0.
+ */
+export function audioFpSimilarity(a: string, b: string): number {
+  const x = audioFpFromHex(a);
+  const y = audioFpFromHex(b);
+  if (x === null || y === null) return 0.0;
+  return 1.0 - audioBerAligned(x, y);
+}
+
 /**
  * Padded character q-gram set of a raw string (Python parity:
  * core/scorer.py::_qgram_set). Lowercases, pads with `n-1` `#` sentinels on
@@ -672,6 +732,8 @@ export function scoreField(
       return phashSimilarity(valA, valB);
     case "radial":
       return radialSimilarity(valA, valB);
+    case "audio_fp":
+      return audioFpSimilarity(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
     case "embedding":

@@ -381,6 +381,39 @@ d("WASM radial matches the pure-TS scoreField reference (4dp)", () => {
   }
 });
 
+// audio_fp (score_one id 14): 1 - best BER over two hex audio fingerprints (min
+// bit-error-rate across every frame offset). The BER numerator is an INTEGER popcount
+// sum and the rate is one f64 divide per offset, so -- unlike radial -- the kernel and
+// the pure-TS `audioFpSimilarity` are byte-exact (like phash). 8 hex chars per u32 word;
+// non-hex -> 0.0. Asserted byte-exact.
+type AudioFpCase = readonly [a: string, b: string, note: string];
+const AUDIO_FP_CASES: readonly AudioFpCase[] = [
+  ["0000000000000000", "0000000000000000", "identical (8 words) -> 1.0"],
+  ["ffffffffffffffff", "0000000000000000", "all bits differ at best offset"],
+  ["deadbeefcafebabe", "deadbeefcafebabe", "identical multi-word -> 1.0"],
+  ["11111111222222223333333344444444", "2222222233333333", "shorter slides to a matching offset"],
+  ["0x0102030405060708", "0102030405060708", "0x prefix stripped -> 1.0"],
+  ["12345678", "87654321", "single-word BER"],
+  ["nothex00", "12345678", "non-hex -> 0.0"],
+];
+
+d("WASM audio_fp matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of AUDIO_FP_CASES) {
+    it(`audio_fp("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "audio_fp");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "audio_fp");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();
