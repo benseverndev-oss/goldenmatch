@@ -25,7 +25,7 @@ describe("ScorerBackend singleton", () => {
     expect(getScorerBackend()).toBeNull();
   });
 
-  it("covers the 10 score_one scorers + the 2 fs-core name scorers", () => {
+  it("covers the 11 score_one scorers + the 2 fs-core name scorers", () => {
     expect([...WASM_COVERED_SCORERS].sort()).toEqual(
       [
         "date",
@@ -37,6 +37,7 @@ describe("ScorerBackend singleton", () => {
         "jaro_winkler",
         "levenshtein",
         "name_freq_weighted_jw",
+        "phash",
         "qgram",
         "soundex_match",
         "token_sort",

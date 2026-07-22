@@ -469,6 +469,58 @@ export function jaccardSimilarity(a: string, b: string): number {
   return intersection / union;
 }
 
+/** Left-pad an odd-length hex to even and strip an optional `0x`/`0X` prefix
+ * (mirrors score-core `norm_phash_hex`; the prefix strip needs length >= 2). */
+function normPhashHex(s: string): string {
+  let h = s;
+  if (h.length >= 2 && (h.startsWith("0x") || h.startsWith("0X"))) h = h.slice(2);
+  if (h.length % 2 !== 0) h = "0" + h;
+  return h;
+}
+
+/** Strictly decode an even-length ASCII-hex string to bytes, or null on any
+ * non-hex char (mirrors score-core `decode_hex`, whose `to_digit(16)?` fails on
+ * non-hex; `hexToBytes`/`parseInt` would silently coerce bad hex to 0). */
+function decodeHexStrict(hex: string): Uint8Array | null {
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) return null;
+  const out = new Uint8Array(hex.length >>> 1);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/** Popcount of a single byte (Brian Kernighan). */
+function popcountByte(b: number): number {
+  let count = 0;
+  while (b !== 0) {
+    b &= b - 1;
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Perceptual-hash similarity on two hex pHash strings: `1 - hamming/nbits`, where
+ * `nbits` counts over the LONGER hash (the tail of the longer XORs against 0, so
+ * every set bit there counts as a difference). Byte-exact with score-core
+ * `phash_similarity` (score_one id 11) and Python `_phash_score_single`. A non-hex
+ * value on either side -> 0.0.
+ */
+export function phashSimilarity(a: string, b: string): number {
+  const pa = decodeHexStrict(normPhashHex(a));
+  const pb = decodeHexStrict(normPhashHex(b));
+  if (pa === null || pb === null) return 0.0;
+  const nbits = Math.max(pa.length, pb.length) * 8;
+  if (nbits === 0) return 0.0;
+  const m = Math.min(pa.length, pb.length);
+  let dist = 0;
+  for (let i = 0; i < m; i++) dist += popcountByte(pa[i]! ^ pb[i]!);
+  for (let i = m; i < pa.length; i++) dist += popcountByte(pa[i]!);
+  for (let i = m; i < pb.length; i++) dist += popcountByte(pb[i]!);
+  return 1.0 - dist / nbits;
+}
+
 /**
  * Padded character q-gram set of a raw string (Python parity:
  * core/scorer.py::_qgram_set). Lowercases, pads with `n-1` `#` sentinels on
@@ -548,6 +600,8 @@ export function scoreField(
       return jaccardSimilarity(valA, valB);
     case "qgram":
       return qgramScore(valA, valB);
+    case "phash":
+      return phashSimilarity(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
     case "embedding":

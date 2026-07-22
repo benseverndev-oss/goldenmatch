@@ -53,6 +53,12 @@
  * id is exercised only when `scoreMatrix` is called directly — but the kernel is
  * reachable and byte-exact, which is the "kernel-backed / shared" contract.
  *
+ * `phash` (id 11) is perceptual-hash similarity: `1 - hamming/nbits` over two hex
+ * pHash strings. The kernel and the pure-TS `phashSimilarity` do the identical strict
+ * hex decode + XOR popcount + one f64 divide, so the WASM matrix is byte-exact with the
+ * fallback on any valid hex (a non-hex value -> 0.0 on both). Same integer-popcount
+ * shape as dice/jaccard.
+ *
  * `ensemble` (id 12) is `max(jaro_winkler, token_sort, 0.8*soundex_match)`. score-wasm
  * OVERRIDES id 12 (like id 2) to recompose it with the TS-parity NORMALIZED token_sort
  * (score_one(12)'s `ensemble_similarity` maxes over the un-normalized score_one(2)),
@@ -72,6 +78,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   soundex_match: 6,
   dice: 9,
   jaccard: 10,
+  phash: 11,
   ensemble: 12,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,

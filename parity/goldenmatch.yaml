@@ -252,6 +252,7 @@ scorers:
   - jaccard
   - jaro_winkler
   - levenshtein
+  - phash
   - qgram
   - record_embedding
   - soundex_match
@@ -260,7 +261,6 @@ scorers:
   - alias_match
   - audio_fp
   - initialism_match
-  - phash
   - radial
   ts_only:
   - given_name_aliased_jw
@@ -314,8 +314,10 @@ blocking_strategies:
 # `ensemble` (id 12) is also shared: score-wasm overrides id 12 to recompose it with
 # the TS-parity normalized token_sort (jw + normalized token_sort + 0.8*soundex_match),
 # matching the pure-TS `ensembleScore` to 4dp -- the same bar its jw/token_sort
-# components hold vs rapidfuzz (soundex byte-exact).
-# python_only: `initialism_match`, `alias_match`, `phash`, `radial`, `audio_fp` have an
+# components hold vs rapidfuzz (soundex byte-exact). `phash` (id 11) is also shared:
+# perceptual-hash similarity (1 - hamming/nbits over hex pHashes), integer XOR popcount,
+# byte-exact WASM<->pure-TS like dice/jaccard.
+# python_only: `initialism_match`, `alias_match`, `radial`, `audio_fp` have an
 # arrow-native (bucket) kernel on Python but no TS WASM port yet.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
@@ -330,6 +332,7 @@ scorer_kernels:
   - jaccard
   - jaro_winkler
   - levenshtein
+  - phash
   - qgram
   - soundex_match
   - token_sort
@@ -337,7 +340,6 @@ scorer_kernels:
   - alias_match
   - audio_fp
   - initialism_match
-  - phash
   - radial
   ts_only:
   - given_name_aliased_jw
