@@ -864,7 +864,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-78 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+81 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -923,6 +923,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `list_domains` | List available domain extraction rulebooks (built-in + user-defined). |
 | `list_plugins` | List all registered goldenmatch plugins by category. Includes the 22 v1.18.2 predefined plugins (numeric/format/business/aggregation) plus any user-registered plugins via entry-points or PluginRegistry.register_*(). Each entry includes name, source (builtin or user), category, and the first line of the merge docstring. |
 | `list_runs` | List previous dedupe/match runs (for rollback) from the run log. |
+| `list_scorers` | List all available similarity scorers. |
+| `list_strategies` | List all golden-record survivorship strategies. |
+| `list_transforms` | List all available field transforms. |
 | `match` | Alias for `match_record`. Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: &#123;"name": "John Smith", "email": "john@test.com", "zip": "10001"&#125; |
 | `match_record` | Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: &#123;"name": "John Smith", "email": "john@test.com", "zip": "10001"&#125; |
 | `memory_export` | Return all corrections as a list of dicts (CSV-shaped). Caller is responsible for writing the file. Optionally filter by dataset. |

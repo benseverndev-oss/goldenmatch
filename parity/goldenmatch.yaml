@@ -38,9 +38,11 @@
 # TS also exposes the agent_* skill variants
 # (agent_deduplicate/agent_match_sources/agent_explain_pair/agent_explain_cluster/
 # agent_review_queue/agent_approve_reject) and edge primitives (score, profile, suggest_config,
-# list_scorers/list_strategies/list_transforms, memory_export); Python ships the richer
-# identity-audit trio + routing/lifecycle skills. The TS set is the deduped union of
-# BASE_SKILLS + AGENT_SKILLS + MEMORY_TOOLS + IDENTITY_TOOLS (src/node/a2a/server.ts).
+# memory_export); Python ships the richer identity-audit trio + routing/lifecycle skills. The
+# TS set is the deduped union of BASE_SKILLS + AGENT_SKILLS + MEMORY_TOOLS + IDENTITY_TOOLS
+# (src/node/a2a/server.ts). The registry-introspection trio
+# (list_scorers/list_transforms/list_strategies) is now SHARED — Python exposes them on both
+# the MCP tool surface and the A2A card (stateless serializers over the config allow-lists).
 package: goldenmatch
 mcp_tools:
   shared:
@@ -71,6 +73,9 @@ mcp_tools:
   - identity_split
   - learn_thresholds
   - list_corrections
+  - list_scorers
+  - list_strategies
+  - list_transforms
   - match
   - match_record
   - memory_export
@@ -128,9 +133,6 @@ mcp_tools:
   - find_exact_matches
   - find_fuzzy_matches
   - list_blocking_strategies
-  - list_scorers
-  - list_strategies
-  - list_transforms
   - read_file
   - score_pair
   - score_strings
@@ -195,6 +197,9 @@ a2a_skills:
   - identity_split
   - learn_thresholds
   - list_corrections
+  - list_scorers
+  - list_strategies
+  - list_transforms
   - match
   - memory_stats
   - review_config
@@ -228,9 +233,6 @@ a2a_skills:
   - agent_match_sources
   - agent_review_queue
   - fix_quality
-  - list_scorers
-  - list_strategies
-  - list_transforms
   - memory_export
   - profile
   - scan_quality

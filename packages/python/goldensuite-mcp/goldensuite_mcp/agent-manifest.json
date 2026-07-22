@@ -4552,6 +4552,18 @@
           "description": "List previous dedupe/match runs (for rollback) from the run log."
         },
         {
+          "name": "list_scorers",
+          "description": "List all available similarity scorers."
+        },
+        {
+          "name": "list_strategies",
+          "description": "List all golden-record survivorship strategies."
+        },
+        {
+          "name": "list_transforms",
+          "description": "List all available field transforms."
+        },
+        {
           "name": "match",
           "description": "Alias for `match_record`. Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: {\"name\": \"John Smith\", \"email\": \"john@test.com\", \"zip\": \"10001\"}"
         },
