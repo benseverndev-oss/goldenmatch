@@ -1,0 +1,38 @@
+{
+  "entity_id": "018f3a2b-7c41-7e10-9b2a-2f6d5e4c1a90",
+  "status": "active",
+  "confidence": 0.86,
+  "dataset": "customers",
+  "records": [
+    {
+      "record_id": "crm:1001",
+      "source": "crm",
+      "source_pk": "1001",
+      "payload": {"name": "Jane A. Smith", "email": "jane.smith@example.com", "company": "Acme Ltd"}
+    },
+    {
+      "record_id": "web:88",
+      "source": "web",
+      "source_pk": "88",
+      "payload": {"name": "Jane Smith", "email": "jane.smith@example.com", "company": "Acme Limited"}
+    },
+    {
+      "record_id": "crm:2042",
+      "source": "crm",
+      "source_pk": "2042",
+      "payload": {"name": "J Smith", "email": "j.smith@example.com", "company": "Acme"}
+    },
+    {
+      "record_id": "erp:x-9",
+      "source": "erp",
+      "source_pk": "x-9",
+      "payload": {"name": "Jane Smith", "email": "jane.smith@example.com", "company": "Acme Ltd."}
+    }
+  ],
+  "edges": [
+    {"edge_id": "e1", "record_a_id": "crm:1001", "record_b_id": "web:88", "kind": "same_as", "score": 0.97, "matchkey_name": "email+name", "run_name": "run-2026-07-22"},
+    {"edge_id": "e2", "record_a_id": "web:88", "record_b_id": "erp:x-9", "kind": "same_as", "score": 0.94, "matchkey_name": "email+name", "run_name": "run-2026-07-22"},
+    {"edge_id": "e3", "record_a_id": "web:88", "record_b_id": "crm:2042", "kind": "possible_same_as", "score": 0.79, "matchkey_name": "name+company", "run_name": "run-2026-07-22"},
+    {"edge_id": "e4", "record_a_id": "crm:1001", "record_b_id": "crm:2042", "kind": "conflicts_with", "score": 0.41, "matchkey_name": "email", "run_name": "run-2026-07-22"}
+  ]
+}

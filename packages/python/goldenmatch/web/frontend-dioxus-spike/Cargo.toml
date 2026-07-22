@@ -1,0 +1,75 @@
+# Standalone spike crate — deliberately its OWN cargo workspace so it never
+# attaches to a parent (there is no root Cargo.toml today; this keeps it inert
+# if one is ever added). It is NOT a pnpm/uv/turbo workspace member either: the
+# pnpm glob is the exact path `.../web/frontend`, which this sibling does not
+# match, so no JS/Python tooling picks it up.
+[workspace]
+
+[package]
+name = "gm-echarts-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# Fetches ECharts at build time (into OUT_DIR) so the self-contained
+# render_neighborhood page can inline it without vendoring 1 MB of JS into git.
+# Offline builds: set ECHARTS_JS_PATH, or accept the CDN-page fallback.
+build = "build.rs"
+
+[dependencies]
+# Apache ECharts, driven from Rust: an option/spec model + renderers. Default
+# features give the native HtmlRenderer (handlebars-based) used by the binary.
+charming = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Web-build-only deps (the Dioxus/WASM migration target). All optional so the
+# native `render` binary builds without any of them. Versions are indicative —
+# this feature is NOT built in the sandbox (no wasm32 target), so treat standing
+# the web build up as normal spike work if a version needs a nudge.
+dioxus = { version = "0.6", optional = true }
+gloo-net = { version = "0.6", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+
+# The native binary that proves the Rust -> ECharts render path.
+[[bin]]
+name = "render"
+path = "src/bin/render.rs"
+
+# The knowledge-graph surface: renders one Identity Graph entity as an
+# interactive ECharts force-directed graph. Same offline file/stdin posture.
+[[bin]]
+name = "render_graph"
+path = "src/bin/render_graph.rs"
+
+# Click-to-expand neighborhood view: the WHOLE resolved graph collapsed to one
+# hub per entity, expanding an entity's records + evidence edges on click.
+# Scales the initial payload with entity count, not record count.
+[[bin]]
+name = "render_neighborhood"
+path = "src/bin/render_neighborhood.rs"
+
+# The Dioxus/WASM app (full Sensitivity route). Only built when `web` is on, so
+# the native `render` build never sees it. Build it for wasm32:
+#   cargo build --target wasm32-unknown-unknown --features web --bin web
+[[bin]]
+name = "web"
+path = "src/bin/web.rs"
+required-features = ["web"]
+
+[features]
+# Enable for the Dioxus web build: pulls Dioxus (web renderer) and switches
+# charming to its wasm renderer (WasmRenderer mounts ECharts into a live DOM
+# node). Build for the wasm32-unknown-unknown target.
+web = ["dep:dioxus", "dioxus/web", "dep:gloo-net", "dep:wasm-bindgen-futures", "charming/wasm"]
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

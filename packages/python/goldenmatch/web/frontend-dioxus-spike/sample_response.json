@@ -1,0 +1,25 @@
+{
+  "field": "threshold",
+  "baseline_value": 0.85,
+  "sample_n": 500,
+  "stability": {
+    "best_value": 0.85,
+    "best_unchanged_pct": 1.0,
+    "points": [
+      { "value": 0.70, "unchanged": 298, "merged": 51, "partitioned": 8,  "overlapping": 15, "twi": 0.786 },
+      { "value": 0.75, "unchanged": 324, "merged": 34, "partitioned": 6,  "overlapping": 8,  "twi": 0.848 },
+      { "value": 0.80, "unchanged": 351, "merged": 15, "partitioned": 4,  "overlapping": 2,  "twi": 0.921 },
+      { "value": 0.85, "unchanged": 372, "merged": 0,  "partitioned": 0,  "overlapping": 0,  "twi": 1.000 },
+      { "value": 0.90, "unchanged": 353, "merged": 2,  "partitioned": 14, "overlapping": 3,  "twi": 0.902 },
+      { "value": 0.95, "unchanged": 318, "merged": 1,  "partitioned": 41, "overlapping": 12, "twi": 0.802 }
+    ]
+  },
+  "points": [
+    { "value": 0.70, "cluster_count_a": 372, "cluster_count_b": 331, "unchanged": 298, "merged": 51, "partitioned": 8,  "overlapping": 15, "twi": 0.786 },
+    { "value": 0.75, "cluster_count_a": 372, "cluster_count_b": 345, "unchanged": 324, "merged": 34, "partitioned": 6,  "overlapping": 8,  "twi": 0.848 },
+    { "value": 0.80, "cluster_count_a": 372, "cluster_count_b": 360, "unchanged": 351, "merged": 15, "partitioned": 4,  "overlapping": 2,  "twi": 0.921 },
+    { "value": 0.85, "cluster_count_a": 372, "cluster_count_b": 372, "unchanged": 372, "merged": 0,  "partitioned": 0,  "overlapping": 0,  "twi": 1.000 },
+    { "value": 0.90, "cluster_count_a": 372, "cluster_count_b": 391, "unchanged": 353, "merged": 2,  "partitioned": 14, "overlapping": 3,  "twi": 0.902 },
+    { "value": 0.95, "cluster_count_a": 372, "cluster_count_b": 418, "unchanged": 318, "merged": 1,  "partitioned": 41, "overlapping": 12, "twi": 0.802 }
+  ]
+}
