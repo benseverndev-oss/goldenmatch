@@ -4,6 +4,14 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.3.4] - 2026-07-22
+
+- Floor bump: `goldenmatch[polars]>=3.8`. 3.8.0 adds the opt-in FS columnar-cluster
+  path (`GOLDENMATCH_FS_COLUMNAR_CLUSTER` + the `GOLDENMATCH_FS_SCORED_PAIRS_MAX`
+  shed) that keeps the driver off the O(pairs) Python list at 14M scale (#1811 /
+  #2006), plus the kernelized `radial` / `audio_fp` scorers (17/19 kernel-backed,
+  #2008). Mandating the new baseline keeps the advertised suite honest.
+
 ## [0.3.3] - 2026-07-21
 
 - Floor bump: `goldenmatch[polars]>=3.7`. 3.7.0 lands the zero-config
