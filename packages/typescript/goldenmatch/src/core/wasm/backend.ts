@@ -20,12 +20,21 @@
  * `qgramScore` computes the identical set math, so the WASM matrix is byte-exact
  * with the fallback on the ASCII/Latin inputs q-gram targets (short codes / SKUs
  * / names) — the same parity bar the four core rapidfuzz scorers hold.
+ *
+ * `date` (id 4) routes through score-core's `date_similarity`: parse `YYYY-MM-DD`
+ * to 8 digits, Damerau-Levenshtein bucketed 0->1.0 / 1->0.90 / 2->0.75 / >=3->0.0,
+ * else `levenshtein` on the raw strings. The kernel uses rapidfuzz TRUE DL and the
+ * pure-TS `dateSimilarity` uses OSA — but for EQUAL-length inputs (both sides are
+ * 8 digits) OSA and true-DL first diverge only at distance 3, which both bucket to
+ * 0.0, so the two are byte-exact for every date pair (exhaustively verified; the
+ * non-ISO branch is plain `levenshtein`, itself an exact shared kernel).
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
   levenshtein: 1,
   token_sort: 2,
   exact: 3,
+  date: 4,
   qgram: 5,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
