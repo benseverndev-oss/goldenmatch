@@ -312,6 +312,39 @@ const ENSEMBLE_CASES: readonly EnsembleCase[] = [
   ["café", "cafe", "jw on accented input"],
 ];
 
+// phash (score_one id 11): perceptual-hash similarity 1 - hamming/nbits over two hex
+// pHashes. The kernel and the pure-TS `phashSimilarity` do the identical strict hex
+// decode + XOR popcount + one f64 divide (nbits over the LONGER hash), so the WASM
+// matrix is byte-exact with the fallback on any valid hex (non-hex -> 0.0 both). Same
+// integer-popcount shape as dice/jaccard. Asserted byte-exact.
+type PhashCase = readonly [a: string, b: string, note: string];
+const PHASH_CASES: readonly PhashCase[] = [
+  ["ffffffffffffffff", "ffffffffffffffff", "identical -> 1.0"],
+  ["0000000000000000", "ffffffffffffffff", "all 64 bits differ -> 0.0"],
+  ["ff00ff00ff00ff00", "ff00ff00ff00ff01", "one bit differs over 64 -> 63/64"],
+  ["0x1234", "1234", "0x prefix stripped -> 1.0"],
+  ["abc", "0abc", "odd length left-pads to even -> 1.0"],
+  ["ff", "ffff", "different lengths: tail of the longer counts -> 0.5"],
+  ["zzzz", "1234", "non-hex -> 0.0"],
+];
+
+d("WASM phash matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of PHASH_CASES) {
+    it(`phash("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "phash");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "phash");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();

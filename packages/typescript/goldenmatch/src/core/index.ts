@@ -109,6 +109,7 @@ export {
   diceCoefficient,
   jaccardSimilarity,
   qgramScore,
+  phashSimilarity,
   ensembleScore,
   scoreMatrix,
   asString,

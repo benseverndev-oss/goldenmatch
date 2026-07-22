@@ -12,6 +12,7 @@ import {
   soundexMatch,
   diceCoefficient,
   jaccardSimilarity,
+  phashSimilarity,
   ensembleScore,
   scoreMatrix,
   applyTransform,
@@ -167,6 +168,37 @@ describe("dice / jaccard (bloom filter hex)", () => {
   it("mismatched all-zero lengths -> 0 (no crash)", () => {
     expect(diceCoefficient("0000", "000000")).toBe(0.0);
     expect(jaccardSimilarity("0000", "000000")).toBe(0.0);
+  });
+});
+
+describe("phash (perceptual-hash hex similarity)", () => {
+  it("identical -> 1.0", () => {
+    expect(phashSimilarity("ffffffffffffffff", "ffffffffffffffff")).toBe(1.0);
+  });
+
+  it("all bits differ -> 0.0", () => {
+    expect(phashSimilarity("0000000000000000", "ffffffffffffffff")).toBe(0.0);
+  });
+
+  it("one bit differs over 64 bits -> 63/64", () => {
+    expect(phashSimilarity("ff00ff00ff00ff00", "ff00ff00ff00ff01")).toBe(63 / 64);
+  });
+
+  it("strips a 0x/0X prefix and left-pads odd length", () => {
+    expect(phashSimilarity("0x1234", "1234")).toBe(1.0);
+    expect(phashSimilarity("abc", "0abc")).toBe(1.0); // odd -> "0abc" both sides
+  });
+
+  it("mismatched lengths: every set bit in the longer's tail is a difference", () => {
+    // "ff" (8 bits) vs "ffff" (16 bits): nbits=16, common byte matches, tail 0xff
+    // contributes 8 differences -> 1 - 8/16 = 0.5.
+    expect(phashSimilarity("ff", "ffff")).toBe(0.5);
+    expect(phashSimilarity("ffff", "ff")).toBe(0.5); // symmetric
+  });
+
+  it("non-hex or empty -> 0.0", () => {
+    expect(phashSimilarity("zzzz", "1234")).toBe(0.0);
+    expect(phashSimilarity("", "")).toBe(0.0);
   });
 });
 
