@@ -7,7 +7,7 @@ import type {
   IdentitySummary,
   IdentityView,
 } from "../lib/api";
-import { IdentityGraph, type GraphExpansion } from "../components/IdentityGraph";
+import { IdentityGraph, type GraphExpansion } from "../components/IdentityGraphLazy";
 
 export function Identities() {
   const qc = useQueryClient();
