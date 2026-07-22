@@ -321,8 +321,8 @@ def _join_assignments_distributed(
     num_partitions: int | None = None,
 ) -> Dataset:
     """Annotate each input row with ``__cluster_id__`` via a DISTRIBUTED hash
-    join -- the scale replacement for ``_join_clusters_to_rows``'s broadcast
-    ``member_to_cid`` dict (which was O(members) on the driver).
+    join -- avoids the O(members) driver-side broadcast ``member_to_cid`` dict
+    the earlier in-memory join used.
 
     ``assignments_ds`` rows: {member_id, cluster_id, cluster_size, oversized}.
     Only MULTI-MEMBER clusters survive (``cluster_size > 1``), matching the old
@@ -371,62 +371,3 @@ def _join_assignments_distributed(
         return df.to_arrow()
 
     return joined.map_batches(_drop_member, batch_format="pyarrow")
-
-
-def _join_clusters_to_rows(ds: Dataset, clusters: dict) -> Dataset:
-    """Annotate each row with __cluster_id__ via a small broadcast lookup.
-
-    Only multi-member clusters are kept; singletons are filtered out.
-    The cluster dict is small (~cluster_count entries); broadcast via
-    ray.put to avoid re-serializing it per batch.
-    """
-    import ray
-
-    member_to_cid: dict[int, int] = {}
-    for cid, info in clusters.items():
-        if info.get("size", 0) > 1:
-            for m in info["members"]:
-                member_to_cid[m] = cid
-
-    if not member_to_cid:
-        # No multi-member clusters; return an empty slice of the input schema.
-        return ds.limit(0)
-
-    map_ref = ray.put(member_to_cid)
-
-    def _annotate(batch: Any) -> Any:  # noqa: ANN401  # batch: pa.Table -> pa.Table
-        import polars as pl
-        import ray as _ray
-        df = pl.from_arrow(batch)
-        assert isinstance(df, pl.DataFrame)
-        if "__row_id__" not in df.columns:
-            df = df.with_row_index("__row_id__").with_columns(
-                pl.col("__row_id__").cast(pl.Int64)
-            )
-        lookup_raw = _ray.get(map_ref)
-        lookup: dict[int, int] = dict(lookup_raw) if not isinstance(lookup_raw, dict) else lookup_raw
-        # W4e: seam ops (map_column default= == replace_strict(keys, vals,
-        # default); filter_not_in([-1]) == != -1, nulls unreachable post-default).
-        from goldenmatch.core.frame import to_frame
-
-        out = (
-            to_frame(df)
-            .map_column("__row_id__", "__cluster_id__", lookup, default=-1)
-            .filter_not_in("__cluster_id__", [-1])
-        )
-        return out.to_arrow()
-
-    return ds.map_batches(_annotate, batch_format="pyarrow")
-
-
-def _write_golden_output(golden: Any, output_path: str) -> None:
-    """Write golden records to parquet at end of Phase 5 pipeline."""
-    if isinstance(golden, list):
-        if golden:
-            pl.DataFrame(golden).write_parquet(output_path)
-        return
-    # Polars DataFrame
-    if hasattr(golden, "write_parquet"):
-        golden.write_parquet(output_path)
-    else:
-        pl.DataFrame(golden).write_parquet(output_path)
