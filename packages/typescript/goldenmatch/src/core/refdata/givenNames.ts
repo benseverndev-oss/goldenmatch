@@ -78,6 +78,52 @@ export function aliasInjectionEdges(): {
   return forms.length === 0 ? null : { forms, canonicals };
 }
 
+/**
+ * *A* canonical formal name for `name` — port of `given_names.canonical_form`.
+ * Lex-first (`min`) when the form belongs to multiple canonicals ("kate" →
+ * "catherine"). OOV / unavailable → the normalized input; empty → `""`; `null`
+ * → `null`. Used by the `alias_match` scorer's given-name half.
+ */
+export function canonicalForm(name: string | null): string | null {
+  if (name === null) return null;
+  const norm = normalize(name);
+  if (!norm) return "";
+  const state = load();
+  if (state === null) return norm;
+  const cset = state.canonicals.get(norm);
+  if (cset === undefined) return norm;
+  // Lex-first, matching Python `min(canon_set)`.
+  let best: string | undefined;
+  for (const c of cset) if (best === undefined || c < best) best = c;
+  return best ?? norm;
+}
+
+/**
+ * Parallel `(normalized, canonical)` arrays for injecting into the score-wasm
+ * `alias_match` kernel (`set_given_name_canonicals`). Each `normalized[i]` maps
+ * to `canonicals[i]` = the pre-resolved lex-first `min(canonical set)` — the
+ * SAME resolution `canonicalForm` applies, done host-side so the kernel needs
+ * only a normalize + lookup. `null` when the table is unavailable.
+ */
+export function canonicalInjectionPairs(): {
+  normalized: string[];
+  canonicals: string[];
+} | null {
+  const state = load();
+  if (state === null) return null;
+  const normalized: string[] = [];
+  const canonicals: string[] = [];
+  for (const [form, cset] of state.canonicals) {
+    let best: string | undefined;
+    for (const c of cset) if (best === undefined || c < best) best = c;
+    if (best !== undefined) {
+      normalized.push(form);
+      canonicals.push(best);
+    }
+  }
+  return normalized.length === 0 ? null : { normalized, canonicals };
+}
+
 /** True iff a and b share at least one canonical. Symmetric, reflexive. */
 export function areEquivalent(a: string | null, b: string | null): boolean {
   if (a === null || b === null) return false;

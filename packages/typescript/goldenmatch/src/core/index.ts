@@ -114,6 +114,7 @@ export {
   audioFpSimilarity,
   deriveInitialism,
   initialismMatch,
+  aliasMatch,
   ensembleScore,
   scoreMatrix,
   asString,

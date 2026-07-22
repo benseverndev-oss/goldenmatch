@@ -14,8 +14,8 @@ import {
 import { SCORER_ID } from "./backend.js";
 import type { ScorerBackend } from "./backend.js";
 import { censusInjectionData } from "../refdata/surnames.js";
-import { aliasInjectionEdges } from "../refdata/givenNames.js";
-import { legalFormsInjectionData } from "../refdata/business.js";
+import { aliasInjectionEdges, canonicalInjectionPairs } from "../refdata/givenNames.js";
+import { legalFormsInjectionData, businessAliasInjectionData } from "../refdata/business.js";
 
 export type { LoadOptions };
 
@@ -51,6 +51,12 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBacke
     set_surname_idf?: (names: string[], counts: Float64Array) => void;
     set_name_aliases?: (forms: string[], canonicals: string[]) => void;
     set_legal_forms?: (forms: string[]) => void;
+    set_business_aliases?: (
+      variants: string[],
+      surfaceForms: string[],
+      canonicals: string[],
+    ) => void;
+    set_given_name_canonicals?: (normalized: string[], canonicals: string[]) => void;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -76,6 +82,20 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBacke
   // kernel drops the SAME forms the pure-TS `initialismMatch` does.
   if (typeof glue.set_legal_forms === "function") {
     glue.set_legal_forms([...legalFormsInjectionData()]);
+  }
+  // Seed BOTH `alias_match` (id 8) tables: the business alias table (FULL legal-
+  // form variant list — the kernel rebuilds the strip regex from it — + the
+  // surface→canonical map) and the pre-resolved given-name nickname map, so the
+  // WASM `alias_match` canonicalizes over the SAME tables the pure-TS path does.
+  if (typeof glue.set_business_aliases === "function") {
+    const biz = businessAliasInjectionData();
+    glue.set_business_aliases([...biz.variants], biz.surfaceForms, biz.canonicals);
+  }
+  if (typeof glue.set_given_name_canonicals === "function") {
+    const given = canonicalInjectionPairs();
+    if (given !== null) {
+      glue.set_given_name_canonicals(given.normalized, given.canonicals);
+    }
   }
 
   const SEP = "\x1e";

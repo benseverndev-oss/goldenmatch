@@ -244,6 +244,7 @@ a2a_skills:
 # PluginRegistry validator fallback, so they're NOT in Python VALID_SCORERS).
 scorers:
   shared:
+  - alias_match
   - audio_fp
   - date
   - dice
@@ -260,8 +261,7 @@ scorers:
   - record_embedding
   - soundex_match
   - token_sort
-  python_only:
-  - alias_match
+  python_only: []
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw
@@ -317,17 +317,22 @@ blocking_strategies:
 # components hold vs rapidfuzz (soundex byte-exact). `phash` (id 11) is also shared:
 # perceptual-hash similarity (1 - hamming/nbits over hex pHashes), integer XOR popcount,
 # byte-exact WASM<->pure-TS like dice/jaccard.
-# python_only: `alias_match` has an arrow-native (bucket) kernel on Python but no TS WASM
-# port yet (it is behind score-wasm's off-by-default `alias` cargo feature + needs the
-# business/given-name alias tables injected). `initialism_match` is now shared: the kernel
-# needs the ~77-entry legal_forms table injected at enableWasm() (set_legal_forms), which the
-# loader seeds with the ported refdata/business.ts table so WASM == pure-TS byte-exact.
+# `alias_match` (id 8) is now shared: score-wasm ENABLES the `alias` cargo feature (the
+# `regex` engine, ~+36 KB) and the kernel needs TWO tables injected at enableWasm() --
+# the business alias table (set_business_aliases: the FULL 81-entry legal-form variant
+# list, from which the kernel rebuilds the trailing-suffix strip regex, + the surface->
+# canonical alias map) and the given-name nickname map (set_given_name_canonicals). The
+# loader seeds both with the ported refdata/business.ts + refdata/givenNames.ts tables so
+# WASM == pure-TS byte-exact. `initialism_match` is shared: the kernel needs the ~77-entry
+# legal_forms table injected at enableWasm() (set_legal_forms), which the loader seeds with
+# the ported refdata/business.ts table so WASM == pure-TS byte-exact.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
 # (Python accepts them via the plugin fallback); a real, declared Python<->TS delta.
 scorer_kernels:
   shared:
+  - alias_match
   - audio_fp
   - date
   - dice
@@ -342,8 +347,7 @@ scorer_kernels:
   - radial
   - soundex_match
   - token_sort
-  python_only:
-  - alias_match
+  python_only: []
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw

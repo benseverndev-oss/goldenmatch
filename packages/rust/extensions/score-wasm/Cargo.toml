@@ -18,10 +18,12 @@ name = "goldenmatch_score_wasm"
 crate-type = ["cdylib", "rlib"]  # cdylib for wasm; rlib so host unit tests link
 
 [dependencies]
-# default-features = false drops the `alias` feature (score_one id 8 + the `regex`
-# engine): alias_match is a Python-bucket-only kernel with no wasm export, so the
-# edge bundle stays free of the heavy `regex` dependency.
-goldenmatch-score-core = { path = "../score-core", default-features = false }
+# The `alias` feature (score_one id 8 + the `regex` engine) is ENABLED: alias_match
+# is WASM-backed via injected business/given-name tables (`set_business_aliases` /
+# `set_given_name_canonicals`), so the edge bundle carries the `regex` engine
+# (~+36 KB) to canonicalize legal-form suffixes byte-for-byte with Python. Every
+# other score-core default feature is inherited.
+goldenmatch-score-core = { path = "../score-core", features = ["alias"] }
 # `fs-core` carries the name scorers (name_freq_weighted_jw / given_name_aliased_jw)
 # as `*_sim` fns over INJECTED reference-data tables -- it bundles no data and its
 # only dep is `score-core` (default-features = false, so no regex reaches the edge

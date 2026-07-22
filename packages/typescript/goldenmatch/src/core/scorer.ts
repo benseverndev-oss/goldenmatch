@@ -20,9 +20,9 @@ import { pairKey } from "./cluster.js";
 import { applyTransforms, soundex } from "./transforms.js";
 import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
 import { getScorerBackend, WASM_COVERED_SCORERS } from "./wasm/backend.js";
-import { areEquivalent } from "./refdata/givenNames.js";
+import { areEquivalent, canonicalForm } from "./refdata/givenNames.js";
 import { isAvailable as surnamesAvailable, surnameRank, surnameIdf } from "./refdata/surnames.js";
-import { LEGAL_FORMS } from "./refdata/business.js";
+import { LEGAL_FORMS, canonicalCompanyForm } from "./refdata/business.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -763,6 +763,27 @@ export function initialismMatch(
 }
 
 /**
+ * `alias_match` scorer: 1.0 iff both values canonicalize to the same NON-EMPTY
+ * business alias OR the same given-name canonical; else 0.0. Byte-exact with
+ * score-core `alias_match` / Python `_alias_match_single` ("Acme Inc" ↔ "Acme
+ * Incorporated" → business "acme"; "Bob" ↔ "Robert" → given "robert"). The two
+ * reference tables (legal-form variants + surface→canonical alias map; given-
+ * name nickname map) are embedded in the refdata modules and injected verbatim
+ * into the WASM kernel at `enableWasm()`, so WASM matches byte-for-byte.
+ * Canonicalization is an idempotent passthrough for OOV names, so two different
+ * OOV names never match.
+ */
+export function aliasMatch(a: string, b: string): number {
+  const cbA = canonicalCompanyForm(a) ?? "";
+  const cbB = canonicalCompanyForm(b) ?? "";
+  if (cbA !== "" && cbA === cbB) return 1.0;
+  const cgA = canonicalForm(a) ?? "";
+  const cgB = canonicalForm(b) ?? "";
+  if (cgA !== "" && cgA === cgB) return 1.0;
+  return 0.0;
+}
+
+/**
  * Padded character q-gram set of a raw string (Python parity:
  * core/scorer.py::_qgram_set). Lowercases, pads with `n-1` `#` sentinels on
  * each side, then returns the FULL set of length-`n` substrings.
@@ -849,6 +870,8 @@ export function scoreField(
       return audioFpSimilarity(valA, valB);
     case "initialism_match":
       return initialismMatch(valA, valB);
+    case "alias_match":
+      return aliasMatch(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
     case "embedding":

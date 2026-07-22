@@ -61,6 +61,30 @@ pub fn install_legal_forms(forms: Vec<String>) {
     let _ = goldenmatch_score_core::set_legal_forms(forms.into_iter().collect());
 }
 
+/// Install the business alias table for `alias_match` (id 8). Delegates to
+/// score-core's process-global `set_business_aliases` OnceLock (first-wins).
+/// `variants` are the normalized legal-form variants (score-core rebuilds them
+/// into the SAME trailing-suffix regex Python compiles); `surface_forms[i]` maps
+/// to `canonicals[i]` (parallel arrays keep the wasm-bindgen boundary flat -- no
+/// nested `Vec<(String, String)>`). Shared by the wasm setter + native tests.
+pub fn install_business_aliases(
+    variants: Vec<String>,
+    surface_forms: Vec<String>,
+    canonicals: Vec<String>,
+) {
+    let pairs: Vec<(String, String)> = surface_forms.into_iter().zip(canonicals).collect();
+    let _ = goldenmatch_score_core::set_business_aliases(variants, pairs);
+}
+
+/// Install the given-name canonical map for `alias_match` (id 8) from parallel
+/// `(normalized, canonical)` arrays (`normalized[i]` -> `canonicals[i]`, the
+/// pre-resolved lex-first `min(canonical set)` computed host-side). Delegates to
+/// score-core's process-global `set_given_name_canonicals` OnceLock (first-wins).
+pub fn install_given_name_canonicals(normalized: Vec<String>, canonicals: Vec<String>) {
+    let pairs: Vec<(String, String)> = normalized.into_iter().zip(canonicals).collect();
+    let _ = goldenmatch_score_core::set_given_name_canonicals(pairs);
+}
+
 /// Full row-major NxN similarity matrix for `values` under `scorer_id`.
 /// Diagonal = 0.0 and the matrix is symmetric, matching the pure-TS
 /// `scoreMatrix` (which fills the upper triangle, mirrors it, and leaves the
@@ -174,6 +198,50 @@ mod tests {
     }
 
     #[test]
+    fn alias_match_id8_dispatches_to_score_core() {
+        // The ONLY test that installs the process-global alias tables (business +
+        // given-name OnceLocks, first-wins), so it never races a different-content
+        // setter. id 8 flows through score_matrix_impl's `_ => score_one` arm.
+        install_business_aliases(
+            // A tiny legal-form variant list (strip_re alternation) + a
+            // surface->canonical alias map (google/alphabet inc -> alphabet).
+            vec!["inc".into(), "llc".into(), "corp".into()],
+            vec![
+                "alphabet".into(),
+                "google".into(),
+                "google".into(),
+                "alphabet".into(),
+            ],
+            vec![
+                "alphabet".into(),
+                "alphabet".into(),
+                "alphabet".into(),
+                "alphabet".into(),
+            ],
+        );
+        install_given_name_canonicals(
+            vec!["bob".into(), "robert".into(), "bill".into(), "william".into()],
+            vec![
+                "robert".into(),
+                "robert".into(),
+                "william".into(),
+                "william".into(),
+            ],
+        );
+
+        // Business: "Google LLC" and "Alphabet Inc." both canonicalize to
+        // "alphabet" (legal form stripped, surface mapped) -> 1.0.
+        let m = score_matrix_impl(&["Google LLC", "Alphabet Inc."], 8);
+        assert_eq!(m[1], 1.0);
+        // Given-name: "Bob" and "Robert" share canonical "robert" -> 1.0.
+        let m2 = score_matrix_impl(&["Bob", "Robert"], 8);
+        assert_eq!(m2[1], 1.0);
+        // Unrelated -> 0.0 (no shared canonical on either table).
+        let m3 = score_matrix_impl(&["Acme", "Umbrella"], 8);
+        assert_eq!(m3[1], 0.0);
+    }
+
+    #[test]
     fn token_sort_id2_normalizes_and_is_order_invariant() {
         // id=2 must use the TS-parity normalized path: order-invariant + case/
         // punctuation-insensitive. "John SMITH" vs "smith john" -> 1.0.
@@ -214,7 +282,10 @@ mod tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{install_legal_forms, install_name_aliases, install_surname_idf, score_matrix_impl};
+    use super::{
+        install_business_aliases, install_given_name_canonicals, install_legal_forms,
+        install_name_aliases, install_surname_idf, score_matrix_impl,
+    };
     use wasm_bindgen::prelude::*;
 
     /// JS entry: `values` is one string with fields joined by `sep` (a 1-char
@@ -251,5 +322,25 @@ mod wasm {
     #[wasm_bindgen]
     pub fn set_legal_forms(forms: Vec<String>) {
         install_legal_forms(forms);
+    }
+
+    /// Install the business alias table for `alias_match` (id 8). Called once by
+    /// the TS loader at `enableWasm()` with the ported legal-form variants +
+    /// surface->canonical alias map (`refdata/business.ts`).
+    #[wasm_bindgen]
+    pub fn set_business_aliases(
+        variants: Vec<String>,
+        surface_forms: Vec<String>,
+        canonicals: Vec<String>,
+    ) {
+        install_business_aliases(variants, surface_forms, canonicals);
+    }
+
+    /// Install the given-name canonical map for `alias_match` (id 8) from parallel
+    /// `(normalized, canonical)` arrays. Called once by the TS loader at
+    /// `enableWasm()` with the pre-resolved lex-first nickname map.
+    #[wasm_bindgen]
+    pub fn set_given_name_canonicals(normalized: Vec<String>, canonicals: Vec<String>) {
+        install_given_name_canonicals(normalized, canonicals);
     }
 }

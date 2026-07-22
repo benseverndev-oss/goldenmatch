@@ -89,6 +89,16 @@
  * the pure-TS `initialismMatch` uses the SAME ported table (`refdata/business.ts`), so
  * the WASM matrix is byte-exact with the fallback. Until the table is injected the kernel
  * scores against an EMPTY legal-form set (no dropping) -- the loader always injects it.
+ *
+ * `alias_match` (id 8) is 1.0 iff both values canonicalize to the same non-empty business
+ * alias OR the same given-name canonical, else 0.0. It needs TWO tables injected at
+ * `enableWasm()`: the business alias table (the FULL 81-entry legal-form variant list,
+ * from which the kernel rebuilds the trailing-suffix strip regex, + the surface→canonical
+ * alias map — `set_business_aliases`) and the pre-resolved given-name nickname map
+ * (`set_given_name_canonicals`). The pure-TS `aliasMatch` uses the SAME ported tables
+ * (`refdata/business.ts` + `refdata/givenNames.ts`), so the WASM matrix is byte-exact with
+ * the fallback. Until both tables are injected the kernel's `alias_match` returns 0.0 for
+ * the un-installed half -- the loader always injects both.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -99,6 +109,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   qgram: 5,
   soundex_match: 6,
   initialism_match: 7,
+  alias_match: 8,
   dice: 9,
   jaccard: 10,
   phash: 11,

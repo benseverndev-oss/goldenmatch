@@ -509,6 +509,7 @@ export const VALID_SCORERS = new Set([
   "radial",
   "audio_fp",
   "initialism_match",
+  "alias_match",
   "given_name_aliased_jw",
   "name_freq_weighted_jw",
 ] as const);
