@@ -2,6 +2,7 @@
 //! a future Dioxus/WASM port of GoldenMatch's web UI.
 
 pub mod chart;
+pub mod graph;
 pub mod model;
 
 #[cfg(feature = "web")]

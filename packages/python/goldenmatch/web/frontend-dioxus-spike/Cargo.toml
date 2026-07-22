@@ -31,6 +31,12 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 name = "render"
 path = "src/bin/render.rs"
 
+# The knowledge-graph surface: renders one Identity Graph entity as an
+# interactive ECharts force-directed graph. Same offline file/stdin posture.
+[[bin]]
+name = "render_graph"
+path = "src/bin/render_graph.rs"
+
 # The Dioxus/WASM app (full Sensitivity route). Only built when `web` is on, so
 # the native `render` build never sees it. Build it for wasm32:
 #   cargo build --target wasm32-unknown-unknown --features web --bin web

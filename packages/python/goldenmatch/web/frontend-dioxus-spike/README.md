@@ -50,6 +50,52 @@ cargo run --bin render -- response.json   # ...or a real saved API response
 > `HtmlRenderer` behaviour). A shipped GM UI would vendor it locally — a one-line
 > renderer swap.
 
+## Knowledge graph view (the Identity Graph)
+
+The second chart spec (`src/graph.rs`) proves the **`graph` (force-directed
+network) series** — GoldenMatch's **Identity Graph** rendered as an interactive
+knowledge graph. It answers the same question the line chart did, for the graph
+surface: does a real KG built in Rust from the actual API data render as
+interactive ECharts? Yes.
+
+One resolved identity (the `/api/v1/identities/{entity_id}` response) becomes:
+
+- an **entity node** at the hub,
+- one **record node** per source record — colored by provenance (a
+  legend-toggleable category per `source`),
+- **member** links from the entity to its records, and
+- the **evidence edges** (`same_as` / `possible_same_as` / `conflicts_with`)
+  between records, weighted by score.
+
+Any record touched by a `conflicts_with` edge is promoted to a distinct red
+**"⚠ conflict"** category, so an over-merge pops out of the graph at a glance.
+Force layout, zoom/drag (`roam`), category legend, and item tooltips are all free
+from ECharts once the option is built.
+
+```bash
+cargo run --bin render_graph                 # baked sample_identity_graph.json
+open identity_graph.html                      # interactive force-directed KG
+cargo run --bin render_graph -- identity.json # ...or a real /identities/{id} response
+```
+
+Same single-spec / two-surface story as the line chart: `identity_graph_chart()`
+is the exact `charming::Chart` the Dioxus `WasmRenderer` would mount — no
+KG-drawing code duplicated per surface. The data source already exists (the
+Identity Graph REST endpoints — `/identities`, `/identities/{id}/evidence`,
+`/conflicts`), so this is a *visualization* layer, not new backend work.
+
+> **charming caveat (edge styling).** charming 0.5's `GraphLink` exposes only
+> `source`/`target`/`value` — no per-edge `lineStyle`/`label`. So edge KIND is
+> surfaced via the conflict-node coloring + the tooltip rather than per-edge
+> color. A production build would use a newer charming (or a raw-JSON escape
+> hatch for the `links` array) to color `same_as` vs `possible_same_as` vs
+> `conflicts_with` edges individually — a coverage gap, not a blocker.
+
+Natural follow-ons if this direction is taken: expand the neighborhood on node
+click (the `/identities/{id}` + `/by-record` endpoints already support it), and a
+multi-entity view fed by `/conflicts` to show over-merge candidates across
+entities.
+
 ## Run the full Dioxus web app
 
 ```bash
@@ -60,8 +106,9 @@ dx serve --features web        # serves the WASM app; proxy /api -> FastAPI
 
 ## What the spike shows
 
-- **One chart spec, two surfaces** (`src/chart.rs`) — no per-surface chart code.
-  The native binary and the Dioxus component call the identical function.
+- **One chart spec, two surfaces** (`src/chart.rs`; and `src/graph.rs` for the
+  knowledge-graph view) — no per-surface chart code. The native binary and the
+  Dioxus component call the identical function.
 - **Full route parity** (`src/dioxus_app.rs`) — the `Sensitivity.tsx` port is
   feature-complete: form inputs (`use_signal`), a `useMutation`-style async
   submit (`spawn` + lifecycle signals), all render states, and the grid.
