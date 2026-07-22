@@ -17,11 +17,14 @@ import {
   audioFpSimilarity,
   initialismMatch,
   deriveInitialism,
+  aliasMatch,
   ensembleScore,
   scoreMatrix,
   applyTransform,
 } from "../../src/core/index.js";
 import type { MatchkeyConfig, MatchkeyField, Row } from "../../src/core/index.js";
+import { canonicalCompanyForm } from "../../src/core/refdata/business.js";
+import { canonicalForm } from "../../src/core/refdata/givenNames.js";
 
 describe("jaro / jaroWinkler", () => {
   it("jaro MARTHA ~= MARHTA matches Python (0.9444)", () => {
@@ -282,6 +285,49 @@ describe("initialism_match (business-name acronym matcher)", () => {
     expect(initialismMatch("National Aeronautics and Space Administration", "NASA")).toBe(0.0);
     expect(initialismMatch("AT and T", "ATT")).toBe(0.0);
     expect(initialismMatch("", "IBM")).toBe(0.0);
+  });
+});
+
+describe("alias_match (business + given-name canonical equality)", () => {
+  it("canonicalizes a company name (legal-form strip + alias map)", () => {
+    // Pinned against Python `refdata.business_aliases.canonical_company_form`.
+    expect(canonicalCompanyForm("Acme Inc")).toBe("acme");
+    expect(canonicalCompanyForm("Acme Incorporated")).toBe("acme");
+    expect(canonicalCompanyForm("Acme Holdings Inc.")).toBe("acme"); // compound suffix peels
+    expect(canonicalCompanyForm("Acme Limited Liability Company")).toBe("acme");
+    expect(canonicalCompanyForm("Acme-Inc")).toBe("acme"); // hyphen is a leading separator
+    expect(canonicalCompanyForm("Acme Group")).toBe("acme"); // descriptor variant stripped
+    expect(canonicalCompanyForm("Google LLC")).toBe("alphabet"); // surface -> canonical
+    expect(canonicalCompanyForm("International Business Machines Corp")).toBe(
+      "international business machines",
+    );
+    expect(canonicalCompanyForm("Globex")).toBe("globex"); // OOV -> normalized passthrough
+    expect(canonicalCompanyForm("Inc")).toBe("inc"); // no leading sep -> nothing stripped
+    expect(canonicalCompanyForm("")).toBe("");
+    expect(canonicalCompanyForm(null)).toBeNull();
+  });
+
+  it("canonicalizes a given name (lex-first nickname resolution)", () => {
+    // Pinned against Python `refdata.given_names.canonical_form`.
+    expect(canonicalForm("Bob")).toBe("robert");
+    expect(canonicalForm("Robert")).toBe("robert");
+    expect(canonicalForm("Kate")).toBe("catherine"); // lex-first across canonicals
+    expect(canonicalForm("Xander")).toBe("alexander");
+    expect(canonicalForm("Zzz")).toBe("zzz"); // OOV passthrough
+  });
+
+  it("matches on a shared non-empty business OR given canonical, else 0.0", () => {
+    // Pinned against Python `_alias_match_single`.
+    expect(aliasMatch("Acme Inc", "Acme Incorporated")).toBe(1.0);
+    expect(aliasMatch("Google", "Alphabet Inc.")).toBe(1.0);
+    expect(aliasMatch("IBM", "International Business Machines")).toBe(1.0);
+    expect(aliasMatch("FedEx", "Federal Express")).toBe(1.0);
+    expect(aliasMatch("Acme Group", "Acme")).toBe(1.0);
+    expect(aliasMatch("Bob", "Robert")).toBe(1.0); // given-name half
+    expect(aliasMatch("Kate", "Catherine")).toBe(1.0);
+    expect(aliasMatch("Acme", "Globex")).toBe(0.0); // different OOV companies
+    expect(aliasMatch("William", "Walter")).toBe(0.0); // unrelated given names
+    expect(aliasMatch("", "")).toBe(0.0); // empty canonical never matches
   });
 });
 

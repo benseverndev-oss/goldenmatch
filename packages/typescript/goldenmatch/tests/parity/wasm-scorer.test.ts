@@ -450,6 +450,47 @@ d("WASM initialism_match matches the pure-TS scoreField reference (exact)", () =
   }
 });
 
+// alias_match (score_one id 8): 1.0 iff both values canonicalize to the same non-empty
+// business alias OR the same given-name canonical, else 0.0. The kernel needs TWO tables
+// injected at enableWasm() -- the business alias table (set_business_aliases: the FULL
+// legal-form variant list, from which the kernel rebuilds the strip regex, + the
+// surface->canonical map) and the given-name nickname map (set_given_name_canonicals).
+// The loader seeds both with the SAME tables the pure-TS `aliasMatch` uses, so the WASM
+// matrix is byte-exact with the fallback (this also verifies both injections round-trip:
+// "Google"->"alphabet" needs the alias map, "Acme Group"->"acme" needs the strip regex,
+// "Bob"<->"Robert" needs the given-name map).
+type AliasCase = readonly [a: string, b: string, note: string];
+const ALIAS_CASES: readonly AliasCase[] = [
+  ["Acme Inc", "Acme Incorporated", "legal-form strip -> shared 'acme' -> 1.0"],
+  ["Google", "Alphabet Inc.", "surface->canonical alias map -> 'alphabet' -> 1.0"],
+  ["IBM", "International Business Machines", "alias map both directions -> 1.0"],
+  ["FedEx", "Federal Express", "brand alias -> 'federal express' -> 1.0"],
+  ["Acme Group", "Acme", "descriptor variant stripped -> shared 'acme' -> 1.0"],
+  ["Acme Holdings Inc.", "Acme", "compound suffix peels -> 'acme' -> 1.0"],
+  ["Bob", "Robert", "given-name nickname map -> 'robert' -> 1.0"],
+  ["Kate", "Catherine", "given-name lex-first canonical -> 1.0"],
+  ["Acme", "Globex", "different OOV companies -> 0.0"],
+  ["William", "Walter", "unrelated given names -> 0.0"],
+  ["", "", "empty canonical never matches -> 0.0"],
+];
+
+d("WASM alias_match matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of ALIAS_CASES) {
+    it(`alias_match("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "alias_match");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "alias_match");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();
