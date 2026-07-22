@@ -96,7 +96,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--budget-usd", type=float, default=25.0)
     p.add_argument("--judge", action="store_true", help="score the format-fair LLM-judge metric too")
-    p.add_argument("--judge-model", default="gpt-4o-mini")
+    p.add_argument(
+        "--judge-model", default=None,
+        help="judge model id; omit -> OPENAI_MODEL (so it tracks the chat model id, e.g. "
+        "openai/gpt-4o-mini when chat routes via OpenRouter) else gpt-4o-mini.",
+    )
     p.add_argument("--out-md", required=True)
     p.add_argument("--out-json", required=True)
     args = p.parse_args(argv)
@@ -121,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         corpus_path=args.corpus_path,
     )
     engine = _MockEnvABEngine() if args.self_test else _build_engine(args.engine)
-    judge = _make_judge(args.judge_model) if (args.judge and not args.self_test) else None
+    judge_model = args.judge_model or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
+    judge = _make_judge(judge_model) if (args.judge and not args.self_test) else None
 
     result = run_engine_ab_env(
         engine, corpus, model=_chat_model(), budget_usd=args.budget_usd, arms=arms, judge=judge,
