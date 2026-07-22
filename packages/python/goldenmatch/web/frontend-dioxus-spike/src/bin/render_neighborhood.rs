@@ -18,10 +18,13 @@
 //! this follow-on). The data model is still built ONCE in Rust.
 //!
 //! By DEFAULT the emitted page is fully SELF-CONTAINED: the ECharts library is
-//! vendored (`vendor/echarts.min.js`, Apache-2.0) and inlined, so the page
-//! renders offline and in any viewer (strict-CSP artifact panels included) with
-//! no external host. Pass `--cdn` for the lightweight variant that loads ECharts
-//! from a CDN instead (smaller file; needs network + a CSP that allows the CDN).
+//! fetched at build time (`build.rs`, Apache-2.0 — NOT vendored into git) and
+//! inlined, so the page renders offline and in any viewer (strict-CSP artifact
+//! panels included) with no external host. Pass `--cdn` for the lightweight
+//! variant that loads ECharts from a CDN instead (smaller file; needs network +
+//! a CSP that allows the CDN). If the build had no network and no
+//! `ECHARTS_JS_PATH` override, ECharts isn't bundled and the default
+//! transparently falls back to the CDN page (with a printed notice).
 
 use std::io::Read;
 
@@ -30,12 +33,19 @@ use gm_echarts_spike::{
 };
 
 const SAMPLE: &str = include_str!("../../sample_identity_graph.json");
-/// Vendored ECharts (Apache-2.0), inlined into the page by default so the
-/// output is self-contained. See `vendor/echarts.min.js`.
-const ECHARTS: &str = include_str!("../../vendor/echarts.min.js");
+/// ECharts (Apache-2.0), fetched at build time into `OUT_DIR` by `build.rs` and
+/// inlined into the page by default so the output is self-contained. When the
+/// build could not obtain it (offline, no `ECHARTS_JS_PATH`), this is a short
+/// stub and `bundled()` is false — the default then falls back to the CDN page.
+const ECHARTS: &str = include_str!(concat!(env!("OUT_DIR"), "/echarts.min.js"));
 const CDN_TAG: &str =
     "<script src=\"https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js\"></script>";
 const OUT: &str = "identity_neighborhood.html";
+
+/// Whether `build.rs` actually bundled the real ECharts library (vs. a stub).
+fn bundled() -> bool {
+    ECHARTS.len() > 100_000
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse args: an optional `--cdn` flag anywhere, plus one positional input
@@ -78,13 +88,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_hubs = payload.hubs.len();
     let payload_json = js_safe_json(&serde_json::to_string(&payload)?);
 
-    // Self-contained by default: inline the vendored ECharts. `--cdn` swaps in
-    // the CDN <script> tag instead. The `__ECHARTS__` replace runs LAST so the
-    // (large) inlined library is never itself scanned for other placeholders.
-    let echarts_tag = if use_cdn {
-        CDN_TAG.to_string()
-    } else {
+    // Self-contained by default: inline the build-time ECharts. `--cdn` swaps in
+    // the CDN <script> tag instead; and if ECharts wasn't bundled at build time
+    // we transparently fall back to the CDN tag (a self-contained page is
+    // impossible without the library). The `__ECHARTS__` replace runs LAST so
+    // the (large) inlined library is never itself scanned for other placeholders.
+    let inline = !use_cdn && bundled();
+    if !use_cdn && !bundled() {
+        eprintln!(
+            "note: ECharts was not bundled at build time; emitting the CDN-linked page. \
+             Rebuild with network (or ECHARTS_JS_PATH) for a self-contained page."
+        );
+    }
+    let echarts_tag = if inline {
         format!("<script>{ECHARTS}</script>")
+    } else {
+        CDN_TAG.to_string()
     };
     let html = PAGE_TEMPLATE
         .replace("__SUMMARY__", &html_escape(&summary))
@@ -92,7 +111,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .replace("__ECHARTS__", &echarts_tag);
     std::fs::write(OUT, html)?;
 
-    let mode = if use_cdn { "CDN" } else { "self-contained" };
+    let mode = if inline {
+        "self-contained"
+    } else if use_cdn {
+        "CDN"
+    } else {
+        "CDN (echarts not bundled)"
+    };
     eprintln!("rendered neighborhood view ({mode}): {n_hubs} entity hubs (collapsed) -> {OUT}");
     eprintln!("  {summary}");
     Ok(())

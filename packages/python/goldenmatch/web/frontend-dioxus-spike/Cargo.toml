@@ -10,6 +10,10 @@ name = "gm-echarts-spike"
 version = "0.0.0"
 edition = "2021"
 publish = false
+# Fetches ECharts at build time (into OUT_DIR) so the self-contained
+# render_neighborhood page can inline it without vendoring 1 MB of JS into git.
+# Offline builds: set ECHARTS_JS_PATH, or accept the CDN-page fallback.
+build = "build.rs"
 
 [dependencies]
 # Apache ECharts, driven from Rust: an option/spec model + renderers. Default

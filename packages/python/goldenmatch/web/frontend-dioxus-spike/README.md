@@ -126,18 +126,28 @@ cargo run --bin render_neighborhood -- /tmp/kg.json  # 8,094 records -> 2,962 co
 open identity_neighborhood.html                       # click any hub to expand
 ```
 
-The emitted page is **self-contained by default**: ECharts is vendored
-(`vendor/echarts.min.js`, Apache-2.0) and inlined, so the page renders offline
-and in any viewer — including strict-CSP artifact panels that block external
-scripts — with no external host (~3.4 MB). This is the exception to the crate's
-"CDN by default" posture (`render` / `render_graph` still emit the lighter
-CDN-linked page); the neighborhood view is the one meant to be handed around as
-a file. Pass `--cdn` for the lightweight variant that loads ECharts from a CDN
-instead (~2.4 MB; needs network + a permissive CSP):
+The emitted page is **self-contained by default**: ECharts (Apache-2.0) is
+**fetched at build time** by `build.rs` (into `OUT_DIR` — *not* vendored into
+git) and inlined, so the page renders offline and in any viewer — including
+strict-CSP artifact panels that block external scripts — with no external host
+(~3.4 MB). This is the exception to the crate's "CDN by default" posture
+(`render` / `render_graph` still emit the lighter CDN-linked page); the
+neighborhood view is the one meant to be handed around as a file. Pass `--cdn`
+for the lightweight variant that loads ECharts from a CDN instead (~2.4 MB;
+needs network + a permissive CSP):
 
 ```bash
 cargo run --bin render_neighborhood -- --cdn /tmp/kg.json   # CDN-linked, smaller file
 ```
+
+**Build-time fetch details.** `build.rs` resolves ECharts in this order:
+`ECHARTS_JS_PATH=/path/to/echarts.min.js` (an explicit override for
+offline / air-gapped / CI builds) → a copy already cached in `OUT_DIR`
+(incremental builds don't re-fetch) → download via `curl`. If none succeed
+(offline, no override) it emits a `cargo:warning` and the crate still builds —
+`render_neighborhood` detects the missing library at runtime and transparently
+falls back to the `--cdn` page (with a printed notice), so a fresh clone with no
+network still produces a working binary.
 
 The data model is still built **once in Rust** (`src/graph_neighborhood.rs`
 reuses the same source-category / conflict-coloring / label logic as
