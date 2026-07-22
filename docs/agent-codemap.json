@@ -5997,6 +5997,7 @@
             "_tool_get_golden_record",
             "_tool_get_stats",
             "_tool_lineage",
+            "_tool_list_blocking_strategies",
             "_tool_list_clusters",
             "_tool_list_domains",
             "_tool_list_runs",

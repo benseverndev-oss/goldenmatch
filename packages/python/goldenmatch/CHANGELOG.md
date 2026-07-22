@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   shorthand `{exact, fuzzy, blocking, threshold}` from `auto_configure`; `memory_export`
   and `suggest_pprl` delegate to the identical MCP dispatch. All four move
   `ts_only` → `shared`.
+- **`list_blocking_strategies` MCP tool (TS-parity).** Now exposed on the Python MCP
+  server (82 tools) as a stateless serializer over `BlockingConfig.strategy` — the
+  last TS-only introspection tool. It lists every accepted blocking-strategy name
+  (incl. the Python-only `lsh` / `simhash` / `perceptual`), closing the `mcp_tools`
+  gap (`ts_only` → `shared`).
 
 ## [3.8.0] - 2026-07-22
 

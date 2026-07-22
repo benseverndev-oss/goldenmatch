@@ -366,6 +366,11 @@ _BASE_TOOLS = [
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
+        name="list_blocking_strategies",
+        description="List all blocking strategy names.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
         name="create_domain",
         description="Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.).",
         inputSchema={
@@ -1090,6 +1095,8 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_list_transforms()
     elif name == "list_strategies":
         return _tool_list_strategies()
+    elif name == "list_blocking_strategies":
+        return _tool_list_blocking_strategies()
     elif name == "create_domain":
         return _tool_create_domain(args)
     elif name == "test_domain":
@@ -1654,6 +1661,23 @@ def _tool_list_strategies() -> dict:
     from goldenmatch.config.schemas import VALID_STRATEGIES
 
     strategies = sorted(VALID_STRATEGIES)
+    return {"strategies": strategies, "count": len(strategies)}
+
+
+def _tool_list_blocking_strategies() -> dict:
+    """List all blocking-strategy names (parity with the TS MCP tool).
+
+    Derived from ``BlockingConfig.strategy`` (the same source the ``api_parity``
+    gate's ``blocking_strategies`` surface reads), so the Python set stays in
+    lockstep with the schema — it includes the Python-only ``lsh`` / ``simhash``
+    / ``perceptual`` strategies the TS port lacks (declared in
+    ``parity/goldenmatch.yaml``). Mirrors the TS ``list_blocking_strategies``
+    (`{ strategies: [...] }`)."""
+    from typing import get_args
+
+    from goldenmatch.config.schemas import BlockingConfig
+
+    strategies = sorted(get_args(BlockingConfig.model_fields["strategy"].annotation))
     return {"strategies": strategies, "count": len(strategies)}
 
 
