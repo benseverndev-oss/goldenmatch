@@ -1,11 +1,17 @@
 name: bench-fs-distributed
 
-# Phase 3c — Fellegi-Sunter dedupe at scale on the bucket backend.
-# workflow_dispatch ONLY (never runs in normal CI). Confirms the Phase 3a
-# FS-on-bucket path holds at 5M+ rows: wall + peak RSS + F1 against known
-# injected duplicates. The bucket backend carries the Ray/DataFusion
-# distribution wiring, so a healthy single-node bucket run is the prerequisite
-# for the distributed claim.
+# Fellegi-Sunter dedupe at scale — two legs.
+#   * `bench` (default): the Phase 3a FS-on-BUCKET single-box path at 5M+ rows
+#     (wall + peak RSS + F1 against injected duplicates). The bucket backend
+#     carries the Ray/DataFusion distribution wiring, so a healthy single-node
+#     bucket run is the prerequisite for the distributed claim.
+#   * `bench_distributed` (opt-in, `-f distributed=true`): the FIRST MEASURED
+#     distributed FS F1 -- the FS config driven through the Phase-5 Ray pipeline
+#     (GOLDENMATCH_DISTRIBUTED_PIPELINE=2: score -> block-shuffle ->
+#     randomized_contraction WCC), F1-scored via the same injected-dup oracle.
+#     Simulated single-box Ray cluster (regression check, not a multi-node parity
+#     proof; the 100M multi-node FS proof is a follow-on).
+# workflow_dispatch (+ a weekly scheduled bucket gate). Never runs in normal CI.
 #
 # Dispatch:
 #   gh workflow run bench-fs-distributed.yml --ref claude/review-technical-work-en9SG \
@@ -47,6 +53,18 @@ on:
         description: "Build the native extension before running"
         required: false
         default: "true"
+      distributed:
+        description: "Also run the Phase-5 DISTRIBUTED FS leg (Ray, simulated single-box cluster) for the first MEASURED distributed FS F1"
+        required: false
+        default: "false"
+      dist_rows:
+        description: "Distributed leg: base row count (simulated single-box Ray)"
+        required: false
+        default: "1000000"
+      dist_partitions:
+        description: "Distributed leg: Ray Dataset partition count"
+        required: false
+        default: "64"
 
 permissions:
   contents: read
@@ -118,6 +136,77 @@ jobs:
         with:
           name: fs-distributed-${{ inputs.rows || '5000000' }}-${{ inputs.backend || 'bucket' }}
           path: /tmp/fs_dist.log
+          retention-days: 30
+
+  bench_distributed:
+    # The FIRST MEASURED distributed FS F1. Opt-in (`-f distributed=true`); every
+    # other distributed bench in the repo runs a WEIGHTED/exact config, so FS
+    # (probabilistic) quality on the Phase-5 Ray engine has never been measured.
+    # This runs `bench_fs_distributed.py --distributed`, which drives the FS
+    # config through GOLDENMATCH_DISTRIBUTED_PIPELINE=2 (score -> block-shuffle ->
+    # randomized_contraction WCC), persists the cluster assignments, and F1-scores
+    # them against the injected-duplicate ground truth using the SAME oracle
+    # (`evaluate_clusters`) as the single-box bucket leg.
+    #
+    # Honest scoping (mirrors bench-phase5-simulated): this is a SIMULATED
+    # single-box Ray cluster (one NIC, one disk, shared page cache) -- a
+    # regression check that FS runs end-to-end on the distributed engine with
+    # correct recall, NOT a multi-node Splink-Spark parity proof. The multi-node
+    # 100M FS proof is a follow-on (needs a real Ray cluster + a shared
+    # GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://... for the WCC checkpoint).
+    if: ${{ inputs.distributed == 'true' }}
+    runs-on: ${{ inputs.runner || 'large-new-64GB' }}
+    timeout-minutes: 90
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      # Any lane that pip-installs + runs the pipeline sets the Arrow allocator
+      # knob (mimalloc SIGSEGVs on the ThreadPoolExecutor/polars workers) and the
+      # jemalloc page-decay knob (caps allocator retention at scale).
+      ARROW_DEFAULT_MEMORY_POOL: system
+      _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+      # Pin the per-task scoring CPU reservation to 1 so the block-shuffle
+      # HashShuffleAggregator actors can't starve the _score op on a single-box
+      # simulated cluster (the module default of 2 is tuned for a many-core
+      # multi-node box).
+      GOLDENMATCH_DISTRIBUTED_SCORE_NUM_CPUS: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch with ray extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/python/goldenmatch[ray]
+          # pandas is a runtime dep of ray.data (not declared in the [ray] extra).
+          pip install psutil pandas
+
+      - name: FS dedupe DISTRIBUTED (Phase-5 Ray) — wall + F1
+        run: |
+          set -o pipefail
+          python packages/python/goldenmatch/scripts/bench_fs_distributed.py \
+            --distributed \
+            --rows "${{ inputs.dist_rows || '1000000' }}" \
+            --dup-frac "${{ inputs.dup_frac || '0.2' }}" \
+            --partitions "${{ inputs.dist_partitions || '64' }}" \
+            --block-shuffle 1 \
+            ${{ github.event_name == 'schedule' && '--min-f1 0.85' || '' }} \
+            | tee /tmp/fs_dist_ray.log
+          {
+            echo "### distributed FS (Phase-5 Ray, simulated single-box)"
+            echo "- rows=\`${{ inputs.dist_rows || '1000000' }}\`  partitions=\`${{ inputs.dist_partitions || '64' }}\`  block_shuffle=\`1\`"
+            echo ""
+            sed -n '/## bench-fs-distributed/,$p' /tmp/fs_dist_ray.log
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fs-distributed-ray-${{ inputs.dist_rows || '1000000' }}
+          path: /tmp/fs_dist_ray.log
           retention-days: 30
 
   route_parity:
