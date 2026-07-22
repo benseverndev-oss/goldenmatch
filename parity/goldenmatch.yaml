@@ -250,6 +250,7 @@ scorers:
   - embedding
   - ensemble
   - exact
+  - initialism_match
   - jaccard
   - jaro_winkler
   - levenshtein
@@ -261,7 +262,6 @@ scorers:
   - token_sort
   python_only:
   - alias_match
-  - initialism_match
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw
@@ -317,9 +317,11 @@ blocking_strategies:
 # components hold vs rapidfuzz (soundex byte-exact). `phash` (id 11) is also shared:
 # perceptual-hash similarity (1 - hamming/nbits over hex pHashes), integer XOR popcount,
 # byte-exact WASM<->pure-TS like dice/jaccard.
-# python_only: `initialism_match`, `alias_match` have an arrow-native (bucket) kernel
-# on Python but no TS WASM port yet (initialism needs the legal_forms table injected;
-# alias_match is behind score-wasm's off-by-default `alias` cargo feature).
+# python_only: `alias_match` has an arrow-native (bucket) kernel on Python but no TS WASM
+# port yet (it is behind score-wasm's off-by-default `alias` cargo feature + needs the
+# business/given-name alias tables injected). `initialism_match` is now shared: the kernel
+# needs the ~77-entry legal_forms table injected at enableWasm() (set_legal_forms), which the
+# loader seeds with the ported refdata/business.ts table so WASM == pure-TS byte-exact.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
@@ -331,6 +333,7 @@ scorer_kernels:
   - dice
   - ensemble
   - exact
+  - initialism_match
   - jaccard
   - jaro_winkler
   - levenshtein
@@ -341,7 +344,6 @@ scorer_kernels:
   - token_sort
   python_only:
   - alias_match
-  - initialism_match
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw

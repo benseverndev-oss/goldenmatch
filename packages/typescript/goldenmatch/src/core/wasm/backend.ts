@@ -81,6 +81,14 @@
  * INTEGER popcount sum and the rate is a single f64 divide per offset, so the kernel
  * and the pure-TS `audioFpSimilarity` are byte-exact (like phash) -- no reduction-order
  * divergence. A non-hex value on either side -> 0.0.
+ *
+ * `initialism_match` (id 7) is 1.0 iff one value's derived initialism (acronym of a
+ * business name, dropping legal-form tokens) equals the other value, else 0.0. It needs
+ * the ~77-entry `legal_forms` table injected into the kernel at `enableWasm()` (a new
+ * `set_legal_forms` export, mirroring the name scorers' census/alias table injection);
+ * the pure-TS `initialismMatch` uses the SAME ported table (`refdata/business.ts`), so
+ * the WASM matrix is byte-exact with the fallback. Until the table is injected the kernel
+ * scores against an EMPTY legal-form set (no dropping) -- the loader always injects it.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -90,6 +98,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   date: 4,
   qgram: 5,
   soundex_match: 6,
+  initialism_match: 7,
   dice: 9,
   jaccard: 10,
   phash: 11,

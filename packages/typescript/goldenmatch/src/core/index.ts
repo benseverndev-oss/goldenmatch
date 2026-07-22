@@ -112,6 +112,8 @@ export {
   phashSimilarity,
   radialSimilarity,
   audioFpSimilarity,
+  deriveInitialism,
+  initialismMatch,
   ensembleScore,
   scoreMatrix,
   asString,

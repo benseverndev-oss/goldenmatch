@@ -22,6 +22,7 @@ import { applyNegativeEvidence } from "./autoconfigNegativeEvidence.js";
 import { getScorerBackend, WASM_COVERED_SCORERS } from "./wasm/backend.js";
 import { areEquivalent } from "./refdata/givenNames.js";
 import { isAvailable as surnamesAvailable, surnameRank, surnameIdf } from "./refdata/surnames.js";
+import { LEGAL_FORMS } from "./refdata/business.js";
 
 // ---------------------------------------------------------------------------
 // Helper: coerce unknown to string | null
@@ -649,6 +650,118 @@ export function audioFpSimilarity(a: string, b: string): number {
   return 1.0 - audioBerAligned(x, y);
 }
 
+// ---------------------------------------------------------------------------
+// initialism_match (abbreviation matcher)
+// ---------------------------------------------------------------------------
+
+/** Remove every `(...)` group — a `(` with the nearest following `)` (and the
+ *  text between); a `(` with no later `)` is kept literally. Mirrors score-core
+ *  `strip_parentheticals` / Python `re.sub(r"\([^)]*\)", "", s)`. */
+function stripParentheticals(s: string): string {
+  const chars = Array.from(s);
+  let out = "";
+  let i = 0;
+  while (i < chars.length) {
+    if (chars[i] === "(") {
+      const rel = chars.slice(i + 1).indexOf(")");
+      if (rel !== -1) {
+        i += rel + 2; // skip "(...)" inclusive
+        continue;
+      }
+    }
+    out += chars[i]!;
+    i++;
+  }
+  return out;
+}
+
+/** Python `token.strip().rstrip(".,").lower()` — the per-token legal-form key.
+ *  The trailing `.`/`,` strip is a linear scan (mirroring Rust `trim_end_matches`),
+ *  not an anchored `/[.,]+$/` regex — that backtracks O(n^2) on a token of many
+ *  trailing separators (CodeQL polynomial-ReDoS), and this input is caller data. */
+function normalizeTokenForLegal(token: string): string {
+  const t = token.trim();
+  let end = t.length;
+  while (end > 0 && (t[end - 1] === "." || t[end - 1] === ",")) end--;
+  return t.slice(0, end).toLowerCase();
+}
+
+/** Python `str.isupper()`: at least one cased char and no lowercase cased char. */
+function pyIsUpper(s: string): boolean {
+  let hasCased = false;
+  for (const c of s) {
+    const lower = c.toLowerCase();
+    const upper = c.toUpperCase();
+    if (lower === upper) continue; // uncased
+    hasCased = true;
+    if (c === lower && c !== upper) return false; // a lowercase cased char
+  }
+  return hasCased;
+}
+
+/** Python `str.isalpha()`: non-empty and every char Unicode-alphabetic. */
+function pyIsAlpha(s: string): boolean {
+  if (s.length === 0) return false;
+  for (const c of s) {
+    if (!/\p{Alphabetic}/u.test(c)) return false;
+  }
+  return true;
+}
+
+/**
+ * Derive the initialism (acronym) of a business name, dropping legal-form tokens.
+ * A single already-acronym token (uppercase, alphabetic, 2..6 chars) passes
+ * through; otherwise the first ASCII letter of each surviving token (>= 2).
+ * Mirrors score-core `derive_initialism` / Python `core.acronym.derive_initialism`.
+ */
+export function deriveInitialism(
+  text: string,
+  legalForms: ReadonlySet<string> = LEGAL_FORMS,
+): string {
+  const stripped = stripParentheticals(text);
+  const cleaned: string[] = [];
+  for (const token of stripped.match(/\S+/gu) ?? []) {
+    if (!/[A-Za-z]/.test(token)) continue; // punctuation-only / digits-only
+    if (legalForms.has(normalizeTokenForLegal(token))) continue;
+    cleaned.push(token);
+  }
+  if (cleaned.length === 1) {
+    const tok = cleaned[0]!;
+    const n = Array.from(tok).length;
+    if (pyIsUpper(tok) && pyIsAlpha(tok) && n >= 2 && n <= 6) return tok.toUpperCase();
+    return "";
+  }
+  if (cleaned.length === 0) return "";
+  let initials = "";
+  for (const token of cleaned) {
+    const m = token.match(/[A-Za-z]/);
+    if (m) initials += m[0]!.toUpperCase();
+  }
+  if (Array.from(initials).length < 2) return "";
+  return initials;
+}
+
+/**
+ * `initialism_match` scorer: 1.0 iff one value's derived initialism equals the
+ * other RAW value, or the two derived initialisms match. Byte-exact with
+ * score-core `initialism_match` / Python `_initialism_match_single`. The legal-form
+ * table is caller-supplied (defaults to the ported `LEGAL_FORMS`), so the WASM
+ * kernel -- seeded with the SAME table at `enableWasm()` -- matches byte-for-byte.
+ */
+export function initialismMatch(
+  a: string,
+  b: string,
+  legalForms: ReadonlySet<string> = LEGAL_FORMS,
+): number {
+  const ia = deriveInitialism(a, legalForms);
+  const ib = deriveInitialism(b, legalForms);
+  const matched =
+    (ia !== "" && ia === b) ||
+    (ib !== "" && a === ib) ||
+    (ia !== "" && ib !== "" && ia === ib);
+  return matched ? 1.0 : 0.0;
+}
+
 /**
  * Padded character q-gram set of a raw string (Python parity:
  * core/scorer.py::_qgram_set). Lowercases, pads with `n-1` `#` sentinels on
@@ -734,6 +847,8 @@ export function scoreField(
       return radialSimilarity(valA, valB);
     case "audio_fp":
       return audioFpSimilarity(valA, valB);
+    case "initialism_match":
+      return initialismMatch(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
     case "embedding":

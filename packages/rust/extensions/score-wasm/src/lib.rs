@@ -53,6 +53,14 @@ pub fn install_name_aliases(forms: Vec<String>, canonicals: Vec<String>) {
     let _ = NAME_ALIASES.set(AliasTable::from_forms(grouped));
 }
 
+/// Install the legal-form variant set for `initialism_match` (id 7). Delegates to
+/// score-core's process-global `set_legal_forms` OnceLock (first-wins) so
+/// `score_one(7, ...)` drops the SAME legal forms the pure-TS path does. Shared by
+/// the wasm setter + native tests.
+pub fn install_legal_forms(forms: Vec<String>) {
+    let _ = goldenmatch_score_core::set_legal_forms(forms.into_iter().collect());
+}
+
 /// Full row-major NxN similarity matrix for `values` under `scorer_id`.
 /// Diagonal = 0.0 and the matrix is symmetric, matching the pure-TS
 /// `scoreMatrix` (which fills the upper triangle, mirrors it, and leaves the
@@ -206,7 +214,7 @@ mod tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{install_name_aliases, install_surname_idf, score_matrix_impl};
+    use super::{install_legal_forms, install_name_aliases, install_surname_idf, score_matrix_impl};
     use wasm_bindgen::prelude::*;
 
     /// JS entry: `values` is one string with fields joined by `sep` (a 1-char
@@ -235,5 +243,13 @@ mod wasm {
     #[wasm_bindgen]
     pub fn set_name_aliases(forms: Vec<String>, canonicals: Vec<String>) {
         install_name_aliases(forms, canonicals);
+    }
+
+    /// Install the legal-form variant set for `initialism_match` (id 7). Called
+    /// once by the TS loader at `enableWasm()` with the ported
+    /// `entity_form_variants()` list (`refdata/business.ts`).
+    #[wasm_bindgen]
+    pub fn set_legal_forms(forms: Vec<String>) {
+        install_legal_forms(forms);
     }
 }

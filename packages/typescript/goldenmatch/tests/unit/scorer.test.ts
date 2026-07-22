@@ -15,6 +15,8 @@ import {
   phashSimilarity,
   radialSimilarity,
   audioFpSimilarity,
+  initialismMatch,
+  deriveInitialism,
   ensembleScore,
   scoreMatrix,
   applyTransform,
@@ -254,6 +256,32 @@ describe("audio_fp (offset-aligned bit-error-rate of hex fingerprints)", () => {
   it("non-hex or empty -> 0.0", () => {
     expect(audioFpSimilarity("nothex00", "12345678")).toBe(0.0);
     expect(audioFpSimilarity("", "")).toBe(0.0); // empty -> BER 1.0 -> 0.0
+  });
+});
+
+describe("initialism_match (business-name acronym matcher)", () => {
+  it("derives an acronym, dropping legal-form tokens", () => {
+    expect(deriveInitialism("International Business Machines Corp")).toBe("IBM");
+    expect(deriveInitialism("General Electric Company")).toBe("GE");
+    expect(deriveInitialism("Acme Industries LLC")).toBe("AI"); // LLC dropped
+    expect(deriveInitialism("Apple Inc.")).toBe(""); // single lowercase token
+    expect(deriveInitialism("3M Company")).toBe(""); // "3M" not alphabetic
+    expect(deriveInitialism("NASA")).toBe("NASA"); // single acronym passes through
+  });
+
+  it("matches a name against its initialism (either direction), else 0.0", () => {
+    // Values pinned against Python `_initialism_match_single`.
+    expect(initialismMatch("International Business Machines Corp", "IBM")).toBe(1.0);
+    expect(initialismMatch("IBM", "International Business Machines Corp")).toBe(1.0);
+    expect(initialismMatch("General Electric Company", "GE")).toBe(1.0);
+    expect(initialismMatch("Hewlett Packard", "HP")).toBe(1.0);
+    expect(initialismMatch("IBM", "IBM")).toBe(1.0);
+    expect(initialismMatch("Acme", "Acme")).toBe(0.0);
+    expect(initialismMatch("Apple Inc.", "AI")).toBe(0.0);
+    // Stopwords are NOT dropped, so these derive extra initials and miss.
+    expect(initialismMatch("National Aeronautics and Space Administration", "NASA")).toBe(0.0);
+    expect(initialismMatch("AT and T", "ATT")).toBe(0.0);
+    expect(initialismMatch("", "IBM")).toBe(0.0);
   });
 });
 
