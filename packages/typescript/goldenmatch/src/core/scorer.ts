@@ -675,9 +675,15 @@ function stripParentheticals(s: string): string {
   return out;
 }
 
-/** Python `token.strip().rstrip(".,").lower()` — the per-token legal-form key. */
+/** Python `token.strip().rstrip(".,").lower()` — the per-token legal-form key.
+ *  The trailing `.`/`,` strip is a linear scan (mirroring Rust `trim_end_matches`),
+ *  not an anchored `/[.,]+$/` regex — that backtracks O(n^2) on a token of many
+ *  trailing separators (CodeQL polynomial-ReDoS), and this input is caller data. */
 function normalizeTokenForLegal(token: string): string {
-  return token.trim().replace(/[.,]+$/, "").toLowerCase();
+  const t = token.trim();
+  let end = t.length;
+  while (end > 0 && (t[end - 1] === "." || t[end - 1] === ",")) end--;
+  return t.slice(0, end).toLowerCase();
 }
 
 /** Python `str.isupper()`: at least one cased char and no lowercase cased char. */
