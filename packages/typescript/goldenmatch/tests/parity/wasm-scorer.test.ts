@@ -224,3 +224,38 @@ d("WASM dice matches the pure-TS scoreField reference (exact)", () => {
     });
   }
 });
+
+// jaccard (score_one id 10) is bloom-filter Jaccard: popcount(A&B)/popcount(A|B).
+// The kernel derives the union by inclusion-exclusion (pcA+pcB-inter) and the pure-TS
+// `jaccardSimilarity` popcounts the actual bit-OR -- algebraically identical for bloom
+// filters -- so the WASM matrix is byte-exact with the fallback on any valid
+// even-length bloom hex (the min-length intersection covers differing byte lengths;
+// malformed hex is the only divergence and never reaches a real CLK column). Asserted
+// byte-exact.
+type JaccardCase = readonly [a: string, b: string, note: string];
+const JACCARD_CASES: readonly JaccardCase[] = [
+  ["ffff", "ffff", "identical -> 1.0"],
+  ["ff00", "00ff", "disjoint bits -> 0.0"],
+  ["deadbeef", "deadbe", "different byte lengths (union over the longer)"],
+  ["ABCD", "abcd", "uppercase hex parses same -> 1.0"],
+  ["0000", "ffff", "one side all-zero -> union>0, inter 0 -> 0.0"],
+  ["0000", "0000", "both all-zero -> union 0 -> 0.0"],
+  ["f0f0a5", "a5f0f0", "partial overlap"],
+];
+
+d("WASM jaccard matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of JACCARD_CASES) {
+    it(`jaccard("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "jaccard");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "jaccard");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});

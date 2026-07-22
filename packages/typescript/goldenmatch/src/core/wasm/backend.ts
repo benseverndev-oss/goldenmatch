@@ -35,6 +35,13 @@
  * WASM matrix is byte-exact with the fallback on any valid (even-length) bloom hex —
  * the shape the `bloom_filter` transform always emits (malformed hex is the only
  * divergence, and never reaches a real PPRL/CLK column).
+ *
+ * `jaccard` (id 10) routes through score-core's `jaccard_similarity` (bloom-filter
+ * Jaccard: `popcount(A&B) / popcount(A|B)`). The kernel computes the union by
+ * inclusion-exclusion (`popcount(A)+popcount(B)-popcount(A&B)`) while the pure-TS
+ * `jaccardSimilarity` popcounts the actual bit-OR — algebraically identical for
+ * bloom filters — so the WASM matrix is byte-exact with the fallback on any valid
+ * (even-length) bloom hex, same as dice.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -44,6 +51,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   date: 4,
   qgram: 5,
   dice: 9,
+  jaccard: 10,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };
