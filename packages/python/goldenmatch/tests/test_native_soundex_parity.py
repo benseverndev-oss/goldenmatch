@@ -2,11 +2,14 @@
 `canonical_soundex` reference.
 
 soundex is kernel-backed on both the bucket path (`score_one` id 6) and the
-field-matrix path (native id 4). As of the canonical-soundex cutover the kernel
-is NOT jellyfish: `NFKD` + uppercase, keep only ASCII `[A-Z]`, then standard
-Soundex, and a value with no surviving letter -> `""`. The `soundex_match` scorer
-adds an empty-code guard (garbage/empty never matches, not even another empty
-code -- so placeholder columns can't mega-cluster).
+field-matrix path (native id 4). The canonical in-house kernel is a Unicode-folding
+STANDARD Soundex: `NFKD` + uppercase, then walk the string -- ASCII `[A-Z]` code as
+classic Soundex, every other char (digit / punctuation / whitespace / combining
+mark / exotic letter) is a SEPARATOR that breaks the coding run but never seeds, and
+a value with no surviving letter -> `""`. On pure ASCII this equals jellyfish EXCEPT
+jellyfish seeds a leading digit; it folds accents jellyfish drops (`Muñoz` -> `M520`).
+The `soundex_match` scorer adds an empty-code guard (garbage/empty never matches, not
+even another empty code -- so placeholder columns can't mega-cluster).
 
 This batteries native `soundex_similarity(a, b)` (== `score_one(6)`) against the
 pure-Python mirror `_soundex_score_single` (which uses `canonical_soundex` + the

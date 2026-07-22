@@ -200,17 +200,24 @@ pub fn qgram_similarity(a: &str, b: &str) -> f64 {
 
 /// GoldenMatch canonical American Soundex -- the in-house reference for every
 /// `goldenmatch` soundex surface (the bucket `score_one` path, the Python
-/// pure/blocking fallbacks, and the TS port). Deliberately NOT jellyfish:
+/// pure/blocking fallbacks, and the TS port). A Unicode-folding STANDARD Soundex:
 ///
-/// - `NFKD`-normalize + Unicode-uppercase, then keep ONLY ASCII letters `[A-Z]`.
-///   Accents fold away (`José` -> `J200`, `Ürüm` -> `U650`, `ß` -> `S000`);
-///   every non-letter -- digits, punctuation, whitespace, combining marks, and
-///   exotic non-decomposable letters (`þ`/`Æ`/`Đ`) -- is DROPPED, not seeded as a
-///   literal the way jellyfish does (`"123" -> "1000"`, `"Þór" -> "Þ600"`).
-/// - Standard Soundex over the surviving letters: seed = the first letter, code
-///   `B..R` per `soundex_code`, adjacent duplicate codes collapse, `H`/`W` are
-///   transparent (skip without breaking a run), vowels (incl. `Y`) break the run;
-///   right-pad to four with `0`.
+/// - `NFKD`-normalize + Unicode-uppercase, then walk the string. ASCII letters
+///   `[A-Z]` are seed / coded consonant / `H`-`W`-transparent / vowel-break as in
+///   classic Soundex; EVERY other char -- digit, punctuation, whitespace, the
+///   combining marks NFKD strips off accents, and exotic non-decomposable letters
+///   (`þ`/`Æ`/`Đ`) -- is a SEPARATOR that breaks the coding run (resets adjacency)
+///   but is skipped and never seeds. So multi-token values code each token's
+///   boundary consonant instead of merging it away (`"joseph bradshaw" -> "J211"`,
+///   NOT `"J216"`), and accents fold to their base letter (`José` -> `J200`,
+///   `Muñoz` -> `M520`). On PURE-ASCII input this equals classic American Soundex
+///   (word separators break the run) -- the historical behavior real person-name
+///   blocking/scoring depends on; it also equals jellyfish on ASCII EXCEPT that
+///   jellyfish nonsensically seeds a leading digit (`"1st" -> "1230"`) where this
+///   seeds the first real letter.
+/// - Standard Soundex over each letter run: seed = the first letter, code `B..R`
+///   per `soundex_code`, adjacent duplicate codes collapse, `H`/`W` transparent,
+///   vowels (incl. `Y`) break the run; right-pad to four with `0`.
 /// - NO surviving letter (empty / all-digit / all-punctuation) -> `""`. A value
 ///   with no phonetic content has no code; on the blocking side an empty key is
 ///   filtered (no giant garbage block), and the `soundex_match` scorer treats an
@@ -223,39 +230,45 @@ pub fn qgram_similarity(a: &str, b: &str) -> f64 {
 /// (the ASCII/Latin-scoped Unicode-version parity edge the other kernels document
 /// applies here too). Cross-surface parity in `tests/test_native_soundex_parity.py`.
 pub fn soundex(s: &str) -> String {
-    let letters: Vec<char> = s
-        .nfkd()
-        .collect::<String>()
-        .to_uppercase()
-        .chars()
-        .filter(|c| c.is_ascii_uppercase())
-        .collect();
-    if letters.is_empty() {
-        return String::new();
-    }
+    let normalized: String = s.nfkd().collect::<String>().to_uppercase();
     let mut result = String::with_capacity(4);
-    result.push(letters[0]); // seed = first surviving letter
-    let mut count = 1usize;
-    let mut last = soundex_code(letters[0]); // would-be code of the seed, or None
-    for &c in &letters[1..] {
-        match soundex_code(c) {
-            Some(code) => {
-                if Some(code) != last {
-                    result.push(code);
-                    count += 1;
-                }
-                last = Some(code);
+    let mut count = 0usize; // chars pushed so far (seed + digits)
+    let mut last: Option<char> = None; // code of the previous letter (None after seed/vowel/separator)
+    for c in normalized.chars() {
+        if c.is_ascii_uppercase() {
+            if count == 0 {
+                result.push(c); // seed = first surviving letter
+                count = 1;
+                last = soundex_code(c); // seed's would-be code suppresses a same-code follower
+                continue;
             }
-            None => {
-                // Vowels (A/E/I/O/U/Y) break the run; H/W stay transparent.
-                if c != 'H' && c != 'W' {
-                    last = None;
+            match soundex_code(c) {
+                Some(code) => {
+                    if Some(code) != last {
+                        result.push(code);
+                        count += 1;
+                    }
+                    last = Some(code);
+                }
+                None => {
+                    // Vowels (A/E/I/O/U/Y) break the run; H/W stay transparent.
+                    if c != 'H' && c != 'W' {
+                        last = None;
+                    }
                 }
             }
+            if count == 4 {
+                break;
+            }
+        } else {
+            // Separator (digit / punctuation / whitespace / combining mark): break the
+            // coding run so a same code across the gap is re-emitted, not merged, and
+            // never seed on a non-letter.
+            last = None;
         }
-        if count == 4 {
-            break;
-        }
+    }
+    if count == 0 {
+        return String::new();
     }
     for _ in count..4 {
         result.push('0');
@@ -1037,35 +1050,44 @@ mod tests {
 
     #[test]
     fn soundex_canonical_in_house() {
-        // Alphabetic names: standard American Soundex, UNCHANGED from jellyfish
-        // (the in-house spec only diverges on non-letters / exotic letters).
+        // Alphabetic single-token names: standard American Soundex, byte-identical
+        // to jellyfish (the in-house spec agrees on all pure-ASCII letter runs).
         assert_eq!(soundex("Robert"), "R163");
         assert_eq!(soundex("Rupert"), "R163"); // Robert/Rupert collide
         assert_eq!(soundex("Ashcraft"), "A261"); // H/W skip rule
         assert_eq!(soundex("Tymczak"), "T522");
         assert_eq!(soundex("Pfister"), "P236"); // adjacent same-code (P,F -> 1) coalesces
         assert_eq!(soundex("Honeyman"), "H555");
-        // Accented Latin folds via NFKD -- byte-identical to jellyfish here too.
+        // Multi-token names: a separator (space) BREAKS the coding run, so the code
+        // on each side of the gap is kept -- it is NOT merged the way stripping
+        // separators would. This is the historical behavior person-name blocking
+        // depends on (matches jellyfish; the strip variant regressed it).
+        assert_eq!(soundex("joseph bradshaw"), "J211"); // P then B kept (not merged to "J216")
+        assert_eq!(soundex("warren nale"), "W655"); // N | N kept (not merged to "W654")
+        // Accented Latin folds via NFKD to the base letter -- byte-identical here.
         assert_eq!(soundex("Ürüm"), "U650");
         assert_eq!(soundex("José"), "J200");
+        assert_eq!(soundex("Muñoz"), "M520"); // ñ folds to n (jellyfish drops it -> "M200")
         assert_eq!(soundex("ß"), "S000"); // upper() -> "SS" -> dup-collapse
         // No surviving letter -> "" (the DIVERGENCE from jellyfish, which would
         // seed the literal digit/symbol: "123" -> "1000").
         assert_eq!(soundex(""), "");
         assert_eq!(soundex("123"), "");
         assert_eq!(soundex("!!"), "");
-        // Non-letters are DROPPED, not seeded/coded (jellyfish: "3M"->"3500",
-        // "4abc"->"4120", "S1S"->"S200" -- it seeds the literal + a mid non-letter
-        // resets the run). In-house: drop them first, then standard Soundex.
-        assert_eq!(soundex("3M"), "M000"); // -> "M"
-        assert_eq!(soundex("4abc"), "A120"); // -> "ABC"
-        assert_eq!(soundex("12ab"), "A100"); // -> "AB"
-        assert_eq!(soundex("S1S"), "S000"); // -> "SS" (adjacent -> collapse), not "S200"
-        // Exotic non-decomposable letters are dropped (jellyfish keeps the raw
-        // char as the literal seed: "Þór"->"Þ600", "Æthel"->"Æ340").
-        assert_eq!(soundex("Þór"), "O600"); // -> "OR"
-        assert_eq!(soundex("Æthel"), "T400"); // -> "THEL"
-        assert_eq!(soundex("Đặng"), "A520"); // -> "ANG"
+        // Non-letters are SEPARATORS (break the run) and never seed. A leading
+        // separator is skipped; a MID separator breaks adjacency so a same code
+        // across the gap is re-emitted (unlike jellyfish, which seeds a leading
+        // digit: "3M"->"3500", "S1S"->"S200" matches us on the break but "1st"
+        // differs by seed).
+        assert_eq!(soundex("3M"), "M000"); // leading sep -> seed M
+        assert_eq!(soundex("4abc"), "A120"); // leading sep -> "abc"
+        assert_eq!(soundex("12ab"), "A100"); // leading seps -> "ab"
+        assert_eq!(soundex("S1S"), "S200"); // S | S: the "1" breaks adjacency -> 2 re-emitted
+        // Exotic non-decomposable letters are separators too (jellyfish keeps the
+        // raw char as the literal seed: "Þór"->"Þ600", "Æthel"->"Æ340").
+        assert_eq!(soundex("Þór"), "O600"); // Þ sep -> "or"
+        assert_eq!(soundex("Æthel"), "T400"); // Æ sep -> "thel"
+        assert_eq!(soundex("Đặng"), "A520"); // Đ + combining seps -> "ang"
     }
 
     #[test]

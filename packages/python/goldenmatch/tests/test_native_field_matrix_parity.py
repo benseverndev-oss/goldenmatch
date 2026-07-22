@@ -75,9 +75,13 @@ def _offdiag(m: np.ndarray) -> np.ndarray:
     return out
 
 
-def test_native_soundex_matches_jellyfish():
+def test_native_soundex_matches_canonical():
+    # Mirror = canonical soundex with the empty-code guard (empty -> None so it
+    # matches nothing), exactly what the native field-matrix kernel does
+    # (`!code.is_empty() && a == b`). Diverges from jellyfish on garbage/exotic.
+    from goldenmatch.utils.transforms import canonical_soundex
     py_mat = scorer._exact_score_matrix(
-        [scorer.jellyfish.soundex(v) if v else None for v in _VALUES]
+        [(canonical_soundex(v) or None) if v else None for v in _VALUES]
     )
     rs_mat = _native_field_matrix(_VALUES, "soundex_match")
     assert rs_mat is not None

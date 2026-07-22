@@ -28,23 +28,43 @@ _SOUNDEX_CODE = {
 
 def canonical_soundex(s: str) -> str:
     """GoldenMatch canonical American Soundex code, or ``""`` when the value has
-    no ASCII-letter content. Byte-identical to score-core ``soundex``."""
-    letters = [c for c in unicodedata.normalize("NFKD", s).upper() if "A" <= c <= "Z"]
-    if not letters:
-        return ""
-    result = [letters[0]]  # seed = first surviving letter
-    last = _SOUNDEX_CODE.get(letters[0])  # would-be code of the seed, or None
-    for c in letters[1:]:
-        code = _SOUNDEX_CODE.get(c)
-        if code is not None:
-            if code != last:
-                result.append(code)
-            last = code
-        elif c not in ("H", "W"):
-            # Vowels (A/E/I/O/U/Y) break the run; H/W stay transparent.
+    no ASCII-letter content. Byte-identical to score-core ``soundex``.
+
+    Spec (Unicode-folding standard Soundex): NFKD-fold + uppercase, then walk the
+    string. ASCII ``[A-Z]`` are letters (seed / code / H-W-transparent / vowel-break);
+    EVERY other char -- digit, punctuation, whitespace, and the combining marks NFKD
+    leaves behind -- is a SEPARATOR that breaks the coding run (resets adjacency) but
+    is otherwise skipped and never seeds. This makes multi-token values
+    (``"joseph bradshaw"``) code each token's boundary consonant instead of merging
+    across the gap, and folds accents to their base letter (``José`` -> ``J200``,
+    ``Muñoz`` -> ``M520``). On pure-ASCII input this equals classic American Soundex
+    (word separators break the run) -- the historical behavior real person-name
+    blocking/scoring depends on. A value with no surviving letter yields ``""``.
+    """
+    result: list[str] = []  # [seed, digit, digit, digit]
+    last: str | None = None  # code of the previous letter (None after seed/vowel/separator)
+    for c in unicodedata.normalize("NFKD", s).upper():
+        if "A" <= c <= "Z":
+            if not result:
+                result.append(c)  # seed = first surviving letter
+                last = _SOUNDEX_CODE.get(c)  # seed's would-be code suppresses a same-code follower
+                continue
+            code = _SOUNDEX_CODE.get(c)
+            if code is not None:
+                if code != last:
+                    result.append(code)
+                last = code
+            elif c not in ("H", "W"):
+                # Vowels (A/E/I/O/U/Y) break the run; H/W stay transparent.
+                last = None
+            if len(result) == 4:
+                break
+        else:
+            # Separator (digit / punctuation / whitespace / combining mark): break
+            # the coding run so a same code across the gap is re-emitted, not merged.
             last = None
-        if len(result) == 4:
-            break
+    if not result:
+        return ""
     return "".join(result).ljust(4, "0")
 
 
