@@ -254,6 +254,7 @@ scorers:
   - levenshtein
   - phash
   - qgram
+  - radial
   - record_embedding
   - soundex_match
   - token_sort
@@ -261,7 +262,6 @@ scorers:
   - alias_match
   - audio_fp
   - initialism_match
-  - radial
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw
@@ -334,13 +334,13 @@ scorer_kernels:
   - levenshtein
   - phash
   - qgram
+  - radial
   - soundex_match
   - token_sort
   python_only:
   - alias_match
   - audio_fp
   - initialism_match
-  - radial
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw

@@ -521,6 +521,74 @@ export function phashSimilarity(a: string, b: string): number {
   return 1.0 - dist / nbits;
 }
 
+/** Parse a radial-variance profile: 2 hex chars per bin as a SIGNED byte
+ * (`b >= 128 -> b - 256`), `0x`/`0X` prefix tolerated, an odd trailing char
+ * dropped. Any non-hex char in the used prefix -> null (mirrors score-core
+ * `radial_from_hex`, whose `to_digit(16)?` fails there). */
+function radialFromHex(s: string): number[] | null {
+  let h = s;
+  if (h.length >= 2 && (h.startsWith("0x") || h.startsWith("0X"))) h = h.slice(2);
+  const usable = h.length - (h.length % 2);
+  if (!/^[0-9a-fA-F]*$/.test(h.slice(0, usable))) return null;
+  const out: number[] = [];
+  for (let i = 0; i < usable; i += 2) {
+    const byte = parseInt(h.slice(i, i + 2), 16);
+    out.push(byte >= 128 ? byte - 256 : byte);
+  }
+  return out;
+}
+
+/** Pearson correlation of two equal-length int sequences; 0.0 if either is
+ * constant. Mean is `sum/len` (integer sum, one divide) and every reduction
+ * accumulates left-to-right, mirroring score-core `pearson` / Python `_pearson`. */
+function pearson(a: readonly number[], b: readonly number[]): number {
+  const n = a.length;
+  let sa = 0;
+  let sb = 0;
+  for (let i = 0; i < n; i++) {
+    sa += a[i]!;
+    sb += b[i]!;
+  }
+  const ma = sa / n;
+  const mb = sb / n;
+  let da = 0;
+  let db = 0;
+  for (let i = 0; i < n; i++) {
+    const dax = a[i]! - ma;
+    da += dax * dax;
+    const dbx = b[i]! - mb;
+    db += dbx * dbx;
+  }
+  if (da === 0 || db === 0) return 0.0;
+  let num = 0;
+  for (let i = 0; i < n; i++) num += (a[i]! - ma) * (b[i]! - mb);
+  return num / Math.sqrt(da * db);
+}
+
+/**
+ * Radial-variance profile similarity (score_one id 13): the max Pearson over
+ * every cyclic angular shift of `b`, clamped to [0, 1]. Mismatched/empty profiles
+ * or a non-hex value -> 0.0. Mirrors score-core `radial_similarity` /
+ * `radial_align` / Python `radial_align_similarity`; the f64 reductions can differ
+ * ~1 ULP from the WASM kernel's (possible SIMD) order, so parity is ~4dp not
+ * byte-exact.
+ */
+export function radialSimilarity(a: string, b: string): number {
+  const x = radialFromHex(a);
+  const y = radialFromHex(b);
+  if (x === null || y === null) return 0.0;
+  const la = x.length;
+  if (la === 0 || y.length !== la) return 0.0;
+  let best = -1.0;
+  const rotated = new Array<number>(la);
+  for (let shift = 0; shift < la; shift++) {
+    for (let k = 0; k < la; k++) rotated[k] = y[(shift + k) % la]!;
+    const c = pearson(x, rotated);
+    if (c > best) best = c;
+  }
+  return Math.min(1.0, Math.max(0.0, best));
+}
+
 /**
  * Padded character q-gram set of a raw string (Python parity:
  * core/scorer.py::_qgram_set). Lowercases, pads with `n-1` `#` sentinels on
@@ -602,6 +670,8 @@ export function scoreField(
       return qgramScore(valA, valB);
     case "phash":
       return phashSimilarity(valA, valB);
+    case "radial":
+      return radialSimilarity(valA, valB);
     case "ensemble":
       return ensembleScore(valA, valB);
     case "embedding":

@@ -13,6 +13,7 @@ import {
   diceCoefficient,
   jaccardSimilarity,
   phashSimilarity,
+  radialSimilarity,
   ensembleScore,
   scoreMatrix,
   applyTransform,
@@ -199,6 +200,35 @@ describe("phash (perceptual-hash hex similarity)", () => {
   it("non-hex or empty -> 0.0", () => {
     expect(phashSimilarity("zzzz", "1234")).toBe(0.0);
     expect(phashSimilarity("", "")).toBe(0.0);
+  });
+});
+
+describe("radial (rotation-aligned Pearson of hex radial profiles)", () => {
+  it("identical profile -> 1.0", () => {
+    expect(radialSimilarity("0a1b2c3d", "0a1b2c3d")).toBeCloseTo(1.0, 12);
+  });
+
+  it("a cyclic rotation aligns to 1.0", () => {
+    // radial_align maxes Pearson over every cyclic shift, so a rotation of the
+    // same profile finds a perfect alignment. "2c3d0a1b" and "3d0a1b2c" are the
+    // shift-2 and shift-3 cyclic rotations of [0a,1b,2c,3d].
+    expect(radialSimilarity("0a1b2c3d", "2c3d0a1b")).toBeCloseTo(1.0, 12);
+    expect(radialSimilarity("0a1b2c3d", "3d0a1b2c")).toBeCloseTo(1.0, 12);
+  });
+
+  it("a constant profile has zero variance -> 0.0", () => {
+    expect(radialSimilarity("0a0a0a0a", "01020304")).toBe(0.0);
+  });
+
+  it("mismatched-length / non-hex / empty -> 0.0", () => {
+    expect(radialSimilarity("0a1b2c3d", "0a1b")).toBe(0.0); // length mismatch
+    expect(radialSimilarity("zz", "0102")).toBe(0.0); // non-hex
+    expect(radialSimilarity("", "")).toBe(0.0); // empty
+  });
+
+  it("signed-byte decode: 0x80..0xff map to negatives", () => {
+    // Both sides identical still correlate to 1.0 regardless of sign.
+    expect(radialSimilarity("7f80017e", "7f80017e")).toBeCloseTo(1.0, 12);
   });
 });
 
