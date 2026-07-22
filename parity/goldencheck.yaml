@@ -10,8 +10,9 @@
 #   interactive (agent-serve/serve/schedule/scan-db/init/review) or unported engines
 #   (denial-constraints/refs/learn). `history` + `evaluate` are now SHARED — the TS port
 #   already carries the engines (core/engine/history.ts + evaluateScan), so the CLI
-#   commands were wired over them. TS also adds health-score/list-domains/profile
-#   convenience commands. No naming divergence.
+#   commands were wired over them. `health-score` / `list-domains` / `profile` are now
+#   SHARED too — the Python CLI wraps the existing scan/profile/domain engines (the same
+#   ones the MCP `health_score` / `profile` / `list_domains` tools use). No naming divergence.
 # a2a_skills: FULL A2A parity — Python and TS expose the same 9 AgentCard skill ids
 #   (analyze_data, compare_domains, configure, explain, fix, handoff, review, scan, validate).
 #   No divergence.
@@ -46,8 +47,11 @@ cli_commands:
   - diff
   - evaluate
   - fix
+  - health-score
   - history
+  - list-domains
   - mcp-serve
+  - profile
   - scan
   - validate
   - watch
@@ -61,10 +65,7 @@ cli_commands:
   - scan-db
   - schedule
   - serve
-  ts_only:
-  - health-score
-  - list-domains
-  - profile
+  ts_only: []
 a2a_skills:
   shared:
   - analyze_data

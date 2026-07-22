@@ -222,3 +222,44 @@ def test_html_report(tmp_path):
     assert html.exists()
     content = html.read_text()
     assert "GoldenCheck Report" in content
+
+
+# --- TS-parity CLI commands (profile / health-score / list-domains) ---
+
+
+def test_profile_command():
+    """`profile` prints column-level stats (type, null %, unique %)."""
+    result = runner.invoke(app, ["profile", str(FIXTURES / "simple.csv")])
+    assert result.exit_code == 0
+    assert "Profile:" in result.stdout
+    assert "rows" in result.stdout and "columns" in result.stdout
+    # Percentages are rendered 0-100 (fraction * 100), matching the TS command.
+    assert "%" in result.stdout
+
+
+def test_profile_command_sample_size():
+    result = runner.invoke(
+        app, ["profile", str(FIXTURES / "simple.csv"), "--sample-size", "10"]
+    )
+    assert result.exit_code == 0
+    assert "Profile:" in result.stdout
+
+
+def test_health_score_command():
+    """`health-score` prints a `GRADE (score/100)` line."""
+    import re
+
+    result = runner.invoke(app, ["health-score", str(FIXTURES / "simple.csv")])
+    assert result.exit_code == 0
+    assert re.search(r"[A-F] \(\d+/100\)", result.stdout)
+
+
+def test_list_domains_command():
+    """`list-domains` lists the bundled domain packs."""
+    result = runner.invoke(app, ["list-domains"])
+    assert result.exit_code == 0
+    assert "Available domain packs" in result.stdout
+    # The three bundled packs (healthcare/finance/ecommerce) must appear.
+    assert "healthcare" in result.stdout
+    assert "finance" in result.stdout
+    assert "ecommerce" in result.stdout

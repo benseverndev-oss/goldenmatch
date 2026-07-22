@@ -15,7 +15,7 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 | Package | MCP tools | Exports | A2A skills | CLI commands | Recipes | TS port |
 |---|---|---|---|---|---|---|
 | `goldenmatch` | 82 | 201 | 47 | 34 | Yes | Yes |
-| `goldencheck` | 19 | 43 | 9 | 19 | Yes | Yes |
+| `goldencheck` | 19 | 43 | 9 | 22 | Yes | Yes |
 | `goldenflow` | 10 | 36 | 6 | 16 | Yes | Yes |
 | `goldenpipe` | 4 | 20 | 4 | 8 | Yes | Yes |
 | `goldenanalysis` | 4 | 8 | — | 4 | Yes | Yes |
@@ -47,7 +47,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 | `goldenmatch` | scorers | 17 | 0 | 2 |
 | `goldenmatch` | transforms | 12 | 0 | 0 |
 | `goldencheck` | mcp_tools | 18 | 1 | 0 |
-| `goldencheck` | cli_commands | 10 | 9 | 3 |
+| `goldencheck` | cli_commands | 13 | 9 | 0 |
 | `goldencheck` | a2a_skills | 9 | 0 | 0 |
 | `goldenflow` | mcp_tools | 10 | 0 | 0 |
 | `goldenflow` | cli_commands | 9 | 7 | 0 |
@@ -72,7 +72,6 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 - `goldenmatch` **scorers** — TS-only: `given_name_aliased_jw`, `name_freq_weighted_jw`.
 - `goldencheck` **mcp_tools** — Python-only: `install_domain`.
 - `goldencheck` **cli_commands** — Python-only: `agent-serve`, `denial-constraints`, `init`, `learn`, `refs`, `review`, `scan-db`, `schedule`, `serve`.
-- `goldencheck` **cli_commands** — TS-only: `health-score`, `list-domains`, `profile`.
 - `goldenflow` **cli_commands** — Python-only: `agent-serve`, `init`, `interactive`, `mcp-serve`, `schedule`, `serve`, `watch`.
 - `goldenpipe` **cli_commands** — Python-only: `interactive`.
 - `goldenanalysis` **mcp_tools** — Python-only: `analyze_frame`, `detect_regressions`, `get_trend`, `list_analyzers`.

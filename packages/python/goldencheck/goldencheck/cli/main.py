@@ -639,6 +639,65 @@ def history(
             typer.echo(f"\nTrend: {first.file} {first.score} -> {last_r.score}")
 
 
+def _findings_by_column(findings: list) -> dict[str, dict[str, int]]:
+    """Aggregate WARNING/ERROR findings per column for health scoring.
+
+    Mirrors ``mcp/server.py::_findings_by_column`` (the health-score inputs the
+    MCP ``profile`` / ``health_score`` tools use)."""
+    from goldencheck.models.finding import Severity
+
+    by_col: dict[str, dict[str, int]] = {}
+    for f in findings:
+        if f.severity >= Severity.WARNING:
+            by_col.setdefault(f.column, {"errors": 0, "warnings": 0})
+            key = "errors" if f.severity == Severity.ERROR else "warnings"
+            by_col[f.column][key] = by_col[f.column].get(key, 0) + 1
+    return by_col
+
+
+@app.command(name="profile")
+def profile_cmd(
+    file: Path = typer.Argument(..., help="Data file to profile."),
+    sample_size: int = typer.Option(100_000, "--sample-size", help="Rows to sample."),
+) -> None:
+    """Show column-level statistics (type, null %, unique %)."""
+    with _cli_error_handler():
+        _findings, profile = scan_file(file, sample_size=sample_size)
+        typer.echo(
+            f"\nProfile: {file} — {profile.row_count} rows, "
+            f"{profile.column_count} columns\n"
+        )
+        for col in profile.columns:
+            typer.echo(
+                f"  {col.name:<25} {col.inferred_type:<10} "
+                f"null: {col.null_pct * 100:.1f}%  unique: {col.unique_pct * 100:.1f}%"
+            )
+
+
+@app.command(name="health-score")
+def health_score_cmd(
+    file: Path = typer.Argument(..., help="Data file to grade."),
+) -> None:
+    """Get the health grade (A-F) and score (0-100)."""
+    with _cli_error_handler():
+        findings, profile = scan_file(file)
+        findings = apply_confidence_downgrade(findings, llm_boost=False)
+        grade, score = profile.health_score(
+            findings_by_column=_findings_by_column(findings),
+        )
+        typer.echo(f"{grade} ({score}/100)")
+
+
+@app.command(name="list-domains")
+def list_domains_cmd() -> None:
+    """List available domain packs."""
+    from goldencheck.semantic.classifier import list_available_domains
+
+    typer.echo("\nAvailable domain packs:")
+    for name in list_available_domains():
+        typer.echo(f"  - {name}")
+
+
 @app.command()
 def serve(
     host: str = typer.Option("0.0.0.0", "--host", help="Host to bind to."),

@@ -5791,6 +5791,17 @@
           ]
         },
         {
+          "command": "health-score",
+          "options": [
+            {
+              "name": "file",
+              "type": "path",
+              "required": true,
+              "help": "Data file to grade."
+            }
+          ]
+        },
+        {
           "command": "history",
           "options": [
             {
@@ -5860,6 +5871,10 @@
           ]
         },
         {
+          "command": "list-domains",
+          "options": []
+        },
+        {
           "command": "mcp-serve",
           "options": [
             {
@@ -5882,6 +5897,24 @@
               "required": false,
               "default": "8100",
               "help": "Port for HTTP transport"
+            }
+          ]
+        },
+        {
+          "command": "profile",
+          "options": [
+            {
+              "name": "file",
+              "type": "path",
+              "required": true,
+              "help": "Data file to profile."
+            },
+            {
+              "name": "--sample-size",
+              "type": "integer",
+              "required": false,
+              "default": "100000",
+              "help": "Rows to sample."
             }
           ]
         },

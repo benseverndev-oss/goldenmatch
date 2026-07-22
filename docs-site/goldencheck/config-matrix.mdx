@@ -112,6 +112,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `fix` | `--output` | path | `None` | Output file path. |
 | `fix` | `--dry-run` | boolean | `False` | Show fixes without writing. |
 | `fix` | `--force` | boolean | `False` | Required for aggressive mode. |
+| `health-score` | `file` | path | **required** | Data file to grade. |
 | `history` | `file` | path | `None` | Filter history by file. |
 | `history` | `--last` | integer | `None` | Show last N scans. |
 | `history` | `--json` | boolean | `False` | Output as JSON. |
@@ -123,6 +124,8 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `mcp-serve` | `--transport` | text | `'stdio'` | Transport: 'stdio' or 'http' |
 | `mcp-serve` | `--host` | text | `'0.0.0.0'` | Host for HTTP transport |
 | `mcp-serve` | `--port` | integer | `8100` | Port for HTTP transport |
+| `profile` | `file` | path | **required** | Data file to profile. |
+| `profile` | `--sample-size` | integer | `100000` | Rows to sample. |
 | `refs` | `child` | path | **required** | Child/fact file holding the foreign key(s). |
 | `refs` | `parent` | path | **required** | Parent/dimension file holding the key(s). |
 | `refs` | `--on` | text | `None` | FK mapping 'child_col=parent_col' (repeatable). Omit to auto-detect same-named parent-key columns. |
