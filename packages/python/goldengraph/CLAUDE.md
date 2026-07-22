@@ -269,8 +269,9 @@ the final hop"; it did NOT guard "don't answer with a plausible neighbor".
   which is why it ships DEFAULT ON while voting stays opt-in.
 - **`GOLDENGRAPH_SYNTH_SELECT=0` (or `false`/'') restores the pre-clause prompt
   byte-identical** (`_local_prompt()` == `_LOCAL_PROMPT`; locked by
-  `tests/test_synthesis_select.py`). NEXT: broader-N / multi-seed confirmation, and whether
-  the same type-check helps the hybrid path (`_HYBRID_PROMPT`, currently unchanged).
+  `tests/test_synthesis_select.py`). NEXT: broader-N / multi-seed confirmation. (Whether the
+  same type-check helps the HYBRID path was tested and REFUTED — see "SELECT does NOT transfer
+  to the hybrid path" below; `_HYBRID_PROMPT` stays unchanged.)
 
 ## Hybrid synthesis is the DEFAULT answer mode (2026-07-22) — the BIG lever
 The synthesis-precision follow-through. The KG is a LOSSY intermediate — the extracted
@@ -303,6 +304,25 @@ env-A/B settled it.
   helps exactly the callers who supply a retriever and is a safe no-op (local) for those who
   don't. Adding a passage store to goldengraph is the follow-up to make hybrid complete.
   `answer_judge 0.51` on the hybrid arm is a different quality tier than local's ~0.21.
+
+## SELECT does NOT transfer to the hybrid path — measured flat, NOT shipped (2026-07-22)
+Answers the open `NEXT` from the SELECT section ("whether the same type-check helps the
+hybrid path"). It does not. The confound-free same-graph env-A/B (`env_ab`,
+`GOLDENGRAPH_SYNTH_SELECT_HYBRID:0,1` over ONE hybrid MuSiQue N=100 build, judge on, run
+`29950498168`; `support_recall` **0.8525 == 0.8525** across arms = the control, so the
+measurement is clean) came back **flat-to-mixed**: `answer_match` **0.4700 → 0.4600
+(−0.0100)**, `token_f1` 0.5298 → 0.5392 (+0.0094). The headline metric went slightly DOWN.
+- **Why it doesn't transfer:** SELECT fixes the WRONG-NODE miss in the graph-ONLY (local)
+  path, where the model has only entities to choose among. The hybrid path already hands the
+  model the raw **passages** as ground truth, which disambiguate the answer directly — so the
+  SELECT preamble is largely redundant there; it just lengthens the prompt and slightly
+  perturbs the headline. The graph-only precision lever does **not** stack on the
+  passages-primary path.
+- **DECISION: not shipped.** The prototype (`_HYBRID_SELECT_PREAMBLE` + a
+  `GOLDENGRAPH_SYNTH_SELECT_HYBRID` flag on `synthesize_hybrid`, PR #2041) was CLOSED, not
+  merged — a flat, default-off knob is dead weight; the value is this finding. `_HYBRID_PROMPT`
+  stays unchanged. If a future corpus/model resurfaces a graph-only precision gap under hybrid,
+  the env-A/B here is the way to re-test before re-adding the clause.
 
 ## CHAT / embedding provider split (2026-07-22)
 `OpenAIClient._ensure_client` (`llm.py`) reads `GOLDENGRAPH_LLM_BASE_URL` /
