@@ -12,6 +12,11 @@ import {
   soundexMatch,
   diceCoefficient,
   jaccardSimilarity,
+  phashSimilarity,
+  radialSimilarity,
+  audioFpSimilarity,
+  initialismMatch,
+  deriveInitialism,
   ensembleScore,
   scoreMatrix,
   applyTransform,
@@ -167,6 +172,116 @@ describe("dice / jaccard (bloom filter hex)", () => {
   it("mismatched all-zero lengths -> 0 (no crash)", () => {
     expect(diceCoefficient("0000", "000000")).toBe(0.0);
     expect(jaccardSimilarity("0000", "000000")).toBe(0.0);
+  });
+});
+
+describe("phash (perceptual-hash hex similarity)", () => {
+  it("identical -> 1.0", () => {
+    expect(phashSimilarity("ffffffffffffffff", "ffffffffffffffff")).toBe(1.0);
+  });
+
+  it("all bits differ -> 0.0", () => {
+    expect(phashSimilarity("0000000000000000", "ffffffffffffffff")).toBe(0.0);
+  });
+
+  it("one bit differs over 64 bits -> 63/64", () => {
+    expect(phashSimilarity("ff00ff00ff00ff00", "ff00ff00ff00ff01")).toBe(63 / 64);
+  });
+
+  it("strips a 0x/0X prefix and left-pads odd length", () => {
+    expect(phashSimilarity("0x1234", "1234")).toBe(1.0);
+    expect(phashSimilarity("abc", "0abc")).toBe(1.0); // odd -> "0abc" both sides
+  });
+
+  it("mismatched lengths: every set bit in the longer's tail is a difference", () => {
+    // "ff" (8 bits) vs "ffff" (16 bits): nbits=16, common byte matches, tail 0xff
+    // contributes 8 differences -> 1 - 8/16 = 0.5.
+    expect(phashSimilarity("ff", "ffff")).toBe(0.5);
+    expect(phashSimilarity("ffff", "ff")).toBe(0.5); // symmetric
+  });
+
+  it("non-hex or empty -> 0.0", () => {
+    expect(phashSimilarity("zzzz", "1234")).toBe(0.0);
+    expect(phashSimilarity("", "")).toBe(0.0);
+  });
+});
+
+describe("radial (rotation-aligned Pearson of hex radial profiles)", () => {
+  it("identical profile -> 1.0", () => {
+    expect(radialSimilarity("0a1b2c3d", "0a1b2c3d")).toBeCloseTo(1.0, 12);
+  });
+
+  it("a cyclic rotation aligns to 1.0", () => {
+    // radial_align maxes Pearson over every cyclic shift, so a rotation of the
+    // same profile finds a perfect alignment. "2c3d0a1b" and "3d0a1b2c" are the
+    // shift-2 and shift-3 cyclic rotations of [0a,1b,2c,3d].
+    expect(radialSimilarity("0a1b2c3d", "2c3d0a1b")).toBeCloseTo(1.0, 12);
+    expect(radialSimilarity("0a1b2c3d", "3d0a1b2c")).toBeCloseTo(1.0, 12);
+  });
+
+  it("a constant profile has zero variance -> 0.0", () => {
+    expect(radialSimilarity("0a0a0a0a", "01020304")).toBe(0.0);
+  });
+
+  it("mismatched-length / non-hex / empty -> 0.0", () => {
+    expect(radialSimilarity("0a1b2c3d", "0a1b")).toBe(0.0); // length mismatch
+    expect(radialSimilarity("zz", "0102")).toBe(0.0); // non-hex
+    expect(radialSimilarity("", "")).toBe(0.0); // empty
+  });
+
+  it("signed-byte decode: 0x80..0xff map to negatives", () => {
+    // Both sides identical still correlate to 1.0 regardless of sign.
+    expect(radialSimilarity("7f80017e", "7f80017e")).toBeCloseTo(1.0, 12);
+  });
+});
+
+describe("audio_fp (offset-aligned bit-error-rate of hex fingerprints)", () => {
+  it("identical fingerprints -> 1.0", () => {
+    expect(audioFpSimilarity("deadbeef", "deadbeef")).toBe(1.0);
+    expect(audioFpSimilarity("deadbeefcafebabe", "deadbeefcafebabe")).toBe(1.0);
+  });
+
+  it("all bits differ over one word -> BER 1.0 -> 0.0", () => {
+    expect(audioFpSimilarity("00000000", "ffffffff")).toBe(0.0);
+  });
+
+  it("one differing bit over 32 -> 1 - 1/32", () => {
+    expect(audioFpSimilarity("00000001", "00000000")).toBe(1 - 1 / 32);
+  });
+
+  it("strips a 0x prefix", () => {
+    expect(audioFpSimilarity("0xdeadbeef", "deadbeef")).toBe(1.0);
+  });
+
+  it("non-hex or empty -> 0.0", () => {
+    expect(audioFpSimilarity("nothex00", "12345678")).toBe(0.0);
+    expect(audioFpSimilarity("", "")).toBe(0.0); // empty -> BER 1.0 -> 0.0
+  });
+});
+
+describe("initialism_match (business-name acronym matcher)", () => {
+  it("derives an acronym, dropping legal-form tokens", () => {
+    expect(deriveInitialism("International Business Machines Corp")).toBe("IBM");
+    expect(deriveInitialism("General Electric Company")).toBe("GE");
+    expect(deriveInitialism("Acme Industries LLC")).toBe("AI"); // LLC dropped
+    expect(deriveInitialism("Apple Inc.")).toBe(""); // single lowercase token
+    expect(deriveInitialism("3M Company")).toBe(""); // "3M" not alphabetic
+    expect(deriveInitialism("NASA")).toBe("NASA"); // single acronym passes through
+  });
+
+  it("matches a name against its initialism (either direction), else 0.0", () => {
+    // Values pinned against Python `_initialism_match_single`.
+    expect(initialismMatch("International Business Machines Corp", "IBM")).toBe(1.0);
+    expect(initialismMatch("IBM", "International Business Machines Corp")).toBe(1.0);
+    expect(initialismMatch("General Electric Company", "GE")).toBe(1.0);
+    expect(initialismMatch("Hewlett Packard", "HP")).toBe(1.0);
+    expect(initialismMatch("IBM", "IBM")).toBe(1.0);
+    expect(initialismMatch("Acme", "Acme")).toBe(0.0);
+    expect(initialismMatch("Apple Inc.", "AI")).toBe(0.0);
+    // Stopwords are NOT dropped, so these derive extra initials and miss.
+    expect(initialismMatch("National Aeronautics and Space Administration", "NASA")).toBe(0.0);
+    expect(initialismMatch("AT and T", "ATT")).toBe(0.0);
+    expect(initialismMatch("", "IBM")).toBe(0.0);
   });
 });
 

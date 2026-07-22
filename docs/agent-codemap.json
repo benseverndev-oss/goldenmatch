@@ -2292,7 +2292,6 @@
             "cluster_dict_to_frames",
             "cluster_frames_to_dict",
             "compute_cluster_confidence",
-            "get_cluster_pair_scores",
             "metadata_height",
             "split_oversized_cluster",
             "split_oversized_cluster_to_size",
@@ -3166,7 +3165,8 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
-            "goldenmatch.core.blocker"
+            "goldenmatch.core.blocker",
+            "goldenmatch.utils.transforms"
           ]
         },
         {
@@ -4070,6 +4070,7 @@
             "_score_one_block",
             "_score_one_block_columnar",
             "_soundex_score_matrix",
+            "_soundex_score_single",
             "find_exact_matches",
             "find_fuzzy_matches",
             "find_fuzzy_matches_columnar",
@@ -4966,7 +4967,6 @@
             "_build_clusters_scipy_fallback",
             "_derive_touched_ids",
             "_emit_boundary_pairs",
-            "_label_prop_threshold",
             "_phase_a_local_cc",
             "_phase_b_merge_boundaries",
             "_propagate_one_step",
@@ -5023,7 +5023,6 @@
           "defines": [
             "_collect_and_call_in_memory",
             "_golden_cluster_threshold",
-            "_per_partition_golden",
             "build_golden_records_distributed",
             "build_golden_records_smart",
             "materialize_golden_dataframe"
@@ -5087,7 +5086,6 @@
           "defines": [
             "_ensure_global_row_id",
             "_join_assignments_distributed",
-            "_join_clusters_to_rows",
             "_phase4_pipeline_enabled",
             "_phase5_cluster",
             "_phase5_pipeline_enabled",
@@ -5095,7 +5093,6 @@
             "_run_phase2_cheat_line",
             "_run_phase4_pipeline",
             "_run_phase5_pipeline",
-            "_write_golden_output",
             "run_dedupe_pipeline_distributed"
           ],
           "imports": [
@@ -5104,7 +5101,6 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
-            "goldenmatch.core.frame",
             "goldenmatch.core.golden",
             "goldenmatch.distributed.clustering",
             "goldenmatch.distributed.golden",
@@ -6965,7 +6961,8 @@
             "_prepare_bloom_input",
             "apply_transform",
             "apply_transforms",
-            "bloom_clk_batch"
+            "bloom_clk_batch",
+            "canonical_soundex"
           ],
           "imports": [
             "goldenmatch.core._native_loader",
@@ -7409,7 +7406,6 @@
             "cluster_detail",
             "cluster_summaries",
             "discover_runs",
-            "lineage_pair_keys",
             "load_clusters_df",
             "load_lineage",
             "load_run_manifest",
@@ -8584,7 +8580,6 @@
             "_finding_from_dict",
             "_get_review_queue",
             "_rules_to_yaml",
-            "_serialize_findings",
             "_tool_analyze_data",
             "_tool_approve_reject",
             "_tool_auto_configure",

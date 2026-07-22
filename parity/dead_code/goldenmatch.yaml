@@ -1,0 +1,29 @@
+# dead_code_deferred (goldenmatch) -- module-level classification map.
+# Spec: docs/superpowers/specs/2026-07-22-arch-aware-dead-code-detection.md
+# Every module that check_dead_code.py flags as reachable from no in-process surface must be
+# EITHER deleted OR listed here with a reason. Reason prefix vocabulary:
+#   surface --  reached out-of-band (external runtime, dynamic dispatch, codegen); NOT dead
+#   fallback -- pure-language reference for a native kernel (native-off path)
+#   oracle --   parity ground-truth the kernel is diffed against
+#   dead --     confirmed dead; scheduled for removal (with the removal ref)
+#
+# Bootstrap 2026-07-22 (Phase 1, module granularity). Format: `module: reason`.
+
+# -- dynamic connector dispatch: load_connector() resolves a string -> "module:Class" map
+#    (connectors/base.py); no static import, so invisible to reachability. Optional deps.
+goldenmatch.connectors.bigquery: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
+goldenmatch.connectors.databricks: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
+goldenmatch.connectors.hubspot: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
+goldenmatch.connectors.salesforce: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
+goldenmatch.connectors.snowflake: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
+
+# -- Alembic migration runtime loads env + versions by convention (goldenmatch identity migrate)
+goldenmatch.db.alembic.env: "surface -- Alembic runtime entry (loaded by the alembic command)"
+goldenmatch.db.alembic.versions.0001_identity_v1: "surface -- Alembic migration (runtime-discovered)"
+goldenmatch.db.alembic.versions.0002_provenance_actor_trust: "surface -- Alembic migration (runtime-discovered)"
+goldenmatch.db.alembic.versions.0003_audit_hash_chain: "surface -- Alembic migration (runtime-discovered)"
+goldenmatch.db.alembic.versions.0004_claim_authority: "surface -- Alembic migration (runtime-discovered)"
+
+# -- maintenance regeneration scripts (run by hand to refresh committed reference data)
+goldenmatch.refdata.scripts: "surface -- maintenance package (regen scripts, not runtime)"
+goldenmatch.refdata.scripts.fetch_census_surnames: "surface -- maintenance regen script"

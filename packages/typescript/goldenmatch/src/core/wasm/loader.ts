@@ -15,6 +15,7 @@ import { SCORER_ID } from "./backend.js";
 import type { ScorerBackend } from "./backend.js";
 import { censusInjectionData } from "../refdata/surnames.js";
 import { aliasInjectionEdges } from "../refdata/givenNames.js";
+import { legalFormsInjectionData } from "../refdata/business.js";
 
 export type { LoadOptions };
 
@@ -49,6 +50,7 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBacke
     // plain JW for those ids); the CI-built artifact always carries them.
     set_surname_idf?: (names: string[], counts: Float64Array) => void;
     set_name_aliases?: (forms: string[], canonicals: string[]) => void;
+    set_legal_forms?: (forms: string[]) => void;
   };
   await glue.default({ module_or_path: bytes });
 
@@ -69,6 +71,11 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<ScorerBacke
     if (aliases !== null) {
       glue.set_name_aliases(aliases.forms, aliases.canonicals);
     }
+  }
+  // Seed the legal-form variant set for `initialism_match` (id 7) so the WASM
+  // kernel drops the SAME forms the pure-TS `initialismMatch` does.
+  if (typeof glue.set_legal_forms === "function") {
+    glue.set_legal_forms([...legalFormsInjectionData()]);
   }
 
   const SEP = "\x1e";

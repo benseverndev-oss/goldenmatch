@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 from pathlib import Path
 
 from mcp.types import Tool
@@ -260,15 +259,6 @@ AGENT_TOOLS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _serialize_findings(findings: list[Finding]) -> list[dict]:
-    results = []
-    for f in findings:
-        d = asdict(f)
-        d["severity"] = f.severity.name
-        results.append(d)
-    return results
 
 
 def _finding_from_dict(d: dict) -> Finding:

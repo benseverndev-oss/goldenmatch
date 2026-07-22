@@ -4,8 +4,68 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 
 import jellyfish
+
+# GoldenMatch canonical American Soundex -- the pure-Python reference that
+# byte-matches the Rust `goldenmatch-score-core::soundex` kernel (the single
+# source of truth for every soundex surface). Deliberately NOT jellyfish: NFKD +
+# uppercase, keep only ASCII [A-Z], then standard Soundex; a value with no
+# surviving letter (empty / all-digit / all-punctuation) -> "". This drops the
+# jellyfish quirks (`"123"->"1000"`, `"Þór"->"Þ600"`) that diverged from the TS
+# port and let placeholder columns mega-cluster. See score-core's `soundex` +
+# tests/test_native_soundex_parity.py for the cross-surface parity contract.
+_SOUNDEX_CODE = {
+    "B": "1", "F": "1", "P": "1", "V": "1",
+    "C": "2", "G": "2", "J": "2", "K": "2", "Q": "2", "S": "2", "X": "2", "Z": "2",
+    "D": "3", "T": "3",
+    "L": "4",
+    "M": "5", "N": "5",
+    "R": "6",
+}
+
+
+def canonical_soundex(s: str) -> str:
+    """GoldenMatch canonical American Soundex code, or ``""`` when the value has
+    no ASCII-letter content. Byte-identical to score-core ``soundex``.
+
+    Spec (Unicode-folding standard Soundex): NFKD-fold + uppercase, then walk the
+    string. ASCII ``[A-Z]`` are letters (seed / code / H-W-transparent / vowel-break);
+    EVERY other char -- digit, punctuation, whitespace, and the combining marks NFKD
+    leaves behind -- is a SEPARATOR that breaks the coding run (resets adjacency) but
+    is otherwise skipped and never seeds. This makes multi-token values
+    (``"joseph bradshaw"``) code each token's boundary consonant instead of merging
+    across the gap, and folds accents to their base letter (``José`` -> ``J200``,
+    ``Muñoz`` -> ``M520``). On pure-ASCII input this equals classic American Soundex
+    (word separators break the run) -- the historical behavior real person-name
+    blocking/scoring depends on. A value with no surviving letter yields ``""``.
+    """
+    result: list[str] = []  # [seed, digit, digit, digit]
+    last: str | None = None  # code of the previous letter (None after seed/vowel/separator)
+    for c in unicodedata.normalize("NFKD", s).upper():
+        if "A" <= c <= "Z":
+            if not result:
+                result.append(c)  # seed = first surviving letter
+                last = _SOUNDEX_CODE.get(c)  # seed's would-be code suppresses a same-code follower
+                continue
+            code = _SOUNDEX_CODE.get(c)
+            if code is not None:
+                if code != last:
+                    result.append(code)
+                last = code
+            elif c not in ("H", "W"):
+                # Vowels (A/E/I/O/U/Y) break the run; H/W stay transparent.
+                last = None
+            if len(result) == 4:
+                break
+        else:
+            # Separator (digit / punctuation / whitespace / combining mark): break
+            # the coding run so a same code across the gap is re-emitted, not merged.
+            last = None
+    if not result:
+        return ""
+    return "".join(result).ljust(4, "0")
 
 
 def apply_transform(value: str | None, transform: str) -> str | None:
@@ -38,7 +98,7 @@ def apply_transform(value: str | None, transform: str) -> str | None:
         end = int(parts[2])
         return value[start:end]
     elif transform == "soundex":
-        return jellyfish.soundex(value)
+        return canonical_soundex(value)
     elif transform == "metaphone":
         return jellyfish.metaphone(value)
     elif transform == "digits_only":

@@ -42,6 +42,53 @@
  * `jaccardSimilarity` popcounts the actual bit-OR — algebraically identical for
  * bloom filters — so the WASM matrix is byte-exact with the fallback on any valid
  * (even-length) bloom hex, same as dice.
+ *
+ * `soundex_match` (id 6) routes through score-core's `soundex_match` (1.0 iff a
+ * NON-EMPTY canonical soundex code is shared, else 0.0 — the empty-code guard means
+ * garbage/empty never matches). The kernel's `soundex` and the pure-TS `soundex`
+ * transform are the SAME Unicode-folding standard-Soundex spec (separators break the
+ * coding run; NFKD folds accents; no-letter -> ""), so the WASM matrix is byte-exact
+ * with the pure-TS `soundexMatch` fallback. Like `exact`, the bucket path intercepts
+ * soundex_match with an O(n) hash-group specialization (`buildScoreMatrix`), so this
+ * id is exercised only when `scoreMatrix` is called directly — but the kernel is
+ * reachable and byte-exact, which is the "kernel-backed / shared" contract.
+ *
+ * `phash` (id 11) is perceptual-hash similarity: `1 - hamming/nbits` over two hex
+ * pHash strings. The kernel and the pure-TS `phashSimilarity` do the identical strict
+ * hex decode + XOR popcount + one f64 divide, so the WASM matrix is byte-exact with the
+ * fallback on any valid hex (a non-hex value -> 0.0 on both). Same integer-popcount
+ * shape as dice/jaccard.
+ *
+ * `ensemble` (id 12) is `max(jaro_winkler, token_sort, 0.8*soundex_match)`. score-wasm
+ * OVERRIDES id 12 (like id 2) to recompose it with the TS-parity NORMALIZED token_sort
+ * (score_one(12)'s `ensemble_similarity` maxes over the un-normalized score_one(2)),
+ * so the WASM matrix matches the pure-TS `ensembleScore` to 4dp — the same tolerance
+ * its `jaro_winkler` / `token_sort` components already hold vs rapidfuzz (its
+ * soundex_match component is byte-exact). Like exact/soundex_match, `buildScoreMatrix`
+ * keeps the O(n) pure-TS `ensembleScoreMatrix` intercept; this id is reached only via a
+ * direct `scoreMatrix` call, where the kernel is reachable + parity-proven.
+ *
+ * `radial` (id 13) is rotation-aligned Pearson of two hex radial-variance profiles
+ * (max Pearson over every cyclic shift, clamped to [0,1]). The kernel and the pure-TS
+ * `radialSimilarity` do the identical signed-byte parse + left-to-right f64 reductions,
+ * but the WASM release build may vectorize the Pearson sums in a different order, so the
+ * WASM matrix matches the pure-TS fallback to ~4dp (not byte-exact) — the same 1-ULP
+ * reduction-order tolerance the native<->pure Python radial parity carries. A non-hex or
+ * mismatched-length profile -> 0.0 on both.
+ *
+ * `audio_fp` (id 14) is `1 - best BER` over two hex audio fingerprints (the minimum
+ * bit-error-rate across every frame offset). Unlike radial, its BER numerator is an
+ * INTEGER popcount sum and the rate is a single f64 divide per offset, so the kernel
+ * and the pure-TS `audioFpSimilarity` are byte-exact (like phash) -- no reduction-order
+ * divergence. A non-hex value on either side -> 0.0.
+ *
+ * `initialism_match` (id 7) is 1.0 iff one value's derived initialism (acronym of a
+ * business name, dropping legal-form tokens) equals the other value, else 0.0. It needs
+ * the ~77-entry `legal_forms` table injected into the kernel at `enableWasm()` (a new
+ * `set_legal_forms` export, mirroring the name scorers' census/alias table injection);
+ * the pure-TS `initialismMatch` uses the SAME ported table (`refdata/business.ts`), so
+ * the WASM matrix is byte-exact with the fallback. Until the table is injected the kernel
+ * scores against an EMPTY legal-form set (no dropping) -- the loader always injects it.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -50,8 +97,14 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   exact: 3,
   date: 4,
   qgram: 5,
+  soundex_match: 6,
+  initialism_match: 7,
   dice: 9,
   jaccard: 10,
+  phash: 11,
+  ensemble: 12,
+  radial: 13,
+  audio_fp: 14,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

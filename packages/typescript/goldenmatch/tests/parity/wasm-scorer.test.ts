@@ -259,3 +259,210 @@ d("WASM jaccard matches the pure-TS scoreField reference (exact)", () => {
     });
   }
 });
+
+// soundex_match (score_one id 6): 1.0 iff a NON-EMPTY canonical soundex code is
+// shared, else 0.0 (empty-code guard). The kernel `soundex` and the pure-TS
+// `soundex` transform are the SAME Unicode-folding standard-Soundex spec
+// (separators break the coding run; NFKD folds accents; no-letter -> ""), so the
+// WASM matrix is byte-exact with the pure-TS `soundexMatch` fallback -- including
+// the multi-token separator cases the strip variant regressed. Asserted byte-exact.
+type SoundexCase = readonly [a: string, b: string, note: string];
+const SOUNDEX_CASES: readonly SoundexCase[] = [
+  ["Robert", "Rupert", "collide on R163 -> 1.0"],
+  ["Smith", "Smyth", "collide on S530 -> 1.0"],
+  ["Robert", "Smith", "different codes -> 0.0"],
+  ["joseph bradshaw", "joseph bradshaw", "multi-token J211 -> 1.0 (separator-aware)"],
+  ["Muñoz", "Munoz", "accent folds to M520 -> 1.0"],
+  ["123", "456", "both no-letter -> '' -> empty-guard 0.0"],
+  ["123", "123", "identical garbage -> '' -> 0.0 (never self-matches)"],
+  ["", "", "both empty -> 0.0"],
+  ["café", "cafe", "accented vowel folds -> collide"],
+];
+
+d("WASM soundex_match matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of SOUNDEX_CASES) {
+    it(`soundex_match("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "soundex_match");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "soundex_match");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
+// ensemble (score_one id 12, overridden in score_matrix_impl): max of jaro_winkler,
+// the NORMALIZED token_sort, and 0.8*soundex_match -- the same three the pure-TS
+// `ensembleScore` maxes. The soundex component is byte-exact; jw and token_sort are
+// rapidfuzz (kernel) vs the hand-rolled pure-TS, which agree to 4dp -- so ensemble is
+// asserted to 4dp vs the pure-TS reference (the same bar jaro_winkler / token_sort
+// hold individually), each case chosen so a different component dominates the max.
+type EnsembleCase = readonly [a: string, b: string, note: string];
+const ENSEMBLE_CASES: readonly EnsembleCase[] = [
+  ["John SMITH", "smith john", "normalized token_sort dominates -> 1.0"],
+  ["Robert", "Rupert", "soundex R163 bonus 0.8 dominates lowish jw"],
+  ["MARTHA", "MARHTA", "jaro_winkler dominates (0.9611)"],
+  ["New York Mets", "Mets New York", "token_sort reorder -> 1.0"],
+  ["abc", "abd", "jw dominates a no-soundex-match pair"],
+  ["café", "cafe", "jw on accented input"],
+];
+
+// phash (score_one id 11): perceptual-hash similarity 1 - hamming/nbits over two hex
+// pHashes. The kernel and the pure-TS `phashSimilarity` do the identical strict hex
+// decode + XOR popcount + one f64 divide (nbits over the LONGER hash), so the WASM
+// matrix is byte-exact with the fallback on any valid hex (non-hex -> 0.0 both). Same
+// integer-popcount shape as dice/jaccard. Asserted byte-exact.
+type PhashCase = readonly [a: string, b: string, note: string];
+const PHASH_CASES: readonly PhashCase[] = [
+  ["ffffffffffffffff", "ffffffffffffffff", "identical -> 1.0"],
+  ["0000000000000000", "ffffffffffffffff", "all 64 bits differ -> 0.0"],
+  ["ff00ff00ff00ff00", "ff00ff00ff00ff01", "one bit differs over 64 -> 63/64"],
+  ["0x1234", "1234", "0x prefix stripped -> 1.0"],
+  ["abc", "0abc", "odd length left-pads to even -> 1.0"],
+  ["ff", "ffff", "different lengths: tail of the longer counts -> 0.5"],
+  ["zzzz", "1234", "non-hex -> 0.0"],
+];
+
+d("WASM phash matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of PHASH_CASES) {
+    it(`phash("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "phash");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "phash");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
+// radial (score_one id 13): rotation-aligned Pearson of two hex radial-variance
+// profiles (max Pearson over every cyclic shift, clamped to [0,1]). The kernel and
+// the pure-TS `radialSimilarity` do the identical signed-byte parse + left-to-right
+// f64 Pearson reductions, but the WASM release build may vectorize the sums in a
+// different order, so parity is ~4dp (not byte-exact) -- the 1-ULP reduction-order
+// tolerance the native<->pure Python radial parity also carries. Non-hex / mismatched
+// length -> 0.0 on both.
+type RadialCase = readonly [a: string, b: string, note: string];
+const RADIAL_CASES: readonly RadialCase[] = [
+  ["0a1b2c3d", "0a1b2c3d", "identical -> 1.0"],
+  ["0a1b2c3d", "2c3d0a1b", "cyclic rotation aligns -> 1.0"],
+  ["0a1b2c3d", "3d0a1b2c", "another cyclic rotation -> 1.0"],
+  ["01020304", "04030201", "reversed profile (partial correlation)"],
+  ["ff01ff01", "01ff01ff", "signed bytes (0xff = -1) rotation"],
+  ["0a0a0a0a", "01020304", "constant profile -> 0.0 (zero variance)"],
+  ["0a1b2c3d", "0a1b", "length mismatch -> 0.0"],
+  ["zz", "0102", "non-hex -> 0.0"],
+];
+
+d("WASM radial matches the pure-TS scoreField reference (4dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of RADIAL_CASES) {
+    it(`radial("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "radial");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "radial");
+      expect(m[0]![1]!).toBeCloseTo(ref!, 9);
+    });
+  }
+});
+
+// audio_fp (score_one id 14): 1 - best BER over two hex audio fingerprints (min
+// bit-error-rate across every frame offset). The BER numerator is an INTEGER popcount
+// sum and the rate is one f64 divide per offset, so -- unlike radial -- the kernel and
+// the pure-TS `audioFpSimilarity` are byte-exact (like phash). 8 hex chars per u32 word;
+// non-hex -> 0.0. Asserted byte-exact.
+type AudioFpCase = readonly [a: string, b: string, note: string];
+const AUDIO_FP_CASES: readonly AudioFpCase[] = [
+  ["0000000000000000", "0000000000000000", "identical (8 words) -> 1.0"],
+  ["ffffffffffffffff", "0000000000000000", "all bits differ at best offset"],
+  ["deadbeefcafebabe", "deadbeefcafebabe", "identical multi-word -> 1.0"],
+  ["11111111222222223333333344444444", "2222222233333333", "shorter slides to a matching offset"],
+  ["0x0102030405060708", "0102030405060708", "0x prefix stripped -> 1.0"],
+  ["12345678", "87654321", "single-word BER"],
+  ["nothex00", "12345678", "non-hex -> 0.0"],
+];
+
+d("WASM audio_fp matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of AUDIO_FP_CASES) {
+    it(`audio_fp("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "audio_fp");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "audio_fp");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
+// initialism_match (score_one id 7): 1.0 iff one value's derived initialism (business
+// acronym, dropping legal-form tokens) equals the other value, else 0.0. The kernel
+// needs the ~77-entry legal-form table injected at enableWasm() (set_legal_forms); the
+// loader seeds it with the SAME table the pure-TS `initialismMatch` uses, so the WASM
+// matrix is byte-exact with the fallback (this also verifies the injection round-trips --
+// "Apple Inc." derives "" only if the kernel dropped "Inc" as a legal form).
+type InitialismCase = readonly [a: string, b: string, note: string];
+const INITIALISM_CASES: readonly InitialismCase[] = [
+  ["International Business Machines Corp", "IBM", "acronym match (Corp dropped) -> 1.0"],
+  ["IBM", "International Business Machines Corp", "reverse direction -> 1.0"],
+  ["General Electric Company", "GE", "Company dropped -> 1.0"],
+  ["Hewlett Packard", "HP", "two tokens -> HP"],
+  ["Acme Industries LLC", "AI", "Industries kept, LLC dropped -> AI"],
+  ["Apple Inc.", "AI", "Inc dropped -> Apple stays lowercase -> no match 0.0"],
+  ["National Aeronautics and Space Administration", "NASA", "stopword kept -> NAASA != NASA -> 0.0"],
+  ["IBM", "IBM", "identical acronym -> 1.0"],
+  ["Acme", "Acme", "no derivable initialism -> 0.0"],
+];
+
+d("WASM initialism_match matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of INITIALISM_CASES) {
+    it(`initialism_match("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "initialism_match");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "initialism_match");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
+d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of ENSEMBLE_CASES) {
+    it(`ensemble("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "ensemble");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "ensemble");
+      expect(m[0]![1]!).toBeCloseTo(ref!, 4);
+    });
+  }
+});

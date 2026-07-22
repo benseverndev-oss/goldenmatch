@@ -244,24 +244,24 @@ a2a_skills:
 # PluginRegistry validator fallback, so they're NOT in Python VALID_SCORERS).
 scorers:
   shared:
+  - audio_fp
   - date
   - dice
   - embedding
   - ensemble
   - exact
+  - initialism_match
   - jaccard
   - jaro_winkler
   - levenshtein
+  - phash
   - qgram
+  - radial
   - record_embedding
   - soundex_match
   - token_sort
   python_only:
   - alias_match
-  - audio_fp
-  - initialism_match
-  - phash
-  - radial
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw
@@ -305,36 +305,45 @@ blocking_strategies:
 # path) -- Python `_NATIVE_SCORER_IDS` (backends.score_buckets) vs TS
 # `WASM_COVERED_SCORERS` (core/wasm/backend SCORER_ID). Every scorer in the
 # `scorers` surface NOT listed here is a pure-language fallback with no kernel.
-# shared: `qgram` (id 5), `date` (id 4), `dice` (id 9), `jaccard` (id 10) are
-# kernel-backed on BOTH surfaces -- Python arrow-native (bucket) AND TS WASM (score-wasm
-# delegates the id to score_one; the WASM output is byte-exact with the pure-TS fallback
-# -- qgram is rational set-Jaccard, date's true-DL==OSA for the equal-length 8-digit
-# inputs it buckets, dice/jaccard are integer bloom-popcount + one divide).
-# python_only: `soundex_match`, `initialism_match`, `alias_match`, `phash`, `ensemble`,
-# `radial`, `audio_fp` have an arrow-native (bucket) kernel on Python but no TS WASM
-# port yet.
+# shared: `qgram` (id 5), `date` (id 4), `soundex_match` (id 6), `dice` (id 9),
+# `jaccard` (id 10) are kernel-backed on BOTH surfaces -- Python arrow-native (bucket)
+# AND TS WASM (score-wasm delegates the id to score_one; the WASM output is byte-exact
+# with the pure-TS fallback -- qgram is rational set-Jaccard, date's true-DL==OSA for the
+# equal-length 8-digit inputs it buckets, soundex_match is the shared Unicode-folding
+# standard-Soundex spec + empty-guard, dice/jaccard are integer bloom-popcount + one divide).
+# `ensemble` (id 12) is also shared: score-wasm overrides id 12 to recompose it with
+# the TS-parity normalized token_sort (jw + normalized token_sort + 0.8*soundex_match),
+# matching the pure-TS `ensembleScore` to 4dp -- the same bar its jw/token_sort
+# components hold vs rapidfuzz (soundex byte-exact). `phash` (id 11) is also shared:
+# perceptual-hash similarity (1 - hamming/nbits over hex pHashes), integer XOR popcount,
+# byte-exact WASM<->pure-TS like dice/jaccard.
+# python_only: `alias_match` has an arrow-native (bucket) kernel on Python but no TS WASM
+# port yet (it is behind score-wasm's off-by-default `alias` cargo feature + needs the
+# business/given-name alias tables injected). `initialism_match` is now shared: the kernel
+# needs the ~77-entry legal_forms table injected at enableWasm() (set_legal_forms), which the
+# loader seeds with the ported refdata/business.ts table so WASM == pure-TS byte-exact.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
 # (Python accepts them via the plugin fallback); a real, declared Python<->TS delta.
 scorer_kernels:
   shared:
+  - audio_fp
   - date
   - dice
+  - ensemble
   - exact
+  - initialism_match
   - jaccard
   - jaro_winkler
   - levenshtein
+  - phash
   - qgram
+  - radial
+  - soundex_match
   - token_sort
   python_only:
   - alias_match
-  - audio_fp
-  - ensemble
-  - initialism_match
-  - phash
-  - radial
-  - soundex_match
   ts_only:
   - given_name_aliased_jw
   - name_freq_weighted_jw

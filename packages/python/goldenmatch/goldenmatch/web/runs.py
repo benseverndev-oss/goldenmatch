@@ -118,18 +118,3 @@ def source_row(ref: RunRef, row_id: int) -> dict:
         raise IndexError(row_id)
     row = src.slice(row_id, 1).select_dicts(list(src.columns))[0]
     return {"row_id": row_id, "columns": row}
-
-
-def lineage_pair_keys(ref: RunRef) -> set[tuple[int, int]]:
-    """Set of canonical (min, max) pair keys present in this run's lineage.
-
-    Used to scope labels to "pairs that appeared in this run." Canonicalized
-    so it joins cleanly with the labels store (which also canonicalizes via
-    web/labels.py::_canonical_pair).
-    """
-    lineage = load_lineage(ref)
-    out: set[tuple[int, int]] = set()
-    for p in lineage.get("pairs", []):
-        a, b = int(p["row_id_a"]), int(p["row_id_b"])
-        out.add((a, b) if a <= b else (b, a))
-    return out

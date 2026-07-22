@@ -53,6 +53,14 @@ pub fn install_name_aliases(forms: Vec<String>, canonicals: Vec<String>) {
     let _ = NAME_ALIASES.set(AliasTable::from_forms(grouped));
 }
 
+/// Install the legal-form variant set for `initialism_match` (id 7). Delegates to
+/// score-core's process-global `set_legal_forms` OnceLock (first-wins) so
+/// `score_one(7, ...)` drops the SAME legal forms the pure-TS path does. Shared by
+/// the wasm setter + native tests.
+pub fn install_legal_forms(forms: Vec<String>) {
+    let _ = goldenmatch_score_core::set_legal_forms(forms.into_iter().collect());
+}
+
 /// Full row-major NxN similarity matrix for `values` under `scorer_id`.
 /// Diagonal = 0.0 and the matrix is symmetric, matching the pure-TS
 /// `scoreMatrix` (which fills the upper triangle, mirrors it, and leaves the
@@ -69,6 +77,19 @@ pub fn score_matrix_impl(values: &[&str], scorer_id: u8) -> Vec<f64> {
             // table-absent fallback the pure TS path takes.
             let s = match scorer_id {
                 2 => token_sort_normalized_ratio(values[i], values[j]),
+                // id=12 (ensemble) mirrors id=2's override: score_one(12)'s
+                // `ensemble_similarity` maxes over the UN-normalized score_one(2),
+                // but the pure-TS `ensembleScore` uses the normalized `tokenSortRatio`
+                // -- so the WASM arm recomposes ensemble with the TS-parity normalized
+                // token_sort (jw + normalized token_sort + 0.8*soundex) to stay 4dp
+                // parity with the pure-TS fallback (soundex byte-exact; jw/token_sort
+                // to 4dp, the same bar those scorers hold individually vs rapidfuzz).
+                12 => {
+                    let jw = score_one(0, values[i], values[j]);
+                    let ts = token_sort_normalized_ratio(values[i], values[j]);
+                    let sx = score_one(6, values[i], values[j]);
+                    jw.max(ts).max(0.8 * sx)
+                }
                 ID_GIVEN_NAME_ALIASED_JW => match NAME_ALIASES.get() {
                     Some(t) => given_name_aliased_sim(values[i], values[j], t),
                     None => score_one(0, values[i], values[j]),
@@ -164,11 +185,36 @@ mod tests {
         let raw = goldenmatch_score_core::score_one(2, "John SMITH", "smith john");
         assert!(raw < 1.0);
     }
+
+    #[test]
+    fn ensemble_id12_uses_normalized_token_sort() {
+        use goldenmatch_score_core::{score_one, token_sort_normalized_ratio};
+        // id=12 must recompose ensemble with the NORMALIZED token_sort (not the
+        // un-normalized one score_one(12)/ensemble_similarity uses), so it stays
+        // parity with the pure-TS `ensembleScore`.
+        for (a, b) in [
+            ("John SMITH", "smith john"), // token-sort dominates -> 1.0
+            ("Robert", "Rupert"),         // soundex R163 -> 0.8 bonus
+            ("MARTHA", "MARHTA"),         // jw dominates
+            ("", ""),                     // empty -> soundex guard 0.0, jw/ts 1.0
+        ] {
+            let m = score_matrix_impl(&[a, b], 12);
+            let want = score_one(0, a, b)
+                .max(token_sort_normalized_ratio(a, b))
+                .max(0.8 * score_one(6, a, b));
+            assert!((m[1] - want).abs() < 1e-12, "ensemble {a:?}/{b:?}: {} vs {want}", m[1]);
+        }
+        // The normalized token_sort makes "John SMITH"/"smith john" -> 1.0, where
+        // score_one(12) (un-normalized token_sort) would score lower.
+        let m = score_matrix_impl(&["John SMITH", "smith john"], 12);
+        assert!((m[1] - 1.0).abs() < 1e-9);
+        assert!(score_one(12, "John SMITH", "smith john") < 1.0);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{install_name_aliases, install_surname_idf, score_matrix_impl};
+    use super::{install_legal_forms, install_name_aliases, install_surname_idf, score_matrix_impl};
     use wasm_bindgen::prelude::*;
 
     /// JS entry: `values` is one string with fields joined by `sep` (a 1-char
@@ -197,5 +243,13 @@ mod wasm {
     #[wasm_bindgen]
     pub fn set_name_aliases(forms: Vec<String>, canonicals: Vec<String>) {
         install_name_aliases(forms, canonicals);
+    }
+
+    /// Install the legal-form variant set for `initialism_match` (id 7). Called
+    /// once by the TS loader at `enableWasm()` with the ported
+    /// `entity_form_variants()` list (`refdata/business.ts`).
+    #[wasm_bindgen]
+    pub fn set_legal_forms(forms: Vec<String>) {
+        install_legal_forms(forms);
     }
 }

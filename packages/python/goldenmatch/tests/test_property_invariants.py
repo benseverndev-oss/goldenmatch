@@ -105,6 +105,13 @@ _nonempty_ascii = st.text(
     min_size=1,
     max_size=64,
 )
+# soundex identity needs at least one ASCII LETTER: canonical soundex maps a
+# no-letter value (digits/punctuation/space) to "" -> the empty-code guard makes
+# it NON-matching even against itself (garbage never matches). So the "score(a,a)
+# == 1.0" invariant holds only for inputs with real phonetic content.
+_nonempty_ascii_alpha = _nonempty_ascii.filter(
+    lambda s: any("a" <= c.lower() <= "z" for c in s)
+)
 
 # Dict strategy for fingerprint tests: str keys (no __ prefix, nonempty),
 # values from the supported primitive types (no NaN floats -- by spec they raise).
@@ -161,7 +168,7 @@ _SCORER_NONEMPTY_STRATEGY: dict = {
     "levenshtein": _nonempty_text,
     "token_sort": _nonempty_text,
     "qgram": _nonempty_text,
-    "soundex_match": _nonempty_ascii,
+    "soundex_match": _nonempty_ascii_alpha,
 }
 
 # Standardizers that are idempotent by design (empirically verified above)

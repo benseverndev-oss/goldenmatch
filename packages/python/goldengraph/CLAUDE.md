@@ -246,6 +246,32 @@ are purely the knob's effect. Dispatch via `bench-graphrag-qa.yml` mode `env_ab`
   bucket), which voting barely dents — the real lever is a better synthesizer
   (node-selection / prompt), not more samples of the same one.
 
+## Synthesis node-disambiguation is DEFAULT ON (`GOLDENGRAPH_SYNTH_SELECT`, 2026-07-22)
+The synthesis-PRECISION lever the voting note points at. Mining the confound-free env-A/B
+(#168) localized the synthesis miss as WRONG-NODE selection, not reasoning: on entity
+questions the model returns a plausible NEIGHBOR of the answer — the containing GROUP
+instead of the member (Karen Fairchild -> Little Big Town), the famous adjacent PERSON
+instead of the body (Politburo -> Stalin), a related EVENT instead of the thing
+(SuperSonics -> 1950 NBA draft), the wrong same-type SIBLING (Josh Radnor -> Bob Saget).
+The prior `_LOCAL_PROMPT` only guarded "don't answer with the entity you HELD going into
+the final hop"; it did NOT guard "don't answer with a plausible neighbor".
+- **`synthesize._SELECT_PREAMBLE`** (inserted before the answer clause by `_local_prompt()`
+  when `_select_enabled()`) forces an explicit disambiguation: state the KIND of thing the
+  question asks for, enumerate candidate answer nodes with types, then pick the type-matching
+  FAR-END node — not the most-famous neighbor, not the group when a member is asked, not a
+  related event when the thing is asked. Composes with `GOLDENGRAPH_LITERAL_ATTRS`.
+- **MEASURED default-on (same-graph env-A/B run 29888086667, MuSiQue N=100, SELECT 0 vs 1
+  on the IDENTICAL graph; `support_recall` 0.8417 == 0.8417 across arms = the control that
+  proves retrieval was untouched):** entity-subset answer_match **0.2462 -> 0.2923 (+18.7%
+  rel)**, answer_match 0.18 -> 0.20, token_f1 0.224 -> 0.263 — all up, same direction, at
+  **~no extra cost** (one call with a longer prompt; total $10.88 ~= the SELECT-off $10.38).
+  Contrast voting (=5): +0.015 entity at ~5x cost. SELECT is ~3x the lift at ~1/5 the cost —
+  which is why it ships DEFAULT ON while voting stays opt-in.
+- **`GOLDENGRAPH_SYNTH_SELECT=0` (or `false`/'') restores the pre-clause prompt
+  byte-identical** (`_local_prompt()` == `_LOCAL_PROMPT`; locked by
+  `tests/test_synthesis_select.py`). NEXT: broader-N / multi-seed confirmation, and whether
+  the same type-check helps the hybrid path (`_HYBRID_PROMPT`, currently unchanged).
+
 ## CHAT / embedding provider split (2026-07-22)
 `OpenAIClient._ensure_client` (`llm.py`) reads `GOLDENGRAPH_LLM_BASE_URL` /
 `GOLDENGRAPH_LLM_API_KEY` first, falling back to `OPENAI_BASE_URL` / `OPENAI_API_KEY`

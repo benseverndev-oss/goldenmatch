@@ -29,18 +29,19 @@ def test_class_a_scorer_resolves_to_callable(scorer_name):
 
 def test_soundex_match_matches_matrix_path():
     """Per-pair soundex_match must produce the same 0/1 score as the matrix
-    path in core/scorer.py:88. Same jellyfish.soundex under the hood."""
-    import jellyfish
+    path. Both use canonical GoldenMatch soundex + the empty-code guard (garbage
+    / empty never matches -- see core/scorer._soundex_score_single)."""
+    from goldenmatch.core.scorer import _soundex_score_single
     fn = _resolve_score_pair_callable("soundex_match")
     pairs = [
         ("Smith", "Smyth"),    # same soundex -> 1.0
         ("Robert", "Rupert"),  # same soundex -> 1.0
         ("Smith", "Jones"),    # different -> 0.0
-        ("", ""),              # edge
+        ("", ""),              # empty code -> guarded to 0.0 (never matches)
+        ("123", "456"),        # garbage -> "" -> 0.0
     ]
     for a, b in pairs:
-        expected = 1.0 if jellyfish.soundex(a) == jellyfish.soundex(b) else 0.0
-        assert fn(a, b) == expected, f"soundex_match({a!r},{b!r})"
+        assert fn(a, b) == _soundex_score_single(a, b), f"soundex_match({a!r},{b!r})"
 
 
 def test_dice_matches_matrix_path():

@@ -7,7 +7,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-import jellyfish
 import numpy as np
 from rapidfuzz.distance import DamerauLevenshtein, JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
@@ -23,7 +22,7 @@ from goldenmatch.core._profile_helpers import (
 )
 from goldenmatch.core.complexity_profile import ScoringProfile
 from goldenmatch.core.profile_emitter import current_emitter, has_active_emitter
-from goldenmatch.utils.transforms import apply_transforms
+from goldenmatch.utils.transforms import apply_transforms, canonical_soundex
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +189,7 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
     elif scorer == "token_sort":
         return token_sort_ratio(val_a, val_b) / 100.0
     elif scorer == "soundex_match":
-        return 1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+        return _soundex_score_single(val_a, val_b)
     elif scorer == "ensemble":
         # Scalar twin of the NxN `ensemble` branch in `_fuzzy_score_matrix`:
         # element-wise max of jaro_winkler, token_sort, and soundex*0.8. The
@@ -692,6 +691,15 @@ def _record_embedding_score_matrix(
     return np.asarray(sim, dtype=np.float64)
 
 
+def _soundex_score_single(val_a: str, val_b: str) -> float:
+    """Per-pair ``soundex_match``: 1.0 iff a NON-EMPTY canonical soundex code is
+    shared. Byte-for-byte with score-core ``soundex_match`` (id 6) -- the
+    empty-code guard means garbage/empty never matches (no placeholder
+    mega-clustering)."""
+    ca = canonical_soundex(val_a)
+    return 1.0 if ca and ca == canonical_soundex(val_b) else 0.0
+
+
 def _soundex_score_matrix(values: list) -> np.ndarray:
     """NxN soundex match matrix.
 
@@ -703,7 +711,9 @@ def _soundex_score_matrix(values: list) -> np.ndarray:
     m = _native_field_matrix(values, "soundex_match")
     if m is not None:
         return m
-    codes = [jellyfish.soundex(v) if v is not None else None for v in values]
+    # Empty code (no phonetic content) -> None so it matches NOTHING in the
+    # exact-match matrix, mirroring score-core `soundex_match`'s empty-guard.
+    codes = [(canonical_soundex(v) or None) if v is not None else None for v in values]
     return _exact_score_matrix(codes)
 
 
@@ -1048,7 +1058,8 @@ def _ensemble_score_single(val_a: str, val_b: str) -> float:
     jw = JaroWinkler.similarity(val_a, val_b)
     ts = token_sort_ratio(val_a, val_b) / 100.0
     try:
-        sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+        ca = canonical_soundex(val_a)
+        sx = 0.8 if ca and ca == canonical_soundex(val_b) else 0.0
     except Exception:
         sx = 0.0
     return max(jw, ts, sx)

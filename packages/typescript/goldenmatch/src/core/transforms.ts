@@ -118,27 +118,44 @@ const SOUNDEX_MAP: Record<string, string> = {
  * Vowels (A/E/I/O/U/Y) DO reset, so "Pfister" and "Jackson" work correctly.
  */
 export function soundex(value: string): string {
-  const clean = value.toUpperCase().replace(/[^A-Z]/g, "");
-  if (clean.length === 0) return "0000";
+  // Canonical GoldenMatch soundex (byte-matches score-core `soundex`): a
+  // Unicode-folding STANDARD Soundex. NFKD-fold + uppercase, then walk the string.
+  // ASCII [A-Z] are seed / coded consonant / H-W-transparent / vowel-break; EVERY
+  // other char (digit, punctuation, whitespace, the combining marks NFKD strips off
+  // accents, exotic non-decomposable letters) is a SEPARATOR that breaks the coding
+  // run but never seeds. So multi-token names code each token's boundary consonant
+  // ("joseph bradshaw"->"J211", not merged to "J216"), accents fold to their base
+  // letter (José->J200, Muñoz->M520), and no-letter -> "" (empty key; garbage never
+  // matches / blocks). On pure ASCII this equals classic American Soundex.
+  const norm = value.normalize("NFKD").toUpperCase();
+  let code = "";
+  let lastDigit = "0"; // "0" = no previous letter code (after seed/vowel/separator)
 
-  const firstLetter = clean[0]!;
-  let code = firstLetter;
-  let lastDigit = SOUNDEX_MAP[firstLetter] ?? "0";
-
-  for (let i = 1; i < clean.length && code.length < 4; i++) {
-    const ch = clean[i]!;
-    const digit = SOUNDEX_MAP[ch];
-    if (digit && digit !== lastDigit) {
-      code += digit;
-      lastDigit = digit;
-    } else if (!digit) {
-      // Vowel / H / W / Y — only H and W are transparent (do NOT reset)
-      if (ch !== "H" && ch !== "W") {
-        lastDigit = "0";
+  for (let i = 0; i < norm.length && code.length < 4; i++) {
+    const ch = norm[i]!;
+    if (ch >= "A" && ch <= "Z") {
+      if (code.length === 0) {
+        code = ch; // seed = first surviving letter
+        lastDigit = SOUNDEX_MAP[ch] ?? "0"; // seed's code suppresses a same-code follower
+        continue;
       }
+      const digit = SOUNDEX_MAP[ch];
+      if (digit && digit !== lastDigit) {
+        code += digit;
+        lastDigit = digit;
+      } else if (!digit) {
+        // Vowel / H / W / Y — only H and W are transparent (do NOT reset)
+        if (ch !== "H" && ch !== "W") {
+          lastDigit = "0";
+        }
+      }
+    } else {
+      // Separator: break the coding run so a same code across the gap re-emits.
+      lastDigit = "0";
     }
   }
 
+  if (code.length === 0) return "";
   return (code + "0000").slice(0, 4);
 }
 

@@ -118,19 +118,6 @@ def label_propagation(
     )
 
 
-# Pair-count threshold above which we route to distributed label propagation.
-# Below this, driver-side scipy.csgraph dominates (per run 26119800863:
-# label-prop on 8.3M pairs ran > 14 min; scipy on the same shape would be
-# seconds). Splink-Spark follows the same pattern: DuckDB backend below
-# the scale where Spark is necessary; Spark above.
-#
-# 50M chosen as a conservative threshold:
-#  - 50M pairs = ~1.2 GB driver memory for the (int64, int64, float64) triple
-#  - scipy.csgraph on that scale: ~30-60s, manageable on 64 GB box
-#  - Above 50M, driver materialization starts to compete with Ray's overhead
-# Override via GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD env var (pairs).
-_LABEL_PROP_PAIR_THRESHOLD = 50_000_000
-
 # Mersenne prime for the randomized-contraction affine hash (#844). Vertex ids
 # must be < _RC_PRIME; row ids at 346M are ~2**28, well under 2**31-1 ~= 2.1B.
 # Keeps h(x)=(A*x+B) % p in i64 range: A,x,B < 2**31 => A*x < 2**62 < 2**63.
@@ -159,18 +146,6 @@ def _wcc_algorithm() -> str:
     """
     import os
     return os.environ.get("GOLDENMATCH_DISTRIBUTED_WCC", "two_phase").lower()
-
-
-def _label_prop_threshold() -> int:
-    import os
-
-    raw = os.environ.get("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD")
-    if raw is None:
-        return _LABEL_PROP_PAIR_THRESHOLD
-    try:
-        return int(raw)
-    except ValueError:
-        return _LABEL_PROP_PAIR_THRESHOLD
 
 
 # Peak driver bytes per scored pair on the in-memory scipy route: ~24 B for the
