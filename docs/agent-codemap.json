@@ -3165,7 +3165,8 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
-            "goldenmatch.core.blocker"
+            "goldenmatch.core.blocker",
+            "goldenmatch.utils.transforms"
           ]
         },
         {
@@ -4069,6 +4070,7 @@
             "_score_one_block",
             "_score_one_block_columnar",
             "_soundex_score_matrix",
+            "_soundex_score_single",
             "find_exact_matches",
             "find_fuzzy_matches",
             "find_fuzzy_matches_columnar",
@@ -6959,7 +6961,8 @@
             "_prepare_bloom_input",
             "apply_transform",
             "apply_transforms",
-            "bloom_clk_batch"
+            "bloom_clk_batch",
+            "canonical_soundex"
           ],
           "imports": [
             "goldenmatch.core._native_loader",

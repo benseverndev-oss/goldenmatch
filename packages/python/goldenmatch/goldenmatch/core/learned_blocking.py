@@ -69,11 +69,11 @@ _TRANSFORM_MAP = {
 
 
 def _safe_soundex(val: str) -> str:
-    try:
-        import jellyfish
-        return jellyfish.soundex(val)
-    except Exception:
-        return val[:4].upper()
+    # GoldenMatch canonical soundex (byte-matches the score-core kernel); pure,
+    # never raises. A no-letter value -> "" (filtered as an empty block key).
+    from goldenmatch.utils.transforms import canonical_soundex
+
+    return canonical_soundex(val)
 
 
 def generate_predicates(columns: list[str]) -> list[BlockingPredicate]:

@@ -146,8 +146,8 @@ def _vec_field_matrix(values: list, scorer_name: str):
         # bonus, all float64). The soundex bonus reuses `_soundex_score_matrix`,
         # the SAME matrix the per-pair soundex_match callable is byte-parity with
         # (asserted in tests/test_score_buckets_vectorized_fallback.py), so the
-        # ensemble vec form agrees with `_ensemble_score_single`'s
-        # `jellyfish.soundex(a)==jellyfish.soundex(b)` empty-code-match semantics.
+        # ensemble vec form agrees with `_ensemble_score_single`'s canonical
+        # soundex empty-code-guard semantics (garbage/empty never matches).
         from goldenmatch.core.scorer import _soundex_score_matrix
         jw = np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
         ts = np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
@@ -477,11 +477,11 @@ def _resolve_score_pair_callable(
     if scorer_name == "exact":
         return lambda a, b: 1.0 if a == b else 0.0
     if scorer_name == "soundex_match":
-        # Pure-Python jellyfish.soundex; per-pair binary match. Identical
-        # to the matrix path's soundex_match (core/scorer.py:88), just
-        # one call at a time instead of cdist-batched.
-        import jellyfish as _jf
-        return lambda a, b: 1.0 if _jf.soundex(a) == _jf.soundex(b) else 0.0
+        # GoldenMatch canonical soundex (byte-matches score-core); per-pair binary
+        # match with the empty-code guard (garbage/empty never matches). Identical
+        # to the matrix path's soundex_match, just one call at a time.
+        from goldenmatch.core.scorer import _soundex_score_single
+        return _soundex_score_single
     if scorer_name == "date":
         # Date-aware scorer (#1858). Per-pair mirror of score-core::date_similarity
         # (native id 4); byte-identical to the kernel (native-parity asserted).

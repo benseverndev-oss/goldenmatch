@@ -87,11 +87,37 @@ describe("soundex", () => {
     expect(soundex("Rupert")).toBe("R163");
   });
 
-  it("empty string -> 0000", () => {
-    expect(soundex("")).toBe("0000");
+  it("no surviving letter -> empty string (canonical spec, not 0000)", () => {
+    // Garbage / empty has no phonetic content -> "" (empty key filtered in
+    // blocking, never matches in scoring). Diverges from jellyfish on purpose.
+    expect(soundex("")).toBe("");
+    expect(soundex("123")).toBe("");
+    expect(soundex("!!")).toBe("");
   });
 
-  it("returns 4-character code", () => {
+  it("NFKD-folds accented letters (José -> J200, Ñoño -> N500)", () => {
+    expect(soundex("José")).toBe("J200");
+    expect(soundex("Ñoño")).toBe("N500");
+    expect(soundex("Muñoz")).toBe(soundex("Munoz"));
+    expect(soundex("Muñoz")).toBe("M520"); // ñ folds to n (jellyfish drops it -> M200)
+  });
+
+  it("separators break the coding run (standard Soundex, not strip-and-merge)", () => {
+    // A space/punctuation between tokens BREAKS adjacency, so a code on each side
+    // of the gap is kept -- stripping separators instead would merge them and
+    // regress person-name blocking/scoring. Byte-matches score-core `soundex`.
+    expect(soundex("joseph bradshaw")).toBe("J211"); // P then B kept (not "J216")
+    expect(soundex("warren nale")).toBe("W655"); // N | N kept (not "W654")
+    expect(soundex("S1S")).toBe("S200"); // the "1" breaks S|S adjacency -> 2 re-emitted
+    // Non-letters never seed: a leading digit is skipped, the first letter seeds.
+    expect(soundex("3M")).toBe("M000");
+    expect(soundex("4abc")).toBe("A120");
+    // Exotic non-decomposable letters are separators too.
+    expect(soundex("Þór")).toBe("O600");
+    expect(soundex("Æthel")).toBe("T400");
+  });
+
+  it("returns 4-character code for real names", () => {
     expect(soundex("Washington").length).toBe(4);
   });
 });
