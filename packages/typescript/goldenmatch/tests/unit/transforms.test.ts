@@ -87,11 +87,21 @@ describe("soundex", () => {
     expect(soundex("Rupert")).toBe("R163");
   });
 
-  it("empty string -> 0000", () => {
-    expect(soundex("")).toBe("0000");
+  it("no surviving letter -> empty string (canonical spec, not 0000)", () => {
+    // Garbage / empty has no phonetic content -> "" (empty key filtered in
+    // blocking, never matches in scoring). Diverges from jellyfish on purpose.
+    expect(soundex("")).toBe("");
+    expect(soundex("123")).toBe("");
+    expect(soundex("!!")).toBe("");
   });
 
-  it("returns 4-character code", () => {
+  it("NFKD-folds accented letters (José -> J200, Ñoño -> N500)", () => {
+    expect(soundex("José")).toBe("J200");
+    expect(soundex("Ñoño")).toBe("N500");
+    expect(soundex("Muñoz")).toBe(soundex("Munoz"));
+  });
+
+  it("returns 4-character code for real names", () => {
     expect(soundex("Washington").length).toBe(4);
   });
 });

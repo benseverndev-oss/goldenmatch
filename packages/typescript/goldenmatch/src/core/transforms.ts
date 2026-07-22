@@ -118,8 +118,11 @@ const SOUNDEX_MAP: Record<string, string> = {
  * Vowels (A/E/I/O/U/Y) DO reset, so "Pfister" and "Jackson" work correctly.
  */
 export function soundex(value: string): string {
-  const clean = value.toUpperCase().replace(/[^A-Z]/g, "");
-  if (clean.length === 0) return "0000";
+  // Canonical GoldenMatch soundex (byte-matches score-core `soundex`): NFKD-fold
+  // + uppercase + keep only ASCII [A-Z] (so José->JOSE, Ñoño->NONO), then standard
+  // Soundex. No surviving letter -> "" (empty key; garbage never matches / blocks).
+  const clean = value.normalize("NFKD").toUpperCase().replace(/[^A-Z]/g, "");
+  if (clean.length === 0) return "";
 
   const firstLetter = clean[0]!;
   let code = firstLetter;

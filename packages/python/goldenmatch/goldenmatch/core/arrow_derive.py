@@ -173,9 +173,9 @@ def transformed_column(arr: Any, transforms: Sequence[str]) -> Any:
         # Known phonetic transforms resolve to their (Rust) callables
         # directly, skipping apply_transform's name-dispatch per value.
         if _t == "soundex":
-            import jellyfish
+            from goldenmatch.utils.transforms import canonical_soundex
 
-            _fn = jellyfish.soundex
+            _fn = canonical_soundex
         elif _t == "metaphone":
             import jellyfish
 

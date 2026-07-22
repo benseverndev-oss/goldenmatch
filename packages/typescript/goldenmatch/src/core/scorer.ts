@@ -378,7 +378,11 @@ export function tokenSortRatio(a: string, b: string): number {
  * Soundex match: 1.0 if soundex codes equal, else 0.0.
  */
 export function soundexMatch(a: string, b: string): number {
-  return soundex(a) === soundex(b) ? 1.0 : 0.0;
+  // Empty code (no phonetic content) never matches -- not even another empty
+  // code -- so placeholder columns don't mega-cluster. Byte-for-byte with
+  // score-core `soundex_match` (id 6) + the Python `_soundex_score_single`.
+  const ca = soundex(a);
+  return ca !== "" && ca === soundex(b) ? 1.0 : 0.0;
 }
 
 // ---------------------------------------------------------------------------
@@ -685,9 +689,15 @@ function exactScoreMatrix(values: (string | null)[]): number[][] {
   return matrix;
 }
 
-/** Soundex score matrix: group by soundex code, 1.0 for same code. */
+/** Soundex score matrix: group by soundex code, 1.0 for same code. Empty codes
+ * (no phonetic content) map to null so they match NOTHING -- the empty-guard that
+ * mirrors score-core `soundex_match` and keeps placeholders from mega-clustering. */
 function soundexScoreMatrix(values: (string | null)[]): number[][] {
-  const codes = values.map((v) => (v !== null ? soundex(v) : null));
+  const codes = values.map((v) => {
+    if (v === null) return null;
+    const c = soundex(v);
+    return c === "" ? null : c;
+  });
   return exactScoreMatrix(codes);
 }
 

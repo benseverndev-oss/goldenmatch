@@ -198,36 +198,46 @@ pub fn qgram_similarity(a: &str, b: &str) -> f64 {
     inter as f64 / union as f64
 }
 
-/// American Soundex matching `jellyfish.soundex` byte-for-byte, INCLUDING its
-/// Unicode handling. Mirrors the jellyfish reference exactly
-/// (`jellyfish/_jellyfish.py::soundex`):
+/// GoldenMatch canonical American Soundex -- the in-house reference for every
+/// `goldenmatch` soundex surface (the bucket `score_one` path, the Python
+/// pure/blocking fallbacks, and the TS port). Deliberately NOT jellyfish:
 ///
-/// - empty input -> `""`.
-/// - `unicodedata.normalize("NFKD", s).upper()`: NFKD decomposition (an accented letter becomes base-letter + combining mark) then Unicode uppercase (`ß` -> `"SS"`).
-/// - seed = the LITERAL first char (kept as-is, not coded); `last` = its would-be code, or None if the seed isn't a coded consonant.
-/// - each subsequent char: a coded consonant appends its code when it differs from `last` (adjacent-dup collapse); ANY other char resets `last` to None UNLESS it is `H`/`W` (which leave `last` untouched).
-/// - stop at 4 output chars; right-pad with `0`.
+/// - `NFKD`-normalize + Unicode-uppercase, then keep ONLY ASCII letters `[A-Z]`.
+///   Accents fold away (`José` -> `J200`, `Ürüm` -> `U650`, `ß` -> `S000`);
+///   every non-letter -- digits, punctuation, whitespace, combining marks, and
+///   exotic non-decomposable letters (`þ`/`Æ`/`Đ`) -- is DROPPED, not seeded as a
+///   literal the way jellyfish does (`"123" -> "1000"`, `"Þór" -> "Þ600"`).
+/// - Standard Soundex over the surviving letters: seed = the first letter, code
+///   `B..R` per `soundex_code`, adjacent duplicate codes collapse, `H`/`W` are
+///   transparent (skip without breaking a run), vowels (incl. `Y`) break the run;
+///   right-pad to four with `0`.
+/// - NO surviving letter (empty / all-digit / all-punctuation) -> `""`. A value
+///   with no phonetic content has no code; on the blocking side an empty key is
+///   filtered (no giant garbage block), and the `soundex_match` scorer treats an
+///   empty code as a non-match against ANYTHING (see `soundex_match`).
 ///
-/// This is the single reference for every `goldenmatch` soundex surface: the
-/// `native` field-matrix kernel and the bucket `score_one` path both call it.
-/// Rust `nfkd()` (the `unicode-normalization` crate) plus `str::to_uppercase`
-/// implement the same Unicode algorithms as Python's `unicodedata.normalize`
-/// and `str.upper`, so the result is byte-identical to jellyfish (batteried in
-/// `tests/test_native_soundex_parity.py`).
+/// Rust `nfkd()` (`unicode-normalization`) + `str::to_uppercase` implement the
+/// same Unicode algorithms as Python `unicodedata.normalize("NFKD", …).upper()`
+/// and JS `String.prototype.normalize("NFKD")` / `toUpperCase()`, so the result
+/// is byte-identical across the Rust / Python-fallback / TS-fallback surfaces
+/// (the ASCII/Latin-scoped Unicode-version parity edge the other kernels document
+/// applies here too). Cross-surface parity in `tests/test_native_soundex_parity.py`.
 pub fn soundex(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let normalized: String = s.nfkd().collect::<String>().to_uppercase();
-    let chars: Vec<char> = normalized.chars().collect();
-    if chars.is_empty() {
+    let letters: Vec<char> = s
+        .nfkd()
+        .collect::<String>()
+        .to_uppercase()
+        .chars()
+        .filter(|c| c.is_ascii_uppercase())
+        .collect();
+    if letters.is_empty() {
         return String::new();
     }
     let mut result = String::with_capacity(4);
-    result.push(chars[0]); // literal seed (jellyfish `result = [s[0]]`)
+    result.push(letters[0]); // seed = first surviving letter
     let mut count = 1usize;
-    let mut last = soundex_code(chars[0]); // would-be code of the seed, or None
-    for &c in &chars[1..] {
+    let mut last = soundex_code(letters[0]); // would-be code of the seed, or None
+    for &c in &letters[1..] {
         match soundex_code(c) {
             Some(code) => {
                 if Some(code) != last {
@@ -237,8 +247,7 @@ pub fn soundex(s: &str) -> String {
                 last = Some(code);
             }
             None => {
-                // Non-coded char (vowel / mark / digit / symbol): reset the
-                // dedup state, EXCEPT H/W which jellyfish leaves alone.
+                // Vowels (A/E/I/O/U/Y) break the run; H/W stay transparent.
                 if c != 'H' && c != 'W' {
                     last = None;
                 }
@@ -252,6 +261,24 @@ pub fn soundex(s: &str) -> String {
         result.push('0');
     }
     result
+}
+
+/// `soundex_match` scorer: `1.0` iff two values share a NON-EMPTY soundex code,
+/// else `0.0`. The empty-code guard is load-bearing -- a value with no phonetic
+/// content (empty / all-digit / all-punctuation -> `soundex` returns `""`) never
+/// matches, INCLUDING another empty-code value, so placeholder columns
+/// (`"000"`, `"-"`, `""`) can't mega-cluster into one phonetic bucket. Byte-for-byte
+/// with the Python `_soundex_score_single` + TS `soundexMatch` fallbacks.
+pub fn soundex_match(a: &str, b: &str) -> f64 {
+    let ca = soundex(a);
+    if ca.is_empty() {
+        return 0.0;
+    }
+    if ca == soundex(b) {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// Soundex digit for a coded consonant (uppercase), else `None`. Vowels
@@ -889,11 +916,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         3 if a == b => 1.0,
         4 => date_similarity(a, b),
         5 => qgram_similarity(a, b),
-        // id=6 = soundex_match: binary 1.0/0.0 on soundex-code equality. Guard
-        // arm collapses the if/else into the match (clippy::collapsible-match),
-        // like id 3; a soundex mismatch falls through to the 0.0 catch-all.
-        // Matches the bucket per-pair mirror `1.0 if jf.soundex(a)==jf.soundex(b) else 0.0`.
-        6 if soundex(a) == soundex(b) => 1.0,
+        // id=6 = soundex_match: 1.0 iff a NON-EMPTY soundex code is shared, else
+        // 0.0 (the empty-code guard lives in `soundex_match` -- garbage/empty never
+        // matches, so placeholder columns can't mega-cluster). Matches the bucket
+        // per-pair mirror `_soundex_score_single`.
+        6 => soundex_match(a, b),
         // id=7 = initialism_match against the host-installed legal-form set (empty
         // until `set_legal_forms` is called). Byte-for-byte with
         // `_initialism_match_single`; the Python fast-path guard requires the
@@ -1009,28 +1036,49 @@ mod tests {
     }
 
     #[test]
-    fn soundex_matches_jellyfish_reference() {
-        // Canonical alphabetic jellyfish values.
+    fn soundex_canonical_in_house() {
+        // Alphabetic names: standard American Soundex, UNCHANGED from jellyfish
+        // (the in-house spec only diverges on non-letters / exotic letters).
         assert_eq!(soundex("Robert"), "R163");
         assert_eq!(soundex("Rupert"), "R163"); // Robert/Rupert collide
         assert_eq!(soundex("Ashcraft"), "A261"); // H/W skip rule
         assert_eq!(soundex("Tymczak"), "T522");
         assert_eq!(soundex("Pfister"), "P236"); // adjacent same-code (P,F -> 1) coalesces
         assert_eq!(soundex("Honeyman"), "H555");
-        // Empty -> empty (jellyfish `if not s`).
-        assert_eq!(soundex(""), "");
-        // Leading non-alpha: jellyfish seeds on the LITERAL first char (NOT the
-        // first letter) and codes the rest -- full-parity cases probed from
-        // jellyfish itself.
-        assert_eq!(soundex("123"), "1000");
-        assert_eq!(soundex("3M"), "3500");
-        assert_eq!(soundex("4abc"), "4120");
-        // Mid-string non-letter resets the dedup state (S..1..S -> both S's coded).
-        assert_eq!(soundex("S1S"), "S200");
-        // Unicode: NFKD fold + uppercase. Ürüm -> U + r(6) + m(5); ß.upper()="SS".
+        // Accented Latin folds via NFKD -- byte-identical to jellyfish here too.
         assert_eq!(soundex("Ürüm"), "U650");
         assert_eq!(soundex("José"), "J200");
-        assert_eq!(soundex("ß"), "S000");
+        assert_eq!(soundex("ß"), "S000"); // upper() -> "SS" -> dup-collapse
+        // No surviving letter -> "" (the DIVERGENCE from jellyfish, which would
+        // seed the literal digit/symbol: "123" -> "1000").
+        assert_eq!(soundex(""), "");
+        assert_eq!(soundex("123"), "");
+        assert_eq!(soundex("!!"), "");
+        // Non-letters are DROPPED, not seeded/coded (jellyfish: "3M"->"3500",
+        // "4abc"->"4120", "S1S"->"S200" -- it seeds the literal + a mid non-letter
+        // resets the run). In-house: drop them first, then standard Soundex.
+        assert_eq!(soundex("3M"), "M000"); // -> "M"
+        assert_eq!(soundex("4abc"), "A120"); // -> "ABC"
+        assert_eq!(soundex("12ab"), "A100"); // -> "AB"
+        assert_eq!(soundex("S1S"), "S000"); // -> "SS" (adjacent -> collapse), not "S200"
+        // Exotic non-decomposable letters are dropped (jellyfish keeps the raw
+        // char as the literal seed: "Þór"->"Þ600", "Æthel"->"Æ340").
+        assert_eq!(soundex("Þór"), "O600"); // -> "OR"
+        assert_eq!(soundex("Æthel"), "T400"); // -> "THEL"
+        assert_eq!(soundex("Đặng"), "A520"); // -> "ANG"
+    }
+
+    #[test]
+    fn soundex_match_empty_code_never_matches() {
+        // Non-empty shared code -> 1.0; different -> 0.0.
+        assert_eq!(soundex_match("Robert", "Rupert"), 1.0);
+        assert_eq!(soundex_match("Robert", "Smith"), 0.0);
+        // Empty code (garbage) never matches -- not even another empty code, so
+        // placeholder columns don't collapse into one phonetic bucket.
+        assert_eq!(soundex_match("123", "456"), 0.0); // both "" -> still 0.0
+        assert_eq!(soundex_match("123", "123"), 0.0); // identical garbage -> 0.0
+        assert_eq!(soundex_match("", ""), 0.0);
+        assert_eq!(soundex_match("123", "Robert"), 0.0); // "" vs a real code
     }
 
     #[test]
@@ -1055,9 +1103,9 @@ mod tests {
     fn score_one_id6_is_soundex_match() {
         assert_eq!(score_one(6, "Robert", "Rupert"), 1.0); // same code
         assert_eq!(score_one(6, "Robert", "Smith"), 0.0); // different code
-        // full jellyfish parity: soundex("123")="1000" != soundex("456")="4000"
+        // Empty-code guard: garbage never matches (id 6 == soundex_match).
         assert_eq!(score_one(6, "123", "456"), 0.0);
-        assert_eq!(score_one(6, "123", "123"), 1.0);
+        assert_eq!(score_one(6, "123", "123"), 0.0); // both "" -> guarded to 0.0
     }
 
     fn _legal_forms() -> std::collections::HashSet<String> {

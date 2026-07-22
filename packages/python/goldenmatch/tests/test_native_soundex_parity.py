@@ -1,18 +1,19 @@
-"""Parity for the soundex_match bucket kernel (score-core id 6) vs jellyfish.
+"""Parity for the soundex_match kernel (score-core id 6) vs the pure-Python
+`canonical_soundex` reference.
 
-soundex was already a Rust kernel in the *field-matrix* path (native id 4); Wave 1
-moves the impl into `score-core` with FULL `jellyfish.soundex` parity (NFKD
-normalize + Unicode uppercase + literal-first-char seed) and wires it into the
-*bucket* path via `score_one` id 6, so it becomes kernel-backed in the metric
-(the scorer_kernels surface reads the bucket `_NATIVE_SCORER_IDS`).
+soundex is kernel-backed on both the bucket path (`score_one` id 6) and the
+field-matrix path (native id 4). As of the canonical-soundex cutover the kernel
+is NOT jellyfish: `NFKD` + uppercase, keep only ASCII `[A-Z]`, then standard
+Soundex, and a value with no surviving letter -> `""`. The `soundex_match` scorer
+adds an empty-code guard (garbage/empty never matches, not even another empty
+code -- so placeholder columns can't mega-cluster).
 
-Full parity means native `soundex_similarity(a, b)` is bit-identical to the
-bucket per-pair mirror `1.0 if jellyfish.soundex(a) == jellyfish.soundex(b) else
-0.0` (`_resolve_score_pair_callable("soundex_match")`) over EVERY input --
-including leading non-alpha (`123`, `3M`), embedded symbols (`O'Brien`), and
-Unicode (`Ürüm`, `José`, `ß`), where the pre-Wave-1 ASCII-only kernel diverged.
-The exact per-string codes are pinned in score-core's cargo tests; this batteries
-the equality semantics the kernel actually uses over thousands of pairs.
+This batteries native `soundex_similarity(a, b)` (== `score_one(6)`) against the
+pure-Python mirror `_soundex_score_single` (which uses `canonical_soundex` + the
+same empty guard) over thousands of pairs, INCLUDING the inputs where the kernel
+now diverges from jellyfish on purpose: garbage (`123`, `!!`, ``), exotic
+non-decomposable letters (`Þór`, `Æthel`), and accented consonants (`Muñoz`).
+The exact per-string codes are pinned in score-core's cargo tests.
 """
 from __future__ import annotations
 
@@ -20,32 +21,30 @@ import random
 
 import pytest
 from goldenmatch.core import _native_loader
-from goldenmatch.core import scorer as _scorer_mod
+from goldenmatch.core.scorer import _soundex_score_single
 
-_jf = _scorer_mod.jellyfish
-
-
-def _mirror(a: str, b: str) -> float:
-    # exactly `_resolve_score_pair_callable("soundex_match")`'s lambda
-    return 1.0 if _jf.soundex(a) == _jf.soundex(b) else 0.0
+# The pure-Python reference the native kernel must reproduce byte-for-byte.
+_mirror = _soundex_score_single
 
 
-# Adversarial vocabulary: alpha names (incl. H/W rule + collisions), leading
-# non-alpha, embedded symbols/digits, empty, and Unicode (NFKD + upper edges).
+# Adversarial vocabulary: alpha names (incl. H/W rule + collisions), garbage
+# (leading/embedded/only non-alpha), empty, accented Latin, and exotic
+# non-decomposable letters.
 _VOCAB = [
     "Robert", "Rupert", "Ashcraft", "Ashcroft", "Tymczak", "Pfister", "Honeyman",
     "Smith", "Smyth", "Jackson", "Gutierrez", "Catherine", "Katherine", "Lloyd",
     "Lee", "OBrien", "O'Brien", "McDonald", "MacDonald", "van der Berg",
     "123", "3M", "4abc", "1B2", "99", "S1S", "AB-BA", "-x", "x-y", "A1B", " Robert",
-    "", "a", "AA", "H", "W", "HW", "WH",
+    "", "a", "AA", "H", "W", "HW", "WH", "!!", "000", "---",
     "José", "Ürüm", "naïve", "Zoë", "ß", "Œuvre", "Åke", "Muñoz", "Håkan", "Ægir",
+    "Þór", "Æthel", "Đặng", "Ñoño",
 ]
 
 
 def _corpus() -> list[tuple[str, str]]:
-    rng = random.Random(20260721)
+    rng = random.Random(20260722)
     alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"
-    mixed = alpha + "0123456789 -'.éüößÅ"
+    mixed = alpha + "0123456789 -'.éüößÅñÞÆ"
     def rand(pool: str) -> str:
         return "".join(rng.choice(pool) for _ in range(rng.randint(0, 12)))
     pairs = [(x, y) for x in _VOCAB for y in _VOCAB]  # every ordered pair incl self
@@ -54,7 +53,7 @@ def _corpus() -> list[tuple[str, str]]:
     return pairs
 
 
-def test_soundex_native_matches_jellyfish_mirror():
+def test_soundex_native_matches_canonical_mirror():
     n = _native_loader.native_module()
     if n is None or not hasattr(n, "soundex_similarity"):
         pytest.skip("native soundex kernel not built / wheel predates soundex_similarity")
@@ -62,21 +61,23 @@ def test_soundex_native_matches_jellyfish_mirror():
         assert n.soundex_similarity(a, b) == _mirror(a, b), f"soundex {a!r} {b!r}"
 
 
-def test_soundex_full_parity_non_alpha_and_unicode():
-    # The cases the pre-Wave-1 ASCII-only kernel got wrong; now byte-identical.
+def test_soundex_empty_guard_and_folding():
+    # The cases the canonical spec changed vs jellyfish; now byte-identical native<->pure.
     n = _native_loader.native_module()
     if n is None or not hasattr(n, "soundex_similarity"):
         pytest.skip("native soundex kernel not built")
-    # 123 -> "1000", 456 -> "4000" (distinct); 123 vs 123 match.
+    # Garbage -> "" -> never matches, not even another garbage value.
     assert n.soundex_similarity("123", "456") == _mirror("123", "456") == 0.0
-    assert n.soundex_similarity("123", "123") == 1.0
-    # 3M -> "3500"; Robert/Rupert collide; Ürüm code is stable under NFKD.
+    assert n.soundex_similarity("123", "123") == 0.0  # identical garbage -> no match
+    assert n.soundex_similarity("000", "---") == 0.0
+    # Real names collide / fold as expected.
     assert n.soundex_similarity("Robert", "Rupert") == 1.0
-    assert n.soundex_similarity("Ürüm", "Ürüm") == 1.0
+    assert n.soundex_similarity("Muñoz", "Munoz") == 1.0  # ñ folds to n
+    assert n.soundex_similarity("José", "Jose") == 1.0
 
 
 def test_soundex_bucket_kernel_id6_matches_mirror():
-    """score_block_pairs dispatching scorer id 6 == the per-pair jellyfish mirror.
+    """score_block_pairs dispatching scorer id 6 == the canonical per-pair mirror.
 
     One block, one soundex_match field, weight 1.0, threshold 0.0 so every pair
     emits; the kernel's per-pair score must equal the mirror.
@@ -85,7 +86,7 @@ def test_soundex_bucket_kernel_id6_matches_mirror():
     if n is None or not hasattr(n, "soundex_similarity"):
         pytest.skip("native soundex kernel not built")
 
-    values = ["Robert", "Rupert", "Smith", "Smyth", "3M", "José"]
+    values = ["Robert", "Rupert", "Smith", "Smyth", "3M", "José", "123", "Muñoz"]
     row_ids = list(range(len(values)))
     sizes = [len(values)]
     field_values = [values]

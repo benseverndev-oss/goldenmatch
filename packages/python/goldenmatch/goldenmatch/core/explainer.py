@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import jellyfish
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 from rapidfuzz.fuzz import token_sort_ratio
 
 from goldenmatch.config.schemas import MatchkeyField
-from goldenmatch.utils.transforms import apply_transforms
+from goldenmatch.utils.transforms import apply_transforms, canonical_soundex
 
 
 @dataclass
@@ -150,11 +149,13 @@ def _score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | N
     elif scorer == "token_sort":
         return token_sort_ratio(val_a, val_b) / 100.0
     elif scorer == "soundex_match":
-        return 1.0 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+        ca = canonical_soundex(val_a)
+        return 1.0 if ca and ca == canonical_soundex(val_b) else 0.0
     elif scorer == "ensemble":
         jw = JaroWinkler.similarity(val_a, val_b)
         ts = token_sort_ratio(val_a, val_b) / 100.0
-        sx = 0.8 if jellyfish.soundex(val_a) == jellyfish.soundex(val_b) else 0.0
+        ca = canonical_soundex(val_a)
+        sx = 0.8 if ca and ca == canonical_soundex(val_b) else 0.0
         return max(jw, ts, sx)
     else:
         return 0.0
