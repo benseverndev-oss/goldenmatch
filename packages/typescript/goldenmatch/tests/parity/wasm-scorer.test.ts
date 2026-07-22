@@ -414,6 +414,42 @@ d("WASM audio_fp matches the pure-TS scoreField reference (exact)", () => {
   }
 });
 
+// initialism_match (score_one id 7): 1.0 iff one value's derived initialism (business
+// acronym, dropping legal-form tokens) equals the other value, else 0.0. The kernel
+// needs the ~77-entry legal-form table injected at enableWasm() (set_legal_forms); the
+// loader seeds it with the SAME table the pure-TS `initialismMatch` uses, so the WASM
+// matrix is byte-exact with the fallback (this also verifies the injection round-trips --
+// "Apple Inc." derives "" only if the kernel dropped "Inc" as a legal form).
+type InitialismCase = readonly [a: string, b: string, note: string];
+const INITIALISM_CASES: readonly InitialismCase[] = [
+  ["International Business Machines Corp", "IBM", "acronym match (Corp dropped) -> 1.0"],
+  ["IBM", "International Business Machines Corp", "reverse direction -> 1.0"],
+  ["General Electric Company", "GE", "Company dropped -> 1.0"],
+  ["Hewlett Packard", "HP", "two tokens -> HP"],
+  ["Acme Industries LLC", "AI", "Industries kept, LLC dropped -> AI"],
+  ["Apple Inc.", "AI", "Inc dropped -> Apple stays lowercase -> no match 0.0"],
+  ["National Aeronautics and Space Administration", "NASA", "stopword kept -> NAASA != NASA -> 0.0"],
+  ["IBM", "IBM", "identical acronym -> 1.0"],
+  ["Acme", "Acme", "no derivable initialism -> 0.0"],
+];
+
+d("WASM initialism_match matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of INITIALISM_CASES) {
+    it(`initialism_match("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "initialism_match");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "initialism_match");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();
