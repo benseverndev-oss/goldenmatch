@@ -148,7 +148,6 @@ def seed_identity(pairs: list[dict]) -> None:
     """
     try:
         import polars as pl
-
         from goldenmatch.core.cluster import build_clusters
         from goldenmatch.identity import IdentityStore, resolve_clusters
     except ImportError as exc:  # pragma: no cover - dev regen convenience
