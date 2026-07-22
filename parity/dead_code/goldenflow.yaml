@@ -1,0 +1,15 @@
+# dead_code_deferred (goldenflow) -- module-level classification map.
+# Spec: docs/superpowers/specs/2026-07-22-arch-aware-dead-code-detection.md
+# Every module check_dead_code.py flags as reachable from no in-process surface must be
+# EITHER deleted OR listed here with a reason. Reason prefix vocabulary:
+#   surface --  reached out-of-band (external runtime, dynamic dispatch, codegen); NOT dead
+#   fallback -- pure-language reference for a native kernel (native-off path)
+#   oracle --   parity ground-truth the kernel is diffed against
+#   dead --     confirmed dead; scheduled for removal (with the removal ref)
+#
+# Bootstrap 2026-07-22 (multi-package generalization). Format: `module: reason`.
+
+# -- unwired JSON reporter: the CLI emits manifests via reporters.rich_console exclusively;
+#    nothing imports json_reporter (no source / test / script). Plausibly an intended output
+#    format never wired. Owner review: wire into the CLI (`--format json`), or remove.
+goldenflow.reporters.json_reporter: "dead -- unwired JSON reporter; no importer (owner review, see spec)"

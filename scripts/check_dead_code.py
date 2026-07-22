@@ -145,20 +145,34 @@ def _ancestors(mod: str) -> list[str]:
 
 
 def _scan_test_imports(pkg: str, src_root: Path) -> set[str]:
-    """Modules imported by the test suite are exercised (roots) even if no source imports
-    them. tests/ lives beside the package dir (../tests from the {pkg}/{pkg} source root)."""
-    tests_dir = src_root.parent / "tests"
-    if not tests_dir.is_dir():
-        return set()
+    """Modules imported by the test suite (and sibling scripts) are exercised (roots) even if
+    no source imports them. `tests/`/`scripts/` live beside the package dir (../ from the
+    {pkg}/{pkg} source root). AST-parsed, NOT regex: a `from {pkg}.core import _planner_json`
+    names the SUBMODULE `{pkg}.core._planner_json` in the imported-name position, which a
+    "dotted path after from/import" regex misses -- the same `from X import <submodule>`
+    under-recording that made the codemap unsound. We emit both the module and each
+    `module.name` candidate; the caller keeps only those that are real modules."""
     hit: set[str] = set()
-    pat = re.compile(rf"\b(?:from|import)\s+({re.escape(pkg)}(?:\.[A-Za-z0-9_]+)*)")
-    for f in tests_dir.rglob("*.py"):
-        try:
-            text = f.read_text(encoding="utf-8-sig", errors="ignore")
-        except OSError:
+    for sib in ("tests", "scripts"):
+        d = src_root.parent / sib
+        if not d.is_dir():
             continue
-        for m in pat.finditer(text):
-            hit.add(m.group(1))
+        for f in d.rglob("*.py"):
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="ignore"))
+            except (OSError, SyntaxError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for a in node.names:
+                        if a.name == pkg or a.name.startswith(pkg + "."):
+                            hit.add(a.name)
+                elif isinstance(node, ast.ImportFrom) and not node.level:
+                    m = node.module or ""
+                    if m == pkg or m.startswith(pkg + "."):
+                        hit.add(m)
+                        for a in node.names:      # `from pkg.sub import submodule` names a module
+                            hit.add(f"{m}.{a.name}")
     return hit
 
 
@@ -357,13 +371,17 @@ def analyze_symbols_scoped(pkg: str) -> dict:
                 defs[(mod, node.name)] = (str(f.relative_to(REPO)), node.lineno)
         top_names[mod] = names
 
-    # resolve uses across source, in-package tests, AND the sibling test suite (the real
-    # goldenmatch tests live at <pkg>/tests, a SIBLING of the <pkg>/<pkg> source root -- not
-    # under it -- so a source-only scan falsely flags every test-only-consumed symbol).
+    # resolve uses across source, in-package tests, the sibling test suite, AND the sibling
+    # scripts/ dir. The real test suite lives at <pkg>/tests (a SIBLING of the <pkg>/<pkg>
+    # source root, not under it), and package-local <pkg>/scripts/ holds maintenance / codegen
+    # / byte-parity-corpus generators that are legitimate consumers of reference helpers (e.g.
+    # goldenflow's `_double_metaphone_*_py` are used only by scripts/gen_identifiers_corpus.py).
+    # A source-only scan falsely flags every symbol consumed only by a test or a script.
     all_py = list(src_root.rglob("*.py"))
-    ext_tests = src_root.parent / "tests"
-    if ext_tests.is_dir():
-        all_py += list(ext_tests.rglob("*.py"))
+    for sib in ("tests", "scripts"):
+        d = src_root.parent / sib
+        if d.is_dir():
+            all_py += list(d.rglob("*.py"))
     used: set[tuple[str, str]] = set()
     for f in all_py:
         try:
@@ -375,13 +393,19 @@ def analyze_symbols_scoped(pkg: str) -> dict:
         in_tree = src_root in f.parents
         this_mod = _module_name(f, src_root, pkg) if in_tree else None
         pkg_of = (this_mod if f.name == "__init__.py" else this_mod.rsplit(".", 1)[0]) if this_mod else pkg
-        sym_binds: dict[str, tuple[str, str]] = {}   # local -> (module, orig)  [symbol import]
-        mod_binds: dict[str, str] = {}               # local -> module          [module alias]
+        # local name -> SET of targets. Set-valued (not scalar) because one file can bind the
+        # SAME local name to different modules in different branches -- CLI dispatch does
+        # `from .mcp.server import run_server` in one command and `from .a2a.server import
+        # run_server` in another. A scalar map lets the second overwrite the first, so a bare
+        # `run_server()` credits only the last binding and the other is falsely flagged. We
+        # can't tell which branch runs, so a use marks EVERY candidate binding used.
+        sym_binds: dict[str, set[tuple[str, str]]] = {}   # local -> {(module, orig), ...}
+        mod_binds: dict[str, set[str]] = {}               # local -> {module, ...}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == pkg or a.name.startswith(pkg + "."):
-                        mod_binds[a.asname or a.name.split(".")[0]] = a.name
+                        mod_binds.setdefault(a.asname or a.name.split(".")[0], set()).add(a.name)
             elif isinstance(node, ast.ImportFrom):
                 if node.level:
                     base_parts = pkg_of.split(".")
@@ -394,14 +418,14 @@ def analyze_symbols_scoped(pkg: str) -> dict:
                 for a in node.names:
                     local = a.asname or a.name
                     if f"{m}.{a.name}" in known_modules:      # from pkg import submodule
-                        mod_binds[local] = f"{m}.{a.name}"
+                        mod_binds.setdefault(local, set()).add(f"{m}.{a.name}")
                     else:                                      # from module import symbol
-                        sym_binds[local] = (m, a.name)
+                        sym_binds.setdefault(local, set()).add((m, a.name))
         # walk loads
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 if node.id in sym_binds:
-                    used.add(sym_binds[node.id])
+                    used.update(sym_binds[node.id])
                 elif node.id in top_names.get(this_mod, ()):   # same-module use
                     used.add((this_mod, node.id))
             elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
@@ -410,10 +434,9 @@ def analyze_symbols_scoped(pkg: str) -> dict:
                     continue
                 base = chain[0]
                 if base in mod_binds and len(chain) >= 2:
-                    used.add((mod_binds[base], chain[1]))
+                    used.update((mod, chain[1]) for mod in mod_binds[base])
                 elif base in sym_binds and len(chain) >= 2:
-                    m, orig = sym_binds[base]
-                    used.add((m, orig))                        # attr on an imported symbol => symbol used
+                    used.update(sym_binds[base])               # attr on an imported symbol => symbol used
                 elif base == pkg:                              # goldenmatch.a.b.SYM
                     for i in range(len(chain) - 1, 0, -1):
                         mod = ".".join(chain[:i])

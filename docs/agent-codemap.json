@@ -8580,7 +8580,6 @@
             "_finding_from_dict",
             "_get_review_queue",
             "_rules_to_yaml",
-            "_serialize_findings",
             "_tool_analyze_data",
             "_tool_approve_reject",
             "_tool_auto_configure",
