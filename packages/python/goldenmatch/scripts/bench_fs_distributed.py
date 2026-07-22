@@ -23,6 +23,7 @@ plus a markdown block the workflow tees into the job summary.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import resource
 import time
@@ -153,6 +154,90 @@ def _peak_rss_gb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 * 1024.0)
 
 
+def _clusters_from_assignments(assignments_dir: str) -> dict:
+    """Read the Phase-5 cluster-assignment parquet (one part file per partition)
+    and rebuild the ``{cluster_id: {"members": [...]}}`` shape ``evaluate_clusters``
+    consumes -- so the DISTRIBUTED run is F1-scored with the exact same oracle as
+    the single-box bucket run (no second scoring surface to drift)."""
+    import glob
+    import os
+
+    parts = glob.glob(os.path.join(assignments_dir, "**", "*.parquet"), recursive=True)
+    if not parts:
+        raise FileNotFoundError(f"no assignment parquet under {assignments_dir}")
+    frame = pl.concat([pl.read_parquet(p) for p in parts], how="vertical_relaxed")
+    clusters: dict[int, dict] = {}
+    for cid, member in zip(
+        frame["cluster_id"].to_list(), frame["member_id"].to_list()
+    ):
+        clusters.setdefault(int(cid), {"members": []})["members"].append(int(member))
+    for info in clusters.values():
+        info["size"] = len(info["members"])
+    return clusters
+
+
+def run_distributed(df, args) -> tuple[dict, float, float]:
+    """Run the FS config through the Phase-5 DISTRIBUTED pipeline
+    (GOLDENMATCH_DISTRIBUTED_PIPELINE=2) on a Ray Dataset and return
+    ``(clusters_dict, wall_seconds, peak_rss_gb)``.
+
+    This is the FIRST harness that measures FS (probabilistic) quality on the
+    distributed engine -- every prior distributed bench used a weighted/exact
+    config. It writes the generated frame (carrying a global ``__row_id__`` == row
+    position, which the Phase-5 scorer/join both require) to parquet, reads it as
+    a partitioned Ray Dataset, runs score -> (block-shuffle) -> WCC, persists the
+    cluster assignments, and rebuilds the clusters dict for the shared oracle.
+
+    block-shuffle ON (default) exercises the recall-complete path (co-locate on
+    the FS blocking key + randomized_contraction WCC). On a MULTI-node cluster
+    the WCC needs a shared ``GOLDENMATCH_DISTRIBUTED_WCC_SCRATCH=gs://...`` (the
+    WCC asserts this itself); a single-box simulated cluster needs no scratch.
+    """
+    import tempfile
+
+    os.environ.setdefault("GOLDENMATCH_ENABLE_DISTRIBUTED_RAY", "1")
+    os.environ["GOLDENMATCH_DISTRIBUTED_PIPELINE"] = "2"
+    os.environ["GOLDENMATCH_DISTRIBUTED_BLOCK_SHUFFLE"] = (
+        "1" if args.block_shuffle else "0"
+    )
+    if args.block_shuffle:
+        # Below the 50M-pair threshold build_clusters_distributed otherwise routes
+        # to the driver-collecting scipy fallback regardless of algorithm; pin the
+        # threshold to 0 so the recall-complete run actually exercises the
+        # distributed randomized_contraction WCC (setdefault: operator can override).
+        os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_WCC", "randomized_contraction")
+        os.environ.setdefault("GOLDENMATCH_DISTRIBUTED_CLUSTERING_THRESHOLD", "0")
+
+    from goldenmatch.distributed import read_parquet_partitioned
+    from goldenmatch.distributed.pipeline import run_dedupe_pipeline_distributed
+
+    df_ids = df.with_row_index("__row_id__").with_columns(
+        pl.col("__row_id__").cast(pl.Int64),
+    )
+    cfg = _fs_cfg(backend="bucket")  # backend is per-partition; ignored by Phase-5
+
+    workdir = tempfile.mkdtemp(prefix="fs_phase5_")
+    input_dir = os.path.join(workdir, "input")
+    assignments_dir = os.path.join(workdir, "assignments")
+    os.makedirs(input_dir, exist_ok=True)
+    df_ids.write_parquet(os.path.join(input_dir, "part-0.parquet"))
+
+    ds = read_parquet_partitioned(input_dir, n_partitions=args.partitions)
+
+    t0 = time.perf_counter()
+    run_dedupe_pipeline_distributed(
+        ds,
+        config=cfg,
+        confidence_required=False,
+        assignments_output_path=assignments_dir,
+        _skip_golden=True,
+    )
+    wall = time.perf_counter() - t0
+    rss = _peak_rss_gb()
+    clusters = _clusters_from_assignments(assignments_dir)
+    return clusters, wall, rss
+
+
 def evaluate_scale_gate(
     f1: float,
     wall_seconds: float,
@@ -209,34 +294,58 @@ def main() -> int:
                     help="gate: exit non-zero if wall > this ceiling")
     ap.add_argument("--max-peak-rss-gb", type=float, default=None,
                     help="gate: exit non-zero if peak RSS > this ceiling")
+    ap.add_argument("--distributed", action="store_true",
+                    help="run the FS config through the Phase-5 DISTRIBUTED Ray "
+                         "pipeline (GOLDENMATCH_DISTRIBUTED_PIPELINE=2) instead of "
+                         "the single-box bucket dedupe -- the first MEASURED "
+                         "distributed FS F1. Requires the [ray] extra.")
+    ap.add_argument("--partitions", type=int, default=64,
+                    help="distributed mode: Ray Dataset partition count")
+    ap.add_argument("--block-shuffle", dest="block_shuffle", type=int, default=1,
+                    help="distributed mode: 1 = recall-complete block-shuffle + "
+                         "randomized_contraction WCC (default); 0 = legacy "
+                         "per-partition scoring")
     args = ap.parse_args()
 
+    mode = "distributed" if args.distributed else "single-box"
     print(f"[gen] {args.rows} base rows + {int(args.rows*args.dup_frac)} dups "
-          f"(backend={args.backend})", flush=True)
+          f"(mode={mode}, backend={args.backend})", flush=True)
     t_gen = time.perf_counter()
     df, gt = gen_with_gt(args.rows, args.dup_frac, args.seed)
     print(f"[gen] {df.height} total rows, {len(gt)} GT pairs in "
           f"{time.perf_counter()-t_gen:.1f}s", flush=True)
 
-    from goldenmatch import dedupe_df
     from goldenmatch.core.evaluate import evaluate_clusters
 
-    cfg = (_zero_config_cfg(df, args.backend) if args.config_mode == "zero"
-           else _fs_cfg(args.backend))
-    print(f"[config] mode={args.config_mode} "
-          f"matchkey_fields={[f.field for m in cfg.get_matchkeys() for f in m.fields]}",
-          flush=True)
-    t0 = time.perf_counter()
-    result = dedupe_df(df, config=cfg, confidence_required=False)
-    wall = time.perf_counter() - t0
-    rss = _peak_rss_gb()
+    if args.distributed:
+        if args.config_mode == "zero":
+            raise SystemExit(
+                "--distributed currently supports the explicit FS config only "
+                "(zero-config on a Ray Dataset is a separate follow-on)."
+            )
+        print(f"[config] mode=explicit distributed block_shuffle={args.block_shuffle} "
+              f"partitions={args.partitions}", flush=True)
+        clusters, wall, rss = run_distributed(df, args)
+        backend_label = f"ray-phase5(shuffle={args.block_shuffle})"
+    else:
+        from goldenmatch import dedupe_df
+        cfg = (_zero_config_cfg(df, args.backend) if args.config_mode == "zero"
+               else _fs_cfg(args.backend))
+        print(f"[config] mode={args.config_mode} "
+              f"matchkey_fields={[f.field for m in cfg.get_matchkeys() for f in m.fields]}",
+              flush=True)
+        t0 = time.perf_counter()
+        result = dedupe_df(df, config=cfg, confidence_required=False)
+        wall = time.perf_counter() - t0
+        rss = _peak_rss_gb()
+        clusters = result.clusters
+        backend_label = args.backend
 
-    clusters = result.clusters
     multi = sum(1 for c in clusters.values() if len(c.get("members", [])) > 1)
     ev = evaluate_clusters(clusters, gt)
 
     for k, v in [
-        ("ROWS", df.height), ("BACKEND", args.backend),
+        ("ROWS", df.height), ("BACKEND", backend_label), ("MODE", mode),
         ("WALL_SECONDS", f"{wall:.3f}"), ("PEAK_RSS_GB", f"{rss:.2f}"),
         ("CLUSTERS_TOTAL", len(clusters)), ("CLUSTERS_MULTI", multi),
         ("GT_PAIRS", len(gt)),
@@ -246,7 +355,7 @@ def main() -> int:
         print(f"{k}={v}", flush=True)
 
     print("\n## bench-fs-distributed")
-    print(f"- rows: **{df.height}**  backend: `{args.backend}`")
+    print(f"- rows: **{df.height}**  mode: `{mode}`  backend: `{backend_label}`")
     print(f"- wall: **{wall:.1f}s**  peak RSS: **{rss:.2f} GB**")
     print(f"- multi-member clusters: {multi}  (GT pairs: {len(gt)})")
     print(f"- **P={ev.precision:.3f}  R={ev.recall:.3f}  F1={ev.f1:.3f}**")
