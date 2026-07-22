@@ -61,14 +61,10 @@ _NODE_BUDGET = int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
 #: the graph but disconnected from the seeds within any reasonable depth).
 _WIDE_HOPS = 8
 
-#: Answer-time retrieval mode. "local" (default) = the entity-graph BFS over extracted
-#: triples (the historical goldengraph path). "hybrid" = that ball PLUS raw source
-#: passages retrieved by goldenmatch's own retrieval surface, fed to synthesis as the
-#: ground truth with the graph as a multi-hop map. The bench's structural finding was
-#: that the triple-only graph is a LOSSY intermediate (it lost to plain paragraph RAG);
-#: hybrid tests whether layering the passages back in -- while keeping the graph for
-#: cross-passage bridging -- closes that gap. Env-tunable for the A/B.
-_QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+# Answer-time retrieval mode ("hybrid" default since 2026-07-22, measured +169% am /
+# +143% judge over "local") is read per-engine in __init__ from GOLDENGRAPH_QA_MODE; there
+# is no module-level constant (a prior `_QA_MODE` global was dead -- __init__ reads the env
+# directly so a test can monkeypatch it per-construction).
 
 #: Passages retrieved per question in hybrid mode (matches the goldenmatch_rag /
 #: text_rag context budget so the comparison is apples-to-apples).
@@ -218,7 +214,7 @@ class GoldenGraphQAEngine:
         # retrieval fed to synthesis). hybrid builds a passage index at build time.
         self._retrieval_mode = (
             retrieval_mode if retrieval_mode is not None
-            else os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+            else os.environ.get("GOLDENGRAPH_QA_MODE", "hybrid")
         )
         self._passage_k = (
             passage_k if passage_k is not None
@@ -252,16 +248,34 @@ class GoldenGraphQAEngine:
         # Embedding calls here are NOT charged to the engine token budget (parity with text_rag).
         passages = None
         if self._retrieval_mode == "hybrid":
-            from openai import OpenAI
+            # Hybrid passage retrieval embeds through the OpenAI-compatible client
+            # (OpenAI on the paid lane, a local nomic endpoint on the free lane). The
+            # `goldengraph-pipeline` smoke lane runs with a stub LLM/embedder and does
+            # NOT install `openai`; a missing package there degrades to passages=None
+            # (answer() then falls back to LOCAL synthesis -- the safe no-passages
+            # path), rather than crashing the build. Real bench lanes install openai,
+            # so they always build the index. The warning keeps a genuinely-absent
+            # backend from silently degrading a paid run unnoticed.
+            try:
+                from openai import OpenAI
 
-            from .goldenmatch_rag import _OpenAIEmbedderAdapter
+                from .goldenmatch_rag import _OpenAIEmbedderAdapter
 
-            adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
-            passages = _PassageRetriever(
-                [d.id for d in corpus.documents],
-                [d.text for d in corpus.documents],
-                adapter,
-            )
+                adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
+                passages = _PassageRetriever(
+                    [d.id for d in corpus.documents],
+                    [d.text for d in corpus.documents],
+                    adapter,
+                )
+            except ImportError:
+                import sys as _sys
+
+                print(
+                    "goldengraph QA: hybrid mode requested but `openai` is not "
+                    "installed -- indexing no passages, answer() falls back to local "
+                    "synthesis.",
+                    file=_sys.stderr,
+                )
         handle = {
             "store": store, "valid_t": _AS_OF, "tx_t": _AS_OF, "passages": passages,
             "query_schema": query_schema,
@@ -276,11 +290,18 @@ class GoldenGraphQAEngine:
     def answer(self, handle, question: str, mode: str | None = None) -> AnswerResult:
         from goldengraph.answer import ask
 
-        # `mode` overrides the engine's configured retrieval mode for THIS call -- the
-        # same-run local-vs-auto A/B (harness.run_engine_ab) uses it to answer the same
-        # question under both modes against one shared graph. None -> the configured
-        # mode, byte-identical to the single-mode path.
-        retrieval_mode = mode or self._retrieval_mode
+        # Resolve the answer-time retrieval/synth mode, most-specific first:
+        #  1. `mode` kwarg -- the local-vs-auto A/B (run_engine_ab) sets it per call.
+        #  2. `GOLDENGRAPH_QA_ANSWER_MODE` env -- an ANSWER-time override so the generic
+        #     env-A/B (run_engine_ab_env) can flip local-vs-hybrid SYNTHESIS over ONE
+        #     shared build. Build the graph in hybrid (GOLDENGRAPH_QA_MODE=hybrid ->
+        #     passages indexed once), then A/B `GOLDENGRAPH_QA_ANSWER_MODE:local,hybrid`:
+        #     `local` synthesizes over the graph only, `hybrid` layers the passages back
+        #     in, holding the build fixed. Empty/unset -> ignored.
+        #  3. the engine's configured `self._retrieval_mode` (byte-identical default).
+        retrieval_mode = (
+            mode or (os.environ.get("GOLDENGRAPH_QA_ANSWER_MODE") or None) or self._retrieval_mode
+        )
         t0 = time.perf_counter()
         before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.

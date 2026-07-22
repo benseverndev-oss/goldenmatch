@@ -149,7 +149,12 @@ def test_ask_hybrid_feeds_passages_and_graph_to_synthesis():
     assert "acquired" in prompt
 
 
-def test_ask_hybrid_without_retriever_degrades_to_graph_only():
+def test_ask_hybrid_without_retriever_falls_back_to_local():
+    # DEFAULT-FLIP SAFETY (2026-07-22): hybrid is now the DEFAULT mode, and its win IS
+    # the passages. With NO passage retriever there is nothing to layer in, so hybrid
+    # falls through to the LOCAL synthesis path -- byte-identical to the prior local
+    # default for passage-less callers (NOT the old free-form "(no passages retrieved)"
+    # graph-only degrade). The prompt is the local entity-answer prompt, not hybrid's.
     llm = RecordingLLM()
     store = _FakeStore(_FakeGraph(_NAMES, _EDGES))
     embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2})
@@ -157,7 +162,11 @@ def test_ask_hybrid_without_retriever_degrades_to_graph_only():
         "Start", store, llm=llm, embedder=embedder, valid_t=1, tx_t=1,
         mode="hybrid", k=1, hops=4, node_budget=64, passages=None,
     )
-    assert "(no passages retrieved)" in llm.prompts[-1]
+    prompt = llm.prompts[-1]
+    assert "(no passages retrieved)" not in prompt  # NOT the hybrid free-form path
+    assert "Passages:" not in prompt  # no hybrid passage block
+    # the local entity-answer clause is what ran
+    assert "single entity that appears in the Entities list" in prompt
 
 
 def test_ask_rejects_unknown_mode():
@@ -227,3 +236,12 @@ def test_ask_local_mode_ignores_filter_flag(monkeypatch):
         mode="local", k=2, hops=4, node_budget=64,
     )
     assert "Noise" in llm.prompts[-1]  # local ball is unfiltered regardless of flag
+
+
+def test_ask_default_mode_is_hybrid():
+    # Ship 2026-07-22: hybrid is the DEFAULT answer mode (measured +169% am / +143%
+    # judge over local on the same graph). Passage-less callers fall back to local
+    # (test above), so the flip is safe by default.
+    import inspect
+
+    assert inspect.signature(ask).parameters["mode"].default == "hybrid"

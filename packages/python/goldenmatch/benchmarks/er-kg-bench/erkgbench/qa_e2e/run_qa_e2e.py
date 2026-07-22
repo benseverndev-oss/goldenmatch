@@ -200,17 +200,29 @@ def _build_engine(name: str):
 
 
 def _make_judge(model: str):
-    """A judge callable(prompt)->str via OpenAI, or None when no key/SDK. Used for
-    the format-fair LLM-judge metric; a FIXED model across engines keeps the
-    comparison honest. Judge failures return '' (scored NO) so they never crash a
-    run. `openai` is installed in every engine lane."""
-    if not os.environ.get("OPENAI_API_KEY"):
+    """A judge callable(prompt)->str, or None when no key/SDK. Used for the format-fair
+    LLM-judge metric; a FIXED model across engines keeps the comparison honest. Judge
+    failures return '' (scored NO) so they never crash a run. `openai` is installed in
+    every engine lane.
+
+    The judge client follows the same CHAT provider resolution as the engine
+    (`GOLDENGRAPH_LLM_BASE_URL`/`_API_KEY` -> `OPENAI_BASE_URL`/`OPENAI_API_KEY`, mirroring
+    goldengraph.llm), so on a run that routes chat to OpenRouter to dodge an OpenAI
+    per-model daily cap the JUDGE routes there too instead of hitting the capped OpenAI.
+    Both env unset -> byte-identical to the prior OpenAI-only judge."""
+    base_url = (
+        os.environ.get("GOLDENGRAPH_LLM_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or "https://api.openai.com/v1"
+    )
+    api_key = os.environ.get("GOLDENGRAPH_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
         return None
     try:
         from openai import OpenAI
     except Exception:
         return None
-    client = OpenAI()
+    client = OpenAI(base_url=base_url, api_key=api_key)
 
     def _judge(prompt: str) -> str:
         try:
