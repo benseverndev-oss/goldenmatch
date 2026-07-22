@@ -35,7 +35,7 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_43_skills():
+def test_agent_card_has_47_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added
@@ -44,16 +44,19 @@ def test_agent_card_has_43_skills():
     added identity_audit_seal / identity_audit_verify (35->37); the healer added
     review_config (37->38); document ingest added documents_suggest_schema /
     documents_ingest (38->40); the registry-introspection parity pass added
-    list_scorers / list_transforms / list_strategies (40->43)."""
+    list_scorers / list_transforms / list_strategies (40->43); the
+    capability-gap parity pass added profile / suggest_config / memory_export /
+    suggest_pprl (43->47)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 43
+    assert len(card["skills"]) == 47
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "retrieve_similar" in ids
     assert "review_config" in ids
     assert {"list_scorers", "list_transforms", "list_strategies"} <= ids
+    assert {"profile", "suggest_config", "memory_export", "suggest_pprl"} <= ids
     assert {"identity_claim", "identity_resolve_conflict", "identity_audit"} <= ids
     assert {"identity_audit_seal", "identity_audit_verify"} <= ids
     assert "controller_telemetry" in ids
@@ -740,3 +743,72 @@ def test_a2a_exposes_reconciled_canonical_ids():
     from goldenmatch.a2a.server import _SKILLS
     ids = {s["id"] for s in _SKILLS}
     assert {"autoconfig", "compare_strategies", "transform"} <= ids
+
+
+# ── Capability-gap skills (profile / suggest_config / memory_export / suggest_pprl) ──
+
+
+def test_dispatch_profile(tmp_path):
+    """profile skill summarizes a dataset's columns via profile_for_agent."""
+    import polars as pl
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    csv_path = tmp_path / "data.csv"
+    pl.DataFrame({
+        "id": [1, 2, 3],
+        "name": ["Alice", "Bob", "Carol"],
+    }).write_csv(str(csv_path))
+
+    result = dispatch_skill("profile", {"file_path": str(csv_path)})
+    assert result["row_count"] == 3
+    assert "has_sensitive" in result
+    cols = {c["name"] for c in result["columns"]}
+    assert cols == {"id", "name"}
+    for c in result["columns"]:
+        assert {"name", "type", "uniqueness", "null_rate", "avg_length"} <= set(c)
+
+
+def test_dispatch_suggest_config(tmp_path):
+    """suggest_config skill returns a shorthand exact/fuzzy/blocking/threshold."""
+    import polars as pl
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    csv_path = tmp_path / "data.csv"
+    pl.DataFrame({
+        "first_name": ["Alice", "Bob", "Alice"],
+        "last_name": ["Smith", "Jones", "Smyth"],
+        "email": ["a@x.com", "b@x.com", "a@x.com"],
+    }).write_csv(str(csv_path))
+
+    result = dispatch_skill("suggest_config", {"file_path": str(csv_path)})
+    suggested = result["suggested"]
+    assert set(suggested) == {"exact", "fuzzy", "blocking", "threshold"}
+    assert isinstance(suggested["exact"], list)
+    assert isinstance(suggested["fuzzy"], dict)
+    assert isinstance(suggested["blocking"], list)
+    assert isinstance(suggested["threshold"], float)
+
+
+def test_dispatch_memory_export(tmp_path):
+    """memory_export skill delegates to the MCP memory dispatch (empty store)."""
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    result = dispatch_skill("memory_export", {"path": str(tmp_path / "mem.db")})
+    assert result["count"] == 0
+    assert result["corrections"] == []
+
+
+def test_dispatch_suggest_pprl(tmp_path):
+    """suggest_pprl skill delegates to the MCP agent dispatch and recommends."""
+    import polars as pl
+    from goldenmatch.a2a.skills import dispatch_skill
+
+    csv_path = tmp_path / "data.csv"
+    pl.DataFrame({
+        "name": ["Alice", "Bob"],
+        "city": ["NYC", "LA"],
+    }).write_csv(str(csv_path))
+
+    result = dispatch_skill("suggest_pprl", {"file_path": str(csv_path)})
+    assert "needs_pprl" in result
+    assert "recommendation" in result

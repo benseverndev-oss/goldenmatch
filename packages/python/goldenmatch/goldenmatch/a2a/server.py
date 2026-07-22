@@ -360,6 +360,37 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    # Capability-gap skills (parity with the TS A2A surface): file-based
+    # profiling / config-suggestion / memory-export / PPRL-recommendation the
+    # TS card already advertised but the Python card omitted.
+    {
+        "id": "profile",
+        "name": "Profile",
+        "description": "Profile a dataset's columns (types, null rates, cardinality).",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "suggest_config",
+        "name": "Suggest Config",
+        "description": "Suggest a dedupe config (exact/fuzzy/blocking/threshold) from a dataset.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "memory_export",
+        "name": "Memory Export",
+        "description": "Export Learning Memory corrections + learned thresholds.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "suggest_pprl",
+        "name": "Suggest PPRL",
+        "description": "Inspect a dataset for sensitive PII and recommend whether to use privacy-preserving record linkage.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 

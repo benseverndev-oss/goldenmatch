@@ -15,6 +15,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   discover the valid scorer / transform / survivorship-strategy names before building
   a config. Closes the corresponding `mcp_tools` / `a2a_skills` cross-language parity
   gap (both trios move `ts_only` → `shared`).
+- **Capability-gap A2A skills (TS-parity).** `profile`, `suggest_config`,
+  `memory_export`, and `suggest_pprl` are now advertised on the Python A2A agent card
+  (47 skills) — closing four `a2a_skills` gaps the TS card already carried. `profile`
+  summarizes a dataset's columns via `profile_for_agent`; `suggest_config` returns a
+  shorthand `{exact, fuzzy, blocking, threshold}` from `auto_configure`; `memory_export`
+  and `suggest_pprl` delegate to the identical MCP dispatch. All four move
+  `ts_only` → `shared`.
 
 ## [3.8.0] - 2026-07-22
 
