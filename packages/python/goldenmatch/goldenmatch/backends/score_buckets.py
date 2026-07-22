@@ -292,6 +292,25 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # silently zeroing the id via score_one's catch-all.
     "radial": 13,
     "audio_fp": 14,
+    # ids 15/16 = name_freq_weighted_jw / given_name_aliased_jw (the census-IDF /
+    # given-name-alias name scorers). UNLIKE ids 0..=14 these are NOT score_one
+    # scorers -- score_one is stateless and cannot reach reference tables. The
+    # WEIGHTED bucket kernel intercepts 15/16 and dispatches them through
+    # fs-core's `name_freq_weighted_sim` / `given_name_aliased_sim` over the
+    # process-global census/alias tables (`set_name_reference_data`). Two-part
+    # wheel-skew guard at the gating site: routing requires BOTH the
+    # `NATIVE_SUPPORTS_NAME_BUCKET_SCORERS` capability flag AND a successful table
+    # install (`_ensure_name_tables_installed`), folded into one memoized bool; a
+    # stale wheel (score_one catch-all -> 0.0) declines to the pure plugin path.
+    # ADDITIONALLY name_freq_weighted_jw declines native when its field carries a
+    # per-dataset `tf_freqs` table (#1207 default-on): fs-core ports only the
+    # STATIC-census branch, so a tf field stays on the vectorized find_fuzzy_matches
+    # (which applies the tf downweight via the plugin matrix path). Parity is
+    # tolerance-bounded, not byte-exact: the native base JW is rapidfuzz-rs vs the
+    # plugin's rapidfuzz-py -- native is the reference (see the FS name-scorer
+    # story in probabilistic.py + tests/test_native_name_scorer_parity.py).
+    "name_freq_weighted_jw": 15,
+    "given_name_aliased_jw": 16,
 }
 
 
@@ -400,6 +419,66 @@ def _ensure_alias_tables_installed() -> bool:
     except Exception:
         _ALIAS_TABLES_INSTALLED = False
     return _ALIAS_TABLES_INSTALLED
+
+
+# Same tri-state as the two above, for the census surname-IDF + given-name alias
+# tables the weighted-bucket name scorers (ids 15/16) dispatch over.
+_NAME_TABLES_INSTALLED: bool | None = None
+
+
+def _ensure_name_tables_installed() -> bool:
+    """Install the census surname-IDF + given-name alias tables into the native
+    kernel's process-global ``NameRefData`` (via ``set_name_reference_data``)
+    exactly once, so the WEIGHTED bucket ids 15/16 (``name_freq_weighted_jw`` /
+    ``given_name_aliased_jw``) score over the SAME tables the pure plugin scorers
+    do (``refdata.scorer.NameFreqWeightedJW`` / ``GivenNameAliasedJW``).
+
+    Shares the process-global with the FS path's ``_ensure_fs_name_refdata`` (one
+    kernel table), so a benign double-install is skipped via
+    ``has_name_reference_data``.
+
+    Returns True once installed on a kernel exposing ``set_name_reference_data``
+    AND the ``NATIVE_SUPPORTS_NAME_BUCKET_SCORERS`` capability flag; False when the
+    loaded kernel lacks a symbol (a stale wheel whose ``score_one`` catch-all would
+    score ids 15/16 as 0.0) or the census/alias packs are unavailable, so the
+    gating site declines the native route and the pure per-pair plugin mirror (or,
+    at the fast-path guard, the vectorized ``find_fuzzy_matches``) scores the block.
+    Idempotent + memoized; the reference tables are deterministic.
+    """
+    global _NAME_TABLES_INSTALLED
+    if _NAME_TABLES_INSTALLED is not None:
+        return _NAME_TABLES_INSTALLED
+    _mod = native_module()
+    if (
+        _mod is None
+        or not hasattr(_mod, "set_name_reference_data")
+        or not hasattr(_mod, "NATIVE_SUPPORTS_NAME_BUCKET_SCORERS")
+    ):
+        _NAME_TABLES_INSTALLED = False
+        return False
+    try:
+        from goldenmatch.refdata.given_names import export_alias_forms
+        from goldenmatch.refdata.surnames import export_counts
+
+        surname_counts = [(n, float(c)) for n, c in export_counts()]
+        alias_forms = export_alias_forms()
+        # Both packs empty -> the kernel would score every name pair as plain JW
+        # (name_freq_weighted degrades to JW with no census table; given_name_-
+        # aliased to JW with no alias graph). The pure plugin path is the only
+        # faithful route in that case, so decline.
+        if not surname_counts and not alias_forms:
+            _NAME_TABLES_INSTALLED = False
+            return False
+        # Skip a redundant install if the FS path already registered the SAME
+        # deterministic tables into the shared process-global.
+        if not (
+            hasattr(_mod, "has_name_reference_data") and _mod.has_name_reference_data()
+        ):
+            _mod.set_name_reference_data(surname_counts, alias_forms)
+        _NAME_TABLES_INSTALLED = True
+    except Exception:
+        _NAME_TABLES_INSTALLED = False
+    return _NAME_TABLES_INSTALLED
 
 
 # Single source in core._hashing (re-exported here for back-compat). The
@@ -793,8 +872,33 @@ def _resolve_fast_path(
     # kernel safe to default-on: an ensemble field on a name-scorer matchkey no
     # longer drags the whole matchkey onto the slow per-pair path.)
     _fast_scorers = [s for _, _, _, s in field_specs]
+    # The two name scorers are in `_NATIVE_SCORER_IDS` (ids 15/16), but they only
+    # ACTUALLY get a kernel when the census/alias tables are installed on a capable
+    # wheel -- and `name_freq_weighted_jw` additionally declines native when its
+    # field carries a per-dataset `tf_freqs` table (#1207 default-on), since fs-core
+    # ports only the static-census branch. In those cases the fast path would fall
+    # to the O(N^2) per-pair Python loop (the 19x-slow regression the guard below
+    # protects against), so treat them as per-pair-forcing -> decline to the
+    # vectorized `find_fuzzy_matches`, which handles every scorer (incl. the tf
+    # downweight via the plugin matrix path), exactly as before this change.
+    _has_name_scorer = any(
+        s in ("name_freq_weighted_jw", "given_name_aliased_jw") for s in _fast_scorers
+    )
+    _name_native_ok = _ensure_name_tables_installed() if _has_name_scorer else False
+    _name_forces_per_pair: set[str] = set()
+    if _has_name_scorer:
+        for f in mk.fields:
+            s = getattr(f, "scorer", None)
+            if s == "name_freq_weighted_jw":
+                if not _name_native_ok or getattr(f, "tf_freqs", None):
+                    _name_forces_per_pair.add(s)
+            elif s == "given_name_aliased_jw" and not _name_native_ok:
+                _name_forces_per_pair.add(s)
     _per_pair_scorers = [
-        s for s in _fast_scorers if s not in _VEC_SUPPORTED and s not in _NATIVE_SCORER_IDS
+        s
+        for s in _fast_scorers
+        if (s not in _VEC_SUPPORTED and s not in _NATIVE_SCORER_IDS)
+        or s in _name_forces_per_pair
     ]
     if _per_pair_scorers:
         _decline(
@@ -1317,6 +1421,18 @@ def score_buckets(
             # `_ensure_alias_tables_installed` folds both into one memoized bool;
             # only evaluated when a field actually uses alias_match.
             _alias_ok = has_alias and _ensure_alias_tables_installed()
+            # name scorers (bucket ids 15/16) have the same TWO-part guard: the
+            # `NATIVE_SUPPORTS_NAME_BUCKET_SCORERS` capability flag AND a successful
+            # census/alias table install, folded into `_ensure_name_tables_installed`.
+            # `_resolve_fast_path` already keeps a name field OFF the fast path when
+            # this is False (or when name_freq_weighted_jw carries a tf table), so a
+            # fast-path matchkey reaching here with a name field is table-installed;
+            # the guard is defense-in-depth (a stale wheel scores ids 15/16 as 0.0).
+            has_name_scorer = any(
+                spec[3] in ("name_freq_weighted_jw", "given_name_aliased_jw")
+                for spec in _field_specs
+            )
+            _name_ok = has_name_scorer and _ensure_name_tables_installed()
             # Wheel-skew: decline native entirely when a field uses a scorer whose
             # capability symbol the loaded kernel lacks (score_one would silently
             # zero that id); the pure-Python per-pair mirror scores the block.
@@ -1326,6 +1442,7 @@ def score_buckets(
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)
                 or (has_alias and not _alias_ok)
+                or (has_name_scorer and not _name_ok)
                 or (has_dice and not _dice_ok)
                 or (has_jaccard and not _jaccard_ok)
                 or (has_phash and not _phash_ok)

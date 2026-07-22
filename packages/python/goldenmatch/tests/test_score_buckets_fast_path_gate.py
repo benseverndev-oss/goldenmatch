@@ -200,8 +200,13 @@ class TestPerPairPythonPerfGuard:
     (26.97s vs 1.40s) -- enough to blow the per-test timeout on a slow CI runner.
     `_resolve_fast_path` must DECLINE so such a matchkey uses find_fuzzy_matches.
 
-    This is what makes the ensemble kernel safe to default-on: an ensemble field
-    resolving no longer drags a name-scorer matchkey onto the slow per-pair path.
+    UPDATE (name-scorer bucket kernel): `name_freq_weighted_jw` /
+    `given_name_aliased_jw` are now native bucket ids 15/16, so a name matchkey
+    ENGAGES the native fast path when the kernel is capable + the tables install.
+    The guard now only bites for a name field that CANNOT go native --
+    `name_freq_weighted_jw` carrying a per-dataset `tf_freqs` table (fs-core ports
+    only the static-census branch), which declines deterministically regardless of
+    native availability.
     """
 
     def _prepared_df_for(self, *fields: MatchkeyField) -> pl.DataFrame:
@@ -211,8 +216,33 @@ class TestPerPairPythonPerfGuard:
             cols[_xform_sig(f)] = ["alice", "alicia", "bob"]
         return pl.DataFrame(cols)
 
-    def test_declines_when_field_forces_per_pair_python(self):
-        # name_freq_weighted_jw is neither vec-supported nor native-id -> per-pair.
+    def test_declines_when_tf_name_field_forces_per_pair_python(self):
+        # A name_freq_weighted_jw field carrying a per-dataset tf_freqs table can't
+        # go native (fs-core ports only the static-census branch), so it forces the
+        # per-pair Python loop -> the guard must decline to find_fuzzy_matches. This
+        # is env-independent (holds whether or not the native kernel is built).
+        f1 = MatchkeyField(field="name", scorer="name_freq_weighted_jw", weight=1.0)
+        f1.tf_freqs = {"alice": 0.9, "alicia": 0.05, "bob": 0.05}
+        f2 = MatchkeyField(field="alias", scorer="jaro_winkler", weight=1.0)
+        mk = MatchkeyConfig(name="names", type="weighted", threshold=0.7, fields=[f1, f2])
+        result = _resolve_fast_path(
+            mk, self._prepared_df_for(f1, f2),
+            across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is None, (
+            "a name_freq_weighted_jw field with a tf_freqs table cannot go native "
+            "(no tf branch in fs-core) -> must decline the fast path (perf guard)"
+        )
+
+    def test_name_scorers_engage_when_native_available(self):
+        # Without a tf table, name_freq_weighted_jw / given_name_aliased_jw are
+        # native bucket ids 15/16 -> the fast path engages (native does the work,
+        # no per-pair Python). Requires a capable native kernel + installable
+        # tables; skip on a pure-Python / stale-wheel env (where the guard still
+        # declines them, keeping the vectorized find_fuzzy_matches path).
+        from goldenmatch.backends.score_buckets import _ensure_name_tables_installed
+        if not _ensure_name_tables_installed():
+            pytest.skip("native name-bucket kernel unavailable (pure-Python/stale wheel)")
         f1 = MatchkeyField(field="name", scorer="name_freq_weighted_jw", weight=1.0)
         f2 = MatchkeyField(field="alias", scorer="given_name_aliased_jw", weight=1.0)
         mk = MatchkeyConfig(name="names", type="weighted", threshold=0.7, fields=[f1, f2])
@@ -220,9 +250,9 @@ class TestPerPairPythonPerfGuard:
             mk, self._prepared_df_for(f1, f2),
             across_files_only=False, source_lookup=None, target_ids=None,
         )
-        assert result is None, (
-            "a matchkey with a per-pair-Python scorer (name_freq_weighted_jw) "
-            "must decline the fast path -> find_fuzzy_matches (perf guard)"
+        assert result is not None, (
+            "name scorers (no tf table) are native bucket ids 15/16 -> the fast "
+            "path must engage when the native kernel is capable"
         )
 
     def test_engages_for_vec_supported_scorers(self):

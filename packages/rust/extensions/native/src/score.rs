@@ -12,7 +12,10 @@
 use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
-use goldenmatch_fs_core::{AliasTable, NameAliases, SurnameFreq, SurnameIdfTable, TfTable};
+use goldenmatch_fs_core::{
+    given_name_aliased_sim, name_freq_weighted_sim, AliasTable, NameAliases, SurnameFreq,
+    SurnameIdfTable, TfTable,
+};
 use goldenmatch_score_core::score_one;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -154,6 +157,45 @@ fn name_providers(
     match refdata {
         Some(d) => (Some(&d.surnames), Some(&d.aliases)),
         None => (None, None),
+    }
+}
+
+/// Weighted-BUCKET scorer ids for the two name scorers. `score_one` (score-core)
+/// owns the bucket namespace 0..=14; these extend it for the reference-table-
+/// backed name scorers, which `score_one` (stateless) cannot dispatch. DISTINCT
+/// from the FS namespace (where `name_freq_weighted_jw`/`given_name_aliased_jw`
+/// are ids 4/5) — that map never transfers here. Kept in lockstep with
+/// `backends.score_buckets._NATIVE_SCORER_IDS` (and `core.fused_match`); a skew
+/// is caught by the `native_symbols` gate + the wheel-drift advisory via the
+/// capability flag `NATIVE_SUPPORTS_NAME_BUCKET_SCORERS`.
+pub const NB_NAME_FREQ_WEIGHTED: u8 = 15;
+pub const NB_GIVEN_NAME_ALIASED: u8 = 16;
+
+/// Per-field similarity for the weighted bucket kernels. Intercepts the two
+/// name-scorer bucket ids (15/16) and dispatches them through fs-core's
+/// reference-table-backed sims using the process-global [`NameRefData`]; every
+/// other id delegates to the stateless `score_one`. When the host never
+/// registered name reference data (`name_data == None`) a name-scorer field
+/// degrades to plain Jaro-Winkler (`score_one(0)`), matching the Python plugin's
+/// `if not is_available(): return jw` — though the Python caller only routes
+/// native once the tables are installed, so this is a defensive fallback.
+#[inline]
+fn score_bucket_field(
+    scorer_id: u8,
+    a: &str,
+    b: &str,
+    name_data: &Option<Arc<NameRefData>>,
+) -> f64 {
+    match scorer_id {
+        NB_NAME_FREQ_WEIGHTED => match name_data {
+            Some(d) => name_freq_weighted_sim(a, b, &d.surnames),
+            None => score_one(0, a, b),
+        },
+        NB_GIVEN_NAME_ALIASED => match name_data {
+            Some(d) => given_name_aliased_sim(a, b, &d.aliases),
+            None => score_one(0, a, b),
+        },
+        id => score_one(id, a, b),
     }
 }
 
@@ -408,6 +450,12 @@ pub fn score_block_pairs(
     let exclude: HashSet<(i64, i64)> = exclude.into_iter().collect();
     let n_fields = scorer_ids.len();
 
+    // Snapshot the process-global name reference data ONCE (a cheap Arc clone)
+    // so the name-scorer bucket ids (15/16) can reach the census/alias tables
+    // inside the parallel loop without re-locking per pair. `Arc<NameRefData>`
+    // is Sync, so the rayon closure captures `&name_data` safely.
+    let name_data = current_name_refdata();
+
     // Precompute each block's (offset, size) span so blocks are independent
     // units of parallel work.
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(block_sizes.len());
@@ -438,7 +486,9 @@ pub fn score_block_pairs(
                                 if let (Some(a), Some(b)) =
                                     (&field_values[f][i], &field_values[f][j])
                                 {
-                                    score_sum += score_one(scorer_ids[f], a, b) * weights[f];
+                                    score_sum +=
+                                        score_bucket_field(scorer_ids[f], a, b, &name_data)
+                                            * weights[f];
                                     weight_sum += weights[f];
                                 }
                             }
@@ -854,6 +904,11 @@ pub fn score_block_pairs_arrow(
         offset += size;
     }
 
+    // Snapshot the process-global name reference data ONCE (cheap Arc clone) so
+    // the name-scorer bucket ids (15/16) reach the census/alias tables inside the
+    // shared span closure. `Arc<NameRefData>` is Sync -> safe for the rayon path.
+    let name_data = current_name_refdata();
+
     // Per-block scorer, shared by the sequential and rayon paths so the two can
     // never diverge. Borrows only Sync data (the arrow arrays, the exclude set,
     // the weight/scorer slices) and holds no mutable state, so it is safe to
@@ -874,7 +929,8 @@ pub fn score_block_pairs_arrow(
                     let mut weight_sum = 0.0_f64;
                     for f in 0..n_fields {
                         if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
-                            score_sum += score_one(scorer_ids[f], a, b) * weights[f];
+                            score_sum +=
+                                score_bucket_field(scorer_ids[f], a, b, &name_data) * weights[f];
                             weight_sum += weights[f];
                         }
                     }
