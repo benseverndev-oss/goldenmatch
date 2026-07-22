@@ -17,9 +17,6 @@ goldenmatch.connectors.hubspot: "surface -- dynamic load_connector() 'module:Cla
 goldenmatch.connectors.salesforce: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
 goldenmatch.connectors.snowflake: "surface -- dynamic load_connector() 'module:Class' dispatch (optional dep)"
 
-# -- codegen invoked by a repo script, not imported by the package
-goldenmatch.core.config_lint.docgen: "surface -- codegen, invoked by scripts/gen_lint_docs.py"
-
 # -- Alembic migration runtime loads env + versions by convention (goldenmatch identity migrate)
 goldenmatch.db.alembic.env: "surface -- Alembic runtime entry (loaded by the alembic command)"
 goldenmatch.db.alembic.versions.0001_identity_v1: "surface -- Alembic migration (runtime-discovered)"
@@ -30,8 +27,3 @@ goldenmatch.db.alembic.versions.0004_claim_authority: "surface -- Alembic migrat
 # -- maintenance regeneration scripts (run by hand to refresh committed reference data)
 goldenmatch.refdata.scripts: "surface -- maintenance package (regen scripts, not runtime)"
 goldenmatch.refdata.scripts.fetch_census_surnames: "surface -- maintenance regen script"
-
-# -- GENUINE CANDIDATE: no module and no test imports it; sail/__init__ imports pyspark lazily
-#    inside the identity builders, not via this session helper. Owner review: wire, expose as
-#    [sail]-extra public API, or remove. Left deferred pending that decision.
-goldenmatch.sail.session: "dead -- unwired Spark-session helper; no importer (owner review, see spec)"

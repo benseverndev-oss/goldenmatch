@@ -185,6 +185,57 @@ removal of the genuine-dead core are follow-ons: the symbol map can't live in th
 sidecar; the 7-symbol deletion touches the distributed engine + perceptual + web and is a
 separately-reviewed cleanup, not part of the detector PR.
 
+## Multi-package generalization (2026-07-22)
+
+Ran both passes across all six Python packages (`goldenmatch`, `goldencheck`, `goldenflow`,
+`goldenpipe`, `infermap`, `goldenanalysis`). The suite is **remarkably clean** — after the
+resolver fixes below, module orphans are 0/0/1/0/1/0 and symbol-level `strong` is
+29/0/4/11/0/0. Every module orphan is classified (`parity/dead_code/<pkg>.yaml` now exists for
+goldenmatch/goldenflow/infermap; goldencheck/goldenpipe/goldenanalysis have zero); `--check`
+is green for all six.
+
+**Three more resolver-substrate bugs surfaced and fixed** — all the same "a legitimate
+consumer or a real binding is invisible to the scan" class as the Phase-2b BOM/sibling-tests
+finds:
+
+1. **Multi-binding overwrite.** The scoped resolver kept one target per local name, so a file
+   that binds the same name to two modules in different branches — CLI dispatch does
+   `from .mcp.server import run_server` in one command and `from .a2a.server import run_server`
+   in another — credited only the *last* import, falsely flagging the first. Now `sym_binds`
+   /`mod_binds` are set-valued and a use marks **every** candidate binding. (Cleared 6
+   goldenmatch + 1 goldenflow + 1 goldenpipe `run_server`-class FPs.)
+2. **Package-local `scripts/` under-scan.** The use-scan covered `<pkg>/tests` but not the
+   sibling `<pkg>/scripts/`, where byte-parity-corpus and codegen generators live. goldenflow's
+   `_double_metaphone_{primary,alt}_py` (docstring: "byte-parity corpus helper") are consumed
+   only by `scripts/gen_identifiers_corpus.py`; goldenmatch's `sail.session.connect` only by
+   `scripts/bench_sail_100m.py`. **This retroactively cleared the Phase-1 "1 genuine dead
+   candidate" (`sail.session`)** — it was never dead, just script-reached. Both `scripts/` and
+   `tests/` are now scanned.
+3. **`from pkg.sub import <submodule>` test-import under-recording (module level).** The
+   module-level `_scan_test_imports` used a regex that captured only the dotted path after
+   `from`, missing the imported-name-is-a-submodule case — so `from goldenpipe.core import
+   _planner_json` recorded `goldenpipe.core` but not `_planner_json`, false-flagging the
+   parity-test-exercised `_planner_json` as an orphan. Replaced with an AST scan that emits both
+   the module and each `module.name`. (Cleared goldenpipe's 2 module orphans and 2 goldenmatch
+   stale deferrals — `config_lint.docgen`, `sail.session` — that tests/scripts actually reach.)
+
+**One confirmed dead symbol removed** (the generalization proving out on another package):
+`goldencheck.mcp.agent_tools._serialize_findings` — a verbatim duplicate of the copy in
+`mcp/server.py:210`, which is the one actually used (3×); the `agent_tools` copy was shadowed
+and never called. Removed it + its now-orphaned `asdict` import.
+
+**Owner-review "written-but-unwired" candidates (classified/documented, not deleted)** — these
+are the ambiguous middle between dead and intended-public-API, in packages whose roadmap isn't
+mine to prune:
+- `goldenflow.connectors.{gcs.write_gcs, s3.write_s3}` — the cloud **read** side (`read_gcs`/
+  `read_s3`) is wired; the **write** counterparts are 0-reference and not in `__all__`.
+- `goldenflow.history.get_run` — single-record accessor in an otherwise-live module (callers use
+  `list_runs`).
+- `goldenflow.reporters.json_reporter` (module) — the CLI emits via `rich_console` only; a JSON
+  reporter that was never wired (`dead --` deferral, owner to wire `--format json` or remove).
+- `goldenpipe.core._native_loader.*` (11 `*_json`/`native_module`) — the native parity-oracle
+  binding surface (goldenpipe-native is reference-mode, not host-accelerated); dormant by design.
+
 ## Non-goals / limits
 
 - The prototype does not do symbol-level analysis (Phase 2) — it reports whole-module orphans.

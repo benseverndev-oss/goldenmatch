@@ -1,0 +1,15 @@
+# dead_code_deferred (infermap) -- module-level classification map.
+# Spec: docs/superpowers/specs/2026-07-22-arch-aware-dead-code-detection.md
+# Every module check_dead_code.py flags as reachable from no in-process surface must be
+# EITHER deleted OR listed here with a reason. Reason prefix vocabulary:
+#   surface --  reached out-of-band (external runtime, dynamic dispatch, codegen); NOT dead
+#   fallback -- pure-language reference for a native kernel (native-off path)
+#   oracle --   parity ground-truth the kernel is diffed against
+#   dead --     confirmed dead; scheduled for removal (with the removal ref)
+#
+# Bootstrap 2026-07-22 (multi-package generalization). Format: `module: reason`.
+
+# -- structural typing contract: a `@runtime_checkable` Provider Protocol. Concrete providers
+#    satisfy it STRUCTURALLY (duck-typed), so none import it -- invisible to reachability, but
+#    it is the load-bearing interface definition every provider is checked against. NOT dead.
+infermap.providers.base: "surface -- Provider Protocol (runtime_checkable; implemented structurally, not imported)"
