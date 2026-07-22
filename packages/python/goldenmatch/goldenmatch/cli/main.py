@@ -332,6 +332,42 @@ def interactive_cmd(
     tui_app.run()
 
 
+@app.command("score")
+def score_cmd(
+    a: str = typer.Argument(..., help="First string."),
+    b: str = typer.Argument(..., help="Second string."),
+    scorer: str = typer.Option(
+        "jaro_winkler", "-s", "--scorer",
+        help="Scorer: exact, jaro_winkler, levenshtein, token_sort, "
+             "soundex_match, dice, jaccard, ensemble.",
+    ),
+) -> None:
+    """Score similarity between two strings."""
+    from goldenmatch import score_strings
+
+    typer.echo(f"{scorer}: {score_strings(a, b, scorer):.4f}")
+
+
+@app.command("info")
+def info_cmd() -> None:
+    """Show package info: version + available scorers/strategies/blocking/transforms."""
+    from typing import get_args
+
+    from goldenmatch.config.schemas import (
+        VALID_SCORERS,
+        VALID_SIMPLE_TRANSFORMS,
+        VALID_STRATEGIES,
+        BlockingConfig,
+    )
+
+    blocking = get_args(BlockingConfig.model_fields["strategy"].annotation)
+    typer.echo(f"GoldenMatch v{__version__}")
+    typer.echo(f"Scorers: {', '.join(sorted(VALID_SCORERS))}")
+    typer.echo(f"Strategies: {', '.join(sorted(VALID_STRATEGIES))}")
+    typer.echo(f"Blocking: {', '.join(sorted(blocking))}")
+    typer.echo(f"Transforms: {', '.join(sorted(VALID_SIMPLE_TRANSFORMS))}")
+
+
 @app.command("profile")
 def profile_cmd(
     files: list[str] = typer.Argument(..., help="File(s) to profile"),

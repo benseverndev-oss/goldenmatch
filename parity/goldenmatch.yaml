@@ -9,8 +9,9 @@
 #   1. NAMING ALIASES (resolved 2026-07-05 via non-breaking aliases — both
 #      servers now answer to both names, so these are shared: dedupe/find_duplicates,
 #      match/match_record, explain_pair/explain_match, profile/profile_data, and
-#      explain_cluster (alias of the shared agent_explain_cluster)). CLI info/score/
-#      tui(TS) vs interactive(PY) are NOT aliases (distinct ops) — left as coverage gaps.
+#      explain_cluster (alias of the shared agent_explain_cluster)). CLI info + score
+#      are now SHARED — the Python CLI wraps score_strings + the config allow-lists.
+#      tui(TS) vs interactive(PY) are NOT aliases (distinct ops) — left as a coverage gap.
 #   2. PYTHON-RICHER COVERAGE (intentional — Python is the fuller, STATEFUL server):
 #      get_stats / get_cluster / list_clusters are Python-only BECAUSE the TS MCP is
 #      stateless — its dedupe() returns stats + clusters inline (DedupeResult), so there
@@ -146,10 +147,12 @@ cli_commands:
   - evaluate
   - identity
   - import-splink
+  - info
   - match
   - mcp-serve
   - memory
   - profile
+  - score
   - serve
   python_only:
   - analyze-blocking
@@ -176,8 +179,6 @@ cli_commands:
   - unmerge
   - watch
   ts_only:
-  - info
-  - score
   - tui
 a2a_skills:
   shared:
