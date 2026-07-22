@@ -5,7 +5,7 @@ import {
   WASM_COVERED_SCORERS,
   type ScorerBackend,
 } from "../../src/core/wasm/backend.js";
-import { scoreMatrix } from "../../src/core/scorer.js";
+import { scoreMatrix, setSyncEmbedder } from "../../src/core/scorer.js";
 
 const stub: ScorerBackend = {
   scoreMatrix: (values) => new Float64Array(values.length * values.length),
@@ -25,11 +25,12 @@ describe("ScorerBackend singleton", () => {
     expect(getScorerBackend()).toBeNull();
   });
 
-  it("covers the 9 score_one scorers + the 2 fs-core name scorers", () => {
+  it("covers the 10 score_one scorers + the 2 fs-core name scorers", () => {
     expect([...WASM_COVERED_SCORERS].sort()).toEqual(
       [
         "date",
         "dice",
+        "ensemble",
         "exact",
         "given_name_aliased_jw",
         "jaccard",
@@ -76,7 +77,7 @@ describe("scoreMatrix backend swap", () => {
     expect(m[0]![1]).toBe(0);
   });
 
-  it("ignores the backend for an UNCOVERED scorer (ensemble stays pure-TS)", () => {
+  it("ignores the backend for an UNCOVERED scorer (embedding stays pure-TS)", () => {
     let called = false;
     setScorerBackend({
       scoreMatrix: (values) => {
@@ -84,11 +85,17 @@ describe("scoreMatrix backend swap", () => {
         return new Float64Array(values.length * values.length).fill(0.5);
       },
     });
-    // ensemble is NOT WASM-covered -> pure-TS scoreField, so the stub's 0.5
-    // must not appear (Robert/Rupert ensemble is soundex-boosted to 0.8).
-    const m = scoreMatrix(["Robert", "Rupert"], "ensemble");
-    expect(called).toBe(false);
-    expect(m[0]![1]).not.toBe(0.5);
+    // embedding is NOT WASM-covered -> pure-TS scoreField (a deterministic stub
+    // embedder makes it a real cosine), so the stub's 0.5 must not appear and
+    // the backend must not be called.
+    setSyncEmbedder((s) => [s.length, s.charCodeAt(0) || 0]);
+    try {
+      const m = scoreMatrix(["abc", "abd"], "embedding");
+      expect(called).toBe(false);
+      expect(m[0]![1]).not.toBe(0.5);
+    } finally {
+      setSyncEmbedder(null);
+    }
   });
 
   it("zeros out null cells after a backend call", () => {

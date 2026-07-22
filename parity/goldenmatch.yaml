@@ -311,9 +311,12 @@ blocking_strategies:
 # with the pure-TS fallback -- qgram is rational set-Jaccard, date's true-DL==OSA for the
 # equal-length 8-digit inputs it buckets, soundex_match is the shared Unicode-folding
 # standard-Soundex spec + empty-guard, dice/jaccard are integer bloom-popcount + one divide).
-# python_only: `initialism_match`, `alias_match`, `phash`, `ensemble`,
-# `radial`, `audio_fp` have an arrow-native (bucket) kernel on Python but no TS WASM
-# port yet.
+# `ensemble` (id 12) is also shared: score-wasm overrides id 12 to recompose it with
+# the TS-parity normalized token_sort (jw + normalized token_sort + 0.8*soundex_match),
+# matching the pure-TS `ensembleScore` to 4dp -- the same bar its jw/token_sort
+# components hold vs rapidfuzz (soundex byte-exact).
+# python_only: `initialism_match`, `alias_match`, `phash`, `radial`, `audio_fp` have an
+# arrow-native (bucket) kernel on Python but no TS WASM port yet.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
@@ -322,6 +325,7 @@ scorer_kernels:
   shared:
   - date
   - dice
+  - ensemble
   - exact
   - jaccard
   - jaro_winkler
@@ -332,7 +336,6 @@ scorer_kernels:
   python_only:
   - alias_match
   - audio_fp
-  - ensemble
   - initialism_match
   - phash
   - radial
