@@ -67,6 +67,14 @@
  * soundex_match component is byte-exact). Like exact/soundex_match, `buildScoreMatrix`
  * keeps the O(n) pure-TS `ensembleScoreMatrix` intercept; this id is reached only via a
  * direct `scoreMatrix` call, where the kernel is reachable + parity-proven.
+ *
+ * `radial` (id 13) is rotation-aligned Pearson of two hex radial-variance profiles
+ * (max Pearson over every cyclic shift, clamped to [0,1]). The kernel and the pure-TS
+ * `radialSimilarity` do the identical signed-byte parse + left-to-right f64 reductions,
+ * but the WASM release build may vectorize the Pearson sums in a different order, so the
+ * WASM matrix matches the pure-TS fallback to ~4dp (not byte-exact) — the same 1-ULP
+ * reduction-order tolerance the native<->pure Python radial parity carries. A non-hex or
+ * mismatched-length profile -> 0.0 on both.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -80,6 +88,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   jaccard: 10,
   phash: 11,
   ensemble: 12,
+  radial: 13,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

@@ -110,6 +110,7 @@ export {
   jaccardSimilarity,
   qgramScore,
   phashSimilarity,
+  radialSimilarity,
   ensembleScore,
   scoreMatrix,
   asString,

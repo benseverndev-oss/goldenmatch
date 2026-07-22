@@ -345,6 +345,42 @@ d("WASM phash matches the pure-TS scoreField reference (exact)", () => {
   }
 });
 
+// radial (score_one id 13): rotation-aligned Pearson of two hex radial-variance
+// profiles (max Pearson over every cyclic shift, clamped to [0,1]). The kernel and
+// the pure-TS `radialSimilarity` do the identical signed-byte parse + left-to-right
+// f64 Pearson reductions, but the WASM release build may vectorize the sums in a
+// different order, so parity is ~4dp (not byte-exact) -- the 1-ULP reduction-order
+// tolerance the native<->pure Python radial parity also carries. Non-hex / mismatched
+// length -> 0.0 on both.
+type RadialCase = readonly [a: string, b: string, note: string];
+const RADIAL_CASES: readonly RadialCase[] = [
+  ["0a1b2c3d", "0a1b2c3d", "identical -> 1.0"],
+  ["0a1b2c3d", "2c3d0a1b", "cyclic rotation aligns -> 1.0"],
+  ["0a1b2c3d", "3d0a1b2c", "another cyclic rotation -> 1.0"],
+  ["01020304", "04030201", "reversed profile (partial correlation)"],
+  ["ff01ff01", "01ff01ff", "signed bytes (0xff = -1) rotation"],
+  ["0a0a0a0a", "01020304", "constant profile -> 0.0 (zero variance)"],
+  ["0a1b2c3d", "0a1b", "length mismatch -> 0.0"],
+  ["zz", "0102", "non-hex -> 0.0"],
+];
+
+d("WASM radial matches the pure-TS scoreField reference (4dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of RADIAL_CASES) {
+    it(`radial("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "radial");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "radial");
+      expect(m[0]![1]!).toBeCloseTo(ref!, 9);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();

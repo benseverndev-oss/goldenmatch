@@ -506,6 +506,7 @@ export const VALID_SCORERS = new Set([
   "jaccard",
   "qgram",
   "phash",
+  "radial",
   "given_name_aliased_jw",
   "name_freq_weighted_jw",
 ] as const);
