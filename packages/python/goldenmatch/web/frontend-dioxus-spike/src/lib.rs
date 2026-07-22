@@ -3,6 +3,7 @@
 
 pub mod chart;
 pub mod graph;
+pub mod graph_neighborhood;
 pub mod model;
 
 #[cfg(feature = "web")]

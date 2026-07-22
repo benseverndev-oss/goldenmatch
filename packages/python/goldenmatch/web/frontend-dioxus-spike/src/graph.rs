@@ -167,7 +167,7 @@ pub fn identity_graph_chart(view: &IdentityView) -> Chart {
 
 /// Truncate long ids (UUIDs / hashes) for display; char-safe (never slices a
 /// multi-byte boundary).
-fn short(id: &str) -> String {
+pub(crate) fn short(id: &str) -> String {
     let n = id.chars().count();
     if n > 12 {
         format!("{}\u{2026}", id.chars().take(12).collect::<String>())
@@ -177,7 +177,7 @@ fn short(id: &str) -> String {
 }
 
 /// Prefer a human-readable payload field for the node label; fall back to the id.
-fn record_label(r: &IdentityRecord) -> String {
+pub(crate) fn record_label(r: &IdentityRecord) -> String {
     for key in ["name", "full_name", "email", "company"] {
         if let Some(v) = r.payload.get(key) {
             if let Some(s) = v.as_str() {

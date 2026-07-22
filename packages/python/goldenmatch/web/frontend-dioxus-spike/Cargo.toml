@@ -37,6 +37,13 @@ path = "src/bin/render.rs"
 name = "render_graph"
 path = "src/bin/render_graph.rs"
 
+# Click-to-expand neighborhood view: the WHOLE resolved graph collapsed to one
+# hub per entity, expanding an entity's records + evidence edges on click.
+# Scales the initial payload with entity count, not record count.
+[[bin]]
+name = "render_neighborhood"
+path = "src/bin/render_neighborhood.rs"
+
 # The Dioxus/WASM app (full Sensitivity route). Only built when `web` is on, so
 # the native `render` build never sees it. Build it for wasm32:
 #   cargo build --target wasm32-unknown-unknown --features web --bin web

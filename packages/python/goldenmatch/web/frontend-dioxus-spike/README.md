@@ -107,10 +107,40 @@ cargo run --bin render_graph -- /tmp/kg_resolved.json   # 472 records -> 180 ent
 > hatch for the `links` array) to color `same_as` vs `possible_same_as` vs
 > `conflicts_with` edges individually — a coverage gap, not a blocker.
 
-Natural follow-ons if this direction is taken: expand the neighborhood on node
-click (the `/identities/{id}` + `/by-record` endpoints already support it), and a
-multi-entity view fed by `/conflicts` to show over-merge candidates across
-entities.
+### Click-to-expand neighborhood mode (`render_neighborhood`)
+
+The whole-graph view draws every record up front, so past a few thousand
+records the page gets heavy and the layout turns into a hairball. The
+neighborhood view solves that by starting **collapsed** — one **hub node per
+resolved entity** — so the initial payload scales with the *entity* count, not
+the record count, and reveals an entity's records + evidence edges (its
+neighborhood) only when you **click its hub** (click again to collapse; a
+"Collapse all" button resets). That is exactly the shape a live server-fed
+build takes: the overview is cheap, and each click is one
+`/api/v1/identities/{id}` neighborhood fetch. Here every neighborhood is
+pre-serialized into the page so the interaction runs fully offline.
+
+```bash
+python scratchpad/kg_big.py /tmp/kg.json 3000        # dedupe -> whole resolved graph
+cargo run --bin render_neighborhood -- /tmp/kg.json  # 8,094 records -> 2,962 collapsed hubs
+open identity_neighborhood.html                       # click any hub to expand
+```
+
+The data model is still built **once in Rust** (`src/graph_neighborhood.rs`
+reuses the same source-category / conflict-coloring / label logic as
+`graph.rs`). Charming's `HtmlRenderer` emits a static option with no event
+hooks, so the click handling uses the **raw-ECharts escape hatch** flagged in
+the caveat above: `src/bin/render_neighborhood.rs` bakes the Rust-built payload
+into a self-contained page plus a ~40-line vanilla-JS ECharts interaction layer
+(`chart.on('click')` toggles each entity's neighborhood). Verified end-to-end
+(headless Chromium) on the 8,094-record / 2,962-entity graph: the initial
+render is 2,962 hub nodes with **zero edges** (light + instant), and expanding
+an entity adds exactly its records + member/evidence links. A production Dioxus
+build would move this onto the real endpoints (`/identities/{id}` +
+`/by-record`) so the browser never holds more than the expanded neighborhoods.
+
+Further follow-on: a multi-entity view fed by `/conflicts` to show over-merge
+candidates across entities.
 
 ## Run the full Dioxus web app
 
