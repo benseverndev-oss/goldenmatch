@@ -7,12 +7,40 @@ import type {
   IdentitySummary,
   IdentityView,
 } from "../lib/api";
+import { IdentityGraph, type GraphExpansion } from "../components/IdentityGraph";
 
 export function Identities() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
   const [datasetFilter, setDatasetFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [view, setView] = useState<"list" | "graph">("list");
+
+  // Adapter: expand one entity into its records + evidence edges. Records in a
+  // conflicts_with edge are colored as "conflict"; others by their source.
+  const expandEntity = async (entityId: string): Promise<GraphExpansion> => {
+    const v = await api.identityGet(entityId);
+    const conflict = new Set<string>();
+    for (const e of v.edges) {
+      if (e.kind === "conflicts_with") {
+        conflict.add(e.record_a_id);
+        conflict.add(e.record_b_id);
+      }
+    }
+    return {
+      nodes: v.records.map((r) => ({
+        id: r.record_id,
+        label: recordLabel(r.payload, r.record_id),
+        group: conflict.has(r.record_id) ? "conflict" : r.source || "unknown",
+      })),
+      links: v.edges.map((e) => ({
+        source: e.record_a_id,
+        target: e.record_b_id,
+        value: e.score,
+        kind: e.kind,
+      })),
+    };
+  };
 
   const stats = useQuery<IdentityStatsResponse>({
     queryKey: ["identity-stats", datasetFilter],
@@ -107,8 +135,33 @@ export function Identities() {
             <option value="retired">retired</option>
           </select>
         </div>
+        <div className="ml-auto flex items-end gap-1 rounded-lg bg-ink-100 p-1">
+          <ViewTab active={view === "list"} onClick={() => setView("list")}>
+            list
+          </ViewTab>
+          <ViewTab active={view === "graph"} onClick={() => setView("graph")}>
+            graph
+          </ViewTab>
+        </div>
       </section>
 
+      {view === "graph" && (
+        <section className="card px-5 py-4">
+          <p className="eyebrow mb-3">identity graph</p>
+          <IdentityGraph
+            hubs={(list.data?.items ?? []).map((s) => ({
+              id: s.entity_id,
+              label: s.entity_id.slice(0, 8),
+              size: 2,
+            }))}
+            hubGroup="entity"
+            expand={expandEntity}
+            emptyHint="No identities yet — run a dedupe with identity.enabled."
+          />
+        </section>
+      )}
+
+      {view === "list" && (
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card px-5 py-4">
           <p className="eyebrow mb-3">identities</p>
@@ -145,8 +198,45 @@ export function Identities() {
           )}
         </div>
       </section>
+      )}
     </div>
   );
+}
+
+function ViewTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "px-3 py-1 text-[12px] rounded-md transition-colors " +
+        (active
+          ? "bg-paper-50 text-ink-900 shadow-card"
+          : "text-ink-500 hover:text-ink-700")
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Prefer a human-readable payload field for a record's node label. */
+function recordLabel(payload: Record<string, unknown> | null, fallback: string): string {
+  if (payload) {
+    for (const key of ["name", "full_name", "email", "company"]) {
+      const v = payload[key];
+      if (typeof v === "string" && v.trim()) return v;
+    }
+  }
+  return fallback;
 }
 
 function IdentityRow({ row }: { row: IdentitySummary }) {
