@@ -1,1 +1,4 @@
 package-lock.json
+
+# Runtime artifacts the CLI writes (scan records to .goldencheck/history.jsonl by default)
+.goldencheck/

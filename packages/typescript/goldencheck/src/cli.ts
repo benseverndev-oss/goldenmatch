@@ -4,6 +4,8 @@
  * Port of goldencheck/cli/main.py using Commander.js.
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { readFile } from "./node/reader.js";
@@ -13,6 +15,8 @@ import { Severity, healthScore, type Finding } from "./core/types.js";
 import { reportJson } from "./core/reporters/json.js";
 import { ciCheck } from "./core/reporters/ci.js";
 import { listAvailableDomains } from "./core/semantic/domains/index.js";
+import { recordScan, loadHistory } from "./core/engine/history.js";
+import { evaluateScan, type ExpectedFinding } from "./core/engine/evaluate.js";
 
 export const program = new Command();
 
@@ -31,6 +35,7 @@ program
   .option("--no-tui", "CLI output (no TUI)")
   .option("--llm-boost", "Enhance with LLM analysis")
   .option("--baseline <path>", "Baseline file for drift detection")
+  .option("--no-history", "Don't record this scan in history")
   .action((file: string, opts: Record<string, unknown>) => {
     const data = readFile(file);
     const result = scanData(data, {
@@ -38,6 +43,12 @@ program
       domain: opts["domain"] as string | undefined,
     });
     const findings = applyConfidenceDowngrade(result.findings, false);
+
+    // Record the scan in .goldencheck/history.jsonl (default on; --no-history
+    // opts out). Commander sets `history` false when --no-history is passed.
+    if (opts["history"] !== false) {
+      recordScan(file, result.profile, findings);
+    }
 
     if (opts["json"]) {
       console.log(reportJson(findings, result.profile));
@@ -225,6 +236,101 @@ program
     console.log("\nAvailable domain packs:");
     for (const d of domains) {
       console.log(`  - ${d}`);
+    }
+  });
+
+// --- history ---
+program
+  .command("history [file]")
+  .description("Show scan history — scores, grades, and trends over time")
+  .option("-n, --last <n>", "Show last N scans")
+  .option("--json", "Output as JSON")
+  .action((file: string | undefined, opts: Record<string, unknown>) => {
+    // recordScan stores the resolved absolute path, so filter by the same.
+    const fileFilter = file ? resolve(file) : undefined;
+    const lastN = opts["last"] !== undefined ? Number(opts["last"]) : undefined;
+    const records = loadHistory(fileFilter, lastN);
+
+    if (records.length === 0) {
+      console.log("No scan history found. Run a scan first.");
+      return;
+    }
+
+    if (opts["json"]) {
+      console.log(JSON.stringify(records, null, 2));
+      return;
+    }
+
+    console.log(
+      `${"Date".padEnd(20)} ${"File".padEnd(24)} ${"Score".padStart(5)} ` +
+        `${"Grade".padStart(5)} ${"Errors".padStart(6)} ${"Warnings".padStart(8)}`,
+    );
+    for (const r of records) {
+      const ts = r.timestamp.slice(0, 16).replace("T", " ");
+      console.log(
+        `${ts.padEnd(20)} ${r.file.padEnd(24)} ${String(r.score).padStart(5)} ` +
+          `${r.grade.padStart(5)} ${String(r.errors).padStart(6)} ${String(r.warnings).padStart(8)}`,
+      );
+    }
+
+    const first = records[0]!;
+    const latest = records[records.length - 1]!;
+    if (records.length >= 2 && first.file === latest.file) {
+      console.log(`\nTrend: ${first.file} ${first.score} -> ${latest.score}`);
+    }
+  });
+
+// --- evaluate ---
+program
+  .command("evaluate <file>")
+  .description("Evaluate scan accuracy against a ground-truth JSON file")
+  .requiredOption(
+    "-g, --ground-truth <path>",
+    "JSON file with expected findings (array of {column, check})",
+  )
+  .option("--min-f1 <n>", "Minimum F1 score; exit 1 if below", "0")
+  .option("--json", "Output results as JSON")
+  .action((file: string, opts: Record<string, unknown>) => {
+    const gtPath = opts["groundTruth"] as string;
+    let expected: ExpectedFinding[];
+    try {
+      expected = JSON.parse(readFileSync(gtPath, "utf-8")) as ExpectedFinding[];
+    } catch (e) {
+      console.error(
+        `Error: could not read ground-truth file '${gtPath}': ${(e as Error).message}`,
+      );
+      process.exit(1);
+    }
+
+    const data = readFile(file);
+    const result = scanData(data);
+    const findings = applyConfidenceDowngrade(result.findings, false);
+    const ev = evaluateScan(findings, expected);
+
+    if (opts["json"]) {
+      console.log(JSON.stringify(ev, null, 2));
+    } else {
+      console.log(`Precision:       ${ev.precision.toFixed(4)}`);
+      console.log(`Recall:          ${ev.recall.toFixed(4)}`);
+      console.log(`F1:              ${ev.f1.toFixed(4)}`);
+      console.log(`True positives:  ${ev.truePositives}`);
+      console.log(`False positives: ${ev.falsePositives}`);
+      console.log(`False negatives: ${ev.falseNegatives}`);
+
+      if (ev.fpDetails.length > 0) {
+        console.log("\nFalse positives:");
+        for (const [col, chk] of ev.fpDetails) console.log(`  ${col}: ${chk}`);
+      }
+      if (ev.fnDetails.length > 0) {
+        console.log("\nFalse negatives (missed):");
+        for (const [col, chk] of ev.fnDetails) console.log(`  ${col}: ${chk}`);
+      }
+    }
+
+    const minF1 = Number(opts["minF1"] ?? 0);
+    if (ev.f1 < minF1) {
+      console.error(`\nF1 ${ev.f1.toFixed(4)} is below minimum ${minF1.toFixed(4)}`);
+      process.exit(1);
     }
   });
 
