@@ -6,8 +6,12 @@
 # Review: MCP tools near-parity (only install_domain is Python-only — INTENTIONAL: the TS
 #   core exposes a read-only domain registry (listAvailableDomains / getDomainTypes /
 #   DOMAIN_REGISTRY, src/core/index.ts) with no install path, so there is no TS operation
-#   to reconcile). CLI: Python ships the richer surface (servers + ops); TS adds
-#   health-score/list-domains/profile convenience commands. No naming divergence.
+#   to reconcile). CLI: Python still ships more commands, but they are servers/daemons/
+#   interactive (agent-serve/serve/schedule/scan-db/init/review) or unported engines
+#   (denial-constraints/refs/learn). `history` + `evaluate` are now SHARED — the TS port
+#   already carries the engines (core/engine/history.ts + evaluateScan), so the CLI
+#   commands were wired over them. TS also adds health-score/list-domains/profile
+#   convenience commands. No naming divergence.
 # a2a_skills: FULL A2A parity — Python and TS expose the same 9 AgentCard skill ids
 #   (analyze_data, compare_domains, configure, explain, fix, handoff, review, scan, validate).
 #   No divergence.
@@ -40,7 +44,9 @@ cli_commands:
   - baseline
   - demo
   - diff
+  - evaluate
   - fix
+  - history
   - mcp-serve
   - scan
   - validate
@@ -48,8 +54,6 @@ cli_commands:
   python_only:
   - agent-serve
   - denial-constraints
-  - evaluate
-  - history
   - init
   - learn
   - refs
