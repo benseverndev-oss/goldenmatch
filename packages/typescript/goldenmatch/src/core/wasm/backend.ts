@@ -14,12 +14,19 @@
  * scorers need their census / alias reference-data tables injected once at
  * `enableWasm()` (the loader does this); until then the kernel degrades them to
  * plain Jaro-Winkler, the same table-absent fallback the pure-TS path takes.
+ *
+ * `qgram` (id 5) routes through score-core's `qgram_similarity` (char-trigram
+ * Jaccard: lowercase, `##`-pad each side, set intersection/union). The pure-TS
+ * `qgramScore` computes the identical set math, so the WASM matrix is byte-exact
+ * with the fallback on the ASCII/Latin inputs q-gram targets (short codes / SKUs
+ * / names) — the same parity bar the four core rapidfuzz scorers hold.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
   levenshtein: 1,
   token_sort: 2,
   exact: 3,
+  qgram: 5,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

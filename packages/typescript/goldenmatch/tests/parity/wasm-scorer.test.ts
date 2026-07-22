@@ -115,3 +115,39 @@ d("WASM name scorers match the pure-TS scoreField reference (4dp)", () => {
     });
   }
 });
+
+// qgram (score_one id 5) is char-trigram Jaccard: WASM `qgram_similarity` and the
+// pure-TS `qgramScore` compute the identical set math (lowercase, `##`-pad each
+// side, |A∩B|/|A∪B|, with an a===b -> 1.0 short-circuit), so the WASM matrix
+// equals the pure-TS fallback exactly (not merely to tolerance — it is rational
+// set arithmetic, no rapidfuzz float divergence). This is the parity that lets
+// qgram move to the `scorer_kernels` SHARED partition (kernel-backed on both
+// Python arrow-native AND TS WASM). Reference is the pure-TS `scoreField`.
+type QgramCase = readonly [a: string, b: string, note: string];
+const QGRAM_CASES: readonly QgramCase[] = [
+  ["hello", "hello", "identical -> 1.0"],
+  ["SKU123", "sku123", "case-insensitive -> 1.0"],
+  ["abcdef", "abcxyz", "partial trigram overlap"],
+  ["cat", "dog", "disjoint -> low"],
+  ["café", "cafe", "accented BMP, partial overlap"],
+  ["ab", "abc", "short (n=3 padding still forms grams)"],
+  ["", "", "both empty -> identical short-circuit"],
+];
+
+d("WASM qgram matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of QGRAM_CASES) {
+    it(`qgram("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "qgram");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "qgram");
+      // Set-Jaccard is rational on both surfaces -> byte-exact, not just 4dp.
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});

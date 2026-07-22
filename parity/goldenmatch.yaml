@@ -305,9 +305,12 @@ blocking_strategies:
 # path) -- Python `_NATIVE_SCORER_IDS` (backends.score_buckets) vs TS
 # `WASM_COVERED_SCORERS` (core/wasm/backend SCORER_ID). Every scorer in the
 # `scorers` surface NOT listed here is a pure-language fallback with no kernel.
-# python_only: `date`, `qgram`, `soundex_match`, `initialism_match`, `alias_match`,
-# `dice`, `jaccard`, `phash`, `ensemble`, `radial`, `audio_fp` have an arrow-native
-# (bucket) kernel on Python but no TS WASM port yet.
+# shared: `qgram` (score_one id 5) is now kernel-backed on BOTH surfaces -- Python
+# arrow-native (bucket) AND TS WASM (score-wasm delegates id 5 to score_one; the
+# WASM char-trigram Jaccard is byte-exact with the pure-TS `qgramScore` fallback).
+# python_only: `date`, `soundex_match`, `initialism_match`, `alias_match`, `dice`,
+# `jaccard`, `phash`, `ensemble`, `radial`, `audio_fp` have an arrow-native (bucket)
+# kernel on Python but no TS WASM port yet.
 # ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
 # name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
 # over fs-core, injected census/alias tables) but have no Python bucket kernel
@@ -317,6 +320,7 @@ scorer_kernels:
   - exact
   - jaro_winkler
   - levenshtein
+  - qgram
   - token_sort
   python_only:
   - alias_match
@@ -327,7 +331,6 @@ scorer_kernels:
   - initialism_match
   - jaccard
   - phash
-  - qgram
   - radial
   - soundex_match
   ts_only:
