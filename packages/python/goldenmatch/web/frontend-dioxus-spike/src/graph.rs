@@ -28,7 +28,7 @@ use charming::{
     Chart,
 };
 
-use crate::model::{IdentityRecord, IdentityView};
+use crate::model::{IdentityRecord, IdentityView, ResolvedGraph};
 
 const ENTITY_CAT: u64 = 0;
 const CONFLICT_CAT: u64 = 1;
@@ -188,4 +188,137 @@ fn record_label(r: &IdentityRecord) -> String {
         }
     }
     short(&r.record_id)
+}
+
+/// The WHOLE resolved graph as one force network: every entity's records are
+/// nodes (colored by source; conflict records red), evidence edges are links.
+/// No per-entity hub nodes and no always-on labels — at hundreds of records the
+/// CLUSTER STRUCTURE itself is the point (records of one entity clump via their
+/// evidence edges); labels live in the hover tooltip. Node size scales with the
+/// entity's record count so big clusters stand out.
+pub fn resolved_graph_chart(graph: &ResolvedGraph) -> Chart {
+    // Records in any `conflicts_with` edge, across ALL entities.
+    let mut conflicted: BTreeSet<String> = BTreeSet::new();
+    for ent in &graph.entities {
+        for e in &ent.edges {
+            if e.kind == "conflicts_with" {
+                conflicted.insert(e.record_a_id.clone());
+                conflicted.insert(e.record_b_id.clone());
+            }
+        }
+    }
+
+    // One category per source (index 0 reserved for the conflict category).
+    let mut source_cat: BTreeMap<String, u64> = BTreeMap::new();
+    for ent in &graph.entities {
+        for r in &ent.records {
+            let src = r.source.clone().unwrap_or_else(|| "unknown".into());
+            let next = source_cat.len() as u64 + 1;
+            source_cat.entry(src).or_insert(next);
+        }
+    }
+    let mut categories = vec![GraphCategory {
+        name: "\u{26a0} conflict".into(),
+    }];
+    let mut by_idx: Vec<(&String, &u64)> = source_cat.iter().collect();
+    by_idx.sort_by_key(|(_, i)| **i);
+    for (src, _) in by_idx {
+        categories.push(GraphCategory {
+            name: format!("source: {src}"),
+        });
+    }
+
+    let mut nodes: Vec<GraphNode> = Vec::new();
+    let mut links: Vec<GraphLink> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut n_multi = 0usize;
+    for ent in &graph.entities {
+        let size = ent.records.len();
+        if size > 1 {
+            n_multi += 1;
+        }
+        let sym = match size {
+            0 | 1 => 7.0,
+            2 => 12.0,
+            3 => 16.0,
+            _ => 22.0,
+        };
+        for r in &ent.records {
+            if !seen.insert(r.record_id.clone()) {
+                continue;
+            }
+            let src = r.source.clone().unwrap_or_else(|| "unknown".into());
+            let category = if conflicted.contains(&r.record_id) {
+                0
+            } else {
+                *source_cat.get(&src).unwrap_or(&1)
+            };
+            nodes.push(GraphNode {
+                id: r.record_id.clone(),
+                name: record_label(r),
+                x: 0.0,
+                y: 0.0,
+                value: size as f64,
+                category,
+                symbol_size: sym,
+                label: None,
+            });
+        }
+        for e in &ent.edges {
+            links.push(GraphLink {
+                source: e.record_a_id.clone(),
+                target: e.record_b_id.clone(),
+                value: e.score.or(Some(1.0)),
+            });
+        }
+    }
+
+    let n_records = nodes.len();
+    let subtitle = format!(
+        "{} records \u{2192} {} entities ({} multi-record) \u{b7} {} evidence edges \u{b7} {} sources{}",
+        n_records,
+        graph.entities.len(),
+        n_multi,
+        links.len(),
+        source_cat.len(),
+        if !conflicted.is_empty() {
+            format!(" \u{b7} {} in conflict", conflicted.len())
+        } else {
+            String::new()
+        },
+    );
+
+    Chart::new()
+        .title(
+            Title::new()
+                .text("Resolved identity graph")
+                .subtext(subtitle),
+        )
+        .tooltip(Tooltip::new().trigger(Trigger::Item))
+        .legend(
+            Legend::new()
+                .data(
+                    categories
+                        .iter()
+                        .map(|c| c.name.clone())
+                        .collect::<Vec<String>>(),
+                )
+                .top("bottom"),
+        )
+        .series(
+            Graph::new()
+                .layout(GraphLayout::Force)
+                .force(
+                    GraphLayoutForce::new()
+                        .gravity(0.05)
+                        .edge_length(45.0)
+                        .friction(0.12),
+                )
+                .roam(true)
+                .data(GraphData {
+                    nodes,
+                    links,
+                    categories,
+                }),
+        )
 }

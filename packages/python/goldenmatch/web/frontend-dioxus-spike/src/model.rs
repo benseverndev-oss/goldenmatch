@@ -45,7 +45,6 @@ pub struct SensitivityResponse {
     pub points: Vec<SensitivityPoint>,
 }
 
-
 // ── Identity graph (the knowledge-graph view) ───────────────────────────────
 // Ported from the `/api/v1/identities/{entity_id}` response shape
 // (`goldenmatch/identity/query.py::IdentityView.to_dict`). ONE resolved
@@ -95,4 +94,14 @@ pub struct IdentityView {
     pub records: Vec<IdentityRecord>,
     #[serde(default)]
     pub edges: Vec<EvidenceEdge>,
+}
+
+/// The WHOLE resolved graph: every entity from the identity store. Rendered as
+/// one network (records as nodes, evidence edges as links) so the cluster
+/// structure + cross-source stitching are visible at a glance. Shape:
+/// ``{"entities": [<IdentityView>, ...]}``.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ResolvedGraph {
+    #[serde(default)]
+    pub entities: Vec<IdentityView>,
 }

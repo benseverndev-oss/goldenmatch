@@ -84,6 +84,22 @@ KG-drawing code duplicated per surface. The data source already exists (the
 Identity Graph REST endpoints — `/identities`, `/identities/{id}/evidence`,
 `/conflicts`), so this is a *visualization* layer, not new backend work.
 
+### Whole-graph mode (`resolved_graph_chart`)
+
+A single entity is a small star; the compelling view is the **whole resolved
+dataset as one network** — every record a node, evidence edges connecting them,
+so the cluster structure and cross-source stitching are visible at a glance.
+Pass `{"entities": [<IdentityView>, ...]}` (the full identity store) and
+`render_graph` auto-detects it and renders `resolved_graph_chart`: records
+colored by source (legend-toggleable), sized by cluster size, conflict records
+red, no per-node labels (tooltip on hover) so hundreds of nodes stay readable.
+
+```bash
+# real end-to-end: dedupe a messy multi-source dataset, dump the whole graph:
+python scratchpad/kg_big.py /tmp/kg_resolved.json
+cargo run --bin render_graph -- /tmp/kg_resolved.json   # 472 records -> 180 entities
+```
+
 > **charming caveat (edge styling).** charming 0.5's `GraphLink` exposes only
 > `source`/`target`/`value` — no per-edge `lineStyle`/`label`. So edge KIND is
 > surfaced via the conflict-node coloring + the tooltip rather than per-edge

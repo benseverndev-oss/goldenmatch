@@ -14,7 +14,10 @@
 use std::io::Read;
 
 use charming::HtmlRenderer;
-use gm_echarts_spike::{graph::identity_graph_chart, model::IdentityView};
+use gm_echarts_spike::{
+    graph::{identity_graph_chart, resolved_graph_chart},
+    model::{IdentityView, ResolvedGraph},
+};
 
 const SAMPLE: &str = include_str!("../../sample_identity_graph.json");
 const OUT: &str = "identity_graph.html";
@@ -30,22 +33,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => std::fs::read_to_string(path)?,
     };
 
-    let view: IdentityView = serde_json::from_str(&raw)?;
-    let chart = identity_graph_chart(&view);
+    // Auto-detect the payload shape: a `{"entities": [...]}` wrapper is the WHOLE
+    // resolved graph (multi-entity network); a bare identity view is one entity.
+    let looks_multi = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("entities").map(|e| e.is_array()))
+        .unwrap_or(false);
+
+    let (chart, summary) = if looks_multi {
+        let g: ResolvedGraph = serde_json::from_str(&raw)?;
+        let recs: usize = g.entities.iter().map(|e| e.records.len()).sum();
+        let edges: usize = g.entities.iter().map(|e| e.edges.len()).sum();
+        let s = format!(
+            "resolved graph: {} entities, {} records, {} evidence edges",
+            g.entities.len(),
+            recs,
+            edges
+        );
+        (resolved_graph_chart(&g), s)
+    } else {
+        let view: IdentityView = serde_json::from_str(&raw)?;
+        let s = format!(
+            "entity {} — {} records, {} evidence edges",
+            view.entity_id,
+            view.records.len(),
+            view.edges.len()
+        );
+        (identity_graph_chart(&view), s)
+    };
 
     let mut renderer = HtmlRenderer::new(
         "GoldenMatch — identity knowledge graph (ECharts spike)",
-        1000,
-        640,
+        1100,
+        720,
     );
     renderer.save(&chart, OUT)?;
-
-    eprintln!(
-        "rendered entity {} — {} records, {} evidence edges -> {}",
-        view.entity_id,
-        view.records.len(),
-        view.edges.len(),
-        OUT
-    );
+    eprintln!("rendered {summary} -> {OUT}");
     Ok(())
 }
