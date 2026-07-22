@@ -149,13 +149,22 @@ def test_missing_pack_declines_even_with_flag(monkeypatch):
 
 def test_name_scorer_not_a_valid_negative_evidence_scorer():
     # NE never uses a reference-data name scorer: the config layer rejects it
-    # outright (it's not in NegativeEvidenceField's allowed scorer list), so the
-    # kernel NE path (score_one 0..=3) is never asked to run one. The defensive
+    # outright, so the kernel NE path (score_one 0..=3) is never asked to run one.
+    # Since the name scorers were promoted to VALID_SCORERS (they're first-class
+    # MATCHKEY scorers now), the rejection is an EXPLICIT NE exclusion
+    # (`_NE_UNSUPPORTED_SCORERS`), not "absent from VALID_SCORERS". The defensive
     # `_fs_native_eligible` NE gate is belt-and-suspenders for this invariant.
     import pytest
-    from goldenmatch.config.schemas import NegativeEvidenceField
+    from goldenmatch.config.schemas import (
+        _NE_UNSUPPORTED_SCORERS,
+        VALID_SCORERS,
+        NegativeEvidenceField,
+    )
 
     for scorer in _NAME_SCORER_IDS:
+        # First-class matchkey scorer, but excluded from the NE path.
+        assert scorer in VALID_SCORERS
+        assert scorer in _NE_UNSUPPORTED_SCORERS
         with pytest.raises(Exception):
             NegativeEvidenceField(field="x", scorer=scorer, threshold=0.9, penalty_bits=10.0)
 

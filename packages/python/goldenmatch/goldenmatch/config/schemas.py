@@ -50,6 +50,13 @@ VALID_SCORERS = frozenset({
     "name_freq_weighted_jw", "given_name_aliased_jw",
 })
 
+# Scorers valid as MATCHKEY scorers but NOT as negative-evidence scorers: the NE
+# path runs the native `score_one` kernel (ids 0..=3), while the reference-data
+# name scorers are FS kernel ids 4/5 with no NE path. Enforced in
+# NegativeEvidenceField (they were implicitly excluded before their promotion to
+# VALID_SCORERS).
+_NE_UNSUPPORTED_SCORERS = frozenset({"name_freq_weighted_jw", "given_name_aliased_jw"})
+
 VALID_STRATEGIES = frozenset({
     "most_recent", "source_priority", "most_complete", "majority_vote", "first_non_null",
     # v1.18 additions (#golden-strategies)
@@ -336,6 +343,16 @@ class NegativeEvidenceField(BaseModel):
             raise ValueError(
                 f"Invalid scorer '{self.scorer}'. Must be one of "
                 f"{sorted(VALID_SCORERS)}"
+            )
+        # Negative evidence uses the native `score_one` kernel (ids 0..=3); the
+        # reference-data name scorers are FS kernel ids 4/5 and have no NE path,
+        # so reject them here even though they are valid MATCHKEY scorers. (They
+        # were implicitly excluded before their promotion to VALID_SCORERS.)
+        if self.scorer in _NE_UNSUPPORTED_SCORERS:
+            raise ValueError(
+                f"Scorer '{self.scorer}' is not supported as a negative-evidence "
+                f"scorer (reference-data name scorers have no NE kernel path). "
+                f"Use one of the standard scorers for negative evidence."
             )
         return self
 
