@@ -61,14 +61,10 @@ _NODE_BUDGET = int(os.environ.get("GOLDENGRAPH_QA_NODE_BUDGET", "256"))
 #: the graph but disconnected from the seeds within any reasonable depth).
 _WIDE_HOPS = 8
 
-#: Answer-time retrieval mode. "local" (default) = the entity-graph BFS over extracted
-#: triples (the historical goldengraph path). "hybrid" = that ball PLUS raw source
-#: passages retrieved by goldenmatch's own retrieval surface, fed to synthesis as the
-#: ground truth with the graph as a multi-hop map. The bench's structural finding was
-#: that the triple-only graph is a LOSSY intermediate (it lost to plain paragraph RAG);
-#: hybrid tests whether layering the passages back in -- while keeping the graph for
-#: cross-passage bridging -- closes that gap. Env-tunable for the A/B.
-_QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "hybrid")
+# Answer-time retrieval mode ("hybrid" default since 2026-07-22, measured +169% am /
+# +143% judge over "local") is read per-engine in __init__ from GOLDENGRAPH_QA_MODE; there
+# is no module-level constant (a prior `_QA_MODE` global was dead -- __init__ reads the env
+# directly so a test can monkeypatch it per-construction).
 
 #: Passages retrieved per question in hybrid mode (matches the goldenmatch_rag /
 #: text_rag context budget so the comparison is apples-to-apples).
