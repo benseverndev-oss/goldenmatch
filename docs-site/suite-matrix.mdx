@@ -30,8 +30,8 @@ The Rust / Arrow-native / fused `-core` kernels are the source of truth for scor
 
 | Substrate | Scorers |
 |---|---|
-| Rust `-core` kernel — Python + TS | `date`, `exact`, `jaro_winkler`, `levenshtein`, `qgram`, `token_sort` |
-| Rust `-core` kernel — Python arrow-native only (TS falls back) | `alias_match`, `audio_fp`, `dice`, `ensemble`, `initialism_match`, `jaccard`, `phash`, `radial`, `soundex_match` |
+| Rust `-core` kernel — Python + TS | `date`, `dice`, `exact`, `jaro_winkler`, `levenshtein`, `qgram`, `token_sort` |
+| Rust `-core` kernel — Python arrow-native only (TS falls back) | `alias_match`, `audio_fp`, `ensemble`, `initialism_match`, `jaccard`, `phash`, `radial`, `soundex_match` |
 | WASM `-core` kernel — TS only (Python falls back) | `given_name_aliased_jw`, `name_freq_weighted_jw` |
 | Language fallback — no `-core` kernel | `embedding`, `record_embedding` |
 
