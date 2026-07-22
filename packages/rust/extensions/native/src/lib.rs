@@ -76,6 +76,16 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // kwarg only when this flag is present, so an OLDER wheel degrades gracefully to the
     // legacy emit-at-neutral native behavior (the numpy fallback still filters).
     m.add("FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE", true)?;
+    // Wheel-skew capability flag: the WEIGHTED bucket entries (`score_block_pairs`
+    // / `score_block_pairs_arrow`) dispatch the reference-data name scorers
+    // (`name_freq_weighted_jw` bucket id 15 / `given_name_aliased_jw` id 16)
+    // through the process-registered census / alias tables — DISTINCT from the FS
+    // path's ids 4/5 (FS_SUPPORTS_NAME_SCORERS). Python's `_NATIVE_SCORER_IDS`
+    // gate admits these two bucket scorers only when this flag is present AND
+    // `set_name_reference_data` has been called; an old wheel lacks the flag and
+    // keeps the pure-Python plugin path (score_one's catch-all would score 15/16
+    // as 0.0 otherwise).
+    m.add("NATIVE_SUPPORTS_NAME_BUCKET_SCORERS", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;

@@ -326,10 +326,19 @@ blocking_strategies:
 # WASM == pure-TS byte-exact. `initialism_match` is shared: the kernel needs the ~77-entry
 # legal_forms table injected at enableWasm() (set_legal_forms), which the loader seeds with
 # the ported refdata/business.ts table so WASM == pure-TS byte-exact.
-# ts_only: `given_name_aliased_jw` / `name_freq_weighted_jw` -- the census/alias
-# name scorers -- are kernel-backed on the TS WASM surface (score-wasm ids 20/21
-# over fs-core, injected census/alias tables) but have no Python bucket kernel
-# (Python accepts them via the plugin fallback); a real, declared Python<->TS delta.
+# `given_name_aliased_jw` / `name_freq_weighted_jw` are now shared too: the census/alias
+# name scorers are kernel-backed on BOTH surfaces -- TS WASM (score-wasm ids 20/21 over
+# fs-core) AND Python native (WEIGHTED bucket ids 15/16 in score_block_pairs/_arrow,
+# dispatched through fs-core's `name_freq_weighted_sim`/`given_name_aliased_sim` over the
+# process-global census/alias tables from `set_name_reference_data`, gated on the
+# `NATIVE_SUPPORTS_NAME_BUCKET_SCORERS` capability + `_ensure_name_tables_installed`). ONE
+# fs-core reference on both sides, so Python native == TS WASM by construction. Parity vs
+# the pure-Python plugin is TOLERANCE-bounded (native base JW is rapidfuzz-rs vs the
+# plugin's rapidfuzz-py; empirically machine-epsilon since there is no FS-style level
+# banding) -- native is the reference. `name_freq_weighted_jw` declines native for a field
+# carrying a per-dataset `tf_freqs` table (#1207): fs-core ports only the static-census
+# branch, so those fields stay on the vectorized find_fuzzy_matches (like `date` declining
+# on a stale wheel -- the kernel exists + is reachable, which is the shared contract).
 scorer_kernels:
   shared:
   - alias_match
@@ -338,19 +347,19 @@ scorer_kernels:
   - dice
   - ensemble
   - exact
+  - given_name_aliased_jw
   - initialism_match
   - jaccard
   - jaro_winkler
   - levenshtein
+  - name_freq_weighted_jw
   - phash
   - qgram
   - radial
   - soundex_match
   - token_sort
   python_only: []
-  ts_only:
-  - given_name_aliased_jw
-  - name_freq_weighted_jw
+  ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
 # reason -- the `check_scorer_coverage` gate FAILS on any uncovered scorer, so a new

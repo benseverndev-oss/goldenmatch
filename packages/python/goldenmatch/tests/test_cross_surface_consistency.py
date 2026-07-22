@@ -6,7 +6,8 @@ several places -- the drift class the focused consistency audit surfaced.
    identical across surfaces. It was a duplicated literal; now a single source in
    core._hashing, pinned here.
 2. Native scorer-id maps: the integer ids in _NATIVE_SCORER_IDS (score_buckets,
-   the score_block_pairs/score_one namespace) and _NATIVE_FIELD_SCORER_IDS
+   the score_block_pairs/score_one namespace 0-14 PLUS the name-scorer bucket ids
+   15/16 that the bucket kernel routes to fs-core) and _NATIVE_FIELD_SCORER_IDS
    (scorer.py, the score_field_matrix namespace) are hand-maintained mirrors of
    the Rust score-core dispatch. Nothing asserted they match the kernel; a
    renumber would silently mis-dispatch. Pinned canonically + behaviorally.
@@ -43,10 +44,18 @@ class TestNativeScorerIdMaps:
     # `soundex_match` therefore lives in BOTH maps at DIFFERENT ids (bucket 6,
     # field 4); the two are pinned separately so they can't silently collide.
     _SCORE_ONE_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "date": 4, "qgram": 5, "soundex_match": 6, "initialism_match": 7, "alias_match": 8, "dice": 9, "jaccard": 10, "phash": 11, "ensemble": 12, "radial": 13, "audio_fp": 14}
+    # Name-scorer bucket ids EXTEND the bucket namespace beyond score_one (0-14):
+    # the weighted bucket kernel (score_block_pairs/_arrow) intercepts 15/16 and
+    # dispatches them to fs-core's name_freq_weighted_sim/given_name_aliased_sim
+    # over the injected census/alias tables -- they are NOT score_one arms. Pinned
+    # here so a renumber of either the Python map or the Rust NB_* consts fails.
+    _NAME_BUCKET_IDS = {"name_freq_weighted_jw": 15, "given_name_aliased_jw": 16}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):
-        assert _NATIVE_SCORER_IDS == self._SCORE_ONE_IDS
+        # _NATIVE_SCORER_IDS = the score_one namespace (0-14) PLUS the two
+        # name-scorer bucket ids (15/16), which the bucket kernel routes to fs-core.
+        assert _NATIVE_SCORER_IDS == {**self._SCORE_ONE_IDS, **self._NAME_BUCKET_IDS}
 
     def test_native_field_scorer_ids_match_score_field_matrix_ordering(self):
         assert _NATIVE_FIELD_SCORER_IDS == self._FIELD_MATRIX_IDS
