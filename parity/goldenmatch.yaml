@@ -201,8 +201,12 @@ a2a_skills:
   - list_strategies
   - list_transforms
   - match
+  - memory_export
   - memory_stats
+  - profile
   - review_config
+  - suggest_config
+  - suggest_pprl
   - transform
   python_only:
   - analyze_blocking
@@ -233,12 +237,8 @@ a2a_skills:
   - agent_match_sources
   - agent_review_queue
   - fix_quality
-  - memory_export
-  - profile
   - scan_quality
   - score
-  - suggest_config
-  - suggest_pprl
 
 # scorers surface (config.schemas.VALID_SCORERS <-> types.ts VALID_SCORERS).
 # python_only: multimodal media comparators (ADR 0022) with no TS port yet.

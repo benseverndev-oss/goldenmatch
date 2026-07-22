@@ -487,6 +487,71 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         strategies = sorted(VALID_STRATEGIES)
         return {"strategies": strategies, "count": len(strategies)}
 
+    # ── Capability-gap skills (parity with the TS A2A surface) ────────────────
+    # File-based, stateless-per-request. `memory_export` / `suggest_pprl` delegate
+    # to the identical MCP dispatch (same JSON contract, same pattern as the
+    # identity_* / list_corrections skills above); `profile` / `suggest_config`
+    # are file-based summarizers over profile_for_agent / auto_configure.
+    if skill_id == "memory_export":
+        from goldenmatch.mcp.memory_tools import _dispatch as _memory_dispatch
+        return _memory_dispatch("memory_export", params)
+
+    if skill_id == "suggest_pprl":
+        from goldenmatch.mcp.agent_tools import _dispatch as _agent_dispatch
+        return _agent_dispatch("suggest_pprl", params, AgentSession)
+
+    if skill_id == "profile":
+        import polars as pl
+
+        df = pl.read_csv(
+            params["file_path"], encoding="utf8-lossy", ignore_errors=True
+        )
+        prof = profile_for_agent(df)
+        return {
+            "row_count": prof.row_count,
+            "has_sensitive": prof.has_sensitive,
+            "columns": [
+                {
+                    "name": f.name,
+                    "type": f.type,
+                    "uniqueness": f.uniqueness,
+                    "null_rate": f.null_rate,
+                    "avg_length": f.avg_length,
+                }
+                for f in prof.fields
+            ],
+        }
+
+    if skill_id == "suggest_config":
+        from pathlib import Path as _Path
+
+        from goldenmatch.core.autoconfig import auto_configure
+        from goldenmatch.core.blocker import collect_blocking_fields
+
+        fp = params["file_path"]
+        cfg = auto_configure([(fp, _Path(fp).stem)])
+        exact: list[str] = []
+        fuzzy: dict[str, float] = {}
+        threshold = 0.85
+        for mk in cfg.get_matchkeys():
+            if mk.type == "exact":
+                exact.extend(f.field for f in mk.fields if f.field)
+            else:
+                th = float(mk.threshold) if mk.threshold is not None else 0.85
+                threshold = th
+                for f in mk.fields:
+                    if f.field:
+                        fuzzy[f.field] = th
+        blocking = collect_blocking_fields(cfg.blocking) if cfg.blocking else []
+        return {
+            "suggested": {
+                "exact": sorted(set(exact)),
+                "fuzzy": fuzzy,
+                "blocking": blocking,
+                "threshold": threshold,
+            }
+        }
+
     raise ValueError(f"Unknown skill: {skill_id}")
 
 
