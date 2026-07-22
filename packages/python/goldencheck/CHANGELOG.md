@@ -2,6 +2,19 @@
 
 All notable changes to GoldenCheck will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`profile`, `health-score`, and `list-domains` CLI commands (TS parity).** The
+  Python CLI now carries the three commands the TypeScript port already shipped,
+  wrapping the existing scan / profile / domain engines (the same ones the MCP
+  `profile` / `health_score` / `list_domains` tools use): `goldencheck profile
+  data.csv` prints per-column type/null%/unique% stats, `goldencheck health-score
+  data.csv` prints the `GRADE (score/100)` line, and `goldencheck list-domains`
+  lists the bundled domain packs. Closes the three `cli_commands` `ts_only` gaps
+  (all move `ts_only` → `shared`).
+
 ## [3.2.0] - 2026-07-16
 
 ### Fixed
