@@ -2607,6 +2607,10 @@ def _fused_result_from_clusters(
         "throughput_posture": None,
         "golden_fused_used": golden_fused_used,
         "match_fused_capacity_mode": True,
+        # Key-set parity with the classic result dict (#2006). The fused path's
+        # scored_pairs shed is attributed to match_fused_capacity_mode above;
+        # scored_pairs_shed is the B2c-columnar-specific marker (False here).
+        "scored_pairs_shed": False,
     }
 
 
