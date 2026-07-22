@@ -122,6 +122,29 @@ Modeled on `check_api_parity.py` / `check_native_symbols.py` (AST-based, allowli
 - **Phase 4: populate `parity/native_symbols/*.allow`** from the FFI greps and add a REST/web
   route manifest — closes the two grep-only root gaps — then promote the gate into `ci-required`.
 
+## Prototype results (2026-07-22, goldenmatch-Python)
+
+**Phase 1 — modules** (`check_dead_code.py`, self-built AST graph): **14 orphans / 406 modules.**
+All classifiable (`parity/dead_code/goldenmatch.yaml`): 13 legitimate out-of-band surfaces —
+connector `load_connector()` dynamic dispatch (5), Alembic migration runtime (5), codegen
+(`config_lint.docgen`), maintenance regen scripts (2) — plus **1 genuine candidate**,
+`goldenmatch.sail.session` (an unwired Spark-session helper: no module and no test imports it;
+`sail/__init__` imports pyspark lazily inside the identity builders, not via this helper). At
+module granularity goldenmatch is effectively clean.
+
+Incidental substrate finding: the first pass (over `agent-codemap.json`) false-flagged ~35 real
+modules because the codemap under-records `from <pkg> import <submodule>` edges — a soundness
+bug in a committed, CI-gated artifact (fix tracked separately; the gate now self-builds its graph).
+
+**Phase 2 — symbols** (`--symbols`, bare-name occurrence scan): **0 unreferenced / 2280
+undecorated top-level def/class symbols.** Mechanism validated (a planted unique
+`def zz_...` is correctly flagged). So goldenmatch has no uniquely-named, truly-unreferenced
+top-level symbols. **Recall caveat:** the bare-name occurrence test is low-FP but low-recall — a
+dead symbol whose name collides with any unrelated token (a dead `def score` hidden behind the
+thousands of `score` uses) is masked, as is a dead-but-doc-mentioned symbol. Higher recall needs
+a **scope-aware AST reference resolver** (resolve each `Name`/`Attribute` load to its binding via
+per-file import resolution) — **Phase 2b**, higher FP, managed by the `dead_code_deferred` map.
+
 ## Non-goals / limits
 
 - The prototype does not do symbol-level analysis (Phase 2) — it reports whole-module orphans.

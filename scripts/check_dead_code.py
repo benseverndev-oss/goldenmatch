@@ -237,10 +237,94 @@ def analyze(pkg: str) -> dict:
     }
 
 
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SCAN_EXT = {".py", ".rs", ".ts", ".tsx", ".mjs", ".cjs", ".mdx", ".md",
+             ".yaml", ".yml", ".json", ".toml", ".sql", ".ipynb"}
+_SCAN_SKIP = {".git", "node_modules", "target", "dist", "build", ".venv",
+              "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "htmlcov"}
+
+
+def _repo_text_files():
+    for p in REPO.rglob("*"):
+        if not p.is_file() or p.suffix not in _SCAN_EXT:
+            continue
+        if any(part in _SCAN_SKIP for part in p.parts):
+            continue
+        yield p
+
+
+def analyze_symbols(pkg: str) -> dict:
+    """Phase 2: module-level (top-level) `def`/`class` symbols referenced NOWHERE in the
+    whole repo -- code, string literals, tests, other languages, docs. A symbol whose total
+    repo-wide identifier occurrences do not exceed its definition count has zero references.
+
+    Architecture-aware without special-casing: because the scan counts occurrences inside
+    STRING LITERALS and across ALL file types, names that are exported (`__all__` string),
+    string-dispatched (MCP/A2A/scorer registries), FFI-exported (Rust/TS mirrors), or
+    referenced only by tests are all automatically kept alive. The one form the occurrence
+    count can't see is DECORATOR registration (`@app.command`, `@router.get`, `@pytest.fixture`,
+    pydantic validators), so decorated defs/classes are excluded from suspicion up front."""
+    src_root = _src_root(pkg)
+    files = [
+        p for p in src_root.rglob("*.py")
+        if "tests" not in p.relative_to(src_root).parts
+        and not p.name.startswith("test_") and p.name != "conftest.py"
+    ]
+    # candidate top-level symbols: {name: [(module_file, lineno), ...]}
+    cands: dict[str, list[tuple[str, int]]] = {}
+    for f in files:
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+        except SyntaxError:
+            continue
+        rel = str(f.relative_to(REPO))
+        for node in tree.body:  # top-level only
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.decorator_list:            # decorator may register out-of-band
+                    continue
+                if node.name.startswith("__") and node.name.endswith("__"):
+                    continue
+                cands.setdefault(node.name, []).append((rel, node.lineno))
+    names = set(cands)
+
+    # repo-wide occurrence count, restricted to candidate names (cheap)
+    counts: dict[str, int] = dict.fromkeys(names, 0)
+    for p in _repo_text_files():
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for tok in _IDENT.findall(text):
+            if tok in counts:
+                counts[tok] += 1
+
+    dead = []
+    for name, defs in cands.items():
+        if counts[name] <= len(defs):  # occurrences never exceed the definition(s) => unreferenced
+            for (file, line) in defs:
+                dead.append((name, file, line))
+    dead.sort(key=lambda t: (t[1], t[2]))
+    return {"pkg": pkg, "n_symbols": len(cands), "dead": dead}
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     check = "--check" in argv
     pkg = args[0] if args else "goldenmatch"
+
+    if "--symbols" in argv:
+        s = analyze_symbols(pkg)
+        print(f"== dead-code (symbol-level) :: {pkg} ==")
+        print(f"top-level def/class symbols (undecorated)={s['n_symbols']}  "
+              f"unreferenced_anywhere={len(s['dead'])}")
+        for name, file, line in s["dead"]:
+            print(f"  {name}\n      {file}:{line}")
+        print("\nnote: LOW-recall / low-FP pass -- flags only symbols whose bare name occurs "
+              "NOWHERE else in the repo (code+strings+tests+other langs+docs). A dead symbol "
+              "whose name collides with any unrelated token is masked; higher recall needs a "
+              "scope-aware AST reference resolver (Phase 2b).")
+        return 0
+
     r = analyze(pkg)
 
     print(f"== dead-code (module-level) :: {pkg} ==")
