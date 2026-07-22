@@ -14,8 +14,20 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from functools import lru_cache
+from typing import NamedTuple
 
 import numpy as np
+
+
+class CorpusBuild(NamedTuple):
+    """Zero-touch corpus-build result: the discovered `RelationSchema` (or None) AND a
+    `PassageIndex` over the source documents, ready to hand to `ask(mode="hybrid")`.
+
+    Returned by `ingest_corpus(..., index_passages=True)` (opt-in; the bare-schema return
+    is preserved when `index_passages` is False, so existing callers are unaffected)."""
+
+    schema: object | None
+    passages: object | None  # goldengraph.passage_index.PassageIndex | None
 
 from .chunk_extract import chunk_extract, chunk_extract_enabled
 from .extract import Extraction, Mention
@@ -840,10 +852,20 @@ def ingest_corpus(
     fp_index: dict[str, str] | None = None,
     max_workers: int | None = None,
     doc_ids=None,
+    index_passages: bool = False,
+    passage_top_k: int = 50,
 ):
     """Build the KG from an ordered list of document texts. Returns the discovered `RelationSchema`
     when `GOLDENGRAPH_SCHEMA_DISCOVER=1` (so the caller can canonicalize QUERY relations through the
     SAME schema the edges were canonicalized with -- the query-side alignment), else None.
+
+    `index_passages=True` ALSO builds a `PassageIndex` over the source `docs` (embedded via
+    `embedder`) and returns a `CorpusBuild(schema, passages)` instead of the bare schema -- the
+    zero-touch wiring for `ask(mode="hybrid")` (index passages at build, retrieve at answer) so a
+    library caller no longer has to hand-build a retriever. Requires an `embedder` (the same one
+    `ask` seeds with); it is the ONLY change to the return contract, and it is opt-in, so every
+    existing caller (return the bare schema) is byte-identical. `passage_top_k` caps how many
+    passages a single answer-time `retrieve` can draw (passage_k must be <= it).
 
     The per-doc LLM work (extraction + fingerprint synthesis) is the build's
     dominant cost and is store-independent, so it runs CONCURRENTLY across docs
@@ -937,4 +959,18 @@ def ingest_corpus(
 
     if timers is not None:
         print(timers.report(wall=time.perf_counter() - t_wall, n_docs=len(docs)), flush=True)
+    if index_passages:
+        # Zero-touch hybrid: embed the source passages ONCE (via the same embedder ask() seeds
+        # with) into a PassageIndex, so `ask(mode="hybrid", passages=...)` works with no
+        # hand-built retriever. Requires an embedder -- raise clearly rather than silently
+        # returning a passage-less build that would degrade hybrid to local at answer time.
+        from .passage_index import PassageIndex
+
+        if embedder is None:
+            raise ValueError(
+                "ingest_corpus(index_passages=True) needs an embedder to embed the passages "
+                "(pass the same embedder ask() uses for seeding)"
+            )
+        passages = PassageIndex.build(doc_ids, docs, embedder, top_k=passage_top_k)
+        return CorpusBuild(schema=discovered_schema, passages=passages)
     return discovered_schema

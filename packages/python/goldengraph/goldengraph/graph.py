@@ -53,7 +53,8 @@ class GoldenGraph:
     (slices 1/2/3), with the ER scale plan surfaced (`execution_plan`, ADVISORY) and ONE `budget`
     threaded across build + answer LLM work (the cross-controller ceiling)."""
 
-    def __init__(self, *, store, plan, execution_plan, budget, llm, embedder, llm_classifier):
+    def __init__(self, *, store, plan, execution_plan, budget, llm, embedder, llm_classifier,
+                 passages=None, query_schema=None):
         self._store = store
         self._plan = plan
         self._execution_plan = execution_plan
@@ -61,12 +62,18 @@ class GoldenGraph:
         self._llm = llm  # the _BudgetedLLM, reused by ask -> shared pool
         self._embedder = embedder
         self._llm_classifier = llm_classifier
+        # Zero-touch hybrid: the PassageIndex built over the corpus (None when the build skipped
+        # it or the store was wrapped via from_store) + the discovered RelationSchema. Threaded
+        # into every `ask` so mode="hybrid" retrieves passages and query relations canonicalize
+        # through the same schema the edges did -- no per-call wiring by the caller.
+        self._passages = passages
+        self._query_schema = query_schema
 
     @classmethod
     def build(cls, docs, workload, *, llm, embedder, predicates=None, llm_classifier=None,
-              budget=None, resolver=None, corpus_records=None, store=None):
+              budget=None, resolver=None, corpus_records=None, store=None, index_passages=True):
         from .budget import Budget, _BudgetedLLM
-        from .ingest import ingest_corpus
+        from .ingest import CorpusBuild, ingest_corpus
         from .unified import plan_resolver
 
         budget = budget if budget is not None else Budget()
@@ -76,24 +83,46 @@ class GoldenGraph:
         execution_plan = plan_er_execution(docs, corpus_records=corpus_records)
         store = store if store is not None else _new_store()
         bllm = _BudgetedLLM(llm, budget)
-        ingest_corpus(docs, store, llm=bllm, resolver=resolver or planned_resolver, embedder=embedder)
+        # index_passages defaults ON (ask() defaults to the hybrid-capable auto path) so the built
+        # graph answers hybrid out of the box; the passages embed once here via the same embedder.
+        # Guarded on embedder presence -- with no embedder there is nothing to embed passages with,
+        # so skip indexing (ask falls back to local) rather than raise. ingest_corpus returns a
+        # CorpusBuild(schema, passages) when indexing, else the bare schema.
+        do_index = index_passages and embedder is not None
+        result = ingest_corpus(
+            docs, store, llm=bllm, resolver=resolver or planned_resolver, embedder=embedder,
+            index_passages=do_index,
+        )
+        if isinstance(result, CorpusBuild):
+            query_schema, passages = result.schema, result.passages
+        else:
+            query_schema, passages = result, None
         return cls(store=store, plan=plan, execution_plan=execution_plan, budget=budget,
-                   llm=bllm, embedder=embedder, llm_classifier=llm_classifier)
+                   llm=bllm, embedder=embedder, llm_classifier=llm_classifier,
+                   passages=passages, query_schema=query_schema)
 
     @classmethod
     def from_store(cls, store, *, llm, embedder, llm_classifier=None, plan=None,
-                   execution_plan=None, budget=None):
+                   execution_plan=None, budget=None, passages=None, query_schema=None):
         """Wrap an ALREADY-built store (e.g. a reopened/persisted store) in the facade -- skips the
-        build. The llm is wrapped in the same `_BudgetedLLM` seam so `ask` draws from `budget`."""
+        build. The llm is wrapped in the same `_BudgetedLLM` seam so `ask` draws from `budget`.
+        `passages` (a PassageIndex) + `query_schema` are optional -- supply them to keep hybrid
+        answering + schema-aligned routing on a reopened store; None leaves ask on the local
+        fallback (byte-identical to a passage-less build)."""
         from .budget import Budget, _BudgetedLLM
 
         budget = budget if budget is not None else Budget()
         return cls(store=store, plan=plan, execution_plan=execution_plan, budget=budget,
-                   llm=_BudgetedLLM(llm, budget), embedder=embedder, llm_classifier=llm_classifier)
+                   llm=_BudgetedLLM(llm, budget), embedder=embedder, llm_classifier=llm_classifier,
+                   passages=passages, query_schema=query_schema)
 
     def ask(self, query, *, valid_t, tx_t, mode="auto", **ask_kwargs):
         from .answer import ask as _ask
 
+        # Thread the build-time passages + discovered schema by default; an explicit kwarg wins,
+        # so a caller can still override (e.g. pass mode="local" or a different retriever).
+        ask_kwargs.setdefault("passages", self._passages)
+        ask_kwargs.setdefault("query_schema", self._query_schema)
         return _ask(query, self._store, llm=self._llm, embedder=self._embedder,
                     valid_t=valid_t, tx_t=tx_t, mode=mode,
                     query_classifier=self._llm_classifier, **ask_kwargs)
