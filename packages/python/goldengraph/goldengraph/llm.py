@@ -42,13 +42,28 @@ class OpenAIClient:
 
             import openai  # lazy: only needed for the real provider
 
+            # CHAT-specific provider overrides (GOLDENGRAPH_LLM_*), falling back to the
+            # generic OPENAI_* env. This lets goldengraph's CHAT (extraction + synthesis)
+            # target a different provider -- e.g. OpenRouter to dodge an OpenAI per-model
+            # daily cap -- WITHOUT moving the embedder, which is a bare `OpenAI()` reading
+            # OPENAI_BASE_URL/OPENAI_API_KEY (and OpenRouter serves no embeddings endpoint).
+            # Unset GOLDENGRAPH_LLM_* -> byte-identical to the prior OPENAI_*-only behavior.
+            #
             # The bench workflow sets OPENAI_BASE_URL='' on the OpenAI-API path (it
             # is only non-empty for a local Ollama run). The openai SDK treats an
             # empty-string base_url as a literal (invalid) URL -> APIConnectionError,
             # and passing base_url=None does NOT help -- the SDK re-reads the empty
             # env var itself. So pass an explicit default when the env is empty.
-            base_url = os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-            api_key = os.environ.get("OPENAI_API_KEY") or None
+            base_url = (
+                os.environ.get("GOLDENGRAPH_LLM_BASE_URL")
+                or os.environ.get("OPENAI_BASE_URL")
+                or "https://api.openai.com/v1"
+            )
+            api_key = (
+                os.environ.get("GOLDENGRAPH_LLM_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or None
+            )
             self._client = openai.OpenAI(base_url=base_url, api_key=api_key)
         return self._client
 

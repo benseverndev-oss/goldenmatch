@@ -292,7 +292,18 @@ jobs:
       - name: Run env A/B (real LLM, budget-capped, one shared graph)
         working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
         env:
+          # Embeddings (text-embedding-3-large) stay on OpenAI: OpenRouter serves NO
+          # embeddings endpoint, and the daily cap that blocked run #167 was on the
+          # gpt-4o-mini CHAT model only (embeddings have a separate, un-exhausted limit).
           OPENAI_API_KEY: ${{ secrets.GOLDENGRAPH_OPENAI_API_KEY }}
+          # goldengraph CHAT (extraction + synthesis) -> OpenRouter, bypassing the
+          # gpt-4o-mini requests-per-day cap. GOLDENGRAPH_LLM_* overrides only the chat
+          # client (llm.py); the embedder above is untouched. Model must be the OpenRouter
+          # id (`openai/gpt-4o-mini`), read by the engine via OPENAI_MODEL (_chat_model()).
+          # Revert to all-OpenAI by dropping these three lines.
+          GOLDENGRAPH_LLM_BASE_URL: https://openrouter.ai/api/v1
+          GOLDENGRAPH_LLM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_MODEL: openai/gpt-4o-mini
           POLARS_SKIP_CPU_CHECK: "1"
           # datasets pulls a fresh-pip pyarrow whose bundled mimalloc SIGSEGVs on the
           # pipeline's worker threads -- the documented repo standard for any lane that
