@@ -13,6 +13,7 @@ from .embed import Embedder, GoldenmatchEmbedder, seed_by_query
 from .extract import Extraction, Mention, Relationship, extract, parse_extraction
 from .ingest import build_batch, ingest
 from .llm import LLMClient, OpenAIClient
+from .passage_index import PassageIndex
 from .profile import (
     Fingerprint,
     ProfileResolution,
@@ -43,6 +44,8 @@ __all__ = [
     "synthesize_global",
     "ask",
     "to_cypher",
+    # Hybrid answering — zero-config passage store for mode="hybrid"
+    "PassageIndex",
     # Semantic Signature engine — Virtual Fingerprint resolution
     "Fingerprint",
     "ProfileResolution",
