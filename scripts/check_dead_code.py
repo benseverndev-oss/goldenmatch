@@ -16,8 +16,10 @@ is naturally immune to the fallback/oracle trap: a fallback *module* is still im
 only a *branch* inside it is dormant. Symbol-level analysis is Phase 2.
 
 Usage:
-  python scripts/check_dead_code.py [pkg]           # report (default pkg: goldenmatch)
+  python scripts/check_dead_code.py [pkg]           # module-level report (default: goldenmatch)
   python scripts/check_dead_code.py [pkg] --check    # exit 1 if uncovered orphans exist
+  python scripts/check_dead_code.py [pkg] --symbols  # Phase 2a: bare-name symbol scan (low-FP)
+  python scripts/check_dead_code.py [pkg] --scoped   # Phase 2b: scope-aware symbol resolver
 """
 from __future__ import annotations
 
@@ -86,7 +88,7 @@ def build_graph_ast(pkg: str) -> tuple[dict[str, dict], dict[str, set[str]]]:
         name = _module_name(f, src_root, pkg)
         purpose = ""
         try:
-            tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+            tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="ignore"))
             doc = ast.get_docstring(tree)
             purpose = (doc or "").strip().splitlines()[0] if doc else ""
         except SyntaxError:
@@ -152,7 +154,7 @@ def _scan_test_imports(pkg: str, src_root: Path) -> set[str]:
     pat = re.compile(rf"\b(?:from|import)\s+({re.escape(pkg)}(?:\.[A-Za-z0-9_]+)*)")
     for f in tests_dir.rglob("*.py"):
         try:
-            text = f.read_text(encoding="utf-8", errors="ignore")
+            text = f.read_text(encoding="utf-8-sig", errors="ignore")
         except OSError:
             continue
         for m in pat.finditer(text):
@@ -274,7 +276,7 @@ def analyze_symbols(pkg: str) -> dict:
     cands: dict[str, list[tuple[str, int]]] = {}
     for f in files:
         try:
-            tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+            tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="ignore"))
         except SyntaxError:
             continue
         rel = str(f.relative_to(REPO))
@@ -291,7 +293,7 @@ def analyze_symbols(pkg: str) -> dict:
     counts: dict[str, int] = dict.fromkeys(names, 0)
     for p in _repo_text_files():
         try:
-            text = p.read_text(encoding="utf-8", errors="ignore")
+            text = p.read_text(encoding="utf-8-sig", errors="ignore")
         except OSError:
             continue
         for tok in _IDENT.findall(text):
@@ -307,10 +309,164 @@ def analyze_symbols(pkg: str) -> dict:
     return {"pkg": pkg, "n_symbols": len(cands), "dead": dead}
 
 
+def _attr_chain(node: ast.AST) -> list[str] | None:
+    """Leftmost-first dotted names of a Name/Attribute load chain (`a.b.c` -> [a,b,c])."""
+    parts: list[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+        return list(reversed(parts))
+    return None
+
+
+def analyze_symbols_scoped(pkg: str) -> dict:
+    """Phase 2b: SCOPE-AWARE unused top-level symbols. Resolves every Name/Attribute load
+    through each file's import bindings to the concrete (module, symbol) it references -- so a
+    dead `def score` in module X is no longer masked by an unrelated `score` token elsewhere.
+
+    A top-level def/class M.S is a candidate if no resolved use targets it and it isn't
+    referenced as a bare STRING literal anywhere in the package source (that keep-alive covers
+    __all__ exports + dispatch registries + FFI/cross-lang mirrors, without the whole-repo
+    prose masking of Phase 2a). Decorated defs excluded (out-of-band registration)."""
+    src_root = _src_root(pkg)
+    known_modules, _ = build_graph_ast(pkg)  # source-only module set
+
+    def is_src(p: Path) -> bool:
+        parts = p.relative_to(src_root).parts
+        return "tests" not in parts and not p.name.startswith("test_") and p.name != "conftest.py"
+
+    # candidate defs (source only): {(module, name): (file, line)}
+    src_files = [p for p in src_root.rglob("*.py") if is_src(p)]
+    defs: dict[tuple[str, str], tuple[str, int]] = {}
+    top_names: dict[str, set[str]] = {}
+    for f in src_files:
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="ignore"))
+        except SyntaxError:
+            continue
+        mod = _module_name(f, src_root, pkg)
+        names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+                if node.decorator_list or (node.name.startswith("__") and node.name.endswith("__")):
+                    continue
+                defs[(mod, node.name)] = (str(f.relative_to(REPO)), node.lineno)
+        top_names[mod] = names
+
+    # resolve uses across source, in-package tests, AND the sibling test suite (the real
+    # goldenmatch tests live at <pkg>/tests, a SIBLING of the <pkg>/<pkg> source root -- not
+    # under it -- so a source-only scan falsely flags every test-only-consumed symbol).
+    all_py = list(src_root.rglob("*.py"))
+    ext_tests = src_root.parent / "tests"
+    if ext_tests.is_dir():
+        all_py += list(ext_tests.rglob("*.py"))
+    used: set[tuple[str, str]] = set()
+    for f in all_py:
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="ignore"))
+        except SyntaxError:
+            continue
+        # external test files are not package modules (no same-module / relative-import
+        # resolution applies -- they import the package absolutely)
+        in_tree = src_root in f.parents
+        this_mod = _module_name(f, src_root, pkg) if in_tree else None
+        pkg_of = (this_mod if f.name == "__init__.py" else this_mod.rsplit(".", 1)[0]) if this_mod else pkg
+        sym_binds: dict[str, tuple[str, str]] = {}   # local -> (module, orig)  [symbol import]
+        mod_binds: dict[str, str] = {}               # local -> module          [module alias]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name == pkg or a.name.startswith(pkg + "."):
+                        mod_binds[a.asname or a.name.split(".")[0]] = a.name
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base_parts = pkg_of.split(".")
+                    base = ".".join(base_parts[: len(base_parts) - (node.level - 1)])
+                    m = f"{base}.{node.module}" if node.module else base
+                else:
+                    m = node.module or ""
+                if not (m == pkg or m.startswith(pkg + ".")):
+                    continue
+                for a in node.names:
+                    local = a.asname or a.name
+                    if f"{m}.{a.name}" in known_modules:      # from pkg import submodule
+                        mod_binds[local] = f"{m}.{a.name}"
+                    else:                                      # from module import symbol
+                        sym_binds[local] = (m, a.name)
+        # walk loads
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                if node.id in sym_binds:
+                    used.add(sym_binds[node.id])
+                elif node.id in top_names.get(this_mod, ()):   # same-module use
+                    used.add((this_mod, node.id))
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+                chain = _attr_chain(node)
+                if not chain:
+                    continue
+                base = chain[0]
+                if base in mod_binds and len(chain) >= 2:
+                    used.add((mod_binds[base], chain[1]))
+                elif base in sym_binds and len(chain) >= 2:
+                    m, orig = sym_binds[base]
+                    used.add((m, orig))                        # attr on an imported symbol => symbol used
+                elif base == pkg:                              # goldenmatch.a.b.SYM
+                    for i in range(len(chain) - 1, 0, -1):
+                        mod = ".".join(chain[:i])
+                        if mod in known_modules:
+                            used.add((mod, chain[i]))
+                            break
+
+    # string-literal keep-alive, scoped to PACKAGE SOURCE (dispatch/registry/__all__/FFI names)
+    string_names: set[str] = set()
+    for f in src_files:
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8-sig", errors="ignore"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value.isidentifier():
+                    string_names.add(node.value)
+
+    strong, dynamic = [], []
+    for (mod, name), (file, line) in sorted(defs.items()):
+        if (mod, name) in used:
+            continue
+        (dynamic if name in string_names else strong).append((mod, name, file, line))
+    return {"pkg": pkg, "n_defs": len(defs), "strong": strong, "dynamic": dynamic}
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     check = "--check" in argv
     pkg = args[0] if args else "goldenmatch"
+
+    if "--scoped" in argv or "--symbols2" in argv:
+        s = analyze_symbols_scoped(pkg)
+        print(f"== dead-code (symbol-level, SCOPE-AWARE) :: {pkg} ==")
+        print(f"undecorated top-level def/class={s['n_defs']}  "
+              f"unused_resolved={len(s['strong']) + len(s['dynamic'])}  "
+              f"(strong={len(s['strong'])}  string-referenced={len(s['dynamic'])})")
+        if s["strong"]:
+            print("\n-- STRONG candidates (no resolved use, no bare-string reference) --")
+            for mod, name, file, line in s["strong"]:
+                print(f"  {mod}.{name}\n      {file}:{line}")
+        if s["dynamic"]:
+            print("\n-- string-referenced (unused by resolver, but name appears as a source "
+                  "string literal -- likely dispatch/registry/__all__/FFI; verify before cutting) --")
+            for mod, name, file, line in s["dynamic"]:
+                print(f"  {mod}.{name}\n      {file}:{line}")
+        print("\nnote: HIGHER-recall / higher-FP pass -- resolves Name/Attribute loads through each "
+              "file's import bindings, so a dead `def score` is no longer masked by unrelated `score` "
+              "tokens. FP sources: decorator-free registration via getattr/globals(), reflection, and "
+              "cross-language (Rust/TS) callers that don't mirror the name as a string. Classify "
+              "survivors into parity/dead_code/<pkg>.yaml.")
+        return 0
 
     if "--symbols" in argv:
         s = analyze_symbols(pkg)

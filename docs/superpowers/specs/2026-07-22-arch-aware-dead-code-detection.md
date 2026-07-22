@@ -145,6 +145,46 @@ thousands of `score` uses) is masked, as is a dead-but-doc-mentioned symbol. Hig
 a **scope-aware AST reference resolver** (resolve each `Name`/`Attribute` load to its binding via
 per-file import resolution) — **Phase 2b**, higher FP, managed by the `dead_code_deferred` map.
 
+**Phase 2b — scope-aware symbols** (`--scoped`): resolves every `Name`/`Attribute` load through
+each file's import bindings (`from m import s` → `sym_binds`; `import m`/`from p import submod` →
+`mod_binds`) to the concrete `(module, symbol)` it references — across package source **plus** the
+sibling `<pkg>/tests` suite — so a dead symbol is no longer masked by a same-named token elsewhere.
+Survivors split into **strong** (no resolved use *and* no bare-string reference in package source)
+vs **string-referenced** (unused-by-resolver but the name appears as a source string literal —
+`__all__` export / dispatch registry / FFI mirror; a low-confidence quarantine, verify before
+cutting). Result on goldenmatch: **72 unused / 2375 undecorated top-level def/class — 37 strong,
+35 string-referenced.** The string-referenced bucket correctly quarantines public API
+(`_api.dedupe`/`score_strings`/`pprl_link`), MCP-dispatched `identity.profile.*`, and Alembic
+`upgrade` — all live via string dispatch, all kept out of the strong list. The strong list is
+mostly known out-of-band surfaces (5 connector classes via `load_connector()` `"module:Class"`
+dispatch, 4 Alembic `downgrade` runtime hooks, 6 refdata `_reload` maintenance helpers, model
+loaders `load_cross_encoder`/`get_smart_embedder`), plus a **genuine-dead core of ≥7** (zero
+in-code references in any language, docs excluded):
+
+| Symbol | Why dead |
+|---|---|
+| `distributed.clustering._label_prop_threshold` | last call site removed by the #956 routing rewrite (the spec claimed callers/tests kept it; the resolver found none — 7 refs are all in specs/plans) |
+| `distributed.pipeline._join_clusters_to_rows` | its own docstring says it was replaced by the scale broadcast-join path |
+| `distributed.pipeline._write_golden_output` | zero references |
+| `distributed.golden._per_partition_golden` | zero references |
+| `core.cluster.get_cluster_pair_scores` | zero references (public name, never wired) |
+| `web.runs.lineage_pair_keys` | zero references |
+| `core.perceptual._dct1d_matrix` | zero references |
+
+**Two real resolver-substrate bugs surfaced (and fixed in the tool):** (1) two source files
+(`core/autoconfig_planner.py`, `core/execution_plan.py`) carry a **UTF-8 BOM** — read as plain
+`utf-8` they fail `ast.parse` and get *silently skipped*, dropping every use they contain (this
+false-flagged the 3 `autoconfig_native.plan_*` symbols they call); fixed by reading `utf-8-sig`
+everywhere the tool feeds `ast.parse`. (2) the goldenmatch test suite is a **sibling** of the
+source root (`<pkg>/tests`, not under `<pkg>/<pkg>`), so the first cut scanned only source and
+falsely flagged every test-only-consumed symbol — 219 → 75 once the sibling suite was included.
+Both are the same class of "the substrate under-scans" bug the Phase-1 agent-codemap edge finding
+was. **Phase 2b enforcement** (a symbol-level `dead_code_deferred` map + `--check` gate) and the
+removal of the genuine-dead core are follow-ons: the symbol map can't live in the module-level
+`parity/dead_code/<pkg>.yaml` (symbol keys read as phantom modules there), so it needs its own
+sidecar; the 7-symbol deletion touches the distributed engine + perceptual + web and is a
+separately-reviewed cleanup, not part of the detector PR.
+
 ## Non-goals / limits
 
 - The prototype does not do symbol-level analysis (Phase 2) — it reports whole-module orphans.
