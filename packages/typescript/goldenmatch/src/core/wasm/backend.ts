@@ -52,6 +52,15 @@
  * soundex_match with an O(n) hash-group specialization (`buildScoreMatrix`), so this
  * id is exercised only when `scoreMatrix` is called directly — but the kernel is
  * reachable and byte-exact, which is the "kernel-backed / shared" contract.
+ *
+ * `ensemble` (id 12) is `max(jaro_winkler, token_sort, 0.8*soundex_match)`. score-wasm
+ * OVERRIDES id 12 (like id 2) to recompose it with the TS-parity NORMALIZED token_sort
+ * (score_one(12)'s `ensemble_similarity` maxes over the un-normalized score_one(2)),
+ * so the WASM matrix matches the pure-TS `ensembleScore` to 4dp — the same tolerance
+ * its `jaro_winkler` / `token_sort` components already hold vs rapidfuzz (its
+ * soundex_match component is byte-exact). Like exact/soundex_match, `buildScoreMatrix`
+ * keeps the O(n) pure-TS `ensembleScoreMatrix` intercept; this id is reached only via a
+ * direct `scoreMatrix` call, where the kernel is reachable + parity-proven.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -63,6 +72,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   soundex_match: 6,
   dice: 9,
   jaccard: 10,
+  ensemble: 12,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

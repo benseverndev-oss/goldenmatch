@@ -295,3 +295,36 @@ d("WASM soundex_match matches the pure-TS scoreField reference (exact)", () => {
     });
   }
 });
+
+// ensemble (score_one id 12, overridden in score_matrix_impl): max of jaro_winkler,
+// the NORMALIZED token_sort, and 0.8*soundex_match -- the same three the pure-TS
+// `ensembleScore` maxes. The soundex component is byte-exact; jw and token_sort are
+// rapidfuzz (kernel) vs the hand-rolled pure-TS, which agree to 4dp -- so ensemble is
+// asserted to 4dp vs the pure-TS reference (the same bar jaro_winkler / token_sort
+// hold individually), each case chosen so a different component dominates the max.
+type EnsembleCase = readonly [a: string, b: string, note: string];
+const ENSEMBLE_CASES: readonly EnsembleCase[] = [
+  ["John SMITH", "smith john", "normalized token_sort dominates -> 1.0"],
+  ["Robert", "Rupert", "soundex R163 bonus 0.8 dominates lowish jw"],
+  ["MARTHA", "MARHTA", "jaro_winkler dominates (0.9611)"],
+  ["New York Mets", "Mets New York", "token_sort reorder -> 1.0"],
+  ["abc", "abd", "jw dominates a no-soundex-match pair"],
+  ["café", "cafe", "jw on accented input"],
+];
+
+d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of ENSEMBLE_CASES) {
+    it(`ensemble("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "ensemble");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "ensemble");
+      expect(m[0]![1]!).toBeCloseTo(ref!, 4);
+    });
+  }
+});
