@@ -36,6 +36,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `ts_only` → `shared`; only `tui` (≈ the Python `interactive` command) remains
   TS-only by design.
 
+### Changed
+
+- **`name_freq_weighted_jw` / `given_name_aliased_jw` are now first-class
+  `VALID_SCORERS` (TS-parity).** The census-frequency-weighted and alias-aware
+  given-name Jaro-Winkler scorers (`refdata/scorer.py`) were accepted only via the
+  PluginRegistry validator fallback, so they were absent from `VALID_SCORERS` and
+  the `scorers` parity surface listed them TS-only. They're registered at
+  `import goldenmatch` (via `_api` → `refdata`), so promoting them to `VALID_SCORERS`
+  lets a config referencing them validate AND score with no manual
+  `import goldenmatch.refdata` (verified by a fresh-process test). Both move the
+  `scorers` surface `ts_only` → `shared` — the goldenmatch↔TS scorer surface is now
+  at full parity. No behavior change for existing configs.
+
 ## [3.8.0] - 2026-07-22
 
 ### Added

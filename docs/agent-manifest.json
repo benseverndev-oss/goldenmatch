@@ -4737,6 +4737,12 @@
               "range": "0 or 1"
             },
             {
+              "value": "given_name_aliased_jw",
+              "meaning": "Jaro-Winkler with alias-aware exact collapse of given-name variants (Bob <-> Robert).",
+              "best_for": "Given names",
+              "range": "0.0-1.0"
+            },
+            {
               "value": "initialism_match",
               "meaning": "Matches initials/acronyms against their expansions.",
               "best_for": "Acronyms, initials",
@@ -4758,6 +4764,12 @@
               "value": "levenshtein",
               "meaning": "Normalized Levenshtein edit distance.",
               "best_for": "General strings",
+              "range": "0.0-1.0"
+            },
+            {
+              "value": "name_freq_weighted_jw",
+              "meaning": "Jaro-Winkler modulated by US-Census surname frequency (rare surnames weigh more).",
+              "best_for": "Surnames",
               "range": "0.0-1.0"
             },
             {
