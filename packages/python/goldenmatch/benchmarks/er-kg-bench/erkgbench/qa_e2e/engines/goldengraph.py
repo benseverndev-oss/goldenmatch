@@ -276,11 +276,18 @@ class GoldenGraphQAEngine:
     def answer(self, handle, question: str, mode: str | None = None) -> AnswerResult:
         from goldengraph.answer import ask
 
-        # `mode` overrides the engine's configured retrieval mode for THIS call -- the
-        # same-run local-vs-auto A/B (harness.run_engine_ab) uses it to answer the same
-        # question under both modes against one shared graph. None -> the configured
-        # mode, byte-identical to the single-mode path.
-        retrieval_mode = mode or self._retrieval_mode
+        # Resolve the answer-time retrieval/synth mode, most-specific first:
+        #  1. `mode` kwarg -- the local-vs-auto A/B (run_engine_ab) sets it per call.
+        #  2. `GOLDENGRAPH_QA_ANSWER_MODE` env -- an ANSWER-time override so the generic
+        #     env-A/B (run_engine_ab_env) can flip local-vs-hybrid SYNTHESIS over ONE
+        #     shared build. Build the graph in hybrid (GOLDENGRAPH_QA_MODE=hybrid ->
+        #     passages indexed once), then A/B `GOLDENGRAPH_QA_ANSWER_MODE:local,hybrid`:
+        #     `local` synthesizes over the graph only, `hybrid` layers the passages back
+        #     in, holding the build fixed. Empty/unset -> ignored.
+        #  3. the engine's configured `self._retrieval_mode` (byte-identical default).
+        retrieval_mode = (
+            mode or (os.environ.get("GOLDENGRAPH_QA_ANSWER_MODE") or None) or self._retrieval_mode
+        )
         t0 = time.perf_counter()
         before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
