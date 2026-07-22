@@ -203,7 +203,10 @@ jobs:
           } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
-          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
+          # polars: the hybrid path's passage retriever (goldenmatch_rag._make_frame)
+          # imports it; goldenmatch itself is polars-free, so these A/B jobs install it
+          # explicitly for GOLDENGRAPH_QA_MODE=hybrid runs (harmless for local-mode runs).
+          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai polars
           maturin build --release \
             -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
           maturin build --release \
@@ -281,7 +284,10 @@ jobs:
           PY
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
-          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai
+          # polars: the hybrid path's passage retriever (goldenmatch_rag._make_frame)
+          # imports it; goldenmatch itself is polars-free, so these A/B jobs install it
+          # explicitly for GOLDENGRAPH_QA_MODE=hybrid runs (harmless for local-mode runs).
+          python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai polars
           maturin build --release \
             -m packages/rust/extensions/goldengraph-native/Cargo.toml --out dist
           maturin build --release \
