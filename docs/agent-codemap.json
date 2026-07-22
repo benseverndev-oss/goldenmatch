@@ -355,6 +355,7 @@
             "_default_n_buckets",
             "_ensure_alias_tables_installed",
             "_ensure_legal_forms_installed",
+            "_ensure_name_tables_installed",
             "_fs_bounded_stream_enabled",
             "_fs_bucket_native_enabled",
             "_ne_effectively_empty",
@@ -382,7 +383,9 @@
             "goldenmatch.core.scorer",
             "goldenmatch.plugins.registry",
             "goldenmatch.refdata",
-            "goldenmatch.refdata.business"
+            "goldenmatch.refdata.business",
+            "goldenmatch.refdata.given_names",
+            "goldenmatch.refdata.surnames"
           ]
         },
         {
