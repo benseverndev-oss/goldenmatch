@@ -132,15 +132,19 @@ _ANSWER_LITERAL = (
 )
 _LOCAL_TAIL = "Question: {q}\n{sub}"
 
-# Node-DISAMBIGUATION preamble (env-gated, default off). Targets the measured
+# Node-DISAMBIGUATION preamble (env-gated, DEFAULT ON 2026-07-22). Targets the measured
 # synthesis-precision failure mode: on entity questions the model returns a plausible
 # NEIGHBOR of the answer rather than the answer -- the containing GROUP instead of the
 # member (Karen Fairchild -> Little Big Town), the famous adjacent PERSON instead of the
 # body (Politburo -> Stalin), a related EVENT instead of the thing (SuperSonics -> 1950
-# NBA draft), the wrong same-type SIBLING (Josh Radnor -> Bob Saget). The existing prompt
-# only guards "don't answer with the entity you HELD"; this guards "don't answer with a
+# NBA draft), the wrong same-type SIBLING (Josh Radnor -> Bob Saget). The prior prompt
+# only guarded "don't answer with the entity you HELD"; this guards "don't answer with a
 # plausible neighbor" by forcing an explicit type-check + candidate enumeration before
-# committing. Experiment knob for the same-graph env-A/B (GOLDENGRAPH_SYNTH_SELECT:0,1).
+# committing. MEASURED default-on (same-graph env-A/B run 29888086667, MuSiQue N=100,
+# support_recall identical across arms = the control): entity-subset answer_match
+# 0.2462 -> 0.2923 (+18.7% rel), answer_match 0.18 -> 0.20, token_f1 0.224 -> 0.263, at
+# ~no extra cost (one call, longer prompt). `GOLDENGRAPH_SYNTH_SELECT=0` restores the
+# pre-clause prompt byte-identical.
 _SELECT_PREAMBLE = (
     "Before you commit, DISAMBIGUATE the final node so you do not return a plausible "
     "NEIGHBOR of the answer instead of the answer itself:\n"
@@ -168,9 +172,10 @@ def _literals_enabled() -> bool:
 
 
 def _select_enabled() -> bool:
-    """`GOLDENGRAPH_SYNTH_SELECT` (default 0/off). On -> insert `_SELECT_PREAMBLE`
-    before the answer clause. Off -> the prompt is byte-identical to the pre-flag one."""
-    return os.environ.get("GOLDENGRAPH_SYNTH_SELECT", "0") not in ("0", "false", "")
+    """`GOLDENGRAPH_SYNTH_SELECT` (DEFAULT 1/on since 2026-07-22; measured +18.7% rel on
+    entity-subset in the same-graph A/B). On -> insert `_SELECT_PREAMBLE` before the answer
+    clause. `=0`/`false` -> the prompt is byte-identical to the pre-clause one."""
+    return os.environ.get("GOLDENGRAPH_SYNTH_SELECT", "1") not in ("0", "false", "")
 
 
 def _local_prompt() -> str:

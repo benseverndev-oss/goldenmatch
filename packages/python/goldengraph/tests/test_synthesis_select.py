@@ -22,20 +22,23 @@ _SUB = {
 }
 
 
-def test_default_off_is_byte_identical(monkeypatch):
+def test_default_on_inserts_preamble(monkeypatch):
+    # DEFAULT (unset) is now ON (2026-07-22 flip: measured +18.7% rel entity-subset).
     monkeypatch.delenv("GOLDENGRAPH_SYNTH_SELECT", raising=False)
     monkeypatch.delenv("GOLDENGRAPH_LITERAL_ATTRS", raising=False)
-    assert _select_enabled() is False
-    # Composed prompt with both flags off == the pre-flag entity prompt, exactly.
-    assert _local_prompt() == _LOCAL_PROMPT
-    assert _SELECT_PREAMBLE not in _local_prompt()
+    assert _select_enabled() is True
+    assert _SELECT_PREAMBLE in _local_prompt()
+    assert _local_prompt() != _LOCAL_PROMPT
 
 
-def test_flag_values_off(monkeypatch):
+def test_explicit_off_is_byte_identical(monkeypatch):
+    # `=0`/`false`/'' opt out -> the composed prompt is the pre-clause entity prompt, exactly.
+    monkeypatch.delenv("GOLDENGRAPH_LITERAL_ATTRS", raising=False)
     for off in ("0", "false", ""):
         monkeypatch.setenv("GOLDENGRAPH_SYNTH_SELECT", off)
         assert _select_enabled() is False, off
         assert _local_prompt() == _LOCAL_PROMPT, off
+        assert _SELECT_PREAMBLE not in _local_prompt(), off
 
 
 def test_flag_on_inserts_preamble_before_answer_clause(monkeypatch):
@@ -57,8 +60,8 @@ def test_flag_on_reaches_the_actual_prompt(monkeypatch):
     assert _SELECT_PREAMBLE in llm.prompts[0]
 
 
-def test_flag_off_absent_from_actual_prompt(monkeypatch):
-    monkeypatch.delenv("GOLDENGRAPH_SYNTH_SELECT", raising=False)
+def test_explicit_off_absent_from_actual_prompt(monkeypatch):
+    monkeypatch.setenv("GOLDENGRAPH_SYNTH_SELECT", "0")
     llm = RecordingLLM("Answer: Acme")
     synthesize_local("Who founded Acme?", _SUB, llm)
     assert _SELECT_PREAMBLE not in llm.prompts[0]
