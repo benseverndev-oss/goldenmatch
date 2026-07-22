@@ -26,11 +26,17 @@ wasm32-unknown-unknown`:
 | native binary | `cargo build --bin render` | ✅ builds + runs (emits `sensitivity.html`) |
 | wasm web app | `cargo build --target wasm32-unknown-unknown --features web --bin web` | ✅ builds (Dioxus 0.6 + charming/wasm + gloo-net) |
 
-**Bundle size** (release `web.wasm`, before `wasm-bindgen`/`wasm-opt`): 2.4 MB
-raw, **617 KB gzipped**. The shipped size is smaller — `dx build --release` runs
-`wasm-bindgen` + `wasm-opt`, which typically strips this to the ~300–450 KB
-gzipped range. Fine for a locally-served dev tool; a number to watch only if this
-UI is ever hosted for remote users.
+**Bundle size** (measured on this crate):
+
+| stage | size |
+|---|---|
+| release `web.wasm`, raw (pre-`wasm-bindgen`) | 2.4 MB / 617 KB gzipped |
+| after `wasm-bindgen` (`--target web`) | 1.4 MB / **397 KB gzipped** wasm + 11 KB gzipped JS glue |
+
+So the real shipped payload is **~408 KB gzipped**, and `wasm-opt` (which
+`dx build --release` also runs) trims it further. Fine for a locally-served dev
+tool; a number to watch only if this UI is ever hosted for remote users. For
+reference, the current React bundle is a comparable order of magnitude.
 
 ## Run it now (native ECharts page, no wasm needed)
 

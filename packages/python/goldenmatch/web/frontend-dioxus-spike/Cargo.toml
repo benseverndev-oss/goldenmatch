@@ -44,3 +44,15 @@ required-features = ["web"]
 # charming to its wasm renderer (WasmRenderer mounts ECharts into a live DOM
 # node). Build for the wasm32-unknown-unknown target.
 web = ["dep:dioxus", "dioxus/web", "dep:gloo-net", "dep:wasm-bindgen-futures", "charming/wasm"]
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
