@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-07-22
+
+### Added
+
+- **Opt-in FS columnar cluster path (`GOLDENMATCH_FS_COLUMNAR_CLUSTER`, default OFF)
+  — #1811.** On the eligible single-Fellegi-Sunter-matchkey in-memory bucket dedupe
+  path, the Arrow pair stream (`score_buckets_arrow`) is threaded straight to the
+  shipped, parity-gated columnar cluster path (`build_clusters_columnar` over
+  `_columnar_pairs_df`) instead of extending the driver-resident `all_pairs` Python
+  `list[tuple]`. At 14M on tight-blocking/dup-dense data that list runs to hundreds
+  of millions of tuples held on the driver through scoring → clustering — the
+  late-stage OOM of #1811. This removes the scoring-phase accumulator; the in-memory
+  analogue of the out-of-core `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`. Default-OFF is inert
+  (byte-unchanged); eligibility mirrors the weighted columnar lane's downstream-safety
+  (single matchkey, no across-files / semantic-blocking / llm / boost) plus the FS
+  bucket route.
+- **Kernelized `radial` + `audio_fp` scorers (17/19 kernel-backed) — #2008.** The
+  radial and audio-fingerprint scorers are now backed by the native `score-core`
+  kernel (`radial` + `audio_fp` in `score.rs`), moving the `scorer_kernels` coverage
+  to 17 of 19; cross-surface parity locked (`test_native_perceptual_scorer_parity`).
+  Host code degrades gracefully to the pure-Python reference when the published
+  `goldenmatch-native` wheel predates these symbols.
+
+### Changed
+
+- Dependency bumps: `setuptools` 81.0.0 → 83.0.0 (#2001), `pyasn1` 0.6.3 → 0.6.4 (#2000).
+
 ## [3.7.0] - 2026-07-21
 
 ### Fixed
