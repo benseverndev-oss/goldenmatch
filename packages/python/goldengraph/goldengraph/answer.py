@@ -439,7 +439,7 @@ def ask(
     embedder: Embedder,
     valid_t: int,
     tx_t: int,
-    mode: str = "local",
+    mode: str = "hybrid",
     k: int = 5,
     hops: int = 4,
     max_communities: int = 10,
@@ -453,15 +453,17 @@ def ask(
 ) -> str:
     """Answer `query` against `store` as-of `(valid_t, tx_t)`.
 
-    `mode="local"`: embedding-seeded neighborhood, expanded adaptively up to `hops`
-    (bounded by `node_budget` entities) so multi-hop answers are reachable, then
-    synthesized with explicit step-by-step relation tracing. `mode="hybrid"`: the same
-    seeded ball PLUS raw source passages retrieved by `passages.retrieve(query,
-    passage_k)` -> `list[str]`, handed to synthesis as the ground-truth context with
-    the graph as a cross-passage multi-hop map (recovers the source-text fidelity the
-    extracted triples drop; the answer is freed from the entity-only constraint). With
-    no `passages` retriever it degrades to passages-empty (graph-only, free-form
-    answer). `mode="global"`: community map-reduce (capped at `max_communities` --
+    `mode="hybrid"` (the DEFAULT since 2026-07-22): the seeded ball PLUS raw source
+    passages retrieved by `passages.retrieve(query, passage_k)` -> `list[str]`, handed to
+    synthesis as the ground-truth context with the graph as a cross-passage multi-hop map
+    (recovers the source-text fidelity the extracted triples drop; the answer is freed from
+    the entity-only constraint). Measured +169% answer_match / +143% judge over local on
+    the same graph. When NO passages are supplied (the library indexes none; a caller must
+    provide a retriever) hybrid falls through to the local path, so the default is
+    byte-identical to the prior local default for passage-less callers. `mode="local"`:
+    embedding-seeded neighborhood, expanded adaptively up to `hops` (bounded by
+    `node_budget` entities), synthesized with explicit step-by-step relation tracing and an
+    entity-only answer. `mode="global"`: community map-reduce (capped at `max_communities` --
     the pre-emptive guard on the N+1 LLM fan-out; per-call budget is the `LLMClient`'s
     job). Each community is contextualized with its immediate (1-hop) neighborhood.
     """
@@ -538,17 +540,30 @@ def ask(
     }
     seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
     if mode == "hybrid":
-        if _hybrid_filter_mode() == "path":
-            from .subgraph_filter import filter_subgraph_to_paths
-
-            subgraph = filter_subgraph_to_paths(subgraph, seeds)
         passage_texts = (
             list(passages.retrieve(query, passage_k)) if passages is not None else []
         )
-        _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the synthesized ball
-        return synthesize_hybrid(
-            query, subgraph, passage_texts, llm, seed_names=seed_names
-        )
+        # DEFAULT-FLIP SAFETY (2026-07-22): hybrid is now the DEFAULT mode (measured
+        # +169% answer_match / +143% judge over local on the same graph, run 29932330468).
+        # Its win IS the passages -- the ground-truth source text the extracted triples
+        # drop. With NO passages there is nothing to layer in, so fall through to the local
+        # entity-answer path, keeping the hybrid default byte-identical to the prior local
+        # default for callers without a passage retriever (the library indexes none; the
+        # bench builds one). Hybrid synthesis runs ONLY when passages are actually present.
+        if passage_texts:
+            if _hybrid_filter_mode() == "path":
+                from .subgraph_filter import filter_subgraph_to_paths
+
+                subgraph = filter_subgraph_to_paths(subgraph, seeds)
+                id_to_name = {
+                    e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
+                }
+                seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
+            _add_refs(provenance_out, subgraph.get("edges", ()))  # provenance of the ball
+            return synthesize_hybrid(
+                query, subgraph, passage_texts, llm, seed_names=seed_names
+            )
+        # no passages -> fall through to the local synthesis path below (safe default)
     # Gated path-preserving prune of the ball (default off = byte-identical). The
     # ER-answer ablation localized the multi-hop miss to path-selection in this ball.
     subgraph = _apply_local_filter(subgraph, seeds, question=query, embedder=embedder)

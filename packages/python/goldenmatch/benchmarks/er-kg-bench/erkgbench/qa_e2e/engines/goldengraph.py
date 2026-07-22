@@ -68,7 +68,7 @@ _WIDE_HOPS = 8
 #: that the triple-only graph is a LOSSY intermediate (it lost to plain paragraph RAG);
 #: hybrid tests whether layering the passages back in -- while keeping the graph for
 #: cross-passage bridging -- closes that gap. Env-tunable for the A/B.
-_QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+_QA_MODE = os.environ.get("GOLDENGRAPH_QA_MODE", "hybrid")
 
 #: Passages retrieved per question in hybrid mode (matches the goldenmatch_rag /
 #: text_rag context budget so the comparison is apples-to-apples).
@@ -218,7 +218,7 @@ class GoldenGraphQAEngine:
         # retrieval fed to synthesis). hybrid builds a passage index at build time.
         self._retrieval_mode = (
             retrieval_mode if retrieval_mode is not None
-            else os.environ.get("GOLDENGRAPH_QA_MODE", "local")
+            else os.environ.get("GOLDENGRAPH_QA_MODE", "hybrid")
         )
         self._passage_k = (
             passage_k if passage_k is not None

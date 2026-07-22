@@ -64,3 +64,13 @@ def test_empty_env_ignored(monkeypatch):
     monkeypatch.setenv("GOLDENGRAPH_QA_ANSWER_MODE", "")
     _engine("local").answer(_HANDLE, "q?")
     assert seen["mode"] == "local"  # empty string is not a mode
+
+
+def test_engine_default_retrieval_mode_is_hybrid(monkeypatch):
+    # Ship 2026-07-22: the bench engine now defaults to hybrid (GOLDENGRAPH_QA_MODE
+    # unset), so build_kg indexes passages and answer() uses hybrid synthesis by
+    # default -- the measured +169%/+143% config. =local restores the old default.
+    monkeypatch.delenv("GOLDENGRAPH_QA_MODE", raising=False)
+    assert GoldenGraphQAEngine(llm=_Stub(), embedder=_Stub())._retrieval_mode == "hybrid"
+    monkeypatch.setenv("GOLDENGRAPH_QA_MODE", "local")
+    assert GoldenGraphQAEngine(llm=_Stub(), embedder=_Stub())._retrieval_mode == "local"

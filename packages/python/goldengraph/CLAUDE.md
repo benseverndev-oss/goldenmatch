@@ -272,6 +272,38 @@ the final hop"; it did NOT guard "don't answer with a plausible neighbor".
   `tests/test_synthesis_select.py`). NEXT: broader-N / multi-seed confirmation, and whether
   the same type-check helps the hybrid path (`_HYBRID_PROMPT`, currently unchanged).
 
+## Hybrid synthesis is the DEFAULT answer mode (2026-07-22) — the BIG lever
+The synthesis-precision follow-through. The KG is a LOSSY intermediate — the extracted
+triples drop the source-text fidelity (dates/numbers/phrases + exact context) that plain
+text-RAG keeps. `mode="hybrid"` layers the raw retrieved PASSAGES back as ground truth
+with the graph as a cross-passage multi-hop map (`synthesize_hybrid`), freeing the answer
+from the entity-only constraint. It was built but default-off; the confound-free same-graph
+env-A/B settled it.
+- **MEASURED (run 29932330468, MuSiQue N=100, `GOLDENGRAPH_QA_ANSWER_MODE:local,hybrid` over
+  ONE hybrid build, judge ON; `support_recall` 0.8417 identical across arms = the control):
+  answer_match 0.16→0.43 (+169%), entity 0.2462→0.4769 (+94%), token_f1 0.2162→0.4915,
+  answer_judge 0.21→0.51 (+143%).** ~3x the quality of local synthesis, for ~no extra
+  answer cost (one call). Far bigger than SELECT (+18.7%) or voting (+6%).
+- **`answer.ask(mode=...)` default flipped `local`→`hybrid`.** SAFE by construction: hybrid's
+  win IS the passages, and the library indexes NONE (the caller supplies a `passages`
+  retriever; the bench builds one via `_PassageRetriever`). So when `passages` is None/empty,
+  hybrid **falls through to the LOCAL synthesis path** — byte-identical to the prior local
+  default for passage-less/zero-config callers (NOT the old free-form "(no passages
+  retrieved)" degrade). `mode="local"` restores the old default explicitly. Tests:
+  `tests/test_hybrid_synthesis.py` (default is hybrid; no-retriever→local; with-passages→hybrid).
+- **Bench:** `engines/goldengraph.py` `GOLDENGRAPH_QA_MODE` default `local`→`hybrid` (so
+  `build_kg` indexes passages + `answer` uses hybrid by default); the head_to_head baked
+  `GOLDENGRAPH_QA_MODE=local` flipped to `hybrid` so the competitive bench runs goldengraph's
+  new default. **All goldengraph bench jobs now `pip install polars`** — the passage retriever
+  (`goldenmatch_rag._make_frame`) imports it and goldenmatch itself is polars-free, so a
+  hybrid build crashed `ModuleNotFoundError: polars` until installed (local-mode never built
+  the retriever, which is why it only surfaced when hybrid was first exercised).
+- **Honest scoping:** a TRUE out-of-box product default needs a zero-config passage index IN
+  the library (goldengraph has none today — the bench builds it). Until then hybrid-default
+  helps exactly the callers who supply a retriever and is a safe no-op (local) for those who
+  don't. Adding a passage store to goldengraph is the follow-up to make hybrid complete.
+  `answer_judge 0.51` on the hybrid arm is a different quality tier than local's ~0.21.
+
 ## CHAT / embedding provider split (2026-07-22)
 `OpenAIClient._ensure_client` (`llm.py`) reads `GOLDENGRAPH_LLM_BASE_URL` /
 `GOLDENGRAPH_LLM_API_KEY` first, falling back to `OPENAI_BASE_URL` / `OPENAI_API_KEY`
