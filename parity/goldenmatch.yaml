@@ -242,9 +242,11 @@ a2a_skills:
   - score
 
 # scorers surface (config.schemas.VALID_SCORERS <-> types.ts VALID_SCORERS).
-# python_only: multimodal media comparators (ADR 0022) with no TS port yet.
-# ts_only: census/alias name-scorer plugins (Python accepts them via the
-# PluginRegistry validator fallback, so they're NOT in Python VALID_SCORERS).
+# FULL parity as of the name-scorer promotion: the census/alias name scorers
+# (given_name_aliased_jw / name_freq_weighted_jw) are now FIRST-CLASS in Python
+# VALID_SCORERS (were plugin-registry-only), matching the TS VALID_SCORERS — so
+# both move ts_only -> shared. refdata registers them at `import goldenmatch`, so
+# a config referencing them validates + scores without a manual refdata import.
 scorers:
   shared:
   - alias_match
@@ -254,10 +256,12 @@ scorers:
   - embedding
   - ensemble
   - exact
+  - given_name_aliased_jw
   - initialism_match
   - jaccard
   - jaro_winkler
   - levenshtein
+  - name_freq_weighted_jw
   - phash
   - qgram
   - radial
@@ -265,9 +269,7 @@ scorers:
   - soundex_match
   - token_sort
   python_only: []
-  ts_only:
-  - given_name_aliased_jw
-  - name_freq_weighted_jw
+  ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
 # VALID_TRANSFORMS). Currently in exact parity -- no declared deltas.
 transforms:

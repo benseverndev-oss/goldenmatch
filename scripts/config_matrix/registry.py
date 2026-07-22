@@ -68,6 +68,8 @@ REGISTRY: dict[str, PackageSpec] = {
                 "radial": {"meaning": "Rotation/crop-invariant radial-variance similarity.", "range": "0.0-1.0", "best_for": "Rotated/cropped images"},
                 "initialism_match": {"meaning": "Matches initials/acronyms against their expansions.", "range": "0 or 1", "best_for": "Acronyms, initials"},
                 "alias_match": {"meaning": "Matches known name aliases and nicknames (Bob <-> Robert).", "range": "0 or 1", "best_for": "Names with nicknames"},
+                "given_name_aliased_jw": {"meaning": "Jaro-Winkler with alias-aware exact collapse of given-name variants (Bob <-> Robert).", "range": "0.0-1.0", "best_for": "Given names"},
+                "name_freq_weighted_jw": {"meaning": "Jaro-Winkler modulated by US-Census surname frequency (rare surnames weigh more).", "range": "0.0-1.0", "best_for": "Surnames"},
             }),
             ("Blocking strategies", "goldenmatch.config.schemas:BlockingConfig.strategy", "`BlockingConfig.strategy`", {
                 "static": {"meaning": "Group records by an exact blocking key.", "best_for": "Clean data with reliable keys"},
