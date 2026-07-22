@@ -25,7 +25,7 @@ describe("ScorerBackend singleton", () => {
     expect(getScorerBackend()).toBeNull();
   });
 
-  it("covers the 8 score_one scorers + the 2 fs-core name scorers", () => {
+  it("covers the 9 score_one scorers + the 2 fs-core name scorers", () => {
     expect([...WASM_COVERED_SCORERS].sort()).toEqual(
       [
         "date",
@@ -37,6 +37,7 @@ describe("ScorerBackend singleton", () => {
         "levenshtein",
         "name_freq_weighted_jw",
         "qgram",
+        "soundex_match",
         "token_sort",
       ],
     );
@@ -59,19 +60,35 @@ describe("scoreMatrix backend swap", () => {
     expect(m[0]![1]).toBe(0); // came from the stub, not pure-TS (~0.9)
   });
 
-  it("ignores the backend for an UNCOVERED scorer (soundex_match stays pure-TS)", () => {
+  it("routes soundex_match through the backend now that it's covered", () => {
+    const calls: string[] = [];
+    setScorerBackend({
+      scoreMatrix: (values, name) => {
+        calls.push(name);
+        return new Float64Array(values.length * values.length); // all zeros
+      },
+    });
+    // soundex_match (score_one id 6) is WASM-covered -> routes to the backend.
+    // Robert/Rupert share soundex R163 (pure-TS would be 1.0); the stub returns
+    // 0, proving the WASM path (not pure-TS) ran.
+    const m = scoreMatrix(["Robert", "Rupert"], "soundex_match");
+    expect(calls).toEqual(["soundex_match"]);
+    expect(m[0]![1]).toBe(0);
+  });
+
+  it("ignores the backend for an UNCOVERED scorer (ensemble stays pure-TS)", () => {
     let called = false;
     setScorerBackend({
       scoreMatrix: (values) => {
         called = true;
-        return new Float64Array(values.length * values.length);
+        return new Float64Array(values.length * values.length).fill(0.5);
       },
     });
-    // soundex_match is NOT WASM-covered -> pure-TS scoreField (Robert/Rupert
-    // share soundex R163 -> 1.0), so the backend stub must not be called.
-    const m = scoreMatrix(["Robert", "Rupert"], "soundex_match");
+    // ensemble is NOT WASM-covered -> pure-TS scoreField, so the stub's 0.5
+    // must not appear (Robert/Rupert ensemble is soundex-boosted to 0.8).
+    const m = scoreMatrix(["Robert", "Rupert"], "ensemble");
     expect(called).toBe(false);
-    expect(m[0]![1]).toBe(1.0);
+    expect(m[0]![1]).not.toBe(0.5);
   });
 
   it("zeros out null cells after a backend call", () => {

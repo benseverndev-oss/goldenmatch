@@ -259,3 +259,39 @@ d("WASM jaccard matches the pure-TS scoreField reference (exact)", () => {
     });
   }
 });
+
+// soundex_match (score_one id 6): 1.0 iff a NON-EMPTY canonical soundex code is
+// shared, else 0.0 (empty-code guard). The kernel `soundex` and the pure-TS
+// `soundex` transform are the SAME Unicode-folding standard-Soundex spec
+// (separators break the coding run; NFKD folds accents; no-letter -> ""), so the
+// WASM matrix is byte-exact with the pure-TS `soundexMatch` fallback -- including
+// the multi-token separator cases the strip variant regressed. Asserted byte-exact.
+type SoundexCase = readonly [a: string, b: string, note: string];
+const SOUNDEX_CASES: readonly SoundexCase[] = [
+  ["Robert", "Rupert", "collide on R163 -> 1.0"],
+  ["Smith", "Smyth", "collide on S530 -> 1.0"],
+  ["Robert", "Smith", "different codes -> 0.0"],
+  ["joseph bradshaw", "joseph bradshaw", "multi-token J211 -> 1.0 (separator-aware)"],
+  ["Muñoz", "Munoz", "accent folds to M520 -> 1.0"],
+  ["123", "456", "both no-letter -> '' -> empty-guard 0.0"],
+  ["123", "123", "identical garbage -> '' -> 0.0 (never self-matches)"],
+  ["", "", "both empty -> 0.0"],
+  ["café", "cafe", "accented vowel folds -> collide"],
+];
+
+d("WASM soundex_match matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of SOUNDEX_CASES) {
+    it(`soundex_match("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "soundex_match");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "soundex_match");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});

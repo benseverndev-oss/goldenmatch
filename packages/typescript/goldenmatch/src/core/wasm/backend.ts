@@ -42,6 +42,16 @@
  * `jaccardSimilarity` popcounts the actual bit-OR — algebraically identical for
  * bloom filters — so the WASM matrix is byte-exact with the fallback on any valid
  * (even-length) bloom hex, same as dice.
+ *
+ * `soundex_match` (id 6) routes through score-core's `soundex_match` (1.0 iff a
+ * NON-EMPTY canonical soundex code is shared, else 0.0 — the empty-code guard means
+ * garbage/empty never matches). The kernel's `soundex` and the pure-TS `soundex`
+ * transform are the SAME Unicode-folding standard-Soundex spec (separators break the
+ * coding run; NFKD folds accents; no-letter -> ""), so the WASM matrix is byte-exact
+ * with the pure-TS `soundexMatch` fallback. Like `exact`, the bucket path intercepts
+ * soundex_match with an O(n) hash-group specialization (`buildScoreMatrix`), so this
+ * id is exercised only when `scoreMatrix` is called directly — but the kernel is
+ * reachable and byte-exact, which is the "kernel-backed / shared" contract.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -50,6 +60,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   exact: 3,
   date: 4,
   qgram: 5,
+  soundex_match: 6,
   dice: 9,
   jaccard: 10,
   given_name_aliased_jw: 20,
