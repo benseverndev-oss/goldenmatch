@@ -7,7 +7,7 @@ import { RunEvaluation } from "./RunEvaluation";
 import { RunLabels } from "./RunLabels";
 import { RunReview } from "./RunReview";
 import { SplitPane } from "./SplitPane";
-import { IdentityGraph, type GraphExpansion } from "./IdentityGraph";
+import { IdentityGraph, type GraphExpansion } from "./IdentityGraphLazy";
 
 type LeftTab = "clusters" | "graph" | "review" | "labels" | "evaluation";
 
