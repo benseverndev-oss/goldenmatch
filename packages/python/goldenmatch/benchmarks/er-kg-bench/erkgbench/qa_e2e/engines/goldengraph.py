@@ -248,16 +248,34 @@ class GoldenGraphQAEngine:
         # Embedding calls here are NOT charged to the engine token budget (parity with text_rag).
         passages = None
         if self._retrieval_mode == "hybrid":
-            from openai import OpenAI
+            # Hybrid passage retrieval embeds through the OpenAI-compatible client
+            # (OpenAI on the paid lane, a local nomic endpoint on the free lane). The
+            # `goldengraph-pipeline` smoke lane runs with a stub LLM/embedder and does
+            # NOT install `openai`; a missing package there degrades to passages=None
+            # (answer() then falls back to LOCAL synthesis -- the safe no-passages
+            # path), rather than crashing the build. Real bench lanes install openai,
+            # so they always build the index. The warning keeps a genuinely-absent
+            # backend from silently degrading a paid run unnoticed.
+            try:
+                from openai import OpenAI
 
-            from .goldenmatch_rag import _OpenAIEmbedderAdapter
+                from .goldenmatch_rag import _OpenAIEmbedderAdapter
 
-            adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
-            passages = _PassageRetriever(
-                [d.id for d in corpus.documents],
-                [d.text for d in corpus.documents],
-                adapter,
-            )
+                adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
+                passages = _PassageRetriever(
+                    [d.id for d in corpus.documents],
+                    [d.text for d in corpus.documents],
+                    adapter,
+                )
+            except ImportError:
+                import sys as _sys
+
+                print(
+                    "goldengraph QA: hybrid mode requested but `openai` is not "
+                    "installed -- indexing no passages, answer() falls back to local "
+                    "synthesis.",
+                    file=_sys.stderr,
+                )
         handle = {
             "store": store, "valid_t": _AS_OF, "tx_t": _AS_OF, "passages": passages,
             "query_schema": query_schema,
