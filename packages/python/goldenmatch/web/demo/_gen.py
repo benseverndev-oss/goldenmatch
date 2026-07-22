@@ -181,15 +181,12 @@ def seed_identity(pairs: list[dict]) -> None:
     db_path = db_dir / "identity.db"
     if db_path.exists():
         db_path.unlink()
-    store = IdentityStore(path=str(db_path))
-    try:
+    with IdentityStore(path=str(db_path)) as store:
         resolve_clusters(
             clusters, df, scored, "demo_match", store,
             run_name="demo-seed", dataset="demo",
             source_pk_col="id", emit_singletons=True,
         )
-    finally:
-        store.close()
     n_multi = sum(1 for c in clusters.values() if c["size"] > 1)
     print(
         f"seeded identity graph: {len(clusters)} entities "
