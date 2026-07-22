@@ -75,6 +75,12 @@
  * WASM matrix matches the pure-TS fallback to ~4dp (not byte-exact) — the same 1-ULP
  * reduction-order tolerance the native<->pure Python radial parity carries. A non-hex or
  * mismatched-length profile -> 0.0 on both.
+ *
+ * `audio_fp` (id 14) is `1 - best BER` over two hex audio fingerprints (the minimum
+ * bit-error-rate across every frame offset). Unlike radial, its BER numerator is an
+ * INTEGER popcount sum and the rate is a single f64 divide per offset, so the kernel
+ * and the pure-TS `audioFpSimilarity` are byte-exact (like phash) -- no reduction-order
+ * divergence. A non-hex value on either side -> 0.0.
  */
 export const SCORER_ID: Readonly<Record<string, number>> = {
   jaro_winkler: 0,
@@ -89,6 +95,7 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   phash: 11,
   ensemble: 12,
   radial: 13,
+  audio_fp: 14,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

@@ -507,6 +507,7 @@ export const VALID_SCORERS = new Set([
   "qgram",
   "phash",
   "radial",
+  "audio_fp",
   "given_name_aliased_jw",
   "name_freq_weighted_jw",
 ] as const);

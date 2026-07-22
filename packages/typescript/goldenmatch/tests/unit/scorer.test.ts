@@ -14,6 +14,7 @@ import {
   jaccardSimilarity,
   phashSimilarity,
   radialSimilarity,
+  audioFpSimilarity,
   ensembleScore,
   scoreMatrix,
   applyTransform,
@@ -229,6 +230,30 @@ describe("radial (rotation-aligned Pearson of hex radial profiles)", () => {
   it("signed-byte decode: 0x80..0xff map to negatives", () => {
     // Both sides identical still correlate to 1.0 regardless of sign.
     expect(radialSimilarity("7f80017e", "7f80017e")).toBeCloseTo(1.0, 12);
+  });
+});
+
+describe("audio_fp (offset-aligned bit-error-rate of hex fingerprints)", () => {
+  it("identical fingerprints -> 1.0", () => {
+    expect(audioFpSimilarity("deadbeef", "deadbeef")).toBe(1.0);
+    expect(audioFpSimilarity("deadbeefcafebabe", "deadbeefcafebabe")).toBe(1.0);
+  });
+
+  it("all bits differ over one word -> BER 1.0 -> 0.0", () => {
+    expect(audioFpSimilarity("00000000", "ffffffff")).toBe(0.0);
+  });
+
+  it("one differing bit over 32 -> 1 - 1/32", () => {
+    expect(audioFpSimilarity("00000001", "00000000")).toBe(1 - 1 / 32);
+  });
+
+  it("strips a 0x prefix", () => {
+    expect(audioFpSimilarity("0xdeadbeef", "deadbeef")).toBe(1.0);
+  });
+
+  it("non-hex or empty -> 0.0", () => {
+    expect(audioFpSimilarity("nothex00", "12345678")).toBe(0.0);
+    expect(audioFpSimilarity("", "")).toBe(0.0); // empty -> BER 1.0 -> 0.0
   });
 });
 
