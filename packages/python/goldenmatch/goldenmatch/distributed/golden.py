@@ -35,27 +35,6 @@ def _golden_cluster_threshold() -> int:
         return _GOLDEN_CLUSTER_THRESHOLD
 
 
-def _per_partition_golden(  # pyright: ignore[reportUnusedFunction]
-    batch: pa.Table,
-    rules: GoldenRulesConfig,
-    user_columns: list[str],
-) -> pa.Table:
-    """Worker-side: pyarrow batch -> Polars -> in-memory builder -> pyarrow."""
-    import polars as pl
-    import pyarrow as pa
-
-    from goldenmatch.core.golden import build_golden_records_batch
-
-    df = pl.from_arrow(batch)
-    assert isinstance(df, pl.DataFrame)  # pa.Table input always yields DataFrame
-    if df.height == 0:
-        return pa.Table.from_pylist([])
-    results = build_golden_records_batch(df, rules)
-    if not results:
-        return pa.Table.from_pylist([])
-    return pa.Table.from_pylist(results)
-
-
 def build_golden_records_distributed(
     multi_ds: Dataset,
     rules: GoldenRulesConfig,

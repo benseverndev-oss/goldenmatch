@@ -1401,19 +1401,6 @@ def add_to_cluster(
     return clusters
 
 
-def get_cluster_pair_scores(
-    cluster_members: list[int],
-    all_pairs: list[tuple[int, int, float]],
-) -> dict[tuple[int, int], float]:
-    """Get pair scores for a specific cluster. Call on-demand, not in hot path."""
-    member_set = set(cluster_members)
-    return {
-        (a, b): s
-        for a, b, s in all_pairs
-        if a in member_set and b in member_set
-    }
-
-
 def unmerge_record(
     record_id: int,
     clusters: dict[int, dict],
