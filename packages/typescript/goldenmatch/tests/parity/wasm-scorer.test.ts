@@ -151,3 +151,40 @@ d("WASM qgram matches the pure-TS scoreField reference (exact)", () => {
     });
   }
 });
+
+// date (score_one id 4) parses YYYY-MM-DD -> 8 digits and buckets the
+// Damerau-Levenshtein distance (0->1.0, 1->0.90, 2->0.75, >=3->0.0), else falls
+// back to plain levenshtein. The WASM kernel uses rapidfuzz TRUE DL; the pure-TS
+// `dateSimilarity` uses OSA. For EQUAL-length inputs (both 8 digits) OSA and
+// true-DL first diverge only at distance 3 -- which both bucket to 0.0 -- so the
+// two surfaces are byte-exact on every date pair (exhaustively verified over the
+// distance-<=2 region). The non-ISO branch is plain levenshtein (an exact shared
+// kernel). Reference is the pure-TS `scoreField`; asserted byte-exact.
+type DateCase = readonly [a: string, b: string, note: string];
+const DATE_CASES: readonly DateCase[] = [
+  ["1990-05-12", "1990-05-12", "same date -> 1.0"],
+  ["1990-05-12", "1990-05-21", "adjacent-digit transposition -> DL 1 -> 0.90"],
+  ["1990-05-12", "1990-06-12", "one digit typo -> 0.90"],
+  ["1990-05-12", "1991-06-12", "two edits -> 0.75"],
+  ["1990-05-12", "2003-11-28", "unrelated -> DL>=3 -> 0.0"],
+  ["2001-02-13", "2010-02-31", "multi-transposition, DL still bucketed"],
+  ["1990-05-12", "not-a-date", "non-ISO b -> levenshtein fallback"],
+  ["12 May 1990", "12 May 1991", "both non-ISO -> levenshtein fallback"],
+];
+
+d("WASM date matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of DATE_CASES) {
+    it(`date("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "date");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "date");
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
