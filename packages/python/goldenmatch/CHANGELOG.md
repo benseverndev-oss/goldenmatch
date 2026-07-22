@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **Registry-introspection tools/skills on MCP + A2A (TS-parity).** `list_scorers`,
+  `list_transforms`, and `list_strategies` are now exposed on the Python MCP server
+  (81 tools) and the A2A agent card (43 skills) as stateless serializers over
+  `VALID_SCORERS` / `VALID_SIMPLE_TRANSFORMS` / `VALID_STRATEGIES` — so an agent can
+  discover the valid scorer / transform / survivorship-strategy names before building
+  a config. Closes the corresponding `mcp_tools` / `a2a_skills` cross-language parity
+  gap (both trios move `ts_only` → `shared`).
+
 ## [3.8.0] - 2026-07-22
 
 ### Added

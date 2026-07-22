@@ -336,6 +336,30 @@ _SKILLS = [
         "inputModes": ["application/json"],
         "outputModes": ["application/json"],
     },
+    # Registry-introspection skills (parity with the TS A2A surface): stateless
+    # serializers over the config allow-lists, so an agent can discover the valid
+    # scorer / transform / survivorship-strategy names before configuring.
+    {
+        "id": "list_scorers",
+        "name": "List Scorers",
+        "description": "List all available similarity scorers.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "list_transforms",
+        "name": "List Transforms",
+        "description": "List all available field transforms.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "list_strategies",
+        "name": "List Strategies",
+        "description": "List all golden-record survivorship strategies.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
 ]
 
 

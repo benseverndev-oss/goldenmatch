@@ -35,7 +35,7 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_40_skills():
+def test_agent_card_has_43_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added
@@ -43,15 +43,17 @@ def test_agent_card_has_40_skills():
     identity_resolve_conflict / identity_audit (32->35); #1078 tamper-evidence
     added identity_audit_seal / identity_audit_verify (35->37); the healer added
     review_config (37->38); document ingest added documents_suggest_schema /
-    documents_ingest (38->40)."""
+    documents_ingest (38->40); the registry-introspection parity pass added
+    list_scorers / list_transforms / list_strategies (40->43)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 40
+    assert len(card["skills"]) == 43
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "retrieve_similar" in ids
     assert "review_config" in ids
+    assert {"list_scorers", "list_transforms", "list_strategies"} <= ids
     assert {"identity_claim", "identity_resolve_conflict", "identity_audit"} <= ids
     assert {"identity_audit_seal", "identity_audit_verify"} <= ids
     assert "controller_telemetry" in ids

@@ -468,6 +468,25 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         from goldenmatch.mcp.document_tools import handle_document_tool
         return handle_document_tool(skill_id, params)
 
+    # Registry-introspection skills (parity with the TS A2A surface). Stateless
+    # serializers over the config allow-lists; the wire shape matches the MCP
+    # list_* tools. Imported from config.schemas (no mcp-SDK dep) so A2A stays
+    # usable without the `mcp` extra installed.
+    if skill_id == "list_scorers":
+        from goldenmatch.config.schemas import VALID_SCORERS
+        scorers = sorted(VALID_SCORERS)
+        return {"scorers": scorers, "count": len(scorers)}
+
+    if skill_id == "list_transforms":
+        from goldenmatch.config.schemas import VALID_SIMPLE_TRANSFORMS
+        transforms = sorted(VALID_SIMPLE_TRANSFORMS)
+        return {"transforms": transforms, "count": len(transforms)}
+
+    if skill_id == "list_strategies":
+        from goldenmatch.config.schemas import VALID_STRATEGIES
+        strategies = sorted(VALID_STRATEGIES)
+        return {"strategies": strategies, "count": len(strategies)}
+
     raise ValueError(f"Unknown skill: {skill_id}")
 
 

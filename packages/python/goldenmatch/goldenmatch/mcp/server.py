@@ -347,6 +347,24 @@ _BASE_TOOLS = [
         description="List available domain extraction rulebooks (built-in + user-defined).",
         inputSchema={"type": "object", "properties": {}},
     ),
+    # Registry-introspection tools (parity with the TS MCP surface): stateless
+    # serializers over the config allow-lists, so an agent can discover the valid
+    # scorer / transform / survivorship-strategy names before building a config.
+    Tool(
+        name="list_scorers",
+        description="List all available similarity scorers.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="list_transforms",
+        description="List all available field transforms.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="list_strategies",
+        description="List all golden-record survivorship strategies.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
     Tool(
         name="create_domain",
         description="Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.).",
@@ -1066,6 +1084,12 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_export_results(args["output_path"], args.get("format", "csv"))
     elif name == "list_domains":
         return _tool_list_domains()
+    elif name == "list_scorers":
+        return _tool_list_scorers()
+    elif name == "list_transforms":
+        return _tool_list_transforms()
+    elif name == "list_strategies":
+        return _tool_list_strategies()
     elif name == "create_domain":
         return _tool_create_domain(args)
     elif name == "test_domain":
@@ -1603,6 +1627,34 @@ def _tool_list_domains() -> dict:
             "attribute_patterns": list(rb.attribute_patterns.keys()),
         })
     return {"domains": result, "count": len(result)}
+
+
+def _tool_list_scorers() -> dict:
+    """List all available similarity scorers (parity with the TS MCP tool).
+
+    Sorted for a deterministic wire order. Mirrors the TS `list_scorers`
+    (`{ scorers: [...VALID_SCORERS] }`)."""
+    from goldenmatch.config.schemas import VALID_SCORERS
+
+    scorers = sorted(VALID_SCORERS)
+    return {"scorers": scorers, "count": len(scorers)}
+
+
+def _tool_list_transforms() -> dict:
+    """List all available field transforms (parity with the TS MCP tool)."""
+    from goldenmatch.config.schemas import VALID_SIMPLE_TRANSFORMS
+
+    transforms = sorted(VALID_SIMPLE_TRANSFORMS)
+    return {"transforms": transforms, "count": len(transforms)}
+
+
+def _tool_list_strategies() -> dict:
+    """List all golden-record survivorship strategies (parity with the TS MCP
+    tool). Same concept as TS `VALID_STRATEGIES` (survivorship, not blocking)."""
+    from goldenmatch.config.schemas import VALID_STRATEGIES
+
+    strategies = sorted(VALID_STRATEGIES)
+    return {"strategies": strategies, "count": len(strategies)}
 
 
 def _tool_create_domain(args: dict) -> dict:
