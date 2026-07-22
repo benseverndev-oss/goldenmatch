@@ -126,18 +126,33 @@ cargo run --bin render_neighborhood -- /tmp/kg.json  # 8,094 records -> 2,962 co
 open identity_neighborhood.html                       # click any hub to expand
 ```
 
+The emitted page is **self-contained by default**: ECharts is vendored
+(`vendor/echarts.min.js`, Apache-2.0) and inlined, so the page renders offline
+and in any viewer — including strict-CSP artifact panels that block external
+scripts — with no external host (~3.4 MB). This is the exception to the crate's
+"CDN by default" posture (`render` / `render_graph` still emit the lighter
+CDN-linked page); the neighborhood view is the one meant to be handed around as
+a file. Pass `--cdn` for the lightweight variant that loads ECharts from a CDN
+instead (~2.4 MB; needs network + a permissive CSP):
+
+```bash
+cargo run --bin render_neighborhood -- --cdn /tmp/kg.json   # CDN-linked, smaller file
+```
+
 The data model is still built **once in Rust** (`src/graph_neighborhood.rs`
 reuses the same source-category / conflict-coloring / label logic as
 `graph.rs`). Charming's `HtmlRenderer` emits a static option with no event
 hooks, so the click handling uses the **raw-ECharts escape hatch** flagged in
 the caveat above: `src/bin/render_neighborhood.rs` bakes the Rust-built payload
-into a self-contained page plus a ~40-line vanilla-JS ECharts interaction layer
+into the page plus a ~40-line vanilla-JS ECharts interaction layer
 (`chart.on('click')` toggles each entity's neighborhood). Verified end-to-end
-(headless Chromium) on the 8,094-record / 2,962-entity graph: the initial
-render is 2,962 hub nodes with **zero edges** (light + instant), and expanding
-an entity adds exactly its records + member/evidence links. A production Dioxus
-build would move this onto the real endpoints (`/identities/{id}` +
-`/by-record`) so the browser never holds more than the expanded neighborhoods.
+(headless Chromium, **all network blocked**) on the 8,094-record /
+2,962-entity graph: the self-contained page loads ECharts from the inlined copy
+alone, the initial render is 2,962 hub nodes with **zero edges** (light +
+instant), and expanding an entity adds exactly its records + member/evidence
+links. A production Dioxus build would move this onto the real endpoints
+(`/identities/{id}` + `/by-record`) so the browser never holds more than the
+expanded neighborhoods.
 
 Further follow-on: a multi-entity view fed by `/conflicts` to show over-merge
 candidates across entities.

@@ -5,6 +5,7 @@
 //!
 //!   cargo run --bin render_neighborhood                 # baked sample
 //!   cargo run --bin render_neighborhood -- resolved.json
+//!   cargo run --bin render_neighborhood -- --cdn resolved.json   # CDN variant
 //!   python scratchpad/kg_big.py /tmp/kg.json && \
 //!       cargo run --bin render_neighborhood -- /tmp/kg.json
 //!
@@ -15,6 +16,12 @@
 //! here from the Rust-built `NeighborhoodPayload` + a small vanilla-JS ECharts
 //! interaction layer (the raw-ECharts escape hatch the README flags for exactly
 //! this follow-on). The data model is still built ONCE in Rust.
+//!
+//! By DEFAULT the emitted page is fully SELF-CONTAINED: the ECharts library is
+//! vendored (`vendor/echarts.min.js`, Apache-2.0) and inlined, so the page
+//! renders offline and in any viewer (strict-CSP artifact panels included) with
+//! no external host. Pass `--cdn` for the lightweight variant that loads ECharts
+//! from a CDN instead (smaller file; needs network + a CSP that allows the CDN).
 
 use std::io::Read;
 
@@ -23,10 +30,28 @@ use gm_echarts_spike::{
 };
 
 const SAMPLE: &str = include_str!("../../sample_identity_graph.json");
+/// Vendored ECharts (Apache-2.0), inlined into the page by default so the
+/// output is self-contained. See `vendor/echarts.min.js`.
+const ECHARTS: &str = include_str!("../../vendor/echarts.min.js");
+const CDN_TAG: &str =
+    "<script src=\"https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js\"></script>";
 const OUT: &str = "identity_neighborhood.html";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let raw = match std::env::args().nth(1).as_deref() {
+    // Parse args: an optional `--cdn` flag anywhere, plus one positional input
+    // (a path, `-` for stdin, or absent for the baked sample).
+    let mut use_cdn = false;
+    let mut input: Option<String> = None;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--cdn" => use_cdn = true,
+            "--inline" => use_cdn = false,
+            other if input.is_none() => input = Some(other.to_string()),
+            _ => {} // ignore extra positionals
+        }
+    }
+
+    let raw = match input.as_deref() {
         None => SAMPLE.to_string(),
         Some("-") => {
             let mut s = String::new();
@@ -53,12 +78,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_hubs = payload.hubs.len();
     let payload_json = js_safe_json(&serde_json::to_string(&payload)?);
 
+    // Self-contained by default: inline the vendored ECharts. `--cdn` swaps in
+    // the CDN <script> tag instead. The `__ECHARTS__` replace runs LAST so the
+    // (large) inlined library is never itself scanned for other placeholders.
+    let echarts_tag = if use_cdn {
+        CDN_TAG.to_string()
+    } else {
+        format!("<script>{ECHARTS}</script>")
+    };
     let html = PAGE_TEMPLATE
         .replace("__SUMMARY__", &html_escape(&summary))
-        .replace("__PAYLOAD__", &payload_json);
+        .replace("__PAYLOAD__", &payload_json)
+        .replace("__ECHARTS__", &echarts_tag);
     std::fs::write(OUT, html)?;
 
-    eprintln!("rendered neighborhood view: {n_hubs} entity hubs (collapsed) -> {OUT}");
+    let mode = if use_cdn { "CDN" } else { "self-contained" };
+    eprintln!("rendered neighborhood view ({mode}): {n_hubs} entity hubs (collapsed) -> {OUT}");
     eprintln!("  {summary}");
     Ok(())
 }
@@ -84,8 +119,8 @@ fn js_safe_json(json: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-/// Self-contained page: ECharts from a CDN (charming's own default too — a
-/// shipped build would vendor it locally), the baked payload, and the
+/// The page shell: an ECharts `<script>` (inlined vendored library by default,
+/// or the CDN tag under `--cdn`) at `__ECHARTS__`, the baked payload, and the
 /// collapse/expand interaction. `__SUMMARY__` / `__PAYLOAD__` are filled above.
 const PAGE_TEMPLATE: &str = r#"<!DOCTYPE html>
 <html lang="en">
@@ -93,7 +128,7 @@ const PAGE_TEMPLATE: &str = r#"<!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>GoldenMatch - identity neighborhood (ECharts spike)</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+__ECHARTS__
 <style>
   html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   #chart { width: 100vw; height: 100vh; }
