@@ -221,3 +221,39 @@ wheel for the matcher and never set the flag.*
   auto-off → embedding matcher); the full-stack path is exercised in the `goldengraph_native`
   / pipeline CI lanes (which build the wheel) and was proven end-to-end by the bench A/B.
   NEXT lever (chosen): probe the synthesis-precision gap (answer retrieved, answered wrong).
+
+## Self-consistency voting MEASURED (small, opt-in) — same-graph env-A/B (2026-07-22)
+Self-consistency voting (`GOLDENGRAPH_SYNTH_SAMPLES`, `synthesize.complete_many` +
+`_vote_answer` majority vote) was built but default-off (=1). To decide default-on we
+needed a CONFOUND-FREE measurement: `head_to_head` rebuilds the KG each run, and
+stochastic-extraction build variance swings even a retrieval-only metric
+(`support_recall` +-0.26 between rebuilds of the SAME corpus) — swamping a
+downstream-only change. The instrument is `run_engine_ab_env`
+(`benchmarks/er-kg-bench/erkgbench/qa_e2e/harness.py`): build the KG ONCE, answer every
+question under N answer-time env-configs on the IDENTICAL graph, so the metric deltas
+are purely the knob's effect. Dispatch via `bench-graphrag-qa.yml` mode `env_ab`,
+`ab_env=NAME:v1,v2`.
+- **MEASURED (MuSiQue N=100, identical graph, run 29876692154):** =1 -> =5 lifts every
+  quality metric ~+6% RELATIVE but tiny ABSOLUTE — `answer_match` 0.1700->0.1800
+  (+0.010), `answer_match_entity` 0.2462->0.2615 (+0.0153), `token_f1` 0.2210->0.2334
+  (+0.0124). **CONTROL: `support_recall` 0.8292 == 0.8292 (delta 0.0000)** across arms —
+  the proof the graph was truly shared (voting can't touch retrieval); this is what a
+  build-variance run CANNOT give you. Cost: ~5x synthesis (5 completions/answer).
+- **DECISION: keep `SYNTH_SAMPLES=1` default (opt-in).** The lift is REAL (clean,
+  same-direction on all three quality metrics, control passed) but too small to justify
+  ~5x synthesis cost as a ZERO-CONFIG default. `=5` is a documented, measured quality
+  knob. The bottleneck is synthesis PRECISION (the ~34-36% answer-in-ball-wrong-node
+  bucket), which voting barely dents — the real lever is a better synthesizer
+  (node-selection / prompt), not more samples of the same one.
+
+## CHAT / embedding provider split (2026-07-22)
+`OpenAIClient._ensure_client` (`llm.py`) reads `GOLDENGRAPH_LLM_BASE_URL` /
+`GOLDENGRAPH_LLM_API_KEY` first, falling back to `OPENAI_BASE_URL` / `OPENAI_API_KEY`
+(unset -> byte-identical to before). This routes goldengraph's CHAT (extraction +
+synthesis) to a separate provider WITHOUT moving the embedder — the embedder is a bare
+`OpenAI()` reading `OPENAI_*`, and **OpenRouter serves no embeddings endpoint**. Why it
+exists: OpenAI's per-model requests-per-day cap (Usage Tier 1: gpt-4o-mini RPD 10000)
+blocked a bench run mid-synthesis; the cap is on the CHAT model only (embeddings have a
+separate, un-exhausted limit), so the fix is to split providers (chat->OpenRouter,
+embeds->OpenAI), not move everything. The `env_ab` bench job wires this via
+`OPENROUTER_API_KEY` + model `openai/gpt-4o-mini` (revertible by dropping 3 env lines).
