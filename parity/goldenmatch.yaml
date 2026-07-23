@@ -371,7 +371,14 @@ scorer_kernels:
   - radial
   - soundex_match
   - token_sort
-  python_only: []
+  python_only:
+  # FS domain comparators (spec 2026-07-23), Phase 3: native score-core kernels
+  # (score_one ids 17/18), byte-parity gated in tests/test_native_date_diff_geo_
+  # parity.py. Python-native-backed only; the TS WASM port is Phase 4 (they move
+  # to `shared` then). numeric_diff stays deferred (band rides the scorer string,
+  # which the fixed-id score_one(id,a,b) contract can't carry).
+  - date_diff
+  - geo_haversine
   ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
@@ -384,6 +391,4 @@ scorer_kernels:
 scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
-  date_diff: "deferred -- native score-core day-distance kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"
-  geo_haversine: "deferred -- native score-core haversine kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"
-  numeric_diff: "deferred -- native score-core banded-distance kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"
+  numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
