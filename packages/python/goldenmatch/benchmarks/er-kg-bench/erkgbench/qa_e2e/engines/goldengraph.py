@@ -226,9 +226,34 @@ class GoldenGraphQAEngine:
         retrieval_mode: str | None = None,
         passage_k: int | None = None,
     ):
-        self._llm = _CountingLLM(llm)
-        # Cascade seam: synthesis may use a separate (larger) model; extraction stays on self._llm.
-        self._synth_llm = _build_synthesis_llm(self._llm)
+        base_llm = _CountingLLM(llm)
+        # Cascade seam: synthesis may use a separate (larger) model; extraction stays
+        # on the base client. Build the synth client FIRST, off the UNcached base --
+        # answers must reflect the current model, so only the extraction/build client
+        # is cached (below). When GOLDENGRAPH_SYNTHESIS_MODEL is unset, synth IS the
+        # base client; caching only the build wrapper keeps synthesis uncached even
+        # in that shared-object case.
+        self._synth_llm = _build_synthesis_llm(base_llm)
+        # Prompt-hash LLM response cache for the (network-bound, ~50 min at N=150)
+        # extraction build: re-running the QA bench on the same corpus then skips the
+        # identical per-document LLM calls. Opt-in + measurement-safe -- the key is the
+        # exact prompt, so a cached response IS the model's output for that prompt and
+        # can never be stale while the prompt matches; a prompt change misses and
+        # repopulates. GOLDENGRAPH_LLM_CACHE unset/empty -> byte-identical (no wrap).
+        # The env value is a DIRECTORY (what the workflow's actions/cache persists);
+        # the JSON-lines backing file lives inside it.
+        self._llm = base_llm
+        cache_dir = os.environ.get("GOLDENGRAPH_LLM_CACHE", "").strip()
+        if cache_dir:
+            from goldengraph.llm import CachingLLMClient
+
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+            except OSError:
+                pass
+            self._llm = CachingLLMClient(
+                base_llm, os.path.join(cache_dir, "extraction_cache.jsonl")
+            )
         # Cache embeddings across the whole run: the build's cross-doc linking and
         # answer-time seeding both re-embed the same entity texts many times, which
         # is the O(N^2) network wall at large N.

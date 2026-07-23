@@ -102,6 +102,22 @@ jobs:
             echo "LOCAL_EMBED_MODEL=nomic-embed-text"
             printf '%s\n' "$OPTS"
           } | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV"
+      # Persist the prompt-hash LLM extraction cache across runs (goldengraph engine
+      # only). The dominant build cost is per-document extraction LLM calls (~50 min
+      # at N=150); the cache (GOLDENGRAPH_LLM_CACHE) is a small JSON-lines file keyed
+      # by the EXACT prompt+model, so re-running the SAME corpus skips those calls.
+      # Scoped by corpus + extraction model (+ ambiguity for matrix hygiene); the
+      # per-run key suffix + restore-keys prefix restore an older/partial cache and
+      # top it up. Prompt-hash keying is self-invalidating (a prompt change misses
+      # and repopulates), so no code SHA is needed in the key.
+      - name: Restore/save the goldengraph extraction LLM cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: ${{ github.workspace }}/.gg_llm_cache
+          key: gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-amb${{ matrix.ambiguity }}-${{ github.run_id }}
+          restore-keys: |
+            gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-amb${{ matrix.ambiguity }}-
+            gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
           python -m pip install --upgrade pip maturin pytest goldenmatch datasets openai polars
@@ -142,6 +158,11 @@ jobs:
           OPENAI_BASE_URL: ${{ inputs.local_llm != '' && 'http://localhost:11434/v1' || '' }}
           OPENAI_MODEL: ${{ inputs.local_llm }}
           OPENAI_EMBED_MODEL: ${{ inputs.local_llm != '' && env.LOCAL_EMBED_MODEL || '' }}
+          # Points the bench extraction/build client at the actions/cache-persisted dir
+          # (restored above). Only the goldengraph engine's BUILD client is cached; the
+          # answer-time synth client stays uncached. Absolute path = the same dir the
+          # cache step persists.
+          GOLDENGRAPH_LLM_CACHE: ${{ github.workspace }}/.gg_llm_cache
           POLARS_SKIP_CPU_CHECK: "1"
         run: |
           mkdir -p results

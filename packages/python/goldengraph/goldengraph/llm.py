@@ -8,8 +8,11 @@ extraction stays testable + provider-swappable.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-from typing import Protocol
+import threading
+from typing import Any, Protocol
 
 
 class LLMClient(Protocol):
@@ -112,3 +115,153 @@ class OpenAIClient:
                     getattr(usage, "completion_tokens", 0),
                 )
         return text
+
+
+#: Sentinel distinguishing "no cache entry" from a legitimately cached falsy value
+#: (a model can return "" and it must be served, not re-fetched).
+_MISS = object()
+
+
+class CachingLLMClient:
+    """Persistent, prompt-hash-keyed response cache in front of any `LLMClient`.
+
+    Why this is SAFE for a measurement harness: the key is a stable hash of the
+    EXACT `(model, method, prompt, sorted(kwargs))` tuple, so a cached response IS
+    the model's output for that exact prompt+model. Serving it can never be stale
+    while the prompt matches, and any extraction-code change that alters a prompt
+    yields a NEW key automatically (a miss that repopulates) -- so the cache cannot
+    corrupt a re-run's measurement. All deterministic post-processing (parsing,
+    resolution) still runs on the cached raw response.
+
+    This is a CAPABILITY, not a library default: goldengraph never installs it on
+    its own. Only the bench build path wraps its extraction client with it when the
+    `GOLDENGRAPH_LLM_CACHE` env var points at a backing file. With no path it is a
+    transparent passthrough (byte-identical to the unwrapped client, zero files).
+
+    On a cache HIT the inner client is NOT called, so it incurs no API cost and the
+    inner token counters do not advance; `.input_tokens`/`.output_tokens`/`.model`
+    are read-through views of the inner client so callers keep working.
+
+    `complete_many` with `temperature > 0` is nondeterministic sampling and is NOT
+    cached (freezing a sampled distribution would be wrong) -- it always calls the
+    inner client. Extraction runs `complete`/`complete_json` at temperature 0, so
+    this only spares the self-consistency synthesis path.
+
+    Backing store: JSON-lines (`{"key": <sha256>, "resp": <str|list[str]>}` per
+    line), loaded on init and written through per put under a lock. Thread-safe --
+    `ingest_corpus` parallelizes extraction across documents, so get/put and the
+    file append are all guarded. A corrupt/partial file is treated as empty and
+    overwritten rather than crashing the build.
+    """
+
+    def __init__(self, inner: Any, path: str | None):
+        self._inner = inner
+        # Empty/None path -> caching DISABLED (transparent passthrough, no file).
+        self._path = str(path) if path else None
+        # Model participates in the key so two runs against different models never
+        # collide; captured once (the inner client's model is fixed per instance).
+        self._model = getattr(inner, "model", "") or ""
+        self._lock = threading.Lock()
+        self._cache: dict[str, Any] = {}
+        if self._path:
+            self._load()
+
+    # --- read-through views onto the inner client (cache hits stay cost-free) ---
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def input_tokens(self) -> int:
+        return getattr(self._inner, "input_tokens", 0)
+
+    @property
+    def output_tokens(self) -> int:
+        return getattr(self._inner, "output_tokens", 0)
+
+    # --- LLMClient protocol ---
+    def complete(self, prompt: str) -> str:
+        return self._cached("complete", prompt, self._inner.complete)
+
+    def complete_json(self, prompt: str) -> str:
+        # Mirror `_CountingLLM`: fall back to `complete` (and its key) when the inner
+        # client has no JSON-constrained method (test stubs / bare clients), so the
+        # cached response and its key both reflect what was actually invoked.
+        fn = getattr(self._inner, "complete_json", None)
+        if fn is None:
+            return self._cached("complete", prompt, self._inner.complete)
+        return self._cached("complete_json", prompt, fn)
+
+    def complete_many(self, prompt: str, *, n: int, temperature: float) -> list[str]:
+        if self._path is None or (temperature and temperature > 0):
+            # Disabled -> transparent passthrough; temperature>0 is nondeterministic
+            # sampling and must never be frozen in the cache.
+            return self._inner.complete_many(prompt, n=n, temperature=temperature)
+        key = self._key("complete_many", prompt, n=n, temperature=temperature)
+        hit = self._get(key)
+        if hit is not _MISS:
+            return list(hit)  # defensive copy so a caller can't mutate the cache
+        resp = list(self._inner.complete_many(prompt, n=n, temperature=temperature))
+        self._put(key, resp)
+        return resp
+
+    # --- internals ---
+    def _cached(self, method: str, prompt: str, call) -> str:
+        if self._path is None:
+            # Disabled -> transparent passthrough (no hashing/locking, no file).
+            return call(prompt)
+        key = self._key(method, prompt)
+        hit = self._get(key)
+        if hit is not _MISS:
+            return hit
+        resp = call(prompt)
+        self._put(key, resp)
+        return resp
+
+    def _key(self, method: str, prompt: str, **kwargs: Any) -> str:
+        payload = json.dumps(
+            [self._model, method, prompt, sorted(kwargs.items())],
+            sort_keys=True,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _get(self, key: str) -> Any:
+        with self._lock:
+            return self._cache.get(key, _MISS)
+
+    def _put(self, key: str, resp: Any) -> None:
+        with self._lock:
+            if key in self._cache:
+                return  # a concurrent writer already stored it -> one file line/key
+            self._cache[key] = resp
+            if self._path:
+                try:
+                    with open(self._path, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"key": key, "resp": resp}, ensure_ascii=True) + "\n")
+                except OSError:
+                    pass  # never let a cache write failure break the build
+
+    def _load(self) -> None:
+        if not self._path or not os.path.exists(self._path):
+            return
+        try:
+            cache: dict[str, Any] = {}
+            with open(self._path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rec = json.loads(line)
+                    cache[rec["key"]] = rec["resp"]
+            self._cache = cache
+        except (OSError, ValueError, KeyError, TypeError):
+            # Corrupt or partially-written file: treat as empty and overwrite it so
+            # subsequent write-through appends start from a clean, well-formed file.
+            self._cache = {}
+            try:
+                with open(self._path, "w", encoding="utf-8"):
+                    pass
+            except OSError:
+                pass
