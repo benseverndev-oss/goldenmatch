@@ -302,6 +302,16 @@ class GoldenGraphQAEngine:
         retrieval_mode = (
             mode or (os.environ.get("GOLDENGRAPH_QA_ANSWER_MODE") or None) or self._retrieval_mode
         )
+        # Answer-time `passage_k` override so the generic env-A/B (run_engine_ab_env) can SWEEP how
+        # many passages hybrid retrieves per question over ONE shared build (e.g.
+        # `GOLDENGRAPH_QA_PASSAGE_K:3,5,10,20`). Read per-call (not just at __init__) so the flip
+        # takes effect inside `_env_overrides`; unset/invalid -> the engine's configured
+        # `self._passage_k` (byte-identical default). MuSiQue/2wiki docs are paragraph-granular, so
+        # this is the retrieval-BREADTH knob (granularity is fixed at one paragraph per Document).
+        try:
+            passage_k = int(os.environ["GOLDENGRAPH_QA_PASSAGE_K"])
+        except (KeyError, ValueError):
+            passage_k = self._passage_k
         t0 = time.perf_counter()
         before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
         # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
@@ -319,7 +329,7 @@ class GoldenGraphQAEngine:
             hops=self._retrieval_hops,
             node_budget=self._node_budget,
             passages=handle.get("passages"),
-            passage_k=self._passage_k,
+            passage_k=passage_k,
             query_schema=handle.get("query_schema"),
             provenance_out=provenance,
         )
