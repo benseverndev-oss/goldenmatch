@@ -64,6 +64,11 @@ on:
         type: boolean
         required: false
         default: true
+      run_field_dependence:
+        description: "Run the FS field-dependence diagnostic (measures conditional-independence violation in FS scoring on historical_50k)"
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -377,6 +382,40 @@ jobs:
             prob_panel_tf_on/
             compare_tf/
           retention-days: 90
+
+  # ── FS field-dependence diagnostic ────────────────────────────────────────
+  # Measures conditional-independence violation in FS scoring on historical_50k:
+  # runs GM, splits emitted pairs into true/false merges, and reports the
+  # field-pair agreement LIFT among non-matches (the dependence FS ignores) plus
+  # the match-weight bits FS over-counts on the average false merge. Decides
+  # whether a dependence-aware weight is the next FS-accuracy lever (measure-first
+  # gate — no kernel work until this says the violation is material). Not a gate.
+  field-dependence:
+    if: ${{ inputs.run_field_dependence }}
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow + rapidfuzz)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      # goldenmatch is arrow-native; the emitted-pair dump the diagnostic reads
+      # writes parquet via polars.
+      - name: Install polars (for the emitted-pair dump)
+        run: pip install polars
+
+      - name: Field-dependence diagnostic — historical_50k
+        run: |
+          python scripts/bench_er_headtohead/diagnose_field_dependence.py \
+            --dataset historical_50k
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────
   # Runs scripts/bench_er_headtohead/run_bakeoff.py: gm_zeroconfig +
