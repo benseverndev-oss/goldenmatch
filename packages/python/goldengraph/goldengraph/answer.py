@@ -232,10 +232,22 @@ def _canon_query_rel(rel, schema):
 def _hybrid_filter_mode() -> str:
     """Hybrid subgraph filter selector, read at call time. "" / "none" / unset =
     off (pass the full ball; the measured 0.420 control). "path" = path-preserving
-    prune (`subgraph_filter.filter_subgraph_to_paths`)."""
+    prune (`subgraph_filter.filter_subgraph_to_paths`). "rerank" = top-K
+    question-relevant edge prune (`subgraph_filter.rerank_subgraph_edges`)."""
     import os
 
     return os.environ.get("GOLDENGRAPH_HYBRID_FILTER", "").strip().lower()
+
+
+def _hybrid_filter_topk() -> int:
+    """`GOLDENGRAPH_HYBRID_FILTER_TOPK` (default 40) -- the `rerank` mode's edge budget.
+    Non-int -> 40."""
+    import os
+
+    try:
+        return int(os.environ.get("GOLDENGRAPH_HYBRID_FILTER_TOPK", "40"))
+    except ValueError:
+        return 40
 
 
 def _local_filter_mode() -> str:
@@ -551,10 +563,27 @@ def ask(
         # default for callers without a passage retriever (the library indexes none; the
         # bench builds one). Hybrid synthesis runs ONLY when passages are actually present.
         if passage_texts:
-            if _hybrid_filter_mode() == "path":
+            hybrid_mode = _hybrid_filter_mode()
+            if hybrid_mode == "path":
                 from .subgraph_filter import filter_subgraph_to_paths
 
                 subgraph = filter_subgraph_to_paths(subgraph, seeds)
+                id_to_name = {
+                    e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
+                }
+                seed_names = [id_to_name[s] for s in seeds if s in id_to_name]
+            elif hybrid_mode == "rerank":
+                # Prune the ball to the top-K question-relevant edges before synthesis:
+                # the answer edge is usually PRESENT but buried in a ~1,700-edge ball that
+                # `_format_subgraph` serializes whole. Seed-incident edges are always kept
+                # (anchor/connectivity); the rest of the budget goes to the highest-scoring
+                # edges by question<->edge-text cosine (same embedder already in scope).
+                from .subgraph_filter import rerank_subgraph_edges
+
+                subgraph = rerank_subgraph_edges(
+                    subgraph, seeds, question=query, embedder=embedder,
+                    top_k=_hybrid_filter_topk(),
+                )
                 id_to_name = {
                     e["entity_id"]: e["canonical_name"] for e in subgraph.get("entities", ())
                 }

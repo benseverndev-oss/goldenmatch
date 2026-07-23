@@ -223,6 +223,30 @@ def test_ask_hybrid_filter_off_keeps_full_ball(monkeypatch):
     assert "Noise" in llm.prompts[-1]
 
 
+def test_ask_hybrid_filter_rerank_prunes_ball_to_budget(monkeypatch):
+    # Start(0)-works_at->A(1)-acquired->Zeta(2)-mentions->Noise(3). Seed = Start(0).
+    # TOPK=2: seed-incident {works_at} always kept; budget 1 fills with the next edge
+    # in original order (acquired); the tail (mentions->Noise) is pruned out of synthesis.
+    names = ["Start", "A", "Zeta", "Noise"]
+    edges = [(0, "works_at", 1), (1, "acquired", 2), (2, "mentions", 3)]
+    llm = RecordingLLM()
+    store = _FakeStore(_FakeGraph(names, edges))
+    embedder = StubEmbedder({"Start": 0, "A": 1, "Zeta": 2, "Noise": 3})
+    passages = _FakePassages(["Start works at A.", "A acquired Zeta in 1990."])
+    monkeypatch.setenv("GOLDENGRAPH_HYBRID_FILTER", "rerank")
+    monkeypatch.setenv("GOLDENGRAPH_HYBRID_FILTER_TOPK", "2")
+    ask(
+        "Start", store, llm=llm, embedder=embedder, valid_t=1, tx_t=1,
+        mode="hybrid", k=1, hops=4, node_budget=64,
+        passages=passages, passage_k=7,
+    )
+    prompt = llm.prompts[-1]
+    assert "Start -[works_at]-> A" in prompt   # seed-incident edge always kept
+    assert "Noise" not in prompt               # pruned beyond the top-K budget
+    # passages are untouched by the filter (ground-truth context stays whole)
+    assert "A acquired Zeta in 1990." in prompt
+
+
 def test_ask_local_mode_ignores_filter_flag(monkeypatch):
     # The filter must touch hybrid ONLY -- local stays byte-identical.
     names = ["Start", "A", "Zeta", "Noise"]
