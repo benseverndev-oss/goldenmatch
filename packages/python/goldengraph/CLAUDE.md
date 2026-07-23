@@ -380,3 +380,50 @@ full-population `_localize_trace` stage split for free (LLM-free, cached embeddi
   lever), both bigger than the ~15 extraction-addressable entities. The recall levers built for #4
   (`GOLDENGRAPH_RELATION_REPROMPT`, `GOLDENGRAPH_CHUNK_EXTRACT`) stay default-OFF; re-test via the
   same-graph `mode=env_ab` harness before ever shipping one.
+
+## Hybrid ball edge-rerank (question-cosine top-K) — REFUTED (2026-07-23)
+Tested pruning the hybrid ball to the top-K question-relevant edges before synthesis, to fix the
+#4 SYNTHESIS miss (47/53 answer-edge-present but buried in a ~1,700-edge ball that `_format_subgraph`
+serializes whole). Lever: `GOLDENGRAPH_HYBRID_FILTER=rerank` + `GOLDENGRAPH_HYBRID_FILTER_TOPK`
+(embedder cosine question<->edge-text, seed-incident edges always kept), default-off.
+- **MEASURED (env_ab `GOLDENGRAPH_HYBRID_FILTER:none,rerank`, TOPK=40, MuSiQue N=75, hybrid, judge off,
+  one shared build, run 30035422835):** answer_match 0.5067 -> **0.4667 (-0.040)**; token_f1 0.565 ->
+  0.519 (-0.046); support_recall 0.864 -> **0.744 (-0.120)**. A LOSS on every axis.
+- **Why it fails (mechanism, not a bad K):** in the hybrid path provenance is taken from the pruned
+  ball, and the -0.12 support_recall shows the rerank prunes AWAY supporting-fact edges. Multi-hop
+  bridge edges are the casualty: the bridge entity is NOT named in the question, so its edges score
+  low on question<->edge cosine and get dropped -- exactly the edges the answer chain needs. Ranking
+  edges by similarity to the QUESTION is the wrong signal for multi-hop; a larger K only shrinks the
+  harm toward baseline, it cannot manufacture a benefit.
+- **DECISION: REFUTED, not shipped.** PR closed, not merged (a flat/negative default-off knob is dead
+  weight; the value is this finding). If ball-pruning is revisited, the structurally-correct lever is
+  `GOLDENGRAPH_HYBRID_FILTER=path` (`filter_subgraph_to_paths` — keeps seed->answer PATHS, not
+  question-similar edges); A/B that instead.
+
+## Bench build-wall is EXTRACTION, not auto-config (2026-07-23)
+`GOLDENGRAPH_BUILD_DEBUG=1` per-phase split on the MuSiQue N=75 build (run 30035422835, cumulative
+across 12 workers): **extract sum=9972s (72%)**, resolve sum=1193s (8.6%), pre_embed sum=920s (6.6%),
+link sum=795s (5.7%). The 2,522 per-doc `resolve()` auto-config-to-RED cycles (BUDGET_ITERATIONS,
+blocking) LOOK alarming in the log but are only ~8.6% of build compute -- a "configure ER once, reuse"
+fix would save <9% and is NOT worth building. The dominant build cost is the per-document LLM
+extraction, which is exactly what the `GOLDENGRAPH_LLM_CACHE` prompt-hash cache targets (warm cache ->
+~72% build cut). Lesson: a high log-line COUNT is not wall; measure the phase split before optimizing.
+
+## Ball-pruning for hybrid multi-hop QA — REFUTED a SECOND way (path filter), 2026-07-23
+Follow-up to the edge-rerank refutation: tested `GOLDENGRAPH_HYBRID_FILTER=path`
+(`filter_subgraph_to_paths` — keeps seed->answer PATHS, the structurally-correct pruning the
+rerank's support_recall drop pointed to).
+- **MEASURED (env_ab `GOLDENGRAPH_HYBRID_FILTER:none,path`, MuSiQue N=75, hybrid, judge off, run
+  30038160088):** answer_match 0.4667 -> 0.4267 (-0.040); support_recall 0.833 -> **0.589 (-0.244,
+  worse than rerank's -0.12)**. Another loss.
+- **CONCLUSION: pruning the hybrid ball is a DEAD END for multi-hop QA.** Two independent methods
+  (question-cosine rerank AND path-preserving filter) both gut support_recall and fail to lift
+  answer_match. Mechanism: in the hybrid path the model treats PASSAGES as primary truth and the
+  graph as a NAVIGATION aid, so shrinking the graph removes cross-passage bridges with no upside. #4's
+  "answer buried in ~1,700 edges" was a MISdiagnosis of the SYNTHESIS miss -- the failure is multi-hop
+  REASONING over passages+graph, not graph SIZE. Do not pursue graph-context reduction for hybrid QA;
+  a reasoning lever (e.g. `GOLDENGRAPH_SYNTH_SAMPLES` self-consistency voting) is the direction if the
+  SYNTHESIS frontier is revisited.
+- **METHODOLOGY:** the two runs' `none` arms differ by 0.04 (0.507 vs 0.467) at identical config =>
+  LLM nondeterminism sets a ~+/-0.04 answer_match noise floor at N=75. Screen levers at N>=150 (or on
+  the deterministic support_recall) before trusting a ~0.04 delta.
