@@ -26,6 +26,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--with-llm", action="store_true",
                    help="also score the realistic real-LLM RAG floor (needs OPENAI_API_KEY)")
     p.add_argument("--budget-usd", type=float, default=2.0)
+    p.add_argument("--source", choices=("synthetic", "realworld"), default="synthetic",
+                   help="synthetic fan-out corpus (default) or the committed Wikidata fixture")
+    p.add_argument("--fixture", default=None,
+                   help="realworld source only: path to the committed Wikidata fixture JSON")
     return p
 
 
@@ -43,10 +47,18 @@ def main(argv: list[str] | None = None) -> int:
             OpenAIClient(model="gpt-4o-mini"),
             BudgetTracker(BudgetConfig(max_cost_usd=args.budget_usd)),
         )
-    res = run_aggregation_deterministic(
-        seed=args.seed, n_anchors=args.n_anchors,
-        ambiguity=args.ambiguity, passage_k=args.passage_k, llm=llm,
-    )
+    if args.source == "realworld":
+        from .realworld import _FIXTURE_DIR, run_realworld_aggregation
+
+        fixture = args.fixture or (_FIXTURE_DIR / "wikidata_companies_v1.json")
+        res = run_realworld_aggregation(
+            fixture, ambiguity=args.ambiguity, passage_k=args.passage_k, llm=llm,
+        )
+    else:
+        res = run_aggregation_deterministic(
+            seed=args.seed, n_anchors=args.n_anchors,
+            ambiguity=args.ambiguity, passage_k=args.passage_k, llm=llm,
+        )
     md = render_aggregation_md(res)
     with open(args.out_md, "w", encoding="utf-8") as fh:
         fh.write(md)
