@@ -162,6 +162,7 @@
             "pages": [
               "suite-matrix",
               "reference/api-surface",
+              "reference/versioning",
               "reference/vendor-comparison"
             ]
           },

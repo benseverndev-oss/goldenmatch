@@ -1,6 +1,14 @@
 # GoldenMatch versioning policy (npm vs PyPI)
 
-**Status:** Recommendation, 2026-06-15
+> **Adopted (2026-07-23).** The recommendation below is now the suite's standing
+> policy: **independent semver per surface**, no lockstep. The npm `1.0.0`
+> stability milestone shipped (goldenmatch TS is now `1.x`), and the durable,
+> user-facing statement of this policy lives in the docs at
+> `docs-site/reference/versioning.mdx` (published under **Reference → Versioning
+> policy**). This file remains the engineering rationale + rejected-alternatives
+> record; the published page is the citable policy.
+
+**Status:** Recommendation, 2026-06-15 (adopted 2026-07-23)
 **Question:** Should the npm `goldenmatch` package jump `0.13.0` → `2.0.0` to match
 the PyPI package, and then move in lockstep going forward?
 
