@@ -6988,6 +6988,7 @@
           "defines": [
             "_bloom_filter_transform",
             "_clk_from_prepared",
+            "_honorific_bare",
             "_parse_bloom_params",
             "_prepare_bloom_input",
             "apply_transform",
