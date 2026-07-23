@@ -1,0 +1,89 @@
+---
+title: "Versioning policy"
+description: "How the suite versions its Python and TypeScript packages — independent semver per surface, why there is no lockstep, and how cross-surface parity is actually guaranteed."
+keywords: ["versioning", "semver", "npm", "pypi", "parity", "release", "compatibility"]
+---
+
+Every Golden Suite package ships on **two independent release lines** — a Python
+package on PyPI and a TypeScript package on npm. This page explains how those
+lines are numbered and, more importantly, how to *read* a version difference
+between them.
+
+<Note>
+  Short version: **each surface carries its own semver.** A lower npm number is
+  not a "behind" copy of the Python one — it is a separate line for a surface
+  that deliberately covers different (smaller) scope. See
+  [Python vs TypeScript: the surface boundary](/reference/api-surface#python-vs-typescript-the-surface-boundary).
+</Note>
+
+## Each surface versions independently
+
+The PyPI version and the npm version of a package are **not** kept in lockstep,
+and one is not derived from the other. They move at their own cadence:
+
+- GoldenMatch's Python line is well into `3.x` while its TypeScript line is in
+  `1.x` — the `0.x → 1.0.0` jump was a one-time "this is now stable" signal, not
+  an attempt to match PyPI.
+- **InferMap's two lines happen to sit at the same version** — parity, not policy.
+- **GoldenGraph's TypeScript line leads its Python line** — the delta runs the
+  other way.
+
+So the direction and size of a version gap carries no cross-surface meaning on
+its own. For the live numbers, read the generated capability matrix on the
+[API surface](/reference/api-surface) page (it is regenerated and CI-gated, so
+it never drifts).
+
+## What a version does — and does not — guarantee
+
+- **Within one line**, the number is a normal semver contract for *that* surface:
+  no breaking changes before the next major on that package.
+- **Across the two lines**, the shared operations carry the **same public names
+  and the same computation** — but that is guaranteed by a CI gate, **not** by
+  the version numbers matching. The `api_parity` gate fails the build on any
+  *undeclared* drift between the Python and TypeScript surfaces, and scorer
+  outputs are held to a 4-decimal cross-language tolerance.
+
+The practical consequence: **do not infer capabilities from the version delta.**
+"npm is at 1.x, PyPI is at 3.x" does not mean the npm package is missing two
+majors' worth of the shared API. What each surface exposes is defined by the
+[capability matrix](/reference/api-surface#capability-matrix) and the
+[surface boundary](/reference/api-surface#python-vs-typescript-the-surface-boundary),
+not by the version string.
+
+## Why not lockstep
+
+Strict lockstep — forcing both lines to the same number always — would be
+actively misleading here, for two reasons:
+
+1. **The surfaces are deliberately non-equivalent.** The TypeScript package is
+   the edge-safe, stateless *subset* of the Python one (it holds no server-side
+   dataset, ships no distributed engine or web UI). A shared version number
+   would imply an equivalence that does not exist.
+2. **It publishes empty releases.** A breaking change in Python would force a
+   no-op major bump on npm even when zero TypeScript code changed, and vice
+   versa — the standard "lockstep tax," paid to make the number less honest.
+
+Lockstep is the right model for a *binding* that tracks the same surface. These
+are two implementations of an overlapping-but-different surface, so independent
+semver is the honest model. The full rationale (and the rejected alternatives,
+including "aligned majors") lives in the engineering note
+[`docs/versioning-policy.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/docs/versioning-policy.md).
+
+## Why there is no "version-lag" gate
+
+It would be easy to add a CI check that flags a TypeScript package for sitting
+several majors behind its Python sibling — and it would be the wrong check.
+Under this policy a lagging number is **not a defect**; an independent line is
+*supposed* to sit at its own version. Gating it would flag a non-problem and
+pressure teams toward the empty-release lockstep this policy rejects.
+
+What *is* gated is the thing that actually matters:
+
+- **`api_parity`** — fails on any undeclared drift in the shared Python↔TypeScript
+  surface (a tool/command/skill added, renamed, or removed on one side without
+  being reflected in the manifest).
+- **`gen_api_surface`** — regenerates the capability matrix (versions + tool
+  counts) from the manifests and fails if the published page is stale.
+
+Correctness is enforced where it is real — the shared surface and the published
+numbers — and the version strings are left to float honestly.
