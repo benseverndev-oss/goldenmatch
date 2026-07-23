@@ -65,15 +65,78 @@ def generate_realworld_aggregation(fixture_path, *, ambiguity: float, seed: int)
     return tuple(docs), qs
 
 
+def _realworld_entity_surfaces(fixture_path):
+    """[(qid, surface, "concept"), ...] over the FIXTURE universe (canonical + aliases).
+
+    DEVIATION from the plan: `dials._entity_surfaces` / `oracle_keys` / `surface_to_canon`
+    / `ablation._typ_of` all read the SYNTHETIC `dataset/concepts.jsonl`, NOT the corpus
+    or gold graph -- so they cannot key a real fixture (`km[(qid, real_surface)]` KeyErrors).
+    The real generator derives the keyspace from the fixture entities instead. `typ` is a
+    uniform "concept" (matching the synthetic default `typ_of.get(id, "concept")`); the
+    aggregation traversal filters by predicate, not type."""
+    out = []
+    for e in load_realworld_entities(fixture_path):
+        for s in dict.fromkeys([e.canonical, *e.variants]):
+            out.append((e.id, s, "concept"))
+    return out
+
+
+def _build_realworld_store(docs, km, s2c_cov, typ_of):
+    """Build the native store from the real edge docs, mirroring
+    `ablation._build_store_obj` but with FIXTURE-derived coverage (that function's
+    coverage is hard-wired to `dials.surface_to_canon`, i.e. the synthetic universe).
+    Returns (slice_graph, coverage: store_entity_id -> set(qid))."""
+    import json
+
+    from goldengraph.extract import Extraction, Mention, Relationship
+    from goldengraph.ingest import build_batch
+    from goldengraph.resolve import ResolvedEntity
+    from goldengraph_native import _native as ggn
+
+    from .engines.goldengraph import _AS_OF
+
+    store = ggn.PyStore()
+    at = 0
+    for d in docs:
+        parts = d.id.split("::")
+        if len(parts) != 3:
+            continue
+        src_id, rel, dst_id = parts
+        at += 1
+        s_surf, o_surf = d.src_surface, d.dst_surface
+        extraction = Extraction(
+            mentions=[
+                Mention(name=s_surf, typ=typ_of.get(src_id, "concept")),
+                Mention(name=o_surf, typ=typ_of.get(dst_id, "concept")),
+            ],
+            relationships=[Relationship(subj=0, predicate=rel, obj=1)],
+        )
+        entities = [
+            ResolvedEntity(local_id=0, canonical_name=s_surf,
+                           typ=typ_of.get(src_id, "concept"), surface_names=[s_surf],
+                           record_keys=[km[(src_id, s_surf)]], member_idx=[0]),
+            ResolvedEntity(local_id=1, canonical_name=o_surf,
+                           typ=typ_of.get(dst_id, "concept"), surface_names=[o_surf],
+                           record_keys=[km[(dst_id, o_surf)]], member_idx=[1]),
+        ]
+        store.append(json.dumps(build_batch(extraction, entities, at=at)))
+    slice_graph = store.as_of(_AS_OF, _AS_OF)
+    coverage: dict[int, set] = {}
+    for e in slice_graph.entities():
+        cov: set = set()
+        for s in e.get("surface_names", ()):
+            cov |= s2c_cov.get(s, set())
+        coverage[e["entity_id"]] = cov
+    return slice_graph, coverage
+
+
 def run_realworld_aggregation(fixture_path, *, ambiguity: float, passage_k: int, llm=None):
     """Mirror of aggregation.run_aggregation_deterministic but sourced from the real
     fixture. All scoring/floor/bucket/gate logic is reused unchanged. Needs the native
-    wheel (via ablation._build_store)."""
-    from . import ablation, dials
+    wheel (via goldengraph_native.PyStore)."""
     from .aggregation import (
         AggregationResult,
         _mean_by_bucket,
-        agg_documents_corpus,
         count_accuracy,
         goldengraph_aggregate,
         llm_rag_aggregate,
@@ -81,17 +144,20 @@ def run_realworld_aggregation(fixture_path, *, ambiguity: float, passage_k: int,
         set_f1,
         size_bucket,
     )
-    from .gold import GoldGraph
 
     docs, qs = generate_realworld_aggregation(fixture_path, ambiguity=ambiguity, seed=7)
-    corpus = agg_documents_corpus(docs)
-    g = GoldGraph.from_corpus(corpus)
-    slice_graph, coverage = ablation._build_store(
-        corpus, g, dials.oracle_keys(corpus, g), ablation._typ_of(g))
-    s2c, anchor_surfaces = {}, {}
-    for eid, surf, _typ in dials._entity_surfaces(g):
-        s2c.setdefault(surf, eid)
+    rows = _realworld_entity_surfaces(fixture_path)
+    km = {(eid, s): eid for eid, s, _t in rows}            # oracle keys: surface -> its qid
+    typ_of = {eid: t for eid, _s, t in rows}
+    s2c_cov: dict = {}                                     # surface -> set(qid) (coverage)
+    s2c_floor: dict = {}                                   # surface -> one qid (floor/anchor)
+    anchor_surfaces: dict = {}
+    for eid, surf, _t in rows:
+        s2c_cov.setdefault(surf, set()).add(eid)
+        s2c_floor.setdefault(surf, eid)
         anchor_surfaces.setdefault(eid, set()).add(surf)
+    slice_graph, coverage = _build_realworld_store(docs, km, s2c_cov, typ_of)
+    s2c = s2c_floor
     gg_f1, floor_f1, floor_rec, gg_count, llm_f1 = [], [], [], [], []
     for q in (q for q in qs if q.kind == "list"):
         b = size_bucket(q.gold_count)
