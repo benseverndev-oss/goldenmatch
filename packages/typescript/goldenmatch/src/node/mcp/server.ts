@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 69 tools covering dedupe, match, scoring, explanation,
+ * Exposes 71 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -56,6 +56,13 @@ import {
   certifyRecallRows,
   toCertifyRecallResponse,
 } from "../../core/recall-certificate.js";
+import { runIncremental } from "../../core/incremental.js";
+import {
+  runSensitivitySweep,
+  sweepStabilityReport,
+} from "../../core/sensitivity.js";
+import type { SweepSpec } from "../../core/sensitivity.js";
+import { autoConfigureRows } from "../../core/autoconfig.js";
 import { getMatchkeys } from "../../core/types.js";
 import { sanitizePath } from "./paths.js";
 import { RUN_STORE } from "./run-store.js";
@@ -517,6 +524,51 @@ const EXISTING_TOOLS: readonly Tool[] = [
         file_path: { type: "string", description: "Dataset to dedupe + certify" },
       },
       required: ["file_path"],
+    },
+  },
+  {
+    name: "sensitivity",
+    description:
+      "Parameter-sensitivity analysis: sweep one or more config " +
+      "parameters across a range and report how stable the clustering " +
+      "is at each value (CCMS unchanged %). Use it to find robust " +
+      "thresholds. Auto-configures the file if no config is given.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: { type: "string", description: "CSV/Parquet to analyze" },
+        sweep: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Sweep specs as 'field:start:stop:step', e.g. " +
+            "'threshold:0.70:0.95:0.05'. One or more.",
+        },
+        config: { type: "string", description: "Optional config YAML path" },
+        sample_size: {
+          type: "integer",
+          description: "Optional: sample N records before sweeping",
+        },
+      },
+      required: ["file_path", "sweep"],
+    },
+  },
+  {
+    name: "incremental",
+    description:
+      "Match a batch of new records against an existing base dataset " +
+      "(without re-running the whole base). Returns matched " +
+      "(new_row_id, base_row_id, score) pairs plus counts. " +
+      "Auto-configures from the base file if no config is given.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        base_file: { type: "string", description: "Existing base dataset path" },
+        new_records: { type: "string", description: "New records file to match in" },
+        config: { type: "string", description: "Optional config YAML path" },
+        threshold: { type: "number", description: "Optional threshold override" },
+      },
+      required: ["base_file", "new_records"],
     },
   },
 ];
@@ -1031,7 +1083,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.11.0",
+          version: "1.12.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1136,6 +1188,92 @@ export async function handleTool(
         }
         const est = await certifyRecallRows(rows);
         return toCertifyRecallResponse(est);
+      }
+
+      case "sensitivity": {
+        const filePath = String(args["file_path"] ?? "");
+        let rows: readonly Row[];
+        try {
+          rows = readFile(sanitizePath(filePath));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/ENOENT|not found|no such file/i.test(msg)) {
+            return { error: `File not found: ${filePath}` };
+          }
+          return { error: `Could not read '${filePath}': ${msg}` };
+        }
+
+        const cfgPath = args["config"];
+        const cfg =
+          typeof cfgPath === "string" && cfgPath.length > 0
+            ? loadConfigFile(sanitizePath(cfgPath))
+            : autoConfigureRows(rows);
+
+        const sweepSpecs = asStringArray(args["sweep"]) ?? [];
+        const sweeps: SweepSpec[] = [];
+        for (const spec of sweepSpecs) {
+          const parts = String(spec).split(":");
+          if (parts.length !== 4) {
+            return {
+              error: `Bad sweep spec '${spec}'; expected 'field:start:stop:step'`,
+            };
+          }
+          sweeps.push({
+            field: parts[0]!,
+            start: Number(parts[1]),
+            stop: Number(parts[2]),
+            step: Number(parts[3]),
+          });
+        }
+        if (sweeps.length === 0) {
+          return {
+            error: "Provide at least one sweep spec, e.g. 'threshold:0.70:0.95:0.05'",
+          };
+        }
+
+        const sampleSize =
+          typeof args["sample_size"] === "number"
+            ? Math.floor(args["sample_size"] as number)
+            : undefined;
+        const results = await runSensitivitySweep(rows, cfg, sweeps, sampleSize);
+        return { results: results.map(sweepStabilityReport) };
+      }
+
+      case "incremental": {
+        const baseFile = String(args["base_file"] ?? "");
+        const newFile = String(args["new_records"] ?? "");
+        let baseRows: readonly Row[];
+        let newRows: readonly Row[];
+        try {
+          baseRows = readFile(sanitizePath(baseFile));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/ENOENT|not found|no such file/i.test(msg)) {
+            return { error: `File not found: ${baseFile}` };
+          }
+          return { error: `Could not read '${baseFile}': ${msg}` };
+        }
+        try {
+          newRows = readFile(sanitizePath(newFile));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/ENOENT|not found|no such file/i.test(msg)) {
+            return { error: `File not found: ${newFile}` };
+          }
+          return { error: `Could not read '${newFile}': ${msg}` };
+        }
+
+        const cfgPath = args["config"];
+        const cfg =
+          typeof cfgPath === "string" && cfgPath.length > 0
+            ? loadConfigFile(sanitizePath(cfgPath))
+            : autoConfigureRows(baseRows);
+
+        const threshold =
+          typeof args["threshold"] === "number"
+            ? (args["threshold"] as number)
+            : undefined;
+        return runIncremental(baseRows, newRows, cfg, threshold);
       }
 
       case "convert_splink_config": {
@@ -1253,7 +1391,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.11.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.12.0" },
               capabilities: { tools: {} },
             },
           });

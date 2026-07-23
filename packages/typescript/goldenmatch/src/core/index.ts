@@ -335,6 +335,10 @@ export { compareClusters, ccmsSummary, parseClustersJson } from "./compare-clust
 export type { CCMSResult, ClusterMembers } from "./compare-clusters.js";
 export { runSensitivity, stabilityReport } from "./sensitivity.js";
 export type { SweepParam, SweepPoint, SensitivityResult } from "./sensitivity.js";
+export { runSensitivitySweep, sweepStabilityReport } from "./sensitivity.js";
+export type { SweepSpec, SweepPointResult, SweepResult } from "./sensitivity.js";
+export { runIncremental } from "./incremental.js";
+export type { IncrementalMatch, IncrementalResult } from "./incremental.js";
 
 // ---------------------------------------------------------------------------
 // Quality, autofix, validation, profiling, ingest
