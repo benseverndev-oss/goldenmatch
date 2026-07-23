@@ -82,6 +82,13 @@ async def _close_quietly(graphiti) -> None:
 class GraphitiQAEngine:
     name = "graphiti"
     fidelity = "real-e2e"
+    # NOT safe to answer in parallel: answer() drives a SINGLE persistent asyncio loop
+    # (`self._loop.run_until_complete`, which cannot be entered from multiple threads
+    # at once) and attributes per-question tokens via a before/after delta on the
+    # shared `self._counter` (double-counts + corrupts the total under concurrency).
+    # The harness forces sequential answering for this engine (QA_E2E_ANSWER_WORKERS
+    # is ignored). Fixing both would require a per-thread loop + per-call token return.
+    answer_parallel_safe = False
 
     def __init__(
         self,
