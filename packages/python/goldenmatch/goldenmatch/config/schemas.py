@@ -34,6 +34,17 @@ VALID_SCORERS = frozenset({
     # is magnitude-blind -- one changed digit reads 0.90). Unparseable input
     # degrades to the `date` scorer. Use for date/dob columns on the FS path.
     "date_diff",
+    # Magnitude-aware numeric comparator (spec 2026-07-23-fs-domain-comparators,
+    # Phase 2): parses both to float and bands |a-b| on a monotone [0,1] ramp,
+    # so string similarity on numbers (`levenshtein("100","900")` ~0.67) no longer
+    # reads distinct amounts as near-agreement. Bare `numeric_diff` = 10% relative
+    # band; `numeric_diff:abs:<eps>` / `numeric_diff:pct:<frac>` set the band (the
+    # suffixed forms validate via _NUMERIC_DIFF_RE below). FS path.
+    "numeric_diff",
+    # Great-circle (haversine) distance comparator (spec 2026-07-23, Phase 2):
+    # parses ONE combined "lat,long" field per side and bands the km distance.
+    # (Two separate lat/long columns are the deferred cross-field comparator.) FS.
+    "geo_haversine",
     # Hamming similarity over a hex perceptual hash (image pHash) -- the
     # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
     "phash",
@@ -74,6 +85,15 @@ _SUBSTRING_RE = re.compile(r"^substring:\d+:\d+$")
 _CUSTOM_STRATEGY_RE = re.compile(r"^custom:[a-z_][a-z0-9_]*$")
 _QGRAM_RE = re.compile(r"^qgram:\d+$")
 _BLOOM_FILTER_RE = re.compile(r"^bloom_filter:\d+:\d+:\d+$")
+# numeric_diff:abs:<eps> / numeric_diff:pct:<frac> -- the band-parameterized forms
+# of the numeric_diff scorer (bare `numeric_diff` is a plain VALID_SCORERS member).
+_NUMERIC_DIFF_RE = re.compile(r"^numeric_diff:(abs|pct):\d+(\.\d+)?$")
+
+
+def _is_valid_scorer(scorer: str) -> bool:
+    """A scorer name is valid if it's a VALID_SCORERS member or a recognized
+    parameterized form (currently the ``numeric_diff:abs|pct:<band>`` suffix)."""
+    return scorer in VALID_SCORERS or bool(_NUMERIC_DIFF_RE.match(scorer))
 
 
 # ── FieldTransform ──────────────────────────────────────────────────────────
@@ -232,7 +252,7 @@ class MatchkeyField(BaseModel):
             raise ValueError("MatchkeyField requires 'field' or 'column'.")
         for t in self.transforms:
             FieldTransform(transform=t)  # reuse validation
-        if self.scorer is not None and self.scorer not in VALID_SCORERS:
+        if self.scorer is not None and not _is_valid_scorer(self.scorer):
             # Check plugin registry before rejecting
             from goldenmatch.plugins.registry import PluginRegistry
             registry = PluginRegistry.instance()
@@ -345,7 +365,7 @@ class NegativeEvidenceField(BaseModel):
                     f"Invalid transform '{t}'. Must be one of "
                     f"{sorted(VALID_SIMPLE_TRANSFORMS)}"
                 )
-        if self.scorer not in VALID_SCORERS:
+        if not _is_valid_scorer(self.scorer):
             raise ValueError(
                 f"Invalid scorer '{self.scorer}'. Must be one of "
                 f"{sorted(VALID_SCORERS)}"

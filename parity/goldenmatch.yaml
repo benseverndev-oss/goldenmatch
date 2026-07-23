@@ -269,9 +269,14 @@ scorers:
   - soundex_match
   - token_sort
   python_only:
-  # Magnitude-aware date comparator (spec 2026-07-23-fs-domain-comparators):
-  # day-distance bands, FS-path only. TS parity port is Phase 4.
+  # FS domain comparators (spec 2026-07-23-fs-domain-comparators), FS-path only.
+  # Native score-core kernels are Phase 3; TS parity port is Phase 4.
+  # Magnitude-aware date comparator (day-distance bands).
   - date_diff
+  # Great-circle (haversine) distance on a single combined "lat,long" field.
+  - geo_haversine
+  # Magnitude-aware numeric comparator (abs/pct banded distance).
+  - numeric_diff
   ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
 # VALID_TRANSFORMS). Currently in exact parity -- no declared deltas.
@@ -380,3 +385,5 @@ scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   date_diff: "deferred -- native score-core day-distance kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"
+  geo_haversine: "deferred -- native score-core haversine kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"
+  numeric_diff: "deferred -- native score-core banded-distance kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"

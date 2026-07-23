@@ -775,12 +775,35 @@ def _fs_domain_comparators_enabled() -> bool:
     the path that admits dates at all). Default-off is byte-identical to today;
     flip only after the accuracy panel + qis_gate scale-neutrality prove it, per
     the ``GOLDENMATCH_FS_AUTOCONFIG_V2`` flag precedent. Phase 1 = ``date_diff``;
-    numeric/geo comparators are later phases.
+    Phase 2 also admits ``numeric`` columns as ``numeric_diff`` and single
+    combined ``lat,long`` columns as ``geo_haversine`` (see
+    ``build_probabilistic_matchkeys``).
     """
     return os.environ.get("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "0").lower() in (
         "1", "true", "on", "yes", "enabled",
     )
 
+
+# Fraction of a column's non-null sample values that must parse as valid
+# coordinates for it to be admitted as a single-field geo_haversine column.
+_LATLONG_SAMPLE_FLOOR = 0.8
+
+
+def _looks_like_latlong(profile: ColumnProfile) -> bool:
+    """Whether a column holds combined ``"lat,long"`` coordinate strings, judged
+    by profiling ``sample_values`` through the same parser the scorer uses. A
+    strong majority (>= _LATLONG_SAMPLE_FLOOR) of the non-null sample must parse
+    to valid coordinates -- specific enough that a plain numeric or free-text
+    column (no ``lat,long`` shape) never trips it. Only consulted under the FS
+    domain-comparators flag, so it never runs (and can't shift behavior) by
+    default. Separate lat/long columns are the deferred cross-field comparator."""
+    from goldenmatch.core.scorer import _parse_latlong
+
+    sample = [v for v in profile.sample_values if v is not None and str(v).strip()]
+    if len(sample) < 5:  # too little evidence to claim a coordinate column
+        return False
+    ok = sum(1 for v in sample if _parse_latlong(str(v)) is not None)
+    return ok / len(sample) >= _LATLONG_SAMPLE_FLOOR
 
 
 # Domain-extracted column scorer mapping.
@@ -4858,6 +4881,31 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # so EM down-weights it rather than mega-clustering. m/u estimation and
         # blocking-field exclusion are EM's job at train time (train_em
         # blocking_fields=...), not this builder's.
+
+        # Phase 2 domain comparators (spec 2026-07-23), behind
+        # GOLDENMATCH_FS_DOMAIN_COMPARATORS (default off -> this whole block is
+        # skipped and the columns fall through to their v1/v2 handling below, so
+        # default behavior is byte-identical). Magnitude-aware numeric + geo:
+        #   * a single combined "lat,long" column -> great-circle `geo_haversine`
+        #     (two separate lat/long columns are the deferred cross-field case);
+        #   * a numeric column -> `numeric_diff` (10% relative band) instead of
+        #     being skipped as a comparison field (the `numeric` skip below).
+        # Both use partial_threshold 0.6 so the mid bands land at level 1 (as the
+        # date_diff admission does). The card >= 1.0 guard drops per-record
+        # surrogates (no shared-identity signal), mirroring the date branch.
+        if v2 and _fs_domain_comparators_enabled():
+            if p.cardinality_ratio < 1.0 and _looks_like_latlong(p):
+                fields.append(MatchkeyField(
+                    field=p.name, scorer="geo_haversine", transforms=["strip"],
+                    levels=3, partial_threshold=0.6,
+                ))
+                continue
+            if p.col_type == "numeric" and p.cardinality_ratio < 1.0:
+                fields.append(MatchkeyField(
+                    field=p.name, scorer="numeric_diff:pct:0.1", transforms=["strip"],
+                    levels=3, partial_threshold=0.6,
+                ))
+                continue
 
         # Lever #1: admit date columns as comparison fields. Default scorer is
         # edit-distance (`levenshtein`); with GOLDENMATCH_FS_DOMAIN_COMPARATORS on

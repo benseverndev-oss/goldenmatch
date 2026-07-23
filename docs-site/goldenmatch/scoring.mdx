@@ -15,6 +15,8 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `levenshtein` | Normalized Levenshtein distance | 0.0--1.0 | General strings |
 | `date` | Damerau-Levenshtein over canonical ISO digits | 0.0--1.0 | Dates (`dob`, `birth_date`) |
 | `date_diff` | Day-distance bands; magnitude-aware (a year gap is a weak partial) | 0.0--1.0 | Dates (`dob`, `birth_date`) |
+| `numeric_diff` | Banded numeric distance (`:abs:<eps>` / `:pct:<frac>`); magnitude-aware | 0.0--1.0 | Amounts, measurements, ages |
+| `geo_haversine` | Great-circle (haversine) km distance banded, on a `lat,long` field | 0.0--1.0 | Coordinates (`lat,long`) |
 | `token_sort` | Sort tokens, then ratio | 0.0--1.0 | Names, addresses |
 | `soundex_match` | Phonetic code comparison | 0 or 1 | Names |
 | `ensemble` | max(jaro_winkler, token_sort, soundex) | 0.0--1.0 | Names with reordering |
@@ -49,6 +51,15 @@ The `date` scorer parses both sides as ISO dates and compares them by Damerau-Le
 Non-ISO input falls back to `levenshtein`. Auto-config already skips date columns as fuzzy fields, so `date` is for hand-written / Splink-converted configs; a preflight check warns when a name-oriented scorer (`jaro_winkler` / `token_sort` / ...) is placed on a date field.
 
 The `date` scorer is edit-distance and therefore **magnitude-blind** — `1990-01-02` vs `1991-01-02` is one digit-edit → 0.90, over-scoring a full-year gap. The `date_diff` scorer instead parses both sides to a day-ordinal and bands by *day-distance* (same → 1.0, ≤1 day → 0.92, ≤1 month → 0.80, ≤1 year → 0.60, ≤5 years → 0.30, else 0), with an MM/DD-transposition floor and the same `levenshtein` fallback on unparseable input. On the Fellegi-Sunter path, `GOLDENMATCH_FS_DOMAIN_COMPARATORS=1` makes auto-config admit date columns as `date_diff` instead of `levenshtein` (default off; byte-identical when off).
+
+### Numeric and coordinate fields
+
+The same magnitude-blindness afflicts numbers and coordinates: `levenshtein("100","900")` ≈ 0.67 reads two very different amounts as near-agreement, and string similarity on a `lat,long` pair is meaningless. Two more domain comparators (behind the same `GOLDENMATCH_FS_DOMAIN_COMPARATORS` flag) fix this on the Fellegi-Sunter path:
+
+- **`numeric_diff`** parses both sides to a float and maps the distance to a monotone `[0,1]` ramp — `numeric_diff:abs:<eps>` for an absolute band (`|a−b|`) or `numeric_diff:pct:<frac>` for a relative band (`|a−b| / max(|a|,|b|)`); bare `numeric_diff` = `pct:0.1`. Auto-config admits numeric columns as `numeric_diff:pct:0.1`.
+- **`geo_haversine`** parses one combined `"lat,long"` field per side and bands the great-circle (haversine) km distance (≤0.1 km → 1.0, ≤1 km → 0.85, ≤10 km → 0.5, ≤100 km → 0.2, else 0). Auto-config admits a column whose sampled values parse as coordinates. (Two *separate* lat/long columns are a deferred cross-field comparator.)
+
+Both fall back to exact-string equality on unparseable input (never returning `None` for non-null values), so the scalar and vectorized scoring paths agree by construction — and, like `date_diff`, they are scale-neutral: just new scorers flowing through the unchanged level → m/u → weight machinery, leaving blocking, the pair set, memory, and clustering untouched. Default off is byte-identical.
 
 ```yaml
 matchkeys:
