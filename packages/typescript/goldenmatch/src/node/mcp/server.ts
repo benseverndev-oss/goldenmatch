@@ -4,13 +4,15 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 51 tools covering dedupe, match, scoring, explanation,
+ * Exposes 57 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (5 memory tools via
  * MEMORY_TOOLS), the Identity Graph (6 identity tools via IDENTITY_TOOLS),
- * and the AgentSession skills (15 agent tools via AGENT_MCP_TOOLS, incl. the
- * healer's review_config).
+ * the AgentSession skills (15 agent tools via AGENT_MCP_TOOLS, incl. the
+ * healer's review_config), and the stateful run tools (6 via RUN_TOOLS:
+ * get_stats/list_clusters/get_cluster/get_golden_record/export_results/
+ * upload_dataset, backed by the server-held RUN_STORE).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.
@@ -19,7 +21,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { resolve, isAbsolute, sep } from "node:path";
+import { isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 
 import { dedupe, match, scoreStrings } from "../../core/api.js";
@@ -42,6 +44,9 @@ import {
 import { addRowIds } from "../../core/matchkey.js";
 import { buildClusters } from "../../core/cluster.js";
 import { compareClusters, ccmsSummary, parseClustersJson } from "../../core/compare-clusters.js";
+import { sanitizePath } from "./paths.js";
+import { RUN_STORE } from "./run-store.js";
+import { RUN_TOOLS, RUN_TOOL_NAMES, handleRunTool } from "./run-tools.js";
 import { explainPair, explainCluster } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
 import { evaluatePairs, loadGroundTruthPairs } from "../../core/evaluate.js";
@@ -439,24 +444,14 @@ export const TOOLS: readonly Tool[] = [
   ...MEMORY_TOOLS,
   ...IDENTITY_TOOLS,
   ...AGENT_MCP_TOOLS,
+  ...RUN_TOOLS,
 ];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sanitizePath(raw: string): string {
-  if (typeof raw !== "string" || raw.length === 0) {
-    throw new Error("path must be a non-empty string");
-  }
-  const resolved = isAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw);
-  const cwd = resolve(process.cwd());
-  // Guard against prefix-bypass: cwd="/app/foo" must NOT accept "/app/foobar".
-  if (resolved !== cwd && !resolved.startsWith(cwd + sep)) {
-    throw new Error(`Path '${raw}' is outside the working directory`);
-  }
-  return resolved;
-}
+//
+// `sanitizePath` now lives in ./paths.ts (shared with run-tools.ts).
 
 function asStringArray(v: unknown): string[] | undefined {
   if (v === undefined || v === null) return undefined;
@@ -574,6 +569,10 @@ export async function handleTool(
     if (AGENT_TOOL_NAMES.has(name)) {
       return await handleAgentTool(name, args);
     }
+    // Run tools read the current run from RUN_STORE (populated by dedupe below).
+    if (RUN_TOOL_NAMES.has(name)) {
+      return handleRunTool(name, args);
+    }
     switch (name) {
       case "find_duplicates":   // alias
       case "dedupe": {
@@ -581,6 +580,13 @@ export async function handleTool(
         const rows = readFile(path);
         const options = buildDedupeOptions(args);
         const result = await dedupe(rows, options);
+        // Persist the run so the stateful query tools (get_stats / list_clusters
+        // / get_cluster / get_golden_record / export_results) can read it.
+        const rowsById = new Map<number, Row>();
+        for (const r of addRowIds(rows)) {
+          rowsById.set(r["__row_id__"] as number, r);
+        }
+        const run_id = RUN_STORE.put({ result, rowsById, sourcePath: path });
         let output_written: string | null = null;
         if (typeof args["output"] === "string" && args["output"]) {
           const outPath = sanitizePath(args["output"] as string);
@@ -590,6 +596,7 @@ export async function handleTool(
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             return {
+              run_id,
               stats: result.stats,
               total_clusters: result.stats.totalClusters,
               total_records: result.stats.totalRecords,
@@ -599,6 +606,7 @@ export async function handleTool(
           }
         }
         return {
+          run_id,
           total_records: result.stats.totalRecords,
           total_clusters: result.stats.totalClusters,
           match_rate: result.stats.matchRate,

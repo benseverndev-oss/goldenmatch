@@ -65,8 +65,12 @@ mcp_tools:
   - explain_cluster
   - explain_match
   - explain_pair
+  - export_results
   - find_duplicates
   - fix_quality
+  - get_cluster
+  - get_golden_record
+  - get_stats
   - identity_conflicts
   - identity_history
   - identity_list
@@ -75,6 +79,7 @@ mcp_tools:
   - identity_split
   - learn_thresholds
   - list_blocking_strategies
+  - list_clusters
   - list_corrections
   - list_scorers
   - list_strategies
@@ -90,6 +95,7 @@ mcp_tools:
   - scan_quality
   - suggest_config
   - suggest_pprl
+  - upload_dataset
   python_only:
   - analyze_blocking
   - certify_recall
@@ -98,10 +104,6 @@ mcp_tools:
   - documents_ingest
   - documents_suggest_schema
   - explain_routing
-  - export_results
-  - get_cluster
-  - get_golden_record
-  - get_stats
   - identity_audit
   - identity_audit_seal
   - identity_audit_verify
@@ -114,7 +116,6 @@ mcp_tools:
   - incremental
   - lineage
   - lint_routing
-  - list_clusters
   - list_domains
   - list_plugins
   - list_runs
@@ -129,7 +130,6 @@ mcp_tools:
   - shatter_cluster
   - test_domain
   - unmerge_record
-  - upload_dataset
   ts_only:
   - build_clusters
   - find_exact_matches

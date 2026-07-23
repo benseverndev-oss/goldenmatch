@@ -12,15 +12,15 @@ its deep reference.
 
 <Note>
   Versions below are the current release versions. Each surface versions
-  independently — the TypeScript packages carry their own semver and expose the
-  stateless compute surface, not a lagging copy of the Python one. See
+  independently — the TypeScript packages carry their own semver and expose a
+  smaller, edge-first surface, not a lagging copy of the Python one. See
   [Python vs TypeScript: the surface boundary](#python-vs-typescript-the-surface-boundary).
 </Note>
 
 ## Capability matrix
 
 What each package ships, at a glance. **MCP** counts are the Python server's tools
-(the TS server exposes the stateless subset — see the
+(the TS server exposes a subset — see the
 [surface boundary](#python-vs-typescript-the-surface-boundary)). A dash means the
 package does not ship that surface.
 
@@ -41,22 +41,26 @@ The two libraries are not "a full version and a lagging copy" — they are **two
 surfaces with different jobs**, and the tool-count gap is a design boundary, not
 neglect:
 
-- **Python is the full, *stateful* server.** It holds datasets, runs, clusters, and
-  the identity graph server-side, so it can expose tools that query and mutate that
-  state (`get_stats`, `list_clusters`, `rollback`, `list_runs`, the `identity_*`
-  audit trio, …) plus the heavier subsystems that live only there — domain packs,
-  PPRL, the routing planner, and document ingest.
-- **TypeScript is the *stateless* compute/edge surface.** Its `dedupe()` returns
-  stats and clusters inline, so there is no server-held dataset for a "query the
-  state" tool to point at. In exchange it ships edge primitives the Python server
-  doesn't: `score_strings`, `score_pair`, `find_exact_matches`, `find_fuzzy_matches`,
+- **Python is the fuller *stateful* server.** It holds datasets, runs, clusters, and
+  the identity graph server-side, so it exposes the deeper state tools the TS surface
+  doesn't — run *mutation* (`unmerge_record`, `shatter_cluster`, `rollback`), the
+  on-disk run log (`list_runs`), incremental resolution, and the `identity_*` audit
+  trio — plus the subsystems that live only there: domain packs, PPRL, the routing
+  planner, and document ingest.
+- **TypeScript is the *edge-first* surface.** Its edge-safe core `dedupe()` returns
+  stats and clusters inline, and — since it added an opt-in, node-only run store on
+  the MCP server — it now also serves the read-query tools (`get_stats`, `get_cluster`,
+  `list_clusters`, `get_golden_record`, `export_results`) over the last run, so those
+  are shared too. It also ships edge primitives the Python server doesn't:
+  `score_strings`, `score_pair`, `find_exact_matches`, `find_fuzzy_matches`,
   `read_file`, `write_csv`, and `server_info`.
 
-So GoldenMatch's **51 TS tools vs 82 Python** breaks down as ~43 shared core
-operations, 8 TS-only edge helpers, and ~39 Python-only stateful/subsystem tools —
-overlapping surfaces sized to their jobs, not a subset. On the shared core the
-**public function names match**, and that parity is enforced in CI by the
-`api_parity` gate, which fails on any *undeclared* Python↔TS drift.
+So GoldenMatch's **57 TS tools vs 82 Python** breaks down as ~49 shared operations,
+8 TS-only edge helpers, and ~33 Python-only tools (run mutation, the rollback/run-log/
+incremental/audit state ops, and the Python-only subsystems) — overlapping surfaces
+sized to their jobs, not a subset. On the shared core the **public function names
+match**, and that parity is enforced in CI by the `api_parity` gate, which fails on
+any *undeclared* Python↔TS drift.
 
 **Versions track independently.** Each surface carries its own semver — npm is not
 pinned to the PyPI number — so a lower TypeScript version reflects a smaller,
@@ -296,9 +300,9 @@ result = AgentSession().autoconfigure("customers.csv")
 
 ## Coverage notes
 
-- **Two surfaces, one core.** Every package has a TS twin. Python is the full
-  stateful server; TypeScript is the stateless compute/edge surface, with its own
-  independent semver. The tool-count and version differences are a design boundary,
+- **Two surfaces, one core.** Every package has a TS twin. Python is the fuller
+  stateful server; TypeScript is the edge-first surface, with its own independent
+  semver. The tool-count and version differences are a design boundary,
   not lag — see [Python vs TypeScript: the surface boundary](#python-vs-typescript-the-surface-boundary).
 - **REST + A2A are for the service-shaped packages only** — GoldenMatch,
   GoldenCheck, GoldenFlow, and GoldenPipe. GoldenAnalysis and InferMap ship a CLI
