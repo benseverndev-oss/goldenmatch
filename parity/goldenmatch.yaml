@@ -190,11 +190,13 @@ a2a_skills:
   - deduplicate
   - evaluate
   - explain
+  - identity_claim
   - identity_conflicts
   - identity_history
   - identity_list
   - identity_merge
   - identity_resolve
+  - identity_resolve_conflict
   - identity_split
   - learn_thresholds
   - list_corrections
@@ -218,8 +220,6 @@ a2a_skills:
   - identity_audit
   - identity_audit_seal
   - identity_audit_verify
-  - identity_claim
-  - identity_resolve_conflict
   - identity_show
   - incremental
   - list_runs
