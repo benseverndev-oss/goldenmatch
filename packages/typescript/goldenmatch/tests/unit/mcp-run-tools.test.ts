@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("MCP run tools — registration", () => {
-  it("registers all six run tools", () => {
+  it("registers all seven run tools", () => {
     const names = new Set(TOOLS.map((t) => t.name));
     for (const n of [
       "get_stats",
@@ -40,6 +40,7 @@ describe("MCP run tools — registration", () => {
       "get_golden_record",
       "export_results",
       "upload_dataset",
+      "lineage",
     ]) {
       expect(names.has(n), `missing ${n}`).toBe(true);
     }
@@ -135,6 +136,58 @@ describe("MCP run tools — after a dedupe populates the store", () => {
     for (const row of written) {
       expect(Object.keys(row).some((k) => k.startsWith("__"))).toBe(false);
     }
+  });
+});
+
+describe("lineage", () => {
+  it("returns a Python-shaped error when no run is loaded", async () => {
+    const r = (await handleTool("lineage", {})) as { error?: string };
+    expect(r.error).toBe("No dataset loaded");
+  });
+
+  it("returns one lineage record per golden record for the current run", async () => {
+    const path = fixture("data.csv", CSV);
+    await handleTool("dedupe", { path, exact: ["name"] });
+    const res = (await handleTool("lineage", {})) as {
+      count: number;
+      lineage: Array<{
+        clusterId: number;
+        sourceRowIds: number[];
+        goldenRowId: number;
+        fieldProvenance: Record<string, unknown>;
+        naturalLanguage?: string;
+      }>;
+    };
+    // one golden record → one lineage edge
+    expect(res.count).toBe(res.lineage.length);
+    expect(res.count).toBeGreaterThanOrEqual(1);
+    const edge = res.lineage[0]!;
+    // the merged cluster has both Alice rows as sources
+    expect(edge.sourceRowIds.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(edge.fieldProvenance).length).toBeGreaterThan(0);
+    // default: no natural-language summary
+    expect(edge.naturalLanguage).toBeUndefined();
+  });
+
+  it("natural_language=true populates a human-readable summary", async () => {
+    const path = fixture("data.csv", CSV);
+    await handleTool("dedupe", { path, exact: ["name"] });
+    const res = (await handleTool("lineage", {
+      natural_language: true,
+    })) as { lineage: Array<{ naturalLanguage?: string }> };
+    expect(res.lineage[0]!.naturalLanguage).toBeTypeOf("string");
+    expect(res.lineage[0]!.naturalLanguage!.length).toBeGreaterThan(0);
+  });
+
+  it("max_pairs caps the number of lineage records returned", async () => {
+    const path = fixture("data.csv", CSV);
+    await handleTool("dedupe", { path, exact: ["name"] });
+    const res = (await handleTool("lineage", { max_pairs: 0 })) as {
+      count: number;
+      lineage: unknown[];
+    };
+    expect(res.count).toBe(0);
+    expect(res.lineage.length).toBe(0);
   });
 });
 
