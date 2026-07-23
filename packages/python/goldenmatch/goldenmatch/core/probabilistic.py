@@ -296,6 +296,11 @@ class EMResult:
     # collision rate; the baseline an agreement is adjusted against).
     tf_freqs: dict[str, dict[str, float]] | None = None
     tf_collision: dict[str, float] | None = None
+    # Unsupervised link cutoff picked from the training-pair score distribution
+    # (GOLDENMATCH_FS_CALIBRATE_THRESHOLD). The fixed 0.50 default over-merges when
+    # namesakes pile up just below it (historical_50k: 0.50 F1 0.75 vs 0.55 F1
+    # 0.80); this adapts the cutoff per dataset. None = off = fixed default.
+    calibrated_link_threshold: float | None = None
     training_config: dict | None = None
     # Non-serialized marker distinguishing a loaded schema-v1 model from an
     # in-memory result constructed before manifests existed.
@@ -328,6 +333,8 @@ class EMResult:
             "tf_freqs": self.tf_freqs,
             "tf_collision": self.tf_collision,
         }
+        if self.calibrated_link_threshold is not None:
+            data["calibrated_link_threshold"] = self.calibrated_link_threshold
         if self.training_config is not None:
             data["training_config"] = self.training_config
         return data
@@ -357,6 +364,7 @@ class EMResult:
                 proportion_matched=data["proportion_matched"],
                 tf_freqs=data.get("tf_freqs"),
                 tf_collision=data.get("tf_collision"),
+                calibrated_link_threshold=data.get("calibrated_link_threshold"),
                 training_config=data.get("training_config"),
                 _source_schema_version=version,
             )
@@ -1416,6 +1424,19 @@ def train_em(
     # Term-frequency tables for fields opting into Winkler TF adjustment.
     tf_freqs, tf_collision = _build_tf_tables(df, mk)
 
+    # Unsupervised link-threshold calibration from the training-pair score
+    # distribution (GOLDENMATCH_FS_CALIBRATE_THRESHOLD, default off -> None).
+    calibrated_link_threshold = None
+    if _fs_calibrate_threshold_enabled():
+        calibrated_link_threshold = _calibrate_link_threshold(
+            comp_matrix, mk, match_weights, p_match,
+        )
+        if calibrated_link_threshold is not None:
+            logger.info(
+                "FS calibrated link threshold: %.4f (vs fixed 0.50 default)",
+                calibrated_link_threshold,
+            )
+
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
@@ -1425,6 +1446,7 @@ def train_em(
         proportion_matched=p_match,
         tf_freqs=tf_freqs,
         tf_collision=tf_collision,
+        calibrated_link_threshold=calibrated_link_threshold,
         training_config=_training_config_manifest(mk),
     )
 
@@ -2192,7 +2214,14 @@ def resolve_thresholds(
     threshold cannot accidentally turn linked pairs into review candidates.
     """
     computed_link, computed_review = compute_thresholds(em_result)
-    link = float(mk.link_threshold) if mk.link_threshold is not None else computed_link
+    # Precedence: explicit user config > EM-calibrated cutoff > fixed default.
+    calibrated = getattr(em_result, "calibrated_link_threshold", None)
+    if mk.link_threshold is not None:
+        link = float(mk.link_threshold)
+    elif calibrated is not None:
+        link = float(calibrated)
+    else:
+        link = computed_link
     review = (
         float(mk.review_threshold)
         if mk.review_threshold is not None
@@ -2201,15 +2230,92 @@ def resolve_thresholds(
     return link, min(review, link)
 
 
+def _fs_calibrate_threshold_enabled() -> bool:
+    """Unsupervised per-dataset link-threshold calibration. **Default OFF.**
+
+    When ``GOLDENMATCH_FS_CALIBRATE_THRESHOLD`` is truthy, EM picks the link cutoff
+    from the training-pair normalized-score distribution instead of the fixed 0.50
+    default. The fixed cutoff over-merges when non-match (namesake) pairs pile up
+    just below it — historical_50k: F1 0.75 at 0.50 vs 0.80 at 0.55. Clean
+    datasets have flat threshold curves, so an adaptive cutoff leaves them
+    ~unchanged. Default off is byte-identical.
+    """
+    return os.environ.get("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+# Clamp the calibrated cutoff to a sane band (mirrors compute_thresholds' own
+# [0.40, 0.95] clamp; 0.90 upper keeps recall from collapsing on odd shapes).
+_CALIBRATE_MIN, _CALIBRATE_MAX = 0.40, 0.90
+
+
+def _otsu_threshold(scores) -> float | None:
+    """Otsu split: the cutoff maximizing between-class variance of a [0,1] score
+    histogram. For a bimodal non-match/match distribution this is the class
+    boundary; for well-separated (unimodal-ish) data the exact split barely
+    matters (flat F1 curve), so it stays safe."""
+    nbins = 100
+    hist, _ = np.histogram(scores, bins=nbins, range=(0.0, 1.0))
+    hist = hist.astype(np.float64)
+    total = hist.sum()
+    if total <= 0:
+        return None
+    prob = hist / total
+    centers = (np.arange(nbins) + 0.5) / nbins
+    omega = np.cumsum(prob)                    # class-0 (below) weight
+    mu = np.cumsum(prob * centers)             # class-0 cumulative mean
+    mu_t = mu[-1]
+    denom = omega * (1.0 - omega)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sigma_b = np.where(denom > 1e-12, (mu_t * omega - mu) ** 2 / denom, 0.0)
+    k = int(np.argmax(sigma_b))
+    return float((k + 1) / nbins)              # upper edge of the split bin
+
+
+def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float | None:
+    """Pick a link cutoff from the training-pair normalized-score distribution via
+    Otsu's method, instead of the fixed 0.50.
+
+    Scores each training pair (regular fields; matches the default-config scoring
+    path) via ``(total - min)/(max - min)``. Returns None if there is too little
+    to calibrate.
+    """
+    fields = [f for f in mk.fields if f.field in match_weights]
+    if not fields:
+        return None
+    weights = {f.field: np.asarray(match_weights[f.field], dtype=np.float64) for f in fields}
+    pair_min = float(sum(w.min() for w in weights.values()))
+    pair_max = float(sum(w.max() for w in weights.values()))
+    if pair_max <= pair_min:
+        return None
+    total = np.zeros(comp_matrix.shape[0], dtype=np.float64)
+    for j, f in enumerate(fields):
+        lv = comp_matrix[:, j]
+        obs = lv >= 0
+        total[obs] += weights[f.field][lv[obs]]
+    norm = np.clip((total - pair_min) / (pair_max - pair_min), 0.0, 1.0)
+    if norm.shape[0] <= 50:
+        return None
+    t = _otsu_threshold(norm)
+    if t is None:
+        return None
+    return round(float(np.clip(t, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+
+
 def _fs_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float:
     """The FS link cutoff: configured ``mk.link_threshold`` when set, else the
+    calibrated per-dataset cutoff (when EM produced one), else the
     calibration-aware value from ``compute_thresholds``. Extracted verbatim from
     the scalar / vectorized / batched scorers (#1804 item 4) so they cannot
     drift on how the cutoff is resolved."""
     if mk.link_threshold is not None:
         return mk.link_threshold
+    cal = getattr(em_result, "calibrated_link_threshold", None)
+    if cal is not None:
+        return cal
     link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
     return link_threshold
 
@@ -3419,10 +3525,9 @@ def _score_fs_native_frame(
     # and scalar paths normalize against.
     min_weight, max_weight = fs_weight_range(em_result, mk)
     weight_range = max_weight - min_weight
-    if mk.link_threshold is not None:
-        link_threshold = float(mk.link_threshold)
-    else:
-        link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
+    # _fs_link_threshold honors mk.link_threshold, then the EM-calibrated cutoff,
+    # then compute_thresholds — so the native path calibrates like numpy does.
+    link_threshold = _fs_link_threshold(mk, em_result, calibrated)
 
     mod = native_module()
     # Register the census / alias tables once per process when a name scorer is in
