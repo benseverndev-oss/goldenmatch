@@ -2214,7 +2214,14 @@ def resolve_thresholds(
     threshold cannot accidentally turn linked pairs into review candidates.
     """
     computed_link, computed_review = compute_thresholds(em_result)
-    link = float(mk.link_threshold) if mk.link_threshold is not None else computed_link
+    # Precedence: explicit user config > EM-calibrated cutoff > fixed default.
+    calibrated = getattr(em_result, "calibrated_link_threshold", None)
+    if mk.link_threshold is not None:
+        link = float(mk.link_threshold)
+    elif calibrated is not None:
+        link = float(calibrated)
+    else:
+        link = computed_link
     review = (
         float(mk.review_threshold)
         if mk.review_threshold is not None
