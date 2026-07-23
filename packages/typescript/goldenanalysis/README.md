@@ -111,6 +111,26 @@ goldenanalysis-js regressions --history .golden/analysis.jsonl --dataset custome
 > in 22+); the Python sibling's optional SQLite backend is a documented follow-up.
 > Python's *default* backend is also JSONL, so the surface parity holds.
 
+## MCP server
+
+`goldenanalysis-mcp` (or `goldenanalysis-js mcp-serve`) starts a stdio MCP server for
+Claude Desktop and other MCP clients — the same four read-only tools the Python
+sibling exposes, so both surfaces match: `list_analyzers`, `analyze_frame`,
+`get_trend`, `detect_regressions`.
+
+```jsonc
+// claude_desktop_config.json
+{
+  "mcpServers": {
+    "goldenanalysis": { "command": "goldenanalysis-mcp" }
+  }
+}
+```
+
+> `analyze_frame` accepts a `.csv` frame or a saved `.json` `AnalysisReport`.
+> `.parquet` input requires the Python package (this edge-safe port ships no
+> Parquet reader).
+
 ## Cross-surface parity
 
 The `AnalysisReport` / `Metric` / `AnalysisTable` **wire types use snake_case** (the

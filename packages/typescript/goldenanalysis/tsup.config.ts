@@ -6,6 +6,7 @@ export default defineConfig({
     "core/index": "src/core/index.ts",
     "node/index": "src/node/index.ts",
     cli: "src/cli.ts",
+    "node/mcp/server": "src/node/mcp/server.ts",
   },
   format: ["esm", "cjs"],
   // resolve: roll the bundled goldenmatch-wasm-runtime types up INTO our .d.ts
