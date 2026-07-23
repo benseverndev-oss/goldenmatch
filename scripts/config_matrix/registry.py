@@ -63,6 +63,7 @@ REGISTRY: dict[str, PackageSpec] = {
                 "jaccard": {"meaning": "Jaccard overlap of token/character sets or bloom filters.", "range": "0.0-1.0", "best_for": "PPRL"},
                 "qgram": {"meaning": "Q-gram (n-gram) overlap similarity.", "range": "0.0-1.0", "best_for": "General strings, typos"},
                 "date": {"meaning": "Damerau-Levenshtein over canonical ISO date digits; typo-tolerant.", "range": "0.0-1.0", "best_for": "Dates (dob, birth_date)"},
+                "date_diff": {"meaning": "Day-distance banded similarity; magnitude-aware (a year gap is a weak partial, not a near-match). FS path.", "range": "0.0-1.0", "best_for": "Dates (dob, birth_date)"},
                 "phash": {"meaning": "Perceptual-hash Hamming similarity.", "range": "0.0-1.0", "best_for": "Images"},
                 "audio_fp": {"meaning": "Audio-fingerprint similarity.", "range": "0.0-1.0", "best_for": "Audio clips"},
                 "radial": {"meaning": "Rotation/crop-invariant radial-variance similarity.", "range": "0.0-1.0", "best_for": "Rotated/cropped images"},

@@ -268,7 +268,10 @@ scorers:
   - record_embedding
   - soundex_match
   - token_sort
-  python_only: []
+  python_only:
+  # Magnitude-aware date comparator (spec 2026-07-23-fs-domain-comparators):
+  # day-distance bands, FS-path only. TS parity port is Phase 4.
+  - date_diff
   ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
 # VALID_TRANSFORMS). Currently in exact parity -- no declared deltas.
@@ -376,3 +379,4 @@ scorer_kernels:
 scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
+  date_diff: "deferred -- native score-core day-distance kernel is Phase 3 (spec 2026-07-23-fs-domain-comparators); pure-Python numpy path until then, like soundex_match declining"

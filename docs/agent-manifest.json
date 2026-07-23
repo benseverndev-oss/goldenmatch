@@ -4713,6 +4713,12 @@
               "range": "0.0-1.0"
             },
             {
+              "value": "date_diff",
+              "meaning": "Day-distance banded similarity; magnitude-aware (a year gap is a weak partial, not a near-match). FS path.",
+              "best_for": "Dates (dob, birth_date)",
+              "range": "0.0-1.0"
+            },
+            {
               "value": "dice",
               "meaning": "Dice coefficient over character bigrams / bloom filters.",
               "best_for": "PPRL",
@@ -5288,6 +5294,7 @@
           "GOLDENMATCH_FS_CALIBRATED",
           "GOLDENMATCH_FS_COLUMNAR_CLUSTER",
           "GOLDENMATCH_FS_DEFAULT_BUCKET",
+          "GOLDENMATCH_FS_DOMAIN_COMPARATORS",
           "GOLDENMATCH_FS_EM_AGG_BLOCKS",
           "GOLDENMATCH_FS_EM_BLOCK_SLIM",
           "GOLDENMATCH_FS_EM_SAMPLE_ROWS",
