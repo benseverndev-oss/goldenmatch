@@ -247,3 +247,62 @@ describe("identity tool dispatch", () => {
     expect(r["error"]).toBeTypeOf("string");
   });
 });
+
+describe("identity tool provenance (actor/trust)", () => {
+  function eventsOf(historyResult: Record<string, unknown>): Record<string, unknown>[] {
+    return historyResult["items"] as Record<string, unknown>[];
+  }
+
+  it("identity_merge persists an explicit actor/trust on the emitted events", async () => {
+    await call("identity_merge", {
+      keep_entity_id: "E1",
+      absorb_entity_id: "E2",
+      actor: "steward:sam",
+      trust: 0.95,
+    });
+    const merge = eventsOf(await call("identity_history", { entity_id: "E1" })).find(
+      (e) => e["kind"] === "manual_merge",
+    );
+    expect(merge).toBeDefined();
+    expect(merge!["actor"]).toBe("steward:sam");
+    expect(merge!["trust"]).toBe(0.95);
+  });
+
+  it("defaults actor='agent' and derives trust=0.5 when omitted", async () => {
+    await call("identity_split", { entity_id: "E1", record_ids: ["src:1"] });
+    const split = eventsOf(await call("identity_history", { entity_id: "E1" })).find(
+      (e) => e["kind"] === "manual_split",
+    );
+    expect(split!["actor"]).toBe("agent");
+    // trustForSource("agent") === 0.5
+    expect(split!["trust"]).toBe(0.5);
+  });
+
+  it("identity_claim + identity_resolve_conflict stamp actor/trust", async () => {
+    await call("identity_claim", {
+      entity_id: "E1",
+      record_id: "src:2",
+      actor: "steward:kim",
+      trust: 1.0,
+    });
+    const claimed = eventsOf(await call("identity_history", { entity_id: "E1" })).find(
+      (e) => e["kind"] === "claimed",
+    );
+    expect(claimed!["actor"]).toBe("steward:kim");
+    expect(claimed!["trust"]).toBe(1.0);
+
+    // Now src:1 and src:2 both sit in E1 -> mediate the conflict with provenance.
+    await call("identity_resolve_conflict", {
+      record_a_id: "src:1",
+      record_b_id: "src:2",
+      resolution: "same",
+      actor: "steward:kim",
+      trust: 0.8,
+    });
+    const mediated = eventsOf(await call("identity_history", { entity_id: "E1" })).find(
+      (e) => e["kind"] === "conflict_mediated",
+    );
+    expect(mediated!["actor"]).toBe("steward:kim");
+    expect(mediated!["trust"]).toBe(0.8);
+  });
+});
