@@ -784,6 +784,61 @@ def _fs_domain_comparators_enabled() -> bool:
     )
 
 
+# Discrete-categorical col_types where a match on a COMMON value ("Smith", a
+# frequent occupation/city/postcode) is far weaker evidence of identity than a
+# match on a rare one -- the regime Winkler term-frequency (TF) adjustment is
+# built for. `string` (occupation-like), `geo` (city/birthplace), and `zip`
+# (postcode) carry NO existing frequency-awareness (contrast `name`, which the
+# refdata hook routes to `name_freq_weighted_jw` whose per-value downweight
+# already fires); `name` is included so a plain (unrefined) name field is still
+# covered, and the TF bump self-neutralizes (log2(collision/fv) -> 0) where a
+# refined scorer has already flattened the top-band agreement. email/phone/
+# identifier are excluded: near-unique identity values where TF is inert anyway.
+_TF_ELIGIBLE_COLTYPES = frozenset({"name", "string", "geo", "zip"})
+
+# Above this cardinality a categorical's values are near-unique, so the TF bump
+# is ~0; skipping saves the per-value frequency table build with no behavior
+# change (TF self-neutralizes there regardless).
+_TF_CARD_CEILING = 0.9
+
+
+def _fs_tf_adjustment_enabled() -> bool:
+    """FS term-frequency (Winkler) adjustment on skewed categorical fields.
+
+    **Default OFF.** When ``GOLDENMATCH_FS_TF_ADJUSTMENT`` is truthy, FS
+    auto-config sets ``MatchkeyField.tf_adjustment=True`` on discrete-categorical
+    comparison fields (``_TF_ELIGIBLE_COLTYPES`` in a skewed cardinality band), so
+    an exact agreement on a RARE value out-weights one on a common value
+    (``+log2(Sum(freq^2)/freq(value))``, clamped +/-10 bits; frequencies built at
+    EM-train time by ``_build_tf_tables``). The Winkler machinery already exists
+    (``probabilistic.py``) and is native-accelerated (``FS_SUPPORTS_TF_ADJUSTMENT``
+    in the kernel), but auto-config never enabled it -- so no zero-config FS run
+    used it. It targets the OVER-MERGE regime (historical_50k: GM precision 0.72
+    vs Splink 0.97) that skewed common-value agreement drives; the prior
+    "no headroom" measurement was on DBLP-ACM (near-unique titles) and Febrl4
+    (precision already ~1.0), neither of which is this regime. Default-off is
+    byte-identical (no field gets the flag); flip only after the accuracy panel +
+    ``qis_gate`` scale-neutrality prove it, per the domain-comparators/v2
+    precedent. Composes with ``_fs_autoconfig_v2_enabled`` (the path that builds
+    the categorical comparison set).
+    """
+    return os.environ.get("GOLDENMATCH_FS_TF_ADJUSTMENT", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+def _tf_adjustment_for(profile: ColumnProfile) -> bool:
+    """Whether a categorical comparison field earns TF adjustment, given the
+    ``GOLDENMATCH_FS_TF_ADJUSTMENT`` flag. Off by default -> always False ->
+    byte-identical. Scoped to skewed-value discrete categoricals; see
+    ``_TF_ELIGIBLE_COLTYPES`` / ``_fs_tf_adjustment_enabled``."""
+    return (
+        _fs_tf_adjustment_enabled()
+        and profile.col_type in _TF_ELIGIBLE_COLTYPES
+        and _PROB_FUZZY_CARD_FLOOR <= profile.cardinality_ratio < _TF_CARD_CEILING
+    )
+
+
 # Fraction of a column's non-null sample values that must parse as valid
 # coordinates for it to be admitted as a single-field geo_haversine column.
 _LATLONG_SAMPLE_FLOOR = 0.8
@@ -5009,6 +5064,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
             transforms=transforms,
             levels=levels,
             partial_threshold=partial_threshold,
+            tf_adjustment=_tf_adjustment_for(p),
         ))
 
     if not fields:
