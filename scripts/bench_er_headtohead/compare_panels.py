@@ -66,6 +66,16 @@ def main() -> int:
                     help="F1 drop beyond this counts as a regression")
     ap.add_argument("--fail-on-regression", action="store_true",
                     help="exit 1 if any dataset's v2 F1 regressed beyond --eps")
+    # Human-facing labels. Default to the FS-auto-config-v1-v2 wording so the
+    # original lane's output is byte-identical; other OFF-vs-ON lanes (e.g. the
+    # domain-comparators flip) pass their own so the summary reads correctly.
+    ap.add_argument("--title",
+                    default="FS auto-config v1 vs v2 — GoldenMatch probabilistic path",
+                    help="H2 heading for the comparison table")
+    ap.add_argument("--a-label", default="v1",
+                    help="column/verdict label for the --v1 (baseline) panel")
+    ap.add_argument("--b-label", default="v2",
+                    help="column/verdict label for the --v2 (treatment) panel")
     args = ap.parse_args()
 
     v1 = _gm_rows(args.v1)
@@ -73,10 +83,11 @@ def main() -> int:
     splink = _splink_f1(args.v1) or _splink_f1(args.v2)
     datasets = sorted(set(v1) | set(v2))
 
+    a_l, b_l = args.a_label, args.b_label
     lines = [
-        "## FS auto-config v1 vs v2 — GoldenMatch probabilistic path",
+        f"## {args.title}",
         "",
-        "| Dataset | v1 F1 | v2 F1 | ΔF1 | v1 P | v2 P | ΔP | v1 R | v2 R | ΔR | Splink F1 | flag |",
+        f"| Dataset | {a_l} F1 | {b_l} F1 | ΔF1 | {a_l} P | {b_l} P | ΔP | {a_l} R | {b_l} R | ΔR | Splink F1 | flag |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     ran_both: list[str] = []
@@ -115,11 +126,11 @@ def main() -> int:
     if not ran_both:
         verdict = "**VERDICT: inconclusive** — no dataset ran under both settings (check dataset availability)."
     elif regressions:
-        verdict = f"**VERDICT: v2 REGRESSES** {', '.join(regressions)} — do NOT flip the default yet."
+        verdict = f"**VERDICT: {b_l} REGRESSES** {', '.join(regressions)} — do NOT flip the default yet."
     else:
         gain_str = f"gains on {', '.join(improvements)}; " if improvements else ""
         verdict = (
-            f"**VERDICT: v2 safe to default** — {gain_str}no F1 regression beyond eps "
+            f"**VERDICT: {b_l} safe to default** — {gain_str}no F1 regression beyond eps "
             f"on any of the {len(ran_both)} dataset(s) that ran under both settings "
             f"({', '.join(ran_both)})."
         )
