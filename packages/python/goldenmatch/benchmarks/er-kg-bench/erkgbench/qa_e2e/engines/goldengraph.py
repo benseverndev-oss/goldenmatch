@@ -131,22 +131,53 @@ class _CachingEmbedder:
 
 class _CountingLLM:
     """Wraps any goldengraph LLMClient and estimates token usage per .complete
-    call (len//4), so the bench owns cost accounting regardless of the client."""
+    call (len//4), so the bench owns cost accounting regardless of the client.
+
+    Two counter layers, both fed by every call:
+      * global `input_tokens`/`output_tokens` -- the whole-run cumulative totals,
+        lock-guarded so the parallel BUILD (ingest_corpus fans extraction across
+        worker threads) sums correctly. `build_kg` brackets these before/after.
+      * a thread-local per-call accumulator -- read by `answer()` on its own worker
+        thread so PARALLEL questions can't cross-contaminate per-question token
+        attribution. Before/after deltas on the shared global counter DOUBLE-COUNT
+        when questions overlap (an increment landing inside two questions' [before,
+        after] windows is charged to both), which would also inflate the summed
+        total; the thread-local delta is exact per question and the per-question
+        deltas still sum to the true total. See `answer()`.
+    """
 
     def __init__(self, inner: Any):
         self._inner = inner
         self.input_tokens = 0
         self.output_tokens = 0
         self._lock = threading.Lock()
+        # Per-thread call accumulator. answer() runs entirely on one pool worker and
+        # `ask()` issues its synthesis call synchronously on that same thread, so the
+        # thread-local captures exactly this question's tokens.
+        self._tl = threading.local()
+
+    def _charge(self, in_tok: int, out_tok: int) -> None:
+        with self._lock:
+            self.input_tokens += in_tok
+            self.output_tokens += out_tok
+        self._tl.in_tok = getattr(self._tl, "in_tok", 0) + in_tok
+        self._tl.out_tok = getattr(self._tl, "out_tok", 0) + out_tok
+
+    def reset_thread_tokens(self) -> None:
+        """Zero THIS thread's per-call accumulator (call before a metered section)."""
+        self._tl.in_tok = 0
+        self._tl.out_tok = 0
+
+    def thread_tokens(self) -> tuple[int, int]:
+        """(input, output) charged on THIS thread since the last reset."""
+        return getattr(self._tl, "in_tok", 0), getattr(self._tl, "out_tok", 0)
 
     def complete(self, prompt: str) -> str:
         # Concurrent build calls share this wrapper; guard the counters (the inner
         # OpenAI client is itself thread-safe for concurrent requests). Retry
         # rate-limit/transient errors so high concurrency doesn't drop documents.
         out = _with_retry(lambda: self._inner.complete(prompt))
-        with self._lock:
-            self.input_tokens += max(1, len(prompt) // 4)
-            self.output_tokens += max(1, len(out) // 4)
+        self._charge(max(1, len(prompt) // 4), max(1, len(out) // 4))
         return out
 
     def complete_json(self, prompt: str) -> str:
@@ -154,9 +185,7 @@ class _CountingLLM:
         # when present (the OpenAIClient/Ollama path), else fall back to complete.
         fn = getattr(self._inner, "complete_json", self._inner.complete)
         out = _with_retry(lambda: fn(prompt))
-        with self._lock:
-            self.input_tokens += max(1, len(prompt) // 4)
-            self.output_tokens += max(1, len(out) // 4)
+        self._charge(max(1, len(prompt) // 4), max(1, len(out) // 4))
         return out
 
 
@@ -180,6 +209,11 @@ def _build_synthesis_llm(default_llm):
 class GoldenGraphQAEngine:
     name = "goldengraph"
     fidelity = "real-e2e"
+    # answer() is read-only against the built handle (store.as_of() snapshot queries +
+    # synthesis; `provenance` is a local set) and, since the _CountingLLM fix, tracks
+    # per-question tokens on a thread-local -- so the harness may answer questions in
+    # parallel (QA_E2E_ANSWER_WORKERS).
+    answer_parallel_safe = True
 
     def __init__(
         self,
@@ -316,7 +350,14 @@ class GoldenGraphQAEngine:
         except (KeyError, ValueError):
             passage_k = self._passage_k
         t0 = time.perf_counter()
-        before_in, before_out = self._synth_llm.input_tokens, self._synth_llm.output_tokens
+        # Per-question token attribution via the synth client's THREAD-LOCAL counter,
+        # not a before/after delta on the shared global counter: under parallel
+        # answering (QA_E2E_ANSWER_WORKERS) overlapping questions' [before, after]
+        # windows would each charge the other's synthesis tokens (double-count),
+        # corrupting both per-question tokens AND the summed total. reset->ask->read
+        # on this worker thread is exact, and the per-question deltas still sum to the
+        # run total. `ask()` issues its synthesis call synchronously on this thread.
+        self._synth_llm.reset_thread_tokens()
         # `provenance_out` collects the source-doc ids of every edge the retrieval/traversal touched.
         # The store stamps each edge with its owning document id (ingest doc_ids); intersecting these
         # with the question's gold_supporting_fact_ids is the supporting-fact recall the harness scores.
@@ -344,8 +385,8 @@ class GoldenGraphQAEngine:
             # corpus renders an edge in several docs (base id + `::N` suffixes); the base id IS the gold
             # id, so the intersection still hits. Empty when retrieval surfaced no stored edge.
             retrieved_fact_ids=tuple(sorted(provenance)),
-            input_tokens=self._synth_llm.input_tokens - before_in,
-            output_tokens=self._synth_llm.output_tokens - before_out,
+            input_tokens=self._synth_llm.thread_tokens()[0],
+            output_tokens=self._synth_llm.thread_tokens()[1],
             latency_s=time.perf_counter() - t0,
         )
 

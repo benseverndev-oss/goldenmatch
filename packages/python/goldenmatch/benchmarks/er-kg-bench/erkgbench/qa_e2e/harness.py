@@ -3,6 +3,7 @@ the harness builds the KG once, answers every question, scores via metrics, and
 enforces a hard USD cap via goldenmatch's BudgetTracker."""
 from __future__ import annotations
 
+import concurrent.futures as _cf
 import contextlib
 import json
 import os
@@ -327,6 +328,156 @@ def _build_scorecard(engine, corpus, model, scored, *, answered, cost_usd, budge
     }
 
 
+#: Default width of the bounded thread pool that answers questions. Each answer is a
+#: network-bound LLM call (synthesis inside engine.answer + the judge inside
+#: _score_question) that releases the GIL, and questions are independent, so a small
+#: pool cuts the sequential per-question wall ~linearly (~41 min at N=150 was one
+#: question at a time). Override with QA_E2E_ANSWER_WORKERS; `1` forces the
+#: byte-identical sequential path, a non-integer value falls back to this default.
+_DEFAULT_ANSWER_WORKERS = 8
+
+
+def _answer_workers() -> int:
+    """Resolve QA_E2E_ANSWER_WORKERS -> pool width. Default 8; `1` = sequential;
+    a non-integer (or unset) value -> the default. Values < 1 clamp to 1."""
+    raw = os.environ.get("QA_E2E_ANSWER_WORKERS")
+    if raw is None:
+        return _DEFAULT_ANSWER_WORKERS
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_ANSWER_WORKERS
+    return max(1, v)
+
+
+def _engine_answer_workers(engine, requested: int) -> int:
+    """The effective pool width for THIS engine. An engine that declares
+    `answer_parallel_safe = False` (its answer() mutates shared state or drives a
+    single asyncio loop -- e.g. graphiti, lightrag) is forced sequential regardless
+    of the requested width."""
+    if requested <= 1:
+        return 1
+    if not getattr(engine, "answer_parallel_safe", True):
+        return 1
+    return requested
+
+
+def _answer_all(
+    engine,
+    handle,
+    questions,
+    judge,
+    *,
+    mode: str | None = None,
+    workers: int,
+    tracker,
+    model: str,
+    on_result=None,
+    reserve: int = 1,
+    only_indices=None,
+):
+    """Answer `questions` and score each in a bounded thread pool, returning
+    ``(scored_ordered, answered_indices)`` where `scored_ordered` is ordered by the
+    ORIGINAL question index -- independent of completion order and of worker count.
+
+    Shared by all three run_* entry points so the pool + ordering + budget policy live
+    in one place.
+
+    - `mode`: forwarded as ``engine.answer(..., mode=mode)`` when not None (the A/B
+      mode arm); a 2-arg ``engine.answer(handle, q)`` call otherwise.
+    - `tracker`: the shared enforce/budget ``BudgetTracker``. Charged (thread-safe)
+      once per answer with that answer's tokens, and consulted to stop SUBMITTING new
+      tasks once over budget -- in-flight tasks still finish (a small, bounded
+      overshoot). The total after a parallel run equals the sequential total (a
+      sum over the same per-answer tokens, order-independent).
+    - `on_result(idx, ans)`: optional hook, called under no lock as each answer lands
+      (per-arm cost attribution charges the arm's tracker here).
+    - `reserve`: multiply the per-question token estimate when checking ``can_send``,
+      so a caller that answers each question under N arms reserves the whole set up
+      front (keeps A/B arms aligned on the same question set).
+    - `only_indices`: when given, answer exactly these question indices with NO budget
+      gate -- a subsequent A/B arm re-answering the first arm's committed set to stay
+      aligned. When None, the budget gate selects the answered prefix.
+
+    ``workers <= 1`` runs the exact sequential loop (byte-identical fallback)."""
+
+    def _do_answer(q):
+        return engine.answer(handle, q.question) if mode is None else engine.answer(
+            handle, q.question, mode=mode
+        )
+
+    def _charge(i, q, ans):
+        # Budget/enforce tracker (its record_usage is lock-guarded) + optional per-arm
+        # attribution. Judge cost is NOT charged here (eval overhead, per run_engine).
+        tracker.record_usage(ans.input_tokens, ans.output_tokens, model)
+        if on_result is not None:
+            on_result(i, ans)
+
+    scored_map: dict[int, dict] = {}
+    answered: list[int] = []
+
+    # Sequential path -- byte-identical to the pre-parallel loop (gate -> answer ->
+    # record_usage -> score, in question order). Also the forced path for
+    # answer_parallel_safe=False engines.
+    if workers <= 1:
+        indices = list(only_indices) if only_indices is not None else range(len(questions))
+        for i in indices:
+            q = questions[i]
+            if only_indices is None and (
+                tracker.budget_exhausted
+                or not tracker.can_send(_estimate_tokens(q.question) * reserve)
+            ):
+                break
+            ans = _do_answer(q)
+            _charge(i, q, ans)
+            scored_map[i] = _score_question(ans, q, judge)
+            answered.append(i)
+        return [scored_map[i] for i in sorted(scored_map)], sorted(answered)
+
+    # Parallel path -- bounded pool, streaming submission so cost recorded by completed
+    # tasks feeds the budget gate before the next submit (in-flight bounded to
+    # `workers`, so the overshoot past the cap is at most ~workers questions). The
+    # answer AND its scoring (which runs the network-bound judge) both happen on the
+    # worker thread; the main thread only charges the tracker and files the result.
+    def _task(i, q):
+        ans = _do_answer(q)
+        return i, q, ans, _score_question(ans, q, judge)
+
+    src = iter(only_indices) if only_indices is not None else iter(range(len(questions)))
+    with _cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        pending: set = set()
+        src_done = False
+
+        def _fill():
+            nonlocal src_done
+            while not src_done and len(pending) < workers:
+                try:
+                    i = next(src)
+                except StopIteration:
+                    src_done = True
+                    break
+                q = questions[i]
+                if only_indices is None and (
+                    tracker.budget_exhausted
+                    or not tracker.can_send(_estimate_tokens(q.question) * reserve)
+                ):
+                    src_done = True  # over budget: stop submitting, let in-flight finish
+                    break
+                pending.add(ex.submit(_task, i, q))
+
+        _fill()
+        while pending:
+            done, pending = _cf.wait(pending, return_when=_cf.FIRST_COMPLETED)
+            for fut in done:
+                i, q, ans, scored = fut.result()
+                _charge(i, q, ans)
+                scored_map[i] = scored
+                answered.append(i)
+            _fill()
+
+    return [scored_map[i] for i in sorted(scored_map)], sorted(answered)
+
+
 def run_engine(
     engine: QAEngine, corpus, *, model: str, budget_usd: float, judge=None
 ) -> dict:
@@ -346,19 +497,18 @@ def run_engine(
     ):
         _localize_trace(engine, build.handle, corpus)
 
-    scored: list[dict] = []
-    answered = 0
-    for q in corpus.questions:
-        if tracker.budget_exhausted or not tracker.can_send(_estimate_tokens(q.question)):
-            break
-        ans = engine.answer(build.handle, q.question)
-        tracker.record_usage(ans.input_tokens, ans.output_tokens, model)
-        scored.append(_score_question(ans, q, judge))
-        answered += 1
+    # Answer every question under the hard cost cap, in a bounded thread pool
+    # (QA_E2E_ANSWER_WORKERS, default 8; 1 = the sequential path). Results are ordered
+    # by original question index, so the scorecard is independent of worker count.
+    workers = _engine_answer_workers(engine, _answer_workers())
+    scored, answered_idx = _answer_all(
+        engine, build.handle, list(corpus.questions), judge,
+        workers=workers, tracker=tracker, model=model,
+    )
 
     return _build_scorecard(
         engine, corpus, model, scored,
-        answered=answered,
+        answered=len(answered_idx),
         cost_usd=tracker.total_cost_usd,
         budget_exhausted=tracker.budget_exhausted,
     )
@@ -392,21 +542,34 @@ def run_engine_ab(
     enforce.record_usage(build.input_tokens, build.output_tokens, model)
     build_cost = enforce.total_cost_usd
 
-    scored: dict[str, list[dict]] = {m: [] for m in modes}
-    answered = 0
-    for q in corpus.questions:
-        # A question costs one answer PER mode; only start it if the budget can afford
-        # the whole set, so both arms answer exactly the same questions.
-        if enforce.budget_exhausted or not enforce.can_send(
-            _estimate_tokens(q.question) * len(modes)
-        ):
-            break
-        for m in modes:
-            ans = engine.answer(build.handle, q.question, mode=m)
-            enforce.record_usage(ans.input_tokens, ans.output_tokens, model)
-            arm_trackers[m].record_usage(ans.input_tokens, ans.output_tokens, model)
-            scored[m].append(_score_question(ans, q, judge))
-        answered += 1
+    # Answer arm-major (env-free -- the mode rides the answer() kwarg), each arm in a
+    # bounded thread pool. The FIRST arm's budget gate reserves the whole mode-set per
+    # question (reserve=len(modes)), fixing the answered-question set; the remaining
+    # arms re-answer exactly that set (only_indices) so all arms stay aligned. The
+    # shared `enforce` tracker accumulates every arm's cost; per-arm cost is attributed
+    # via on_result. Byte-identical to the old question-major loop when the budget is
+    # not hit; a small bounded overshoot at the cap boundary otherwise.
+    questions = list(corpus.questions)
+    workers = _engine_answer_workers(engine, _answer_workers())
+    scored: dict[str, list[dict]] = {}
+
+    def _arm_charger(m):
+        return lambda i, ans: arm_trackers[m].record_usage(
+            ans.input_tokens, ans.output_tokens, model
+        )
+
+    first = modes[0]
+    scored[first], answered_idx = _answer_all(
+        engine, build.handle, questions, judge, mode=first, workers=workers,
+        tracker=enforce, model=model, on_result=_arm_charger(first), reserve=len(modes),
+    )
+    for m in modes[1:]:
+        scored[m], _ = _answer_all(
+            engine, build.handle, questions, judge, mode=m, workers=workers,
+            tracker=enforce, model=model, on_result=_arm_charger(m),
+            only_indices=answered_idx,
+        )
+    answered = len(answered_idx)
 
     arms = {
         m: _build_scorecard(
@@ -462,22 +625,38 @@ def run_engine_ab_env(
     enforce.record_usage(build.input_tokens, build.output_tokens, model)
     build_cost = enforce.total_cost_usd
 
-    scored: dict[str, list[dict]] = {label: [] for label in labels}
-    answered = 0
-    for q in corpus.questions:
-        # A question costs one answer PER arm; only start it if the budget can afford
-        # the whole set, so every arm answers exactly the same questions.
-        if enforce.budget_exhausted or not enforce.can_send(
-            _estimate_tokens(q.question) * len(arms)
-        ):
-            break
-        for label, env in arms:
-            with _env_overrides(env):
-                ans = engine.answer(build.handle, q.question)
-            enforce.record_usage(ans.input_tokens, ans.output_tokens, model)
-            arm_trackers[label].record_usage(ans.input_tokens, ans.output_tokens, model)
-            scored[label].append(_score_question(ans, q, judge))
-        answered += 1
+    # Answer arm-major, each arm's whole batch under ONE `_env_overrides(env)` context.
+    # This is what makes the env A/B thread-safe: os.environ is process-global, so two
+    # arms' overrides cannot run concurrently -- but WITHIN one arm the env is fixed, so
+    # every worker thread in that arm's pool sees the same (correct) env. The first
+    # arm's budget gate reserves the whole arm-set per question (reserve=len(arms)),
+    # fixing the answered set; the rest re-answer exactly that set (only_indices) so the
+    # arms stay aligned. Byte-identical to the old question-major loop when the budget
+    # is not hit; a small bounded overshoot at the cap boundary otherwise.
+    questions = list(corpus.questions)
+    workers = _engine_answer_workers(engine, _answer_workers())
+    scored: dict[str, list[dict]] = {}
+
+    def _arm_charger(label):
+        return lambda i, ans: arm_trackers[label].record_usage(
+            ans.input_tokens, ans.output_tokens, model
+        )
+
+    first_label, first_env = arms[0]
+    with _env_overrides(first_env):
+        scored[first_label], answered_idx = _answer_all(
+            engine, build.handle, questions, judge, workers=workers,
+            tracker=enforce, model=model, on_result=_arm_charger(first_label),
+            reserve=len(arms),
+        )
+    for label, env in arms[1:]:
+        with _env_overrides(env):
+            scored[label], _ = _answer_all(
+                engine, build.handle, questions, judge, workers=workers,
+                tracker=enforce, model=model, on_result=_arm_charger(label),
+                only_indices=answered_idx,
+            )
+    answered = len(answered_idx)
 
     arm_cards = {
         label: _build_scorecard(

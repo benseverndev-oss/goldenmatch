@@ -42,6 +42,13 @@ def make_counting_llm_func(inner, counter: dict):
 class LightRAGQAEngine:
     name = "lightrag"
     fidelity = "real-e2e"
+    # NOT safe to answer in parallel: answer() runs on a SINGLE persistent asyncio loop
+    # (reused across build + every query; `run_until_complete` cannot be driven from
+    # multiple threads at once) and attributes per-question tokens via a before/after
+    # delta on the shared `self._counter` (double-counts + corrupts the total under
+    # concurrency). The harness forces sequential answering for this engine
+    # (QA_E2E_ANSWER_WORKERS is ignored).
+    answer_parallel_safe = False
 
     def __init__(
         self, *, llm_model_func: Any, embedding_func: Any, work_root: str | None = None

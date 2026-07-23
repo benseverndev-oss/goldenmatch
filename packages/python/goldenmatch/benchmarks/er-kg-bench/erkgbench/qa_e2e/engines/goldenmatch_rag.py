@@ -23,6 +23,7 @@ light lane). The OpenAI client is injectable so the wiring is testable offline."
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any
 
@@ -49,10 +50,19 @@ class _OpenAIEmbedderAdapter:
         self._model = model
         self._batch = batch
         self._cache: dict[str, np.ndarray] = {}
+        # The corpus cache_key is written on the FIRST answer; under parallel answering
+        # (QA_E2E_ANSWER_WORKERS) several first-wave questions can hit `embed_column`
+        # with the same cache_key at once, so guard the cache read/store. The network
+        # embed itself runs OUTSIDE the lock (query embeds pass cache_key=None and never
+        # touch it), so parallelism is preserved; the lock only makes the store atomic.
+        self._cache_lock = threading.Lock()
 
     def embed_column(self, values, cache_key=None) -> np.ndarray:
-        if cache_key is not None and cache_key in self._cache:
-            return self._cache[cache_key]
+        if cache_key is not None:
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
         texts = [v if (v and str(v).strip()) else " " for v in values]
         out: list[list[float]] = []
         for i in range(0, len(texts), self._batch):
@@ -62,7 +72,9 @@ class _OpenAIEmbedderAdapter:
         arr = np.asarray(out, dtype=float)
         arr = arr / (np.linalg.norm(arr, axis=1, keepdims=True) + 1e-12)
         if cache_key is not None:
-            self._cache[cache_key] = arr
+            with self._cache_lock:
+                # First writer wins; concurrent computers produce the same array anyway.
+                arr = self._cache.setdefault(cache_key, arr)
         return arr
 
 
