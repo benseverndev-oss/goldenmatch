@@ -518,17 +518,24 @@ jobs:
             echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped in the panel"
           fi
 
-      - name: Run panel — field-dependence OFF (GOLDENMATCH_FS_FIELD_DEPENDENCE=0)
+      # Both arms run under posterior calibration: the correction shifts the
+      # score distribution, and the min-max (linear) threshold lands slightly
+      # worse (P/R trade). posterior_from_weight gives a principled 0.5 boundary,
+      # so lowering a namesake's weight lowers its posterior below 0.5 without the
+      # pair_max normalization artifact — the hypothesized completion.
+      - name: Run panel — field-dependence OFF (posterior calibration)
         env:
           GOLDENMATCH_FS_FIELD_DEPENDENCE: "0"
+          GOLDENMATCH_FS_CALIBRATED: "posterior"
         run: |
           python scripts/bench_er_headtohead/run_panel.py \
             --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
             --out-dir prob_panel_fd_off
 
-      - name: Run panel — field-dependence ON (GOLDENMATCH_FS_FIELD_DEPENDENCE=1)
+      - name: Run panel — field-dependence ON (posterior calibration)
         env:
           GOLDENMATCH_FS_FIELD_DEPENDENCE: "1"
+          GOLDENMATCH_FS_CALIBRATED: "posterior"
         run: |
           python scripts/bench_er_headtohead/run_panel.py \
             --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
