@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 65 tools covering dedupe, match, scoring, explanation,
+ * Exposes 67 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -32,6 +32,8 @@ import { createInterface } from "node:readline";
 import { dedupe, match, scoreStrings } from "../../core/api.js";
 import { readFile, writeCsv, writeJson } from "../connectors/file.js";
 import { loadConfigFile } from "../config-file.js";
+import { autoMapColumns } from "../../core/schema-match.js";
+import { diagnoseConfig } from "../../core/config-critique.js";
 import type { Row, MatchkeyField } from "../../core/types.js";
 import {
   makeMatchkeyConfig,
@@ -433,6 +435,48 @@ const EXISTING_TOOLS: readonly Tool[] = [
         clusters_b_path: { type: "string", description: "Path to the comparison (ER2) clusters JSON" },
       },
       required: ["clusters_a_path", "clusters_b_path"],
+    },
+  },
+  {
+    name: "schema_match",
+    description:
+      "Auto-map columns between two files with different schemas. Returns " +
+      "proposed (col_a, col_b) mappings with a confidence score and method " +
+      "(exact_name / synonym / name_sim / partial_name / value_overlap / " +
+      "composite). Stateless -- needs no loaded dataset; useful before matching " +
+      "two sources.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_a: { type: "string", description: "Path to source A (csv/tsv/json/jsonl)" },
+        file_b: { type: "string", description: "Path to source B (csv/tsv/json/jsonl)" },
+        min_score: { type: "number", description: "Minimum mapping score to keep (default 0.5)" },
+      },
+      required: ["file_a", "file_b"],
+    },
+  },
+  {
+    name: "config_weaknesses",
+    description:
+      "Diagnose weaknesses in the current run's auto-config: columns admitted " +
+      "that shouldn't be (source/provenance labels, per-row IDs), oversized or " +
+      "shared-value blocks, null sinks, low-signal matchkeys, and over-merging. " +
+      "Returns ranked findings, each with a plain-English explanation + a " +
+      "concrete fix, plus a one-paragraph summary. Reads the current run (the " +
+      "last dedupe in this session).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        max_findings: {
+          type: "integer",
+          description: "Max findings to return, ranked by severity (default 6).",
+        },
+        phrasing: {
+          type: "string",
+          enum: ["plain", "technical"],
+          description: "Wording style for the findings (default plain).",
+        },
+      },
     },
   },
 ];
@@ -947,7 +991,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.9.0",
+          version: "1.10.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -981,6 +1025,31 @@ export async function handleTool(
         const a = parseClustersJson(JSON.parse(readFileSync(pathA, "utf-8")));
         const b = parseClustersJson(JSON.parse(readFileSync(pathB, "utf-8")));
         return ccmsSummary(compareClusters(a, b));
+      }
+
+      case "schema_match": {
+        const pathA = sanitizePath(String(args["file_a"]));
+        const pathB = sanitizePath(String(args["file_b"]));
+        const rowsA = readFile(pathA);
+        const rowsB = readFile(pathB);
+        const minScore =
+          typeof args["min_score"] === "number" ? (args["min_score"] as number) : 0.5;
+        return { mappings: autoMapColumns(rowsA, rowsB, minScore) };
+      }
+
+      case "config_weaknesses": {
+        const run = RUN_STORE.getCurrent();
+        if (run === null) return { error: "No dataset loaded" };
+        const maxFindings =
+          typeof args["max_findings"] === "number"
+            ? Math.floor(args["max_findings"] as number)
+            : 6;
+        const phrasing = args["phrasing"] === "technical" ? "technical" : "plain";
+        const rows = [...run.rowsById.values()];
+        return diagnoseConfig(rows, run.result.config, run.result, {
+          maxFindings,
+          phrasing,
+        });
       }
 
       case "convert_splink_config": {
@@ -1098,7 +1167,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.9.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.10.0" },
               capabilities: { tools: {} },
             },
           });

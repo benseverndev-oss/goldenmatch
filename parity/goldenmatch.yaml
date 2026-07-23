@@ -58,6 +58,7 @@ mcp_tools:
   - analyze_data
   - auto_configure
   - compare_clusters
+  - config_weaknesses
   - controller_telemetry
   - convert_splink_config
   - dedupe
@@ -99,6 +100,7 @@ mcp_tools:
   - rollback
   - run_transforms
   - scan_quality
+  - schema_match
   - shatter_cluster
   - suggest_config
   - suggest_pprl
@@ -107,7 +109,6 @@ mcp_tools:
   python_only:
   - analyze_blocking
   - certify_recall
-  - config_weaknesses
   - create_domain
   - documents_ingest
   - documents_suggest_schema
@@ -127,7 +128,6 @@ mcp_tools:
   - pprl_auto_config
   - pprl_link
   - retrieve_similar
-  - schema_match
   - sensitivity
   - test_domain
   ts_only:

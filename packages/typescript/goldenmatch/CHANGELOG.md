@@ -4,6 +4,15 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.10.0] - 2026-07-23
+
+### Added
+- **`schema_match` + `config_weaknesses` MCP tools** (TS↔Python parity, Tier 3 PR-2), taking the MCP surface from **65 → 67 tools**. Both are class-B net-new core ports — the backing edge-safe TS core did not exist and was ported here. Both flip `python_only → shared` in `parity/goldenmatch.yaml` under `mcp_tools`.
+  - `schema_match` (stateless) auto-maps columns between two files with different schemas. `src/core/schema-match.ts` ports Python `core/schema_match.py::auto_map_columns`: score every `(col_a, col_b)` pair via exact-name / synonym / fuzzy name similarity / partial-name / value-overlap / type-compatibility, keep those `>= min_score`, greedily assign best-first (each column used at most once), then append composite mappings (e.g. `full_name → first_name + last_name`). The reference-string similarity **reuses the existing `jaroWinkler` kernel** (`scorer.ts`) — no new similarity impl. Mapping objects use the Python-parity snake_case wire shape (`col_a`/`col_b`/`score`/`method`, plus `composite_cols`). The node MCP handler reads two files via `readFile` and returns `{mappings: [...]}`.
+  - `config_weaknesses` (reads the current run) diagnoses weaknesses in the run's auto-config. `src/core/config-critique.ts` ports Python `core/config_critique.py::diagnose_config` — the deterministic detectors: `source_admitted` (provenance labels), `id_admitted` (per-row IDs), `shared_value_block` (oversized blocks), `over_merge` / `distributed_over_merge`, `null_sink`, `low_signal_key` — each returning a ranked finding with a plain/technical explanation, evidence, and a `fix_config_hint`, plus a deterministic template summary. Detectors are defensive (a missing signal is skipped, never an error). The optional LLM summary (Python `GOLDENMATCH_WEAKNESS_LLM`) is deliberately not ported — the offline default is the template summary. The node MCP handler reads the current run from `RUN_STORE` (config + rows + clusters + postflight signals) and returns the Python-parity `{findings, summary_plain}` (`{error: "No dataset loaded"}` when no run is loaded).
+  - **A2A:** neither tool surfaces on the TS A2A card (the card is built from BASE_SKILLS + AGENT_SKILLS + MEMORY_TOOLS + IDENTITY_TOOLS; base MCP tools do not feed it — same as PR-1's `lineage`). So `a2a_skills` is unchanged: `schema_match` stays `python_only` (Python's A2A still exposes it; TS does not) and `config_weaknesses` stays absent from `a2a_skills` entirely (Python A2A never exposed it).
+  - Tests: `tests/unit/schema-match.test.ts` (synonym/exact/composite/greedy/empty + snake_case shape), `tests/unit/config-critique.test.ts` (id/source/null-sink findings, clean-config no-op, response shape, ranking + `max_findings`).
+
 ## [1.9.0] - 2026-07-23
 
 ### Added
