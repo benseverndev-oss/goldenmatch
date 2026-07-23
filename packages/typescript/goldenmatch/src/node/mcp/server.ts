@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 67 tools covering dedupe, match, scoring, explanation,
+ * Exposes 69 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -51,6 +51,12 @@ import {
 import { addRowIds } from "../../core/matchkey.js";
 import { buildClusters } from "../../core/cluster.js";
 import { compareClusters, ccmsSummary, parseClustersJson } from "../../core/compare-clusters.js";
+import { analyzeBlocking } from "../../core/block-analyzer.js";
+import {
+  certifyRecallRows,
+  toCertifyRecallResponse,
+} from "../../core/recall-certificate.js";
+import { getMatchkeys } from "../../core/types.js";
 import { sanitizePath } from "./paths.js";
 import { RUN_STORE } from "./run-store.js";
 import { RUN_TOOLS, RUN_TOOL_NAMES, handleRunTool } from "./run-tools.js";
@@ -477,6 +483,40 @@ const EXISTING_TOOLS: readonly Tool[] = [
           description: "Wording style for the findings (default plain).",
         },
       },
+    },
+  },
+  {
+    name: "analyze_blocking",
+    description:
+      "Diagnose blocking on the loaded dataset: returns ranked blocking " +
+      "key candidates with block counts, max block size, total candidate " +
+      "comparisons, and estimated recall. Use it to explain why matching " +
+      "is slow or produces too many candidate pairs. Reads the current run " +
+      "(the last dedupe in this session).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sample_size: { type: "integer", description: "Recall-estimation sample size (default 1000)" },
+        target_block_size: { type: "integer", description: "Target block size for scoring (default 5000)" },
+        limit: { type: "integer", description: "Top N suggestions (default 10)" },
+      },
+    },
+  },
+  {
+    name: "certify_recall",
+    description:
+      "Estimate match RECALL without ground truth (unsupervised). Treats " +
+      "each auto-configured matchkey/pass as a decorrelated system and uses " +
+      "capture-recapture over their overlaps to estimate how many true " +
+      "matches were missed. Returns a point estimate (a safe lower bound " +
+      "additionally needs a small labelled audit; see `goldenmatch evaluate " +
+      "--certify --audit-out`). Needs >=3 decorrelated systems.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: { type: "string", description: "Dataset to dedupe + certify" },
+      },
+      required: ["file_path"],
     },
   },
 ];
@@ -991,7 +1031,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.10.0",
+          version: "1.11.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1050,6 +1090,52 @@ export async function handleTool(
           maxFindings,
           phrasing,
         });
+      }
+
+      case "analyze_blocking": {
+        const run = RUN_STORE.getCurrent();
+        if (run === null) return { error: "No dataset loaded" };
+        const matchkeys = getMatchkeys(run.result.config);
+        const colSet = new Set<string>();
+        for (const mk of matchkeys) {
+          for (const f of mk.fields) colSet.add(f.field);
+        }
+        const cols = [...colSet].sort();
+        const sampleSize =
+          typeof args["sample_size"] === "number"
+            ? Math.floor(args["sample_size"] as number)
+            : 1000;
+        const targetBlockSize =
+          typeof args["target_block_size"] === "number"
+            ? Math.floor(args["target_block_size"] as number)
+            : 5000;
+        const limit =
+          typeof args["limit"] === "number" ? Math.floor(args["limit"] as number) : 10;
+        const rows = [...run.rowsById.values()];
+        const suggestions = analyzeBlocking(rows, cols, sampleSize, targetBlockSize);
+        return { matchkey_columns: cols, suggestions: suggestions.slice(0, limit) };
+      }
+
+      case "certify_recall": {
+        const filePath = String(args["file_path"] ?? "");
+        let path: string;
+        try {
+          path = sanitizePath(filePath);
+        } catch {
+          return { error: `File not found: ${filePath}` };
+        }
+        let rows: readonly Row[];
+        try {
+          rows = readFile(path);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/ENOENT|not found|no such file/i.test(msg)) {
+            return { error: `File not found: ${filePath}` };
+          }
+          return { error: `Could not read '${filePath}': ${msg}` };
+        }
+        const est = await certifyRecallRows(rows);
+        return toCertifyRecallResponse(est);
       }
 
       case "convert_splink_config": {
@@ -1167,7 +1253,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.10.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.11.0" },
               capabilities: { tools: {} },
             },
           });
