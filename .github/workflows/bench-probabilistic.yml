@@ -79,6 +79,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_threshold_sweep:
+        description: "Run the FS link-threshold sweep diagnostic (is the default 0.50 cutoff badly placed? measure-first for threshold calibration)"
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -555,6 +560,33 @@ jobs:
             prob_panel_disc_on/
             compare_disc/
           retention-days: 90
+
+  # ── FS link-threshold sweep diagnostic ────────────────────────────────────
+  # Sweeps the FS link threshold (default fixed 0.50) on historical_50k and
+  # reports the P/R/F1 curve. Measure-first for threshold calibration: is 0.50
+  # badly placed (headroom -> calibration is a lever) or near-optimal (the
+  # over-merge is intrinsic to the weights, not the cutoff)? Not a gate.
+  threshold-sweep:
+    if: ${{ inputs.run_threshold_sweep }}
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: FS threshold sweep — historical_50k
+        run: |
+          python scripts/bench_er_headtohead/diagnose_threshold_sweep.py \
+            --dataset historical_50k
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────
   # Runs scripts/bench_er_headtohead/run_bakeoff.py: gm_zeroconfig +
