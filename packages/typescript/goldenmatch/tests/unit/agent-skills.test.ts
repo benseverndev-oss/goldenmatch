@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { AGENT_SKILLS, dispatchSkill } from "../../src/core/agent/skills.js";
 import { AgentSession } from "../../src/core/agent/session.js";
+import { InMemoryStore } from "../../src/core/memory/store.js";
 import type { Row } from "../../src/core/types.js";
 
 const ctx = () => ({
@@ -183,23 +184,81 @@ describe("dispatchSkill", () => {
     expect(typeof out.count).toBe("number");
   });
 
-  it("agent_approve_reject records a valid decision", async () => {
+  it("agent_approve_reject returns Python-shaped status on the edge path (no store)", async () => {
     const out = await dispatchSkill(
       "agent_approve_reject",
-      { id_a: 1, id_b: 2, decision: "approve", decided_by: "tester" },
+      { id_a: 1, id_b: 2, decision: "approve", decided_by: "tester", job_name: "j" },
       ctx(),
     );
-    expect(out.recorded).toBe(true);
+    // No memory store wired -> not persisted, but the decision is still
+    // returned (mirrors Python's memory_store=None branch).
+    expect(out.status).toBe("ok");
     expect(out.decision).toBe("approve");
+    expect(out.id_a).toBe(1);
+    expect(out.id_b).toBe(2);
+    expect(out.decided_by).toBe("tester");
+    expect(out.job_name).toBe("j");
   });
 
-  it("agent_approve_reject rejects an invalid decision", async () => {
+  it("agent_approve_reject persists an approve correction (canonicalized pair)", async () => {
+    const store = new InMemoryStore();
+    const out = await dispatchSkill(
+      "agent_approve_reject",
+      // deliberately unordered ids -> stored as (min, max)
+      { id_a: 5, id_b: 2, decision: "approve", decided_by: "tester" },
+      { ...ctx(), openMemoryStore: async () => store },
+    );
+    expect(out.status).toBe("ok");
+    const corrections = await store.getCorrections();
+    expect(corrections).toHaveLength(1);
+    const c = corrections[0]!;
+    expect(c.idA).toBe(2);
+    expect(c.idB).toBe(5);
+    expect(c.decision).toBe("approve");
+    expect(c.source).toBe("agent");
+    expect(c.trust).toBe(0.5);
+    expect(c.fieldHash).toBe("");
+    expect(c.recordHash).toBe("");
+    expect(c.originalScore).toBe(0);
+  });
+
+  it("agent_approve_reject persists a reject correction with reason + dataset", async () => {
+    const store = new InMemoryStore();
+    const out = await dispatchSkill(
+      "agent_approve_reject",
+      {
+        id_a: 7,
+        id_b: 3,
+        decision: "reject",
+        decided_by: "tester",
+        reason: "different people",
+        dataset: "voters.csv",
+      },
+      { ...ctx(), openMemoryStore: async () => store },
+    );
+    expect(out.status).toBe("ok");
+    expect(out.decision).toBe("reject");
+    const corrections = await store.getCorrections();
+    expect(corrections).toHaveLength(1);
+    const c = corrections[0]!;
+    expect(c.idA).toBe(3);
+    expect(c.idB).toBe(7);
+    expect(c.decision).toBe("reject");
+    expect(c.source).toBe("agent");
+    expect(c.trust).toBe(0.5);
+    expect(c.reason).toBe("different people");
+    expect(c.dataset).toBe("voters.csv");
+  });
+
+  it("agent_approve_reject does not persist an invalid decision", async () => {
+    const store = new InMemoryStore();
     const out = await dispatchSkill(
       "agent_approve_reject",
       { id_a: 1, id_b: 2, decision: "maybe" },
-      ctx(),
+      { ...ctx(), openMemoryStore: async () => store },
     );
     expect(out.error).toMatch(/invalid decision/i);
+    expect(await store.countCorrections()).toBe(0);
   });
 
   it("scan_quality fails open when goldencheck is absent", async () => {

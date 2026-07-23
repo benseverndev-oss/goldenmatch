@@ -156,4 +156,20 @@ export interface SkillContext {
   // circular import; typed as `unknown`-bearing here keeps types.ts leaf.
   readonly session: import("./session.js").AgentSession;
   loadTable(source: string): Promise<Row[]>;
+  /**
+   * Optional durable Learning Memory store factory. The node surfaces
+   * (MCP / A2A) inject it; the edge path leaves it absent. When present,
+   * `agent_approve_reject` persists an agent correction (source='agent',
+   * trust=0.5), mirroring Python's `_write_agent_correction`. When absent the
+   * decision is still returned but not persisted — matching Python's
+   * `memory_store=None` branch. The handler opens the store, writes, and
+   * closes it, mirroring the `add_correction` MCP tool's lifecycle.
+   */
+  openMemoryStore?: () => Promise<import("../memory/types.js").MemoryStore>;
+  /**
+   * Optional dataset identifier threaded into a persisted correction's
+   * `dataset` field. Absent (→ null) on the stateless MCP path, matching
+   * Python's MCP dispatch (which passes `dataset=None`).
+   */
+  readonly dataset?: string;
 }

@@ -15,7 +15,11 @@ import {
   dispatchSkill,
 } from "../../core/agent/index.js";
 import type { Row } from "../../core/types.js";
+import type { MemoryStore } from "../../core/memory/types.js";
 import { readFile } from "../connectors/file.js";
+import { SqliteMemoryStore } from "../memory/sqlite-store.js";
+
+const DEFAULT_MEMORY_PATH = ".goldenmatch/memory.db";
 
 // ---------------------------------------------------------------------------
 // Tool type (matches the shape used in mcp/server.ts + memory-tools.ts)
@@ -59,6 +63,26 @@ export async function handleAgentTool(
   const ctx = {
     session: new AgentSession(),
     loadTable: async (source: string): Promise<Row[]> => readFile(source),
+    // Durable Learning Memory store factory. Only `agent_approve_reject`
+    // invokes it (to persist the agent correction, matching Python's
+    // `_write_agent_correction`); every other skill leaves it untouched, so no
+    // SQLite handle is opened for unrelated calls. Mirrors the `add_correction`
+    // MCP tool's `openStore` (default `.goldenmatch/memory.db`, `path`
+    // override, `better-sqlite3` optional peer dep).
+    openMemoryStore: async (): Promise<MemoryStore> => {
+      const path =
+        typeof args["path"] === "string" && args["path"]
+          ? (args["path"] as string)
+          : DEFAULT_MEMORY_PATH;
+      const store = new SqliteMemoryStore({
+        enabled: true,
+        backend: "sqlite",
+        path,
+        learning: { thresholdMinCorrections: 10, weightsMinCorrections: 50 },
+      });
+      await store.init();
+      return store;
+    },
   };
   return dispatchSkill(name, args ?? {}, ctx);
 }
