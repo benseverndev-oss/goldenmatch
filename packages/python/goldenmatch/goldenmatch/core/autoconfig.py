@@ -885,6 +885,80 @@ def _strip_honorifics_for(profile: ColumnProfile) -> bool:
 _LATLONG_SAMPLE_FLOOR = 0.8
 
 
+# Discriminator negative-evidence (GOLDENMATCH_FS_STRONG_DISCRIMINATORS).
+# col_types whose DISAGREEMENT is a strong signal a name-agreeing pair is a
+# namesake (different people): dates (dob), geo/place (birth_place). Also any
+# high-cardinality string field (birth_place often profiles as string) above the
+# floor — excludes low-card categoricals like occupation.
+_DISCRIMINATOR_NE_COLTYPES = frozenset({"date", "geo", "zip"})
+_DISCRIMINATOR_NE_STRING_CARD_FLOOR = 0.1
+_DISCRIMINATOR_NE_DEFAULT_BITS = 3.0
+
+
+def _fs_strong_discriminators_enabled() -> bool:
+    """FS discriminator negative-evidence. **Default OFF.**
+
+    When ``GOLDENMATCH_FS_STRONG_DISCRIMINATORS`` is truthy, FS auto-config adds a
+    one-sided negative-evidence penalty on discriminator comparison fields
+    (date/geo/high-card-string, e.g. dob/birth_place), so a CONFIDENT disagreement
+    on a discriminator subtracts ``penalty_bits`` from the match weight. Targets
+    the namesake over-merge on historical_50k: false merges agree on names but
+    DISAGREE on birth_place (1.9% vs 69% for true merges) / dob (0.4% vs 40%). NE
+    is one-sided (never boosts on agreement), so it penalizes ONLY the namesakes
+    and leaves true matches (which agree on the discriminator) untouched — no
+    recall cost, unlike removing name evidence. The field stays a positive
+    comparison field too; the NE stacks additively on disagreement. Default off is
+    byte-identical (negative_evidence stays None).
+    """
+    return os.environ.get("GOLDENMATCH_FS_STRONG_DISCRIMINATORS", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+def _discriminator_ne_penalty_bits() -> float:
+    """LLR bits a confident discriminator disagreement subtracts
+    (``GOLDENMATCH_FS_DISCRIMINATOR_PENALTY_BITS``; default 3.0)."""
+    v = os.environ.get("GOLDENMATCH_FS_DISCRIMINATOR_PENALTY_BITS")
+    if v:
+        try:
+            return abs(float(v))
+        except ValueError:
+            pass
+    return _DISCRIMINATOR_NE_DEFAULT_BITS
+
+
+def _discriminator_ne_fields(profiles, fields):
+    """Build discriminator negative-evidence for the probabilistic matchkey, or
+    None. Only columns that are ALSO positive comparison fields qualify (so
+    agreement still boosts true matches); name/identity types excluded."""
+    if not _fs_strong_discriminators_enabled():
+        return None
+    field_names = {f.field for f in fields}
+    bits = _discriminator_ne_penalty_bits()
+    ne = []
+    for p in profiles:
+        if p.name not in field_names:
+            continue
+        if p.col_type in ("name", "multi_name", "identifier", "email", "phone"):
+            continue
+        is_disc = p.col_type in _DISCRIMINATOR_NE_COLTYPES or (
+            p.col_type == "string"
+            and p.cardinality_ratio >= _DISCRIMINATOR_NE_STRING_CARD_FLOOR
+        )
+        if not is_disc:
+            continue
+        # exact for codes/dates; fuzzy for place/free-text (a low threshold so
+        # only a CLEAR disagreement fires, not a typo).
+        if p.col_type in ("date", "zip"):
+            scorer, threshold = "exact", 0.99
+        else:
+            scorer, threshold = "jaro_winkler", 0.75
+        ne.append(NegativeEvidenceField(
+            field=p.name, scorer=scorer, threshold=threshold, penalty_bits=bits,
+        ))
+    return ne or None
+
+
 def _looks_like_latlong(profile: ColumnProfile) -> bool:
     """Whether a column holds combined ``"lat,long"`` coordinate strings, judged
     by profiling ``sample_values`` through the same parser the scorer uses. A
@@ -5121,6 +5195,7 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         name="probabilistic_auto",
         type="probabilistic",
         fields=fields,
+        negative_evidence=_discriminator_ne_fields(profiles, fields),
         missing=_pick_missing_semantics(profiles, fields),
     )]
 
