@@ -40,6 +40,26 @@ def test_generate_realworld_aggregation_shapes_and_gold():
     assert "Acme" in all_text or "BETA" in all_text or "Beta Corporation" in all_text
 
 
+def test_v1_fixture_loads_and_has_a_large_bucket_question():
+    """Sanity-check the committed v1 fixture end-to-end (wheel-free): the loader +
+    generator run over the real pull, and at least one anchor lands in the 11-20
+    fan-out bucket (the bucket where the passage-window floor collapses)."""
+    from erkgbench.qa_e2e.aggregation import size_bucket
+
+    v1 = _FIXTURE_DIR / "wikidata_companies_v1.json"
+    if not v1.exists():
+        pytest.skip("wikidata_companies_v1.json fixture not committed")
+    ents = load_realworld_entities(v1)
+    assert len(ents) > 100
+    _docs, qs = generate_realworld_aggregation(v1, ambiguity=0.6, seed=7)
+    lists = [q for q in qs if q.kind == "list"]
+    buckets = {size_bucket(q.gold_count) for q in lists}
+    assert "11-20" in buckets       # the RAG-floor-collapse bucket is present
+    # uniqueness invariant holds on the real pull too
+    keys = [(q.anchor_id, q.relation) for q in lists]
+    assert len(keys) == len(set(keys))
+
+
 def test_run_realworld_aggregation_gg_beats_floor():
     try:
         import goldengraph_native  # noqa: F401
