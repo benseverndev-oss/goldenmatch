@@ -11,7 +11,7 @@ single map of all of them. Pick a package, pick a surface, and follow the link t
 its deep reference.
 
 <Note>
-  Versions below are the current published releases. TypeScript packages track the
+  Versions below are the current release versions. TypeScript packages track the
   same API but lag the Python versions and expose a subset of the MCP tools — see
   the [coverage notes](#coverage-notes) at the bottom.
 </Note>
@@ -24,12 +24,12 @@ surface.
 
 | Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
 |---------|:-------------:|:----------------:|-----|:---------:|:----:|:---:|--------------|
-| [GoldenMatch](#goldenmatch) | `2.8.0` | `1.1.0` | `goldenmatch` | 69 | ✓ | ✓ | wheel · Postgres · DuckDB |
-| [GoldenCheck](#goldencheck) | `1.4.1` | `0.4.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
-| [GoldenFlow](#goldenflow)   | `1.9.0` | `0.9.0` | `goldenflow`  | 10 | ✓ | ✓ | wheel |
-| [GoldenPipe](#goldenpipe)   | `1.3.0` | `0.2.0` | `goldenpipe`  | 4  | ✓ | ✓ | core (WASM) |
-| [GoldenAnalysis](#goldenanalysis) | `0.3.0` | `0.1.0` | `goldenanalysis` | 4 | — | — | core (WASM) |
-| [InferMap](#infermap)       | `0.5.1` | `0.5.0` | `infermap`    | 4  | — | — | — |
+| [GoldenMatch](#goldenmatch) | `3.8.0` | `1.4.0` | `goldenmatch` | 82 | ✓ | ✓ | wheel · Postgres · DuckDB |
+| [GoldenCheck](#goldencheck) | `3.2.0` | `0.5.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
+| [GoldenFlow](#goldenflow)   | `2.1.0` | `0.16.0` | `goldenflow`  | 10 | ✓ | ✓ | wheel |
+| [GoldenPipe](#goldenpipe)   | `1.4.0` | `0.3.0` | `goldenpipe`  | 4  | ✓ | ✓ | core (WASM) |
+| [GoldenAnalysis](#goldenanalysis) | `0.4.0` | `0.1.0` | `goldenanalysis` | 4 | — | — | core (WASM) |
+| [InferMap](#infermap)       | `0.6.0` | `0.6.0` | `infermap`    | 4  | — | — | wheel |
 
 ## Install
 
@@ -55,8 +55,8 @@ Each package's MCP server ships in the same distribution: `pip install <pkg>[mcp
 ## GoldenMatch
 
 Zero-config entity resolution: dedupe, match, cluster, survivorship, identity
-graph, privacy-preserving linkage. The flagship — the only package with a native
-wheel, SQL extensions, REST, and A2A.
+graph, privacy-preserving linkage. The flagship — a native wheel, SQL extensions
+(Postgres + DuckDB), REST, and A2A; the only package with a SQL surface.
 
 **Python** — `import goldenmatch`
 
@@ -77,7 +77,7 @@ wheel, SQL extensions, REST, and A2A.
 
 **Servers** — REST (`goldenmatch serve`: `/match`, `/autoconfig`, `/clusters`,
 `/reviews`, `/controller/telemetry`, …) · A2A (`goldenmatch agent-serve`) · local
-web UI (`goldenmatch serve-ui`) · **69 MCP tools**.
+web UI (`goldenmatch serve-ui`) · **82 MCP tools**.
 
 **Native / SQL** — `goldenmatch-native` wheel, a Postgres extension (pgrx:
 `goldenmatch_dedupe`, `goldenmatch_autoconfig`, `goldenmatch_connected_components`, …),
@@ -122,7 +122,7 @@ findings with severities, auto-triage and fix, diff two versions.
 
 ## GoldenFlow
 
-Data transformation: 92 built-in transforms across 11 categories (phone, date,
+Data transformation: 113 built-in transforms across categories (phone, date,
 address, name, categorical, identifiers, …), a transform registry, schema mapping,
 and owned identifier kernels (card / IBAN / ISBN / EAN / VAT / SWIFT / ABA / IMEI).
 
@@ -231,8 +231,8 @@ assignment over pluggable field scorers, plus domain detection.
 
 **CLI** — `infermap <cmd>`: `map`, `apply`, `inspect`, `validate`, `mcp-serve`.
 
-**Servers** — **4 MCP tools** (`map`, `apply`, `inspect`, `validate`). Pure Python +
-pure TypeScript — no native wheel, no SQL, no REST or A2A.
+**Servers** — **4 MCP tools** (`map`, `apply`, `inspect`, `validate`). Ships the
+`infermap-native` wheel (Rust core; WASM/SQL deferred); no SQL, REST, or A2A.
 
 → [Overview](/infermap/overview)
 
@@ -264,14 +264,14 @@ result = AgentSession().autoconfigure("customers.csv")
 
 - **TypeScript lags Python.** Every package has a TS twin, but the npm versions
   trail the PyPI ones and the TS MCP servers expose a subset of the Python tools
-  (e.g. GoldenMatch: 45 TS tools vs 69 Python). The public function names match.
+  (e.g. GoldenMatch: 50 TS tools vs 82 Python). The public function names match.
 - **REST + A2A are for the service-shaped packages only** — GoldenMatch,
   GoldenCheck, GoldenFlow, and GoldenPipe. GoldenAnalysis and InferMap ship a CLI
   and an MCP server but no long-running HTTP service.
 - **Native acceleration** is a compiled Rust kernel behind a pure-Python/TS
-  fallback. GoldenMatch, GoldenCheck, GoldenFlow, and GoldenAnalysis ship it;
-  GoldenPipe's `goldenpipe-core` is the planner-only reference (execution stays in
-  the host language); InferMap is pure Python/TS.
+  fallback. GoldenMatch, GoldenCheck, GoldenFlow, GoldenAnalysis, and InferMap ship
+  it; GoldenPipe's `goldenpipe-core` is the planner-only reference (execution stays
+  in the host language).
 - **SQL extensions** (Postgres + DuckDB) are GoldenMatch-only.
 
 <Note>
