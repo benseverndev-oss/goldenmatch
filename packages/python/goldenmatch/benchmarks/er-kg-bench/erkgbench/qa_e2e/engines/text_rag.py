@@ -22,6 +22,22 @@ from ..harness import AnswerResult, BuildResult
 
 _EMBED_BATCH = 256
 
+
+def make_openai_client():
+    """Construct an OpenAI client whose base_url is resolved the SAME guarded way as the
+    judge/chat clients (`run_qa_e2e._make_judge`). A bare `OpenAI()` reads `OPENAI_BASE_URL`
+    from the env, and the paid head_to_head lane sets it to the EMPTY string (chat +
+    embeddings both to OpenAI directly). The SDK uses that empty value verbatim, producing a
+    protocol-less URL that fails every request with `httpx.UnsupportedProtocol` -- which, on
+    the embedding path, silently collapses retrieval. `'' or <default>` falls through to the
+    OpenAI default; a non-empty value (the local nomic/Ollama lane) is honored as-is."""
+    from openai import OpenAI
+
+    base = os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    key = os.environ.get("OPENAI_API_KEY") or None
+    return OpenAI(base_url=base, api_key=key)
+
+
 _PROMPT = (
     "Answer the question using ONLY the passages below. These questions are often "
     "MULTI-HOP -- you may need to combine facts from several passages. Give the "
@@ -60,9 +76,7 @@ class TextRAGQAEngine:
         # Lazy client construction so importing this module for the registry never
         # needs an API key; tests inject a stub.
         if client is None:
-            from openai import OpenAI
-
-            client = OpenAI()
+            client = make_openai_client()
         self._client = client
         self._model = model
         self._embedding_model = embedding_model
