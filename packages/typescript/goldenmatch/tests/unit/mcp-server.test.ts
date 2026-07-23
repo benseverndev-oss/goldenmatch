@@ -183,8 +183,8 @@ describe("MCP server — handleTool dispatcher", () => {
 });
 
 describe("MCP server — agent tools wiring", () => {
-  it("TOOLS exposes 50 tools (46 + 4 cross-language naming aliases, #1451; +convert_splink_config)", () => {
-    expect(TOOLS.length).toBe(50);
+  it("TOOLS exposes 51 tools (46 + 4 cross-language naming aliases, #1451; +convert_splink_config +compare_clusters)", () => {
+    expect(TOOLS.length).toBe(51);
   });
 
   it("TOOLS includes the agent skill names", () => {

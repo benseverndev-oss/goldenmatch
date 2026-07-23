@@ -52,8 +52,8 @@ neglect:
   doesn't: `score_strings`, `score_pair`, `find_exact_matches`, `find_fuzzy_matches`,
   `read_file`, `write_csv`, and `server_info`.
 
-So GoldenMatch's **50 TS tools vs 82 Python** breaks down as ~42 shared core
-operations, 8 TS-only edge helpers, and ~40 Python-only stateful/subsystem tools —
+So GoldenMatch's **51 TS tools vs 82 Python** breaks down as ~43 shared core
+operations, 8 TS-only edge helpers, and ~39 Python-only stateful/subsystem tools —
 overlapping surfaces sized to their jobs, not a subset. On the shared core the
 **public function names match**, and that parity is enforced in CI by the
 `api_parity` gate, which fails on any *undeclared* Python↔TS drift.

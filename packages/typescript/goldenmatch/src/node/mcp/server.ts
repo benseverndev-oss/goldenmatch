@@ -4,12 +4,13 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 50 tools covering dedupe, match, scoring, explanation,
+ * Exposes 51 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
- * GoldenMatch config converter (convert_splink_config), Learning
- * Memory (5 memory tools via MEMORY_TOOLS), the Identity Graph
- * (6 identity tools via IDENTITY_TOOLS), and the AgentSession skills
- * (15 agent tools via AGENT_MCP_TOOLS, incl. the healer's review_config).
+ * GoldenMatch config converter (convert_splink_config), CCMS cluster
+ * comparison (compare_clusters), Learning Memory (5 memory tools via
+ * MEMORY_TOOLS), the Identity Graph (6 identity tools via IDENTITY_TOOLS),
+ * and the AgentSession skills (15 agent tools via AGENT_MCP_TOOLS, incl. the
+ * healer's review_config).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.
@@ -40,6 +41,7 @@ import {
 } from "../../core/scorer.js";
 import { addRowIds } from "../../core/matchkey.js";
 import { buildClusters } from "../../core/cluster.js";
+import { compareClusters, ccmsSummary, parseClustersJson } from "../../core/compare-clusters.js";
 import { explainPair, explainCluster } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
 import { evaluatePairs, loadGroundTruthPairs } from "../../core/evaluate.js";
@@ -391,6 +393,26 @@ const EXISTING_TOOLS: readonly Tool[] = [
         },
       },
       required: ["settings_json"],
+    },
+  },
+  {
+    name: "compare_clusters",
+    description:
+      "Compare two ER clustering outcomes on the same rows via CCMS (Case " +
+      "Count Metric System). Pass two clusters-JSON file paths (baseline ER1 " +
+      "and comparison ER2); each file is a mapping of cluster id -> members " +
+      "(a `{\"members\": [...]}` object or a bare list), optionally under a " +
+      "`{\"clusters\": {...}}` wrapper. Returns per-case counts " +
+      "(unchanged/merged/partitioned/overlapping) with percentages, record " +
+      "and cluster counts (rc/cc1/cc2), singleton counts (sc1/sc2), and the " +
+      "Talburt-Wang Index (twi). Stateless -- needs no loaded dataset.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clusters_a_path: { type: "string", description: "Path to the baseline (ER1) clusters JSON" },
+        clusters_b_path: { type: "string", description: "Path to the comparison (ER2) clusters JSON" },
+      },
+      required: ["clusters_a_path", "clusters_b_path"],
     },
   },
 ];
@@ -918,6 +940,14 @@ export async function handleTool(
         }
         writeCsv(path, rowsArg as Row[]);
         return { written: rowsArg.length, path };
+      }
+
+      case "compare_clusters": {
+        const pathA = sanitizePath(String(args["clusters_a_path"]));
+        const pathB = sanitizePath(String(args["clusters_b_path"]));
+        const a = parseClustersJson(JSON.parse(readFileSync(pathA, "utf-8")));
+        const b = parseClustersJson(JSON.parse(readFileSync(pathB, "utf-8")));
+        return ccmsSummary(compareClusters(a, b));
       }
 
       case "convert_splink_config": {
