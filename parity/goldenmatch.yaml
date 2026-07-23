@@ -95,8 +95,10 @@ mcp_tools:
   - rollback
   - run_transforms
   - scan_quality
+  - shatter_cluster
   - suggest_config
   - suggest_pprl
+  - unmerge_record
   - upload_dataset
   python_only:
   - analyze_blocking
@@ -127,9 +129,7 @@ mcp_tools:
   - retrieve_similar
   - schema_match
   - sensitivity
-  - shatter_cluster
   - test_domain
-  - unmerge_record
   ts_only:
   - build_clusters
   - find_exact_matches

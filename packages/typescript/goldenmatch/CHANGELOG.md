@@ -4,6 +4,15 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.6.0] - 2026-07-23
+
+### Added
+- **`unmerge_record` + `shatter_cluster` MCP run-surgery tools** (TS↔Python parity, mirroring `goldenmatch/mcp/server.py`'s `_tool_unmerge_record`/`_tool_shatter_cluster`, which delegate to `MatchEngine.unmerge_record`/`unmerge_cluster`). These flip from `python_only` to `shared` in `parity/goldenmatch.yaml`, bringing the TS MCP server to **61 tools** (was 59). Both live in the node-only MCP server (`src/node/mcp/surgery-tools.ts` — `SURGERY_TOOLS`/`SURGERY_TOOL_NAMES`/`handleSurgeryTool`), NOT the edge-safe core.
+  - `unmerge_record` removes a record from its cluster in the current run and re-clusters the remaining members from the stored `pairScores` (no re-scoring); the removed record becomes a singleton. `shatter_cluster` breaks a whole cluster into singletons (pair scores discarded).
+  - **In-place mutation design:** both tools mutate the CURRENT run (the last `dedupe` in this stdio session) via a new `RunStore.update(runId, newResult)` method, which replaces the stored run's `result` while preserving its `runId` / `createdAt` / `rowsById` / `sourcePath` / insertion order / current pointer. Surgery edits an existing run, so it must NOT `put` a new run id — a subsequent `get_stats`/`get_cluster` reads the mutated run under the same id. The stats on the rebuilt result are recomputed the same way the dedupe pipeline computes them.
+  - **Memory-write parity:** the surgery kernels (`unmergeRecord`/`unmergeCluster` in `core/cluster.ts`) accept an OPTIONAL `memoryStore` that auto-writes `reject` corrections; Python's MCP path passes none, so the TS wiring omits it too (no auto-emitted corrections).
+  - Tests: `tests/unit/mcp-surgery-tools.test.ts` (record pulled out + remainder re-clustered via stored pair scores, members → singletons, run id preserved across the in-place mutation, and no-run / unknown-cluster-id / missing-record-id error paths).
+
 ## [1.5.0] - 2026-07-23
 
 ### Added

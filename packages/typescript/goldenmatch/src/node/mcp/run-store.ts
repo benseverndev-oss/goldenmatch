@@ -81,6 +81,29 @@ export class RunStore {
     return entry.run;
   }
 
+  /**
+   * Replace a stored run's `result` IN PLACE, preserving its `runId`,
+   * `createdAt`, `rowsById`, `sourcePath`, insertion order, and the "current"
+   * pointer. This is the in-place surgery path (unmerge/shatter mutate the
+   * current run's clusters) -- distinct from `put`, which mints a NEW run id.
+   * Returns true if the run existed (and is unexpired), false otherwise.
+   */
+  update(runId: string, newResult: DedupeResult): boolean {
+    const now = this.clock();
+    const entry = this.entries.get(runId);
+    if (entry === undefined) return false;
+    if (now - entry.touched > this.ttlMs) {
+      this.entries.delete(runId);
+      if (this.currentId === runId) this.currentId = null;
+      return false;
+    }
+    // Map.set on an existing key keeps its insertion position, so FIFO
+    // eviction order is preserved. Touch refreshes TTL (surgery = activity).
+    const updated: RunState = { ...entry.run, result: newResult };
+    this.entries.set(runId, { run: updated, touched: now });
+    return true;
+  }
+
   private evict(now: number): void {
     for (const [k, v] of [...this.entries]) {
       if (now - v.touched > this.ttlMs) {

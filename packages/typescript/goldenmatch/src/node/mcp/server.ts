@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 59 tools covering dedupe, match, scoring, explanation,
+ * Exposes 61 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (5 memory tools via
@@ -12,9 +12,11 @@
  * the AgentSession skills (15 agent tools via AGENT_MCP_TOOLS, incl. the
  * healer's review_config), the stateful run tools (6 via RUN_TOOLS:
  * get_stats/list_clusters/get_cluster/get_golden_record/export_results/
- * upload_dataset, backed by the server-held RUN_STORE), and the rollback
+ * upload_dataset, backed by the server-held RUN_STORE), the rollback
  * subsystem tools (list_runs/rollback via ROLLBACK_TOOLS, backed by the
- * on-disk .goldenmatch_runs.json run log).
+ * on-disk .goldenmatch_runs.json run log), and the cluster-surgery tools
+ * (unmerge_record/shatter_cluster via SURGERY_TOOLS, which mutate the current
+ * RUN_STORE run in place).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.
@@ -54,6 +56,11 @@ import {
   ROLLBACK_TOOL_NAMES,
   handleRollbackTool,
 } from "./rollback-tools.js";
+import {
+  SURGERY_TOOLS,
+  SURGERY_TOOL_NAMES,
+  handleSurgeryTool,
+} from "./surgery-tools.js";
 import { explainPair, explainCluster } from "../../core/explain.js";
 import { profileRows } from "../../core/profiler.js";
 import { evaluatePairs, loadGroundTruthPairs } from "../../core/evaluate.js";
@@ -453,6 +460,7 @@ export const TOOLS: readonly Tool[] = [
   ...AGENT_MCP_TOOLS,
   ...RUN_TOOLS,
   ...ROLLBACK_TOOLS,
+  ...SURGERY_TOOLS,
 ];
 
 // ---------------------------------------------------------------------------
@@ -584,6 +592,10 @@ export async function handleTool(
     // Rollback subsystem tools operate on the on-disk .goldenmatch_runs.json log.
     if (ROLLBACK_TOOL_NAMES.has(name)) {
       return handleRollbackTool(name, args);
+    }
+    // Cluster-surgery tools mutate the current run in RUN_STORE in place.
+    if (SURGERY_TOOL_NAMES.has(name)) {
+      return await handleSurgeryTool(name, args);
     }
     switch (name) {
       case "find_duplicates":   // alias
@@ -934,7 +946,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.5.0",
+          version: "1.6.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1085,7 +1097,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.5.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.6.0" },
               capabilities: { tools: {} },
             },
           });
