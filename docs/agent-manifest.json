@@ -4936,6 +4936,9 @@
               "meaning": "Remove all whitespace."
             },
             {
+              "value": "strip_honorifics"
+            },
+            {
               "value": "token_sort",
               "meaning": "Sort the whitespace tokens alphabetically."
             },

@@ -40,7 +40,17 @@ const STRIP_HONORIFIC_TOKENS: ReadonlySet<string> = new Set([
   "phd", "md", "dds", "dvm", "do",
 ]);
 
-const HONORIFIC_PUNCT_RE = /^[^\w]+|[^\w]+$/g;
+/**
+ * Alphanumerics-only, lowercased form of a token for honorific matching
+ * ("Bt." -> "bt"). Char filter, not a regex — no backtracking / ReDoS.
+ */
+function honorificBare(token: string): string {
+  let out = "";
+  for (const ch of token) {
+    if (/[0-9A-Za-z]/.test(ch)) out += ch;
+  }
+  return out.toLowerCase();
+}
 
 /**
  * Drop honorific/title/rank/post-nominal tokens from a name value. Returns null
@@ -50,7 +60,7 @@ const HONORIFIC_PUNCT_RE = /^[^\w]+|[^\w]+$/g;
 function stripHonorifics(value: string): string | null {
   const tokens = value.split(/\s+/).filter((t) => t.length > 0);
   const kept = tokens.filter((t) => {
-    const bare = t.replace(HONORIFIC_PUNCT_RE, "").toLowerCase();
+    const bare = honorificBare(t);
     return bare !== "" && !STRIP_HONORIFIC_TOKENS.has(bare);
   });
   const residual = kept.join(" ").trim();

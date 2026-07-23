@@ -60,16 +60,18 @@ _STRIP_HONORIFIC_TOKENS = frozenset({
     "phd", "md", "dds", "dvm", "do",
 })
 
-# Trailing/leading punctuation stripped from a token before the honorific test.
-_HONORIFIC_PUNCT_RE = re.compile(r"^[^\w]+|[^\w]+$")
+def _honorific_bare(token: str) -> str:
+    """Alphanumerics-only, lowercased form of a token for honorific matching
+    ("Bt." -> "bt"). Char filter, not a regex — no backtracking / ReDoS."""
+    return "".join(ch for ch in token if ch.isalnum()).lower()
 
 
 def strip_honorifics(value: str) -> str | None:
     """Drop honorific/title/rank/post-nominal tokens from a name value.
 
-    Token-wise, case-insensitive, tolerant of trailing punctuation ("Bt." ==
-    "bt"). Returns ``None`` when nothing survives (a name field that was *only*
-    an honorific, e.g. ``"Sir"`` / ``"Baronet"``) so the FS scorer treats it as a
+    Token-wise, case-insensitive, tolerant of punctuation ("Bt." == "bt").
+    Returns ``None`` when nothing survives (a name field that was *only* an
+    honorific, e.g. ``"Sir"`` / ``"Baronet"``) so the FS scorer treats it as a
     MISSING value rather than a spurious empty-string agreement — see
     ``fs_missing_mode``. Regnal numerals/ordinals are kept (see
     ``_STRIP_HONORIFIC_TOKENS``).
@@ -77,11 +79,11 @@ def strip_honorifics(value: str) -> str | None:
     tokens = value.split()
     if not tokens:
         return None
-    kept = [
-        t for t in tokens
-        if _HONORIFIC_PUNCT_RE.sub("", t).lower() not in _STRIP_HONORIFIC_TOKENS
-        and _HONORIFIC_PUNCT_RE.sub("", t) != ""
-    ]
+    kept = []
+    for t in tokens:
+        bare = _honorific_bare(t)
+        if bare and bare not in _STRIP_HONORIFIC_TOKENS:
+            kept.append(t)
     residual = " ".join(kept).strip()
     return residual or None
 
