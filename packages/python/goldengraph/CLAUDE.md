@@ -351,3 +351,32 @@ blocked a bench run mid-synthesis; the cap is on the CHAT model only (embeddings
 separate, un-exhausted limit), so the fix is to split providers (chat->OpenRouter,
 embeds->OpenAI), not move everything. The `env_ab` bench job wires this via
 `OPENROUTER_API_KEY` + model `openai/gpt-4o-mini` (revertible by dropping 3 env lines).
+
+## #4 post-hybrid extraction miss bucket — DROP (2026-07-23)
+Measured, confound-free (PR #2056 fixed the empty-`OPENAI_BASE_URL` embedder bug that had
+collapsed hybrid to entity-only, run 30010330554), how much of GoldenGraph's remaining QA miss is
+genuinely extraction-limited now that hybrid synthesis is default-on. The instrument: one
+`head_to_head` run with `GOLDENGRAPH_QA_TRACE=1` + `GOLDENGRAPH_QA_TRACE_LIMIT=0` emits the
+full-population `_localize_trace` stage split for free (LLM-free, cached embeddings).
+- **MEASURED (MuSiQue N=150, hybrid default-on, `passage_k=10`, `GOLDENGRAPH_EXTRACTOR=api`, judge on,
+  run 30020312632):** confound cleared (zero `UnsupportedProtocol`/embedding-failed lines); headline
+  recovered from the confounded 0.167 back to its clean ceiling — `answer_match` 0.393 full /
+  **0.45 on the entity-subset (n=100)**, `llm_judge` 0.453 / 0.52, matching the known ~0.44 k=10 level.
+  Stage split: **`{EXTRACTION:68, RETRIEVAL-BROKEN-CHAIN:3, RETRIEVAL-BUDGET:26, SYNTHESIS:53}`**.
+- **Why the big EXTRACTION bucket does NOT mean an extraction frontier:** the split is
+  BUILD-determined (classified against entity-graph node names, `graph_names`), so it counts every
+  non-entity gold as EXTRACTION by construction. Of the 68: >=37 are structurally non-entity answers
+  (12 dates, 5 numbers, 20 phrases) that can NEVER be graph nodes and are recoverable ONLY via
+  hybrid's passage path; of the 31 short golds most are still ordinals/percentages/place-phrases
+  ("third-largest", "74th", "48.8 percent", "northeastern Oklahoma"), leaving only ~15 plausibly
+  extraction-addressable named entities (~10% of questions). Because the headline has already
+  recovered to its hybrid-on ceiling, hybrid's passage path is demonstrably already answering the
+  non-entity half — the EXTRACTION bucket overlaps hybrid's passage wins.
+- **DECISION: DROP #4.** Per the go/drop rule (headline already high + big but build-determined
+  EXTRACTION bucket → overlaps hybrid's passage recovery), entity-extraction-recall work is not the
+  lever — it would chase a bucket that is mostly non-entity answers hybrid already handles. The two
+  larger REAL frontiers here are **SYNTHESIS:53** (retrieved-but-wrong-answer, 35% — a prompt/synthesis
+  lever) and **RETRIEVAL-BUDGET:26** (reachable-from-seeds-but-outside-the-ball, 17% — a retrieval-budget
+  lever), both bigger than the ~15 extraction-addressable entities. The recall levers built for #4
+  (`GOLDENGRAPH_RELATION_REPROMPT`, `GOLDENGRAPH_CHUNK_EXTRACT`) stay default-OFF; re-test via the
+  same-graph `mode=env_ab` harness before ever shipping one.
