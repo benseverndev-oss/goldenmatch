@@ -27,7 +27,7 @@ package does not ship that surface.
 {/* api-surface-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_api_surface.py --write */}
 | Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
 |---------|:-------------:|:----------------:|-----|:---------:|:----:|:---:|--------------|
-| [GoldenMatch](#goldenmatch) | `3.8.0` | `1.4.0` | `goldenmatch` | 82 | ✓ | ✓ | wheel · Postgres · DuckDB |
+| [GoldenMatch](#goldenmatch) | `3.8.0` | `1.5.0` | `goldenmatch` | 82 | ✓ | ✓ | wheel · Postgres · DuckDB |
 | [GoldenCheck](#goldencheck) | `3.2.0` | `0.5.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
 | [GoldenFlow](#goldenflow) | `2.1.0` | `0.16.0` | `goldenflow` | 10 | ✓ | ✓ | wheel |
 | [GoldenPipe](#goldenpipe) | `1.4.0` | `0.3.0` | `goldenpipe` | 4 | ✓ | ✓ | core (WASM) |
@@ -43,24 +43,25 @@ neglect:
 
 - **Python is the fuller *stateful* server.** It holds datasets, runs, clusters, and
   the identity graph server-side, so it exposes the deeper state tools the TS surface
-  doesn't — run *mutation* (`unmerge_record`, `shatter_cluster`, `rollback`), the
-  on-disk run log (`list_runs`), incremental resolution, and the `identity_*` audit
-  trio — plus the subsystems that live only there: domain packs, PPRL, the routing
-  planner, and document ingest.
+  doesn't — run *mutation* (`unmerge_record`, `shatter_cluster`), incremental
+  resolution, and the `identity_*` audit trio — plus the subsystems that live only
+  there: domain packs, PPRL, the routing planner, and document ingest.
 - **TypeScript is the *edge-first* surface.** Its edge-safe core `dedupe()` returns
-  stats and clusters inline, and — since it added an opt-in, node-only run store on
-  the MCP server — it now also serves the read-query tools (`get_stats`, `get_cluster`,
-  `list_clusters`, `get_golden_record`, `export_results`) over the last run, so those
-  are shared too. It also ships edge primitives the Python server doesn't:
-  `score_strings`, `score_pair`, `find_exact_matches`, `find_fuzzy_matches`,
-  `read_file`, `write_csv`, and `server_info`.
+  stats and clusters inline, and — since it added an opt-in, node-only run store plus
+  an on-disk run log on the MCP server — it now also serves the read-query tools
+  (`get_stats`, `get_cluster`, `list_clusters`, `get_golden_record`, `export_results`)
+  over the last run and the rollback subsystem (`list_runs`, `rollback`) over the
+  `.goldenmatch_runs.json` log, so those are shared too. (These stateful tools live in
+  the node-only MCP server, not the edge-safe core.) It also ships edge primitives the
+  Python server doesn't: `score_strings`, `score_pair`, `find_exact_matches`,
+  `find_fuzzy_matches`, `read_file`, `write_csv`, and `server_info`.
 
-So GoldenMatch's **57 TS tools vs 82 Python** breaks down as ~49 shared operations,
-8 TS-only edge helpers, and ~33 Python-only tools (run mutation, the rollback/run-log/
-incremental/audit state ops, and the Python-only subsystems) — overlapping surfaces
-sized to their jobs, not a subset. On the shared core the **public function names
-match**, and that parity is enforced in CI by the `api_parity` gate, which fails on
-any *undeclared* Python↔TS drift.
+So GoldenMatch's **59 TS tools vs 82 Python** breaks down as ~51 shared operations,
+8 TS-only edge helpers, and ~31 Python-only tools (run mutation, the incremental/audit
+state ops, and the Python-only subsystems) — overlapping surfaces sized to their jobs,
+not a subset. On the shared core the **public function names match**, and that parity
+is enforced in CI by the `api_parity` gate, which fails on any *undeclared* Python↔TS
+drift.
 
 **Versions track independently.** Each surface carries its own semver — npm is not
 pinned to the PyPI number — so a lower TypeScript version reflects a smaller,
