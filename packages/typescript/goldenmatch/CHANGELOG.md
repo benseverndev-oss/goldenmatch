@@ -4,6 +4,15 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.13.0] - 2026-07-23
+
+### Added
+- **`retrieve_similar` MCP tool** (TS↔Python parity, Tier 3 final), taking the MCP surface from **71 → 72 tools**. This is a class-B net-new edge-safe core port — the backing TS core did not exist and was ported here — and the LAST buildable Tier 3 tool (only the deferred identity-audit trio remains). It flips `python_only → shared` in `parity/goldenmatch.yaml` under `mcp_tools`.
+  - Semantic retrieval (#1089): return the rows in a CSV most similar to a free-text query, ranked by cosine similarity. `src/core/retrieve-similar.ts` ports Python `core/retrieval.py::retrieve_similar_records`: embed the chosen column + the query, run ANN cosine search via the existing edge-safe `ANNBlocker` (no new ANN impl), apply an optional `{column: value}` equality pre-filter BEFORE embedding, and return the top-`k` records over `threshold`. Faithful semantics: empty on blank query / empty (filtered) corpus / nothing clearing threshold; a filter on an absent column yields no results; `__row_id__` used for the returned id when present (else row position); `__`-prefixed keys stripped from the returned record; results ranked highest-similarity first. Python-parity response `{file, query, column, count, results:[{row_id, score, record}]}` (score rounded 4dp).
+  - **EDGE-MODEL CAVEAT (caller-supplied embedder):** unlike Python — whose default `"inhouse"` embedder is a bundled, zero-config, no-cloud model — the TS surface carries only the embedding KERNEL (`goldenembed-wasm`), NOT a bundled model, and the HTTP `Embedder` needs a provider + credentials. So `retrieveSimilar` REQUIRES an explicit `embedder` and throws `RetrieveSimilarError` with a clear message when none is supplied (no silent default model). The node MCP handler requires a `provider` (openai/vertex/voyage) arg + credentials (`api_key` or the provider's env var), building the embedder via the existing `getEmbedder`, and returns a clear error if the provider is missing.
+  - **A2A:** `retrieve_similar` does not surface on the TS A2A card (built from BASE_SKILLS + AGENT_SKILLS + MEMORY_TOOLS + IDENTITY_TOOLS; base MCP tools do not feed it). So `a2a_skills` is unchanged: it stays `python_only` (Python's A2A still exposes the skill; TS does not) — verified via `scripts/emit_ts_surface.mjs`.
+  - Tests: `tests/unit/retrieve-similar.test.ts` (top-k ordering + score shape via a stub embedder, missing-embedder errors clearly, threshold + k caps, filters incl. absent-column, `__row_id__`/position ids, `__`-key stripping, Python-parity response shape).
+
 ## [1.12.0] - 2026-07-23
 
 ### Added
