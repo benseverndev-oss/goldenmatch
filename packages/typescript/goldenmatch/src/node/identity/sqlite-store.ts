@@ -16,8 +16,11 @@ import { dirname, normalize } from "node:path";
 
 import {
   canonRecordPair,
+  type AuditSeal,
+  type ClaimType,
   type EdgeKind,
   type EventKind,
+  type EvidenceRef,
   type EvidenceEdge,
   type IdentityAlias,
   type IdentityEvent,
@@ -26,8 +29,14 @@ import {
   type IdentityStore,
   type SourceRecord,
 } from "../../core/identity/types.js";
+import { pyIsoformat } from "../../core/identity/pyDatetime.js";
 
-const SCHEMA_VERSION = 2;
+// v5 (byte-identical to Python `store.py` SCHEMA_VERSION 5): the provenance
+// spine (#1075 actor/trust on events + edges), tamper-evidence (#1078
+// entry_hash + the audit_seals chain table), and the claim-authority tier
+// (#1256 claim_type/evidence_ref/previous_claim_id). A DB written by either
+// toolkit is schema-identical.
+const SCHEMA_VERSION = 5;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -70,6 +79,8 @@ const SCHEMA = [
     controller_snapshot  TEXT,
     run_name             TEXT,
     dataset              TEXT,
+    actor                TEXT,
+    trust                REAL,
     recorded_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)
   );`,
@@ -77,17 +88,35 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_edges_pair   ON evidence_edges(record_a_id, record_b_id);`,
   `CREATE INDEX IF NOT EXISTS idx_edges_run    ON evidence_edges(run_name);`,
   `CREATE TABLE IF NOT EXISTS identity_events (
-    event_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_id    TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    payload      TEXT,
-    run_name     TEXT,
-    dataset      TEXT,
-    recorded_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    event_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id         TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    payload           TEXT,
+    run_name          TEXT,
+    dataset           TEXT,
+    actor             TEXT,
+    trust             REAL,
+    claim_type        TEXT,
+    evidence_ref      TEXT,
+    previous_claim_id INTEGER,
+    entry_hash        TEXT,
+    recorded_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
   `CREATE INDEX IF NOT EXISTS idx_events_entity ON identity_events(entity_id);`,
   `CREATE INDEX IF NOT EXISTS idx_events_kind   ON identity_events(kind);`,
   `CREATE INDEX IF NOT EXISTS idx_events_run    ON identity_events(run_name);`,
+  `CREATE TABLE IF NOT EXISTS audit_seals (
+    seal_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    dataset       TEXT,
+    root_hash     TEXT NOT NULL,
+    event_count   INTEGER NOT NULL,
+    last_event_id INTEGER,
+    prev_seal_id  INTEGER,
+    prev_root     TEXT,
+    actor         TEXT,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_seals_dataset ON audit_seals(dataset);`,
   `CREATE TABLE IF NOT EXISTS identity_aliases (
     alias        TEXT NOT NULL,
     entity_id    TEXT NOT NULL,
@@ -135,6 +164,8 @@ interface EdgeRow {
   controller_snapshot: string | null;
   run_name: string | null;
   dataset: string | null;
+  actor: string | null;
+  trust: number | null;
   recorded_at: string;
 }
 
@@ -145,11 +176,72 @@ interface EventRow {
   payload: string | null;
   run_name: string | null;
   dataset: string | null;
+  actor: string | null;
+  trust: number | null;
+  claim_type: string | null;
+  evidence_ref: string | null;
+  previous_claim_id: number | null;
+  entry_hash: string | null;
   recorded_at: string;
+}
+
+interface SealRow {
+  seal_id: number;
+  dataset: string | null;
+  root_hash: string;
+  event_count: number;
+  last_event_id: number | null;
+  prev_seal_id: number | null;
+  prev_root: string | null;
+  actor: string | null;
+  created_at: string;
 }
 
 export interface SqliteIdentityStoreOptions {
   readonly path?: string;
+}
+
+// Columns each v5 table gained since v2, with their SQLite type. Order matches
+// Python `store.py` (_ensure_provenance_columns / _ensure_audit_columns /
+// _ensure_claim_columns) so a migrated DB is column-identical to a fresh one.
+const V5_ADDED_COLUMNS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  identity_events: [
+    ["actor", "TEXT"],
+    ["trust", "REAL"],
+    ["claim_type", "TEXT"],
+    ["evidence_ref", "TEXT"],
+    ["previous_claim_id", "INTEGER"],
+    ["entry_hash", "TEXT"],
+  ],
+  evidence_edges: [
+    ["actor", "TEXT"],
+    ["trust", "REAL"],
+  ],
+};
+
+/**
+ * Idempotent v2 -> v5 migration. Mirrors Python `IdentityStore._migrate`'s
+ * PRAGMA-guarded probes: for each table, `PRAGMA table_info` is read and a
+ * missing column is added via `ALTER TABLE ... ADD COLUMN` -- NEVER blindly
+ * (re-adding an existing column errors). So this is a real no-op on a
+ * Python-written v5 DB (every column already present) and adds only the absent
+ * columns on an old v2 DB (new columns read back NULL). `audit_seals` is
+ * created by `CREATE TABLE IF NOT EXISTS` in SCHEMA, so no explicit create here.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function migrateToV5(db: any): void {
+  for (const [table, cols] of Object.entries(V5_ADDED_COLUMNS)) {
+    const existing = new Set<string>(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+        (r) => r.name,
+      ),
+    );
+    for (const [name, type] of cols) {
+      if (!existing.has(name)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+      }
+    }
+  }
 }
 
 export class SqliteIdentityStore implements IdentityStore {
@@ -185,7 +277,11 @@ export class SqliteIdentityStore implements IdentityStore {
     db.pragma("journal_mode = WAL");
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
+    // `CREATE TABLE IF NOT EXISTS` (re)creates only ABSENT tables at the v5 shape;
+    // a pre-existing table keeps its old columns, so the real work is the
+    // idempotent ADD COLUMN migration below (mirrors Python `_migrate`).
     db.exec(SCHEMA);
+    migrateToV5(db);
     const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
     const version = row?.user_version ?? 0;
     if (version < SCHEMA_VERSION) {
@@ -359,8 +455,8 @@ export class SqliteIdentityStore implements IdentityStore {
         `INSERT OR IGNORE INTO evidence_edges
            (entity_id, record_a_id, record_b_id, kind, score, matchkey_name,
             field_scores, negative_evidence, controller_snapshot, run_name,
-            dataset, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            dataset, actor, trust, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         edge.entityId,
@@ -374,6 +470,8 @@ export class SqliteIdentityStore implements IdentityStore {
         cs,
         edge.runName,
         edge.dataset,
+        edge.actor ?? null,
+        edge.trust ?? null,
         edge.recordedAt.toISOString(),
       );
     const row = this.db
@@ -433,7 +531,10 @@ export class SqliteIdentityStore implements IdentityStore {
     const payload = event.payload !== null ? JSON.stringify(event.payload) : null;
     this.db
       .prepare(
-        "INSERT INTO identity_events (entity_id, kind, payload, run_name, dataset, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        `INSERT INTO identity_events
+           (entity_id, kind, payload, run_name, dataset, actor, trust,
+            claim_type, evidence_ref, previous_claim_id, entry_hash, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.entityId,
@@ -441,7 +542,15 @@ export class SqliteIdentityStore implements IdentityStore {
         payload,
         event.runName,
         event.dataset,
-        event.recordedAt.toISOString(),
+        event.actor ?? null,
+        event.trust ?? null,
+        event.claimType ?? null,
+        event.evidenceRef ?? null,
+        event.previousClaimId ?? null,
+        event.entryHash ?? null,
+        // Python stamps `recorded_at` via datetime.isoformat(); match it byte-for
+        // -byte so the stored string hashes identically cross-toolkit (PR-B).
+        pyIsoformat(event.recordedAt),
       );
     const row = this.db
       .prepare(
@@ -477,6 +586,76 @@ export class SqliteIdentityStore implements IdentityStore {
       )
       .get(entityId, runName, kind);
     return row !== undefined;
+  }
+
+  async exportAuditLog(dataset?: string): Promise<IdentityEvent[]> {
+    // `dataset` scopes to a dataset; omitted = the whole log (Python's
+    // export_audit_log with no filter). ORDER BY event_id = commit order.
+    const rows: EventRow[] =
+      dataset === undefined
+        ? (this.db
+            .prepare("SELECT * FROM identity_events ORDER BY event_id")
+            .all() as EventRow[])
+        : (this.db
+            .prepare(
+              "SELECT * FROM identity_events WHERE dataset = ? ORDER BY event_id",
+            )
+            .all(dataset) as EventRow[]);
+    return rows.map(rowToEvent);
+  }
+
+  async addSeal(seal: AuditSeal): Promise<number | null> {
+    this.db
+      .prepare(
+        `INSERT INTO audit_seals
+           (dataset, root_hash, event_count, last_event_id, prev_seal_id,
+            prev_root, actor, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        seal.dataset,
+        seal.rootHash,
+        seal.eventCount,
+        seal.lastEventId,
+        seal.prevSealId,
+        seal.prevRoot,
+        seal.actor,
+        pyIsoformat(seal.createdAt),
+      );
+    const row = this.db
+      .prepare("SELECT MAX(seal_id) AS seal_id FROM audit_seals")
+      .get() as { seal_id: number | null };
+    return row?.seal_id ?? null;
+  }
+
+  async latestSeal(dataset?: string): Promise<AuditSeal | null> {
+    // dataset === undefined => the global chain (`dataset IS NULL`), mirroring
+    // Python's `dataset=None` default.
+    const row: SealRow | undefined =
+      dataset === undefined
+        ? (this.db
+            .prepare(
+              "SELECT * FROM audit_seals WHERE dataset IS NULL ORDER BY seal_id DESC LIMIT 1",
+            )
+            .get() as SealRow | undefined)
+        : (this.db
+            .prepare(
+              "SELECT * FROM audit_seals WHERE dataset = ? ORDER BY seal_id DESC LIMIT 1",
+            )
+            .get(dataset) as SealRow | undefined);
+    return row ? rowToSeal(row) : null;
+  }
+
+  async listSeals(dataset?: string): Promise<AuditSeal[]> {
+    const rows: SealRow[] =
+      dataset === undefined
+        ? (this.db
+            .prepare("SELECT * FROM audit_seals WHERE dataset IS NULL ORDER BY seal_id")
+            .all() as SealRow[])
+        : (this.db
+            .prepare("SELECT * FROM audit_seals WHERE dataset = ? ORDER BY seal_id")
+            .all(dataset) as SealRow[]);
+    return rows.map(rowToSeal);
   }
 
   async addAlias(alias: IdentityAlias): Promise<void> {
@@ -548,6 +727,8 @@ function rowToEdge(row: EdgeRow): EvidenceEdge {
     controllerSnapshot: parseJsonOrNull(row.controller_snapshot),
     runName: row.run_name,
     dataset: row.dataset,
+    actor: row.actor,
+    trust: row.trust,
     recordedAt: parseDate(row.recorded_at),
   };
 }
@@ -560,7 +741,27 @@ function rowToEvent(row: EventRow): IdentityEvent {
     payload: parseJsonOrNull(row.payload),
     runName: row.run_name,
     dataset: row.dataset,
+    actor: row.actor,
+    trust: row.trust,
+    claimType: row.claim_type as ClaimType | null,
+    evidenceRef: row.evidence_ref as EvidenceRef | null,
+    previousClaimId: row.previous_claim_id,
+    entryHash: row.entry_hash,
     recordedAt: parseDate(row.recorded_at),
+  };
+}
+
+function rowToSeal(row: SealRow): AuditSeal {
+  return {
+    sealId: row.seal_id,
+    dataset: row.dataset,
+    rootHash: row.root_hash,
+    eventCount: row.event_count,
+    lastEventId: row.last_event_id,
+    prevSealId: row.prev_seal_id,
+    prevRoot: row.prev_root,
+    actor: row.actor,
+    createdAt: parseDate(row.created_at),
   };
 }
 

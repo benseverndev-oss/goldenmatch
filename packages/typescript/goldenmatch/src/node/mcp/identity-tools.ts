@@ -22,6 +22,7 @@ import {
   type IdentityView,
 } from "../../core/identity/query.js";
 import { mediateConflict } from "../../core/identity/mediation.js";
+import { trustForSource } from "../../core/memory/types.js";
 import type {
   EvidenceEdge,
   IdentityEvent,
@@ -116,6 +117,8 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         keep_entity_id: { type: "string" },
         absorb_entity_id: { type: "string" },
         reason: { type: "string" },
+        actor: { type: "string", description: "Provenance principal id. Default: agent" },
+        trust: { type: "number", description: "Provenance trust [0,1]. Default: derived from actor" },
         path: { type: "string" },
       },
       required: ["keep_entity_id", "absorb_entity_id"],
@@ -132,6 +135,8 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         entity_id: { type: "string" },
         record_ids: { type: "array", items: { type: "string" } },
         reason: { type: "string" },
+        actor: { type: "string", description: "Provenance principal id. Default: agent" },
+        trust: { type: "number", description: "Provenance trust [0,1]. Default: derived from actor" },
         path: { type: "string" },
       },
       required: ["entity_id", "record_ids"],
@@ -153,6 +158,8 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
           description: "record id in `{source}:{source_pk}` form",
         },
         reason: { type: "string" },
+        actor: { type: "string", description: "Provenance principal id. Default: agent" },
+        trust: { type: "number", description: "Provenance trust [0,1]. Default: derived from actor" },
         path: { type: "string" },
       },
       required: ["entity_id", "record_id"],
@@ -178,6 +185,8 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
           default: true,
           description: "Act on the verdict (split on 'distinct'); false = log only.",
         },
+        actor: { type: "string", description: "Provenance principal id. Default: agent" },
+        trust: { type: "number", description: "Provenance trust [0,1]. Default: derived from actor" },
         path: { type: "string" },
       },
       required: ["record_a_id", "record_b_id", "resolution"],
@@ -234,6 +243,8 @@ function edgeToDict(e: EvidenceEdge): Record<string, unknown> {
     controller_snapshot: e.controllerSnapshot,
     run_name: e.runName,
     dataset: e.dataset,
+    actor: e.actor ?? null,
+    trust: e.trust ?? null,
     recorded_at: e.recordedAt.toISOString(),
   };
 }
@@ -246,6 +257,12 @@ function eventToDict(ev: IdentityEvent): Record<string, unknown> {
     payload: ev.payload,
     run_name: ev.runName,
     dataset: ev.dataset,
+    actor: ev.actor ?? null,
+    trust: ev.trust ?? null,
+    claim_type: ev.claimType ?? null,
+    evidence_ref: ev.evidenceRef ?? null,
+    previous_claim_id: ev.previousClaimId ?? null,
+    entry_hash: ev.entryHash ?? null,
     recorded_at: ev.recordedAt.toISOString(),
   };
 }
@@ -306,6 +323,21 @@ function intArg(args: Record<string, unknown>, key: string, dflt: number): numbe
   return Number.isFinite(n) ? n : dflt;
 }
 
+/**
+ * Resolve the (actor, trust) provenance for an agent-driven mutation, mirroring
+ * Python `mcp/identity_tools.py::_actor_trust`: `actor` defaults to `"agent"`
+ * (MCP is the agent surface); when `trust` is absent it's derived from the
+ * actor's prefix (`steward:` -> 1.0, else 0.5) via the shared `trustForSource`
+ * map, so an agent write is recorded at lower authority than a steward's.
+ */
+function actorTrust(args: Record<string, unknown>): { actor: string; trust: number } {
+  const actor = strArg(args, "actor") ?? "agent";
+  const rawTrust = args["trust"];
+  const trust =
+    typeof rawTrust === "number" ? rawTrust : trustForSource(actor.split(":")[0] ?? actor);
+  return { actor, trust };
+}
+
 async function dispatch(
   name: string,
   args: Record<string, unknown>,
@@ -356,6 +388,7 @@ async function dispatch(
       const res = await manualMerge(store, keep, absorb, {
         ...(reason !== undefined ? { reason } : {}),
         runName: "mcp",
+        ...actorTrust(args),
       });
       return { keep: res.keep, absorbed: res.absorbed, at: res.at };
     }
@@ -371,6 +404,7 @@ async function dispatch(
       const res = await manualSplit(store, entityId, recordIds, {
         ...(reason !== undefined ? { reason } : {}),
         runName: "mcp",
+        ...actorTrust(args),
       });
       return { new_entity_id: res.newEntityId, moved: res.moved, at: res.at };
     }
@@ -385,6 +419,7 @@ async function dispatch(
       const res = await claimRecord(store, entityId, recordId, {
         ...(reason !== undefined ? { reason } : {}),
         runName: "mcp",
+        ...actorTrust(args),
       });
       return {
         entity_id: res.entityId,
@@ -411,6 +446,7 @@ async function dispatch(
         ...(reason !== undefined ? { reason } : {}),
         ...(dataset !== undefined ? { dataset } : {}),
         apply,
+        ...actorTrust(args),
       });
       return {
         record_a_id: res.recordAId,

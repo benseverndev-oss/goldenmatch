@@ -6,6 +6,7 @@
 
 import {
   canonRecordPair,
+  type AuditSeal,
   type EventKind,
   type EvidenceEdge,
   type IdentityAlias,
@@ -21,9 +22,11 @@ export class InMemoryIdentityStore implements IdentityStore {
   private readonly records = new Map<string, SourceRecord>();
   private readonly edges: EvidenceEdge[] = [];
   private readonly events: IdentityEvent[] = [];
+  private readonly seals: AuditSeal[] = [];
   private readonly aliases = new Map<string, IdentityAlias>();
   private nextEdgeId = 1;
   private nextEventId = 1;
+  private nextSealId = 1;
 
   async upsertIdentity(node: IdentityNode): Promise<void> {
     const existing = this.identities.get(node.entityId);
@@ -187,6 +190,39 @@ export class InMemoryIdentityStore implements IdentityStore {
     return this.events.some(
       (e) => e.entityId === entityId && e.runName === runName && e.kind === kind,
     );
+  }
+
+  async exportAuditLog(dataset?: string): Promise<IdentityEvent[]> {
+    return this.events
+      .filter((e) => dataset === undefined || e.dataset === dataset)
+      // commit order == eventId ASC (append order), mirroring Python's event_id.
+      .sort((a, b) => (a.eventId ?? 0) - (b.eventId ?? 0))
+      .map((e) => ({ ...e }));
+  }
+
+  async addSeal(seal: AuditSeal): Promise<number | null> {
+    const stored: AuditSeal = { ...seal, sealId: this.nextSealId++ };
+    this.seals.push(stored);
+    return stored.sealId;
+  }
+
+  async latestSeal(dataset?: string): Promise<AuditSeal | null> {
+    // dataset === undefined => the global chain (dataset IS NULL), mirroring the
+    // Python `dataset=None` default; the SQL store keys on `dataset IS NULL`.
+    const scoped = this.seals.filter((s) =>
+      dataset === undefined ? s.dataset === null : s.dataset === dataset,
+    );
+    if (scoped.length === 0) return null;
+    let latest = scoped[0]!;
+    for (const s of scoped) if ((s.sealId ?? 0) > (latest.sealId ?? 0)) latest = s;
+    return { ...latest };
+  }
+
+  async listSeals(dataset?: string): Promise<AuditSeal[]> {
+    return this.seals
+      .filter((s) => (dataset === undefined ? s.dataset === null : s.dataset === dataset))
+      .sort((a, b) => (a.sealId ?? 0) - (b.sealId ?? 0))
+      .map((s) => ({ ...s }));
   }
 
   async addAlias(alias: IdentityAlias): Promise<void> {

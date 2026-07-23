@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type {
+  AuditSeal,
   EvidenceEdge,
   IdentityAlias,
   IdentityEvent,
@@ -90,6 +91,61 @@ function makeAlias(alias: string, entityId: string): IdentityAlias {
     dataset: "test",
     recordedAt: new Date(),
   };
+}
+
+function makeSeal(overrides: Partial<AuditSeal> = {}): AuditSeal {
+  return {
+    sealId: null,
+    rootHash: "root-abc",
+    eventCount: 3,
+    lastEventId: 3,
+    dataset: null,
+    prevSealId: null,
+    prevRoot: null,
+    actor: "steward:sam",
+    createdAt: new Date(),
+    ...overrides,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function openRawDb(path: string): Promise<any> {
+  const mod = await import("better-sqlite3" as string);
+  const Database = (mod as { default?: unknown }).default ?? mod;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new (Database as any)(path);
+}
+
+// The evidence_edges + identity_events shape at schema v2 (before the v5
+// provenance/audit/claim columns) -- used to synthesize a legacy DB the
+// migration must upgrade in place.
+const V2_SCHEMA = `
+  CREATE TABLE evidence_edges (
+    edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id TEXT NOT NULL, record_a_id TEXT NOT NULL, record_b_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'same_as', score REAL, matchkey_name TEXT,
+    field_scores TEXT, negative_evidence TEXT, controller_snapshot TEXT,
+    run_name TEXT, dataset TEXT,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_id, record_a_id, record_b_id, kind, run_name)
+  );
+  CREATE TABLE identity_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id TEXT NOT NULL,
+    kind TEXT NOT NULL, payload TEXT, run_name TEXT, dataset TEXT,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`;
+
+function columnSet(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  table: string,
+): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+      (r) => r.name,
+    ),
+  );
 }
 
 describe("SqliteIdentityStore", () => {
@@ -390,6 +446,170 @@ describe("SqliteIdentityStore", () => {
         expect(got?.entityId).toBe("e-1");
         const rec = await reopened.getRecord("csv:r1");
         expect(rec?.recordId).toBe("csv:r1");
+      } finally {
+        await reopened.close();
+      }
+    });
+  });
+
+  describe("v5 provenance + audit schema", () => {
+    it("provenance (actor/trust) round-trips on events + edges", async () => {
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.emitEvent({
+        ...makeEvent("e-1", "created"),
+        actor: "agent",
+        trust: 0.5,
+        claimType: "inference",
+        evidenceRef: "tool-call",
+        previousClaimId: null,
+      });
+      const [ev] = await store.history("e-1");
+      expect(ev?.actor).toBe("agent");
+      expect(ev?.trust).toBe(0.5);
+      expect(ev?.claimType).toBe("inference");
+      expect(ev?.evidenceRef).toBe("tool-call");
+
+      await store.addEdge({
+        ...makeEdge("e-1", "csv:r1", "csv:r2"),
+        actor: "steward:sam",
+        trust: 1.0,
+      });
+      const [edge] = await store.edgesForEntity("e-1");
+      expect(edge?.actor).toBe("steward:sam");
+      expect(edge?.trust).toBe(1.0);
+    });
+
+    it("a provenance-free event reads back with null actor/trust", async () => {
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.emitEvent(makeEvent("e-1", "created")); // no actor/trust set
+      const [ev] = await store.history("e-1");
+      expect(ev?.actor).toBeNull();
+      expect(ev?.trust).toBeNull();
+      expect(ev?.claimType).toBeNull();
+      expect(ev?.entryHash).toBeNull();
+    });
+
+    it("audit_seals CRUD: addSeal / latestSeal / listSeals with dataset scoping", async () => {
+      // Two seals on the global (dataset IS NULL) chain, chained.
+      const id1 = await store.addSeal(makeSeal({ rootHash: "r1", eventCount: 2, lastEventId: 2 }));
+      expect(typeof id1).toBe("number");
+      const id2 = await store.addSeal(
+        makeSeal({ rootHash: "r2", eventCount: 5, lastEventId: 5, prevSealId: id1, prevRoot: "r1" }),
+      );
+      // One seal on a named dataset chain.
+      await store.addSeal(makeSeal({ dataset: "d1", rootHash: "d1-root", eventCount: 1, lastEventId: 1 }));
+
+      const globalLatest = await store.latestSeal();
+      expect(globalLatest?.sealId).toBe(id2);
+      expect(globalLatest?.rootHash).toBe("r2");
+      expect(globalLatest?.prevSealId).toBe(id1);
+      expect(globalLatest?.dataset).toBeNull();
+
+      const globalSeals = await store.listSeals();
+      expect(globalSeals.map((s) => s.rootHash)).toEqual(["r1", "r2"]);
+      expect(globalSeals.every((s) => s.dataset === null)).toBe(true);
+
+      const d1Latest = await store.latestSeal("d1");
+      expect(d1Latest?.rootHash).toBe("d1-root");
+      // The named-dataset scope excludes the global chain.
+      expect((await store.listSeals("d1")).map((s) => s.rootHash)).toEqual(["d1-root"]);
+    });
+
+    it("exportAuditLog returns events in event_id order, dataset-scoped", async () => {
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.upsertIdentity(makeNode("e-2", "other"));
+      await store.emitEvent({ ...makeEvent("e-1", "created"), dataset: "test" });
+      await store.emitEvent({ ...makeEvent("e-1", "absorbed_record"), dataset: "test" });
+      await store.emitEvent({ ...makeEvent("e-2", "created"), dataset: "other" });
+
+      const all = await store.exportAuditLog();
+      expect(all.map((e) => e.kind)).toEqual(["created", "absorbed_record", "created"]);
+      // event_id strictly ascending (commit order).
+      for (let i = 1; i < all.length; i++) {
+        expect(all[i]!.eventId!).toBeGreaterThan(all[i - 1]!.eventId!);
+      }
+      const scoped = await store.exportAuditLog("test");
+      expect(scoped).toHaveLength(2);
+      expect(scoped.every((e) => e.dataset === "test")).toBe(true);
+    });
+  });
+
+  describe("v2 -> v5 migration", () => {
+    it("migrates a synthesized v2 DB in place, adding the new columns", async () => {
+      const v2Path = join(tmpDir, "v2.db");
+      const raw = await openRawDb(v2Path);
+      raw.exec(V2_SCHEMA);
+      raw.pragma("user_version = 2");
+      // A legacy event + edge written before the provenance columns existed.
+      raw
+        .prepare(
+          "INSERT INTO identity_events (entity_id, kind, payload, run_name, dataset, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run("e-1", "created", null, "r", "test", "2026-01-01T00:00:00");
+      raw
+        .prepare(
+          "INSERT INTO evidence_edges (entity_id, record_a_id, record_b_id, kind, run_name, dataset, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run("e-1", "csv:r1", "csv:r2", "same_as", "r", "test", "2026-01-01T00:00:00");
+      raw.close();
+
+      const migrated = await SqliteIdentityStore.open({ path: v2Path });
+      try {
+        // New event that USES the added columns -- would throw "no column named
+        // actor" if the migration hadn't added them.
+        await migrated.emitEvent({
+          ...makeEvent("e-1", "absorbed_record"),
+          actor: "agent",
+          trust: 0.5,
+        });
+        const events = await migrated.history("e-1");
+        expect(events).toHaveLength(2);
+        // The legacy row reads back with null provenance; the new row keeps it.
+        const legacy = events.find((e) => e.kind === "created");
+        const fresh = events.find((e) => e.kind === "absorbed_record");
+        expect(legacy?.actor).toBeNull();
+        expect(fresh?.actor).toBe("agent");
+        expect(fresh?.trust).toBe(0.5);
+
+        // The audit_seals table was created by the migration/schema.
+        const sid = await migrated.addSeal(makeSeal());
+        expect(typeof sid).toBe("number");
+        expect((await migrated.latestSeal())?.rootHash).toBe("root-abc");
+      } finally {
+        await migrated.close();
+      }
+
+      // user_version bumped to 5, and both tables carry the new columns.
+      const check = await openRawDb(v2Path);
+      try {
+        expect((check.pragma("user_version", { simple: true }) as number)).toBe(5);
+        const evCols = columnSet(check, "identity_events");
+        for (const c of ["actor", "trust", "claim_type", "evidence_ref", "previous_claim_id", "entry_hash"]) {
+          expect(evCols.has(c)).toBe(true);
+        }
+        const edgeCols = columnSet(check, "evidence_edges");
+        expect(edgeCols.has("actor")).toBe(true);
+        expect(edgeCols.has("trust")).toBe(true);
+      } finally {
+        check.close();
+      }
+    });
+
+    it("opens a v5 DB unchanged -- reopening runs the migration as a no-op", async () => {
+      // A fresh store IS v5. Write provenance + a seal, then reopen: migrateToV5
+      // probes and finds every column present, so it must NOT re-ALTER (which
+      // would throw "duplicate column name") -- the Python-written-v5 case.
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.emitEvent({ ...makeEvent("e-1", "created"), actor: "agent", trust: 0.5 });
+      await store.addSeal(makeSeal({ rootHash: "seal-1" }));
+      await store.close();
+
+      const reopened = await SqliteIdentityStore.open({ path: dbPath });
+      try {
+        const [ev] = await reopened.history("e-1");
+        expect(ev?.actor).toBe("agent");
+        expect(ev?.trust).toBe(0.5);
+        expect((await reopened.latestSeal())?.rootHash).toBe("seal-1");
       } finally {
         await reopened.close();
       }

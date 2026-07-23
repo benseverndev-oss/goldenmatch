@@ -79,7 +79,7 @@ export async function manualMerge(
   store: IdentityStore,
   keepEntityId: string,
   absorbEntityId: string,
-  opts: { reason?: string; runName?: string } = {},
+  opts: { reason?: string; runName?: string; actor?: string; trust?: number } = {},
 ): Promise<{ keep: string; absorbed: string; at: string }> {
   const winner = await store.getIdentity(keepEntityId);
   const loser = await store.getIdentity(absorbEntityId);
@@ -93,6 +93,9 @@ export async function manualMerge(
   }
   await store.retireIdentity(absorbEntityId, keepEntityId);
   const runName = opts.runName ?? "manual";
+  // Provenance (#1075): stamp WHO merged these + their trust onto both events.
+  // Spread so an absent actor/trust is never set (exactOptionalPropertyTypes).
+  const prov = provenance(opts);
   await store.emitEvent({
     eventId: null,
     entityId: keepEntityId,
@@ -100,6 +103,7 @@ export async function manualMerge(
     payload: { absorbed: absorbEntityId, reason: opts.reason ?? null },
     runName,
     dataset: winner.dataset,
+    ...prov,
     recordedAt: now,
   });
   await store.emitEvent({
@@ -109,16 +113,33 @@ export async function manualMerge(
     payload: { merged_into: keepEntityId, reason: opts.reason ?? null },
     runName,
     dataset: loser.dataset,
+    ...prov,
     recordedAt: now,
   });
   return { keep: keepEntityId, absorbed: absorbEntityId, at: now.toISOString() };
+}
+
+/**
+ * Build the `{ actor?, trust? }` provenance spread from an option bag. Omits a
+ * key entirely when its value is undefined so `exactOptionalPropertyTypes`
+ * never sees `undefined` assigned, and a provenance-free call stays byte-for
+ * -byte identical to the pre-provenance events (Python actor/trust = None).
+ */
+function provenance(opts: {
+  actor?: string;
+  trust?: number;
+}): { actor?: string; trust?: number } {
+  return {
+    ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
+    ...(opts.trust !== undefined ? { trust: opts.trust } : {}),
+  };
 }
 
 export async function manualSplit(
   store: IdentityStore,
   entityId: string,
   recordIds: readonly string[],
-  opts: { reason?: string; runName?: string } = {},
+  opts: { reason?: string; runName?: string; actor?: string; trust?: number } = {},
 ): Promise<{ newEntityId: string; moved: string[]; at: string }> {
   const parent = await store.getIdentity(entityId);
   if (!parent) throw new Error(`Entity ${entityId} not found`);
@@ -145,6 +166,7 @@ export async function manualSplit(
     moved.push(rid);
   }
   const runName = opts.runName ?? "manual";
+  const prov = provenance(opts);
   await store.emitEvent({
     eventId: null,
     entityId,
@@ -152,6 +174,7 @@ export async function manualSplit(
     payload: { split_to: newId, records: moved, reason: opts.reason ?? null },
     runName,
     dataset: parent.dataset,
+    ...prov,
     recordedAt: now,
   });
   await store.emitEvent({
@@ -161,6 +184,7 @@ export async function manualSplit(
     payload: { split_from: entityId, records: moved, reason: opts.reason ?? null },
     runName,
     dataset: parent.dataset,
+    ...prov,
     recordedAt: now,
   });
   return { newEntityId: newId, moved, at: now.toISOString() };
@@ -180,7 +204,7 @@ export async function claimRecord(
   store: IdentityStore,
   entityId: string,
   recordId: string,
-  opts: { reason?: string; runName?: string } = {},
+  opts: { reason?: string; runName?: string; actor?: string; trust?: number } = {},
 ): Promise<{
   entityId: string;
   recordId: string;
@@ -208,6 +232,7 @@ export async function claimRecord(
 
   await store.upsertRecord({ ...rec, entityId, lastSeenAt: now });
   const runName = opts.runName ?? "manual";
+  const prov = provenance(opts);
   await store.emitEvent({
     eventId: null,
     entityId,
@@ -215,6 +240,7 @@ export async function claimRecord(
     payload: { record_id: recordId, from_entity: prevEntity, reason: opts.reason ?? null },
     runName,
     dataset: target.dataset,
+    ...prov,
     recordedAt: now,
   });
   if (prevEntity) {
@@ -225,6 +251,7 @@ export async function claimRecord(
       payload: { record_id: recordId, to_entity: entityId, reason: opts.reason ?? null },
       runName,
       dataset: target.dataset,
+      ...prov,
       recordedAt: now,
     });
   }

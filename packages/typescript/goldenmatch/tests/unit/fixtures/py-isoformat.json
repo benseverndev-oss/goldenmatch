@@ -1,0 +1,10 @@
+{
+  "description": "pyIsoformat parity cases. `iso` is a Z-suffixed UTC Date-constructor input (unambiguous); `expected` is Python datetime.isoformat() for that UTC instant. µs==0 -> no fractional part; µs>0 -> 6-digit microseconds (JS ms*1000).",
+  "cases": [
+    { "iso": "2026-01-02T03:04:05.000Z", "expected": "2026-01-02T03:04:05" },
+    { "iso": "2026-01-02T03:04:05.678Z", "expected": "2026-01-02T03:04:05.678000" },
+    { "iso": "2026-01-02T03:04:05.007Z", "expected": "2026-01-02T03:04:05.007000" },
+    { "iso": "2026-12-31T23:59:59.999Z", "expected": "2026-12-31T23:59:59.999000" },
+    { "iso": "2026-07-23T00:00:00.000Z", "expected": "2026-07-23T00:00:00" }
+  ]
+}

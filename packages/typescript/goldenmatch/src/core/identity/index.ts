@@ -9,6 +9,7 @@
  */
 
 export * from "./types.js";
+export { pyIsoformat } from "./pyDatetime.js";
 export { newEntityId } from "./new-entity-id.js";
 export { InMemoryIdentityStore } from "./in-memory-store.js";
 export {
