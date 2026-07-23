@@ -45,8 +45,10 @@ describe("MCP run tools — registration", () => {
     }
   });
 
-  it("does NOT register list_runs (deferred with the rollback subsystem)", () => {
-    expect(TOOLS.some((t) => t.name === "list_runs")).toBe(false);
+  it("does NOT own list_runs (it lives in the rollback subsystem, not RUN_TOOLS)", () => {
+    // list_runs IS registered on the server now (via ROLLBACK_TOOLS), but it is
+    // NOT one of the in-memory run-cache tools — see mcp-rollback-tools.test.ts.
+    expect(TOOLS.some((t) => t.name === "list_runs")).toBe(true);
   });
 });
 

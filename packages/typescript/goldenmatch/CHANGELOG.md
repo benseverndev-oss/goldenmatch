@@ -4,6 +4,14 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.5.0] - 2026-07-23
+
+### Added
+- **`list_runs` + `rollback` MCP tools** (TS↔Python parity, mirroring `goldenmatch/core/rollback.py`). These flip from `python_only` to `shared` in `parity/goldenmatch.yaml`, bringing the TS MCP server to **59 tools** (was 57 after the Tier-1 run store). Both live in the node-only MCP server (`src/node/mcp/`), NOT the edge-safe core.
+  - New node-only run-log module `src/node/mcp/run-log.ts` — a faithful port of Python's `rollback.py`: `saveRunSnapshot` / `listRuns` / `rollbackRun` over an on-disk `.goldenmatch_runs.json` log (append, keep last 50, mark-and-rewrite). This is a **separate, durable** state layer from the ephemeral in-memory `RUN_STORE` (added for the run-query tools) — rollback needs a persistent record of which output *files* a run wrote.
+  - `list_runs` returns the parsed run log (empty list when the log is absent or corrupt). `rollback` deletes a run's output files (each path-jailed via the shared `sanitizePath` cwd guard, mirroring Python's `safe_path` — a jailed or missing file is reported under `not_found`, never aborting the call), refuses an unknown (`{ error, available_runs }`) or already-rolled-back run, then marks it `rolled_back` + `rolled_back_at` and rewrites the log.
+  - **Writer parity note:** like Python, `saveRunSnapshot` is a callable that is NOT auto-wired into the dedupe pipeline (Python's own pipeline never calls `save_run_snapshot` either — only tests do). Wiring a snapshot writer into `dedupe()`/`export_results` is a deliberate follow-up on both surfaces.
+
 ## [1.3.0] - 2026-07-14
 
 ### Added

@@ -81,6 +81,7 @@ mcp_tools:
   - list_blocking_strategies
   - list_clusters
   - list_corrections
+  - list_runs
   - list_scorers
   - list_strategies
   - list_transforms
@@ -91,6 +92,7 @@ mcp_tools:
   - profile
   - profile_data
   - review_config
+  - rollback
   - run_transforms
   - scan_quality
   - suggest_config
@@ -118,13 +120,11 @@ mcp_tools:
   - lint_routing
   - list_domains
   - list_plugins
-  - list_runs
   - memory_import
   - plan_routing
   - pprl_auto_config
   - pprl_link
   - retrieve_similar
-  - rollback
   - schema_match
   - sensitivity
   - shatter_cluster
