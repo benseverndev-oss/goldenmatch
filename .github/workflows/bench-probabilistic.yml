@@ -21,6 +21,14 @@
 #                      (real corrupted DOBs) is where the magnitude-aware date_diff
 #                      comparator is expected to lift F1; this verdict gates the
 #                      GOLDENMATCH_FS_DOMAIN_COMPARATORS default flip.
+#   panel-tf         — runs the panel twice (GOLDENMATCH_FS_TF_ADJUSTMENT 0 vs 1)
+#                      and diffs F1 per dataset. TF down-weights agreement on
+#                      COMMON categorical values (surname/occupation/city/postcode)
+#                      so it targets the over-merge regime (historical_50k GM
+#                      precision 0.72 vs Splink 0.97); this verdict gates the
+#                      GOLDENMATCH_FS_TF_ADJUSTMENT default flip. Also emits an
+#                      over-merge diagnostic (what the false merges agree on) so a
+#                      neutral result still explains WHY GM over-merges.
 #
 # To run: GitHub -> Actions -> "bench-probabilistic" -> Run workflow.
 name: bench-probabilistic
@@ -48,6 +56,11 @@ on:
         default: false
       run_comparators:
         description: "Run the FS domain-comparators OFF-vs-ON lane (gates the GOLDENMATCH_FS_DOMAIN_COMPARATORS default flip)"
+        type: boolean
+        required: false
+        default: true
+      run_tf:
+        description: "Run the FS term-frequency OFF-vs-ON lane (gates the GOLDENMATCH_FS_TF_ADJUSTMENT default flip) + over-merge diagnostic"
         type: boolean
         required: false
         default: true
@@ -261,6 +274,108 @@ jobs:
             prob_panel_dc_off/
             prob_panel_dc_on/
             compare_dc/
+          retention-days: 90
+
+  # ── FS term-frequency OFF-vs-ON lane ──────────────────────────────────────
+  # Runs the panel twice (GOLDENMATCH_FS_TF_ADJUSTMENT 0 vs 1, v2 auto-config
+  # default-on in BOTH so the flag is the only variable). TF down-weights
+  # agreement on COMMON categorical values, so historical_50k (where GM
+  # over-merges: precision 0.72 vs Splink 0.97) is the money row. Installs polars
+  # so the GOLDENMATCH_BENCH_DUMP_PAIRS emitted-pair dump succeeds, then runs an
+  # over-merge diagnostic: whether the false merges concentrate on common
+  # categorical values (TF's target) or share only a blocking key (a cause TF
+  # can't fix) — so a neutral F1 result still yields the "why". Verdict gates the
+  # GOLDENMATCH_FS_TF_ADJUSTMENT default flip.
+  panel-tf:
+    if: ${{ inputs.run_tf }}
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      # goldenmatch is arrow-native (no polars dep); the emitted-pair dump under
+      # GOLDENMATCH_BENCH_DUMP_PAIRS writes parquet via polars, so the diagnostic
+      # needs it installed. Harmless to the panel itself.
+      - name: Install polars (for the emitted-pair dump the diagnostic reads)
+        run: pip install polars
+
+      # DBLP-ACM is gitignored; fetch the Leipzig benchmark best-effort. On any
+      # failure the panel records dblp_acm as skipped (never fatal).
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+            ls -la "$DEST"
+          else
+            echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped in the panel"
+          fi
+
+      - name: Run panel — TF OFF (GOLDENMATCH_FS_TF_ADJUSTMENT=0)
+        env:
+          GOLDENMATCH_FS_TF_ADJUSTMENT: "0"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_tf_off
+
+      - name: Run panel — TF ON (GOLDENMATCH_FS_TF_ADJUSTMENT=1)
+        env:
+          GOLDENMATCH_FS_TF_ADJUSTMENT: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_tf_on
+
+      - name: Compare OFF vs ON (writes verdict to job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_tf_off/panel.json \
+            --v2 prob_panel_tf_on/panel.json \
+            --title "FS term-frequency OFF vs ON — GoldenMatch probabilistic path" \
+            --a-label tf-off --b-label tf-on \
+            --out compare_tf/compare.md $FLAG
+
+      # Over-merge diagnostic on historical_50k (the money row): reads the emitted
+      # pairs from both runs, reports FP counts OFF-vs-ON and what the false merges
+      # agree on. Best-effort — never fails the job.
+      - name: Over-merge diagnostic — historical_50k
+        continue-on-error: true
+        run: |
+          python scripts/bench_er_headtohead/diagnose_tf_over_merge.py \
+            --dataset historical_50k \
+            --pairs-off prob_panel_tf_off/historical_50k/gm_pairs \
+            --pairs-on prob_panel_tf_on/historical_50k/gm_pairs
+
+      - name: Upload OFF/ON panels + comparison + diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: prob-panel-tf
+          path: |
+            prob_panel_tf_off/
+            prob_panel_tf_on/
+            compare_tf/
           retention-days: 90
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────
