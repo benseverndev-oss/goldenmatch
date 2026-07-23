@@ -238,7 +238,11 @@ export function scoreCandidate(
   if (groupCount === 0 || totalRecords === 0) return { ...ZERO_METRICS };
 
   const blockSizes = [...sizes.values()];
-  const maxGroupSize = Math.max(...blockSizes);
+  // Loop-based max, not `Math.max(...blockSizes)`: spread overflows the call
+  // stack (RangeError) on arrays larger than ~65K elements, and there is one
+  // block size per group — a real crash on wide-blocking datasets.
+  let maxGroupSize = 0;
+  for (const s of blockSizes) if (s > maxGroupSize) maxGroupSize = s;
   const meanGroupSize = blockSizes.reduce((a, b) => a + b, 0) / groupCount;
 
   // Sample standard deviation (ddof=1), matching polars `.std()`; 0 for a
