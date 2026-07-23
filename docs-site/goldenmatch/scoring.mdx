@@ -14,6 +14,7 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `jaro_winkler` | Edit distance with prefix bonus | 0.0--1.0 | Names |
 | `levenshtein` | Normalized Levenshtein distance | 0.0--1.0 | General strings |
 | `date` | Damerau-Levenshtein over canonical ISO digits | 0.0--1.0 | Dates (`dob`, `birth_date`) |
+| `date_diff` | Day-distance bands; magnitude-aware (a year gap is a weak partial) | 0.0--1.0 | Dates (`dob`, `birth_date`) |
 | `token_sort` | Sort tokens, then ratio | 0.0--1.0 | Names, addresses |
 | `soundex_match` | Phonetic code comparison | 0 or 1 | Names |
 | `ensemble` | max(jaro_winkler, token_sort, soundex) | 0.0--1.0 | Names with reordering |
@@ -46,6 +47,8 @@ The `date` scorer parses both sides as ISO dates and compares them by Damerau-Le
 ```
 
 Non-ISO input falls back to `levenshtein`. Auto-config already skips date columns as fuzzy fields, so `date` is for hand-written / Splink-converted configs; a preflight check warns when a name-oriented scorer (`jaro_winkler` / `token_sort` / ...) is placed on a date field.
+
+The `date` scorer is edit-distance and therefore **magnitude-blind** — `1990-01-02` vs `1991-01-02` is one digit-edit → 0.90, over-scoring a full-year gap. The `date_diff` scorer instead parses both sides to a day-ordinal and bands by *day-distance* (same → 1.0, ≤1 day → 0.92, ≤1 month → 0.80, ≤1 year → 0.60, ≤5 years → 0.30, else 0), with an MM/DD-transposition floor and the same `levenshtein` fallback on unparseable input. On the Fellegi-Sunter path, `GOLDENMATCH_FS_DOMAIN_COMPARATORS=1` makes auto-config admit date columns as `date_diff` instead of `levenshtein` (default off; byte-identical when off).
 
 ```yaml
 matchkeys:

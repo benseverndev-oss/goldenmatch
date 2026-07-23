@@ -966,6 +966,7 @@ _`VALID_SCORERS` -- `MatchkeyField.scorer` / `NegativeEvidenceField.scorer`._
 | `alias_match` | Matches known name aliases and nicknames (Bob &lt;-> Robert). | Names with nicknames | 0 or 1 |
 | `audio_fp` | Audio-fingerprint similarity. | Audio clips | 0.0-1.0 |
 | `date` | Damerau-Levenshtein over canonical ISO date digits; typo-tolerant. | Dates (dob, birth_date) | 0.0-1.0 |
+| `date_diff` | Day-distance banded similarity; magnitude-aware (a year gap is a weak partial, not a near-match). FS path. | Dates (dob, birth_date) | 0.0-1.0 |
 | `dice` | Dice coefficient over character bigrams / bloom filters. | PPRL | 0.0-1.0 |
 | `embedding` | Cosine similarity of a model embedding of the field. | Semantic matching | 0.0-1.0 |
 | `ensemble` | Best of several sub-scorers (max of jaro_winkler / token_sort / soundex). | Names with reordering | 0.0-1.0 |

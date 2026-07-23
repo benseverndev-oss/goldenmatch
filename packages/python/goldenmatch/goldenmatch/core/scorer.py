@@ -234,16 +234,18 @@ def _date_diff_band(d: int) -> float:
 def _date_diff_similarity_py(val_a: str, val_b: str) -> float:
     """Day-distance banded similarity; MM/DD transposition floored to a partial;
     edit-distance (`_date_similarity_py`) fallback when either side won't parse."""
-    pa, pb = _date_parts(val_a), _date_parts(val_b)
-    oa, ob = _date_ordinal_of(pa), _date_ordinal_of(pb)
-    if pa is None or pb is None or oa is None or ob is None:
+    oa, ob = _parse_date_ordinal(val_a), _parse_date_ordinal(val_b)
+    if oa is None or ob is None:
         return _date_similarity_py(val_a, val_b)
     d = abs(oa - ob)
     if d != 0:
         # A month<->day swap on either operand that collapses the distance to 0
         # is a data-entry transposition (1990-01-02 vs 1990-02-01), a partial not
-        # a disagree -> floor at the <=31-day band.
-        for parts, other in ((pa, ob), (pb, oa)):
+        # a disagree -> floor at the <=31-day band. (Re-parse parts here only --
+        # both operands parsed above, so this is never None on the covered path.)
+        for parts, other in ((_date_parts(val_a), ob), (_date_parts(val_b), oa)):
+            if parts is None:
+                continue
             y, mo, dd = parts
             sw = _date_ordinal_of((y, dd, mo))
             if sw is not None and abs(sw - other) == 0:
