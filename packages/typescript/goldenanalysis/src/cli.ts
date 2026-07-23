@@ -153,6 +153,13 @@ export function buildProgram(): Command {
       process.stdout.write(runTrend(metric, opts));
     });
   program
+    .command("mcp-serve")
+    .description("Start the MCP server (stdio) for Claude Desktop and other MCP clients")
+    .action(async () => {
+      const { startMcpServer } = await import("./node/mcp/server.js");
+      startMcpServer();
+    });
+  program
     .command("regressions")
     .requiredOption("--history <path>", "path to the analysis.jsonl history")
     .option("--dataset <name>", "dataset name", "frame")

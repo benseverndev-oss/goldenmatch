@@ -10,7 +10,7 @@
 //
 // Per-package variance is captured in REGISTRY:
 //   mcp.symbol : the combined tools export ("TOOLS" or "TOOL_DEFINITIONS"); mcp:null => the
-//                package ships no TS MCP server (goldenanalysis) -> emits [].
+//                package ships no TS MCP server -> emits [].
 //   a2a.from   : the built a2a server exporting AGENT_CARD; a2a:null (or omitted) => the package
 //                ships no TS A2A server (goldenanalysis, infermap) -> a2a_skills key is omitted.
 //   cli.kind   : "program"      -> import { program } (commander), read program.commands
@@ -24,7 +24,7 @@ const REGISTRY = {
   goldencheck:    { mcp: { from: "dist/node/mcp/server.js", symbol: "TOOL_DEFINITIONS" }, cli: { from: "dist/cli.js", kind: "program" }, a2a: { from: "dist/node/a2a/server.js" } },
   goldenflow:     { mcp: { from: "dist/node/mcp/server.js", symbol: "TOOL_DEFINITIONS" }, cli: { from: "dist/cli.js", kind: "program" }, a2a: { from: "dist/node/a2a/server.js" } },
   goldenpipe:     { mcp: { from: "dist/node/mcp/server.js", symbol: "TOOLS" },            cli: { from: "dist/cli.js", kind: "program" }, a2a: { from: "dist/node/a2a/server.js" } },
-  goldenanalysis: { mcp: null,                                                            cli: { from: "dist/cli.js", kind: "buildProgram" }, a2a: null },
+  goldenanalysis: { mcp: { from: "dist/node/mcp/server.js", symbol: "TOOL_DEFINITIONS" }, cli: { from: "dist/cli.js", kind: "buildProgram" }, a2a: null },
   infermap:       { mcp: { from: "dist/node/mcp/server.js", symbol: "TOOLS" },            cli: { from: "dist/cli.js", kind: "commands" }, a2a: null },
 };
 

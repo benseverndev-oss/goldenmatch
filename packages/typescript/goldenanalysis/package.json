@@ -47,7 +47,8 @@
     }
   },
   "bin": {
-    "goldenanalysis-js": "./dist/cli.cjs"
+    "goldenanalysis-js": "./dist/cli.cjs",
+    "goldenanalysis-mcp": "./dist/node/mcp/server.cjs"
   },
   "files": [
     "dist",
