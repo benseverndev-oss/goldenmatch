@@ -12,32 +12,23 @@
 // keeping them recovers recall at no precision cost).
 // ---------------------------------------------------------------------------
 
+// Conservative set: only tokens that are ~never a real surname (safe to
+// default-ON on general-population data). Ambiguous surnames (Shah, King,
+// Prince, Bishop, Baron, Knight, Marshall, Do, ...) are deliberately excluded;
+// the historical_50k A/B win is driven by "sir"/"baronet", both retained.
+// Byte-matched by the Python `_STRIP_HONORIFIC_TOKENS` (api-parity contract).
 const STRIP_HONORIFIC_TOKENS: ReadonlySet<string> = new Set([
   // courtesy titles
-  "mr", "mrs", "ms", "miss", "mstr", "master",
+  "mr", "mrs", "ms", "miss", "mstr",
   // academic / professional
   "dr", "prof", "professor",
-  // religious
-  "rev", "revd", "reverend", "fr", "father", "st", "saint",
-  "pope", "cardinal", "bishop", "archbishop", "deacon",
-  // honorifics / knighthoods
-  "sir", "dame", "hon", "honourable", "honorable",
-  "knight", "kt", "bt", "baronet",
-  // peerage / nobility ranks
-  "lord", "lady", "baron", "baroness", "earl", "count", "countess",
-  "duke", "duchess", "viscount", "viscountess",
-  "marquess", "marquis", "marchioness",
-  // royalty
-  "king", "queen", "prince", "princess", "emperor", "empress",
-  "tsar", "czar", "kaiser", "sultan", "shah", "emir", "sheikh",
-  // military rank
-  "gen", "general", "col", "colonel", "maj", "major",
-  "capt", "captain", "lt", "lieutenant", "sgt", "sergeant",
-  "adm", "admiral", "cmdr", "commander", "brig", "brigadier",
-  "marshal", "fieldmarshal",
+  // religious (abbreviated titles only, not office names)
+  "rev", "revd", "reverend",
+  // knighthoods / unambiguous honorifics
+  "sir", "dame", "kt", "bt", "baronet",
   // generational / post-nominal suffixes
   "jr", "sr", "esq", "esquire",
-  "phd", "md", "dds", "dvm", "do",
+  "phd", "md", "dds", "dvm",
 ]);
 
 /**

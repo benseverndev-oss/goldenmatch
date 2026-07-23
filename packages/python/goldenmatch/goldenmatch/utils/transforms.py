@@ -26,38 +26,33 @@ _SOUNDEX_CODE = {
 }
 
 
-# Honorific / title / rank / post-nominal tokens stripped by the
-# ``strip_honorifics`` transform. Regnal numerals ("VIII") and ordinals ("1st")
-# are DELIBERATELY absent: the historical_50k A/B showed keeping them recovers
-# recall at no precision cost (they discriminate monarchs), so they survive as
-# ordinary tokens. Byte-matched by the TS `STRIP_HONORIFIC_TOKENS` mirror in
-# core/transforms.ts (api-parity contract).
+# Honorific / title / post-nominal tokens stripped by the ``strip_honorifics``
+# transform. Deliberately CONSERVATIVE: only tokens that are ~never a real
+# surname, so the transform is safe to default-ON across general-population data.
+#
+# EXCLUDED on purpose (each is a common surname, so stripping it would nuke real
+# names — e.g. "Shah", "King", "Prince", "Bishop", "Baron", "Earl", "Knight",
+# "Marshall", "Do"): the peerage ranks (lord/lady/baron/earl/count/duke/
+# viscount/marquess...), royalty (king/queen/prince/emperor/tsar/sultan/shah/
+# emir/sheikh...), religious offices (pope/bishop/cardinal/deacon/father/saint/
+# st), military ranks (general/colonel/major/captain/admiral/marshal...),
+# "master", "knight", "hon", and the "do" suffix. The historical_50k A/B win is
+# driven by "sir" (144k) and "baronet" (145k), both retained here — the ambiguous
+# tokens were neutral-to-harmful. Regnal numerals ("VIII") and ordinals ("1st")
+# are also kept (they discriminate monarchs; A/B recovered recall).
+# Byte-matched by the TS `STRIP_HONORIFIC_TOKENS` mirror (api-parity contract).
 _STRIP_HONORIFIC_TOKENS = frozenset({
     # courtesy titles
-    "mr", "mrs", "ms", "miss", "mstr", "master",
+    "mr", "mrs", "ms", "miss", "mstr",
     # academic / professional
     "dr", "prof", "professor",
-    # religious
-    "rev", "revd", "reverend", "fr", "father", "st", "saint",
-    "pope", "cardinal", "bishop", "archbishop", "deacon",
-    # honorifics / knighthoods
-    "sir", "dame", "hon", "honourable", "honorable",
-    "knight", "kt", "bt", "baronet",
-    # peerage / nobility ranks
-    "lord", "lady", "baron", "baroness", "earl", "count", "countess",
-    "duke", "duchess", "viscount", "viscountess",
-    "marquess", "marquis", "marchioness",
-    # royalty
-    "king", "queen", "prince", "princess", "emperor", "empress",
-    "tsar", "czar", "kaiser", "sultan", "shah", "emir", "sheikh",
-    # military rank
-    "gen", "general", "col", "colonel", "maj", "major",
-    "capt", "captain", "lt", "lieutenant", "sgt", "sergeant",
-    "adm", "admiral", "cmdr", "commander", "brig", "brigadier",
-    "marshal", "fieldmarshal",
+    # religious (abbreviated titles only, not office names)
+    "rev", "revd", "reverend",
+    # knighthoods / unambiguous honorifics
+    "sir", "dame", "kt", "bt", "baronet",
     # generational / post-nominal suffixes
     "jr", "sr", "esq", "esquire",
-    "phd", "md", "dds", "dvm", "do",
+    "phd", "md", "dds", "dvm",
 })
 
 def _honorific_bare(token: str) -> str:

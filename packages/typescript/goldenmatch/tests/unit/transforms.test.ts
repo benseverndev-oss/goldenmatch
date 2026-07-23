@@ -84,6 +84,15 @@ describe("applyTransform - strip_honorifics (mirror of Python strip_honorifics)"
       "winston",
     );
   });
+
+  it("real surnames survive (conservative set, safe to default-on)", () => {
+    for (const surname of ["King", "Queen", "Prince", "Bishop", "Baron", "Earl",
+                           "Duke", "Shah", "Pope", "Marshall", "Knight", "Do",
+                           "Master", "Lord"]) {
+      expect(applyTransform(surname, "strip_honorifics")).toBe(surname);
+    }
+    expect(applyTransform("Don King", "strip_honorifics")).toBe("Don King");
+  });
 });
 
 describe("applyTransform - parameterized", () => {

@@ -98,6 +98,15 @@ class TestStripHonorifics:
             "Sir Winston", ["lowercase", "strip", "strip_honorifics"]
         ) == "winston"
 
+    def test_real_surnames_survive(self):
+        # The conservative set MUST NOT strip tokens that are common real
+        # surnames — safe to default-ON on general-population data.
+        for surname in ("King", "Queen", "Prince", "Bishop", "Baron", "Earl",
+                        "Duke", "Shah", "Pope", "Marshall", "Knight", "Do",
+                        "Master", "Lord"):
+            assert apply_transform(surname, "strip_honorifics") == surname
+        assert apply_transform("Don King", "strip_honorifics") == "Don King"
+
 
 class TestApplyTransforms:
     """Tests for the apply_transforms function."""
