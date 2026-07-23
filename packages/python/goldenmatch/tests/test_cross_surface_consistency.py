@@ -50,12 +50,24 @@ class TestNativeScorerIdMaps:
     # over the injected census/alias tables -- they are NOT score_one arms. Pinned
     # here so a renumber of either the Python map or the Rust NB_* consts fails.
     _NAME_BUCKET_IDS = {"name_freq_weighted_jw": 15, "given_name_aliased_jw": 16}
+    # FS domain comparators (spec 2026-07-23, Phase 3): REAL score_one arms at
+    # ids 17/18 (magnitude-aware date-diff / great-circle haversine), sitting
+    # ABOVE the name-scorer 15/16 gap (15/16 are NOT score_one arms -- they're
+    # intercepted by the bucket kernel). Pinned so a renumber of the Python map or
+    # the Rust score_one match fails. `numeric_diff` is intentionally absent (its
+    # band rides the scorer string, which the fixed-id score_one can't carry).
+    _COMPARATOR_BUCKET_IDS = {"date_diff": 17, "geo_haversine": 18}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):
         # _NATIVE_SCORER_IDS = the score_one namespace (0-14) PLUS the two
-        # name-scorer bucket ids (15/16), which the bucket kernel routes to fs-core.
-        assert _NATIVE_SCORER_IDS == {**self._SCORE_ONE_IDS, **self._NAME_BUCKET_IDS}
+        # name-scorer bucket ids (15/16, kernel-intercepted) PLUS the two FS domain
+        # comparator score_one arms (17/18).
+        assert _NATIVE_SCORER_IDS == {
+            **self._SCORE_ONE_IDS,
+            **self._NAME_BUCKET_IDS,
+            **self._COMPARATOR_BUCKET_IDS,
+        }
 
     def test_native_field_scorer_ids_match_score_field_matrix_ordering(self):
         assert _NATIVE_FIELD_SCORER_IDS == self._FIELD_MATRIX_IDS
