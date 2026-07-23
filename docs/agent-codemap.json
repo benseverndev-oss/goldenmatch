@@ -1608,6 +1608,7 @@
             "_fs_autoconfig_v2_enabled",
             "_fs_domain_comparators_enabled",
             "_fs_route_min_rows",
+            "_fs_strip_honorifics_enabled",
             "_fs_tf_adjustment_enabled",
             "_fs_total_pair_budget",
             "_fuzzy_pass_transforms",
@@ -1651,6 +1652,7 @@
             "_semantic_blocking_threshold",
             "_source_correlated_exclusions",
             "_source_disjoint",
+            "_strip_honorifics_for",
             "_text_corpus_blocking",
             "_text_heavy_columns",
             "_tf_adjustment_for",
@@ -6991,7 +6993,8 @@
             "apply_transform",
             "apply_transforms",
             "bloom_clk_batch",
-            "canonical_soundex"
+            "canonical_soundex",
+            "strip_honorifics"
           ],
           "imports": [
             "goldenmatch.core._native_loader",

@@ -839,6 +839,47 @@ def _tf_adjustment_for(profile: ColumnProfile) -> bool:
     )
 
 
+# Name column types that carry honorific/title tokens ("Sir", "Baronet") worth
+# stripping before FS scores them. Person-name columns classify to "name"; a
+# composite first+last field classifies to "multi_name".
+_STRIP_HONORIFIC_COLTYPES = frozenset({"name", "multi_name"})
+
+
+def _fs_strip_honorifics_enabled() -> bool:
+    """FS honorific-token stripping on name comparison fields.
+
+    **Default OFF.** When ``GOLDENMATCH_FS_STRIP_HONORIFICS`` is truthy, FS
+    auto-config appends the ``strip_honorifics`` transform to name-typed
+    comparison fields, so a title/rank token leaked into a name field ("Sir",
+    "Baronet", "Bt.") stops carrying match weight. Targets the OVER-MERGE regime
+    that TF down-weighting could NOT reach on historical_50k (byte-neutral there:
+    the name coltype already routes through ``name_freq_weighted_jw``, so TF
+    self-neutralizes; the honorifics are the residual it doesn't cut). The
+    honorific tokens are a curated title/rank set (``strip_honorifics`` in
+    ``utils/transforms.py``); regnal numerals are kept (the A/B showed keeping
+    them recovers recall at no precision cost). Default-off is byte-identical (no
+    field gets the transform); flip only after the accuracy panel proves it, per
+    the domain-comparators/TF precedent.
+
+    Spike A/B (historical_50k, panel-honorific lane): F1 0.7520 -> 0.7628
+    (+0.0108), precision +0.0245, recall -0.0046; GM overtakes Splink (0.7571).
+    """
+    return os.environ.get("GOLDENMATCH_FS_STRIP_HONORIFICS", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+def _strip_honorifics_for(profile: ColumnProfile) -> bool:
+    """Whether a comparison field earns the ``strip_honorifics`` transform, given
+    the ``GOLDENMATCH_FS_STRIP_HONORIFICS`` flag. Off by default -> always False
+    -> byte-identical. Scoped to name-typed columns; see
+    ``_STRIP_HONORIFIC_COLTYPES`` / ``_fs_strip_honorifics_enabled``."""
+    return (
+        _fs_strip_honorifics_enabled()
+        and profile.col_type in _STRIP_HONORIFIC_COLTYPES
+    )
+
+
 # Fraction of a column's non-null sample values that must parse as valid
 # coordinates for it to be admitted as a single-field geo_haversine column.
 _LATLONG_SAMPLE_FLOOR = 0.8
@@ -5049,6 +5090,12 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         scorer, transforms = _refdata_refine_matchkey_field(
             p.name, scorer, transforms, p.col_type,
         )
+
+        # Honorific stripping (GOLDENMATCH_FS_STRIP_HONORIFICS, default OFF).
+        # Appended last so it runs after lowercase/strip; emits None for a
+        # honorific-only value -> FS reads it as missing, not an empty agreement.
+        if _strip_honorifics_for(p) and "strip_honorifics" not in transforms:
+            transforms = [*transforms, "strip_honorifics"]
 
         # Determine comparison levels based on scorer type
         if scorer == "exact":

@@ -26,6 +26,66 @@ _SOUNDEX_CODE = {
 }
 
 
+# Honorific / title / rank / post-nominal tokens stripped by the
+# ``strip_honorifics`` transform. Regnal numerals ("VIII") and ordinals ("1st")
+# are DELIBERATELY absent: the historical_50k A/B showed keeping them recovers
+# recall at no precision cost (they discriminate monarchs), so they survive as
+# ordinary tokens. Byte-matched by the TS `STRIP_HONORIFIC_TOKENS` mirror in
+# core/transforms.ts (api-parity contract).
+_STRIP_HONORIFIC_TOKENS = frozenset({
+    # courtesy titles
+    "mr", "mrs", "ms", "miss", "mstr", "master",
+    # academic / professional
+    "dr", "prof", "professor",
+    # religious
+    "rev", "revd", "reverend", "fr", "father", "st", "saint",
+    "pope", "cardinal", "bishop", "archbishop", "deacon",
+    # honorifics / knighthoods
+    "sir", "dame", "hon", "honourable", "honorable",
+    "knight", "kt", "bt", "baronet",
+    # peerage / nobility ranks
+    "lord", "lady", "baron", "baroness", "earl", "count", "countess",
+    "duke", "duchess", "viscount", "viscountess",
+    "marquess", "marquis", "marchioness",
+    # royalty
+    "king", "queen", "prince", "princess", "emperor", "empress",
+    "tsar", "czar", "kaiser", "sultan", "shah", "emir", "sheikh",
+    # military rank
+    "gen", "general", "col", "colonel", "maj", "major",
+    "capt", "captain", "lt", "lieutenant", "sgt", "sergeant",
+    "adm", "admiral", "cmdr", "commander", "brig", "brigadier",
+    "marshal", "fieldmarshal",
+    # generational / post-nominal suffixes
+    "jr", "sr", "esq", "esquire",
+    "phd", "md", "dds", "dvm", "do",
+})
+
+# Trailing/leading punctuation stripped from a token before the honorific test.
+_HONORIFIC_PUNCT_RE = re.compile(r"^[^\w]+|[^\w]+$")
+
+
+def strip_honorifics(value: str) -> str | None:
+    """Drop honorific/title/rank/post-nominal tokens from a name value.
+
+    Token-wise, case-insensitive, tolerant of trailing punctuation ("Bt." ==
+    "bt"). Returns ``None`` when nothing survives (a name field that was *only*
+    an honorific, e.g. ``"Sir"`` / ``"Baronet"``) so the FS scorer treats it as a
+    MISSING value rather than a spurious empty-string agreement — see
+    ``fs_missing_mode``. Regnal numerals/ordinals are kept (see
+    ``_STRIP_HONORIFIC_TOKENS``).
+    """
+    tokens = value.split()
+    if not tokens:
+        return None
+    kept = [
+        t for t in tokens
+        if _HONORIFIC_PUNCT_RE.sub("", t).lower() not in _STRIP_HONORIFIC_TOKENS
+        and _HONORIFIC_PUNCT_RE.sub("", t) != ""
+    ]
+    residual = " ".join(kept).strip()
+    return residual or None
+
+
 def canonical_soundex(s: str) -> str:
     """GoldenMatch canonical American Soundex code, or ``""`` when the value has
     no ASCII-letter content. Byte-identical to score-core ``soundex``.
@@ -123,6 +183,10 @@ def apply_transform(value: str | None, transform: str) -> str | None:
         return tokens[-1] if tokens else value
     elif transform == "bloom_filter" or transform.startswith("bloom_filter:"):
         return _bloom_filter_transform(value, transform)
+    elif transform == "strip_honorifics":
+        # May return None (value was honorific-only) -> apply_transforms
+        # short-circuits and FS reads it as MISSING, not an empty agreement.
+        return strip_honorifics(value)
     else:
         # Plugin transform fallback: consult the registry so refdata-style
         # extensions (legal_form_strip, address_token_normalize, …) work

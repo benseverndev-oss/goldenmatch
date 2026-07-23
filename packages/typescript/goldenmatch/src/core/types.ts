@@ -527,6 +527,7 @@ export const VALID_TRANSFORMS = new Set([
   "token_sort",
   "first_token",
   "last_token",
+  "strip_honorifics",
 ] as const);
 
 export const VALID_STRATEGIES = new Set([

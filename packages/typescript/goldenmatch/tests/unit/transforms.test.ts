@@ -52,6 +52,40 @@ describe("applyTransform - basic transforms", () => {
   });
 });
 
+describe("applyTransform - strip_honorifics (mirror of Python strip_honorifics)", () => {
+  it("strips a leading title", () => {
+    expect(applyTransform("Sir Winston", "strip_honorifics")).toBe("Winston");
+  });
+
+  it("strips a trailing punctuated rank", () => {
+    expect(applyTransform("John Smith Bt.", "strip_honorifics")).toBe("John Smith");
+  });
+
+  it("honorific-only value becomes null (missing, not empty agreement)", () => {
+    expect(applyTransform("Sir", "strip_honorifics")).toBe(null);
+    expect(applyTransform("Baronet", "strip_honorifics")).toBe(null);
+  });
+
+  it("plain name unchanged", () => {
+    expect(applyTransform("Winston", "strip_honorifics")).toBe("Winston");
+  });
+
+  it("keeps regnal numerals", () => {
+    expect(applyTransform("Henry VIII", "strip_honorifics")).toBe("Henry VIII");
+  });
+
+  it("is case-insensitive", () => {
+    expect(applyTransform("DAME judi", "strip_honorifics")).toBe("judi");
+  });
+
+  it("null propagates through a chain", () => {
+    expect(applyTransforms("Sir", ["lowercase", "strip", "strip_honorifics"])).toBe(null);
+    expect(applyTransforms("Sir Winston", ["lowercase", "strip", "strip_honorifics"])).toBe(
+      "winston",
+    );
+  });
+});
+
 describe("applyTransform - parameterized", () => {
   it("substring:0:3", () => {
     expect(applyTransform("abcdef", "substring:0:3")).toBe("abc");
