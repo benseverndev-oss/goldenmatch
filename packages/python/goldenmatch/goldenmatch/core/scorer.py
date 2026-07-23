@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -170,6 +171,87 @@ def _date_similarity_py(val_a: str, val_b: str) -> float:
     return Levenshtein.normalized_similarity(val_a, val_b)
 
 
+# --- date_diff: magnitude-aware date comparator ----------------------------
+# Spec: docs/superpowers/specs/2026-07-23-fs-domain-comparators-design.md
+# The edit-distance `date` scorer above is magnitude-BLIND: 1990-01-02 vs
+# 1991-01-02 differs by one digit -> 0.90, over-scoring a full-year DOB gap.
+# `date_diff` parses both to a day-ordinal and bands by DAY-DISTANCE, so a year
+# gap is a weak partial. It is a strict improvement: on unparseable input it
+# reuses `_date_similarity_py` (never returns None for non-null strings), so the
+# scalar and vectorized (NxN loop) paths call the SAME function and agree by
+# construction, and the missing-level decision is unchanged.
+# Day-distance -> similarity, monotone non-increasing. Person-data defaults;
+# a config's `level_thresholds` re-bucket the raw value if a caller wants other
+# cutoffs. 1827 d ~= 5 y.
+_DATE_DIFF_BANDS: tuple[tuple[int, float], ...] = (
+    (0, 1.0), (1, 0.92), (31, 0.80), (366, 0.60), (1827, 0.30),
+)
+
+
+def _date_parts(s: str | None) -> tuple[int, int, int] | None:
+    """Parse a date to ``(year, month, day)`` -- tolerant of ISO ``YYYY-MM-DD``
+    (and ``/`` separators, 1-digit month/day), compact ``YYYYMMDD``, and a bare
+    ``YYYY`` (year-only, e.g. NCVR birth_year -> Jan-1 of that year). None if it
+    matches none of these. Range validity (e.g. month 13) is checked at ordinal
+    time, not here. Regex-free (``re`` isn't imported in this module)."""
+    if not s:
+        return None
+    s = s.strip()
+    sep = "-" if "-" in s else ("/" if "/" in s else "")
+    if sep:
+        bits = s.split(sep)
+        if len(bits) == 3 and all(b.isdigit() for b in bits) and len(bits[0]) == 4:
+            return int(bits[0]), int(bits[1]), int(bits[2])
+        return None
+    if len(s) == 8 and s.isdigit():
+        return int(s[:4]), int(s[4:6]), int(s[6:8])
+    if len(s) == 4 and s.isdigit():
+        return int(s), 1, 1
+    return None
+
+
+def _date_ordinal_of(parts: tuple[int, int, int] | None) -> int | None:
+    if parts is None:
+        return None
+    try:
+        return _dt.date(parts[0], parts[1], parts[2]).toordinal()
+    except ValueError:
+        return None  # invalid month/day (e.g. 1990-13-40)
+
+
+def _parse_date_ordinal(s: str | None) -> int | None:
+    """Proleptic-Gregorian day ordinal for a parseable date, else None."""
+    return _date_ordinal_of(_date_parts(s))
+
+
+def _date_diff_band(d: int) -> float:
+    for lim, val in _DATE_DIFF_BANDS:
+        if d <= lim:
+            return val
+    return 0.0
+
+
+def _date_diff_similarity_py(val_a: str, val_b: str) -> float:
+    """Day-distance banded similarity; MM/DD transposition floored to a partial;
+    edit-distance (`_date_similarity_py`) fallback when either side won't parse."""
+    pa, pb = _date_parts(val_a), _date_parts(val_b)
+    oa, ob = _date_ordinal_of(pa), _date_ordinal_of(pb)
+    if oa is None or ob is None:
+        return _date_similarity_py(val_a, val_b)
+    d = abs(oa - ob)
+    if d != 0:
+        # A month<->day swap on either operand that collapses the distance to 0
+        # is a data-entry transposition (1990-01-02 vs 1990-02-01), a partial not
+        # a disagree -> floor at the <=31-day band.
+        for parts, other in ((pa, ob), (pb, oa)):
+            y, mo, dd = parts
+            sw = _date_ordinal_of((y, dd, mo))
+            if sw is not None and abs(sw - other) == 0:
+                d = min(d, 31)
+                break
+    return _date_diff_band(d)
+
+
 def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | None:
     """Score two field values using the specified scorer.
 
@@ -182,6 +264,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return 1.0 if val_a == val_b else 0.0
     elif scorer == "date":
         return _date_similarity_py(val_a, val_b)
+    elif scorer == "date_diff":
+        return _date_diff_similarity_py(val_a, val_b)
     elif scorer == "jaro_winkler":
         return JaroWinkler.similarity(val_a, val_b)
     elif scorer == "levenshtein":
@@ -588,6 +672,17 @@ def _fuzzy_score_matrix(
         for i in range(n):
             for j in range(i + 1, n):
                 s = _date_similarity_py(clean[i], clean[j])
+                matrix[i, j] = matrix[j, i] = s
+    elif scorer_name == "date_diff":
+        # Magnitude-aware date comparator (spec 2026-07-23). Same O(n^2) shape as
+        # `date` -- dates land in small same-key blocks, so this is not a hot path,
+        # and _field_score_matrix_dedup collapses distinct values. Calling the
+        # SAME scalar fn guarantees scalar == vectorized parity by construction.
+        n = len(clean)
+        matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                s = _date_diff_similarity_py(clean[i], clean[j])
                 matrix[i, j] = matrix[j, i] = s
     elif scorer_name == "initialism_match":
         return _initialism_score_matrix(values)

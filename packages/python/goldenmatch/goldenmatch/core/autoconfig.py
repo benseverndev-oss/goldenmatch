@@ -765,6 +765,23 @@ def _fs_autoconfig_v2_enabled() -> bool:
     )
 
 
+def _fs_domain_comparators_enabled() -> bool:
+    """FS domain comparators (spec 2026-07-23-fs-domain-comparators-design.md).
+
+    **Default OFF.** When ``GOLDENMATCH_FS_DOMAIN_COMPARATORS`` is truthy, FS
+    auto-config admits ``date`` columns with the magnitude-aware ``date_diff``
+    scorer instead of ``levenshtein`` (edit-distance can't see that a 1-year DOB
+    gap is a weak partial). Composes with ``_fs_autoconfig_v2_enabled`` (v2 is
+    the path that admits dates at all). Default-off is byte-identical to today;
+    flip only after the accuracy panel + qis_gate scale-neutrality prove it, per
+    the ``GOLDENMATCH_FS_AUTOCONFIG_V2`` flag precedent. Phase 1 = ``date_diff``;
+    numeric/geo comparators are later phases.
+    """
+    return os.environ.get("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
 
 # Domain-extracted column scorer mapping.
 # These columns are added by extract_features() and start with __.
@@ -4842,16 +4859,21 @@ def build_probabilistic_matchkeys(profiles: list[ColumnProfile]) -> list[Matchke
         # blocking-field exclusion are EM's job at train time (train_em
         # blocking_fields=...), not this builder's.
 
-        # Lever #1: admit date columns as edit-distance comparison fields.
+        # Lever #1: admit date columns as comparison fields. Default scorer is
+        # edit-distance (`levenshtein`); with GOLDENMATCH_FS_DOMAIN_COMPARATORS on
+        # the magnitude-aware `date_diff` is used instead (spec 2026-07-23) -- a
+        # year DOB gap becomes a weak partial rather than a near-match. partial=0.6
+        # for date_diff so the 0.60 (<=1y) band lands at level 1, not level 0.
         if v2 and p.col_type == "date":
             if p.cardinality_ratio >= 1.0:
                 continue  # per-record timestamp surrogate: no shared-identity signal
+            _date_dc = _fs_domain_comparators_enabled()
             fields.append(MatchkeyField(
                 field=p.name,
-                scorer="levenshtein",
+                scorer="date_diff" if _date_dc else "levenshtein",
                 transforms=["strip"],
                 levels=3,
-                partial_threshold=0.8,
+                partial_threshold=0.6 if _date_dc else 0.8,
             ))
             continue
 

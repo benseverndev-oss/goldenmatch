@@ -28,6 +28,12 @@ VALID_SCORERS = frozenset({
     # degrades to levenshtein. Use this for date columns instead of a name-
     # oriented fuzzy scorer.
     "date",
+    # Magnitude-aware date comparator (spec 2026-07-23-fs-domain-comparators):
+    # parses both dates to a day-ordinal and scores by DAY-DISTANCE bands, so a
+    # full-year DOB gap is a weak partial (the edit-distance `date` scorer above
+    # is magnitude-blind -- one changed digit reads 0.90). Unparseable input
+    # degrades to the `date` scorer. Use for date/dob columns on the FS path.
+    "date_diff",
     # Hamming similarity over a hex perceptual hash (image pHash) -- the
     # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
     "phash",

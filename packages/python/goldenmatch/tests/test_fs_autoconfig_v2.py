@@ -63,6 +63,26 @@ def _scorer_of(mks, field):
     return next(f.scorer for f in mks[0].fields if f.field == field)
 
 
+# ── domain comparators (GOLDENMATCH_FS_DOMAIN_COMPARATORS, spec 2026-07-23) ──
+
+def test_date_column_is_levenshtein_by_default(monkeypatch):
+    # v2 on (admits dates), domain-comparators flag unset -> edit-distance, the
+    # byte-identical-to-today admission.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.delenv("GOLDENMATCH_FS_DOMAIN_COMPARATORS", raising=False)
+    mks = build_probabilistic_matchkeys(_person_profiles())
+    assert _scorer_of(mks, "dob") == "levenshtein"
+
+
+def test_date_column_is_date_diff_under_flag(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "1")
+    mks = build_probabilistic_matchkeys(_person_profiles())
+    assert _scorer_of(mks, "dob") == "date_diff"
+    # non-date fields are unchanged by the flag
+    assert _scorer_of(mks, "surname") != "date_diff"
+
+
 # ── default ON; explicit =0 restores byte-identical legacy field set ──────────
 
 def test_default_unset_is_v2(monkeypatch):
