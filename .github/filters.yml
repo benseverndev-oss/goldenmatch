@@ -427,6 +427,14 @@ config_matrix:
   - 'scripts/test_suite_matrix.py'
   - 'docs-site/suite-matrix.mdx'
   - 'docs-site/*/recipes.mdx'
+  # Reference api-surface capability matrix: the generated table reads the package
+  # versions (pyproject / package.json) + MCP counts (parity manifests), so a
+  # version bump or a manifest change must re-run its --check.
+  - 'scripts/gen_api_surface.py'
+  - 'scripts/test_api_surface.py'
+  - 'docs-site/reference/api-surface.mdx'
+  - 'packages/python/*/pyproject.toml'
+  - 'packages/typescript/*/package.json'
   - 'parity/*.yaml'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
