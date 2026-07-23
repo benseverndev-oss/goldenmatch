@@ -4,6 +4,23 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Baseline functional-dependency mining runs the native-gated FD kernels
+  instead of a per-pair Polars `group_by`.** `baseline/constraints.py` now feeds
+  its candidate columns to the strict (`discover_functional_dependencies`) and
+  approximate (`discover_approximate_fds`) kernels — the same native-gated,
+  single-source kernels `relations/` already uses — so the compute is Rust when
+  `goldencheck[native]` is installed and a pure-Python (Polars-free) fallback
+  otherwise; the Polars engine is out of the FD-mining path (a step in the
+  Polars eviction). Two behavior refinements fall out of the shared kernels: a
+  **unique/near-unique determinant no longer produces a spurious FD** (the old
+  `group_by` scored it at confidence 1.0 for trivially "determining" every
+  column; the strict pass skips it), and the approximate pass applies the shared
+  average-group-size guard. Genuine strict and approximate dependencies are
+  discovered unchanged. As a side effect, the `core.kernels`
+  `discover_functional_dependencies` fallback is now Polars-free too.
+
 ### Added
 
 - **`profile`, `health-score`, and `list-domains` CLI commands (TS parity).** The

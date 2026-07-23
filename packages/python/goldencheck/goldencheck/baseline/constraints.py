@@ -5,6 +5,10 @@ import logging
 
 from goldencheck._polars_lazy import pl
 from goldencheck.baseline.models import FunctionalDependency, TemporalOrder
+from goldencheck.core.kernels import (
+    discover_approximate_fds,
+    discover_functional_dependencies,
+)
 
 __all__ = ["mine_constraints"]
 
@@ -58,8 +62,23 @@ def _mine_functional_dependencies(
     df: pl.DataFrame,
     min_confidence: float,
 ) -> list[FunctionalDependency]:
-    """Return merged FDs with confidence >= *min_confidence*."""
-    # Select the 30 lowest-cardinality columns to avoid O(2^n) blowup.
+    """Return merged FDs with confidence >= *min_confidence*.
+
+    Runs the native-gated FD kernels over the candidate columns instead of a
+    per-pair Polars ``group_by``: the strict pass (``discover_functional_dependencies``,
+    confidence 1.0) and the approximate pass (``discover_approximate_fds``,
+    confidence in ``[min_confidence, 1.0)`` = ``1 - violations/n_rows``) together
+    cover the ``>= min_confidence`` range. The Rust kernel interns each column
+    once and reuses it across every pair (early-exit on the first violation for
+    the strict pass); the no-native fallback does its distinct-/mode-counting in
+    pure Python. Either way the FD-mining compute leaves the Polars engine (the
+    baseline module's Polars-eviction step) — only candidate selection still
+    inspects the frame. The strict pass also drops the trivial FDs a
+    ``group_by`` counted as confidence 1.0 (a unique determinant "determines"
+    every column), and the approximate pass applies the shared average-group-size
+    guard, so near-unique determinants no longer surface spurious dependencies.
+    """
+    # Select the 30 lowest-cardinality columns to avoid O(k^2) blowup.
     cardinalities: list[tuple[str, int]] = []
     for col in df.columns:
         n_unique = df[col].n_unique()
@@ -69,38 +88,24 @@ def _mine_functional_dependencies(
     # Sort ascending by cardinality and take up to _MAX_COLS.
     cardinalities.sort(key=lambda x: x[1])
     candidate_cols = [col for col, _ in cardinalities[:_MAX_COLS]]
+    if len(candidate_cols) < 2:
+        return []
 
     n_rows = len(df)
+    # Pull each candidate column out once (extraction, not compute) so the
+    # kernels run on plain Python lists — no Polars in the FD-mining path.
+    values = [df[c].to_list() for c in candidate_cols]
 
-    # Accumulate: determinant -> {dependent -> max_confidence}
+    # Accumulate: determinant -> {dependent -> max_confidence}. The strict and
+    # approximate passes are disjoint by construction (0 vs >=1 violations).
     det_to_deps: dict[str, dict[str, float]] = {}
-
-    for det in candidate_cols:
-        for dep in candidate_cols:
-            if det == dep:
-                continue
-
-            # Confidence = fraction of rows where the dependent value matches
-            # the most frequent dependent value for that determinant group.
-            # This is the standard TANE/approximate-FD definition and handles
-            # cases where a single group has a few exceptions gracefully.
-            grouped = (
-                df.select([det, dep])
-                .group_by([det, dep])
-                .agg(pl.len().alias("_cnt"))
-                .group_by(det)
-                .agg(pl.col("_cnt").max().alias("_mode_cnt"))
-            )
-            consistent_count = grouped["_mode_cnt"].sum()
-            confidence = consistent_count / n_rows
-
-            if confidence >= min_confidence:
-                if det not in det_to_deps:
-                    det_to_deps[det] = {}
-                # Keep the highest confidence seen for this dep.
-                prev = det_to_deps[det].get(dep, 0.0)
-                if confidence > prev:
-                    det_to_deps[det][dep] = confidence
+    for i, j in discover_functional_dependencies(values):
+        det_to_deps.setdefault(candidate_cols[i], {})[candidate_cols[j]] = 1.0
+    for i, j, viol in discover_approximate_fds(values, min_confidence):
+        confidence = 1.0 - viol / n_rows
+        dep_map = det_to_deps.setdefault(candidate_cols[i], {})
+        if confidence > dep_map.get(candidate_cols[j], 0.0):
+            dep_map[candidate_cols[j]] = confidence
 
     # Merge: for each determinant, combine all dependent columns into one FD.
     # Use the minimum confidence across dependents (most conservative).
