@@ -238,6 +238,7 @@ a2a_skills:
   - agent_match_sources
   - agent_review_queue
   - fix_quality
+  - memory_import
   - scan_quality
   - score
 
