@@ -303,6 +303,18 @@ jobs:
           print(f"AB_VAR={name}")
           print(f"AB_VALUES={values}")
           PY
+      # Same prompt-hash extraction cache as the head_to_head job (see the comment
+      # there). env_ab has NO ambiguity matrix, so the key uses inputs.ambiguity; the
+      # `<corpus>-<model>-` restore-keys prefix is SHARED with head_to_head, so a cache
+      # populated by either mode warms the other (same corpus + extraction model).
+      - name: Restore/save the goldengraph extraction LLM cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: ${{ github.workspace }}/.gg_llm_cache
+          key: gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-amb${{ inputs.ambiguity }}-${{ github.run_id }}
+          restore-keys: |
+            gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-amb${{ inputs.ambiguity }}-
+            gg-llmcache-${{ inputs.corpus }}-${{ inputs.local_llm != '' && inputs.local_llm || 'api' }}-
       - name: Install goldenmatch + native engine wheel + goldengraph + datasets
         run: |
           # polars: the hybrid path's passage retriever (goldenmatch_rag._make_frame)
@@ -331,6 +343,10 @@ jobs:
           GOLDENGRAPH_LLM_BASE_URL: https://openrouter.ai/api/v1
           GOLDENGRAPH_LLM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_MODEL: openai/gpt-4o-mini
+          # Points the bench extraction/build client at the actions/cache-persisted dir
+          # (restored above). Only the goldengraph engine's BUILD client is cached; the
+          # answer-time synth client stays uncached. Same dir the cache step persists.
+          GOLDENGRAPH_LLM_CACHE: ${{ github.workspace }}/.gg_llm_cache
           POLARS_SKIP_CPU_CHECK: "1"
           # datasets pulls a fresh-pip pyarrow whose bundled mimalloc SIGSEGVs on the
           # pipeline's worker threads -- the documented repo standard for any lane that
