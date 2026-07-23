@@ -324,6 +324,22 @@ measurement is clean) came back **flat-to-mixed**: `answer_match` **0.4700 → 0
   stays unchanged. If a future corpus/model resurfaces a graph-only precision gap under hybrid,
   the env-A/B here is the way to re-test before re-adding the clause.
 
+## Hybrid passage_k sweep — default 10 is optimal (2026-07-23)
+How many passages hybrid retrieves per question (`passage_k`, default 10) is the retrieval-BREADTH
+knob. MuSiQue/2wiki/hotpot corpora build one Document PER PARAGRAPH (`corpora.py`/`wiki_corpus.py`),
+so there is no finer chunking lever — breadth is the whole of it. The bench engine's `answer()` gained
+an ANSWER-time `GOLDENGRAPH_QA_PASSAGE_K` override (mirroring `GOLDENGRAPH_QA_ANSWER_MODE`) so the
+same-graph env-A/B can sweep it over ONE shared build (unset/invalid -> configured default, byte-identical).
+- **MEASURED (env_ab `GOLDENGRAPH_QA_PASSAGE_K:3,5,10,20`, MuSiQue N=100, one hybrid build, judge on,
+  run 29982270929; `support_recall` 0.8425 identical across all 4 arms = the control):** answer_match
+  0.37 (k=3) -> 0.42 (k=5) -> **0.44 (k=10)** -> 0.43 (k=20); token_f1 0.442 -> 0.485 -> **0.501** -> 0.497.
+  A clear inverted-U peaking at **k=10**: too few passages miss supporting context, too many add
+  distractor noise. (MuSiQue ships 10 context paragraphs/question — 2 supporting + 8 distractor — so
+  k~=10 ~= "one question's worth of context," which is why it's the knee.)
+- **DECISION: keep `passage_k=10` default (bench + library `ask()`), unchanged — it is optimal, not
+  beatable by a tighter/broader k here.** The value is the confirmation + the reusable sweep knob for a
+  future corpus/model. Re-sweep via `ab_env=GOLDENGRAPH_QA_PASSAGE_K:...` before changing the default.
+
 ## CHAT / embedding provider split (2026-07-22)
 `OpenAIClient._ensure_client` (`llm.py`) reads `GOLDENGRAPH_LLM_BASE_URL` /
 `GOLDENGRAPH_LLM_API_KEY` first, falling back to `OPENAI_BASE_URL` / `OPENAI_API_KEY`
