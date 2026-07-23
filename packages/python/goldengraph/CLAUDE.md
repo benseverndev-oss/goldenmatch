@@ -408,3 +408,22 @@ blocking) LOOK alarming in the log but are only ~8.6% of build compute -- a "con
 fix would save <9% and is NOT worth building. The dominant build cost is the per-document LLM
 extraction, which is exactly what the `GOLDENGRAPH_LLM_CACHE` prompt-hash cache targets (warm cache ->
 ~72% build cut). Lesson: a high log-line COUNT is not wall; measure the phase split before optimizing.
+
+## Ball-pruning for hybrid multi-hop QA — REFUTED a SECOND way (path filter), 2026-07-23
+Follow-up to the edge-rerank refutation: tested `GOLDENGRAPH_HYBRID_FILTER=path`
+(`filter_subgraph_to_paths` — keeps seed->answer PATHS, the structurally-correct pruning the
+rerank's support_recall drop pointed to).
+- **MEASURED (env_ab `GOLDENGRAPH_HYBRID_FILTER:none,path`, MuSiQue N=75, hybrid, judge off, run
+  30038160088):** answer_match 0.4667 -> 0.4267 (-0.040); support_recall 0.833 -> **0.589 (-0.244,
+  worse than rerank's -0.12)**. Another loss.
+- **CONCLUSION: pruning the hybrid ball is a DEAD END for multi-hop QA.** Two independent methods
+  (question-cosine rerank AND path-preserving filter) both gut support_recall and fail to lift
+  answer_match. Mechanism: in the hybrid path the model treats PASSAGES as primary truth and the
+  graph as a NAVIGATION aid, so shrinking the graph removes cross-passage bridges with no upside. #4's
+  "answer buried in ~1,700 edges" was a MISdiagnosis of the SYNTHESIS miss -- the failure is multi-hop
+  REASONING over passages+graph, not graph SIZE. Do not pursue graph-context reduction for hybrid QA;
+  a reasoning lever (e.g. `GOLDENGRAPH_SYNTH_SAMPLES` self-consistency voting) is the direction if the
+  SYNTHESIS frontier is revisited.
+- **METHODOLOGY:** the two runs' `none` arms differ by 0.04 (0.507 vs 0.467) at identical config =>
+  LLM nondeterminism sets a ~+/-0.04 answer_match noise floor at N=75. Screen levers at N>=150 (or on
+  the deterministic support_recall) before trusting a ~0.04 delta.
