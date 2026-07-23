@@ -234,6 +234,17 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # score_field_matrix path), where id 4 is soundex_match -- different kernel,
     # different namespace; date is not wired into that path.
     "date": 4,
+    # ids 17/18 = date_diff / geo_haversine (FS domain comparators, score-core
+    # score_one, spec 2026-07-23). (ids 15/16 below are the name scorers.) Same
+    # wheel-skew story as date: routing is GUARDED on the `date_diff_similarity` /
+    # `geo_haversine_similarity` capability symbols at the gating site below, so a
+    # stale wheel (whose score_one catch-all scores ids 17/18 as 0.0) declines to
+    # the pure-Python per-pair mirrors (`_date_diff_similarity_py` /
+    # `_geo_haversine_similarity_py`). Only the PARAMETERLESS comparators are
+    # kernel-backed; `numeric_diff` carries its band on the scorer string, which
+    # the fixed-id score_one(id,a,b) can't convey.
+    "date_diff": 17,
+    "geo_haversine": 18,
     # id 5 = qgram (char-trigram Jaccard, score-core score_one). Same wheel-skew
     # story as date: routing is GUARDED on the `qgram_similarity` capability
     # symbol at the gating site below, so a stale wheel (pre-qgram, whose
@@ -566,6 +577,20 @@ def _resolve_score_pair_callable(
         # (native id 4); byte-identical to the kernel (native-parity asserted).
         from goldenmatch.core.scorer import _date_similarity_py
         return _date_similarity_py
+    if scorer_name == "date_diff":
+        # Magnitude-aware date comparator (spec 2026-07-23). Per-pair mirror of
+        # score-core::date_diff_similarity (native id 15); parity-asserted in
+        # tests/test_native_date_diff_geo_parity.py. Making it fast-path eligible
+        # routes date_diff configs through the bucket backend (native id 15 or
+        # this per-pair mirror) instead of the slow matrix path.
+        from goldenmatch.core.scorer import _date_diff_similarity_py
+        return _date_diff_similarity_py
+    if scorer_name == "geo_haversine":
+        # Great-circle comparator (spec 2026-07-23). Per-pair mirror of
+        # score-core::geo_haversine_similarity (native id 16); parity-asserted in
+        # tests/test_native_date_diff_geo_parity.py.
+        from goldenmatch.core.scorer import _geo_haversine_similarity_py
+        return _geo_haversine_similarity_py
     if scorer_name == "qgram":
         # Character-trigram Jaccard (n=3). Per-pair mirror of the matrix path
         # (_qgram_score_matrix) AND of score-core::qgram_similarity (native
@@ -1387,6 +1412,8 @@ def score_buckets(
             # per-pair path (which mirrors the kernel) score the whole block.
             _mod = native_module()
             _date_ok = _mod is not None and hasattr(_mod, "date_similarity")
+            _date_diff_ok = _mod is not None and hasattr(_mod, "date_diff_similarity")
+            _geo_ok = _mod is not None and hasattr(_mod, "geo_haversine_similarity")
             _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
             _soundex_ok = _mod is not None and hasattr(_mod, "soundex_similarity")
             _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
@@ -1396,6 +1423,8 @@ def score_buckets(
             _radial_ok = _mod is not None and hasattr(_mod, "radial_similarity")
             _audio_fp_ok = _mod is not None and hasattr(_mod, "audio_fp_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
+            has_date_diff = any(spec[3] == "date_diff" for spec in _field_specs)
+            has_geo = any(spec[3] == "geo_haversine" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             has_dice = any(spec[3] == "dice" for spec in _field_specs)
@@ -1438,6 +1467,8 @@ def score_buckets(
             # zero that id); the pure-Python per-pair mirror scores the block.
             _skew_block = (
                 (has_date and not _date_ok)
+                or (has_date_diff and not _date_diff_ok)
+                or (has_geo and not _geo_ok)
                 or (has_qgram and not _qgram_ok)
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)

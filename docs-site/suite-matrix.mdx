@@ -26,14 +26,14 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 
 The Rust / Arrow-native / fused `-core` kernels are the source of truth for scoring; each language surface either dispatches to the kernel (the fast path) or runs a byte-identical pure-language **fallback**. This tracks which scorers a kernel actually backs vs which are fallback-only. Sources: Python `_NATIVE_SCORER_IDS` (arrow bucket kernel) and TS `WASM_COVERED_SCORERS` (`-core` WASM), gated as the `scorer_kernels` api_parity surface.
 
-**17 of 20 scorers are kernel-backed** (the reference fast path); the other 3 are pure-language fallbacks with no `-core` kernel.
+**19 of 22 scorers are kernel-backed** (the reference fast path); the other 3 are pure-language fallbacks with no `-core` kernel.
 
 | Substrate | Scorers |
 |---|---|
 | Rust `-core` kernel — Python + TS | `alias_match`, `audio_fp`, `date`, `dice`, `ensemble`, `exact`, `given_name_aliased_jw`, `initialism_match`, `jaccard`, `jaro_winkler`, `levenshtein`, `name_freq_weighted_jw`, `phash`, `qgram`, `radial`, `soundex_match`, `token_sort` |
-| Rust `-core` kernel — Python arrow-native only (TS falls back) | — |
+| Rust `-core` kernel — Python arrow-native only (TS falls back) | `date_diff`, `geo_haversine` |
 | WASM `-core` kernel — TS only (Python falls back) | — |
-| Language fallback — no `-core` kernel | `date_diff`, `embedding`, `record_embedding` |
+| Language fallback — no `-core` kernel | `embedding`, `numeric_diff`, `record_embedding` |
 
 ## Cross-language parity (Python ↔ TypeScript)
 
@@ -44,7 +44,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 | `goldenmatch` | mcp_tools | 42 | 40 | 8 |
 | `goldenmatch` | cli_commands | 13 | 23 | 1 |
 | `goldenmatch` | a2a_skills | 27 | 20 | 9 |
-| `goldenmatch` | scorers | 19 | 1 | 0 |
+| `goldenmatch` | scorers | 19 | 3 | 0 |
 | `goldenmatch` | transforms | 12 | 0 | 0 |
 | `goldencheck` | mcp_tools | 18 | 1 | 0 |
 | `goldencheck` | cli_commands | 13 | 9 | 0 |
@@ -69,7 +69,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 - `goldenmatch` **cli_commands** — TS-only: `tui`.
 - `goldenmatch` **a2a_skills** — Python-only: `analyze_blocking`, `compare_clusters`, `configure`, `documents_ingest`, `documents_suggest_schema`, `identity_audit`, `identity_audit_seal`, `identity_audit_verify`, `identity_claim`, `identity_resolve_conflict`, `identity_show`, `incremental`, `list_runs`, `pprl`, `quality`, `retrieve_similar`, `review`, `rollback`, `schema_match`, `sensitivity`.
 - `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `fix_quality`, `scan_quality`, `score`.
-- `goldenmatch` **scorers** — Python-only: `date_diff`.
+- `goldenmatch` **scorers** — Python-only: `date_diff`, `geo_haversine`, `numeric_diff`.
 - `goldencheck` **mcp_tools** — Python-only: `install_domain`.
 - `goldencheck` **cli_commands** — Python-only: `agent-serve`, `denial-constraints`, `init`, `learn`, `refs`, `review`, `scan-db`, `schedule`, `serve`.
 - `goldenflow` **cli_commands** — Python-only: `agent-serve`, `init`, `interactive`, `mcp-serve`, `schedule`, `serve`, `watch`.

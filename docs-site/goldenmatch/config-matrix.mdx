@@ -971,12 +971,14 @@ _`VALID_SCORERS` -- `MatchkeyField.scorer` / `NegativeEvidenceField.scorer`._
 | `embedding` | Cosine similarity of a model embedding of the field. | Semantic matching | 0.0-1.0 |
 | `ensemble` | Best of several sub-scorers (max of jaro_winkler / token_sort / soundex). | Names with reordering | 0.0-1.0 |
 | `exact` | Exact string equality after transforms. | Email, phone, ID | 0 or 1 |
+| `geo_haversine` | Great-circle (haversine) distance banded to a similarity, on a single combined 'lat,long' field. FS path. | Coordinates (lat,long) | 0.0-1.0 |
 | `given_name_aliased_jw` | Jaro-Winkler with alias-aware exact collapse of given-name variants (Bob &lt;-> Robert). | Given names | 0.0-1.0 |
 | `initialism_match` | Matches initials/acronyms against their expansions. | Acronyms, initials | 0 or 1 |
 | `jaccard` | Jaccard overlap of token/character sets or bloom filters. | PPRL | 0.0-1.0 |
 | `jaro_winkler` | Jaro-Winkler edit distance with a shared-prefix bonus. | Names | 0.0-1.0 |
 | `levenshtein` | Normalized Levenshtein edit distance. | General strings | 0.0-1.0 |
 | `name_freq_weighted_jw` | Jaro-Winkler modulated by US-Census surname frequency (rare surnames weigh more). | Surnames | 0.0-1.0 |
+| `numeric_diff` | Banded numeric distance (abs/pct); magnitude-aware, so string-close numbers that are far apart no longer read as near-agreement. FS path. | Amounts, measurements, ages | 0.0-1.0 |
 | `phash` | Perceptual-hash Hamming similarity. | Images | 0.0-1.0 |
 | `qgram` | Q-gram (n-gram) overlap similarity. | General strings, typos | 0.0-1.0 |
 | `radial` | Rotation/crop-invariant radial-variance similarity. | Rotated/cropped images | 0.0-1.0 |

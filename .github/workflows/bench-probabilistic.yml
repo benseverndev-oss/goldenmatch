@@ -9,12 +9,18 @@
 # dep are recorded as skipped/error rows — never fatal to the panel. ncvr is
 # always skipped by design (the raw sample carries no true-entity grouping).
 #
-# Two jobs (both workflow_dispatch, neither a gate):
-#   panel        — single-config panel (current FS auto-config) vs Splink.
-#   panel-v1-v2  — runs the panel twice (GOLDENMATCH_FS_AUTOCONFIG_V2 0 vs 1)
-#                  and diffs GoldenMatch F1 per dataset; the verdict gates the
-#                  v2-default flip. Fetches DBLP-ACM (the one set we can't
-#                  measure locally) best-effort from Leipzig.
+# Three jobs (all workflow_dispatch, none a gate):
+#   panel            — single-config panel (current FS auto-config) vs Splink.
+#   panel-v1-v2      — runs the panel twice (GOLDENMATCH_FS_AUTOCONFIG_V2 0 vs 1)
+#                      and diffs GoldenMatch F1 per dataset; the verdict gates the
+#                      v2-default flip. Fetches DBLP-ACM (the one set we can't
+#                      measure locally) best-effort from Leipzig.
+#   panel-comparators — runs the panel twice (GOLDENMATCH_FS_DOMAIN_COMPARATORS
+#                      0 vs 1, v2 auto-config default-on in BOTH so the flag is
+#                      the only variable) and diffs F1 per dataset. historical_50k
+#                      (real corrupted DOBs) is where the magnitude-aware date_diff
+#                      comparator is expected to lift F1; this verdict gates the
+#                      GOLDENMATCH_FS_DOMAIN_COMPARATORS default flip.
 #
 # To run: GitHub -> Actions -> "bench-probabilistic" -> Run workflow.
 name: bench-probabilistic
@@ -40,6 +46,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_comparators:
+        description: "Run the FS domain-comparators OFF-vs-ON lane (gates the GOLDENMATCH_FS_DOMAIN_COMPARATORS default flip)"
+        type: boolean
+        required: false
+        default: true
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -165,6 +176,91 @@ jobs:
             prob_panel_v1/
             prob_panel_v2/
             compare/
+          retention-days: 90
+
+  # ── FS domain-comparators OFF vs ON lane ──────────────────────────────────
+  # Runs the panel twice — GOLDENMATCH_FS_DOMAIN_COMPARATORS=0 (baseline; date
+  # columns scored by edit-distance `levenshtein`) and =1 (the magnitude-aware
+  # `date_diff`/`numeric_diff`/`geo_haversine` comparators) — and diffs
+  # GoldenMatch F1 per dataset. v2 auto-config is default-on in BOTH runs (the
+  # env var is unset), so the domain-comparators flag is the ONLY variable.
+  # historical_50k carries real corrupted DOBs, so it is the dataset where the
+  # date comparator is expected to lift F1 (offline synthetic fixtures ceiling at
+  # F1=1.0); this verdict gates the GOLDENMATCH_FS_DOMAIN_COMPARATORS default
+  # flip, mirroring how panel-v1-v2 gated the v2 flip.
+  panel-comparators:
+    if: ${{ inputs.run_comparators }}
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      # DBLP-ACM is gitignored; fetch the Leipzig benchmark best-effort. On any
+      # failure the panel records dblp_acm as skipped (never fatal).
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+            ls -la "$DEST"
+          else
+            echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped in the panel"
+          fi
+
+      - name: Run panel — comparators OFF (GOLDENMATCH_FS_DOMAIN_COMPARATORS=0)
+        env:
+          GOLDENMATCH_FS_DOMAIN_COMPARATORS: "0"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_dc_off
+
+      - name: Run panel — comparators ON (GOLDENMATCH_FS_DOMAIN_COMPARATORS=1)
+        env:
+          GOLDENMATCH_FS_DOMAIN_COMPARATORS: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_dc_on
+
+      - name: Compare OFF vs ON (writes verdict to job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_dc_off/panel.json \
+            --v2 prob_panel_dc_on/panel.json \
+            --title "FS domain comparators OFF vs ON — GoldenMatch probabilistic path" \
+            --a-label off --b-label on \
+            --out compare_dc/compare.md $FLAG
+
+      - name: Upload OFF/ON panels + comparison
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: prob-panel-comparators
+          path: |
+            prob_panel_dc_off/
+            prob_panel_dc_on/
+            compare_dc/
           retention-days: 90
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────

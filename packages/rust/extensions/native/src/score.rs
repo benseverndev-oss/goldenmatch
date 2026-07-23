@@ -277,6 +277,29 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::date_similarity(a, b)
 }
 
+/// Magnitude-aware date comparator (score-core id 17, FS domain comparators spec
+/// 2026-07-23). Exposed as its own #[pyfunction] capability marker, exactly like
+/// `date_similarity`: `score_one` / `score_block_pairs` dispatch id 17, but a
+/// stale published wheel (pre-date_diff) would hit score_one's catch-all and
+/// silently return 0.0 for id 17, so the Python caller gates the native route on
+/// `hasattr(_native, "date_diff_similarity")` and falls back to the pure-Python
+/// per-pair mirror (`_date_diff_similarity_py`) otherwise.
+#[pyfunction]
+pub fn date_diff_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::date_diff_similarity(a, b)
+}
+
+/// Great-circle (haversine) distance comparator (score-core id 18, FS domain
+/// comparators spec 2026-07-23). Own #[pyfunction] capability marker like
+/// `date_diff_similarity`; a stale pre-geo wheel hits score_one's catch-all
+/// (silent 0.0 for id 18), so the Python caller gates the native route on
+/// `hasattr(_native, "geo_haversine_similarity")` and falls back to the
+/// pure-Python per-pair mirror (`_geo_haversine_similarity_py`) otherwise.
+#[pyfunction]
+pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::geo_haversine_similarity(a, b)
+}
+
 /// Character-trigram Jaccard (q-gram) similarity (score-core id 5). Exposed as
 /// its own #[pyfunction] capability marker, exactly like `date_similarity`:
 /// `score_one` / `score_block_pairs` dispatch id 5, but a stale published wheel

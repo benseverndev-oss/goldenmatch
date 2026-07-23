@@ -139,6 +139,219 @@ pub fn date_similarity(a: &str, b: &str) -> f64 {
     }
 }
 
+// --- date_diff: magnitude-aware date comparator (score_one id 15) -----------
+// The reference for `goldenmatch.core.scorer._date_diff_similarity_py` (spec
+// 2026-07-23-fs-domain-comparators). `date_similarity` above is magnitude-BLIND
+// (a one-digit edit -> 0.90, so a full-year DOB gap over-scores); `date_diff`
+// parses both to a proleptic-Gregorian day count and bands by |days_a - days_b|,
+// with an MM/DD-transposition floor and the SAME `date_similarity` edit-distance
+// fallback on unparseable input (so it never diverges from the Python missing
+// semantics -- both return a real similarity for any non-null pair). Day-distance
+// -> similarity, monotone non-increasing (1827 d ~= 5 y).
+const DATE_DIFF_BANDS: [(i64, f64); 5] =
+    [(0, 1.0), (1, 0.92), (31, 0.80), (366, 0.60), (1827, 0.30)];
+
+/// Parse a date to raw `(year, month, day)` ints -- range NOT validated here
+/// (validity is checked in `date_to_days`, mirroring Python's `_date_parts` +
+/// `datetime.date()` two-step). Accepts ISO `YYYY-MM-DD` / `YYYY/MM/DD` (1-2
+/// digit m/d ok), compact `YYYYMMDD`, and bare `YYYY` (-> Jan 1). Regex-free,
+/// byte-for-byte with `_date_parts`.
+fn date_parts(s: &str) -> Option<(i64, i64, i64)> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let sep = if t.contains('-') {
+        Some('-')
+    } else if t.contains('/') {
+        Some('/')
+    } else {
+        None
+    };
+    if let Some(c) = sep {
+        let bits: Vec<&str> = t.split(c).collect();
+        if bits.len() == 3
+            && bits
+                .iter()
+                .all(|b| !b.is_empty() && b.bytes().all(|x| x.is_ascii_digit()))
+            && bits[0].len() == 4
+        {
+            return Some((
+                bits[0].parse::<i64>().ok()?,
+                bits[1].parse::<i64>().ok()?,
+                bits[2].parse::<i64>().ok()?,
+            ));
+        }
+        return None;
+    }
+    if t.len() == 8 && t.bytes().all(|x| x.is_ascii_digit()) {
+        return Some((
+            t[0..4].parse::<i64>().ok()?,
+            t[4..6].parse::<i64>().ok()?,
+            t[6..8].parse::<i64>().ok()?,
+        ));
+    }
+    if t.len() == 4 && t.bytes().all(|x| x.is_ascii_digit()) {
+        return Some((t.parse::<i64>().ok()?, 1, 1));
+    }
+    None
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap(y) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// Proleptic-Gregorian day count (Howard Hinnant's days_from_civil) for a valid
+/// date, else None -- rejecting exactly what `datetime.date(y,m,d)` rejects
+/// (year 1..=9999, month 1..=12, day 1..=days_in_month). Only DIFFERENCES between
+/// two dates are used, so the epoch offset cancels and this matches Python
+/// `date.toordinal()` deltas exactly.
+fn date_to_days(y: i64, m: i64, d: i64) -> Option<i64> {
+    if !(1..=9999).contains(&y) || !(1..=12).contains(&m) {
+        return None;
+    }
+    if d < 1 || d > days_in_month(y, m) {
+        return None;
+    }
+    let yy = if m <= 2 { y - 1 } else { y };
+    let era = if yy >= 0 { yy } else { yy - 399 } / 400;
+    let yoe = yy - era * 400; // [0, 399]
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    Some(era * 146097 + doe - 719468)
+}
+
+fn parse_date_days(s: &str) -> Option<i64> {
+    let (y, m, d) = date_parts(s)?;
+    date_to_days(y, m, d)
+}
+
+fn date_diff_band(d: i64) -> f64 {
+    for (lim, val) in DATE_DIFF_BANDS {
+        if d <= lim {
+            return val;
+        }
+    }
+    0.0
+}
+
+/// Day-distance banded similarity; MM/DD transposition floored to the <=31d band;
+/// `date_similarity` edit-distance fallback when either side won't parse.
+pub fn date_diff_similarity(a: &str, b: &str) -> f64 {
+    match (parse_date_days(a), parse_date_days(b)) {
+        (Some(oa), Some(ob)) => {
+            let mut d = (oa - ob).abs();
+            if d != 0 {
+                // A month<->day swap on either operand that collapses the distance
+                // to 0 is a data-entry transposition (1990-01-02 vs 1990-02-01) --
+                // a partial, not a disagree -> floor at the <=31d band.
+                for (parts, other) in [(date_parts(a), ob), (date_parts(b), oa)] {
+                    if let Some((y, mo, dd)) = parts {
+                        if let Some(sw) = date_to_days(y, dd, mo) {
+                            if sw == other {
+                                d = d.min(31);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            date_diff_band(d)
+        }
+        // Either side unparseable: reuse the edit-distance date scorer (never None).
+        _ => date_similarity(a, b),
+    }
+}
+
+// --- geo_haversine: great-circle distance comparator (score_one id 16) -------
+// The reference for `goldenmatch.core.scorer._geo_haversine_similarity_py`:
+// parse ONE combined "lat,long" field per side and band the great-circle
+// (haversine) km distance, monotone non-increasing. Exact-string fallback when
+// either side won't parse (never None for a non-null pair). Parity is on the
+// BANDED similarity (a discrete value); the haversine itself runs the platform
+// libm (same as Python's `math`), so band assignment is identical for any pair
+// not within an ULP of a band edge -- which the parity fixtures avoid.
+const GEO_HAVERSINE_BANDS: [(f64, f64); 4] = [(0.1, 1.0), (1.0, 0.85), (10.0, 0.5), (100.0, 0.2)];
+const EARTH_RADIUS_KM: f64 = 6371.0088;
+
+fn parse_latlong(s: &str) -> Option<(f64, f64)> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let sep = if t.contains(',') {
+        ','
+    } else if t.contains(';') {
+        ';'
+    } else {
+        return None;
+    };
+    let bits: Vec<&str> = t.split(sep).collect();
+    if bits.len() != 2 {
+        return None;
+    }
+    let lat = bits[0].trim().parse::<f64>().ok()?;
+    let lon = bits[1].trim().parse::<f64>().ok()?;
+    if lat.is_finite()
+        && lon.is_finite()
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
+    {
+        Some((lat, lon))
+    } else {
+        None
+    }
+}
+
+fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let lat1 = a.0.to_radians();
+    let lat2 = b.0.to_radians();
+    let dlat = lat2 - lat1;
+    let dlon = b.1.to_radians() - a.1.to_radians();
+    // Mirror Python's `math.sin(x) ** 2` (base**int -> C pow, not x*x): use powf.
+    let h = (dlat / 2.0).sin().powf(2.0) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powf(2.0);
+    2.0 * EARTH_RADIUS_KM * h.sqrt().min(1.0).asin()
+}
+
+fn geo_haversine_band(km: f64) -> f64 {
+    for (lim, val) in GEO_HAVERSINE_BANDS {
+        if km <= lim {
+            return val;
+        }
+    }
+    0.0
+}
+
+/// Haversine-distance banded similarity on a `lat,long` field; exact-string
+/// fallback when either side won't parse (never None).
+pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
+    match (parse_latlong(a), parse_latlong(b)) {
+        (Some(pa), Some(pb)) => geo_haversine_band(haversine_km(pa, pb)),
+        _ => {
+            if a == b {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 /// Character-trigram (q-gram) Jaccard set for one raw string, mirroring Python
 /// `goldenmatch.core.scorer._qgram_set` (n=3): lowercase, pad each side with
 /// `n-1` `#` sentinels, and take the set of length-`n` codepoint substrings.
@@ -907,7 +1120,10 @@ pub fn audio_fp_similarity(a: &str, b: &str) -> f64 {
 /// fast-path scale, all on [0, 1]. ids: 0=jaro_winkler, 1=levenshtein,
 /// 2=token_sort, 3=exact, 4=date, 5=qgram, 6=soundex_match, 7=initialism_match,
 /// 8=alias_match, 9=dice, 10=jaccard, 11=phash, 12=ensemble, 13=radial,
-/// 14=audio_fp.
+/// 14=audio_fp, 17=date_diff, 18=geo_haversine. (ids 15/16 are the
+/// weighted-bucket name scorers, dispatched by the native crate's
+/// `bucket_field_similarity` before it delegates other ids here -- not by
+/// `score_one` -- so they are intentionally absent from this match.)
 ///
 /// NOTE: id=2 returns the UNSCALED `fuzz::ratio` ([0,1], NOT *100). This is
 /// deliberate and must not be reconciled with `token_sort_ratio`'s *100 form:
@@ -966,6 +1182,17 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // those mirrors instead of silently zeroing via this catch-all.
         13 => radial_similarity(a, b),
         14 => audio_fp_similarity(a, b),
+        // ids 17/18 = date_diff / geo_haversine (FS domain comparators, spec
+        // 2026-07-23). Magnitude-aware day-distance / great-circle km bands.
+        // (ids 15/16 are the weighted-bucket name scorers, handled by the native
+        // crate's `bucket_field_similarity`, never reaching here.) Byte-parity
+        // with the `_date_diff_similarity_py` / `_geo_haversine_similarity_py`
+        // mirrors the bucket per-pair path falls back to; the Python guard gates
+        // each on its `date_diff_similarity` / `geo_haversine_similarity`
+        // capability symbol so a stale wheel declines to those mirrors instead of
+        // silently zeroing via this catch-all.
+        17 => date_diff_similarity(a, b),
+        18 => geo_haversine_similarity(a, b),
         _ => 0.0,
     }
 }

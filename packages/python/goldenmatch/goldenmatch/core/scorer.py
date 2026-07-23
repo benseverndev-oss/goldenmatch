@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import math
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -254,6 +255,124 @@ def _date_diff_similarity_py(val_a: str, val_b: str) -> float:
     return _date_diff_band(d)
 
 
+# --- numeric_diff: magnitude-aware numeric comparator ----------------------
+# Spec: docs/superpowers/specs/2026-07-23-fs-domain-comparators-design.md
+# String similarity on numbers is meaningless -- `levenshtein("100","900")` ~0.67
+# reads two very different amounts as near-agreement. `numeric_diff` parses both
+# to float and maps the DISTANCE to a monotone [0,1] ramp, in one of two modes:
+#   numeric_diff:abs:<eps>  -> distance = |a-b|,                       band = eps
+#   numeric_diff:pct:<frac> -> distance = |a-b| / max(|a|,|b|,_PCT_EPS), band = frac
+# Similarity = 1.0 at distance 0, linear decay to 0.0 at the band edge, 0 beyond
+# (monotone non-increasing). Unparseable input falls back to exact (1.0 if the raw
+# strings are equal else 0.0) -- NEVER None -- so the scalar and vectorized (NxN
+# loop) paths call the SAME function and agree by construction, and the missing-
+# level decision is unchanged (mirrors date_diff's fallback posture).
+_NUMERIC_DIFF_DEFAULT: tuple[str, float] = ("pct", 0.1)  # bare form -> 10% band
+_PCT_EPS = 1e-9  # guards the pct denominator when both values are ~0
+
+
+def _parse_numeric_diff_spec(scorer: str) -> tuple[str, float]:
+    """``numeric_diff[:abs|pct:<band>]`` -> ``(mode, band)``; bare / malformed
+    suffix -> the default (``pct``, 0.1)."""
+    parts = scorer.split(":")
+    if len(parts) == 3 and parts[0] == "numeric_diff" and parts[1] in ("abs", "pct"):
+        try:
+            band = float(parts[2])
+        except ValueError:
+            return _NUMERIC_DIFF_DEFAULT
+        if band > 0.0:
+            return parts[1], band
+    return _NUMERIC_DIFF_DEFAULT
+
+
+def _parse_float(s: str | None) -> float | None:
+    """Float value of a string, else None (also None for the special float
+    literals ``nan``/``inf`` -- a garbage numeric must read as unparseable, not a
+    distance)."""
+    if s is None:
+        return None
+    try:
+        v = float(s.strip())
+    except (ValueError, AttributeError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _numeric_diff_similarity_py(val_a: str, val_b: str, scorer: str) -> float:
+    """Banded numeric-distance similarity; exact-string fallback when either side
+    won't parse as a finite float (so it never returns None for non-null input)."""
+    a, b = _parse_float(val_a), _parse_float(val_b)
+    if a is None or b is None:
+        return 1.0 if val_a == val_b else 0.0
+    mode, band = _parse_numeric_diff_spec(scorer)
+    dist = abs(a - b)
+    if mode == "pct":
+        dist = dist / max(abs(a), abs(b), _PCT_EPS)
+    if dist >= band:
+        return 0.0
+    return 1.0 - dist / band  # 1.0 at dist 0, linear decay to the band edge
+
+
+# --- geo_haversine: great-circle distance comparator -----------------------
+# Spec: docs/superpowers/specs/2026-07-23-fs-domain-comparators-design.md
+# String similarity on coordinates is meaningless; great-circle distance is the
+# signal. `geo_haversine` parses ONE combined "lat,long" field per side and bands
+# the haversine distance in km, monotone non-increasing. (Two SEPARATE lat/long
+# columns are the deferred CROSS-field comparator -- the single-field
+# score_field(a,b,scorer) signature can't reach two columns.) Unparseable input
+# falls back to exact (never None), like numeric_diff / date_diff.
+# km -> similarity, monotone non-increasing. Address/venue-scale defaults.
+_GEO_HAVERSINE_BANDS: tuple[tuple[float, float], ...] = (
+    (0.1, 1.0), (1.0, 0.85), (10.0, 0.5), (100.0, 0.2),
+)
+_EARTH_RADIUS_KM = 6371.0088  # IUGG mean Earth radius
+
+
+def _parse_latlong(s: str | None) -> tuple[float, float] | None:
+    """Parse ``"lat,long"`` (``,`` or ``;`` separator) to ``(lat, long)`` within
+    valid coordinate ranges, else None. Regex-free."""
+    if not s:
+        return None
+    txt = s.strip()
+    sep = "," if "," in txt else (";" if ";" in txt else "")
+    if not sep:
+        return None
+    bits = txt.split(sep)
+    if len(bits) != 2:
+        return None
+    try:
+        lat, lon = float(bits[0].strip()), float(bits[1].strip())
+    except ValueError:
+        return None
+    if math.isfinite(lat) and math.isfinite(lon) and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        return lat, lon
+    return None
+
+
+def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lon1 = math.radians(a[0]), math.radians(a[1])
+    lat2, lon2 = math.radians(b[0]), math.radians(b[1])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2.0 * _EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _geo_haversine_band(km: float) -> float:
+    for lim, val in _GEO_HAVERSINE_BANDS:
+        if km <= lim:
+            return val
+    return 0.0
+
+
+def _geo_haversine_similarity_py(val_a: str, val_b: str) -> float:
+    """Haversine-distance banded similarity on a ``lat,long`` field; exact-string
+    fallback when either side won't parse (never None)."""
+    pa, pb = _parse_latlong(val_a), _parse_latlong(val_b)
+    if pa is None or pb is None:
+        return 1.0 if val_a == val_b else 0.0
+    return _geo_haversine_band(_haversine_km(pa, pb))
+
+
 def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | None:
     """Score two field values using the specified scorer.
 
@@ -268,6 +387,10 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _date_similarity_py(val_a, val_b)
     elif scorer == "date_diff":
         return _date_diff_similarity_py(val_a, val_b)
+    elif scorer == "geo_haversine":
+        return _geo_haversine_similarity_py(val_a, val_b)
+    elif scorer == "numeric_diff" or scorer.startswith("numeric_diff:"):
+        return _numeric_diff_similarity_py(val_a, val_b, scorer)
     elif scorer == "jaro_winkler":
         return JaroWinkler.similarity(val_a, val_b)
     elif scorer == "levenshtein":
@@ -685,6 +808,27 @@ def _fuzzy_score_matrix(
         for i in range(n):
             for j in range(i + 1, n):
                 s = _date_diff_similarity_py(clean[i], clean[j])
+                matrix[i, j] = matrix[j, i] = s
+    elif scorer_name == "geo_haversine":
+        # Great-circle distance comparator (spec 2026-07-23). Same O(n^2) shape
+        # as `date`/`date_diff` -- coordinates land in small same-key blocks, and
+        # _field_score_matrix_dedup collapses distinct values. Calling the SAME
+        # scalar fn guarantees scalar == vectorized parity by construction.
+        n = len(clean)
+        matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                s = _geo_haversine_similarity_py(clean[i], clean[j])
+                matrix[i, j] = matrix[j, i] = s
+    elif scorer_name == "numeric_diff" or scorer_name.startswith("numeric_diff:"):
+        # Magnitude-aware numeric comparator (spec 2026-07-23). Same O(n^2) shape;
+        # the band spec rides on the scorer string, passed through to the SAME
+        # scalar fn -> scalar == vectorized parity by construction.
+        n = len(clean)
+        matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                s = _numeric_diff_similarity_py(clean[i], clean[j], scorer_name)
                 matrix[i, j] = matrix[j, i] = s
     elif scorer_name == "initialism_match":
         return _initialism_score_matrix(values)

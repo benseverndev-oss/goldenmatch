@@ -83,6 +83,68 @@ def test_date_column_is_date_diff_under_flag(monkeypatch):
     assert _scorer_of(mks, "surname") != "date_diff"
 
 
+# ── Phase 2: numeric_diff + geo_haversine admission (same flag) ──────────────
+
+def _numeric_geo_profiles():
+    return [
+        _p("first_name", "name", card=0.42),
+        _p("surname", "name", card=0.74),
+        _p("balance", "numeric", card=0.6),  # numeric (Phase 2)
+        ColumnProfile(  # single combined lat,long column (Phase 2)
+            name="coordinates", dtype="Utf8", col_type="string", confidence=0.5,
+            null_rate=0.0, cardinality_ratio=0.9, avg_len=20,
+            sample_values=["40.71,-74.00", "34.05,-118.24", "41.88,-87.63",
+                           "29.76,-95.37", "33.45,-112.07", "39.95,-75.16"],
+        ),
+    ]
+
+
+def test_numeric_and_geo_skipped_by_default(monkeypatch):
+    # v2 on, domain-comparators flag unset -> numeric skipped entirely, and a
+    # coordinate column is admitted only as a PLAIN string field (never as
+    # geo_haversine). Byte-identical to today: the flag adds no new scorers.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.delenv("GOLDENMATCH_FS_DOMAIN_COMPARATORS", raising=False)
+    mks = build_probabilistic_matchkeys(_numeric_geo_profiles())
+    fields = _fields(mks)
+    assert "balance" not in fields  # numeric is not an FS comparison field
+    scorers = [f.scorer for f in mks[0].fields]
+    assert "geo_haversine" not in scorers
+    assert "numeric_diff:pct:0.1" not in scorers
+
+
+def test_numeric_is_numeric_diff_under_flag(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "1")
+    mks = build_probabilistic_matchkeys(_numeric_geo_profiles())
+    assert _scorer_of(mks, "balance") == "numeric_diff:pct:0.1"
+
+
+def test_latlong_column_is_geo_haversine_under_flag(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "1")
+    mks = build_probabilistic_matchkeys(_numeric_geo_profiles())
+    assert _scorer_of(mks, "coordinates") == "geo_haversine"
+
+
+def test_non_coordinate_string_not_detected_as_geo(monkeypatch):
+    # A plain free-text column must NOT be admitted as geo_haversine even under
+    # the flag -- the sample-parse floor guards against misfire.
+    monkeypatch.setenv(ON, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_DOMAIN_COMPARATORS", "1")
+    profs = [
+        _p("first_name", "name", card=0.42),
+        ColumnProfile(
+            name="notes", dtype="Utf8", col_type="description", confidence=0.5,
+            null_rate=0.0, cardinality_ratio=0.9, avg_len=30,
+            sample_values=["hello world", "a, b, c", "1, 2, 3, 4", "x", "y", "z"],
+        ),
+    ]
+    mks = build_probabilistic_matchkeys(profs)
+    scorers = [f.scorer for f in mks[0].fields] if mks else []
+    assert "geo_haversine" not in scorers
+
+
 # ── default ON; explicit =0 restores byte-identical legacy field set ──────────
 
 def test_default_unset_is_v2(monkeypatch):

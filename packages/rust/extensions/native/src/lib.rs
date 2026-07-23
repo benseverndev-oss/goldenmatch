@@ -108,6 +108,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::levenshtein_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(score::date_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(score::date_diff_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(score::geo_haversine_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::qgram_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::soundex_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(score::set_legal_form_variants, m)?)?;
