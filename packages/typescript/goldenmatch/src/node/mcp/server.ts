@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 71 tools covering dedupe, match, scoring, explanation,
+ * Exposes 72 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -57,6 +57,11 @@ import {
   toCertifyRecallResponse,
 } from "../../core/recall-certificate.js";
 import { runIncremental } from "../../core/incremental.js";
+import {
+  retrieveSimilar,
+  retrievedRecordToDict,
+} from "../../core/retrieve-similar.js";
+import { getEmbedder } from "../../core/embedder.js";
 import {
   runSensitivitySweep,
   sweepStabilityReport,
@@ -571,6 +576,53 @@ const EXISTING_TOOLS: readonly Tool[] = [
       required: ["base_file", "new_records"],
     },
   },
+  {
+    name: "retrieve_similar",
+    description:
+      "Semantic retrieval (#1089): return the records in a CSV most similar " +
+      "to a free-text query, ranked by cosine similarity. Embeds the chosen " +
+      "column and the query, then runs ANN search. The read side of the RAG " +
+      "entity-canonicalization epic -- fetch candidate records by query " +
+      "without running a full dedupe. EMBEDDER IS CALLER-SUPPLIED: unlike the " +
+      "Python tool (which defaults to a bundled zero-config in-house model), " +
+      "this TS surface carries only the embedding kernel, not a model, so you " +
+      "MUST pass an embedder `provider` (openai/vertex/voyage) plus its " +
+      "credentials; it errors clearly if none is given.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_path: { type: "string", description: "CSV/TSV/JSON corpus to search" },
+        query: { type: "string", description: "Free-text query to search for" },
+        column: { type: "string", description: "Column of the corpus to embed + search" },
+        k: { type: "integer", description: "Max records to return (default 20)" },
+        threshold: {
+          type: "number",
+          description: "Minimum cosine similarity in [-1, 1] (default 0.0)",
+        },
+        provider: {
+          type: "string",
+          enum: ["openai", "vertex", "voyage"],
+          description:
+            "REQUIRED embedder provider (no bundled model on the TS surface). " +
+            "Credentials come from api_key or the provider's env var.",
+        },
+        model: {
+          type: "string",
+          description: "Embedder model id (defaults to the provider's default model).",
+        },
+        api_key: {
+          type: "string",
+          description: "Embedder API key (else read from the provider's env var).",
+        },
+        filters: {
+          type: "object",
+          additionalProperties: true,
+          description: "Optional {column: value} equality pre-filter applied before embedding",
+        },
+      },
+      required: ["file_path", "query", "column", "provider"],
+    },
+  },
 ];
 
 // Cross-language naming aliases (Python<->TS MCP parity). Each forwards to an
@@ -1083,7 +1135,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.12.0",
+          version: "1.13.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1276,6 +1328,84 @@ export async function handleTool(
         return runIncremental(baseRows, newRows, cfg, threshold);
       }
 
+      case "retrieve_similar": {
+        const filePath = String(args["file_path"] ?? "");
+        if (!filePath) return { error: "Missing required parameter: file_path" };
+        const query = String(args["query"] ?? "");
+        if (!query) return { error: "Missing required parameter: query" };
+        const column = String(args["column"] ?? "");
+        if (!column) return { error: "Missing required parameter: column" };
+
+        // Caller-supplied embedder: the TS surface has NO bundled model (the
+        // Python "inhouse" default has no TS equivalent), so require an explicit
+        // provider and error clearly otherwise.
+        const provider = args["provider"];
+        if (
+          provider !== "openai" &&
+          provider !== "vertex" &&
+          provider !== "voyage"
+        ) {
+          return {
+            error:
+              "retrieve_similar requires an embedder 'provider' " +
+              "(openai/vertex/voyage): the TS surface carries only the " +
+              "embedding kernel, not a bundled model. Pass provider + " +
+              "credentials (api_key or the provider's env var).",
+          };
+        }
+
+        let rows: readonly Row[];
+        try {
+          rows = readFile(sanitizePath(filePath));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/ENOENT|not found|no such file/i.test(msg)) {
+            return { error: `File not found: ${filePath}` };
+          }
+          return { error: `Could not read '${filePath}': ${msg}` };
+        }
+        if (rows.length > 0 && !Object.prototype.hasOwnProperty.call(rows[0], column)) {
+          return {
+            error: `Column '${column}' not in ${filePath} (have ${Object.keys(
+              rows[0] ?? {},
+            ).join(", ")})`,
+          };
+        }
+
+        const embedder = getEmbedder({
+          provider,
+          ...(typeof args["model"] === "string" && args["model"]
+            ? { model: args["model"] as string }
+            : {}),
+          ...(typeof args["api_key"] === "string" && args["api_key"]
+            ? { apiKey: args["api_key"] as string }
+            : {}),
+        });
+
+        const k =
+          typeof args["k"] === "number" ? Math.floor(args["k"] as number) : 20;
+        const threshold =
+          typeof args["threshold"] === "number" ? (args["threshold"] as number) : 0.0;
+        const filters =
+          args["filters"] && typeof args["filters"] === "object" && !Array.isArray(args["filters"])
+            ? (args["filters"] as Record<string, unknown>)
+            : null;
+
+        const results = await retrieveSimilar(rows, query, column, {
+          k,
+          threshold,
+          filters,
+          embedder,
+        });
+        return {
+          file: filePath,
+          query,
+          column,
+          count: results.length,
+          results: results.map(retrievedRecordToDict),
+        };
+      }
+
       case "convert_splink_config": {
         const settingsJson = args["settings_json"];
         const strict = args["strict"] === true;
@@ -1391,7 +1521,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.12.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.13.0" },
               capabilities: { tools: {} },
             },
           });

@@ -99,6 +99,7 @@ mcp_tools:
   - memory_stats
   - profile
   - profile_data
+  - retrieve_similar
   - review_config
   - rollback
   - run_transforms
@@ -128,7 +129,6 @@ mcp_tools:
   - plan_routing
   - pprl_auto_config
   - pprl_link
-  - retrieve_similar
   - test_domain
   ts_only:
   - build_clusters
