@@ -1,6 +1,6 @@
 # Adding server-held state to the TypeScript MCP surface — design note
 
-**Status:** Proposal — awaiting a build/no-build decision (2026-07-23)
+**Status:** Adopted — **Tier 1 (the run cache) is built in this PR** (2026-07-23). Tiers 2–3 remain deferred as described below.
 **Author:** cross-surface parity work (follows the api-surface boundary contract, PRs #2055 / #2057 / #2058)
 **Scope:** the `goldenmatch` npm package's MCP server (`src/node/mcp/`) only. Not the core, not the other suite packages.
 
@@ -94,9 +94,9 @@ If the goal is to shrink the gap, do **Tier 1 only, as its own PR**: port Python
 
 Defer Tiers 2–3: the mutation tools need core-surgery ports, and the subsystem tools (identity-audit, incremental, lineage) are each a separate, larger commitment. Sequence them only if the run cache proves the demand.
 
-## Decision needed
+## Decision (resolved 2026-07-23)
 
-**Do we cross the stateless-run boundary for the TS MCP server at all?** If yes, Tier 1 is the slice to start with and this note is the plan. If no, the honest close is to *document* the run-query tools as intentionally Python-only in the manifest header (like the distributed engine / web UI already are), so the gap stays declared rather than looking like neglect.
+**Yes — Tier 1 is built in this PR.** The run cache (`get_stats` / `list_clusters` / `get_cluster` / `get_golden_record` / `export_results` + the file-stager `upload_dataset`) is wired against a bounded `RUN_STORE` in `src/node/mcp/`, and the six tools are flipped `python_only → shared`. `list_runs` was pulled from the Tier-1 set on inspection: its Python impl reads the on-disk rollback snapshot log, so it belongs with the (still-deferred) rollback subsystem, alongside the Tier-2 mutation tools (`shatter_cluster` / `unmerge_record` / `rollback`). Tiers 2–3 remain deferred pending demand.
 
 ## Non-goals
 
