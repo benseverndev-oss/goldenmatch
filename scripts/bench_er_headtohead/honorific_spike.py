@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-import polars as pl
+import pyarrow as pa
 
 # Honorific / title / rank / suffix tokens that leak into name fields on
 # historical (Wikidata) data. Matched case-insensitively, token-wise, with
@@ -101,15 +101,16 @@ _NAME_COLUMNS: tuple[str, ...] = (
 )
 
 
-def strip_honorifics_frame(df: pl.DataFrame) -> pl.DataFrame:
+def strip_honorifics_table(table: pa.Table) -> pa.Table:
     """Apply :func:`strip_honorifics` to every present name column, in place of
-    the original values, preserving row order and every other column."""
-    present = [c for c in _NAME_COLUMNS if c in df.columns]
-    if not present:
-        return df
-    return df.with_columns(
-        pl.col(c)
-        .map_elements(strip_honorifics, return_dtype=pl.String)
-        .alias(c)
-        for c in present
-    )
+    the original values, preserving row order and every other column.
+
+    pyarrow-native (the bench env installs goldenmatch[bench] = splink + duckdb +
+    pyarrow but NOT polars, which is why ``records`` is a pyarrow Table here).
+    """
+    present = [c for c in _NAME_COLUMNS if c in table.column_names]
+    for col in present:
+        stripped = [strip_honorifics(v) for v in table.column(col).to_pylist()]
+        idx = table.column_names.index(col)
+        table = table.set_column(idx, col, pa.array(stripped, type=pa.string()))
+    return table

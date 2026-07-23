@@ -90,13 +90,9 @@ def _gm_predictions_path(records, truth, gm_pred_path: Path, dump_dir: Path):
     if os.environ.get("GM_SPIKE_STRIP_HONORIFICS", "0").lower() in (
         "1", "true", "on", "yes",
     ):
-        import polars as pl
-
         honorific_spike = _import_sibling("honorific_spike")
 
-        records = honorific_spike.strip_honorifics_frame(
-            pl.from_arrow(records)
-        ).to_arrow()
+        records = honorific_spike.strip_honorifics_table(records)
 
     dump_dir.mkdir(parents=True, exist_ok=True)
     os.environ["GOLDENMATCH_BENCH_DUMP_PAIRS"] = str(dump_dir)
