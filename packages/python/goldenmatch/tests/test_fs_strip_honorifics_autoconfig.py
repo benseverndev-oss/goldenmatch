@@ -46,12 +46,14 @@ def _clear_flag(monkeypatch):
     monkeypatch.delenv(ON, raising=False)
 
 
-# --- default OFF: byte-identical (no field carries the transform) ----------
+# --- default ON: name fields get the transform (flipped 2026-07-23) ---------
 
-def test_default_off_no_field_gets_strip():
-    profiles = [_p("first_name", "name"), _p("surname", "name"),
-                _p("occupation", "string"), _p("city", "geo")]
-    assert all(v is False for v in _has_strip(profiles).values())
+def test_default_on_appends_strip_on_name_fields():
+    # Flag unset -> default ON -> name/multi_name fields get strip_honorifics.
+    strip = _has_strip([_p("first_name", "name"), _p("surname", "name"),
+                        _p("occupation", "string"), _p("city", "geo")])
+    assert strip == {"first_name": True, "surname": True,
+                     "occupation": False, "city": False}
 
 
 def test_explicit_off_no_field_gets_strip(monkeypatch):
@@ -60,24 +62,23 @@ def test_explicit_off_no_field_gets_strip(monkeypatch):
     assert all(v is False for v in _has_strip(profiles).values())
 
 
-def test_off_name_transforms_unchanged(monkeypatch):
-    # OFF must leave the name field's transform list exactly as the baseline.
-    monkeypatch.delenv(ON, raising=False)
+@pytest.mark.parametrize("falsy", ["0", "false", "off", "no", "disabled", "FALSE"])
+def test_off_accepts_falsy_spellings(monkeypatch, falsy):
+    monkeypatch.setenv(ON, falsy)
+    assert _has_strip([_p("surname", "name")]) == {"surname": False}
+
+
+def test_off_name_transforms_are_legacy_baseline(monkeypatch):
+    # Explicit OFF must leave the name field's transform list at the legacy set.
+    monkeypatch.setenv(ON, "0")
     t = _transforms([_p("surname", "name")])
     assert "strip_honorifics" not in t["surname"]
 
 
 # --- ON: name-typed fields get the transform -------------------------------
 
-def test_on_appends_strip_on_name_fields(monkeypatch):
-    monkeypatch.setenv(ON, "1")
-    strip = _has_strip([_p("first_name", "name"), _p("surname", "name")])
-    assert strip == {"first_name": True, "surname": True}
-
-
-def test_on_strip_is_last_transform(monkeypatch):
-    # Must run after lowercase/strip (append order matters for tokenization).
-    monkeypatch.setenv(ON, "1")
+def test_on_strip_is_last_transform():
+    # Default ON; must run after lowercase/strip (append order matters).
     t = _transforms([_p("surname", "name")])["surname"]
     assert t[-1] == "strip_honorifics"
     assert "strip_honorifics" not in t[:-1]  # appended exactly once
@@ -108,8 +109,14 @@ def test_strip_honorifics_for_helper(monkeypatch):
     assert _strip_honorifics_for(_p("x", "email")) is False
 
 
-def test_strip_honorifics_for_off_by_default():
-    # Flag unset -> always False regardless of col_type.
+def test_strip_honorifics_for_on_by_default():
+    # Flag unset -> default ON -> name types earn it, non-name types don't.
+    assert _strip_honorifics_for(_p("x", "name")) is True
+    assert _strip_honorifics_for(_p("x", "string")) is False
+
+
+def test_strip_honorifics_for_explicit_off(monkeypatch):
+    monkeypatch.setenv(ON, "0")
     assert _strip_honorifics_for(_p("x", "name")) is False
 
 

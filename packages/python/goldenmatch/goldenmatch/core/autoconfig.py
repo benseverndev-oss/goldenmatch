@@ -848,24 +848,28 @@ _STRIP_HONORIFIC_COLTYPES = frozenset({"name", "multi_name"})
 def _fs_strip_honorifics_enabled() -> bool:
     """FS honorific-token stripping on name comparison fields.
 
-    **Default OFF.** When ``GOLDENMATCH_FS_STRIP_HONORIFICS`` is truthy, FS
-    auto-config appends the ``strip_honorifics`` transform to name-typed
-    comparison fields, so a title/rank token leaked into a name field ("Sir",
-    "Baronet", "Bt.") stops carrying match weight. Targets the OVER-MERGE regime
-    that TF down-weighting could NOT reach on historical_50k (byte-neutral there:
-    the name coltype already routes through ``name_freq_weighted_jw``, so TF
-    self-neutralizes; the honorifics are the residual it doesn't cut). The
-    honorific tokens are a curated title/rank set (``strip_honorifics`` in
-    ``utils/transforms.py``); regnal numerals are kept (the A/B showed keeping
-    them recovers recall at no precision cost). Default-off is byte-identical (no
-    field gets the transform); flip only after the accuracy panel proves it, per
-    the domain-comparators/TF precedent.
+    **Default ON (2026-07-23).** ``GOLDENMATCH_FS_STRIP_HONORIFICS=0`` (or
+    ``false``/``off``/``no``/``disabled``) restores the legacy behavior (no field
+    gets the transform). When on, FS auto-config appends the ``strip_honorifics``
+    transform to name-typed comparison fields, so a title/rank token leaked into a
+    name field ("Sir", "Baronet", "Bt.") stops carrying match weight. Reaches the
+    OVER-MERGE regime that TF down-weighting could NOT on historical_50k
+    (byte-neutral there: the name coltype already routes through
+    ``name_freq_weighted_jw``, so TF self-neutralizes; the honorifics are the
+    residual it doesn't cut). The honorific tokens are a conservative,
+    surname-safe set (``strip_honorifics`` in ``utils/transforms.py`` — ambiguous
+    tokens that are real surnames like Shah/King/Prince are excluded); regnal
+    numerals are kept.
 
-    Spike A/B (historical_50k, panel-honorific lane): F1 0.7520 -> 0.7628
-    (+0.0108), precision +0.0245, recall -0.0046; GM overtakes Splink (0.7571).
+    MEASURED (scripts/bench_er_headtohead panel-honorific lane, GM probabilistic
+    vs Splink, one evaluator) — flipped on after the surname-safe set beat OFF
+    with recall intact and no measured regression:
+      historical_50k F1 0.7520 -> 0.7652 (+0.0132), precision +0.0245,
+      recall +0.0005; GM overtakes Splink (0.7570).
+      febrl3 / synthetic_person: neutral (no honorifics present).
     """
-    return os.environ.get("GOLDENMATCH_FS_STRIP_HONORIFICS", "0").lower() in (
-        "1", "true", "on", "yes", "enabled",
+    return os.environ.get("GOLDENMATCH_FS_STRIP_HONORIFICS", "1").lower() not in (
+        "0", "false", "off", "no", "disabled",
     )
 
 
