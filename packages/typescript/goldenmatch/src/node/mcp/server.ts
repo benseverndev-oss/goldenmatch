@@ -4,11 +4,12 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 61 tools covering dedupe, match, scoring, explanation,
+ * Exposes 63 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (5 memory tools via
- * MEMORY_TOOLS), the Identity Graph (6 identity tools via IDENTITY_TOOLS),
+ * MEMORY_TOOLS), the Identity Graph (8 identity tools via IDENTITY_TOOLS,
+ * incl. identity_claim + identity_resolve_conflict),
  * the AgentSession skills (15 agent tools via AGENT_MCP_TOOLS, incl. the
  * healer's review_config), the stateful run tools (6 via RUN_TOOLS:
  * get_stats/list_clusters/get_cluster/get_golden_record/export_results/
@@ -946,7 +947,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.6.0",
+          version: "1.7.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1097,7 +1098,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.6.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.7.0" },
               capabilities: { tools: {} },
             },
           });

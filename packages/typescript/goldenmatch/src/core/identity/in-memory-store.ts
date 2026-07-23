@@ -156,6 +156,20 @@ export class InMemoryIdentityStore implements IdentityStore {
       .map((e) => ({ ...e }));
   }
 
+  async edgesByKind(kind: string, dataset?: string): Promise<EvidenceEdge[]> {
+    return this.edges
+      .filter((e) => e.kind === kind)
+      .filter((e) => dataset === undefined || e.dataset === dataset)
+      // recorded_at DESC, then insertion order (edgeId) DESC so the latest
+      // edge for a pair wins deterministically when timestamps tie.
+      .sort(
+        (a, b) =>
+          b.recordedAt.getTime() - a.recordedAt.getTime() ||
+          (b.edgeId ?? 0) - (a.edgeId ?? 0),
+      )
+      .map((e) => ({ ...e }));
+  }
+
   async emitEvent(event: IdentityEvent): Promise<number | null> {
     const stored: IdentityEvent = { ...event, eventId: this.nextEventId++ };
     this.events.push(stored);

@@ -14,12 +14,14 @@
 
 import { SqliteIdentityStore } from "../identity/sqlite-store.js";
 import {
+  claimRecord,
   findByRecord,
   listEntities,
   manualMerge,
   manualSplit,
   type IdentityView,
 } from "../../core/identity/query.js";
+import { mediateConflict } from "../../core/identity/mediation.js";
 import type {
   EvidenceEdge,
   IdentityEvent,
@@ -133,6 +135,52 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         path: { type: "string" },
       },
       required: ["entity_id", "record_ids"],
+    },
+  },
+  {
+    name: "identity_claim",
+    description:
+      "Claim a record into an identity, moving it out of any prior entity " +
+      "('this record belongs to that identity'). Emits a `claimed` event on " +
+      "both the gaining and losing entities. Idempotent: claiming a record " +
+      "already in the target entity is a no-op.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string", description: "Entity to claim the record into" },
+        record_id: {
+          type: "string",
+          description: "record id in `{source}:{source_pk}` form",
+        },
+        reason: { type: "string" },
+        path: { type: "string" },
+      },
+      required: ["entity_id", "record_id"],
+    },
+  },
+  {
+    name: "identity_resolve_conflict",
+    description:
+      "Adjudicate a `conflicts_with` pair: 'same' keeps the entity intact, " +
+      "'distinct' splits the second record out into a new identity, 'defer' " +
+      "only logs. Records a durable mediation verdict + event and stops the " +
+      "conflict re-surfacing in the open-conflicts queue.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        record_a_id: { type: "string" },
+        record_b_id: { type: "string" },
+        resolution: { type: "string", enum: ["same", "distinct", "defer"] },
+        reason: { type: "string" },
+        dataset: { type: "string" },
+        apply: {
+          type: "boolean",
+          default: true,
+          description: "Act on the verdict (split on 'distinct'); false = log only.",
+        },
+        path: { type: "string" },
+      },
+      required: ["record_a_id", "record_b_id", "resolution"],
     },
   },
 ];
@@ -325,6 +373,54 @@ async function dispatch(
         runName: "mcp",
       });
       return { new_entity_id: res.newEntityId, moved: res.moved, at: res.at };
+    }
+
+    if (name === "identity_claim") {
+      const entityId = strArg(args, "entity_id");
+      const recordId = strArg(args, "record_id");
+      if (!entityId || !recordId) {
+        return { error: "Missing required parameters: entity_id, record_id" };
+      }
+      const reason = strArg(args, "reason");
+      const res = await claimRecord(store, entityId, recordId, {
+        ...(reason !== undefined ? { reason } : {}),
+        runName: "mcp",
+      });
+      return {
+        entity_id: res.entityId,
+        record_id: res.recordId,
+        moved: res.moved,
+        from_entity: res.fromEntity,
+        at: res.at,
+      };
+    }
+
+    if (name === "identity_resolve_conflict") {
+      const recordAId = strArg(args, "record_a_id");
+      const recordBId = strArg(args, "record_b_id");
+      const resolution = strArg(args, "resolution");
+      if (!recordAId || !recordBId || !resolution) {
+        return {
+          error: "Missing required parameters: record_a_id, record_b_id, resolution",
+        };
+      }
+      const reason = strArg(args, "reason");
+      const dataset = strArg(args, "dataset");
+      const apply = args["apply"] === undefined ? true : Boolean(args["apply"]);
+      const res = await mediateConflict(store, recordAId, recordBId, resolution, {
+        ...(reason !== undefined ? { reason } : {}),
+        ...(dataset !== undefined ? { dataset } : {}),
+        apply,
+      });
+      return {
+        record_a_id: res.recordAId,
+        record_b_id: res.recordBId,
+        resolution: res.resolution,
+        entity_id: res.entityId,
+        applied: res.applied,
+        action: res.action,
+        at: res.at,
+      };
     }
 
     return { error: `Unknown identity tool: ${name}` };

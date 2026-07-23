@@ -4,6 +4,17 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.7.0] - 2026-07-23
+
+### Added
+- **`identity_claim` + `identity_resolve_conflict` MCP tools** (TS↔Python parity, mirroring `goldenmatch/mcp/identity_tools.py`). These complete the identity mutation set (`identity_merge`/`identity_split` already shipped), flipping from `python_only` to `shared` in `parity/goldenmatch.yaml` and taking the TS MCP server to **63 tools** (was 61). Both are class-B net-new core ports — the backing TS core functions did not exist and were ported here.
+  - `claimRecord` (`src/core/identity/query.ts` ← Python `claim_record`) reassigns a record to a target entity and emits a `claimed` event on BOTH the gaining and losing entities. Idempotent: claiming a record already in the target is a no-op (`moved: false`, no events). Added `"claimed"` to the `EventKind` union.
+  - `mediateConflict` + `openConflicts` (`src/core/identity/mediation.ts` ← Python `mediation.py`) adjudicate a `conflicts_with` pair: `same` keeps the entity intact, `distinct` splits `record_b` out via `manualSplit`, `defer` only logs. Every verdict is a durable `mediation_verdict` evidence edge + a `conflict_mediated` event. Added `"mediation_verdict"` to `EdgeKind` and `"conflict_mediated"` to `EventKind`.
+  - New `IdentityStore.edgesByKind(kind, dataset?)` store method (the generic counterpart to `findConflicts`, ports Python `store.edges_by_kind`) added to BOTH the `InMemoryIdentityStore` and `SqliteIdentityStore` backends; `openConflicts` depends on it. Newest-first with a `recordedAt DESC, edgeId DESC` tiebreak for deterministic latest-wins verdict lookups.
+  - **Idempotency + re-mediation:** `claimRecord`/`mediateConflict` preserve the identity-event guarding — a claim replay is a no-op, and each mediation mints a unique `mediation:<iso>:<seq>` run_name so re-adjudicating the SAME pair appends a new verdict edge instead of silently no-op'ing against the edge `UNIQUE(entity, a, b, kind, run_name)` constraint. All edge lookups canonicalize via `canonRecordPair`.
+  - These mutate the durable identity graph via `SqliteIdentityStore` (`.goldenmatch/identity.db`) — the node-only, stateful, durable-SQLite-backed surface. The new core functions stay edge-safe; only the persistence backend is node-only. They do NOT touch the ephemeral `RUN_STORE`.
+  - Tests: `tests/unit/identity-mediation.test.ts` (edge-safe core on `InMemoryIdentityStore`: claim reassign/no-op-replay/both-entity events, `same`/`distinct`/`defer`, `distinct` splits `record_b` via `manualSplit`, re-mediation is NOT a silent no-op, `edgesByKind` filtering), `tests/node/identity/sqlite-store.test.ts` (durable backend `edgesByKind`/`openConflicts`/claim/re-mediation), `tests/unit/mcp-identity-tools.test.ts` (the two tools' dispatch + snake_case wire format).
+
 ## [1.6.0] - 2026-07-23
 
 ### Added

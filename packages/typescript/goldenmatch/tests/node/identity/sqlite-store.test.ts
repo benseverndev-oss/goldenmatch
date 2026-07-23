@@ -20,6 +20,8 @@ import type {
   SourceRecord,
 } from "../../../src/core/identity/types.js";
 import { SqliteIdentityStore } from "../../../src/node/identity/sqlite-store.js";
+import { claimRecord } from "../../../src/core/identity/query.js";
+import { mediateConflict, openConflicts } from "../../../src/core/identity/mediation.js";
 
 function makeNode(entityId: string, dataset = "test", confidence = 0.9): IdentityNode {
   const now = new Date();
@@ -242,6 +244,85 @@ describe("SqliteIdentityStore", () => {
       const conflicts = await store.findConflicts();
       expect(conflicts).toHaveLength(1);
       expect(conflicts[0]?.kind).toBe("conflicts_with");
+    });
+
+    it("edgesByKind returns edges of a given kind, newest-first", async () => {
+      await store.addEdge(makeEdge("e-1", "csv:r1", "csv:r2"));
+      const v1: EvidenceEdge = {
+        ...makeEdge("e-1", "csv:r1", "csv:r3"),
+        kind: "mediation_verdict",
+        negativeEvidence: { resolution: "defer" },
+        runName: "mediation:1",
+        recordedAt: new Date("2026-01-01T00:00:00Z"),
+      };
+      const v2: EvidenceEdge = {
+        ...makeEdge("e-1", "csv:r1", "csv:r3"),
+        kind: "mediation_verdict",
+        negativeEvidence: { resolution: "distinct" },
+        runName: "mediation:2",
+        recordedAt: new Date("2026-01-02T00:00:00Z"),
+      };
+      await store.addEdge(v1);
+      await store.addEdge(v2);
+      const verdicts = await store.edgesByKind("mediation_verdict");
+      expect(verdicts).toHaveLength(2);
+      // newest-first: distinct (2026-01-02) before defer (2026-01-01)
+      expect(verdicts[0]?.negativeEvidence?.["resolution"]).toBe("distinct");
+      // no same_as leakage
+      expect(verdicts.every((e) => e.kind === "mediation_verdict")).toBe(true);
+    });
+  });
+
+  describe("mediation + claim (durable backend)", () => {
+    it("openConflicts closes after a terminal mediateConflict verdict", async () => {
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.upsertRecord(makeRecord("csv:r1", "e-1"));
+      await store.upsertRecord(makeRecord("csv:r2", "e-1"));
+      await store.addEdge({
+        ...makeEdge("e-1", "csv:r1", "csv:r2"),
+        kind: "conflicts_with",
+      });
+      const before = await openConflicts(store);
+      expect(before).toHaveLength(1);
+
+      const res = await mediateConflict(store, "csv:r1", "csv:r2", "distinct");
+      expect(res.action.type).toBe("split");
+      // csv:r2 split off e-1.
+      expect((await store.getRecord("csv:r2"))?.entityId).not.toBe("e-1");
+      // conflict now closed.
+      expect(await openConflicts(store)).toHaveLength(0);
+    });
+
+    it("re-mediating the same pair is NOT a silent no-op", async () => {
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.upsertRecord(makeRecord("csv:r1", "e-1"));
+      await store.upsertRecord(makeRecord("csv:r2", "e-1"));
+      await store.addEdge({
+        ...makeEdge("e-1", "csv:r1", "csv:r2"),
+        kind: "conflicts_with",
+      });
+      await mediateConflict(store, "csv:r1", "csv:r2", "defer");
+      // deferred conflict is still open.
+      expect(await openConflicts(store)).toHaveLength(1);
+      // re-mediate as distinct -> a SECOND verdict edge, conflict closes.
+      await mediateConflict(store, "csv:r1", "csv:r2", "distinct");
+      expect(await store.edgesByKind("mediation_verdict")).toHaveLength(2);
+      expect(await openConflicts(store)).toHaveLength(0);
+    });
+
+    it("claimRecord reassigns a record and emits claimed on both entities", async () => {
+      await store.upsertIdentity(makeNode("e-1"));
+      await store.upsertIdentity(makeNode("e-2"));
+      await store.upsertRecord(makeRecord("csv:r1", "e-2"));
+      const res = await claimRecord(store, "e-1", "csv:r1");
+      expect(res.moved).toBe(true);
+      expect(res.fromEntity).toBe("e-2");
+      expect((await store.getRecord("csv:r1"))?.entityId).toBe("e-1");
+      expect((await store.history("e-1")).some((e) => e.kind === "claimed")).toBe(true);
+      expect((await store.history("e-2")).some((e) => e.kind === "claimed")).toBe(true);
+      // replay is a no-op.
+      const replay = await claimRecord(store, "e-1", "csv:r1");
+      expect(replay.moved).toBe(false);
     });
   });
 
