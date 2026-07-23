@@ -82,6 +82,7 @@ mcp_tools:
   - identity_resolve
   - identity_resolve_conflict
   - identity_split
+  - incremental
   - learn_thresholds
   - lineage
   - list_blocking_strategies
@@ -103,6 +104,7 @@ mcp_tools:
   - run_transforms
   - scan_quality
   - schema_match
+  - sensitivity
   - shatter_cluster
   - suggest_config
   - suggest_pprl
@@ -120,7 +122,6 @@ mcp_tools:
   - identity_show
   - identity_stats
   - identity_worklist
-  - incremental
   - lint_routing
   - list_domains
   - list_plugins
@@ -128,7 +129,6 @@ mcp_tools:
   - pprl_auto_config
   - pprl_link
   - retrieve_similar
-  - sensitivity
   - test_domain
   ts_only:
   - build_clusters
