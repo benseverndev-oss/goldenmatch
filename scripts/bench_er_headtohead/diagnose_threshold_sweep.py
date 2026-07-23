@@ -60,23 +60,14 @@ def _pred_path(records, cfg, threshold, out_dir):
     return p
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", default="historical_50k")
-    ap.add_argument("--thresholds", default=None,
-                    help="comma-separated; default a 0.30..0.95 sweep")
-    args = ap.parse_args()
-    thresholds = ([float(t) for t in args.thresholds.split(",")]
-                  if args.thresholds else _DEFAULT_THRESHOLDS)
-
-    lines = [f"## FS threshold sweep — {args.dataset}", ""]
+def _sweep_one(dataset, thresholds) -> list[str]:
+    lines = [f"## FS threshold sweep — {dataset}", ""]
     try:
-        records, truth = ds_mod.load_dataset(args.dataset)
+        records, truth = ds_mod.load_dataset(dataset)
         from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
     except Exception as e:
         lines.append(f"_unavailable ({type(e).__name__}: {e}); skipped._")
-        _emit("\n".join(lines) + "\n")
-        return 0
+        return lines
 
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -102,8 +93,7 @@ def main() -> int:
 
     if not rows:
         lines.append("_no thresholds scored._")
-        _emit("\n".join(lines) + "\n")
-        return 0
+        return lines
 
     best = max(rows, key=lambda r: r[3])
     default = next((r for r in rows if abs(r[0] - 0.50) < 1e-9), None)
@@ -133,7 +123,23 @@ def main() -> int:
                    "to the score distribution (weights), not the cutoff.")
         lines.append(f"- **{verdict}**")
 
-    _emit("\n".join(lines) + "\n")
+    return lines
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--datasets", default="historical_50k",
+                    help="comma-separated dataset names")
+    ap.add_argument("--thresholds", default=None,
+                    help="comma-separated; default a 0.30..0.95 sweep")
+    args = ap.parse_args()
+    thresholds = ([float(t) for t in args.thresholds.split(",")]
+                  if args.thresholds else _DEFAULT_THRESHOLDS)
+    out = []
+    for ds in [d.strip() for d in args.datasets.split(",") if d.strip()]:
+        out.extend(_sweep_one(ds, thresholds))
+        out.append("")
+    _emit("\n".join(out) + "\n")
     return 0
 
 

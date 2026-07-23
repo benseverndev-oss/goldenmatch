@@ -583,10 +583,13 @@ jobs:
       - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
         run: pip install -e packages/python/goldenmatch[bench]
 
-      - name: FS threshold sweep — historical_50k
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      - name: FS threshold sweep — generalization across datasets
         run: |
           python scripts/bench_er_headtohead/diagnose_threshold_sweep.py \
-            --dataset historical_50k
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,febrl3,synthetic_person' }}"
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────
   # Runs scripts/bench_er_headtohead/run_bakeoff.py: gm_zeroconfig +
