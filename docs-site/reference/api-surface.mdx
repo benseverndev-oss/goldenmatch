@@ -11,16 +11,18 @@ single map of all of them. Pick a package, pick a surface, and follow the link t
 its deep reference.
 
 <Note>
-  Versions below are the current release versions. TypeScript packages track the
-  same API but lag the Python versions and expose a subset of the MCP tools — see
-  the [coverage notes](#coverage-notes) at the bottom.
+  Versions below are the current release versions. Each surface versions
+  independently — the TypeScript packages carry their own semver and expose the
+  stateless compute surface, not a lagging copy of the Python one. See
+  [Python vs TypeScript: the surface boundary](#python-vs-typescript-the-surface-boundary).
 </Note>
 
 ## Capability matrix
 
 What each package ships, at a glance. **MCP** counts are the Python server's tools
-(the TS server exposes a subset). A dash means the package does not ship that
-surface.
+(the TS server exposes the stateless subset — see the
+[surface boundary](#python-vs-typescript-the-surface-boundary)). A dash means the
+package does not ship that surface.
 
 {/* api-surface-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_api_surface.py --write */}
 | Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
@@ -32,6 +34,34 @@ surface.
 | [GoldenAnalysis](#goldenanalysis) | `0.4.0` | `0.1.0` | `goldenanalysis` | 4 | — | — | core (WASM) |
 | [InferMap](#infermap) | `0.6.0` | `0.6.0` | `infermap` | 4 | — | — | wheel |
 {/* api-surface-matrix:generated:end */}
+
+## Python vs TypeScript: the surface boundary
+
+The two libraries are not "a full version and a lagging copy" — they are **two
+surfaces with different jobs**, and the tool-count gap is a design boundary, not
+neglect:
+
+- **Python is the full, *stateful* server.** It holds datasets, runs, clusters, and
+  the identity graph server-side, so it can expose tools that query and mutate that
+  state (`get_stats`, `list_clusters`, `rollback`, `list_runs`, the `identity_*`
+  audit trio, …) plus the heavier subsystems that live only there — domain packs,
+  PPRL, the routing planner, and document ingest.
+- **TypeScript is the *stateless* compute/edge surface.** Its `dedupe()` returns
+  stats and clusters inline, so there is no server-held dataset for a "query the
+  state" tool to point at. In exchange it ships edge primitives the Python server
+  doesn't: `score_strings`, `score_pair`, `find_exact_matches`, `find_fuzzy_matches`,
+  `read_file`, `write_csv`, and `server_info`.
+
+So GoldenMatch's **50 TS tools vs 82 Python** breaks down as ~42 shared core
+operations, 8 TS-only edge helpers, and ~40 Python-only stateful/subsystem tools —
+overlapping surfaces sized to their jobs, not a subset. On the shared core the
+**public function names match**, and that parity is enforced in CI by the
+`api_parity` gate, which fails on any *undeclared* Python↔TS drift.
+
+**Versions track independently.** Each surface carries its own semver — npm is not
+pinned to the PyPI number — so a lower TypeScript version reflects a smaller,
+slower-moving surface, not a stale one. (InferMap's TS and Python are at the same
+version; GoldenGraph's TS is ahead of its Python.)
 
 ## Install
 
@@ -264,9 +294,10 @@ result = AgentSession().autoconfigure("customers.csv")
 
 ## Coverage notes
 
-- **TypeScript lags Python.** Every package has a TS twin, but the npm versions
-  trail the PyPI ones and the TS MCP servers expose a subset of the Python tools
-  (e.g. GoldenMatch: 50 TS tools vs 82 Python). The public function names match.
+- **Two surfaces, one core.** Every package has a TS twin. Python is the full
+  stateful server; TypeScript is the stateless compute/edge surface, with its own
+  independent semver. The tool-count and version differences are a design boundary,
+  not lag — see [Python vs TypeScript: the surface boundary](#python-vs-typescript-the-surface-boundary).
 - **REST + A2A are for the service-shaped packages only** — GoldenMatch,
   GoldenCheck, GoldenFlow, and GoldenPipe. GoldenAnalysis and InferMap ship a CLI
   and an MCP server but no long-running HTTP service.
