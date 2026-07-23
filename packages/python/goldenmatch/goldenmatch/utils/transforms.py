@@ -26,6 +26,63 @@ _SOUNDEX_CODE = {
 }
 
 
+# Honorific / title / post-nominal tokens stripped by the ``strip_honorifics``
+# transform. Deliberately CONSERVATIVE: only tokens that are ~never a real
+# surname, so the transform is safe to default-ON across general-population data.
+#
+# EXCLUDED on purpose (each is a common surname, so stripping it would nuke real
+# names — e.g. "Shah", "King", "Prince", "Bishop", "Baron", "Earl", "Knight",
+# "Marshall", "Do"): the peerage ranks (lord/lady/baron/earl/count/duke/
+# viscount/marquess...), royalty (king/queen/prince/emperor/tsar/sultan/shah/
+# emir/sheikh...), religious offices (pope/bishop/cardinal/deacon/father/saint/
+# st), military ranks (general/colonel/major/captain/admiral/marshal...),
+# "master", "knight", "hon", and the "do" suffix. The historical_50k A/B win is
+# driven by "sir" (144k) and "baronet" (145k), both retained here — the ambiguous
+# tokens were neutral-to-harmful. Regnal numerals ("VIII") and ordinals ("1st")
+# are also kept (they discriminate monarchs; A/B recovered recall).
+# Byte-matched by the TS `STRIP_HONORIFIC_TOKENS` mirror (api-parity contract).
+_STRIP_HONORIFIC_TOKENS = frozenset({
+    # courtesy titles
+    "mr", "mrs", "ms", "miss", "mstr",
+    # academic / professional
+    "dr", "prof", "professor",
+    # religious (abbreviated titles only, not office names)
+    "rev", "revd", "reverend",
+    # knighthoods / unambiguous honorifics
+    "sir", "dame", "kt", "bt", "baronet",
+    # generational / post-nominal suffixes
+    "jr", "sr", "esq", "esquire",
+    "phd", "md", "dds", "dvm",
+})
+
+def _honorific_bare(token: str) -> str:
+    """Alphanumerics-only, lowercased form of a token for honorific matching
+    ("Bt." -> "bt"). Char filter, not a regex — no backtracking / ReDoS."""
+    return "".join(ch for ch in token if ch.isalnum()).lower()
+
+
+def strip_honorifics(value: str) -> str | None:
+    """Drop honorific/title/rank/post-nominal tokens from a name value.
+
+    Token-wise, case-insensitive, tolerant of punctuation ("Bt." == "bt").
+    Returns ``None`` when nothing survives (a name field that was *only* an
+    honorific, e.g. ``"Sir"`` / ``"Baronet"``) so the FS scorer treats it as a
+    MISSING value rather than a spurious empty-string agreement — see
+    ``fs_missing_mode``. Regnal numerals/ordinals are kept (see
+    ``_STRIP_HONORIFIC_TOKENS``).
+    """
+    tokens = value.split()
+    if not tokens:
+        return None
+    kept = []
+    for t in tokens:
+        bare = _honorific_bare(t)
+        if bare and bare not in _STRIP_HONORIFIC_TOKENS:
+            kept.append(t)
+    residual = " ".join(kept).strip()
+    return residual or None
+
+
 def canonical_soundex(s: str) -> str:
     """GoldenMatch canonical American Soundex code, or ``""`` when the value has
     no ASCII-letter content. Byte-identical to score-core ``soundex``.
@@ -123,6 +180,10 @@ def apply_transform(value: str | None, transform: str) -> str | None:
         return tokens[-1] if tokens else value
     elif transform == "bloom_filter" or transform.startswith("bloom_filter:"):
         return _bloom_filter_transform(value, transform)
+    elif transform == "strip_honorifics":
+        # May return None (value was honorific-only) -> apply_transforms
+        # short-circuits and FS reads it as MISSING, not an empty agreement.
+        return strip_honorifics(value)
     else:
         # Plugin transform fallback: consult the registry so refdata-style
         # extensions (legal_form_strip, address_token_normalize, …) work

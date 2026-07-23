@@ -292,6 +292,7 @@ transforms:
   - soundex
   - strip
   - strip_all
+  - strip_honorifics
   - token_sort
   - uppercase
   python_only: []

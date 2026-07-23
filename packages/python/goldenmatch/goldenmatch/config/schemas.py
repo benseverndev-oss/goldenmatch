@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 VALID_SIMPLE_TRANSFORMS = frozenset({
     "lowercase", "uppercase", "strip", "strip_all", "soundex", "metaphone",
     "digits_only", "alpha_only", "normalize_whitespace",
-    "token_sort", "first_token", "last_token",
+    "token_sort", "first_token", "last_token", "strip_honorifics",
 })
 
 VALID_SCORERS = frozenset({

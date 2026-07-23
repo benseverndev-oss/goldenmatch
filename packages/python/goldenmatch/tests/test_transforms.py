@@ -66,6 +66,48 @@ class TestApplyTransform:
             apply_transform("hello", "nonexistent_transform")
 
 
+class TestStripHonorifics:
+    """strip_honorifics — mirror of TS core/transforms.ts stripHonorifics."""
+
+    def test_strips_leading_title(self):
+        assert apply_transform("Sir Winston", "strip_honorifics") == "Winston"
+
+    def test_strips_trailing_punctuated_rank(self):
+        assert apply_transform("John Smith Bt.", "strip_honorifics") == "John Smith"
+
+    def test_honorific_only_becomes_none(self):
+        # The correctness crux: a value that is ONLY a honorific must become None
+        # so FS reads it as MISSING, not an agreeing empty string.
+        assert apply_transform("Sir", "strip_honorifics") is None
+        assert apply_transform("Baronet", "strip_honorifics") is None
+
+    def test_plain_name_unchanged(self):
+        assert apply_transform("Winston", "strip_honorifics") == "Winston"
+
+    def test_regnal_numerals_kept(self):
+        # Numerals discriminate monarchs -> kept (the A/B winner).
+        assert apply_transform("Henry VIII", "strip_honorifics") == "Henry VIII"
+
+    def test_case_insensitive(self):
+        assert apply_transform("DAME judi", "strip_honorifics") == "judi"
+
+    def test_chain_short_circuits_to_none(self):
+        # None propagates through the rest of the chain (apply_transforms guard).
+        assert apply_transforms("Sir", ["lowercase", "strip", "strip_honorifics"]) is None
+        assert apply_transforms(
+            "Sir Winston", ["lowercase", "strip", "strip_honorifics"]
+        ) == "winston"
+
+    def test_real_surnames_survive(self):
+        # The conservative set MUST NOT strip tokens that are common real
+        # surnames — safe to default-ON on general-population data.
+        for surname in ("King", "Queen", "Prince", "Bishop", "Baron", "Earl",
+                        "Duke", "Shah", "Pope", "Marshall", "Knight", "Do",
+                        "Master", "Lord"):
+            assert apply_transform(surname, "strip_honorifics") == surname
+        assert apply_transform("Don King", "strip_honorifics") == "Don King"
+
+
 class TestApplyTransforms:
     """Tests for the apply_transforms function."""
 

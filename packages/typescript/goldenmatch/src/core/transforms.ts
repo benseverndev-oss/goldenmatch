@@ -6,6 +6,59 @@
  */
 
 // ---------------------------------------------------------------------------
+// Honorific stripping (mirror of goldenmatch/utils/transforms.py
+// _STRIP_HONORIFIC_TOKENS / strip_honorifics). Regnal numerals/ordinals are
+// deliberately absent — kept as ordinary tokens (the historical_50k A/B showed
+// keeping them recovers recall at no precision cost).
+// ---------------------------------------------------------------------------
+
+// Conservative set: only tokens that are ~never a real surname (safe to
+// default-ON on general-population data). Ambiguous surnames (Shah, King,
+// Prince, Bishop, Baron, Knight, Marshall, Do, ...) are deliberately excluded;
+// the historical_50k A/B win is driven by "sir"/"baronet", both retained.
+// Byte-matched by the Python `_STRIP_HONORIFIC_TOKENS` (api-parity contract).
+const STRIP_HONORIFIC_TOKENS: ReadonlySet<string> = new Set([
+  // courtesy titles
+  "mr", "mrs", "ms", "miss", "mstr",
+  // academic / professional
+  "dr", "prof", "professor",
+  // religious (abbreviated titles only, not office names)
+  "rev", "revd", "reverend",
+  // knighthoods / unambiguous honorifics
+  "sir", "dame", "kt", "bt", "baronet",
+  // generational / post-nominal suffixes
+  "jr", "sr", "esq", "esquire",
+  "phd", "md", "dds", "dvm",
+]);
+
+/**
+ * Alphanumerics-only, lowercased form of a token for honorific matching
+ * ("Bt." -> "bt"). Char filter, not a regex — no backtracking / ReDoS.
+ */
+function honorificBare(token: string): string {
+  let out = "";
+  for (const ch of token) {
+    if (/[0-9A-Za-z]/.test(ch)) out += ch;
+  }
+  return out.toLowerCase();
+}
+
+/**
+ * Drop honorific/title/rank/post-nominal tokens from a name value. Returns null
+ * when nothing survives (value was only an honorific, e.g. "Sir"/"Baronet") so
+ * the FS scorer reads it as MISSING rather than a spurious empty agreement.
+ */
+function stripHonorifics(value: string): string | null {
+  const tokens = value.split(/\s+/).filter((t) => t.length > 0);
+  const kept = tokens.filter((t) => {
+    const bare = honorificBare(t);
+    return bare !== "" && !STRIP_HONORIFIC_TOKENS.has(bare);
+  });
+  const residual = kept.join(" ").trim();
+  return residual === "" ? null : residual;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -52,6 +105,10 @@ export function applyTransform(
       return soundex(value);
     case "metaphone":
       return metaphone(value);
+    case "strip_honorifics":
+      // May return null (honorific-only value) -> applyTransforms
+      // short-circuits and FS reads it as MISSING, not an empty agreement.
+      return stripHonorifics(value);
     default:
       return value;
   }

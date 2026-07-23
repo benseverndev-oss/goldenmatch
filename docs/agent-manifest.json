@@ -4936,6 +4936,9 @@
               "meaning": "Remove all whitespace."
             },
             {
+              "value": "strip_honorifics"
+            },
+            {
               "value": "token_sort",
               "meaning": "Sort the whitespace tokens alphabetically."
             },
@@ -5321,6 +5324,7 @@
           "GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE",
           "GOLDENMATCH_FS_ROUTE_MIN_ROWS",
           "GOLDENMATCH_FS_SCORED_PAIRS_MAX",
+          "GOLDENMATCH_FS_STRIP_HONORIFICS",
           "GOLDENMATCH_FS_TF_ADJUSTMENT",
           "GOLDENMATCH_FS_VECTORIZED",
           "GOLDENMATCH_FS_VEC_MAX_ELEMS",
