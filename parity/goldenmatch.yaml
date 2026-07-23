@@ -57,6 +57,7 @@ mcp_tools:
   - agent_review_queue
   - analyze_data
   - auto_configure
+  - compare_clusters
   - controller_telemetry
   - convert_splink_config
   - dedupe
@@ -92,7 +93,6 @@ mcp_tools:
   python_only:
   - analyze_blocking
   - certify_recall
-  - compare_clusters
   - config_weaknesses
   - create_domain
   - documents_ingest

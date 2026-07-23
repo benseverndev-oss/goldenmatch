@@ -331,8 +331,8 @@ export { matchOne, findExactMatchesOne } from "./match-one.js";
 // Cluster comparison + sensitivity
 // ---------------------------------------------------------------------------
 
-export { compareClusters } from "./compare-clusters.js";
-export type { CCMSResult } from "./compare-clusters.js";
+export { compareClusters, ccmsSummary, parseClustersJson } from "./compare-clusters.js";
+export type { CCMSResult, ClusterMembers } from "./compare-clusters.js";
 export { runSensitivity, stabilityReport } from "./sensitivity.js";
 export type { SweepParam, SweepPoint, SensitivityResult } from "./sensitivity.js";
 
