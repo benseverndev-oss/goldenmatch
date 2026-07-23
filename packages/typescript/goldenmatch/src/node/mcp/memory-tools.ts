@@ -10,6 +10,7 @@
 
 import { SqliteMemoryStore } from "../memory/sqlite-store.js";
 import { MemoryLearner } from "../../core/memory/learner.js";
+import { trustForSource } from "../../core/memory/types.js";
 import type {
   Correction,
   LearnedAdjustment,
@@ -143,6 +144,29 @@ export const MEMORY_TOOLS: readonly Tool[] = [
             "SQLite memory DB path. Default: .goldenmatch/memory.db",
         },
       },
+    },
+  },
+  {
+    name: "memory_import",
+    description:
+      "Import corrections from a list of dicts (the exact shape " +
+      "memory_export returns). Upserts into the store: higher trust " +
+      "wins, same trust = latest wins. Returns the count imported.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        corrections: {
+          type: "array",
+          items: { type: "object" },
+          description: "Correction dicts, as returned by memory_export.",
+        },
+        path: {
+          type: "string",
+          description:
+            "SQLite memory DB path. Default: .goldenmatch/memory.db",
+        },
+      },
+      required: ["corrections"],
     },
   },
 ];
@@ -398,5 +422,83 @@ async function dispatch(
     };
   }
 
+  if (name === "memory_import") {
+    // Inverse of memory_export: write each supplied correction dict via
+    // addCorrection (which applies the trust upsert). Hashes are preserved
+    // VERBATIM -- record_hash/field_hash are re-anchored later by
+    // applyCorrections, and record_hash excludes __row_id__ so regenerating
+    // them would break correction durability. Mirrors Python memory_tools.py.
+    const rowsRaw = args["corrections"];
+    const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
+    const store = await openStore(path);
+    let imported = 0;
+    try {
+      for (const raw of rows) {
+        const r = (raw ?? {}) as Record<string, unknown>;
+        const decision = r["decision"];
+        if (typeof decision !== "string") {
+          throw new Error("memory_import: each correction requires a 'decision'");
+        }
+        const source =
+          typeof r["source"] === "string" ? (r["source"] as string) : "api";
+        // Default trust is source-derived (trustForSource("api") === 0.5), but a
+        // memory_export round-trip always carries an explicit trust so the
+        // default rarely fires. Mirrors Python's `float(r.get("trust", 0.5))`.
+        const trust =
+          typeof r["trust"] === "number" && Number.isFinite(r["trust"] as number)
+            ? (r["trust"] as number)
+            : trustForSource(source);
+        const created = r["created_at"];
+        const createdAt =
+          typeof created === "string" && created ? new Date(created) : new Date();
+        const correction: Correction = {
+          id:
+            typeof r["id"] === "string" && r["id"]
+              ? (r["id"] as string)
+              : crypto.randomUUID(),
+          idA: toInt(r["id_a"]),
+          idB: toInt(r["id_b"]),
+          decision: decision as Correction["decision"],
+          source: source as Correction["source"],
+          trust,
+          fieldHash:
+            typeof r["field_hash"] === "string" ? (r["field_hash"] as string) : "",
+          recordHash:
+            typeof r["record_hash"] === "string"
+              ? (r["record_hash"] as string)
+              : "",
+          originalScore: toFloat(r["original_score"], 0.0),
+          matchkeyName:
+            typeof r["matchkey_name"] === "string"
+              ? (r["matchkey_name"] as string)
+              : null,
+          reason: typeof r["reason"] === "string" ? (r["reason"] as string) : null,
+          dataset:
+            typeof r["dataset"] === "string" ? (r["dataset"] as string) : null,
+          createdAt,
+        };
+        await store.addCorrection(correction);
+        imported += 1;
+      }
+    } finally {
+      await store.close?.();
+    }
+    return { imported };
+  }
+
   return { error: `Unknown memory tool: ${name}` };
+}
+
+/** Coerce a wire value to an int (Python `int(...)`); non-numeric -> 0. */
+function toInt(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+  const n = parseInt(String(v ?? 0), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Coerce a wire value to a float (Python `float(...)`); non-numeric -> def. */
+function toFloat(v: unknown, def: number): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const n = parseFloat(String(v));
+  return Number.isFinite(n) ? n : def;
 }

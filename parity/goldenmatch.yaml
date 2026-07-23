@@ -80,6 +80,7 @@ mcp_tools:
   - identity_resolve_conflict
   - identity_split
   - learn_thresholds
+  - lineage
   - list_blocking_strategies
   - list_clusters
   - list_corrections
@@ -90,6 +91,7 @@ mcp_tools:
   - match
   - match_record
   - memory_export
+  - memory_import
   - memory_stats
   - profile
   - profile_data
@@ -118,11 +120,9 @@ mcp_tools:
   - identity_stats
   - identity_worklist
   - incremental
-  - lineage
   - lint_routing
   - list_domains
   - list_plugins
-  - memory_import
   - plan_routing
   - pprl_auto_config
   - pprl_link
@@ -238,6 +238,7 @@ a2a_skills:
   - agent_match_sources
   - agent_review_queue
   - fix_quality
+  - memory_import
   - scan_quality
   - score
 

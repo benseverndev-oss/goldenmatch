@@ -4,7 +4,8 @@
  * Ports the Python server's run-query tools (goldenmatch/mcp/server.py) onto the
  * TS MCP surface, now that `RUN_STORE` holds the last `dedupe()` result:
  *   get_stats / list_clusters / get_cluster / get_golden_record / export_results
- * plus the stateless file-stager `upload_dataset` (agent_tools.py). All read the
+ * plus the stateless file-stager `upload_dataset` (agent_tools.py) and `lineage`
+ * (per-golden-record field provenance via core `buildLineage`). All read the
  * CURRENT run (the last dedupe in this stdio session) -- none take a run id, matching
  * Python's implicit "current run" contract. `list_runs` is intentionally NOT ported
  * here: its Python impl reads the on-disk rollback snapshot log, so it belongs with
@@ -16,6 +17,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import type { Row } from "../../core/types.js";
+import { buildLineage } from "../../core/lineage.js";
 import { writeCsv, writeJson } from "../connectors/file.js";
 import { sanitizePath } from "./paths.js";
 import { RUN_STORE, stripInternal } from "./run-store.js";
@@ -117,6 +119,26 @@ export const RUN_TOOLS: readonly Tool[] = [
         encoding: { type: "string", enum: ["base64", "text"], description: "Content encoding (default base64)" },
       },
       required: ["file_content", "filename"],
+    },
+  },
+  {
+    name: "lineage",
+    description:
+      "Field-level provenance for the current run: one lineage record per golden " +
+      "record, with the source rows merged and the per-field survivorship strategy " +
+      "+ confidence. Optionally include a natural-language summary per record.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        max_pairs: {
+          type: "integer",
+          description: "Max lineage records to return (default 100)",
+        },
+        natural_language: {
+          type: "boolean",
+          description: "Include a human-readable summary per record (default false)",
+        },
+      },
     },
   },
 ];
@@ -225,6 +247,22 @@ function toolUploadDataset(args: Record<string, unknown>): unknown {
   return { path: outPath, bytes: bytes.byteLength, filename };
 }
 
+function toolLineage(args: Record<string, unknown>): unknown {
+  const run = RUN_STORE.getCurrent();
+  // Python's lineage handler returns {"error": "No dataset loaded"} when no run
+  // is loaded -- mirror that shape here.
+  if (run === null) return { error: "No dataset loaded" };
+  const maxPairs = intArg(args["max_pairs"], 100);
+  const naturalLanguage = args["natural_language"] === true;
+  const bundle = buildLineage(
+    run.result,
+    naturalLanguage ? { naturalLanguage: true } : {},
+  );
+  const edges =
+    maxPairs >= 0 ? bundle.edges.slice(0, maxPairs) : [...bundle.edges];
+  return { count: edges.length, lineage: edges };
+}
+
 /** Dispatch a run tool. Returns a plain object (the tools/call wrap applies). */
 export function handleRunTool(name: string, args: Record<string, unknown>): unknown {
   switch (name) {
@@ -240,6 +278,8 @@ export function handleRunTool(name: string, args: Record<string, unknown>): unkn
       return toolExportResults(args);
     case "upload_dataset":
       return toolUploadDataset(args);
+    case "lineage":
+      return toolLineage(args);
     default:
       return { error: `unknown run tool: ${name}` };
   }

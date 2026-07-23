@@ -4,6 +4,14 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.9.0] - 2026-07-23
+
+### Added
+- **`memory_import` + `lineage` MCP tools** (TS↔Python parity, Tier 3 PR-1), taking the MCP surface from **63 → 65 tools**. Both are class-A wiring on state layers that already existed — no net-new core algorithm. Both flip `python_only → shared` in `parity/goldenmatch.yaml`.
+  - `memory_import` (in `MEMORY_TOOLS`, `src/node/mcp/memory-tools.ts`) is the inverse of `memory_export`: it accepts a list of correction dicts and writes each via `SqliteMemoryStore.addCorrection`, so the store's trust upsert (incoming trust < existing ⇒ ignore; same-or-higher ⇒ replace) applies for free. `record_hash`/`field_hash` are preserved **VERBATIM** — never regenerated — because `applyCorrections` re-anchors them later and `record_hash` excludes `__row_id__` so corrections survive row reordering; regenerating would break that durability. Default `source="api"` maps to trust 0.5 via `trustForSource`. Response is `{imported}` (counts rows processed, matching Python's handler even when the upsert skips a lower-trust row).
+  - `lineage` (in `RUN_TOOLS`, `src/node/mcp/run-tools.ts`) reads the current run from the server-held `RUN_STORE` (Tier 1) and calls the edge-safe `core/lineage.ts::buildLineage(result)` — zero net-new core. Input schema mirrors Python's `{max_pairs, natural_language}`; response is `{count, lineage}` (one field-provenance record per golden record, with an optional natural-language summary). Returns the Python-shaped `{error: "No dataset loaded"}` when no run is loaded.
+  - Tests: `tests/unit/mcp-memory-tools.test.ts` (import round-trip with verbatim hashes + the lower-trust-incoming-ignored upsert + the `api`/0.5 default), `tests/unit/mcp-run-tools.test.ts` (lineage per golden record, `natural_language` summary, `max_pairs` cap, no-run error).
+
 ## [1.8.0] - 2026-07-23
 
 ### Fixed
