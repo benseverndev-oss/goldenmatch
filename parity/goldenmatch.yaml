@@ -55,8 +55,10 @@ mcp_tools:
   - agent_explain_pair
   - agent_match_sources
   - agent_review_queue
+  - analyze_blocking
   - analyze_data
   - auto_configure
+  - certify_recall
   - compare_clusters
   - config_weaknesses
   - controller_telemetry
@@ -107,8 +109,6 @@ mcp_tools:
   - unmerge_record
   - upload_dataset
   python_only:
-  - analyze_blocking
-  - certify_recall
   - create_domain
   - documents_ingest
   - documents_suggest_schema
