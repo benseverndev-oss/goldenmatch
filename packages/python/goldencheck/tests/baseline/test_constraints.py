@@ -94,6 +94,22 @@ def test_no_fd_on_random_data():
     assert fds == [], f"Expected no FDs on random data, got: {fds}"
 
 
+def test_unique_determinant_not_reported_as_fd():
+    """A unique determinant trivially "determines" every other column, but that
+    is a spurious FD. The native-kernel path (strict pass) skips unique
+    determinants, so — unlike the old per-pair ``group_by`` miner, which scored
+    them at confidence 1.0 — the unique ``noise`` column yields no FD, while the
+    genuine ``zip_code -> city`` dependency is still discovered."""
+    df = _zip_city_df(200)  # includes noise = range(200), a unique determinant
+    fds, _, _ = mine_constraints(df, min_confidence=0.95)
+    assert not any(
+        fd.determinant == ["noise"] for fd in fds
+    ), f"unique determinant should not yield an FD, got: {fds}"
+    assert any(
+        "zip_code" in fd.determinant and "city" in fd.dependent for fd in fds
+    ), f"expected zip_code->city FD to survive, got: {fds}"
+
+
 def test_fds_merged_same_determinant():
     """A->B and A->C should be merged into a single FD A->[B,C]."""
     # state_code -> city AND state_code -> region both hold

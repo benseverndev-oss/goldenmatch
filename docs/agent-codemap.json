@@ -7665,7 +7665,8 @@
           ],
           "imports": [
             "goldencheck._polars_lazy",
-            "goldencheck.baseline.models"
+            "goldencheck.baseline.models",
+            "goldencheck.core.kernels"
           ]
         },
         {
@@ -8951,6 +8952,7 @@
           "defines": [
             "FunctionalDependencyProfiler",
             "_discover_python",
+            "_discover_strict_ids",
             "_select_candidates"
           ],
           "imports": [

@@ -120,14 +120,11 @@ def discover_functional_dependencies(
                 (int(i), int(j))
                 for i, j in native_module().discover_functional_dependencies(arrays)
             ]
-        except Exception:  # noqa: BLE001 - any native failure -> Polars path
+        except Exception:  # noqa: BLE001 - any native failure -> pure-Python path
             pass
-    from goldencheck._polars_lazy import pl
-    from goldencheck.relations.functional_dependency import _discover_python
+    from goldencheck.relations.functional_dependency import _discover_strict_ids
 
-    names = [f"c{i}" for i in range(len(cols))]
-    df = pl.DataFrame({n: c for n, c in zip(names, cols)})
-    return _discover_python(df, names, df.height)
+    return _discover_strict_ids(cols, len(cols[0]) if cols else 0)
 
 
 # ── approximate functional dependencies ──────────────────────────────────────

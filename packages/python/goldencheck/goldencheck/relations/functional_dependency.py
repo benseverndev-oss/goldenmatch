@@ -50,6 +50,30 @@ def _select_candidates(frame, n_rows: int) -> list[str]:
     return [c for _nu, c in scored[:_MAX_CANDIDATES]]
 
 
+def _discover_strict_ids(cols_values: list[list], n_rows: int) -> list[tuple[int, int]]:
+    """List-based, Polars-free strict FD discovery: ``det -> dep`` holds iff
+    ``n_distinct(det, dep) == n_distinct(det)``. Returns ``(det_idx, dep_idx)``
+    pairs into ``cols_values``; skips trivial pairs (unique determinant, constant
+    dependent) identically to the kernel.
+
+    This is the shared compute core: the frame-based :func:`_discover_python`
+    below delegates to it after pulling columns to lists, and
+    ``core.kernels.discover_functional_dependencies`` calls it directly on its
+    list input — so the fallback never routes through the Polars engine (the
+    baseline / relations Polars-eviction discipline)."""
+    distinct = [len(set(c)) for c in cols_values]
+    out: list[tuple[int, int]] = []
+    for i in range(len(cols_values)):
+        if distinct[i] == n_rows:  # unique determinant -> trivial
+            continue
+        for j in range(len(cols_values)):
+            if i == j or distinct[j] <= 1:
+                continue
+            if len(set(zip(cols_values[i], cols_values[j]))) == distinct[i]:
+                out.append((i, j))
+    return out
+
+
 def _discover_python(frame, cols: list[str], n_rows: int) -> list[tuple[int, int]]:
     """Polars-free mirror of the kernel: det->dep holds iff
     n_distinct(det, dep) == n_distinct(det). Skips trivial pairs identically.
@@ -61,18 +85,8 @@ def _discover_python(frame, cols: list[str], n_rows: int) -> list[tuple[int, int
     a safety net). Values are pulled out of the Polars frame once with
     ``to_list``; the engine no longer runs the distinct counts."""
     frame = to_frame(frame)
-    lists = {c: frame.column(c).to_list() for c in cols}
-    distinct = {c: len(set(lists[c])) for c in cols}
-    out: list[tuple[int, int]] = []
-    for i, det in enumerate(cols):
-        if distinct[det] == n_rows:  # unique determinant -> trivial
-            continue
-        for j, dep in enumerate(cols):
-            if i == j or distinct[dep] <= 1:
-                continue
-            if len(set(zip(lists[det], lists[dep]))) == distinct[det]:
-                out.append((i, j))
-    return out
+    values = [frame.column(c).to_list() for c in cols]
+    return _discover_strict_ids(values, n_rows)
 
 
 class FunctionalDependencyProfiler:
