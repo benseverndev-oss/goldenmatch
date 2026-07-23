@@ -1,0 +1,12 @@
+{
+  "meta": {"source": "wikidata", "pulled": "test", "sparql_sha": "test", "domain": "companies"},
+  "entities": [
+    {"qid": "Q1", "canonical": "Acme Holdings", "aliases": ["Acme Holdings Inc.", "Acme"]},
+    {"qid": "Q2", "canonical": "Beta Corp", "aliases": ["Beta Corporation", "BETA"]},
+    {"qid": "Q3", "canonical": "Gamma Ltd", "aliases": ["Gamma Limited"]},
+    {"qid": "Q4", "canonical": "Delta LLC", "aliases": ["Delta"]}
+  ],
+  "facts": [
+    {"anchor_qid": "Q1", "relation": "has_subsidiary", "member_qids": ["Q2", "Q3", "Q4"]}
+  ]
+}
