@@ -71,11 +71,13 @@ mcp_tools:
   - get_cluster
   - get_golden_record
   - get_stats
+  - identity_claim
   - identity_conflicts
   - identity_history
   - identity_list
   - identity_merge
   - identity_resolve
+  - identity_resolve_conflict
   - identity_split
   - learn_thresholds
   - list_blocking_strategies
@@ -111,9 +113,7 @@ mcp_tools:
   - identity_audit
   - identity_audit_seal
   - identity_audit_verify
-  - identity_claim
   - identity_profile
-  - identity_resolve_conflict
   - identity_show
   - identity_stats
   - identity_worklist

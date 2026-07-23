@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 6 identity tools matching the Python sibling", () => {
+  it("exports the 8 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -106,8 +106,10 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_conflicts",
       "identity_merge",
       "identity_split",
+      "identity_claim",
+      "identity_resolve_conflict",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(6);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(8);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");
@@ -177,5 +179,71 @@ describe("identity tool dispatch", () => {
     expect(r["moved"]).toEqual(["src:1"]);
     const resolved = await call("identity_resolve", { record_id: "src:1" });
     expect((resolved["node"] as Record<string, unknown>)["entity_id"]).toBe(r["new_entity_id"]);
+  });
+
+  it("identity_claim reassigns a record and reports the losing entity", async () => {
+    const r = await call("identity_claim", { entity_id: "E1", record_id: "src:2" });
+    expect(r["moved"]).toBe(true);
+    expect(r["entity_id"]).toBe("E1");
+    expect(r["from_entity"]).toBe("E2");
+    const resolved = await call("identity_resolve", { record_id: "src:2" });
+    expect((resolved["node"] as Record<string, unknown>)["entity_id"]).toBe("E1");
+    // claimed event on BOTH the gaining (E1) and losing (E2) entities.
+    const h1 = await call("identity_history", { entity_id: "E1" });
+    const h2 = await call("identity_history", { entity_id: "E2" });
+    expect((h1["items"] as Record<string, unknown>[]).some((e) => e["kind"] === "claimed")).toBe(true);
+    expect((h2["items"] as Record<string, unknown>[]).some((e) => e["kind"] === "claimed")).toBe(true);
+  });
+
+  it("identity_claim is a no-op on replay", async () => {
+    const r1 = await call("identity_claim", { entity_id: "E1", record_id: "src:2" });
+    expect(r1["moved"]).toBe(true);
+    const r2 = await call("identity_claim", { entity_id: "E1", record_id: "src:2" });
+    expect(r2["moved"]).toBe(false);
+  });
+
+  it("identity_resolve_conflict 'distinct' splits record_b out", async () => {
+    // src:1 & src:2 both belong to E1 first (claim src:2 into E1), conflict edge exists.
+    await call("identity_claim", { entity_id: "E1", record_id: "src:2" });
+    const r = await call("identity_resolve_conflict", {
+      record_a_id: "src:1",
+      record_b_id: "src:2",
+      resolution: "distinct",
+    });
+    expect(r["resolution"]).toBe("distinct");
+    const action = r["action"] as Record<string, unknown>;
+    expect(action["type"]).toBe("split");
+    // src:2 is now on a fresh identity, not E1.
+    const resolved = await call("identity_resolve", { record_id: "src:2" });
+    expect((resolved["node"] as Record<string, unknown>)["entity_id"]).not.toBe("E1");
+  });
+
+  it("identity_resolve_conflict 'same'/'defer' record a verdict without splitting", async () => {
+    const same = await call("identity_resolve_conflict", {
+      record_a_id: "src:1",
+      record_b_id: "src:2",
+      resolution: "same",
+    });
+    expect((same["action"] as Record<string, unknown>)["type"]).toBe("none");
+    const defer = await call("identity_resolve_conflict", {
+      record_a_id: "src:1",
+      record_b_id: "src:2",
+      resolution: "defer",
+    });
+    expect((defer["action"] as Record<string, unknown>)["type"]).toBe("none");
+    // A conflict_mediated event landed on the origin entity.
+    const h1 = await call("identity_history", { entity_id: "E1" });
+    expect(
+      (h1["items"] as Record<string, unknown>[]).some((e) => e["kind"] === "conflict_mediated"),
+    ).toBe(true);
+  });
+
+  it("identity_resolve_conflict rejects an invalid resolution", async () => {
+    const r = await call("identity_resolve_conflict", {
+      record_a_id: "src:1",
+      record_b_id: "src:2",
+      resolution: "nonsense",
+    });
+    expect(r["error"]).toBeTypeOf("string");
   });
 });

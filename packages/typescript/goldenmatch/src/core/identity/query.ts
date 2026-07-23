@@ -165,3 +165,74 @@ export async function manualSplit(
   });
   return { newEntityId: newId, moved, at: now.toISOString() };
 }
+
+/**
+ * Claim `recordId` into `entityId`, moving it out of any prior entity
+ * ("this record belongs to that identity"). Ports Python
+ * `goldenmatch.identity.query.claim_record`.
+ *
+ * Emits a `claimed` event on BOTH the gaining entity and (when the record
+ * was previously attached elsewhere) the losing entity. Idempotent: claiming
+ * a record already in `entityId` is a no-op (`moved: false`, no events), so a
+ * replay does nothing.
+ */
+export async function claimRecord(
+  store: IdentityStore,
+  entityId: string,
+  recordId: string,
+  opts: { reason?: string; runName?: string } = {},
+): Promise<{
+  entityId: string;
+  recordId: string;
+  moved: boolean;
+  fromEntity: string | null;
+  at: string;
+}> {
+  const target = await store.getIdentity(entityId);
+  if (!target) throw new Error(`Entity ${entityId} not found`);
+  if (target.status !== "active") throw new Error("Target entity must be active");
+  const rec = await store.getRecord(recordId);
+  if (!rec) throw new Error(`Record ${recordId} not found`);
+
+  const prevEntity = rec.entityId;
+  const now = new Date();
+  if (prevEntity === entityId) {
+    return {
+      entityId,
+      recordId,
+      moved: false,
+      fromEntity: prevEntity,
+      at: now.toISOString(),
+    };
+  }
+
+  await store.upsertRecord({ ...rec, entityId, lastSeenAt: now });
+  const runName = opts.runName ?? "manual";
+  await store.emitEvent({
+    eventId: null,
+    entityId,
+    kind: "claimed",
+    payload: { record_id: recordId, from_entity: prevEntity, reason: opts.reason ?? null },
+    runName,
+    dataset: target.dataset,
+    recordedAt: now,
+  });
+  if (prevEntity) {
+    await store.emitEvent({
+      eventId: null,
+      entityId: prevEntity,
+      kind: "claimed",
+      payload: { record_id: recordId, to_entity: entityId, reason: opts.reason ?? null },
+      runName,
+      dataset: target.dataset,
+      recordedAt: now,
+    });
+  }
+  return {
+    entityId,
+    recordId,
+    moved: true,
+    fromEntity: prevEntity,
+    at: now.toISOString(),
+  };
+}

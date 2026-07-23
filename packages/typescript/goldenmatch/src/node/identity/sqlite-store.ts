@@ -395,6 +395,24 @@ export class SqliteIdentityStore implements IdentityStore {
     return rows.map(rowToEdge);
   }
 
+  async edgesByKind(kind: string, dataset?: string): Promise<EvidenceEdge[]> {
+    // recorded_at DESC then edge_id DESC so the latest edge for a pair wins
+    // deterministically when timestamps tie (mirrors the in-memory store).
+    const rows: EdgeRow[] =
+      dataset === undefined
+        ? (this.db
+            .prepare(
+              "SELECT * FROM evidence_edges WHERE kind = ? ORDER BY recorded_at DESC, edge_id DESC",
+            )
+            .all(kind) as EdgeRow[])
+        : (this.db
+            .prepare(
+              "SELECT * FROM evidence_edges WHERE kind = ? AND dataset = ? ORDER BY recorded_at DESC, edge_id DESC",
+            )
+            .all(kind, dataset) as EdgeRow[]);
+    return rows.map(rowToEdge);
+  }
+
   async findConflicts(dataset?: string): Promise<EvidenceEdge[]> {
     const rows: EdgeRow[] =
       dataset === undefined

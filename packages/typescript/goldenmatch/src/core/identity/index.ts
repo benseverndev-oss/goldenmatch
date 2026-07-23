@@ -17,6 +17,7 @@ export {
   type ResolveOptions,
 } from "./resolve.js";
 export {
+  claimRecord,
   findByRecord,
   findConflicts,
   getEntity,
@@ -26,3 +27,11 @@ export {
   manualSplit,
   type IdentityView,
 } from "./query.js";
+export {
+  mediateConflict,
+  openConflicts,
+  type ConflictItem,
+  type ConflictResolution,
+  type MediationAction,
+  type MediationResult,
+} from "./mediation.js";

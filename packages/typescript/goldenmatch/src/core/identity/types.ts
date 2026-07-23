@@ -17,7 +17,8 @@ export type EdgeKind =
   | "same_as"
   | "possible_same_as"
   | "conflicts_with"
-  | "derived_from";
+  | "derived_from"
+  | "mediation_verdict";
 
 export type EventKind =
   | "created"
@@ -26,7 +27,9 @@ export type EventKind =
   | "split_from"
   | "retired"
   | "manual_merge"
-  | "manual_split";
+  | "manual_split"
+  | "claimed"
+  | "conflict_mediated";
 
 export interface IdentityNode {
   entityId: string;
@@ -119,6 +122,14 @@ export interface IdentityStore {
   addEdge(edge: EvidenceEdge): Promise<number | null>;
   edgesForEntity(entityId: string): Promise<EvidenceEdge[]>;
   findConflicts(dataset?: string): Promise<EvidenceEdge[]>;
+  /**
+   * All evidence edges of a given `kind`, most-recent first. Generic
+   * counterpart to `findConflicts` (which is `edgesByKind("conflicts_with")`).
+   * Mirrors Python `store.edges_by_kind`; used by the mediation workflow to
+   * list steward verdict edges. Ties on `recordedAt` break on descending
+   * insertion order so latest-wins lookups are deterministic.
+   */
+  edgesByKind(kind: EdgeKind, dataset?: string): Promise<EvidenceEdge[]>;
 
   emitEvent(event: IdentityEvent): Promise<number | null>;
   history(entityId: string, limit?: number): Promise<IdentityEvent[]>;
