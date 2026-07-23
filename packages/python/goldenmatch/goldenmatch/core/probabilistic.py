@@ -2437,8 +2437,10 @@ def score_probabilistic(
             for ne in ne_fields:
                 total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
 
-            # Field-dependence correction: drop the correlated-pair double-count.
+            # Field-dependence correction: drop the correlated-pair double-count
+            # (and the achievable max, so a true full-agree pair still hits 1.0).
             total_weight += _joint_correction_scalar(vec, mk, em_result)
+            pair_max_weight -= _joint_total_excess(mk, em_result)
 
             if calibrated:
                 normalized = posterior_from_weight(total_weight, prior_w)
@@ -2714,6 +2716,15 @@ def _apply_joint_correction_vectorized(total_weight, top_masks, mk, em_result) -
             total_weight -= np.where(ma & mb, bits, 0.0)
 
 
+def _joint_total_excess(mk, em_result) -> float:
+    """Total excess bits across corrected pairs whose fields are in ``mk``. The
+    max-scoring configuration (every field at top) triggers every correction, so
+    the achievable pair-max drops by this amount — subtract it from
+    ``pair_max_weight`` too, else a TRUE full-agree pair normalizes below 1.0 and
+    the correction silently costs recall (not just precision)."""
+    return sum(bits for _pa, _pb, bits in _joint_field_indices(mk, em_result))
+
+
 #: Scorers that CANNOT run through the scalar per-pair ``score_field`` (they are
 #: matrix-only by nature) — model-backed embedding scorers. The FS path handles
 #: them exclusively on the vectorized matrix (EM E-step + block scoring); they
@@ -2901,6 +2912,7 @@ def score_probabilistic_vectorized(
         top_masks[f.field] = observed & (lvl == int(f.levels) - 1)
 
     _apply_joint_correction_vectorized(total_weight, top_masks, mk, em_result)
+    pair_max_weight -= _joint_total_excess(mk, em_result)
 
     for ne in (mk.negative_evidence or []):
         ne_vals = _field_values_for_block(block_df, ne, n)
@@ -3032,6 +3044,7 @@ def score_probabilistic_vectorized_batch(
         top_masks[f.field] = observed & (lvl == int(f.levels) - 1)
 
     _apply_joint_correction_vectorized(total_weight, top_masks, mk, em_result)
+    pair_max_weight -= _joint_total_excess(mk, em_result)
 
     for ne in (mk.negative_evidence or []):
         ne_vals: list[str | None] = []
@@ -3875,6 +3888,7 @@ def score_pair_probabilistic(
     for ne in (mk.negative_evidence or []):
         total_weight += _ne_scalar_contribution(row_a, row_b, ne, em_result)
     total_weight += _joint_correction_scalar(vec, mk, em_result)
+    pair_max_weight -= _joint_total_excess(mk, em_result)
 
     if _fs_calibration_mode() == "posterior":
         return posterior_from_weight(total_weight, prior_weight(em_result.proportion_matched))
