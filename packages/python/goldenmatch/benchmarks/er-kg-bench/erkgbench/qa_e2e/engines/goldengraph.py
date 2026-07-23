@@ -257,11 +257,14 @@ class GoldenGraphQAEngine:
             # so they always build the index. The warning keeps a genuinely-absent
             # backend from silently degrading a paid run unnoticed.
             try:
-                from openai import OpenAI
-
                 from .goldenmatch_rag import _OpenAIEmbedderAdapter
+                from .text_rag import make_openai_client
 
-                adapter = _OpenAIEmbedderAdapter(OpenAI(), _passage_embed_model())
+                # `make_openai_client()` resolves OPENAI_BASE_URL the guarded way: the paid
+                # head_to_head lane sets it to the EMPTY string, which a bare OpenAI() would
+                # use verbatim -> protocol-less URL -> every passage embed fails
+                # (httpx.UnsupportedProtocol) -> hybrid silently collapses to entity-only.
+                adapter = _OpenAIEmbedderAdapter(make_openai_client(), _passage_embed_model())
                 passages = _PassageRetriever(
                     [d.id for d in corpus.documents],
                     [d.text for d in corpus.documents],

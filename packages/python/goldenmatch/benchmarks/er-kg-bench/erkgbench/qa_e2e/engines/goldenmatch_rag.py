@@ -100,9 +100,9 @@ class _BaseGoldenmatchRAGEngine:
         client: Any | None = None,
     ):
         if client is None:
-            from openai import OpenAI
+            from .text_rag import make_openai_client
 
-            client = OpenAI()
+            client = make_openai_client()
         self._client = client
         self._model = model
         self._embedder = _OpenAIEmbedderAdapter(client, embedding_model)
