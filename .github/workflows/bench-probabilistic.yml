@@ -51,6 +51,11 @@ on:
         type: boolean
         required: false
         default: true
+      run_honorific:
+        description: "Run the honorific-normalization spike OFF-vs-ON lane (strip title/rank tokens from name fields; historical_50k over-merge probe)"
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -261,6 +266,93 @@ jobs:
             prob_panel_dc_off/
             prob_panel_dc_on/
             compare_dc/
+          retention-days: 90
+
+  # ── Honorific-normalization spike lane (THROWAWAY) ────────────────────────
+  # Runs the panel twice — GM_SPIKE_STRIP_HONORIFICS=0 (baseline) and =1 (strip
+  # title/honorific/rank tokens from name fields before FS auto-config + scoring)
+  # — and diffs GoldenMatch F1 per dataset. v2 auto-config default-on in BOTH
+  # runs (env unset), so the honorific strip is the ONLY variable. Motivation:
+  # the FS over-merge diagnostic on historical_50k showed the false merges
+  # concentrate on honorific tokens leaked into name fields (first_name="sir"
+  # 144259, surname="baronet" 144727); TF down-weighting was byte-neutral there
+  # (name coltype already routes through name_freq_weighted_jw). This lane is the
+  # only valid instrument — no local historical_50k, and the strip cuts agreement
+  # from TRUE historical-knight merges too, so the net F1 effect must be measured.
+  # NOT a gate; NOT a default flip candidate until this verdict says it wins.
+  panel-honorific:
+    if: ${{ inputs.run_honorific }}
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      # DBLP-ACM is gitignored; fetch the Leipzig benchmark best-effort. On any
+      # failure the panel records dblp_acm as skipped (never fatal).
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+            ls -la "$DEST"
+          else
+            echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped in the panel"
+          fi
+
+      - name: Run panel — honorific strip OFF (GM_SPIKE_STRIP_HONORIFICS=0)
+        env:
+          GM_SPIKE_STRIP_HONORIFICS: "0"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_hon_off
+
+      - name: Run panel — honorific strip ON (GM_SPIKE_STRIP_HONORIFICS=1)
+        env:
+          GM_SPIKE_STRIP_HONORIFICS: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_hon_on
+
+      - name: Compare OFF vs ON (writes verdict to job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_hon_off/panel.json \
+            --v2 prob_panel_hon_on/panel.json \
+            --title "Honorific-strip OFF vs ON — GoldenMatch probabilistic path" \
+            --a-label off --b-label on \
+            --out compare_hon/compare.md $FLAG
+
+      - name: Upload OFF/ON panels + comparison
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: prob-panel-honorific
+          path: |
+            prob_panel_hon_off/
+            prob_panel_hon_on/
+            compare_hon/
           retention-days: 90
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────

@@ -83,6 +83,21 @@ def _gm_predictions_path(records, truth, gm_pred_path: Path, dump_dir: Path):
 
     rid = records.column("record_id").to_pylist()
 
+    # ── Honorific-normalization spike (GM_SPIKE_STRIP_HONORIFICS) ──
+    # Throwaway A/B lever: strip title/honorific tokens from name fields before
+    # FS auto-config + scoring see them. OFF (unset/0) == byte-identical baseline.
+    # record_id is untouched, so `rid` and row order stay valid.
+    if os.environ.get("GM_SPIKE_STRIP_HONORIFICS", "0").lower() in (
+        "1", "true", "on", "yes",
+    ):
+        import polars as pl
+
+        honorific_spike = _import_sibling("honorific_spike")
+
+        records = honorific_spike.strip_honorifics_frame(
+            pl.from_arrow(records)
+        ).to_arrow()
+
     dump_dir.mkdir(parents=True, exist_ok=True)
     os.environ["GOLDENMATCH_BENCH_DUMP_PAIRS"] = str(dump_dir)
     try:
