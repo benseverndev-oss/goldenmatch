@@ -4,6 +4,14 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.8.0] - 2026-07-23
+
+### Fixed
+- **`agent_approve_reject` now PERSISTS the decision** instead of returning a `{recorded: true}` no-op. The tool was advertised on the MCP/A2A agent surface but its handler silently discarded the approve/reject — a correctness bug (it claimed to record a decision but wrote nothing). It now writes a durable `Correction` to Learning Memory, faithful to Python's `_write_agent_correction`: `source='agent'`, `trust=0.5`, empty field/record hashes, `original_score` 0.0, and the pair canonicalized to `(min, max)` before storage (the project-wide invariant, same as `add_correction`). The tool count is UNCHANGED (stays 63) — this is a behavior fix, and `agent_approve_reject` stays `ts_only` in `parity/goldenmatch.yaml` (functional-but-TS-only; the three still-unported agent tools `sensitivity`/`incremental`/`certify_recall` remain the Python-only delta).
+  - Threaded an optional durable-store handle into the agent `SkillContext` (`openMemoryStore` factory + `dataset`). The node MCP/A2A surface (`handleAgentTool`) supplies it via `SqliteMemoryStore` (`.goldenmatch/memory.db`, `path` override, `better-sqlite3` optional peer dep), mirroring the `add_correction` tool's `openStore` lifecycle; only `agent_approve_reject` invokes it, so no SQLite handle opens for unrelated skills. On the edge path (no store wired) the decision is still returned but not persisted, matching Python's `memory_store=None` branch. The ephemeral review-queue side is unchanged.
+  - Response shape now mirrors Python's handler: `{status: "ok", decision, job_name?, id_a, id_b, decided_by?}` (was `{recorded: true, decision, id_a?, id_b?}`).
+  - Tests: `tests/unit/agent-skills.test.ts` proves persistence for both approve and reject via an in-memory `MemoryStore` (canonicalized pair, `source='agent'`/`trust=0.5`/empty hashes, reason + dataset threading), the Python-shaped response on the edge path (no store), and that an invalid decision persists nothing.
+
 ## [1.7.0] - 2026-07-23
 
 ### Added

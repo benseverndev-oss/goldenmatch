@@ -16,6 +16,7 @@ import type {
 } from "../types.js";
 import { makeMatchkeyConfig, makeMatchkeyField } from "../types.js";
 import type { SkillDef, SkillContext, SkillResult, JSONSchema } from "./types.js";
+import type { Correction } from "../memory/types.js";
 import { profileForAgent, selectStrategy } from "./strategy.js";
 import { explainPair } from "../explain.js";
 import { gatePairs } from "../review-queue.js";
@@ -49,6 +50,15 @@ async function resolveTable(
   // No inline rows and no path: still call loadTable so an injected loader can
   // raise the surface-specific "no loader" error (matches the test contract).
   return ctx.loadTable("");
+}
+
+/**
+ * Coerce a tool argument to a finite integer, or null when it isn't one.
+ * Mirrors the `add_correction` MCP tool's `id_a` / `id_b` parsing.
+ */
+function toInt(raw: unknown): number | null {
+  const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -429,19 +439,76 @@ export const AGENT_SKILLS: readonly SkillDef[] = [
     id: "agent_approve_reject",
     description: "Approve or reject a review queue pair.",
     inputSchema: APPROVE_REJECT_SCHEMA,
-    handler: async (args): Promise<SkillResult> => {
+    handler: async (args, ctx): Promise<SkillResult> => {
       const decision = args.decision;
       if (decision !== "approve" && decision !== "reject") {
         return {
           error: `Invalid decision: ${String(decision)}. Use 'approve' or 'reject'.`,
         };
       }
-      // Memory-store write is a Wave-3+ follow-up; record the decision only.
+
+      // Durable Learning Memory write, faithful to Python's
+      // `_write_agent_correction`: source='agent', trust=0.5, empty
+      // field/record hashes (staleness detection degrades gracefully),
+      // original_score 0.0. The pair is canonicalized to (min, max) before
+      // storage (the project-wide invariant, same as `add_correction`). When
+      // no store is wired (edge path) the decision is still returned, matching
+      // Python's `memory_store=None` branch.
+      const idA = toInt(args.id_a);
+      const idB = toInt(args.id_b);
+      if (
+        ctx.openMemoryStore !== undefined &&
+        idA !== null &&
+        idB !== null
+      ) {
+        const ca = Math.min(idA, idB);
+        const cb = Math.max(idA, idB);
+        const reason =
+          typeof args.reason === "string" && args.reason.length > 0
+            ? args.reason
+            : null;
+        const dataset =
+          typeof args.dataset === "string" && args.dataset.length > 0
+            ? args.dataset
+            : ctx.dataset !== undefined
+              ? ctx.dataset
+              : null;
+        const correction: Correction = {
+          id: crypto.randomUUID(),
+          idA: ca,
+          idB: cb,
+          decision,
+          source: "agent",
+          trust: 0.5,
+          fieldHash: "",
+          recordHash: "",
+          originalScore: 0.0,
+          matchkeyName: null,
+          reason,
+          dataset,
+          createdAt: new Date(),
+        };
+        const store = await ctx.openMemoryStore();
+        try {
+          await store.addCorrection(correction);
+        } finally {
+          await store.close?.();
+        }
+      }
+
+      // Response shape mirrors Python's `agent_approve_reject` handler:
+      // {status, decision, job_name?, id_a, id_b, decided_by?}.
+      const jobName =
+        typeof args.job_name === "string" ? args.job_name : undefined;
+      const decidedBy =
+        typeof args.decided_by === "string" ? args.decided_by : undefined;
       return {
-        recorded: true,
+        status: "ok",
         decision,
+        ...(jobName !== undefined ? { job_name: jobName } : {}),
         ...(args.id_a !== undefined ? { id_a: args.id_a } : {}),
         ...(args.id_b !== undefined ? { id_b: args.id_b } : {}),
+        ...(decidedBy !== undefined ? { decided_by: decidedBy } : {}),
       };
     },
   },
