@@ -17,7 +17,7 @@ vi.mock("../../src/core/pipeline.js", async (orig) => {
   return {
     ...actual,
     runDedupePipeline: (...args: Parameters<typeof actual.runDedupePipeline>) => {
-      const cfg = args[1] as {
+      const cfg = args[1] as unknown as {
         matchkeys?: Array<{ threshold?: number }>;
         matchSettings?: Array<{ threshold?: number }>;
       };
