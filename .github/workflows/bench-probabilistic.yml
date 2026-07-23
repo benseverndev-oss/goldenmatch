@@ -325,7 +325,7 @@ jobs:
             --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
             --out-dir prob_panel_hon_off
 
-      - name: Run panel — honorific strip ON (GM_SPIKE_STRIP_HONORIFICS=1)
+      - name: Run panel — honorific strip ON, full (GM_SPIKE_STRIP_HONORIFICS=1)
         env:
           GM_SPIKE_STRIP_HONORIFICS: "1"
         run: |
@@ -333,18 +333,39 @@ jobs:
             --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
             --out-dir prob_panel_hon_on
 
-      - name: Compare OFF vs ON (writes verdict to job summary)
+      - name: Run panel — honorific strip ON, keep numerals (GM_SPIKE_HONORIFIC_KEEP_NUMERALS=1)
+        env:
+          GM_SPIKE_STRIP_HONORIFICS: "1"
+          GM_SPIKE_HONORIFIC_KEEP_NUMERALS: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_hon_nonum
+
+      # Confirmation: OFF vs ON-full re-runs the +0.0099 F1 delta (GM is
+      # deterministic, so it must reproduce). Refinement: OFF vs ON-keep-numerals
+      # tests whether leaving regnal numerals in improves the net.
+      - name: Compare OFF vs ON-full (confirmation verdict)
         run: |
           FLAG=""
           if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
           python scripts/bench_er_headtohead/compare_panels.py \
             --v1 prob_panel_hon_off/panel.json \
             --v2 prob_panel_hon_on/panel.json \
-            --title "Honorific-strip OFF vs ON — GoldenMatch probabilistic path" \
-            --a-label off --b-label on \
-            --out compare_hon/compare.md $FLAG
+            --title "Honorific-strip OFF vs ON (full) — GoldenMatch probabilistic path" \
+            --a-label off --b-label on_full \
+            --out compare_hon/compare_full.md $FLAG
 
-      - name: Upload OFF/ON panels + comparison
+      - name: Compare OFF vs ON-keep-numerals (refinement verdict)
+        run: |
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_hon_off/panel.json \
+            --v2 prob_panel_hon_nonum/panel.json \
+            --title "Honorific-strip OFF vs ON (keep numerals) — GoldenMatch probabilistic path" \
+            --a-label off --b-label on_keepnum \
+            --out compare_hon/compare_keepnum.md
+
+      - name: Upload OFF/ON panels + comparisons
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -352,6 +373,7 @@ jobs:
           path: |
             prob_panel_hon_off/
             prob_panel_hon_on/
+            prob_panel_hon_nonum/
             compare_hon/
           retention-days: 90
 

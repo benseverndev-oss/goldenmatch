@@ -92,7 +92,14 @@ def _gm_predictions_path(records, truth, gm_pred_path: Path, dump_dir: Path):
     ):
         honorific_spike = _import_sibling("honorific_spike")
 
-        records = honorific_spike.strip_honorifics_table(records)
+        # GM_SPIKE_HONORIFIC_KEEP_NUMERALS=1 leaves regnal numerals/ordinals in
+        # place (the no-numerals A/B arm); default strips them.
+        keep_numerals = os.environ.get(
+            "GM_SPIKE_HONORIFIC_KEEP_NUMERALS", "0"
+        ).lower() in ("1", "true", "on", "yes")
+        records = honorific_spike.strip_honorifics_table(
+            records, drop_numerals=not keep_numerals
+        )
 
     dump_dir.mkdir(parents=True, exist_ok=True)
     os.environ["GOLDENMATCH_BENCH_DUMP_PAIRS"] = str(dump_dir)
