@@ -2,6 +2,7 @@
 fixture (wheel-free for the loader/generator/CLI; wheel-gated for the runner)."""
 from __future__ import annotations
 
+import pytest
 from erkgbench.qa_e2e.realworld import (
     _FIXTURE_DIR,
     generate_realworld_aggregation,
@@ -37,3 +38,18 @@ def test_generate_realworld_aggregation_shapes_and_gold():
     # ambiguity=1.0 -> at least one mention uses a non-canonical alias somewhere
     all_text = " ".join(d.text for d in docs)
     assert "Acme" in all_text or "BETA" in all_text or "Beta Corporation" in all_text
+
+
+def test_run_realworld_aggregation_gg_beats_floor():
+    try:
+        import goldengraph_native  # noqa: F401
+    except ImportError:
+        pytest.skip("goldengraph-native wheel not installed")
+    from erkgbench.qa_e2e.realworld import run_realworld_aggregation
+
+    res = run_realworld_aggregation(
+        _FIXTURE_DIR / "wikidata_companies_TINY.json",
+        ambiguity=1.0, passage_k=2)
+    # on the 3-member set, exact traversal should match all; the k=2 window can't
+    gg = list(res.gg_setf1.values())
+    assert gg and min(gg) >= 0.99            # exact traversal recovers the full set

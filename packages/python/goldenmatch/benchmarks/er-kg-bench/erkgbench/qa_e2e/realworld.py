@@ -63,3 +63,53 @@ def generate_realworld_aggregation(fixture_path, *, ambiguity: float, seed: int)
                               anchor_id=src_id, relation=rel,
                               gold_members=tuple(members), gold_count=len(members)))
     return tuple(docs), qs
+
+
+def run_realworld_aggregation(fixture_path, *, ambiguity: float, passage_k: int, llm=None):
+    """Mirror of aggregation.run_aggregation_deterministic but sourced from the real
+    fixture. All scoring/floor/bucket/gate logic is reused unchanged. Needs the native
+    wheel (via ablation._build_store)."""
+    from . import ablation, dials
+    from .aggregation import (
+        AggregationResult,
+        _mean_by_bucket,
+        agg_documents_corpus,
+        count_accuracy,
+        goldengraph_aggregate,
+        llm_rag_aggregate,
+        passage_window_floor,
+        set_f1,
+        size_bucket,
+    )
+    from .gold import GoldGraph
+
+    docs, qs = generate_realworld_aggregation(fixture_path, ambiguity=ambiguity, seed=7)
+    corpus = agg_documents_corpus(docs)
+    g = GoldGraph.from_corpus(corpus)
+    slice_graph, coverage = ablation._build_store(
+        corpus, g, dials.oracle_keys(corpus, g), ablation._typ_of(g))
+    s2c, anchor_surfaces = {}, {}
+    for eid, surf, _typ in dials._entity_surfaces(g):
+        s2c.setdefault(surf, eid)
+        anchor_surfaces.setdefault(eid, set()).add(surf)
+    gg_f1, floor_f1, floor_rec, gg_count, llm_f1 = [], [], [], [], []
+    for q in (q for q in qs if q.kind == "list"):
+        b = size_bucket(q.gold_count)
+        gold = set(q.gold_members)
+        a_surfs = anchor_surfaces.get(q.anchor_id, set())
+        got = goldengraph_aggregate(slice_graph, coverage, q.anchor_id, q.relation)
+        floor = passage_window_floor(docs, a_surfs, q.relation, passage_k=passage_k,
+                                     surface_to_canon=s2c)
+        gg_f1.append((b, set_f1(got, gold)["f1"]))
+        fscore = set_f1(floor, gold)
+        floor_f1.append((b, fscore["f1"]))
+        floor_rec.append((b, fscore["recall"]))
+        gg_count.append((b, count_accuracy(len(got), q.gold_count)))
+        if llm is not None and not getattr(llm, "exhausted", False):
+            rag = llm_rag_aggregate(docs, a_surfs, q.relation, passage_k=passage_k,
+                                    surface_to_canon=s2c, llm=llm)
+            llm_f1.append((b, set_f1(rag, gold)["f1"]))
+    return AggregationResult(
+        gg_setf1=_mean_by_bucket(gg_f1), floor_setf1=_mean_by_bucket(floor_f1),
+        gg_count_acc=_mean_by_bucket(gg_count), floor_recall=_mean_by_bucket(floor_rec),
+        llm_setf1=_mean_by_bucket(llm_f1) if llm_f1 else None)
