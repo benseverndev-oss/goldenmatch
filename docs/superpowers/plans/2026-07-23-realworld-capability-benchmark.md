@@ -367,6 +367,24 @@ SELECT ?company ?ceo ?ceoLabel ?start ?end WHERE {
 ```
 Keep only anchors with >= 2 dated CEO intervals (a real correction to test as-of). The win: `store.as_of(year)` correct on past-date questions; the temporal-blind floor returns the most-recent/most-mentioned -> wrong.
 
+## Phase 1.5 — Non-oracle aggregation (real ER + aggregation COMPOUNDED) — highest-value follow-up
+
+**Why this is the strongest single benchmark.** Phase 0 holds entity resolution ORACLE for both arms (`record_keys` = the ground-truth qid via `km`), so it isolates the aggregation/traversal capability — a valid but PARTIAL story ("given resolved entities, the graph aggregates exactly; the window collapses"). The non-oracle variant removes the oracle: the store must RESOLVE the real alias variants itself (the same "Buell" / "Buell Motorcycle Company" mention rendered across docs) via goldenmatch's real resolver, THEN aggregate. This exercises the full stack where GoldenGraph's two measured strengths — ER quality (the real-frameworks leaderboard, `results/RESULTS.md`) and exact aggregation — COMPOUND, against a floor that has neither. It is the most defensible "the graph does what RAG can't" demonstration on real data.
+
+**The change (a `resolve_mode` on the realworld runner):**
+- Add `resolve_mode: str = "oracle"` to `run_realworld_aggregation` (Phase 0 stays the default, byte-identical). `resolve_mode="real"` builds the store WITHOUT the oracle `km`.
+- Concretely: instead of `_build_realworld_store` injecting `record_keys=[km[(qid, surface)]]`, build via `goldengraph.ingest.ingest_corpus(...)` with the real goldenmatch-backed `resolver` (the default `resolve`), exactly as the QA engine's `build_kg` does — the docs are the SAME rendered edge docs, so the engine must cluster the alias variants back together to answer the aggregation.
+- Score `goldengraph_aggregate` against the gold qid member set as in Phase 0. GG set-F1 now folds in BOTH resolution correctness (variants merged) AND traversal completeness. The floor now suffers BOTH the window collapse AND name fragmentation (the same member under different aliases counts as distinct surfaces it cannot merge).
+
+**Expected result and its meaning:** the GG-vs-floor gap should WIDEN vs Phase 0 (the floor loses name-resolution on top of window-recall), and GG set-F1 may dip below 1.0 where resolution is imperfect — that dip IS the honest ER signal, and should still dominate the floor. Report GG set-F1 by bucket for BOTH arms (oracle vs real); the oracle-vs-real delta quantifies the ER contribution separately from the aggregation contribution.
+
+**Tasks (TDD, same pattern as Phase 0):**
+- Task 1.5a: `run_realworld_aggregation(..., resolve_mode="real")` builds the store via `ingest_corpus` + the real resolver; a wheel-gated test asserts that with `ambiguity=1.0` on the TINY fixture the alias variants of a member merge into ONE store node (resolution happened) AND GG still recovers the full 3-member set.
+- Task 1.5b: CLI `--resolve-mode {oracle,real}` (default `oracle`); oracle path byte-identical.
+- Task 1.5c: E2E on `wikidata_companies_v1.json` for both modes; record the two headline tables + the oracle-vs-real delta in `results/`.
+
+**Caution:** ingesting with the real resolver invokes goldenmatch auto-config per document (the 2,522-cycle pattern noted in `packages/python/goldengraph/CLAUDE.md`); on the fixture's ~2,331 facts this is minutes, but if it dominates, pass a pre-built resolver config rather than re-auto-configuring per doc.
+
 ## Phase 2 — CI workflow + real-LLM RAG arm + second domain (follow-on)
 
 - Add a `bench-capability-realworld` workflow (or a `mode` in `bench-graphrag-qa.yml`) that runs `--source realworld` on `large-new-64GB`, uploads the results artifact. Doc-only/synthetic paths unaffected.
