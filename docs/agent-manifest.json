@@ -8,12 +8,7 @@
       "doc_path": "docs-site/goldenmatch/config-matrix.mdx",
       "source": {
         "import_name": "goldenmatch",
-        "root": "packages/python/goldenmatch/goldenmatch",
-        "modules": {
-          "config_schema": "packages/python/goldenmatch/goldenmatch/config/schemas.py",
-          "cli": "packages/python/goldenmatch/goldenmatch/cli/main.py",
-          "mcp_server": "packages/python/goldenmatch/goldenmatch/mcp/server.py"
-        }
+        "root": "packages/python/goldenmatch/goldenmatch"
       },
       "config_models": [
         {
@@ -2172,14 +2167,14 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8200",
               "help": "Port for the A2A server"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host to bind to"
@@ -2191,13 +2186,13 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "File(s) to analyze"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Config file with matchkeys"
             }
@@ -2208,27 +2203,27 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
             {
               "name": "--sensitivity",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'medium'",
               "help": "low, medium, or high"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Write anomalies to a CSV instead of printing"
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Max rows to print"
@@ -2240,20 +2235,20 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files as path or path:source_name"
             },
             {
               "name": "--out",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Write committed config to this path instead of stdout."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Pin a domain rulebook (electronics, software, …) instead of auto-detecting."
@@ -2286,13 +2281,13 @@
           "options": [
             {
               "name": "file_a",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "First cluster JSON file (baseline / ER1)"
             },
             {
               "name": "file_b",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Second cluster JSON file (comparison / ER2)"
             },
@@ -2305,7 +2300,7 @@
             },
             {
               "name": "--case-type",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter details by case: unchanged, merged, partitioned, overlapping"
@@ -2324,7 +2319,7 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name to delete"
             }
@@ -2339,13 +2334,13 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name to load"
             },
             {
               "name": "--dest",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'goldenmatch.yaml'",
               "help": "Destination path"
@@ -2357,13 +2352,13 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name"
             },
             {
               "name": "config_path",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Path to config YAML file"
             }
@@ -2374,7 +2369,7 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name to display"
             }
@@ -2385,13 +2380,13 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files as path or path:source_name"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to YAML config file (optional - auto-detects if omitted)"
@@ -2412,7 +2407,7 @@
             },
             {
               "name": "--model",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Override embedding model selection"
@@ -2426,7 +2421,7 @@
             },
             {
               "name": "--preview-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Number of records for preview sample"
@@ -2503,21 +2498,21 @@
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output directory"
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output format (csv, parquet)"
             },
             {
               "name": "--run-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run name for output files"
@@ -2545,7 +2540,7 @@
             },
             {
               "name": "--chunk-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Records per chunk in chunked mode"
@@ -2580,7 +2575,7 @@
             },
             {
               "name": "--anomaly-sensitivity",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'medium'",
               "help": "low, medium, or high"
@@ -2601,28 +2596,28 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "LLM provider: auto, anthropic, or openai"
             },
             {
               "name": "--llm-max-labels",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "500",
               "help": "Max pairs to label with LLM"
             },
             {
               "name": "--backend",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Processing backend: default, bucket, chunked, ray, duckdb"
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. Layered with config.exclude_columns when both are present."
@@ -2709,7 +2704,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -2728,14 +2723,14 @@
             },
             {
               "name": "--col-a",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'id_a'",
               "help": "Ground truth column A"
             },
             {
               "name": "--col-b",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'id_b'",
               "help": "Ground truth column B"
@@ -2798,7 +2793,7 @@
             },
             {
               "name": "--audit-n",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Audit samples per stratum (default 50)."
@@ -2817,7 +2812,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -2829,14 +2824,14 @@
             },
             {
               "name": "--pair",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Explain a pair: 'id_a,id_b'"
             },
             {
               "name": "--cluster",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Explain a cluster by id"
@@ -2848,14 +2843,14 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter to identities in this dataset."
@@ -2874,20 +2869,20 @@
           "options": [
             {
               "name": "entity_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "The entity_id of the identity to operate on."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Maximum number of events to return."
@@ -2906,35 +2901,35 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter to identities in this dataset."
             },
             {
               "name": "--status",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter to identities with this status."
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Maximum number of identities to return."
             },
             {
               "name": "--offset",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "0",
               "help": "Number of identities to skip for pagination."
@@ -2953,26 +2948,26 @@
           "options": [
             {
               "name": "keep",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "entity_id to keep"
             },
             {
               "name": "absorb",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "entity_id to absorb"
             },
             {
               "name": "--reason",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reason recorded in the event log."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -2984,7 +2979,7 @@
           "options": [
             {
               "name": "--dsn",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Postgres DSN; can also be set via GOLDENMATCH_IDENTITY_DSN."
             },
@@ -2997,7 +2992,7 @@
             },
             {
               "name": "--revision",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'head'",
               "help": "Target revision (default: head)."
@@ -3009,14 +3004,14 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--dsn",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Database connection string for the identity store."
@@ -3035,13 +3030,13 @@
           "options": [
             {
               "name": "record_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "`{source}:{pk}` to look up"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -3060,13 +3055,13 @@
           "options": [
             {
               "name": "entity_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "The entity_id of the identity to operate on."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -3085,26 +3080,26 @@
           "options": [
             {
               "name": "entity_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "The entity_id of the identity to operate on."
             },
             {
               "name": "record_ids",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "record_ids to move to a new identity"
             },
             {
               "name": "--reason",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reason recorded in the event log."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -3116,20 +3111,20 @@
           "options": [
             {
               "name": "input_path",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Splink settings or trained-model JSON file"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'goldenmatch.yaml'",
               "help": "Output YAML config path"
             },
             {
               "name": "--model-out",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Persist imported trained m/u as an FS model JSON; sets model_path in the config"
@@ -3143,28 +3138,28 @@
             },
             {
               "name": "--upgrade",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run the data-aware upgrade pass against this dataset (parquet/csv): four levers -- tf_tables, distance_thresholds, fan_out (negative evidence + cluster-guard tuning), calibration. Writes the UPGRADED config/model to --output/--model-out and the faithful baseline alongside as out.baseline.yaml/model.baseline.json."
             },
             {
               "name": "--splink-clusters",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reference cluster mapping (parquet/csv) from the prior Splink run, for agreement measurement. First column = id, second column = cluster_id."
             },
             {
               "name": "--labels",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional ground-truth cluster mapping (parquet/csv) for true pairwise + B-cubed F1 measurement. First column = id, second column = cluster_id."
             },
             {
               "name": "--sample-cap",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Row cap for --upgrade lever computation and measurement (seeded subsample above it)"
@@ -3178,7 +3173,7 @@
             },
             {
               "name": "--id-column",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id)"
@@ -3190,7 +3185,7 @@
           "options": [
             {
               "name": "base_file",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Base dataset file path"
             },
@@ -3222,7 +3217,7 @@
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely."
@@ -3230,40 +3225,36 @@
           ]
         },
         {
-          "command": "info",
-          "options": []
-        },
-        {
           "command": "ingest-docs run",
           "options": [
             {
               "name": "docs",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Document paths (PDF/image)."
             },
             {
               "name": "--schema",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Target schema JSON file."
             },
             {
               "name": "--out",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Write records here (.csv or .parquet)."
             },
             {
               "name": "--backend",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'vlm'",
               "help": "Extraction backend."
             },
             {
               "name": "--model",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'gpt-4o'",
               "help": "Vision model."
@@ -3275,26 +3266,26 @@
           "options": [
             {
               "name": "sample",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "A representative document (PDF/image)."
             },
             {
               "name": "--out",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Write the proposed schema JSON here."
             },
             {
               "name": "--backend",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'vlm'",
               "help": "Extraction backend."
             },
             {
               "name": "--model",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'gpt-4o'",
               "help": "Vision model."
@@ -3306,7 +3297,7 @@
           "options": [
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output path for generated config"
@@ -3318,7 +3309,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "File(s) to load"
             }
@@ -3329,7 +3320,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -3348,14 +3339,14 @@
             },
             {
               "name": "--n",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Number of pairs to label"
             },
             {
               "name": "--strategy",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'borderline'",
               "help": "Pair selection: borderline, random, or hardest"
@@ -3374,7 +3365,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -3386,21 +3377,21 @@
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Write lineage.json here (default: print a summary)"
             },
             {
               "name": "--run-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'lineage'",
               "help": "Run name for the lineage file"
             },
             {
               "name": "--max-pairs",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Cap on lineage records (0 = no cap)"
@@ -3419,19 +3410,19 @@
           "options": [
             {
               "name": "target",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Target file as path or path:source_name"
             },
             {
               "name": "--against",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Reference files as path or path:source_name"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to YAML config file (optional - auto-detects if omitted)"
@@ -3445,7 +3436,7 @@
             },
             {
               "name": "--preview-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Number of records for preview sample"
@@ -3494,28 +3485,28 @@
             },
             {
               "name": "--match-mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'best'",
               "help": "Match mode: best or all"
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output directory"
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output format (csv, parquet)"
             },
             {
               "name": "--run-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run name for output files"
@@ -3536,7 +3527,7 @@
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely."
@@ -3562,35 +3553,35 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Data files to load"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: stdio or http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "HTTP host (only for http transport)"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8200",
               "help": "HTTP port (only for http transport)"
@@ -3602,82 +3593,82 @@
           "options": [
             {
               "name": "--decision",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "approve | reject | field_correct"
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Dataset key (required)"
             },
             {
               "name": "--id-a",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Pair-level: first row id"
             },
             {
               "name": "--id-b",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Pair-level: second row id"
             },
             {
               "name": "--cluster-id",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Field-level: cluster id the correction targets"
             },
             {
               "name": "--field-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Field-level: column being corrected"
             },
             {
               "name": "--original-value",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Field-level: original chosen value"
             },
             {
               "name": "--corrected-value",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Field-level: the value the reviewer changed it to"
             },
             {
               "name": "--reason",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reason"
             },
             {
               "name": "--matchkey-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional matchkey scope"
             },
             {
               "name": "--source",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'steward'",
               "help": "Source: steward (1.0 trust) | agent (0.5) | boost | unmerge"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3689,13 +3680,13 @@
           "options": [
             {
               "name": "out",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Output CSV path"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3707,13 +3698,13 @@
           "options": [
             {
               "name": "src",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source CSV path"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3725,14 +3716,14 @@
           "options": [
             {
               "name": "--matchkey-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Limit learning to this matchkey"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3744,19 +3735,19 @@
           "options": [
             {
               "name": "id_a",
-              "type": "integer",
+              "type": "int",
               "required": true,
               "help": "First record ID"
             },
             {
               "name": "id_b",
-              "type": "integer",
+              "type": "int",
               "required": true,
               "help": "Second record ID"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3768,7 +3759,7 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3786,7 +3777,7 @@
             },
             {
               "name": "--security",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'high'",
               "help": "Security level: standard, high, paranoid"
@@ -3817,7 +3808,7 @@
             },
             {
               "name": "--fields",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Comma-separated field names to match on"
             },
@@ -3830,21 +3821,21 @@
             },
             {
               "name": "--security",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'high'",
               "help": "Security level: standard, high, paranoid"
             },
             {
               "name": "--protocol",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'trusted_third_party'",
               "help": "Protocol: trusted_third_party or smc"
             },
             {
               "name": "--scorer",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'dice'",
               "help": "Similarity scorer: dice or jaccard"
@@ -3858,7 +3849,7 @@
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenFlow transforms skip them entirely; PPRL bloom filters never hash them."
@@ -3870,7 +3861,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "File(s) to profile"
             },
@@ -3902,7 +3893,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Input files (path or path:source_name). Omit to review only the pending queue."
@@ -3915,21 +3906,21 @@
             },
             {
               "name": "--job",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'review'",
               "help": "Review-queue job name for freshly-gated pairs"
             },
             {
               "name": "--queue-path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "SQLite review queue path (default: sibling of the config's memory store, else .goldenmatch/review_queue.db)"
             },
             {
               "name": "--memory-path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Learning Memory SQLite path"
@@ -3950,14 +3941,14 @@
             },
             {
               "name": "--decided-by",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'cli'",
               "help": "Steward identifier recorded on each decision"
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Max pairs to review this session"
@@ -3969,13 +3960,13 @@
           "options": [
             {
               "name": "run_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Run ID to rollback"
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Directory containing run log"
@@ -3987,7 +3978,7 @@
           "options": [
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Directory containing run log"
@@ -3999,61 +3990,37 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Data files to process"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--every",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run interval (e.g. 1h, 30m, 6h, 1d)"
             },
             {
               "name": "--cron",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Cron schedule (e.g. '0 6 * * *')"
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Output directory"
-            }
-          ]
-        },
-        {
-          "command": "score",
-          "options": [
-            {
-              "name": "a",
-              "type": "text",
-              "required": true,
-              "help": "First string."
-            },
-            {
-              "name": "b",
-              "type": "text",
-              "required": true,
-              "help": "Second string."
-            },
-            {
-              "name": "--scorer",
-              "type": "text",
-              "required": false,
-              "default": "'jaro_winkler'",
-              "help": "Scorer: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble."
             }
           ]
         },
@@ -4062,7 +4029,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -4074,13 +4041,13 @@
             },
             {
               "name": "--sweep",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Sweep spec: field:start:stop:step (repeatable)"
             },
             {
               "name": "--sample",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Random sample size for speed"
@@ -4099,27 +4066,27 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Data files to load"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'127.0.0.1'",
               "help": "Server host"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8080",
               "help": "Server port"
@@ -4138,14 +4105,14 @@
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'127.0.0.1'",
               "help": "Host to bind."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "5050",
               "help": "Port (0 = pick free, default 5050 matches Vite proxy)."
@@ -4175,34 +4142,34 @@
           "options": [
             {
               "name": "--source-type",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'postgres'",
               "help": "Database type"
             },
             {
               "name": "--connection-string",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Database URL"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source table name"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--output-mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'separate'",
               "help": "separate or in_place"
@@ -4223,21 +4190,21 @@
             },
             {
               "name": "--incremental-column",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column for incremental detection"
             },
             {
               "name": "--chunk-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Records per chunk"
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them. Layered with config.exclude_columns when both are set."
@@ -4263,20 +4230,20 @@
           "options": [
             {
               "name": "record_id",
-              "type": "integer",
+              "type": "int",
               "required": true,
               "help": "Record row ID to unmerge from its cluster"
             },
             {
               "name": "--clusters",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to clusters CSV from a previous run"
             },
             {
               "name": "--pairs",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to scored pairs CSV (id_a,id_b,score)"
@@ -4297,7 +4264,7 @@
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Where to write the re-clustered CSV (default: <clusters>.unmerged.csv)"
@@ -4309,383 +4276,53 @@
           "options": [
             {
               "name": "--source-type",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'postgres'",
               "help": "Database type"
             },
             {
               "name": "--connection-string",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Database URL"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Table to watch"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--interval",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "30",
               "help": "Seconds between polls"
             },
             {
               "name": "--output-mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'separate'",
               "help": "separate or in_place"
             },
             {
               "name": "--incremental-column",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column for change detection"
             }
           ]
-        }
-      ],
-      "mcp_tools": [
-        {
-          "name": "add_correction",
-          "description": "Add a Learning Memory correction. Two shapes:"
-        },
-        {
-          "name": "agent_approve_reject",
-          "description": "Approve or reject a review queue pair"
-        },
-        {
-          "name": "agent_compare_strategies",
-          "description": "Compare ER strategies on your data"
-        },
-        {
-          "name": "agent_deduplicate",
-          "description": "Deduplicate ONE dataset: auto-configures matching, runs the full entity-resolution pipeline, and returns the duplicate clusters with confidence gating (auto-merge / needs-review / reject) plus per-decision reasoning. Takes a file path or an uploaded dataset; pass output_path to also write the golden (deduplicated) records to CSV. Operates on a single source -- to link records across TWO datasets use agent_match_sources instead."
-        },
-        {
-          "name": "agent_explain_cluster",
-          "description": "Explain why records are in the same cluster"
-        },
-        {
-          "name": "agent_explain_pair",
-          "description": "Natural language explanation for a record pair"
-        },
-        {
-          "name": "agent_match_sources",
-          "description": "Link records across TWO datasets (not dedupe one): auto-selects a matching strategy, scores cross-source pairs, and returns the matched pairs with confidence. Takes two file paths or uploaded datasets (file_a / file_b); pass output_path to also write the matched pairs to CSV. To find duplicates WITHIN a single dataset use agent_deduplicate instead."
-        },
-        {
-          "name": "agent_review_queue",
-          "description": "Get borderline pairs awaiting approval"
-        },
-        {
-          "name": "analyze_blocking",
-          "description": "Diagnose blocking on the loaded dataset: returns ranked blocking key candidates with block counts, max block size, total candidate comparisons, and estimated recall. Use it to explain why matching is slow or produces too many candidate pairs."
-        },
-        {
-          "name": "analyze_data",
-          "description": "Profile a dataset (read-only, runs no matching and writes nothing): column stats, the detected domain/entity type, data-quality signals, and a recommended entity-resolution strategy. Takes a file path or an uploaded dataset. Use it before deduplicating to understand the data and preview the strategy the auto-config would pick."
-        },
-        {
-          "name": "auto_configure",
-          "description": "Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`."
-        },
-        {
-          "name": "certify_recall",
-          "description": "Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems."
-        },
-        {
-          "name": "compare_clusters",
-          "description": "Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output)."
-        },
-        {
-          "name": "config_weaknesses",
-          "description": "Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary."
-        },
-        {
-          "name": "controller_telemetry",
-          "description": "Return the AutoConfigController telemetry from the most recent `auto_configure` or `agent_deduplicate` call in this MCP session. Same JSON shape as the web /api/v1/controller/telemetry endpoint."
-        },
-        {
-          "name": "convert_splink_config",
-          "description": "Convert a Splink settings JSON (bare or trained) into a GoldenMatch config. Pass the settings as an inline JSON string -- no filesystem access needed. Returns the config as YAML, a findings report (severity/splink_path/message/mapped_to per finding), a summary, and -- when the Splink input carried trained m/u probabilities -- the imported EM model as a dict you can persist yourself. strict=True fails on ANY lossy mapping (not just hard errors)."
-        },
-        {
-          "name": "create_domain",
-          "description": "Create a custom domain extraction rulebook. Define patterns for a specific data domain (medical devices, automotive parts, real estate, etc.)."
-        },
-        {
-          "name": "dedupe",
-          "description": "Alias for `find_duplicates`. Find duplicate matches for a record. Provide field values to search against the loaded dataset."
-        },
-        {
-          "name": "documents_ingest",
-          "description": "Extract records from documents (PDF/image) against a target schema into rows ready for dedupe_df. Returns records + an ingest report."
-        },
-        {
-          "name": "documents_suggest_schema",
-          "description": "Propose a target extraction schema (JSON) from a sample document image/PDF."
-        },
-        {
-          "name": "evaluate",
-          "description": "Score the loaded run against ground-truth pairs. Loads a ground-truth CSV (id_a,id_b columns) and returns precision, recall, and F1 for the current clustering."
-        },
-        {
-          "name": "explain_cluster",
-          "description": "Alias for `agent_explain_cluster`. Explain why records are in the same cluster"
-        },
-        {
-          "name": "explain_match",
-          "description": "Explain why two records match or don't match. Shows per-field score breakdown."
-        },
-        {
-          "name": "explain_pair",
-          "description": "Alias for `explain_match`. Explain why two records match or don't match. Shows per-field score breakdown."
-        },
-        {
-          "name": "explain_routing",
-          "description": "Human-readable explanation of why each stage is routed the way it is, with the driver-RAM projection that drove it."
-        },
-        {
-          "name": "export_results",
-          "description": "Export matching results to a file (CSV or JSON)."
-        },
-        {
-          "name": "find_duplicates",
-          "description": "Find duplicate matches for a record. Provide field values to search against the loaded dataset."
-        },
-        {
-          "name": "fix_quality",
-          "description": "Run GoldenCheck scan and apply fixes to a CSV file. Returns the fixed data summary and a manifest of all fixes applied. Requires goldencheck: pip install goldenmatch[quality]"
-        },
-        {
-          "name": "get_cluster",
-          "description": "Get details of a specific cluster: all member records and their field values."
-        },
-        {
-          "name": "get_golden_record",
-          "description": "Get the merged golden (canonical) record for a cluster."
-        },
-        {
-          "name": "get_stats",
-          "description": "Get dataset statistics: record count, cluster count, match rate, cluster sizes."
-        },
-        {
-          "name": "identity_audit",
-          "description": "Export the append-only identity audit log in commit order: every event with actor / trust / timestamp / reason, so a reviewer can reconstruct exactly which actor changed what, when, and why. Optionally filtered by dataset / actor."
-        },
-        {
-          "name": "identity_audit_seal",
-          "description": "Anchor the append-only audit log with a tamper-evidence seal: a chained sha256 root over every event since the last seal. Cheap and idempotent (a no-op when nothing new has been logged). Run it periodically (or after a batch of stewardship actions) so the history becomes provably untampered. Optionally scoped to a dataset. Publish/mirror the returned root_hash to make tampering detectable by an external party."
-        },
-        {
-          "name": "identity_audit_verify",
-          "description": "Verify the append-only audit log against its seal chain. Replays the per-event content hashes and the seal roots to detect content edits, deletion, reordering, and insertion of any sealed event. Returns {ok, events_checked, seals_checked} plus the ids of any content mismatches / broken seals / missing sealed events. Optionally scoped to a dataset."
-        },
-        {
-          "name": "identity_claim",
-          "description": "Claim a record into an identity, moving it out of any prior entity ('this record belongs to that identity'). Emits a provenance-stamped `claimed` event on both the gaining and losing entities."
-        },
-        {
-          "name": "identity_conflicts",
-          "description": "List evidence edges marked `conflicts_with`."
-        },
-        {
-          "name": "identity_history",
-          "description": "Return the temporal event log for an identity."
-        },
-        {
-          "name": "identity_list",
-          "description": "List identities, optionally filtered by dataset/status."
-        },
-        {
-          "name": "identity_merge",
-          "description": "Manually merge two identities. All records from `absorb_entity_id` are reassigned to `keep_entity_id`. The merge events are stamped with `actor`/`trust` provenance so the audit log records who merged these and on what authority."
-        },
-        {
-          "name": "identity_profile",
-          "description": "MDM profile of one entity: record count + per-source breakdown, golden record, confidence, conflict count, canonical version (structural-event count), and first/last activity. Returns {found: false} when no such entity exists."
-        },
-        {
-          "name": "identity_resolve",
-          "description": "Resolve a record_id to its durable identity. Returns the full identity view (members, evidence edges, recent events) or null when no identity exists for that record."
-        },
-        {
-          "name": "identity_resolve_conflict",
-          "description": "Adjudicate a `conflicts_with` pair: 'same' keeps the entity intact, 'distinct' splits the second record out into a new identity, 'defer' only logs. Records a durable mediation verdict + event with actor/trust provenance, and stops the conflict re-surfacing in the open-conflicts queue."
-        },
-        {
-          "name": "identity_show",
-          "description": "Fetch the full detail of one identity by entity_id: its member records, evidence edges, and recent event log. Returns {found: false} when no such entity exists."
-        },
-        {
-          "name": "identity_split",
-          "description": "Split a subset of records off an identity into a brand-new identity. The original keeps the remaining records. The split events carry `actor`/`trust` provenance."
-        },
-        {
-          "name": "identity_stats",
-          "description": "Graph-level summary / health stats: entities by status, total records, records-per-entity distribution, conflict total, source mix, and the largest entities. Optionally scoped to a dataset."
-        },
-        {
-          "name": "identity_worklist",
-          "description": "Prioritized steward worklist: active entities needing attention (open conflicts and/or confidence below weak_confidence), highest conflict count first."
-        },
-        {
-          "name": "incremental",
-          "description": "Match a batch of new records against an existing base dataset (without re-running the whole base). Returns matched (new_row_id, base_row_id, score) pairs plus counts. Auto-configures from the base file if no config is given."
-        },
-        {
-          "name": "learn_thresholds",
-          "description": "Force a MemoryLearner pass over accumulated corrections. Returns the list of LearnedAdjustments produced (matchkey_name, threshold, sample_size, learned_at). Requires >= 10 corrections per matchkey before threshold tuning fires; otherwise returns an empty list."
-        },
-        {
-          "name": "lineage",
-          "description": "Field-level provenance for the loaded run: for each scored pair, the per-field scores that produced the match, plus cluster id. Optionally write a lineage JSON to a directory."
-        },
-        {
-          "name": "lint_routing",
-          "description": "Flag config/env overrides that force a slow path (e.g. CLUSTERING_THRESHOLD=0 when the edge set fits driver RAM). ERROR at scale; would_refuse mirrors the runtime guard."
-        },
-        {
-          "name": "list_blocking_strategies",
-          "description": "List all blocking strategy names."
-        },
-        {
-          "name": "list_clusters",
-          "description": "List duplicate clusters found in the dataset. Returns cluster IDs, sizes, and member counts."
-        },
-        {
-          "name": "list_corrections",
-          "description": "List stored Learning Memory corrections, optionally filtered by dataset. Returns id_a, id_b, decision, source, trust, reason, matchkey_name, dataset, original_score, created_at."
-        },
-        {
-          "name": "list_domains",
-          "description": "List available domain extraction rulebooks (built-in + user-defined)."
-        },
-        {
-          "name": "list_plugins",
-          "description": "List all registered goldenmatch plugins by category. Includes the 22 v1.18.2 predefined plugins (numeric/format/business/aggregation) plus any user-registered plugins via entry-points or PluginRegistry.register_*(). Each entry includes name, source (builtin or user), category, and the first line of the merge docstring."
-        },
-        {
-          "name": "list_runs",
-          "description": "List previous dedupe/match runs (for rollback) from the run log."
-        },
-        {
-          "name": "list_scorers",
-          "description": "List all available similarity scorers."
-        },
-        {
-          "name": "list_strategies",
-          "description": "List all golden-record survivorship strategies."
-        },
-        {
-          "name": "list_transforms",
-          "description": "List all available field transforms."
-        },
-        {
-          "name": "match",
-          "description": "Alias for `match_record`. Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: {\"name\": \"John Smith\", \"email\": \"john@test.com\", \"zip\": \"10001\"}"
-        },
-        {
-          "name": "match_record",
-          "description": "Match a single record against the loaded dataset in real-time. Paste a record's fields and instantly see if it matches any existing record. Uses the configured matchkeys, scorers, and thresholds. Example: {\"name\": \"John Smith\", \"email\": \"john@test.com\", \"zip\": \"10001\"}"
-        },
-        {
-          "name": "memory_export",
-          "description": "Return all corrections as a list of dicts (CSV-shaped). Caller is responsible for writing the file. Optionally filter by dataset."
-        },
-        {
-          "name": "memory_import",
-          "description": "Import corrections from a list of dicts (the exact shape memory_export returns). Upserts into the store: higher trust wins, same trust = latest wins. Returns the count imported."
-        },
-        {
-          "name": "memory_stats",
-          "description": "Return Learning Memory status: total correction count, last learn time, and current learned adjustments. Cheap; safe for status checks."
-        },
-        {
-          "name": "plan_routing",
-          "description": "Project per-stage distributed routing (scoring/clustering/golden) for a given data shape + cluster. Pure; no controller run."
-        },
-        {
-          "name": "pprl_auto_config",
-          "description": "Analyze the loaded dataset and recommend optimal PPRL (privacy-preserving record linkage) configuration. Returns recommended fields, bloom filter parameters, threshold, and explanation."
-        },
-        {
-          "name": "pprl_link",
-          "description": "Run privacy-preserving record linkage between two parties' data. Computes bloom filters, matches records without sharing raw data. Specify fields, threshold, and security level."
-        },
-        {
-          "name": "profile",
-          "description": "Alias for `profile_data`. Get data quality profile: column types, null rates, unique counts, sample values."
-        },
-        {
-          "name": "profile_data",
-          "description": "Get data quality profile: column types, null rates, unique counts, sample values."
-        },
-        {
-          "name": "retrieve_similar",
-          "description": "Semantic retrieval (#1089): return the records in a CSV most similar to a free-text query, ranked by cosine similarity. Embeds the chosen column and the query with the zero-config in-house embedder (no cloud/torch by default) and runs ANN search. The read side of the RAG entity-canonicalization epic -- fetch candidate records by query without running a full dedupe."
-        },
-        {
-          "name": "review_config",
-          "description": "Run the config healer over the loaded dataset: analyze the dedupe run and return ranked, self-verified suggestions for improving the matching config (thresholds, scorers, negative evidence, blocking). Each suggestion carries an id, kind, target, rationale, and a machine-applicable patch. Requires the native kernel (pip install goldenmatch[native]); returns an empty list otherwise."
-        },
-        {
-          "name": "rollback",
-          "description": "Undo a previous run by DELETING its output files (looked up by run_id in the run log). Destructive: removes the files that run wrote. Use list_runs first to find the run_id."
-        },
-        {
-          "name": "run_transforms",
-          "description": "Run GoldenFlow data transforms on a CSV file. Normalizes phone numbers (E.164), dates (ISO), categorical spelling, and Unicode issues. Returns a manifest of transforms applied. Requires goldenflow: pip install goldenmatch[transform]"
-        },
-        {
-          "name": "scan_quality",
-          "description": "Run GoldenCheck data quality scan on a CSV file. Returns issues found (encoding errors, Unicode problems, format violations) without applying fixes. Requires goldencheck: pip install goldenmatch[quality]"
-        },
-        {
-          "name": "schema_match",
-          "description": "Auto-map columns between two files with different schemas. Returns proposed (col_a, col_b) mappings with a confidence score and method (synonym / name_sim / composite). Useful before matching two sources."
-        },
-        {
-          "name": "sensitivity",
-          "description": "Parameter-sensitivity analysis: sweep one or more config parameters across a range and report how stable the clustering is at each value (CCMS unchanged %). Use it to find robust thresholds. Auto-configures the file if no config is given."
-        },
-        {
-          "name": "shatter_cluster",
-          "description": "Break an entire cluster into individual records. All members become singletons. Use when a cluster is completely wrong."
-        },
-        {
-          "name": "suggest_config",
-          "description": "Analyze bad merges and suggest config changes. Provide examples of incorrect merges (pairs that should NOT have matched) and GoldenMatch will identify which fields/thresholds to tighten. Example: [{\"record_a\": {...}, \"record_b\": {...}, \"reason\": \"different people\"}]"
-        },
-        {
-          "name": "suggest_pprl",
-          "description": "Check if data needs privacy-preserving matching"
-        },
-        {
-          "name": "test_domain",
-          "description": "Test a domain extraction rulebook against sample records. Shows what features would be extracted from the loaded data."
-        },
-        {
-          "name": "unmerge_record",
-          "description": "Remove a record from its cluster. The record becomes a singleton. Remaining cluster members are re-clustered using stored pair scores. Use this to fix bad merges."
-        },
-        {
-          "name": "upload_dataset",
-          "description": "Upload a local file's bytes to the server and get back a server-side path to reuse across other tools (analyze_data, auto_configure, agent_deduplicate, ...). No hosting needed. Send base64 (default) or raw text via `encoding`. Uploaded files are ephemeral scratch, reaped after GOLDENMATCH_MCP_UPLOAD_TTL (default 24h); re-upload if you need a path older than that. Max size GOLDENMATCH_MCP_MAX_UPLOAD_BYTES (default 64MB) -- above it, pass a public http(s) URL as file_path instead."
         }
       ],
       "vocabularies": [
@@ -4737,12 +4374,6 @@
               "range": "0 or 1"
             },
             {
-              "value": "given_name_aliased_jw",
-              "meaning": "Jaro-Winkler with alias-aware exact collapse of given-name variants (Bob <-> Robert).",
-              "best_for": "Given names",
-              "range": "0.0-1.0"
-            },
-            {
               "value": "initialism_match",
               "meaning": "Matches initials/acronyms against their expansions.",
               "best_for": "Acronyms, initials",
@@ -4764,12 +4395,6 @@
               "value": "levenshtein",
               "meaning": "Normalized Levenshtein edit distance.",
               "best_for": "General strings",
-              "range": "0.0-1.0"
-            },
-            {
-              "value": "name_freq_weighted_jw",
-              "meaning": "Jaro-Winkler modulated by US-Census surname frequency (rare surnames weigh more).",
-              "best_for": "Surnames",
               "range": "0.0-1.0"
             },
             {
@@ -5288,6 +4913,7 @@
           "GOLDENMATCH_FS_CALIBRATED",
           "GOLDENMATCH_FS_COLUMNAR_CLUSTER",
           "GOLDENMATCH_FS_DEFAULT_BUCKET",
+          "GOLDENMATCH_FS_DOMAIN_COMPARATORS",
           "GOLDENMATCH_FS_EM_AGG_BLOCKS",
           "GOLDENMATCH_FS_EM_BLOCK_SLIM",
           "GOLDENMATCH_FS_EM_SAMPLE_ROWS",
@@ -5638,7 +5264,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8100",
               "help": "Port for the A2A server"
@@ -5663,7 +5289,7 @@
             },
             {
               "name": "--skip",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "[]",
               "help": "Techniques to skip"
@@ -5689,7 +5315,7 @@
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack to apply."
@@ -5714,14 +5340,14 @@
             },
             {
               "name": "--sample-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Bound the cross-tuple (pairwise) pass."
             },
             {
               "name": "--max-constraints",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Cap the ranked number of DCs reported."
@@ -5746,7 +5372,7 @@
             },
             {
               "name": "--ref",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Git ref to compare against (default: HEAD)."
@@ -5802,7 +5428,7 @@
             },
             {
               "name": "--mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'safe'",
               "help": "Fix mode: safe, moderate, or aggressive."
@@ -5853,7 +5479,7 @@
             },
             {
               "name": "--last",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Show last N scans."
@@ -5903,7 +5529,7 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'anthropic'",
               "help": "LLM provider: anthropic or openai."
@@ -5919,21 +5545,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: 'stdio' or 'http'"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8100",
               "help": "Port for HTTP transport"
@@ -5951,7 +5577,7 @@
             },
             {
               "name": "--sample-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Rows to sample."
@@ -5975,7 +5601,7 @@
             },
             {
               "name": "--on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "FK mapping 'child_col=parent_col' (repeatable). Omit to auto-detect same-named parent-key columns."
@@ -5989,7 +5615,7 @@
             },
             {
               "name": "--fail-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'error'",
               "help": "CI exit threshold: error/warning/info."
@@ -6035,14 +5661,14 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'anthropic'",
               "help": "LLM provider: anthropic or openai."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack: healthcare, finance, ecommerce."
@@ -6081,14 +5707,14 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'anthropic'",
               "help": "LLM provider: anthropic or openai."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack: healthcare, finance, ecommerce."
@@ -6116,14 +5742,14 @@
             },
             {
               "name": "--webhook",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "URL to POST findings to."
             },
             {
               "name": "--notify-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'grade-drop'",
               "help": "Trigger: grade-drop, any-error, any-warning."
@@ -6170,27 +5796,27 @@
           "options": [
             {
               "name": "connection",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Database connection string (postgres://, snowflake://, etc.)"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Table name to scan."
             },
             {
               "name": "--query",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Custom SQL query."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack."
@@ -6211,7 +5837,7 @@
             },
             {
               "name": "--sample-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Max rows to fetch."
@@ -6229,28 +5855,28 @@
             },
             {
               "name": "--interval",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'daily'",
               "help": "Interval: hourly, daily, weekly, 5min, 15min, 30min, or seconds."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack."
             },
             {
               "name": "--webhook",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Webhook URL for notifications."
             },
             {
               "name": "--notify-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'grade-drop'",
               "help": "Trigger: grade-drop, any-error, any-warning."
@@ -6269,14 +5895,14 @@
           "options": [
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host to bind to."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8000",
               "help": "Port to listen on."
@@ -6326,21 +5952,21 @@
             },
             {
               "name": "--interval",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "60",
               "help": "Poll interval in seconds."
             },
             {
               "name": "--pattern",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Glob pattern (e.g., '*.csv')."
             },
             {
               "name": "--exit-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Exit on severity: error or warning."
@@ -6353,84 +5979,6 @@
               "help": "JSON output per scan."
             }
           ]
-        }
-      ],
-      "mcp_tools": [
-        {
-          "name": "analyze_data",
-          "description": "Analyze a data file to detect its domain, profile columns, and recommend a scanning strategy. Returns domain detection, column count, row count, strategy decisions, and alternative approaches."
-        },
-        {
-          "name": "approve_reject",
-          "description": "Approve (pin) or reject (dismiss) a review queue item. Decision must be 'pin' or 'dismiss'."
-        },
-        {
-          "name": "auto_configure",
-          "description": "Scan a data file, triage findings by confidence, and generate goldencheck.yml content from the pinned findings. Optionally accepts constraints to filter or adjust the generated config."
-        },
-        {
-          "name": "compare_domains",
-          "description": "Scan a file with every available domain pack (plus base/no-domain) and compare health scores. Recommends the best-fitting domain."
-        },
-        {
-          "name": "explain_column",
-          "description": "Get a natural-language health narrative for a specific column. Scans the file, profiles the column, and explains all findings."
-        },
-        {
-          "name": "explain_finding",
-          "description": "Explain a single finding in natural language. Requires the finding as a JSON dict and the file_path to load a profile for context."
-        },
-        {
-          "name": "get_column_detail",
-          "description": "Get detailed profile and findings for a specific column."
-        },
-        {
-          "name": "get_domain_info",
-          "description": "Get detailed info about a specific domain pack — lists all semantic types, their name hints, and suppression rules."
-        },
-        {
-          "name": "health_score",
-          "description": "Get the health score (A-F, 0-100) for a data file. Quick summary of overall data quality."
-        },
-        {
-          "name": "install_domain",
-          "description": "Download a community domain pack from the goldencheck-types repository and save it for use in future scans."
-        },
-        {
-          "name": "list_checks",
-          "description": "List all available profiler checks and what they detect. No arguments needed."
-        },
-        {
-          "name": "list_domains",
-          "description": "List all available domain packs (healthcare, finance, ecommerce, etc.). Domain packs provide specialized semantic type definitions for specific data domains."
-        },
-        {
-          "name": "pipeline_handoff",
-          "description": "Generate a structured quality attestation JSON for a data file. Includes health score, findings summary, pinned rules, and attestation status (PASS, PASS_WITH_WARNINGS, REVIEW_REQUIRED, FAIL)."
-        },
-        {
-          "name": "profile",
-          "description": "Profile a data file and return column-level statistics: type, null%, unique%, min/max, top values, detected formats. Also returns a health score (A-F) based on finding severity."
-        },
-        {
-          "name": "review_queue",
-          "description": "List all pending review items for a given job. Returns items that need human decision (medium-confidence findings)."
-        },
-        {
-          "name": "review_stats",
-          "description": "Get review queue statistics for a job — counts of pending, pinned, and dismissed items."
-        },
-        {
-          "name": "scan",
-          "description": "Scan a data file (CSV, Parquet, Excel) for data quality issues. Returns findings with severity, confidence, affected rows, and sample values. No configuration needed — rules are discovered from the data."
-        },
-        {
-          "name": "suggest_fix",
-          "description": "Preview fixes for a data file without applying them. Shows what would change (columns, fix types, rows affected, before/after samples)."
-        },
-        {
-          "name": "validate",
-          "description": "Validate a data file against pinned rules in goldencheck.yml. Returns validation findings (existence, required, unique, enum, range checks)."
         }
       ],
       "vocabularies": [
@@ -6886,7 +6434,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8150",
               "help": "Port the A2A agent server listens on."
@@ -6927,7 +6475,7 @@
           "options": [
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "20",
               "help": "Number of recent runs to show"
@@ -7019,21 +6567,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: stdio or http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8150",
               "help": "Port for HTTP transport"
@@ -7062,7 +6610,7 @@
             },
             {
               "name": "--every",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'1h'",
               "help": "Interval (e.g., 5m, 1h, 30s)"
@@ -7088,14 +6636,14 @@
           "options": [
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Network interface the REST API server binds to."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8000",
               "help": "Port the REST API server listens on."
@@ -7113,7 +6661,7 @@
             },
             {
               "name": "--chunk-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Rows per batch"
@@ -7159,7 +6707,7 @@
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack to use"
@@ -7981,7 +7529,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8250",
               "help": "Port for A2A server"
@@ -7993,7 +7541,7 @@
           "options": [
             {
               "name": "--dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Directory to create config in"
@@ -8005,14 +7553,14 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional data file to load (press 'r' to run)."
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional pipeline YAML config."
@@ -8024,21 +7572,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport type: stdio or http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8250",
               "help": "Port for HTTP transport"
@@ -8050,20 +7598,20 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input file path"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Pipeline YAML config"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output file path"
@@ -8077,21 +7625,21 @@
             },
             {
               "name": "--identity-path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Enable Identity Graph; persist to this SQLite path"
             },
             {
               "name": "--identity-dataset",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Identity Graph dataset namespace"
             },
             {
               "name": "--identity-source-pk",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column to derive `{source}:{source_pk}` record_id from"
@@ -8110,7 +7658,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8000",
               "help": "Port for REST API"
@@ -8126,29 +7674,11 @@
           "options": [
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Pipeline YAML config"
             }
           ]
-        }
-      ],
-      "mcp_tools": [
-        {
-          "name": "explain_pipeline",
-          "description": "Explain what a pipeline config does"
-        },
-        {
-          "name": "list_stages",
-          "description": "List all discovered pipeline stages"
-        },
-        {
-          "name": "run_pipeline",
-          "description": "Run a pipeline on a file OR inline data (records / csv_text) and return per-stage status, reasoning and timing PLUS the deduped output (golden-record count + preview, unique/duplicate counts, cluster count, match stats). Give a `stages` list or `config_path` to control the chain, or omit both for zero-config auto."
-        },
-        {
-          "name": "validate_pipeline",
-          "description": "Validate pipeline wiring"
         }
       ],
       "vocabularies": [
@@ -8421,19 +7951,19 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source CSV file to apply mapping to"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Path to mapping config YAML (required)"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Output CSV path (required)"
             },
@@ -8451,13 +7981,13 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source data to inspect (CSV path, schema YAML, etc.)"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Table name for DB sources"
@@ -8476,47 +8006,47 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source data (CSV path, DataFrame, DB URI, schema YAML)"
             },
             {
               "name": "target",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Target data (same variety of inputs)"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional table name for DB sources"
             },
             {
               "name": "--required",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated required target field names"
             },
             {
               "name": "--schema-file",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to schema YAML file"
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'table'",
               "help": "Output format: table, json, or yaml"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Save mapping config to this YAML file"
@@ -8549,21 +8079,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: 'stdio' or 'http'"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8100",
               "help": "Port for HTTP transport"
@@ -8575,19 +8105,19 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source data to validate (CSV path, etc.)"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Path to mapping config YAML (required)"
             },
             {
               "name": "--required",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated required field names"
@@ -8607,24 +8137,6 @@
               "help": "Enable verbose logging"
             }
           ]
-        }
-      ],
-      "mcp_tools": [
-        {
-          "name": "apply",
-          "description": "Apply a saved mapping config to a source CSV, renaming columns according to the mapping and writing the result to an output file."
-        },
-        {
-          "name": "inspect",
-          "description": "Inspect a data source — show fields, types, sample values, null rates, unique rates, and statistics."
-        },
-        {
-          "name": "map",
-          "description": "Map source columns to target schema using a weighted scorer pipeline with optimal 1:1 assignment. Returns mappings with confidence scores and human-readable reasoning."
-        },
-        {
-          "name": "validate",
-          "description": "Validate that a source file's columns satisfy a saved mapping config. Reports missing source columns and unmapped required fields."
         }
       ],
       "vocabularies": [
@@ -8790,21 +8302,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "stdio | http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host interface to bind when transport is http."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8300",
               "help": "HTTP port (A2A convention: Analysis = 8300)."
@@ -8816,7 +8328,7 @@
           "options": [
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Dataset name whose run history to check."
             },
@@ -8828,21 +8340,21 @@
             },
             {
               "name": "--baseline",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'rolling_median'",
               "help": "Baseline strategy to compare against, e.g. rolling_median."
             },
             {
               "name": "--window",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "7",
               "help": "Number of prior runs the baseline is computed over."
             },
             {
               "name": "--policy",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Per-metric gates: JSON or \"key=pct,key=pct\"."
@@ -8867,14 +8379,14 @@
             },
             {
               "name": "--analyzers",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'all'",
               "help": "Comma-separated analyzer names, or 'all'."
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'markdown'",
               "help": "markdown | json"
@@ -8893,13 +8405,13 @@
           "options": [
             {
               "name": "--metric",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Metric key to trend, e.g. cluster.singleton_ratio."
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Dataset name whose run history to read."
             },
@@ -8911,7 +8423,7 @@
             },
             {
               "name": "--last",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "30",
               "help": "Number of most recent runs to include in the trend."

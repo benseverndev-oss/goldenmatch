@@ -236,7 +236,7 @@ def _date_diff_similarity_py(val_a: str, val_b: str) -> float:
     edit-distance (`_date_similarity_py`) fallback when either side won't parse."""
     pa, pb = _date_parts(val_a), _date_parts(val_b)
     oa, ob = _date_ordinal_of(pa), _date_ordinal_of(pb)
-    if oa is None or ob is None:
+    if pa is None or pb is None or oa is None or ob is None:
         return _date_similarity_py(val_a, val_b)
     d = abs(oa - ob)
     if d != 0:
