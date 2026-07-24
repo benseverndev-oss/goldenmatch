@@ -4415,6 +4415,10 @@
           "description": "Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`."
         },
         {
+          "name": "build_clusters",
+          "description": "Group records into clusters given a file and matchkey definition."
+        },
+        {
           "name": "certify_recall",
           "description": "Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems."
         },
@@ -4477,6 +4481,14 @@
         {
           "name": "find_duplicates",
           "description": "Find duplicate matches for a record. Provide field values to search against the loaded dataset."
+        },
+        {
+          "name": "find_exact_matches",
+          "description": "Find exact matches on a field in a file. Returns pairs."
+        },
+        {
+          "name": "find_fuzzy_matches",
+          "description": "Find fuzzy matches in a block of rows. Returns scored pairs."
         },
         {
           "name": "fix_quality",
@@ -4669,6 +4681,14 @@
         {
           "name": "schema_match",
           "description": "Auto-map columns between two files with different schemas. Returns proposed (col_a, col_b) mappings with a confidence score and method (synonym / name_sim / composite). Useful before matching two sources."
+        },
+        {
+          "name": "score_pair",
+          "description": "Score two record objects across weighted fields. Returns a combined score."
+        },
+        {
+          "name": "score_strings",
+          "description": "Score similarity between two strings using the requested scorer."
         },
         {
           "name": "sensitivity",

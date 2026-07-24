@@ -27,7 +27,7 @@ package does not ship that surface.
 {/* api-surface-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_api_surface.py --write */}
 | Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
 |---------|:-------------:|:----------------:|-----|:---------:|:----:|:---:|--------------|
-| [GoldenMatch](#goldenmatch) | `3.8.0` | `1.23.0` | `goldenmatch` | 82 | ✓ | ✓ | wheel · Postgres · DuckDB |
+| [GoldenMatch](#goldenmatch) | `3.9.0` | `1.23.0` | `goldenmatch` | 87 | ✓ | ✓ | wheel · Postgres · DuckDB |
 | [GoldenCheck](#goldencheck) | `3.2.0` | `0.6.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
 | [GoldenFlow](#goldenflow) | `2.1.0` | `0.17.0` | `goldenflow` | 10 | ✓ | ✓ | wheel |
 | [GoldenPipe](#goldenpipe) | `1.4.0` | `0.3.0` | `goldenpipe` | 4 | ✓ | ✓ | core (WASM) |
@@ -42,24 +42,28 @@ surfaces with different jobs**, and the tool-count gap is a design boundary, not
 neglect:
 
 - **Python is the fuller *stateful* server.** It holds datasets, runs, clusters, and
-  the identity graph server-side, so it exposes the deeper state tools the TS surface
-  doesn't — run *mutation* (`unmerge_record`, `shatter_cluster`), incremental
-  resolution, and the `identity_*` audit trio — plus the subsystems that live only
-  there: domain packs, PPRL, the routing planner, and document ingest.
+  the identity graph server-side. That head start has largely been closed — run
+  *mutation* (`unmerge_record`, `shatter_cluster`), incremental resolution, the
+  `identity_*` tools, and domain packs are all **shared** now. What remains Python-only
+  is the set with no JS-ecosystem equivalent: VLM document ingest, the distributed
+  routing planner, entry-point plugin discovery, and PPRL auto-config.
 - **TypeScript is the *edge-first* surface.** Its edge-safe core `dedupe()` returns
   stats and clusters inline, and — since it added an opt-in, node-only run store plus
   an on-disk run log on the MCP server — it now also serves the read-query tools
   (`get_stats`, `get_cluster`, `list_clusters`, `get_golden_record`, `export_results`)
   over the last run and the rollback subsystem (`list_runs`, `rollback`) over the
   `.goldenmatch_runs.json` log, so those are shared too. (These stateful tools live in
-  the node-only MCP server, not the edge-safe core.) It also ships edge primitives the
-  Python server doesn't: `score_strings`, `score_pair`, `find_exact_matches`,
-  `find_fuzzy_matches`, `read_file`, `write_csv`, and `server_info`.
+  the node-only MCP server, not the edge-safe core.) The remaining TS-only tools are
+  the three host helpers `read_file`, `write_csv`, and `server_info`. (The scoring /
+  blocking / clustering primitives `score_strings`, `score_pair`, `find_exact_matches`,
+  `find_fuzzy_matches`, and `build_clusters` were TS-only until 2026-07-24; Python now
+  exposes all five, so they are shared.)
 
-So GoldenMatch's **59 TS tools vs 82 Python** breaks down as ~51 shared operations,
-8 TS-only edge helpers, and ~31 Python-only tools (run mutation, the incremental/audit
-state ops, and the Python-only subsystems) — overlapping surfaces sized to their jobs,
-not a subset. On the shared core the **public function names match**, and that parity
+So GoldenMatch's **83 TS tools vs 87 Python** breaks down as 80 shared operations,
+3 TS-only host helpers, and 7 Python-only tools (the VLM document-ingest pair, the
+distributed routing trio, `list_plugins`, and `pprl_auto_config`) — overlapping
+surfaces sized to their jobs, not a subset. On the shared core the **public function
+names match**, and that parity
 is enforced in CI by the `api_parity` gate, which fails on any *undeclared* Python↔TS
 drift.
 
@@ -116,7 +120,7 @@ graph, privacy-preserving linkage. The flagship — a native wheel, SQL extensio
 
 **Servers** — REST (`goldenmatch serve`: `/match`, `/autoconfig`, `/clusters`,
 `/reviews`, `/controller/telemetry`, …) · A2A (`goldenmatch agent-serve`) · local
-web UI (`goldenmatch serve-ui`) · **82 MCP tools**.
+web UI (`goldenmatch serve-ui`) · **87 MCP tools**.
 
 **Native / SQL** — `goldenmatch-native` wheel, a Postgres extension (pgrx:
 `goldenmatch_dedupe`, `goldenmatch_autoconfig`, `goldenmatch_connected_components`, …),

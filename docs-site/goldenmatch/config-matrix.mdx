@@ -868,7 +868,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-82 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+87 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -883,6 +883,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `analyze_blocking` | Diagnose blocking on the loaded dataset: returns ranked blocking key candidates with block counts, max block size, total candidate comparisons, and estimated recall. Use it to explain why matching is slow or produces too many candidate pairs. |
 | `analyze_data` | Profile a dataset (read-only, runs no matching and writes nothing): column stats, the detected domain/entity type, data-quality signals, and a recommended entity-resolution strategy. Takes a file path or an uploaded dataset. Use it before deduplicating to understand the data and preview the strategy the auto-config would pick. |
 | `auto_configure` | Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`. |
+| `build_clusters` | Group records into clusters given a file and matchkey definition. |
 | `certify_recall` | Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems. |
 | `compare_clusters` | Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output). |
 | `config_weaknesses` | Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary. |
@@ -899,6 +900,8 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `explain_routing` | Human-readable explanation of why each stage is routed the way it is, with the driver-RAM projection that drove it. |
 | `export_results` | Export matching results to a file (CSV or JSON). |
 | `find_duplicates` | Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
+| `find_exact_matches` | Find exact matches on a field in a file. Returns pairs. |
+| `find_fuzzy_matches` | Find fuzzy matches in a block of rows. Returns scored pairs. |
 | `fix_quality` | Run GoldenCheck scan and apply fixes to a CSV file. Returns the fixed data summary and a manifest of all fixes applied. Requires goldencheck: pip install goldenmatch[quality] |
 | `get_cluster` | Get details of a specific cluster: all member records and their field values. |
 | `get_golden_record` | Get the merged golden (canonical) record for a cluster. |
@@ -947,6 +950,8 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `run_transforms` | Run GoldenFlow data transforms on a CSV file. Normalizes phone numbers (E.164), dates (ISO), categorical spelling, and Unicode issues. Returns a manifest of transforms applied. Requires goldenflow: pip install goldenmatch[transform] |
 | `scan_quality` | Run GoldenCheck data quality scan on a CSV file. Returns issues found (encoding errors, Unicode problems, format violations) without applying fixes. Requires goldencheck: pip install goldenmatch[quality] |
 | `schema_match` | Auto-map columns between two files with different schemas. Returns proposed (col_a, col_b) mappings with a confidence score and method (synonym / name_sim / composite). Useful before matching two sources. |
+| `score_pair` | Score two record objects across weighted fields. Returns a combined score. |
+| `score_strings` | Score similarity between two strings using the requested scorer. |
 | `sensitivity` | Parameter-sensitivity analysis: sweep one or more config parameters across a range and report how stable the clustering is at each value (CCMS unchanged %). Use it to find robust thresholds. Auto-configures the file if no config is given. |
 | `shatter_cluster` | Break an entire cluster into individual records. All members become singletons. Use when a cluster is completely wrong. |
 | `suggest_config` | Analyze bad merges and suggest config changes. Provide examples of incorrect merges (pairs that should NOT have matched) and GoldenMatch will identify which fields/thresholds to tighten. Example: [&#123;"record_a": &#123;...&#125;, "record_b": &#123;...&#125;, "reason": "different people"&#125;] |
