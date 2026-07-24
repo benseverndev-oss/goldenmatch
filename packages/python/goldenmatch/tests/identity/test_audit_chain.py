@@ -10,7 +10,7 @@ provable. These tests lock the two integrity layers:
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from goldenmatch.identity import IdentityStore
@@ -309,7 +309,7 @@ def test_content_hash_ignores_tzinfo_for_the_same_wall_clock():
     ``gm_identity_audit_verify`` smoke caught exactly this.
     """
     naive = datetime(2026, 7, 24, 13, 22, 25, 55123)
-    aware = naive.replace(tzinfo=timezone.utc)
+    aware = naive.replace(tzinfo=UTC)
 
     def _ev(recorded_at):
         return IdentityEvent(
