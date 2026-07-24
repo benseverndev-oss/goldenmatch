@@ -4,6 +4,14 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.17.0] - 2026-07-23
+
+### Added
+- **`pprl_link` MCP tool (79 -> 80).** Class-A wiring of the already-ported TS `runPPRL` core: reads two parties' CSV files, encodes each party's `fields` as Bloom-filter CLKs, and links records without sharing raw values. Stateless (reads the files directly); `security_level` (standard/high/paranoid) picks the ngram/hash/bloom-size, mirroring Python `_tool_pprl_link`. Response shape matches Python (`clusters_found` / `match_pairs` / `total_comparisons` / `clusters`). Flips `python_only -> shared` under `mcp_tools`. Test in `tests/unit/mcp-server.test.ts` (real two-party link + missing-fields error).
+
+### Deferred (documented, not silently dropped)
+- **`pprl_auto_config` stays `python_only`.** Python's tool reads the server-loaded dataset and returns recommended fields + per-field profiles + a security-level bloom config + explanation via `pprl/autoconfig.py::auto_configure_pprl` (~250 lines: field profiling + capture-style threshold estimation over Bloom filters). The existing TS `autoConfigurePPRL` is a *different* two-party helper, not this. A faithful port + a data-source decision (TS has no server-loaded `_rows` concept) is a bounded follow-up; `pprl_link` (the actual linkage capability) is the high-value half and ships now.
+
 ## [1.16.0] - 2026-07-23
 
 ### Added

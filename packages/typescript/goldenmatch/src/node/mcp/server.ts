@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 79 tools covering dedupe, match, scoring, explanation,
+ * Exposes 80 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -33,6 +33,7 @@ import { dedupe, match, scoreStrings } from "../../core/api.js";
 import { readFile, writeCsv, writeJson } from "../connectors/file.js";
 import { loadConfigFile } from "../config-file.js";
 import { autoMapColumns } from "../../core/schema-match.js";
+import { runPPRL, type PPRLConfig } from "../../core/pprl/protocol.js";
 import { diagnoseConfig } from "../../core/config-critique.js";
 import type { Row, MatchkeyField } from "../../core/types.js";
 import {
@@ -471,6 +472,34 @@ const EXISTING_TOOLS: readonly Tool[] = [
         min_score: { type: "number", description: "Minimum mapping score to keep (default 0.5)" },
       },
       required: ["file_a", "file_b"],
+    },
+  },
+  {
+    name: "pprl_link",
+    description:
+      "Run privacy-preserving record linkage (PPRL) between two parties' CSV " +
+      "files. Encodes each party's fields as Bloom-filter CLKs and matches " +
+      "records without sharing raw values. Stateless -- reads the two files " +
+      "directly. Specify the shared `fields`, a `threshold`, and a " +
+      "`security_level` (standard/high/paranoid picks the ngram/hash/size).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file_a: { type: "string", description: "Path to party A's CSV file" },
+        file_b: { type: "string", description: "Path to party B's CSV file" },
+        fields: {
+          type: "array",
+          items: { type: "string" },
+          description: "Shared field names to link on (present in both files)",
+        },
+        threshold: { type: "number", description: "Match threshold (default 0.85)" },
+        security_level: {
+          type: "string",
+          enum: ["standard", "high", "paranoid"],
+          description: "Bloom params: standard=2/20/512, high=2/30/1024, paranoid=3/40/2048 (default high)",
+        },
+      },
+      required: ["file_a", "file_b", "fields"],
     },
   },
   {
@@ -1135,7 +1164,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.16.0",
+          version: "1.17.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1179,6 +1208,47 @@ export async function handleTool(
         const minScore =
           typeof args["min_score"] === "number" ? (args["min_score"] as number) : 0.5;
         return { mappings: autoMapColumns(rowsA, rowsB, minScore) };
+      }
+
+      case "pprl_link": {
+        const rowsA = readFile(sanitizePath(String(args["file_a"])));
+        const rowsB = readFile(sanitizePath(String(args["file_b"])));
+        const fields = Array.isArray(args["fields"]) ? args["fields"].map(String) : [];
+        if (fields.length === 0) return { error: "Missing required parameter: fields" };
+        const threshold = typeof args["threshold"] === "number" ? args["threshold"] : 0.85;
+        const levelRaw = String(args["security_level"] ?? "high");
+        const level: PPRLConfig["securityLevel"] =
+          levelRaw === "standard" || levelRaw === "paranoid" ? levelRaw : "high";
+        // security_level -> (ngram, hashes, bloom size), mirroring Python _LEVELS.
+        const LEVELS: Record<string, readonly [number, number, number]> = {
+          standard: [2, 20, 512],
+          high: [2, 30, 1024],
+          paranoid: [3, 40, 2048],
+        };
+        const [ngram, hashes, size] = LEVELS[level]!;
+        const config: PPRLConfig = {
+          fields,
+          threshold,
+          securityLevel: level,
+          protocol: "trusted_third_party",
+          ngramSize: ngram,
+          hashFunctions: hashes,
+          bloomFilterSize: size,
+        };
+        const result = runPPRL(rowsA, rowsB, config);
+        const clusters = result.clusters.slice(0, 20).map((members, i) => ({
+          cluster_id: i,
+          members: members.map((m) => ({ party: m.party, record_id: m.id })),
+        }));
+        return {
+          clusters_found: result.clusters.length,
+          match_pairs: result.matchCount,
+          total_comparisons: result.totalComparisons,
+          security_level: level,
+          threshold,
+          fields,
+          clusters,
+        };
       }
 
       case "config_weaknesses": {
@@ -1521,7 +1591,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.16.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.17.0" },
               capabilities: { tools: {} },
             },
           });
