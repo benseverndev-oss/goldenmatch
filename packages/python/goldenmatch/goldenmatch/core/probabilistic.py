@@ -62,10 +62,54 @@ logger = logging.getLogger(__name__)
 _FS_CALIBRATION_DEFAULT = "linear"
 
 
+# Review band sits this many bits of evidence below the link cut when the
+# prior-aware evidence cut is active (W >= c links; W in [c-gap, c) reviews).
+_FS_EVIDENCE_REVIEW_GAP_BITS = 3.0
+
+def _fs_evidence_cut() -> float | None:
+    """Prior-aware link cut in BITS of net match evidence. **Default None (off).**
+
+    The posterior score is ``σ(prior_w + W)`` where ``W = Σ log2(m/u)`` is the
+    endpoint-invariant match evidence and ``prior_w = log2(λ/(1-λ))`` is the
+    within-block prior. A FIXED posterior cut (0.99) is equivalent to
+    ``W ≥ 6.63 - prior_w``, so blocking's λ inflation LOWERS the evidence bar and
+    weak pairs clear it (measured: historical_50k has λ≈0.92, which drops the bar to
+    W ≥ 3.12 bits and collapses posterior precision to 0.48).
+
+    Setting ``GOLDENMATCH_FS_EVIDENCE_CUT=c`` makes the link threshold
+    ``σ(c + prior_w)``, which is exactly ``W ≥ c`` — a prior- AND endpoint-invariant
+    evidence bar. That matters because the DEFAULT linear min-max score renormalizes
+    against the summed per-field weight extremes, so any weight change (TF,
+    honorific stripping, u-corrections) silently relocates the operating point of
+    every pair, including pairs whose evidence on the changed field never moved.
+    On this axis the bar does not move. Measured: the post-blocking-u lever swings
+    ncvr F1 by -0.162 under the linear default but only +0.025 at c=6.
+
+    Implies posterior scoring (set ``GOLDENMATCH_FS_CALIBRATED=linear`` to override).
+    ``c`` is a deliberate user knob, NOT auto-selected: no single constant matches
+    every dataset (historical f1 peaks near c=6, its f1_probabilistic near c=9, ncvr
+    plateaus at c>=9), and unsupervised selection off EM's own parameters is refuted
+    (both a score-histogram anti-mode and a λ-driven quantile measured far worse).
+    c=9 (512:1 odds) is the best single value found on the local quality gate.
+    Default off is byte-identical.
+    """
+    val = os.environ.get("GOLDENMATCH_FS_EVIDENCE_CUT")
+    if val is None:
+        return None
+    try:
+        return float(val.strip())
+    except ValueError:
+        return None
+
+
 def _fs_calibration_mode() -> str:
     """Return the active FS score-calibration mode: 'posterior' or 'linear'."""
     val = os.environ.get("GOLDENMATCH_FS_CALIBRATED")
     if val is None:
+        # An evidence cut is defined on the posterior (log-odds) axis, so it
+        # forces posterior scoring unless the caller explicitly picked linear.
+        if _fs_evidence_cut() is not None:
+            return "posterior"
         return _FS_CALIBRATION_DEFAULT
     v = val.strip().lower()
     if v in ("0", "false", "no", "off", "disabled", "linear"):
@@ -2155,6 +2199,17 @@ def compute_thresholds(
     if calibrated is None:
         calibrated = _fs_calibration_mode() == "posterior"
     if calibrated:
+        # Prior-aware evidence cut: threshold the posterior at σ(c + prior_w),
+        # which is exactly W >= c — a prior- AND endpoint-invariant evidence bar.
+        # Falls through to the legacy fixed 0.99 cut when unset.
+        c = _fs_evidence_cut()
+        if c is not None:
+            prior_w = prior_weight(em_result.proportion_matched)
+            link = posterior_from_weight(float(c), prior_w)
+            review = posterior_from_weight(
+                float(c) - _FS_EVIDENCE_REVIEW_GAP_BITS, prior_w
+            )
+            return link, min(review, link)
         # Posterior scores are calibrated probabilities; thresholds are
         # absolute, not distribution-relative. 0.99 is the measured-best link
         # cut on post-block pairs (the 0.5 Bayes boundary is too permissive
