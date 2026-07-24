@@ -115,6 +115,29 @@ jobs:
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/AGGREGATION.md
           if-no-files-found: ignore
 
+      - name: Real-world aggregation -- oracle vs real ER (Phase 1.5, key-free)
+        # Non-oracle aggregation on the committed Wikidata fixture: the store must cluster
+        # the alias variants ITSELF via goldenmatch's real resolver, so GG set-F1 folds in
+        # ER quality on top of traversal. Runs the wheel-gated TINY unit tests (real km
+        # clusters variants; real merge -> one node -> full recovery; imperfect ER dips GG
+        # below oracle; oracle default byte-identical), then a small bucket-balanced E2E
+        # over v1 that writes the oracle-vs-real delta + anchor-fragmentation evidence.
+        working-directory: packages/python/goldenmatch/benchmarks/er-kg-bench
+        env:
+          POLARS_SKIP_CPU_CHECK: "1"
+        run: |
+          python -m pytest tests/test_realworld_aggregation.py -v
+          python scripts/run_realworld_phase15_e2e.py \
+            --anchors-per-bucket 8 --out-md RESULTS_REALWORLD_AGGREGATION.md
+
+      - name: Upload RESULTS_REALWORLD_AGGREGATION.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-realworld-aggregation
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/RESULTS_REALWORLD_AGGREGATION.md
+          if-no-files-found: ignore
+
       - name: Temporal as_of capability gate (deterministic, key-free)
         # The second capability RAG structurally can't do: as-of a PAST date after a
         # correction. goldengraph store.as_of(D) returns the edge true at D; a
