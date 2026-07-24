@@ -22,6 +22,8 @@ import {
   type IdentityView,
 } from "../../core/identity/query.js";
 import { mediateConflict } from "../../core/identity/mediation.js";
+import { sealAuditLog, verifyAuditChain, verificationSummary } from "../../core/identity/audit.js";
+import { pyIsoformat } from "../../core/identity/pyDatetime.js";
 import { trustForSource } from "../../core/memory/types.js";
 import type {
   EvidenceEdge,
@@ -190,6 +192,54 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
         path: { type: "string" },
       },
       required: ["record_a_id", "record_b_id", "resolution"],
+    },
+  },
+  {
+    name: "identity_audit",
+    description:
+      "Export the append-only identity audit log in commit order: every event " +
+      "with actor / trust / timestamp / reason, so a reviewer can reconstruct " +
+      "exactly which actor changed what, when, and why. Optionally filtered by " +
+      "dataset / actor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string" },
+        actor: { type: "string" },
+        limit: { type: "integer", default: 500 },
+        path: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "identity_audit_seal",
+    description:
+      "Anchor the append-only audit log with a tamper-evidence seal: a chained " +
+      "sha256 root over every event since the last seal. Cheap and idempotent " +
+      "(a no-op when nothing new has been logged). Publish/mirror the returned " +
+      "root_hash to make tampering detectable by an external party.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string" },
+        actor: { type: "string", description: "Principal sealing the log. Defaults to 'agent'." },
+        path: { type: "string", description: "Identity DB path" },
+      },
+    },
+  },
+  {
+    name: "identity_audit_verify",
+    description:
+      "Verify the append-only audit log against its seal chain. Replays the " +
+      "per-event content hashes and the seal roots to detect content edits, " +
+      "deletion, reordering, and insertion of any sealed event. Returns " +
+      "{ok, events_checked, seals_checked} plus the ids of any mismatches.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string" },
+        path: { type: "string", description: "Identity DB path" },
+      },
     },
   },
 ];
@@ -456,6 +506,59 @@ async function dispatch(
         applied: res.applied,
         action: res.action,
         at: res.at,
+      };
+    }
+
+    if (name === "identity_audit") {
+      const limit = intArg(args, "limit", 500);
+      const dataset = strArg(args, "dataset");
+      const actorFilter = strArg(args, "actor");
+      let events = await store.exportAuditLog(dataset);
+      if (actorFilter !== undefined) events = events.filter((e) => e.actor === actorFilter);
+      const items = events.slice(0, limit).map((e) => ({
+        event_id: e.eventId,
+        entity_id: e.entityId,
+        kind: e.kind,
+        actor: e.actor ?? null,
+        trust: e.trust ?? null,
+        claim_type: e.claimType ?? null,
+        evidence_ref: e.evidenceRef ?? null,
+        previous_claim_id: e.previousClaimId ?? null,
+        recorded_at: e.recordedAt ? pyIsoformat(e.recordedAt) : null,
+        run_name: e.runName,
+        dataset: e.dataset,
+        payload: e.payload,
+      }));
+      return { items, total: events.length };
+    }
+
+    if (name === "identity_audit_seal") {
+      const { actor } = actorTrust(args);
+      const dataset = strArg(args, "dataset");
+      const seal = await sealAuditLog(store, { actor, dataset: dataset ?? null });
+      if (seal === null) return { sealed: false, reason: "no new events to seal" };
+      return {
+        sealed: true,
+        seal_id: seal.sealId,
+        root_hash: seal.rootHash,
+        event_count: seal.eventCount,
+        last_event_id: seal.lastEventId,
+        dataset: seal.dataset,
+        actor: seal.actor,
+      };
+    }
+
+    if (name === "identity_audit_verify") {
+      const dataset = strArg(args, "dataset");
+      const result = await verifyAuditChain(store, { dataset: dataset ?? null });
+      return {
+        ok: result.ok,
+        events_checked: result.eventsChecked,
+        seals_checked: result.sealsChecked,
+        content_mismatches: result.contentMismatches,
+        seal_mismatches: result.sealMismatches,
+        missing_sealed_events: result.missingSealedEvents,
+        summary: verificationSummary(result),
       };
     }
 

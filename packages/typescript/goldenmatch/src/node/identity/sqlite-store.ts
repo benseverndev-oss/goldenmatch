@@ -30,6 +30,7 @@ import {
   type SourceRecord,
 } from "../../core/identity/types.js";
 import { pyIsoformat } from "../../core/identity/pyDatetime.js";
+import { eventContentHash } from "../../core/identity/audit.js";
 
 // v5 (byte-identical to Python `store.py` SCHEMA_VERSION 5): the provenance
 // spine (#1075 actor/trust on events + edges), tamper-evidence (#1078
@@ -529,6 +530,9 @@ export class SqliteIdentityStore implements IdentityStore {
 
   async emitEvent(event: IdentityEvent): Promise<number | null> {
     const payload = event.payload !== null ? JSON.stringify(event.payload) : null;
+    // Stamp the tamper-evidence content hash at insert (PR-B), mirroring Python
+    // `store.emit_event`. Only when absent, so a hydrated event keeps its hash.
+    const entryHash = event.entryHash ?? (await eventContentHash(event));
     this.db
       .prepare(
         `INSERT INTO identity_events
@@ -547,7 +551,7 @@ export class SqliteIdentityStore implements IdentityStore {
         event.claimType ?? null,
         event.evidenceRef ?? null,
         event.previousClaimId ?? null,
-        event.entryHash ?? null,
+        entryHash,
         // Python stamps `recorded_at` via datetime.isoformat(); match it byte-for
         // -byte so the stored string hashes identically cross-toolkit (PR-B).
         pyIsoformat(event.recordedAt),
@@ -775,6 +779,13 @@ function parseJsonOrNull(v: string | null): Record<string, unknown> | null {
 }
 
 function parseDate(v: string): Date {
-  const normalised = v.includes(" ") && !v.includes("T") ? v.replace(" ", "T") : v;
+  let normalised = v.includes(" ") && !v.includes("T") ? v.replace(" ", "T") : v;
+  // `identity_events.recorded_at` is written via `pyIsoformat` (naive, no zone)
+  // + SQLite's CURRENT_TIMESTAMP default is naive-UTC; a naive `new Date(...)`
+  // parses as LOCAL, so a read-back event re-hashed by the audit layer would
+  // diverge from its stored entry_hash on any non-UTC machine (false tamper).
+  // Force UTC for naive strings; already-zoned values (edges/aliases use
+  // `toISOString()`, which carries `Z`) are left untouched.
+  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(normalised)) normalised += "Z";
   return new Date(normalised);
 }

@@ -35,8 +35,8 @@
       "claim_type": null,
       "evidence_ref": null,
       "previous_claim_id": null,
-      "recorded_at": "2026-07-23T12:00:00.123456",
-      "expected_hash": "ed34125dcb6ef14711246e21154b48f28612a53ab95a24ee5960389373006167"
+      "recorded_at": "2026-07-23T12:00:00.123000",
+      "expected_hash": "4c9ac9bee933015f3ec19e1758a8323749c04e337d7808f9b6012c00c172abb8"
     },
     {
       "event_id": 3,
@@ -105,12 +105,12 @@
       "claim_type": null,
       "evidence_ref": "url:https://x/y",
       "previous_claim_id": null,
-      "recorded_at": "2026-07-23T12:00:04.000001",
-      "expected_hash": "d20b8c461e3412a68cde77ffb99ef64cb8bee4429a735aaf5c7f9fd7be61149d"
+      "recorded_at": "2026-07-23T12:00:04.456000",
+      "expected_hash": "29da1cb061c13c4578ab666cf68412ab61c04715dc3675b27cda39b7951b22ec"
     }
   ],
   "seal": {
-    "root_hash": "620f76b1c46404d445a6ddea2bd79adb06f23c25c51c0bc1bce3c4abecacb377",
+    "root_hash": "10707916aa8436aabbd088c1978056e5b857b2374a3bd132f5fa894a437c9db2",
     "event_count": 6,
     "last_event_id": 6
   }

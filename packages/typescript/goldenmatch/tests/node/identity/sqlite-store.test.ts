@@ -486,7 +486,9 @@ describe("SqliteIdentityStore", () => {
       expect(ev?.actor).toBeNull();
       expect(ev?.trust).toBeNull();
       expect(ev?.claimType).toBeNull();
-      expect(ev?.entryHash).toBeNull();
+      // PR-B: emitEvent now stamps a tamper-evidence content hash at insert, so
+      // entryHash is a 64-char sha256 hex (no longer null).
+      expect(ev?.entryHash).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it("audit_seals CRUD: addSeal / latestSeal / listSeals with dataset scoping", async () => {

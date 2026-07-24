@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 8 identity tools matching the Python sibling", () => {
+  it("exports the 11 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -108,8 +108,11 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_split",
       "identity_claim",
       "identity_resolve_conflict",
+      "identity_audit",
+      "identity_audit_seal",
+      "identity_audit_verify",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(8);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(11);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");

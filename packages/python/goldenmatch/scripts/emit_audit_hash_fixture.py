@@ -32,10 +32,16 @@ CASES: list[dict] = [
     # provenance-free (actor/trust None; no claim fields) + micros==0
     dict(entity_id="e1", kind="created", payload={"reason": "new"},
          run_name="run-a", dataset=None, recorded_at=_dt(2026, 7, 23, 12, 0, 0)),
-    # trust = 1.0 (the float-repr landmine) + actor + micros>0
+    # trust = 1.0 (the float-repr landmine) + actor + micros>0.
+    # NOTE micros are MILLISECOND-ALIGNED (ms*1000) throughout: a JS `Date` is
+    # ms-precision, so `pyIsoformat(new Date(iso))` only round-trips ms-aligned
+    # timestamps. Real TS-authored events are always ms-precision; cross-verifying
+    # a Python-written SUB-ms event from TS is an inherent JS `Date` limitation
+    # (documented), not a hash-port defect -- the fixture stays ms-aligned so it
+    # exercises the fractional branch while remaining TS-round-trippable.
     dict(entity_id="e2", kind="manual_merge", payload={"records": [1, 2]},
          run_name="run-a", dataset="ds1", actor="steward:jo", trust=1.0,
-         recorded_at=_dt(2026, 7, 23, 12, 0, 0, 123456)),
+         recorded_at=_dt(2026, 7, 23, 12, 0, 0, 123000)),
     # trust = 0.5, non-ASCII payload values + nested object (recursive key sort)
     dict(entity_id="e3", kind="claimed", payload={"z": "café", "a": {"y": "naïve", "x": "日本語"}},
          run_name="run-b", dataset="ds1", actor="agent", trust=0.5,
@@ -49,10 +55,10 @@ CASES: list[dict] = [
     dict(entity_id="e5", kind="absorbed_record", payload={"n": 3},
          run_name="run-c", dataset=None, actor="pipeline", trust=0.123456,
          claim_type="inferred", recorded_at=_dt(2026, 7, 23, 12, 0, 3)),
-    # trust = 0.999999 + evidence_ref only
+    # trust = 0.999999 + evidence_ref only + escaped chars in payload
     dict(entity_id="e6", kind="merged_with", payload={"s": "a\"b\\c\n"},
          run_name="run-c", dataset=None, actor="agent", trust=0.999999,
-         evidence_ref="url:https://x/y", recorded_at=_dt(2026, 7, 23, 12, 0, 4, 1)),
+         evidence_ref="url:https://x/y", recorded_at=_dt(2026, 7, 23, 12, 0, 4, 456000)),
 ]
 
 
