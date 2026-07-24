@@ -208,6 +208,57 @@ def _fs_monotonic_mode() -> str:
     return "warn"
 
 
+def _fs_post_blocking_u_enabled() -> bool:
+    """Post-blocking bias correction for FS u-probabilities. **Default OFF.**
+
+    u is estimated from RANDOM pairs (global non-matches), but FS only ever scores
+    BLOCKED pairs, where blocking-correlated fields agree far more often than at
+    random. So a field common among candidates (e.g. authors on a per-author
+    blocked corpus) gets a wildly inflated ``log2(m/u)`` weight and drives false
+    merges. When ``GOLDENMATCH_FS_POST_BLOCKING_U`` is truthy, the final weights use
+    u DECONVOLVED from the blocked population: the observed blocked-pair level rate
+    is ``p_match*m + (1-p_match)*u_blocked``, and EM already gives m and p_match, so
+    ``u_blocked = (blocked_rate - p_match*m) / (1 - p_match)`` — the non-match
+    agreement rate CONDITIONED on blocking. Deflates candidate-common fields toward
+    weight ~0, letting the genuinely discriminative fields decide. m-estimation
+    (the E-step, on random-pair u) is unchanged; only the final weights shift.
+    Default off is byte-identical.
+    """
+    return os.environ.get("GOLDENMATCH_FS_POST_BLOCKING_U", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
+def _deconvolve_post_blocking_u(
+    comp_matrix, mk, m_probs, p_match, always_conditioned, u_floor: float = 1e-4,
+) -> dict:
+    """Per-field u deconvolved from the blocked-pair level distribution (see
+    ``_fs_post_blocking_u_enabled``). Returns ``{field: [u per level]}`` for the
+    regular (non-blocking) fields; blocking fields keep their fixed prior."""
+    pm = min(max(float(p_match), 0.0), 0.99)
+    denom = 1.0 - pm
+    out: dict = {}
+    for j, f in enumerate(mk.fields):
+        if f.field in always_conditioned:
+            continue
+        lv = comp_matrix[:, j]
+        obs = float((lv >= 0).sum())
+        if obs <= 0 or denom <= 0:
+            continue
+        m_f = m_probs.get(f.field)
+        if m_f is None:
+            continue
+        u_new = []
+        for k in range(int(f.levels)):
+            blocked = float((lv == k).sum()) / obs
+            u_k = (blocked - pm * m_f[k]) / denom
+            u_new.append(max(u_floor, u_k))
+        s = sum(u_new)
+        if s > 0:
+            out[f.field] = [x / s for x in u_new]
+    return out
+
+
 def enforce_weight_monotonicity(
     match_weights: dict[str, list[float]],
     skip_fields: list[str] | None = None,
@@ -1354,6 +1405,15 @@ def train_em(
     # Compute match weights: log2(m/u)
     # For blocking fields, use fixed priors since EM can't learn from
     # fields that are always "agree" within blocks
+    # Post-blocking bias correction (GOLDENMATCH_FS_POST_BLOCKING_U, default off):
+    # deconvolve u from the blocked population so candidate-common fields don't get
+    # a random-pair-inflated weight. Off -> empty -> the random-pair u is used.
+    u_post = (
+        _deconvolve_post_blocking_u(comp_matrix, mk, m_probs, p_match, always_conditioned)
+        if _fs_post_blocking_u_enabled() else {}
+    )
+    if u_post:
+        logger.info("FS post-blocking u correction on %d field(s)", len(u_post))
     match_weights = {}
     for f in mk.fields:
         if f.field in always_conditioned:
@@ -1366,10 +1426,11 @@ def train_em(
             logger.debug("Using fixed weights for blocking field '%s'", f.field)
             continue
 
+        u_src = u_post.get(f.field) or u_probs[f.field]
         weights = []
         for k in range(f.levels):
             m_val = max(m_probs[f.field][k], 1e-10)
-            u_val = max(u_probs[f.field][k], 1e-10)
+            u_val = max(u_src[k], 1e-10)
             weights.append(math.log2(m_val / u_val))
         match_weights[f.field] = weights
 
