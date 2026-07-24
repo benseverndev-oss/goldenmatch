@@ -10,6 +10,7 @@ provable. These tests lock the two integrity layers:
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 from goldenmatch.identity import IdentityStore
@@ -291,3 +292,44 @@ def test_pre_hashchain_events_seal_and_verify(tmp_path):
         assert res.ok is True
     finally:
         s.close()
+
+
+# ── timezone normalization (Postgres TIMESTAMPTZ round-trip) ──────────────────
+
+
+def test_content_hash_ignores_tzinfo_for_the_same_wall_clock():
+    """A tz-AWARE ``recorded_at`` must hash identically to the naive value that
+    was actually written.
+
+    Events are hashed *before* insert from a naive ``datetime.now()``, but the
+    Postgres schema stores ``recorded_at`` as ``TIMESTAMPTZ`` and reads back a
+    tz-aware datetime. Without normalization every stamped event re-hashed to a
+    different value and ``verify_audit_chain`` reported phantom "content
+    edit(s)" on a clean in-DB store -- the `rust_pgrx`
+    ``gm_identity_audit_verify`` smoke caught exactly this.
+    """
+    naive = datetime(2026, 7, 24, 13, 22, 25, 55123)
+    aware = naive.replace(tzinfo=timezone.utc)
+
+    def _ev(recorded_at):
+        return IdentityEvent(
+            entity_id="e1", kind="created", payload={"reason": "init"},
+            run_name="r1", dataset="people", actor="agent:x", trust=0.5,
+            recorded_at=recorded_at,
+        )
+
+    assert event_content_hash(_ev(naive)) == event_content_hash(_ev(aware))
+
+
+def test_naive_content_hash_is_pinned_so_existing_seals_stay_valid():
+    """Back-compat lock: the naive-datetime hash must not move. Any change to
+    ``event_content_hash`` / ``_normalize_dt`` that shifts this value silently
+    invalidates every seal chained over already-stored events."""
+    ev = IdentityEvent(
+        entity_id="e1", kind="created", payload={"reason": "init"},
+        run_name="r1", dataset="people", actor="agent:x", trust=0.5,
+        recorded_at=datetime(2026, 7, 24, 13, 22, 25, 55123),
+    )
+    assert event_content_hash(ev) == (
+        "fbb6f4093d6a5e943a07c96c0e2a8f93eafaf97d4a1ddbec66ed0792c8c2292a"
+    )

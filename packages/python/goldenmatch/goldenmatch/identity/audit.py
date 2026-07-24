@@ -41,8 +41,27 @@ if TYPE_CHECKING:
 def _normalize_dt(value: Any) -> str:
     """Stable string form of a timestamp, identical on the insert side (a
     ``datetime``) and the read-back side (``_to_dt`` returns a ``datetime``),
-    so the content hash round-trips across a store write/read."""
+    so the content hash round-trips across a store write/read.
+
+    **Dropping the tzinfo is load-bearing for the Postgres backend.** Events are
+    created with a naive ``datetime.now()`` and hashed *before* insert, but the
+    Postgres schema stores ``recorded_at`` as ``TIMESTAMPTZ`` and hands back a
+    tz-AWARE datetime, whose ``isoformat()`` carries a ``+00:00`` offset the
+    write-side hash never saw. Every stamped event therefore re-hashed to a
+    different value and ``verify_audit_chain`` reported phantom "content
+    edit(s)" on a perfectly clean in-DB store (caught by the `rust_pgrx`
+    `gm_identity_audit_verify` smoke). Keeping the wall clock exactly as the
+    driver returned it -- in the session timezone the naive value was written in
+    -- makes the read-back string identical to the written one.
+
+    Naive values (every SQLite event, and the write side on both backends) are
+    untouched, so existing entry hashes and the seals chained over them stay
+    valid -- the same back-compat constraint that governs the claim-authority
+    fields in ``event_content_hash`` below.
+    """
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.replace(tzinfo=None)
         return value.isoformat()
     return str(value)
 
