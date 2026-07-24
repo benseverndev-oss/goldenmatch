@@ -33,7 +33,7 @@ import {
 } from "./core/compare-clusters.js";
 import { runIncremental } from "./core/incremental.js";
 import { emitHealerSurface } from "./node/cli-healer.js";
-import type { Row } from "./core/types.js";
+import type { ClusterInfo, PairKey, Row } from "./core/types.js";
 import pkg from "../package.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
@@ -1263,6 +1263,250 @@ program
       }
     },
   );
+
+// ---------- runs ----------
+program
+  .command("runs")
+  .description("List previous runs (for rollback)")
+  .option("--output-dir <dir>", "directory containing the run log", ".")
+  .action(async (opts: { outputDir: string }) => {
+    const { listRuns } = await import("./node/mcp/run-log.js");
+    const runs = listRuns(opts.outputDir);
+    if (runs.length === 0) {
+      process.stdout.write("No runs recorded.\n");
+      return;
+    }
+    process.stdout.write(`${runs.length} run(s):\n`);
+    for (const r of runs) {
+      const state = r.rolled_back ? "rolled back" : "active";
+      process.stdout.write(
+        `  ${r.run_id}  ${r.timestamp}  ${r.output_files.length} file(s)  [${state}]\n`,
+      );
+    }
+  });
+
+// ---------- rollback ----------
+program
+  .command("rollback")
+  .description("Roll back a previous run by deleting its output files")
+  .argument("<run_id>", "run id to roll back")
+  .option("--output-dir <dir>", "directory containing the run log", ".")
+  .action(async (runId: string, opts: { outputDir: string }) => {
+    const { rollbackRun } = await import("./node/mcp/run-log.js");
+    const res = rollbackRun(runId, opts.outputDir);
+    if ("error" in res) {
+      process.stderr.write(`Error: ${res.error}\n`);
+      if (res.available_runs?.length) {
+        process.stderr.write(`Available runs: ${res.available_runs.join(", ")}\n`);
+      }
+      process.exit(1);
+    }
+    process.stdout.write(`Rolled back ${res.run_id}\n`);
+    for (const f of res.deleted) process.stdout.write(`  deleted: ${f}\n`);
+    for (const f of res.not_found) process.stdout.write(`  missing: ${f}\n`);
+  });
+
+// ---------- unmerge ----------
+//
+// Operates on EXPORTED FILES, not a live run (same as Python): a clusters CSV
+// carrying `__row_id__` + `__cluster_id__`, plus an optional scored-pairs CSV
+// (`id_a,id_b,score`) supplying the edge weights that re-clustering needs --
+// a clusters CSV alone has no pair scores to re-cluster from.
+program
+  .command("unmerge")
+  .description("Remove a record from its cluster (per-entity unmerge)")
+  .argument("<record_id>", "record row id to unmerge", (v) => parseInt(v, 10))
+  .option("--clusters <path>", "clusters CSV from a previous run (required)")
+  .option("--pairs <path>", "scored-pairs CSV (id_a,id_b,score)")
+  .option("--shatter", "shatter the whole cluster into singletons")
+  .option("-t, --threshold <value>", "min score for re-clustering", parseFloat, 0)
+  .option("-o, --output <path>", "output CSV (default: <clusters>.unmerged.csv)")
+  .action(
+    async (
+      recordId: number,
+      opts: {
+        clusters?: string;
+        pairs?: string;
+        shatter?: boolean;
+        threshold: number;
+        output?: string;
+      },
+    ) => {
+      if (!opts.clusters) {
+        process.stderr.write(
+          "Error: --clusters is required.\n" +
+            "Generate a clusters CSV with: goldenmatch dedupe --output-clusters\n",
+        );
+        process.exit(2);
+      }
+      const { unmergeRecord, unmergeCluster, pairKey } = await import("./core/cluster.js");
+      const rows = readFile(opts.clusters);
+      const first = rows[0];
+      if (!first || !("__row_id__" in first) || !("__cluster_id__" in first)) {
+        process.stderr.write(
+          "Error: clusters file must contain __row_id__ and __cluster_id__ columns.\n",
+        );
+        process.exit(2);
+      }
+
+      // rows -> Map<cluster_id, members[]>
+      const members = new Map<number, number[]>();
+      const rowCid = new Map<number, number>();
+      for (const r of rows) {
+        const rid = Number(r["__row_id__"]);
+        const cid = Number(r["__cluster_id__"]);
+        if (!Number.isFinite(rid) || !Number.isFinite(cid)) continue;
+        rowCid.set(rid, cid);
+        const list = members.get(cid);
+        if (list) list.push(rid);
+        else members.set(cid, [rid]);
+      }
+      const targetCid = rowCid.get(recordId);
+      if (targetCid === undefined) {
+        process.stderr.write(`Record ${recordId} not found in clusters file.\n`);
+        process.exit(1);
+      }
+
+      // Optional scored pairs -> per-cluster pairScores (edge weights).
+      const pairScoresFor = new Map<number, Map<PairKey, number>>();
+      if (opts.pairs) {
+        for (const p of readFile(opts.pairs)) {
+          const a = Number(p["id_a"]);
+          const b = Number(p["id_b"]);
+          const s = Number(p["score"]);
+          if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(s)) continue;
+          const cid = rowCid.get(a);
+          if (cid === undefined || cid !== rowCid.get(b)) continue; // intra-cluster only
+          let m = pairScoresFor.get(cid);
+          if (!m) {
+            m = new Map<PairKey, number>();
+            pairScoresFor.set(cid, m);
+          }
+          m.set(pairKey(a, b), s);
+        }
+      }
+
+      let clusters: Map<number, ClusterInfo> = new Map(
+        [...members].map(([cid, mem]): [number, ClusterInfo] => [
+          cid,
+          {
+            members: mem,
+            size: mem.length,
+            oversized: false,
+            pairScores: pairScoresFor.get(cid) ?? new Map<PairKey, number>(),
+            confidence: 1,
+            bottleneckPair: null,
+            clusterQuality: "strong",
+          },
+        ]),
+      );
+
+      const before = clusters.get(targetCid)?.members.length ?? 0;
+      process.stdout.write(`Unmerge record ${recordId}\n`);
+      process.stdout.write(`  Found in cluster ${targetCid} (${before} members)\n`);
+
+      if (opts.shatter) {
+        process.stdout.write(`  Shattering cluster ${targetCid} into ${before} singletons\n`);
+        clusters = await unmergeCluster(targetCid, clusters);
+      } else {
+        process.stdout.write(`  Removing record ${recordId} from cluster\n`);
+        clusters = await unmergeRecord(recordId, clusters, opts.threshold);
+      }
+
+      // Re-assign cluster ids onto the source rows and write out.
+      const newCid = new Map<number, number>();
+      for (const [cid, info] of clusters) for (const m of info.members) newCid.set(m, cid);
+      const updated = rows.map((r) => ({
+        ...r,
+        __cluster_id__: newCid.get(Number(r["__row_id__"])) ?? null,
+      }));
+      const out = opts.output ?? `${opts.clusters}.unmerged.csv`;
+      writeOutputRows(out, updated as Row[], "csv");
+      process.stdout.write(`  ${clusters.size} cluster(s) after unmerge -> ${out}\n`);
+    },
+  );
+
+// ---------- config (preset sub-app) ----------
+//
+// Mirrors Python's `config` Typer sub-app over the same
+// `~/.goldenmatch/presets/<name>.yaml` layout, so presets are interchangeable.
+const configCmd = program
+  .command("config")
+  .description("Manage saved config presets");
+
+configCmd
+  .command("save")
+  .description("Save a config file as a named preset")
+  .argument("<name>", "preset name")
+  .argument("<config_path>", "path to the config YAML")
+  .action(async (name: string, configPath: string) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      const dest = new PresetStore().save(name, configPath);
+      process.stdout.write(`Preset '${name}' saved to ${dest}\n`);
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("load")
+  .description("Load a named preset to a local file")
+  .argument("<name>", "preset name")
+  .option("-d, --dest <path>", "destination path", "goldenmatch.yaml")
+  .action(async (name: string, opts: { dest: string }) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      const out = new PresetStore().load(name, opts.dest);
+      process.stdout.write(`Preset '${name}' written to ${out}\n`);
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("list")
+  .description("List saved presets")
+  .action(async () => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    const names = new PresetStore().listPresets();
+    if (names.length === 0) {
+      process.stdout.write("No presets saved.\n");
+      return;
+    }
+    for (const n of names) process.stdout.write(`  ${n}\n`);
+  });
+
+configCmd
+  .command("delete")
+  .description("Delete a saved preset")
+  .argument("<name>", "preset name")
+  .action(async (name: string) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      new PresetStore().delete(name);
+      process.stdout.write(`Preset '${name}' deleted\n`);
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("show")
+  .description("Print a saved preset")
+  .argument("<name>", "preset name")
+  .action(async (name: string) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      process.stdout.write(new PresetStore().show(name));
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
 
 // ---------------------------------------------------------------------------
 // Entry point

@@ -145,6 +145,7 @@ cli_commands:
   - analyze-blocking
   - autoconfig
   - compare-clusters
+  - config
   - dedupe
   - demo
   - evaluate
@@ -159,25 +160,24 @@ cli_commands:
   - mcp-serve
   - memory
   - profile
+  - rollback
+  - runs
   - score
   - serve
   - tui
+  - unmerge
   python_only:
   - anomalies
-  - config
   - ingest-docs
   - init
   - label
   - pprl
   - review
-  - rollback
-  - runs
   - schedule
   - sensitivity
   - serve-ui
   - setup
   - sync
-  - unmerge
   - watch
   ts_only: []
 a2a_skills:
