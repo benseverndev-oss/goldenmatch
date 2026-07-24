@@ -1508,6 +1508,167 @@ configCmd
     }
   });
 
+// ---------- sensitivity ----------
+program
+  .command("sensitivity")
+  .description("Analyze parameter sensitivity using CCMS cluster comparison")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .requiredOption(
+    "-s, --sweep <spec>",
+    "sweep spec 'field:start:stop:step' (repeatable)",
+    (v: string, prev: string[]) => [...prev, v],
+    [] as string[],
+  )
+  .option("--sample <n>", "random sample size for speed", (v) => parseInt(v, 10))
+  .option("-o, --output <path>", "save results to JSON")
+  .action(
+    async (
+      files: string[],
+      opts: { config: string; sweep: string[]; sample?: number; output?: string },
+    ) => {
+      const { runSensitivitySweep, sweepStabilityReport } = await import(
+        "./core/sensitivity.js"
+      );
+      // Python's spec grammar: field:start:stop:step (all numeric after the field).
+      const specs = opts.sweep.map((raw) => {
+        const parts = raw.split(":");
+        if (parts.length !== 4) {
+          process.stderr.write(
+            `Error: bad --sweep '${raw}'; expected field:start:stop:step\n`,
+          );
+          process.exit(2);
+        }
+        const [field, start, stop, step] = parts as [string, string, string, string];
+        const nums = [start, stop, step].map(parseFloat);
+        if (nums.some((n) => !Number.isFinite(n))) {
+          process.stderr.write(`Error: non-numeric range in --sweep '${raw}'\n`);
+          process.exit(2);
+        }
+        return { field, start: nums[0]!, stop: nums[1]!, step: nums[2]! };
+      });
+
+      const rows = loadFilesWithSource(files);
+      const config = loadConfigFile(opts.config);
+      const results = await runSensitivitySweep(
+        rows,
+        config,
+        specs,
+        opts.sample,
+      );
+
+      const report = { results: results.map((r) => sweepStabilityReport(r)) };
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]!;
+        const s = report.results[i]!;
+        process.stdout.write(
+          `${r.param.field}: baseline=${r.baselineValue} ` +
+            `best=${s.best_value} (${s.best_unchanged_pct.toFixed(1)}% unchanged)\n`,
+        );
+        for (const p of s.points) {
+          process.stdout.write(
+            `    ${p.value}: unchanged=${p.unchanged} merged=${p.merged} ` +
+              `partitioned=${p.partitioned} overlapping=${p.overlapping} twi=${p.twi.toFixed(4)}\n`,
+          );
+        }
+      }
+      if (opts.output) {
+        writeFileSync(opts.output, JSON.stringify(report, null, 2) + "\n", "utf-8");
+        process.stdout.write(`Results saved to ${opts.output}\n`);
+      }
+    },
+  );
+
+// ---------- pprl (privacy-preserving record linkage) ----------
+//
+// Python's `pprl` is a Typer sub-app with `link` + `auto-config`. Only `link`
+// is ported: the TS package has the linkage protocol (`runPPRL`) but NOT the
+// PPRL auto-config profiler, which remains tracked as the `pprl_auto_config`
+// python_only MCP tool. `pprl auto-config` therefore errors with a pointer
+// rather than silently doing something different.
+const pprlCmd = program
+  .command("pprl")
+  .description("Privacy-preserving record linkage (bloom-filter CLKs)");
+
+pprlCmd
+  .command("link")
+  .description("Link two parties' records without sharing raw values")
+  .requiredOption("-a, --file-a <path>", "party A data file")
+  .requiredOption("-b, --file-b <path>", "party B data file")
+  .requiredOption("-f, --fields <fields>", "comma-separated fields to match on")
+  .option("-t, --threshold <value>", "match threshold", parseFloat, 0.85)
+  .option("-s, --security <level>", "standard | high | paranoid", "high")
+  .option("-p, --protocol <name>", "trusted_third_party | smc", "trusted_third_party")
+  .option("--scorer <name>", "dice | jaccard", "dice")
+  .option("--salt <key>", "shared HMAC key (both parties must use the same)")
+  .option("-o, --output <path>", "output CSV of cluster assignments")
+  .action(
+    async (opts: {
+      fileA: string;
+      fileB: string;
+      fields: string;
+      threshold: number;
+      security: string;
+      protocol: string;
+      scorer: string;
+      salt?: string;
+      output?: string;
+    }) => {
+      const { runPPRL } = await import("./core/pprl/protocol.js");
+      const security = opts.security as "standard" | "high" | "paranoid";
+      const protocol = opts.protocol as "trusted_third_party" | "smc";
+      const scorer = opts.scorer as "dice" | "jaccard";
+      if (!["standard", "high", "paranoid"].includes(security)) {
+        process.stderr.write(`Error: --security must be standard|high|paranoid\n`);
+        process.exit(2);
+      }
+      if (!["trusted_third_party", "smc"].includes(protocol)) {
+        process.stderr.write(`Error: --protocol must be trusted_third_party|smc\n`);
+        process.exit(2);
+      }
+
+      const rowsA = readFile(opts.fileA);
+      const rowsB = readFile(opts.fileB);
+      const result = runPPRL(rowsA, rowsB, {
+        fields: parseCsvList(opts.fields),
+        securityLevel: security,
+        protocol,
+        threshold: opts.threshold,
+        scorer,
+        ...(opts.salt ? { salt: opts.salt } : {}),
+      });
+
+      process.stdout.write(
+        `PPRL (${protocol}, ${security}): ${result.matchCount} match(es) ` +
+          `over ${result.totalComparisons} comparison(s), ${result.clusters.length} cluster(s)\n`,
+      );
+      if (opts.output) {
+        // One row per cluster member: cluster_id + which party + that party's row id.
+        const rows: Row[] = [];
+        result.clusters.forEach((members, cid) => {
+          for (const m of members) {
+            rows.push({ cluster_id: cid, party: m.party, record_id: m.id });
+          }
+        });
+        writeOutputRows(opts.output, rows, "csv");
+        process.stdout.write(`Cluster assignments written to ${opts.output}\n`);
+      }
+    },
+  );
+
+pprlCmd
+  .command("auto-config")
+  .description("(not ported) profile a file and suggest PPRL parameters")
+  .argument("[file]", "data file to analyze")
+  .action(() => {
+    process.stderr.write(
+      "pprl auto-config is not available in the TypeScript package.\n" +
+        "The PPRL auto-config profiler is Python-only (`pprl_auto_config`).\n" +
+        "Use: goldenmatch pprl auto-config <file>   (Python)\n",
+    );
+    process.exit(2);
+  });
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------

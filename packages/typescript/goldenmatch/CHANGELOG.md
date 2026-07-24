@@ -4,6 +4,16 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.22.0] - 2026-07-24
+
+### Added
+- **`sensitivity` + `pprl` CLI commands** (parity batch 5). goldenmatch `cli_commands.python_only` **12 → 10**. Both wrap cores TypeScript already had.
+  - `sensitivity <files...> -c <config> -s field:start:stop:step [--sample n] [-o out.json]` — parameter-sensitivity sweep compared against one baseline clustering via CCMS (`runSensitivitySweep` + `sweepStabilityReport`). `--sweep` is repeatable; the `field:start:stop:step` grammar matches Python's and rejects wrong arity / non-numeric ranges with exit 2 rather than a confusing downstream error.
+  - `pprl link -a <fileA> -b <fileB> -f <fields> [-t thr] [-s level] [-p protocol] [--scorer] [--salt] [-o out.csv]` — privacy-preserving record linkage over bloom-filter CLKs (`runPPRL`), writing one CSV row per cluster member (`cluster_id`, `party`, `record_id`).
+
+### Known difference (documented, exits non-zero)
+- **`pprl auto-config` is not ported.** Python's `pprl` is a Typer sub-app with `link` **and** `auto-config`; the TS package has the linkage protocol but not the PPRL parameter profiler, which stays tracked as the `pprl_auto_config` **python_only MCP tool**. The TS subcommand exists so the gap is visible, and it exits 2 with a pointer to the Python command rather than silently doing something different.
+
 ## [1.21.0] - 2026-07-24
 
 ### Added
