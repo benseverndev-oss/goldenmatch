@@ -4,6 +4,23 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [3.9.0] - 2026-07-24
+
+### Added
+- **5 core-primitive MCP tools** (`score_strings`, `score_pair`, `find_exact_matches`,
+  `find_fuzzy_matches`, `build_clusters`) -- closing the REVERSE parity gap: the
+  TypeScript MCP server exposed these while Python did not. Each is a thin, STATELESS
+  wrapper over a function goldenmatch already had, so an agent can score two strings,
+  score two records, enumerate a file's exact/fuzzy pairs, or cluster a file without
+  first loading a run into session state. Wire shapes mirror the TS handlers exactly,
+  including the 100-pair / 200-cluster response caps. goldenmatch MCP tools **82 -> 87**;
+  `mcp_tools.ts_only` **8 -> 3** (only `read_file`, `write_csv`, `server_info` remain).
+
+### Fixed
+- `docs-site/reference/api-surface.mdx` prose was stale beyond the generated block: it
+  listed all 7 primitives as TS-only and claimed "~31 Python-only tools" when the real
+  figure is 7. Corrected alongside the counts.
+
 ## [Unreleased]
 
 ### Added

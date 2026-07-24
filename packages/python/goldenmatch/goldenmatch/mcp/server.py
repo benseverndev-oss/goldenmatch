@@ -350,6 +350,98 @@ _BASE_TOOLS = [
     # Registry-introspection tools (parity with the TS MCP surface): stateless
     # serializers over the config allow-lists, so an agent can discover the valid
     # scorer / transform / survivorship-strategy names before building a config.
+    # Core scoring/blocking/clustering PRIMITIVES (reverse-parity with the TS MCP
+    # surface, which exposed these while Python did not). Each is a thin, stateless
+    # wrapper over a function goldenmatch already had -- an agent can score two
+    # strings, score two records, enumerate a file's exact/fuzzy pairs, or cluster
+    # a file without first loading a run into session state.
+    Tool(
+        name="score_strings",
+        description="Score similarity between two strings using the requested scorer.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "description": "First string"},
+                "b": {"type": "string", "description": "Second string"},
+                "scorer": {
+                    "type": "string",
+                    "description": (
+                        "Scorer name (exact, jaro_winkler, levenshtein, token_sort, "
+                        "soundex_match, dice, jaccard, ensemble)"
+                    ),
+                },
+            },
+            "required": ["a", "b"],
+        },
+    ),
+    Tool(
+        name="score_pair",
+        description="Score two record objects across weighted fields. Returns a combined score.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "row_a": {"type": "object", "description": "First record"},
+                "row_b": {"type": "object", "description": "Second record"},
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string"},
+                            "scorer": {"type": "string"},
+                            "weight": {"type": "number"},
+                            "transforms": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["field"],
+                    },
+                },
+            },
+            "required": ["row_a", "row_b"],
+        },
+    ),
+    Tool(
+        name="find_exact_matches",
+        description="Find exact matches on a field in a file. Returns pairs.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Input file path"},
+                "field": {"type": "string", "description": "Field to match on"},
+                "transforms": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["path", "field"],
+        },
+    ),
+    Tool(
+        name="find_fuzzy_matches",
+        description="Find fuzzy matches in a block of rows. Returns scored pairs.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Input file path"},
+                "field": {"type": "string", "description": "Field to match on"},
+                "scorer": {"type": "string"},
+                "threshold": {"type": "number"},
+                "transforms": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["path", "field"],
+        },
+    ),
+    Tool(
+        name="build_clusters",
+        description="Group records into clusters given a file and matchkey definition.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Input file path"},
+                "exact": {"type": "array", "items": {"type": "string"}},
+                "fuzzy": {"type": "object", "additionalProperties": {"type": "number"}},
+                "blocking": {"type": "array", "items": {"type": "string"}},
+                "threshold": {"type": "number"},
+            },
+            "required": ["path"],
+        },
+    ),
     Tool(
         name="list_scorers",
         description="List all available similarity scorers.",
@@ -1089,6 +1181,38 @@ def _handle_tool(name: str, args: dict) -> dict:
         return _tool_export_results(args["output_path"], args.get("format", "csv"))
     elif name == "list_domains":
         return _tool_list_domains()
+    elif name == "score_strings":
+        return _tool_score_strings(
+            str(args.get("a", "")),
+            str(args.get("b", "")),
+            args.get("scorer") or "jaro_winkler",
+        )
+    elif name == "score_pair":
+        return _tool_score_pair(
+            args.get("row_a") or {},
+            args.get("row_b") or {},
+            args.get("fields"),
+        )
+    elif name == "find_exact_matches":
+        return _tool_find_exact_matches(
+            args["path"], args["field"], args.get("transforms")
+        )
+    elif name == "find_fuzzy_matches":
+        return _tool_find_fuzzy_matches(
+            args["path"],
+            args["field"],
+            args.get("scorer") or "jaro_winkler",
+            args.get("threshold"),
+            args.get("transforms"),
+        )
+    elif name == "build_clusters":
+        return _tool_build_clusters(
+            args["path"],
+            args.get("exact"),
+            args.get("fuzzy"),
+            args.get("blocking"),
+            args.get("threshold"),
+        )
     elif name == "list_scorers":
         return _tool_list_scorers()
     elif name == "list_transforms":
@@ -1634,6 +1758,213 @@ def _tool_list_domains() -> dict:
             "attribute_patterns": list(rb.attribute_patterns.keys()),
         })
     return {"domains": result, "count": len(result)}
+
+
+# ---------------------------------------------------------------------------
+# Core primitives (reverse-parity with the TS MCP surface)
+#
+# These wrap functions goldenmatch already exposed in-process; the gap was that
+# an AGENT could not reach them over MCP without loading a run into session
+# state first. All five are STATELESS -- they never read or write _resolve_run_state.
+# Response shapes mirror the TS handlers exactly (including the 100-pair /
+# 200-cluster response caps, which keep a big file from flooding the wire).
+# ---------------------------------------------------------------------------
+
+_PAIR_RESPONSE_CAP = 100
+_CLUSTER_RESPONSE_CAP = 200
+_DEFAULT_TRANSFORMS = ["lowercase", "strip"]
+
+
+def _tool_score_strings(a: str, b: str, scorer: str) -> dict:
+    """Score two strings (mirrors TS `score_strings` -> `{scorer, score}`)."""
+    from goldenmatch._api import score_strings
+
+    try:
+        return {"scorer": scorer, "score": score_strings(a, b, scorer)}
+    except (ValueError, KeyError) as exc:
+        return {"error": f"Unknown or unusable scorer {scorer!r}: {exc}"}
+
+
+def _tool_score_pair(row_a: dict, row_b: dict, fields: list | None) -> dict:
+    """Score two records across weighted fields.
+
+    Mirrors TS `score_pair` -> `{score, field_count}`, over the SAME primitive
+    (`core.scorer.score_pair`, whose signature already matches TS `scorePair`).
+    Per-field defaults match the TS `buildFieldsFromArg` helper.
+    """
+    from goldenmatch.config.schemas import MatchkeyField
+    from goldenmatch.core.scorer import score_pair
+
+    if not fields:
+        return {"error": "`fields` must be a non-empty list of {field, scorer, weight, transforms}."}
+    try:
+        mk_fields = [
+            MatchkeyField(
+                field=f["field"],
+                scorer=f.get("scorer") or "jaro_winkler",
+                weight=float(f.get("weight", 1.0)),
+                transforms=list(f.get("transforms") or []),
+            )
+            for f in fields
+        ]
+    except (KeyError, TypeError, ValueError) as exc:
+        return {"error": f"Invalid `fields` entry: {exc}"}
+    return {"score": score_pair(row_a, row_b, mk_fields), "field_count": len(mk_fields)}
+
+
+def _adhoc_matchkey(
+    name: str,
+    mk_type: str,
+    field: str,
+    scorer: str,
+    transforms: list | None,
+    threshold: float | None,
+):
+    """Build the one-field matchkey the two find_* tools score with.
+
+    `mk_type` matters: TS uses `exact` for find_exact_matches and `weighted` for
+    find_fuzzy_matches, and Pydantic REQUIRES a threshold on a weighted matchkey
+    (an exact one takes none) -- so the two cannot share a single type.
+    """
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    return MatchkeyConfig(
+        name=name,
+        type=mk_type,
+        fields=[
+            MatchkeyField(
+                field=field,
+                scorer=scorer,
+                weight=1.0,
+                transforms=list(transforms) if transforms is not None else list(_DEFAULT_TRANSFORMS),
+            )
+        ],
+        threshold=threshold,
+    )
+
+
+def _load_rows_with_ids(path: str):
+    """Load a file and stamp `__row_id__` (the ids the returned pairs refer to)."""
+    import polars as pl
+
+    from goldenmatch.core.ingest import load_file
+
+    df = load_file(path).collect()
+    if "__row_id__" not in df.columns:
+        df = df.with_row_index("__row_id__").with_columns(pl.col("__row_id__").cast(pl.Int64))
+    return df
+
+
+def _tool_find_exact_matches(path: str, field: str, transforms: list | None) -> dict:
+    """Exact-match pairs on one field (mirrors TS -> `{pair_count, pairs}`)."""
+    from goldenmatch.core.scorer import find_exact_matches
+
+    p = _safe_path_or_error(path)
+    if isinstance(p, dict):
+        return p
+    try:
+        df = _load_rows_with_ids(str(p))
+    except (FileNotFoundError, OSError) as exc:
+        return {"error": f"Could not read {path}: {exc}"}
+    if field not in df.columns:
+        return {"error": f"Column {field!r} not in {path} (have: {sorted(df.columns)[:20]})"}
+
+    # find_exact_matches reads the PRECOMPUTED `__mk_<name>__` column, so the
+    # matchkey column has to be materialized first (the pipeline does this in
+    # its own prep step). Without it: ColumnNotFoundError, not an empty result.
+    from goldenmatch.core.matchkey import compute_matchkeys
+
+    mk = _adhoc_matchkey("adhoc_exact", "exact", field, "exact", transforms, None)
+    pairs = find_exact_matches(compute_matchkeys(df.lazy(), [mk]), mk)
+    return {
+        "pair_count": len(pairs),
+        "pairs": [[a, b, s] for a, b, s in pairs[:_PAIR_RESPONSE_CAP]],
+    }
+
+
+def _tool_find_fuzzy_matches(
+    path: str, field: str, scorer: str, threshold: float | None, transforms: list | None
+) -> dict:
+    """Fuzzy-scored pairs on one field (mirrors TS -> `{pair_count, pairs}`)."""
+    from goldenmatch.core.scorer import find_fuzzy_matches
+
+    p = _safe_path_or_error(path)
+    if isinstance(p, dict):
+        return p
+    try:
+        df = _load_rows_with_ids(str(p))
+    except (FileNotFoundError, OSError) as exc:
+        return {"error": f"Could not read {path}: {exc}"}
+    if field not in df.columns:
+        return {"error": f"Column {field!r} not in {path} (have: {sorted(df.columns)[:20]})"}
+
+    mk = _adhoc_matchkey(
+        "adhoc_fuzzy",
+        "weighted",
+        field,
+        scorer,
+        transforms,
+        0.85 if threshold is None else float(threshold),
+    )
+    pairs = find_fuzzy_matches(df, mk)
+    return {
+        "pair_count": len(pairs),
+        "pairs": [[a, b, s] for a, b, s in pairs[:_PAIR_RESPONSE_CAP]],
+    }
+
+
+def _tool_build_clusters(
+    path: str,
+    exact: list | None,
+    fuzzy: dict | None,
+    blocking: list | None,
+    threshold: float | None,
+) -> dict:
+    """Cluster a file (mirrors TS -> `{cluster_count, clusters}`).
+
+    NOTE the tool name is about the OUTCOME, not the raw `core.cluster.build_clusters`
+    primitive: TS runs a full `dedupe()` and reports the resulting clusters, so this
+    runs `dedupe_df` for the same semantics rather than clustering caller-supplied pairs.
+    """
+    from goldenmatch import dedupe_df
+
+    p = _safe_path_or_error(path)
+    if isinstance(p, dict):
+        return p
+    try:
+        df = _load_rows_with_ids(str(p))
+    except (FileNotFoundError, OSError) as exc:
+        return {"error": f"Could not read {path}: {exc}"}
+
+    kwargs: dict = {}
+    if exact:
+        kwargs["exact"] = list(exact)
+    if fuzzy:
+        kwargs["fuzzy"] = dict(fuzzy)
+    if blocking:
+        kwargs["blocking"] = list(blocking)
+    if threshold is not None:
+        kwargs["threshold"] = float(threshold)
+
+    try:
+        result = dedupe_df(df, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - surface as a tool error, never a crash
+        return {"error": f"Clustering failed: {exc}"}
+
+    clusters = [
+        {
+            "cluster_id": cid,
+            "size": info.get("size", len(info.get("members", []))),
+            "confidence": info.get("confidence"),
+            "quality": info.get("cluster_quality"),
+            "members": list(info.get("members", [])),
+        }
+        for cid, info in (result.clusters or {}).items()
+    ]
+    return {
+        "cluster_count": len(clusters),
+        "clusters": clusters[:_CLUSTER_RESPONSE_CAP],
+    }
 
 
 def _tool_list_scorers() -> dict:
