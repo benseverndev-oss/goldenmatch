@@ -184,6 +184,68 @@ SELECT goldenmatch.gm_embed('John Smith');  -- real[]
   The DuckDB embedding UDF needs the optional embed runtime: `pip install goldenmatch-duckdb[embed]`.
 </Note>
 
+## Identity graph (stateful, PostgreSQL)
+
+PostgreSQL can maintain a durable, event-sourced **identity graph** in-database:
+stable entity ids that survive across runs, incremental absorb of new records,
+steward corrections, a tamper-evident audit log, and MDM operator views. This is
+Postgres-only (it needs a durable multi-connection store); DuckDB stays the
+stateless dedupe surface.
+
+Point the extension at the database it runs in with a superuser GUC (or the
+`GOLDENMATCH_IDENTITY_DSN` / `GOLDENMATCH_DATABASE_URL` server env), then resolve
+a table into a named dataset:
+
+```sql
+ALTER SYSTEM SET goldenmatch.identity_dsn = 'postgresql://user:pass@localhost/mydb';
+SELECT pg_reload_conf();
+
+SELECT goldenmatch.gm_configure('idjob',
+  '{"matchkeys":[{"name":"email","type":"exact","fields":[{"field":"email","scorer":"exact"}]}],"identity":{"source_pk_column":"id"}}');
+
+-- Resolve a table into the in-DB identity dataset (create / absorb / merge,
+-- incremental across runs). Re-running absorbs new rows into existing ids.
+SELECT goldenmatch.gm_resolve('idjob', 'customers', 'people');
+```
+
+The read functions serve that in-DB dataset when `db_path` is empty (pass a
+SQLite path or a libpq DSN to read an external store instead). Every function
+returns JSON identical to the MCP / REST / CLI surfaces.
+
+| Function | Purpose |
+|---|---|
+| `gm_resolve(job, table, dataset)` | Resolve a table into the dataset (create/absorb/merge) |
+| `goldenmatch_identity_resolve(record_id, db_path)` | Resolve a `{source}:{pk}` record to its entity |
+| `goldenmatch_identity_view(entity_id, db_path)` | Full identity view + event log |
+| `goldenmatch_identity_history(entity_id, db_path)` | Temporal event log for one identity |
+| `goldenmatch_identity_list(dataset, status, db_path)` | List identities (empty filters = all) |
+| `goldenmatch_identity_conflicts(dataset, db_path)` | Open `conflicts_with` edges |
+| `gm_identity_profile(entity_id, db_path)` | MDM profile of one entity (sources, records, version) |
+| `gm_identity_stats(dataset, db_path)` | Graph-level health summary |
+| `gm_identity_worklist(dataset, db_path)` | Prioritized steward queue (conflicts / weak confidence) |
+| `gm_identity_merge(dataset, entity_a, entity_b)` | Steward merge (keep A, absorb B) |
+| `gm_identity_split(dataset, entity_id, record_id)` | Steward split a record into a fresh identity |
+| `gm_identity_claim(entity_id, record_id, reason)` | Steward claim a record into an entity |
+| `gm_identity_resolve_conflict(dataset, record_a, record_b, resolution, reason)` | Steward verdict (`same`/`distinct`/`defer`) |
+| `gm_identity_audit(dataset, db_path)` | Append-only audit-log page |
+| `gm_identity_audit_seal(dataset)` | Anchor the audit log with a new tamper-evidence seal |
+| `gm_identity_audit_verify(dataset, db_path)` | Replay the seal chain and report integrity |
+
+```sql
+-- Steward workflow: profile an entity, seal + verify the audit chain.
+SELECT goldenmatch.gm_identity_profile('<entity_id>', '');   -- '' = the in-DB dataset
+SELECT goldenmatch.gm_identity_audit_seal('');               -- '' = the global chain
+SELECT goldenmatch.gm_identity_audit_verify('', '');         -- {"ok": true, ...}
+```
+
+<Note>
+  The write functions (`gm_resolve`, `gm_identity_merge` / `_split` / `_claim`,
+  `gm_identity_resolve_conflict`, `gm_identity_audit_seal`) commit on the store's
+  own connection to the configured DSN, not the caller's SQL transaction; replay
+  is idempotent. They require `goldenmatch.identity_dsn` (or the env fallback) to
+  be set. Empty optional args (`dataset`, `reason`) mean "unset".
+</Note>
+
 ## Requirements
 
 - Python 3.11+
