@@ -60,6 +60,15 @@ half is a near-verbatim port of the Postgres SQL. The consequence is that
 `use_bulk_fast_path` stops being backend-specific and the four `bulk_*` methods
 get a real SQLite branch instead of a `NotImplementedError`.
 
+**One SQLite-specific deviation, found while building the spike.** When an
+UPSERT's INSERT takes its values from a `SELECT`, SQLite's parser cannot tell
+whether `ON` opens the upsert clause or a join constraint, and fails with
+``near "DO": syntax error``. The documented workaround is to give the SELECT a
+WHERE clause — `FROM _stage_x WHERE true`. Postgres needs no such thing, so the
+port is verbatim *except* here. Cheap, but it is the kind of thing that turns
+into a confusing half-hour if it is discovered during implementation instead of
+now.
+
 ## Ceiling analysis — what this can and cannot buy
 
 Being explicit here because it is easy to oversell.
@@ -155,19 +164,33 @@ elimination is worth real money. Hence: measure first.
 
 ## Spike — decide before building
 
-`scratchpad/adbc_sqlite_ingest_spike.py`, measured on `large-new-64GB` (**not**
-locally — see the bench-runner rule), against the identity schema:
+**Built.** `packages/python/goldenmatch/scripts/spike_adbc_sqlite_ingest.py`,
+run by the `spike-adbc-sqlite-ingest` workflow on `large-new-64GB` (**not**
+locally — see the bench-runner rule). Three arms over the real identity schema,
+N in {100k, 1M, 5M}:
 
-1. Write N rows into `identity_nodes` + `source_records` three ways, N in
-   {100k, 1M, 5M}: (a) today's batched row path, (b) ADBC ingest into a staging
-   table + `INSERT ... SELECT ... ON CONFLICT`, (c) stdlib `executemany` into
-   staging + the same upsert — **(c) is the control that isolates "Arrow" from
-   "staging table"**, and it needs no new dependency.
-2. Report wall and **peak RSS**, plus the Python-heap delta, per arm.
-3. Verify the resulting DB is byte-identical across arms (schema + row content).
+| arm | what it is | new dependency |
+|---|---|---|
+| `rowpath` | today's batched row path via the `IdentityStore` API | no |
+| `staging` | staging table + stdlib `executemany` + the same upsert | **no** |
+| `adbc` | `adbc_ingest` into the same staging table + the same upsert | yes |
 
-The existing `bench-identity-resolve-scaling` workflow already ladders the right
-shape and has the arm plumbing; extend it rather than writing a new one.
+All three start from the same `pyarrow.Table`; `rowpath` and `staging` pay the
+Arrow -> Python-rows conversion inside their timed region, because that
+conversion *is* the cost under examination. Each arm runs in its own subprocess
+so peak RSS is that arm's alone.
+
+**Correctness gate:** every arm's resulting database is content-hashed over
+`identity_nodes` + `source_records`, so a faster arm that writes different bytes
+reports a mismatch instead of looking like a win. Already exercised: `staging`
+comes out byte-identical to `rowpath`.
+
+`adbc-driver-sqlite` is layered in by the workflow with `uv run --with`; it does
+**not** enter `uv.lock` or the package dependencies unless this spike says GO.
+The ADBC API surface the spike relies on is verified working against a WAL-mode
+SQLite file: `dbapi.connect(uri=path)` is the file-connect form (the published
+examples only show in-memory), `adbc_ingest` creates the staging table, and the
+staged upsert runs on the same ADBC connection.
 
 ### Kill criteria
 
@@ -178,6 +201,13 @@ shape and has the arm plumbing; extend it rather than writing a new one.
   dependency and the single-writer complexity are not worth it.
 - If (b) clearly wins on RSS at 5M, proceed with **option A**, gated behind an
   extra plus a kill switch, with the parity gate from trap 2 as the merge blocker.
+
+The spike prints this verdict itself rather than leaving it to interpretation.
+
+**Read the `batched_row_path` flag in the output.** The spike reports whether
+#2111's SQLite transaction batching is present; without it the `rowpath` baseline
+is the old per-statement-autocommit path and every other arm looks far better
+than it is. Do not run the spike for a decision until #2111 has landed.
 
 ## Relationship to other work
 
