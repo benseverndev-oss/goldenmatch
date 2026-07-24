@@ -34,7 +34,7 @@ from __future__ import annotations
 import random
 import sys
 
-import polars as pl
+import pyarrow as pa
 from goldenmatch.core.autoconfig import (
     build_blocking,
     build_matchkeys,
@@ -67,7 +67,7 @@ def make_healthcare_df(
     seed: int = 715,
     zip_present: float = 0.95,
     rich_surnames: int = 0,
-) -> pl.DataFrame:
+) -> pa.Table:
     """Synthetic healthcare-provider shape, mirroring the #715 description:
 
     - source: categorical, 15 values
@@ -113,13 +113,15 @@ def make_healthcare_df(
                 "matching_id": f"rec_{i}",
             }
         )
-    return pl.DataFrame(rows)
+    # Arrow-native: goldenmatch is arrow-first, and returning a pa.Table keeps the
+    # quality harness (which imports this generator) free of any polars import.
+    return pa.Table.from_pylist(rows)
 
 
 def _run_pincer_mode(n: int) -> None:
     df = make_healthcare_df(n)
-    print(f"=== Synthetic healthcare df: {df.height:,} rows x {df.width} cols ===")
-    print(df.head(5))
+    print(f"=== Synthetic healthcare df: {df.num_rows:,} rows x {df.num_columns} cols ===")
+    print(df.slice(0, 5))
     print()
 
     profiles = profile_columns(df)
@@ -143,7 +145,7 @@ def _run_pincer_mode(n: int) -> None:
 
     has_fuzzy = any(mk.type in ("weighted", "probabilistic") for mk in matchkeys)
     blocking = (
-        build_blocking(profiles, df, n_rows_full=df.height) if has_fuzzy else None
+        build_blocking(profiles, df, n_rows_full=df.num_rows) if has_fuzzy else None
     )
     print("=== build_blocking output ===")
     if blocking is None:
@@ -180,7 +182,7 @@ def _run_pincer_mode(n: int) -> None:
         print("  >>> inconclusive: no identifier-eligible columns found at this shape/scale.")
 
 
-def _max_block_full(df: pl.DataFrame, key) -> int:
+def _max_block_full(df: "pa.Table", key) -> int:
     """True max block size for one emitted blocking key/pass on the FULL df.
 
     Mirrors exactly what the static blocker does: build the production block-key
@@ -191,14 +193,20 @@ def _max_block_full(df: pl.DataFrame, key) -> int:
     collision the pipeline never scores). Returns -1 if the key references
     columns absent from df or the expr build fails.
     """
+    # POLARS-ONLY diagnostic: _build_block_key_expr returns a polars expression,
+    # so this one helper converts. Imported LAZILY and used only by this script's
+    # own --mode diagnostics -- importing make_healthcare_df must never pull polars
+    # (the quality harness depends on that).
+    import polars as pl
+
     from goldenmatch.core.blocker import _build_block_key_expr
 
-    if not all(f in df.columns for f in key.fields):
+    if not all(f in df.column_names for f in key.fields):
         return -1
     try:
         expr = _build_block_key_expr(key)
         sizes = (
-            df.with_columns(expr)
+            pl.from_arrow(df).with_columns(expr)
             .filter(
                 pl.col("__block_key__").is_not_null()
                 & ~pl.col("__block_key__")
@@ -225,9 +233,9 @@ def _run_blocking_scale_mode(n: int) -> None:
     blocking blow-up -- the gap that let #715 reopen.
     """
     df = make_healthcare_df(n, zip_present=0.5, rich_surnames=5000)
-    df = df.drop("matching_id")
+    df = df.drop_columns(["matching_id"])
     print(
-        f"=== blocking-scale: {df.height:,} rows x {df.width} cols "
+        f"=== blocking-scale: {df.num_rows:,} rows x {df.num_columns} cols "
         f"(sparse zip ~0.5, rich surnames ~5000) ==="
     )
     print()
@@ -241,7 +249,7 @@ def _run_blocking_scale_mode(n: int) -> None:
         )
     print()
 
-    blk = build_blocking(profiles, df, n_rows_full=df.height)
+    blk = build_blocking(profiles, df, n_rows_full=df.num_rows)
 
     # Same cap build_blocking gates on internally.
     cap = max(1000, min(10_000, n // 200))

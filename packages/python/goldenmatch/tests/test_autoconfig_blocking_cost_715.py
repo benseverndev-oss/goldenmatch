@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 def _proj_block(df, cols, full_n):
     from goldenmatch.core.blocking_candidates import project_max_block_size
     mb = int(df.group_by(cols).len().get_column("len").max() or 0)
-    return project_max_block_size(mb, df.height, full_n)
+    return project_max_block_size(mb, df.num_rows, full_n)
 
 
 def _proj_block_nonnull(df, field, full_n):
@@ -52,10 +52,10 @@ def _proj_block_nonnull(df, field, full_n):
     import polars as pl
     from goldenmatch.core.blocking_candidates import project_max_block_size
     sub = df.filter(pl.col(field).is_not_null())
-    mb = int(sub.group_by(field).len().get_column("len").max() or 0) if sub.height else 0
-    # Full-N projection unchanged: scale by full_n / FULL df.height (not the
+    mb = int(sub.group_by(field).len().get_column("len").max() or 0) if sub.num_rows else 0
+    # Full-N projection unchanged: scale by full_n / FULL df.num_rows (not the
     # non-null height), so a bounded id (zip) still grows with N.
-    return project_max_block_size(mb, df.height, full_n)
+    return project_max_block_size(mb, df.num_rows, full_n)
 
 
 def test_no_emitted_blocking_pass_exceeds_cap_sparse_zip():
@@ -64,7 +64,7 @@ def test_no_emitted_blocking_pass_exceeds_cap_sparse_zip():
 
     # matching_id is the ground-truth record id (`not used for config`), so the
     # real pipeline never feeds it to build_blocking; drop it here too.
-    df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")  # sparse zip5
+    df = make_healthcare_df(30_000, zip_present=0.5).drop_columns(["matching_id"])  # sparse zip5
     profiles = profile_columns(df)
     col_type = {p.name: p.col_type for p in profiles}
     full_n = 1_000_000  # simulate scale; v0 path uses full df but we assert projected
@@ -96,7 +96,7 @@ def test_sparse_healthcare_emits_strong_id_union_1207():
     from goldenmatch.core.autoconfig import build_blocking, profile_columns
     from repro_issue_715 import make_healthcare_df
 
-    df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")
+    df = make_healthcare_df(30_000, zip_present=0.5).drop_columns(["matching_id"])
     profiles = profile_columns(df)
     blk = build_blocking(profiles, df, n_rows_full=1_000_000)
     assert blk.strategy == "multi_pass", f"expected union multi_pass, got {blk.strategy}"
@@ -113,9 +113,9 @@ def test_dense_zip_still_picks_bounded_compound():
     from goldenmatch.core.autoconfig import build_blocking, profile_columns
     from repro_issue_715 import make_healthcare_df
 
-    df = make_healthcare_df(30_000, zip_present=0.95).drop("matching_id")
+    df = make_healthcare_df(30_000, zip_present=0.95).drop_columns(["matching_id"])
     profiles = profile_columns(df)
-    blk = build_blocking(profiles, df, n_rows_full=df.height)
+    blk = build_blocking(profiles, df, n_rows_full=df.num_rows)
     assert blk.keys, "expected a blocking key on the dense-zip shape"
 
 
@@ -127,9 +127,9 @@ def test_sparse_zip_gets_bounded_compound_not_degenerate():
     from goldenmatch.core.autoconfig import build_blocking, profile_columns
     from repro_issue_715 import make_healthcare_df
 
-    df = make_healthcare_df(30_000, zip_present=0.5).drop("matching_id")
+    df = make_healthcare_df(30_000, zip_present=0.5).drop_columns(["matching_id"])
     profiles = profile_columns(df)
-    blk = build_blocking(profiles, df, n_rows_full=df.height)
+    blk = build_blocking(profiles, df, n_rows_full=df.num_rows)
     # Non-degenerate: has at least one real blocking key.
     assert blk.keys, "expected a bounded compound key, got degenerate/empty blocking"
     # The bounding column (zip5) should appear in the chosen key/passes.
@@ -185,7 +185,7 @@ def test_dense_zip_no_sole_bounded_key_at_scale_876():
     from goldenmatch.core.autoconfig import build_blocking, profile_columns
     from repro_issue_715 import make_healthcare_df
 
-    df = make_healthcare_df(30_000, zip_present=0.95).drop("matching_id")  # dense zip5
+    df = make_healthcare_df(30_000, zip_present=0.95).drop_columns(["matching_id"])  # dense zip5
     profiles = profile_columns(df)
     blk = build_blocking(profiles, df, n_rows_full=100_000_000)  # #876 scale
 

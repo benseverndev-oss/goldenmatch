@@ -125,7 +125,7 @@ def test_healthcare_shape_produces_exact_matchkey_and_blocking():
     # Component 2 verification: the fuzzy matchkey gets a (bounded) blocking key.
     has_fuzzy = any(mk.type in ("weighted", "probabilistic") for mk in mks)
     if has_fuzzy:
-        blocking = build_blocking(profiles, df, n_rows_full=df.height)
+        blocking = build_blocking(profiles, df, n_rows_full=df.num_rows)
         assert blocking is not None and blocking.keys, (
             "expected blocking keys for the fuzzy matchkey, got none"
         )
