@@ -29,6 +29,7 @@ Zero-config gets good results and returns the config it chose; the healer (`revi
 
 ## Polyglot & edge
 - Python (PyPI) + TypeScript (npm), tracked to 4-decimal scorer parity via a cross-language harness
+- Cross-language phase-handoff has KNOWN LIMITS (surface parity != byte-for-byte interop): the identity graph (+ cryptographic cross-verification) and the `score -> cluster` boundary round-trip byte-safe; string scoring is 4-decimal tolerance-bounded (can flip a threshold); standardize/dates, embeddings, and the auto-config controller diverge; distributed/VLM/routing are Python-only. Measured by a conformance harness. Details: [Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity)
 - TypeScript cores are dependency-free and `node:*`-free, so they run in browsers, Cloudflare Workers, Vercel Edge, and Deno
 - An opt-in WebAssembly backend (`await enableWasm()` / `enableAnalysisWasm()` / `enableSuggestWasm()`) swaps in the same pyo3-free Rust kernels (`score-core` / `analysis-core` / `suggest-core`, the last being the config-suggestion "healer") the Python wheels and SQL UDFs use; pure-TS stays the default and the byte-identical fallback
 - SQL-native in PostgreSQL (pgrx extension) and DuckDB

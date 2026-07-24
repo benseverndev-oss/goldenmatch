@@ -128,6 +128,31 @@ What sets it apart:
 
 ---
 
+## Cross-language interoperability (know the limits)
+
+The Python and TypeScript ports are at **surface parity** — the same operations
+exist in both. That is *not* the same as being able to hand any pipeline phase
+from one language to the other and back byte-for-byte. Some boundaries genuinely
+round-trip; others are numerically tolerance-bounded; a few can't cross at all.
+Each verdict below is **measured** by a conformance harness, not assumed:
+
+| Boundary | Verdict |
+| --- | --- |
+| **Identity graph DB** | ✅ byte-safe + cryptographically cross-verifiable (a seal written by one toolkit validates under the other) |
+| **`score → cluster`** and the **end-to-end split-run** (score in Python, cluster in TS) | ✅ byte-safe — reproduces the single-language run |
+| Cluster JSON · config YAML · Learning Memory · run log · `record_fingerprint` | ✅ portable |
+| **String scoring** | 🟡 4-decimal tolerance — a pair on a threshold can flip (byte-identical only with the shared WASM scorer) |
+| **Standardize / dates** · embeddings · auto-config controller | 🟠 divergent — not byte-portable |
+| Distributed / Ray · document (VLM) ingest · distributed routing | ⛔ Python-only by architecture |
+
+**Rule of thumb:** hand off at the **cluster** or **identity** boundary and it's
+seamless; don't split a pipeline across `standardize`/dates, embeddings, or the
+controller and expect bit-exact reproduction. Full detail, guidance, and the
+runnable harness that keeps these verdicts honest:
+[Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity).
+
+---
+
 ## The healing loop
 
 GoldenMatch's core workflow is a loop, not a one-shot:

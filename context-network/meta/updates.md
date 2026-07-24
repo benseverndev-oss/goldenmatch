@@ -2,6 +2,26 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-24 -- Cross-language phase-handoff conformance harness + published limits
+- Added **[ADR 0046](../decisions/0046-cross-language-phase-handoff-conformance.md)**:
+  cross-language (Python↔TS) phase-handoff is a MEASURED property, not assumed
+  from surface parity. Surface parity (same ops exist) != artifact interop
+  (a phase's output round-trips byte-for-byte).
+- Shipped a runnable **conformance harness** (Python oracle → TS parity test):
+  `tests/parity/cluster-conformance.parity.test.ts` (identical scored pairs →
+  identical partition, incl. oversized-cluster MST split with tied edges) and
+  `tests/parity/split-run.parity.test.ts` (a REAL half-Python/half-TS pipeline
+  reproduces the single-language run; independent all-TS run agreed).
+- **Verdict table** published on README, `docs-site/concepts/cross-language-parity`,
+  and `llms.txt`: byte-safe (identity graph +crypto, `score→cluster`, split-run,
+  cluster JSON, config, memory, fingerprints); tolerance-bounded (string scoring
+  4dp — can flip a threshold); divergent (standardize/dates, embeddings,
+  controller); Python-only (distributed/VLM/routing). Design note:
+  `docs/design/2026-07-24-cross-language-phase-conformance.md`.
+- Known limit stated honestly: the split-run's clean independent-run agreement is
+  dataset-specific; the next extension is a corrupted-on-threshold split-run to
+  hunt the flipping case.
+
 ## 2026-07-18 -- goldenmatch 3.5.0: `date` scorer + cross-surface consistency hardening
 - Cut **goldenmatch 3.5.0** (docs sweep + release). Headline: the `date` scorer
   (#1858) -- `jaro_winkler` scores unrelated ISO birthdays 0.80+, so `date`

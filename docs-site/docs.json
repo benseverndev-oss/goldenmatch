@@ -34,7 +34,8 @@
             "pages": [
               "concepts/architecture",
               "concepts/entity-resolution",
-              "concepts/scale-envelope"
+              "concepts/scale-envelope",
+              "concepts/cross-language-parity"
             ]
           },
           {
