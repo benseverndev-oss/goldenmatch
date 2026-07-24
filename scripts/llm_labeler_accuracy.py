@@ -18,7 +18,10 @@ vs a different John Smith b.1850), the labels RATIFY the bias instead of correct
 it, and calibration confidently finds the wrong cut. A labeler that is 85% accurate
 with uncorrelated errors is more useful than one that is 90% accurate and correlated.
 
-Diagnostic only: never fails the job, prints a verdict table to the step summary.
+Diagnostic: a dataset that is absent or errors is reported and skipped rather than
+failing the run -- but a run where NO dataset produced results exits non-zero, so a
+broken harness cannot report green with an empty table (which is exactly how the
+missing-``__row_id__`` bug shipped a SUCCESS carrying no data).
 """
 from __future__ import annotations
 
@@ -101,6 +104,24 @@ def _sample(pairs, gt, n_band: int, n_ctrl: int, rng):
     return band, hi[:n_ctrl], lo[:n_ctrl], base_rate
 
 
+def _with_row_ids(df):
+    """Attach ``__row_id__`` for the LLM scorer's record lookup.
+
+    ``llm_score_pairs`` resolves each pair id through ``select_dicts(["__row_id__",
+    ...])``, but the raw dataset frame has no such column -- the pipeline adds it
+    internally, so a frame handed straight from a loader raises ColumnNotFoundError.
+    Pair ids are ROW INDICES (dedupe assigns them positionally), so a plain arange is
+    the correct mapping. Kept separate from the frame used for auto-config/scoring:
+    profiling a synthetic id column would hand auto-config a cardinality-1.0
+    "identifier" that it would then reason about.
+    """
+    import polars as pl
+
+    if "__row_id__" in df.columns:
+        return df
+    return df.with_columns(pl.arange(0, df.height).alias("__row_id__"))
+
+
 def _llm_verdicts(sampled, df, budget_usd: float):
     """Send every sampled pair to the LLM; return {(a,b): is_match}.
 
@@ -119,6 +140,17 @@ def _llm_verdicts(sampled, df, budget_usd: float):
     out, summary = llm_score_pairs(
         sampled, df, config=cfg, return_budget=True,
     )
+    # CRITICAL: llm_score_pairs SWALLOWS API errors -- on a 401 it logs and returns
+    # every pair unchanged, which reads as a unanimous "reject" and would produce a
+    # confident table of pure noise. Verified: a bad key yields total_calls=0,
+    # cost=$0.00, and a full set of False verdicts. Refuse to treat that as data.
+    calls = (summary or {}).get("total_calls", 0)
+    if sampled and not calls:
+        raise RuntimeError(
+            f"LLM returned no successful calls for {len(sampled)} pairs "
+            f"(total_calls=0, cost=$0.00) -- the API rejected the request; "
+            f"verdicts would be meaningless"
+        )
     verdicts = {(a, b): (s == 1.0) for a, b, s in out}
     return verdicts, summary
 
@@ -233,7 +265,7 @@ def main() -> int:
             continue
         sampled = band + hi + lo
         try:
-            verdicts, summary = _llm_verdicts(sampled, df, args.budget_usd)
+            verdicts, summary = _llm_verdicts(sampled, _with_row_ids(df), args.budget_usd)
         except Exception as e:
             lines.append(f"| {name} | - | - | - | - | - | _LLM failed: {type(e).__name__}: {str(e)[:60]}_ |")
             continue
@@ -256,6 +288,12 @@ def main() -> int:
     lines.append("")
     if not totals:
         lines.append("_No dataset produced a labeled band; nothing to conclude._")
+        _emit("\n".join(lines) + "\n")
+        # Do NOT let a totally failed run report green. "Never fail the job" is
+        # right for a dataset being absent; it is wrong when every dataset errored,
+        # which is exactly how the __row_id__ bug shipped a SUCCESS with no data.
+        print("::error::llm-labeler-accuracy produced no results for any dataset")
+        return 1
     for name, r in totals:
         c = r["corr"]
         if r["acc"] >= 0.90 and (c is None or c <= 0.40):
