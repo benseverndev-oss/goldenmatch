@@ -82,9 +82,13 @@ mcp_tools:
   - identity_history
   - identity_list
   - identity_merge
+  - identity_profile
   - identity_resolve
   - identity_resolve_conflict
+  - identity_show
   - identity_split
+  - identity_stats
+  - identity_worklist
   - incremental
   - learn_thresholds
   - lineage
@@ -119,10 +123,6 @@ mcp_tools:
   - documents_ingest
   - documents_suggest_schema
   - explain_routing
-  - identity_profile
-  - identity_show
-  - identity_stats
-  - identity_worklist
   - lint_routing
   - list_domains
   - list_plugins
@@ -200,6 +200,7 @@ a2a_skills:
   - identity_merge
   - identity_resolve
   - identity_resolve_conflict
+  - identity_show
   - identity_split
   - learn_thresholds
   - list_corrections
@@ -220,7 +221,6 @@ a2a_skills:
   - configure
   - documents_ingest
   - documents_suggest_schema
-  - identity_show
   - incremental
   - list_runs
   - pprl
@@ -231,6 +231,7 @@ a2a_skills:
   - schema_match
   - sensitivity
   ts_only:
+
   - agent_approve_reject
   - agent_deduplicate
   - agent_explain_cluster
@@ -238,16 +239,18 @@ a2a_skills:
   - agent_match_sources
   - agent_review_queue
   - fix_quality
+  - identity_profile
+  - identity_stats
+  - identity_worklist
   - memory_import
   - scan_quality
   - score
-
-# scorers surface (config.schemas.VALID_SCORERS <-> types.ts VALID_SCORERS).
-# FULL parity as of the name-scorer promotion: the census/alias name scorers
 # (given_name_aliased_jw / name_freq_weighted_jw) are now FIRST-CLASS in Python
+# FULL parity as of the name-scorer promotion: the census/alias name scorers
 # VALID_SCORERS (were plugin-registry-only), matching the TS VALID_SCORERS — so
-# both move ts_only -> shared. refdata registers them at `import goldenmatch`, so
 # a config referencing them validates + scores without a manual refdata import.
+# both move ts_only -> shared. refdata registers them at `import goldenmatch`, so
+# scorers surface (config.schemas.VALID_SCORERS <-> types.ts VALID_SCORERS).
 scorers:
   shared:
   - alias_match

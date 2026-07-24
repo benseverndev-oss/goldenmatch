@@ -16,12 +16,18 @@ import { SqliteIdentityStore } from "../identity/sqlite-store.js";
 import {
   claimRecord,
   findByRecord,
+  getEntity,
   listEntities,
   manualMerge,
   manualSplit,
   type IdentityView,
 } from "../../core/identity/query.js";
 import { mediateConflict } from "../../core/identity/mediation.js";
+import {
+  entityProfile,
+  identitySummaryStats,
+  stewardWorklist,
+} from "../../core/identity/profile.js";
 import { sealAuditLog, verifyAuditChain, verificationSummary } from "../../core/identity/audit.js";
 import { pyIsoformat } from "../../core/identity/pyDatetime.js";
 import { trustForSource } from "../../core/memory/types.js";
@@ -238,6 +244,67 @@ export const IDENTITY_TOOLS: readonly Tool[] = [
       type: "object",
       properties: {
         dataset: { type: "string" },
+        path: { type: "string", description: "Identity DB path" },
+      },
+    },
+  },
+  {
+    name: "identity_show",
+    description:
+      "Fetch the full detail of one identity by entity_id: its member records, " +
+      "evidence edges, and recent event log. Returns {found: false} when no " +
+      "such entity exists.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string" },
+        event_limit: { type: "integer", default: 100 },
+        path: { type: "string", description: "Identity DB path" },
+      },
+      required: ["entity_id"],
+    },
+  },
+  {
+    name: "identity_profile",
+    description:
+      "One entity's full MDM profile: record count + per-source breakdown, " +
+      "golden record, confidence, conflict count, a canonical version (count of " +
+      "structural events), and first/last activity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity_id: { type: "string" },
+        path: { type: "string", description: "Identity DB path" },
+      },
+      required: ["entity_id"],
+    },
+  },
+  {
+    name: "identity_stats",
+    description:
+      "Graph-level identity health: entities by status, total records, " +
+      "records-per-entity distribution, conflict total, source mix, and the " +
+      "largest entities. Optionally scoped to a dataset.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string" },
+        path: { type: "string", description: "Identity DB path" },
+      },
+    },
+  },
+  {
+    name: "identity_worklist",
+    description:
+      "Prioritized queue of active entities needing a steward's attention " +
+      "(open conflicts and/or confidence below weak_confidence), highest " +
+      "conflict count first then lowest confidence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: { type: "string" },
+        weak_confidence: { type: "number", default: 0.6 },
+        limit: { type: "integer", default: 50 },
         path: { type: "string", description: "Identity DB path" },
       },
     },
@@ -560,6 +627,36 @@ async function dispatch(
         missing_sealed_events: result.missingSealedEvents,
         summary: verificationSummary(result),
       };
+    }
+
+    if (name === "identity_show") {
+      const entityId = strArg(args, "entity_id");
+      if (!entityId) return { error: "Missing required parameter: entity_id" };
+      const view = await getEntity(store, entityId, intArg(args, "event_limit", 100));
+      return view ? viewToDict(view) : { found: false };
+    }
+
+    if (name === "identity_profile") {
+      const entityId = strArg(args, "entity_id");
+      if (!entityId) return { error: "Missing required parameter: entity_id" };
+      const prof = await entityProfile(store, entityId);
+      return prof ?? { found: false };
+    }
+
+    if (name === "identity_stats") {
+      const dataset = strArg(args, "dataset");
+      return await identitySummaryStats(store, dataset ?? null);
+    }
+
+    if (name === "identity_worklist") {
+      const dataset = strArg(args, "dataset");
+      const rawWeak = args["weak_confidence"];
+      const items = await stewardWorklist(store, {
+        dataset: dataset ?? null,
+        weakConfidence: typeof rawWeak === "number" ? rawWeak : 0.6,
+        limit: intArg(args, "limit", 50),
+      });
+      return { items };
     }
 
     return { error: `Unknown identity tool: ${name}` };

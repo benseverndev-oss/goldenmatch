@@ -4,6 +4,15 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.16.0] - 2026-07-23
+
+### Added
+- **Identity read tools (MDM ops read-side, 75 -> 79).** Four tools completing the identity subsystem's read side. `identity_show` is class-A wiring (`getEntity` + `viewToDict`); the other three are a net-new edge-safe core port of Python `identity/profile.py` into `src/core/identity/profile.ts`:
+  - `identity_profile` (`entityProfile`) - one entity's full profile: record count + per-source breakdown, golden record, confidence, conflict count, a canonical version (count of structural events), first/last activity.
+  - `identity_stats` (`identitySummaryStats`) - graph health: entities by status, records-per-entity distribution (avg/p50/max, loop-based max), source mix, largest entities, total conflicts.
+  - `identity_worklist` (`stewardWorklist`) - prioritized queue of active entities with open conflicts and/or confidence below `weak_confidence`, highest conflict count then lowest confidence.
+  - Response shapes mirror `mcp/identity_tools.py` exactly. All 4 flip `python_only -> shared` under `mcp_tools`. On `a2a_skills`: `identity_show` -> `shared` (Python A2A exposes it), `identity_profile`/`identity_stats`/`identity_worklist` -> `ts_only` (they feed the TS A2A card via IDENTITY_TOOLS but Python's A2A does not advertise them - verified against `emit_python_surface`). Tests in `tests/unit/mcp-identity-tools.test.ts`.
+
 ## [1.15.0] - 2026-07-23
 
 ### Added
