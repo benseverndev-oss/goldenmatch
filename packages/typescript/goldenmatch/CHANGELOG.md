@@ -4,6 +4,22 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.20.0] - 2026-07-24
+
+### Added
+- **Domain rulebooks + the `list_domains` / `create_domain` / `test_domain` MCP tools** (parity batch 3; MCP **80 → 83**). Port of Python `core/domain_registry.py` — user-authored YAML extraction rules for a data domain (medical devices, automotive parts, …), the counterpart to the compiled-in `core/domain.ts` extractors.
+  - `src/core/domain-rulebook.ts` (**edge-safe**): rulebook shape, `compileRulebook`, `extractWithRulebook` (brand / identifiers / attributes / normalized name + Python's exact confidence scoring), `matchDomain`. An invalid user regex is skipped and reported, never thrown — one bad pattern can't take down a rulebook.
+  - `src/node/domain-registry.ts` (**node**): YAML `loadRulebook` / `saveRulebook` / `discoverRulebooks` over `.goldenmatch/domains` + `~/.goldenmatch/domains`, in Python's snake_case key order so a rulebook authored by either toolkit loads in the other. `yaml` is an optional peer dep with an actionable error when absent.
+  - `test_domain` reads the current run's rows from `RUN_STORE` (the TS analogue of Python's server-held `_rows`).
+- **`interactive` CLI command** — see below.
+
+### Fixed
+- **`interactive` / `tui` were the same command counted as two gaps.** Python's CLI called it `interactive`, the TS CLI called it `tui`; both launch the TUI over optional input files, so the parity manifest listed one capability as *both* a `python_only` and a `ts_only` gap. Both CLIs now register both names (TS `cli_commands.ts_only` is now **empty**). It had to be a real second `.command()`, not `.alias()` — the surface emitter reads `program.commands.map(c => c.name())` and does not see commander aliases, so an alias would have left the manifest lying.
+
+### Known difference (documented, not a gap)
+- TS `list_domains` returns only user-authored rulebooks. Python additionally ships 7 built-in YAML packs inside its wheel (`goldenmatch/domains/`); the TS package's built-in domain knowledge is the compiled-in `core/domain.ts` extractors instead, so there is no third search path and a fresh TS install lists zero domains where Python lists 7.
+- Regex parity is the common Python/JS subset. Python-only constructs (named groups `(?P<x>…)`, atomic/possessive groups, conditionals) are reported invalid rather than silently mis-matching. `\w`-style word splitting is normalized to `\p{L}\p{N}_` so it stays Unicode-aware like Python's.
+
 ## [1.19.0] - 2026-07-24
 
 ### Added

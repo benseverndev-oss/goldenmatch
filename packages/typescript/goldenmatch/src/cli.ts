@@ -1059,38 +1059,53 @@ program
     startA2aServer({ port: parseInt(opts.port, 10), host: opts.host });
   });
 
-// ---------- tui ----------
-program
-  .command("tui")
-  .description("Launch interactive TUI (requires optional peer deps: ink + react)")
-  .argument("[files...]", "input files to load on startup")
-  .option("-c, --config <path>", "path to YAML config file")
-  .option("--memory-path <path>", "Learning Memory SQLite path for Boost-tab labels")
-  .option("-o, --output-dir <dir>", "directory the Export tab writes into")
-  .action(
-    async (
-      files: string[],
-      opts: { config?: string; memoryPath?: string; outputDir?: string },
-    ) => {
-    try {
-      const { startTui } = await import("./node/tui/app.js");
-      const tuiOpts: {
-        files?: string[];
-        config?: ReturnType<typeof loadConfigFile>;
-        memoryPath?: string;
-        outputDir?: string;
-      } = {};
-      if (files && files.length > 0) tuiOpts.files = files;
-      if (opts.config) tuiOpts.config = loadConfigFile(opts.config);
-      if (opts.memoryPath) tuiOpts.memoryPath = opts.memoryPath;
-      if (opts.outputDir) tuiOpts.outputDir = opts.outputDir;
-      await startTui(tuiOpts);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`TUI error: ${message}\n`);
-      process.exit(1);
-    }
-  });
+// ---------- tui / interactive (one command, two names) ----------
+//
+// Python's CLI calls this `interactive`; the TS CLI has always called it `tui`.
+// They are the SAME operation (launch the TUI over optional input files), so the
+// parity manifest was counting ONE capability as BOTH a python_only gap and a
+// ts_only gap. Registering both names on both sides closes both halves.
+//
+// It must be a real second `.command()`, NOT `.alias("interactive")`: the API
+// surface emitter reads `program.commands.map(c => c.name())`, which does not
+// see commander aliases -- an alias would leave the manifest lying.
+interface TuiCmdOpts {
+  config?: string;
+  memoryPath?: string;
+  outputDir?: string;
+}
+
+async function runTuiCommand(files: string[], opts: TuiCmdOpts): Promise<void> {
+  try {
+    const { startTui } = await import("./node/tui/app.js");
+    const tuiOpts: {
+      files?: string[];
+      config?: ReturnType<typeof loadConfigFile>;
+      memoryPath?: string;
+      outputDir?: string;
+    } = {};
+    if (files && files.length > 0) tuiOpts.files = files;
+    if (opts.config) tuiOpts.config = loadConfigFile(opts.config);
+    if (opts.memoryPath) tuiOpts.memoryPath = opts.memoryPath;
+    if (opts.outputDir) tuiOpts.outputDir = opts.outputDir;
+    await startTui(tuiOpts);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`TUI error: ${message}\n`);
+    process.exit(1);
+  }
+}
+
+for (const cmdName of ["tui", "interactive"] as const) {
+  program
+    .command(cmdName)
+    .description("Launch the interactive TUI (requires optional peer deps: ink + react)")
+    .argument("[files...]", "input files to load on startup")
+    .option("-c, --config <path>", "path to YAML config file")
+    .option("--memory-path <path>", "Learning Memory SQLite path for Boost-tab labels")
+    .option("-o, --output-dir <dir>", "directory the Export tab writes into")
+    .action(runTuiCommand);
+}
 
 // ---------- analyze-blocking ----------
 program

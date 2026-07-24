@@ -63,6 +63,7 @@ mcp_tools:
   - config_weaknesses
   - controller_telemetry
   - convert_splink_config
+  - create_domain
   - dedupe
   - evaluate
   - explain_cluster
@@ -95,6 +96,7 @@ mcp_tools:
   - list_blocking_strategies
   - list_clusters
   - list_corrections
+  - list_domains
   - list_runs
   - list_scorers
   - list_strategies
@@ -117,19 +119,17 @@ mcp_tools:
   - shatter_cluster
   - suggest_config
   - suggest_pprl
+  - test_domain
   - unmerge_record
   - upload_dataset
   python_only:
-  - create_domain
   - documents_ingest
   - documents_suggest_schema
   - explain_routing
   - lint_routing
-  - list_domains
   - list_plugins
   - plan_routing
   - pprl_auto_config
-  - test_domain
   ts_only:
   - build_clusters
   - find_exact_matches
@@ -153,6 +153,7 @@ cli_commands:
   - import-splink
   - incremental
   - info
+  - interactive
   - lineage
   - match
   - mcp-serve
@@ -160,12 +161,12 @@ cli_commands:
   - profile
   - score
   - serve
+  - tui
   python_only:
   - anomalies
   - config
   - ingest-docs
   - init
-  - interactive
   - label
   - pprl
   - review
@@ -178,8 +179,7 @@ cli_commands:
   - sync
   - unmerge
   - watch
-  ts_only:
-  - tui
+  ts_only: []
 a2a_skills:
   shared:
   - add_correction
