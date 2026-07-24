@@ -23,7 +23,7 @@ export const program = new Command();
 program
   .name("goldencheck-js")
   .description("Data validation that discovers rules from your data")
-  .version("0.5.0");
+  .version("0.6.0");
 
 // --- scan ---
 program
@@ -197,13 +197,23 @@ program
 // --- mcp-serve ---
 program
   .command("mcp-serve")
-  .description("Start MCP server (stdio)")
-  .option("--transport <type>", "Transport: stdio or http", "stdio")
-  .option("--port <n>", "HTTP port (for http transport)", "8100")
-  .action((_opts: Record<string, unknown>) => {
-    console.log("MCP server — use with Claude Desktop or other MCP clients");
-    console.log("MCP server implementation requires @modelcontextprotocol/sdk");
-    process.exit(1);
+  .description("Start MCP server over stdio (JSON-RPC 2.0)")
+  .action(async () => {
+    // `startMcpServer` is a hand-rolled, zero-dependency JSON-RPC-over-stdio
+    // loop -- it does NOT need @modelcontextprotocol/sdk. This command used to
+    // print that it did and exit(1), so the surface was "shared" in name only.
+    const { startMcpServer } = await import("./node/mcp/server.js");
+    startMcpServer();
+  });
+
+// --- agent-serve (A2A) ---
+program
+  .command("agent-serve")
+  .description("Start the A2A agent server")
+  .option("-p, --port <port>", "port", "8100")
+  .action(async (opts: { port: string }) => {
+    const { runA2aServer } = await import("./node/a2a/server.js");
+    runA2aServer(parseInt(opts.port, 10));
   });
 
 // --- demo ---

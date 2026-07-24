@@ -19,7 +19,7 @@ cli_commands:
   - apply
   - inspect
   - map
-  - validate
-  python_only:
   - mcp-serve
+  - validate
+  python_only: []
   ts_only: []
