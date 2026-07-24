@@ -24,6 +24,47 @@ benchmark for how good that built-in dedup actually is. This is one.
 > neighborhood-structured corpus needed to actually *separate* real homographs
 > (see `../clear-kg/RESULTS.md`).
 
+## What the graph does that RAG can't (the three axes)
+
+The differentiated value of a *resolved* knowledge graph is **not** answering
+questions over documents. On multi-hop QA (`answer_match`) a hybrid graph+passage
+engine converges to plain text-RAG — the passages carry the answer and the graph
+is a lossy intermediate (we measured that, and stopped optimizing it). The graph's
+edge is the two things a passage-window retriever *structurally cannot do*: resolve
+entities correctly, and answer **structured queries** — exact **aggregation** and
+**temporal as-of** — over those resolved entities. All three are benchmarked below
+on real, recognizable Wikidata data.
+
+**1. Entity-resolution quality — leads the field.** The headline board (below):
+goldenmatch's built-in dedup scores **F1 0.602** on the labelled record set, ahead
+of every named framework's documented default — Neo4j-KGBuilder 0.456,
+neo4j-graphrag 0.403, MS-GraphRAG / LightRAG / Cognee / mem0 at 0.066 (exact-title
+floors that recover almost no fuzzy variant). Each row runs the framework's *real*
+decision code (see the `fid` fidelity tier), not a strawman.
+
+**2. Exact aggregation — size-invariant where RAG collapses.** "How many
+subsidiaries of X?" on a real Wikidata company fixture (`wikidata_companies_v1.json`,
+15.5k entities). GoldenGraph traverses the resolved graph exactly, so its set-F1
+stays **flat (~1.0) across set sizes** while a passage-window RAG's recall collapses
+past the window (**0.99 → 0.88 → 0.64** for size buckets 2-4 / 5-10 / 11-20). With
+real (imperfect) resolution in play, the **count** query compounds both edges:
+goldenmatch merges alias variants a naive RAG counts twice, so count-accuracy is
+**1.00 / 0.88 / 0.88** vs an ER-blind RAG's **0.38 / 0.38 / 0.00** — a **+0.63 →
++0.88** gap that *widens* with set size. Reproduce:
+`scripts/run_realworld_phase15_e2e.py` + `run_realworld_phase2_e2e.py`.
+
+**3. Temporal as-of — a valid-time axis RAG doesn't have.** "Who was CEO of X **as
+of a past year**?" on **550 real Wikidata CEO successions** (P169 + P580 start
+dates). `store.as_of(D)` returns the person valid at D: **accuracy 1.000 on both
+past and current**. A temporal-blind RAG returns the most-recent CEO — right 0.945
+on current, but **0.002 on past** (2 of 550): no valid-time axis, so it always
+answers with today's value. Reproduce: `scripts/run_realworld_temporal_e2e.py`.
+
+**The honest framing:** we don't lead with QA `answer_match`, because there the
+graph ≈ text-RAG. We lead with ER + aggregation + temporal — where a resolved graph
+does something a passage retriever cannot. (The capability runs live in the
+`goldengraph-pipeline` CI lane and write `RESULTS_REALWORLD_*.md` artifacts.)
+
 ## Quick start
 
 ```bash
