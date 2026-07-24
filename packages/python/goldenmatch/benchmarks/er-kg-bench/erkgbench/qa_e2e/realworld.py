@@ -104,12 +104,13 @@ def _resolution_km(rows, *, resolve_mode: str) -> dict:
     if resolve_mode != "real":
         raise ValueError(f"resolve_mode must be 'oracle' or 'real', got {resolve_mode!r}")
     import goldenmatch as gm
-    import polars as pl
+    import pyarrow as pa
 
-    # `gm.dedupe_df` -> `auto_configure_df` requires a polars frame (the last polars
-    # island in goldenmatch); a pyarrow Table is rejected with TypeError. name+type is
-    # two fields, under the 3-field cross-encoder rerank trigger, so it stays offline.
-    df = pl.DataFrame({"name": [s for _e, s, _t in rows], "type": [t for _e, _s, t in rows]})
+    # goldenmatch is arrow-native (v3.0.0): dedupe_df takes a pa.Table and runs
+    # POLARS-FREE -- required here, the goldengraph-pipeline lane has no polars
+    # (do NOT switch to pl.DataFrame; ModuleNotFoundError there). name+type is two
+    # fields, under the 3-field cross-encoder rerank trigger, so it stays offline.
+    df = pa.table({"name": [s for _e, s, _t in rows], "type": [t for _e, _s, t in rows]})
     result = gm.dedupe_df(df)
     # DedupeResult.clusters may surface only multi-member clusters -> default each row to
     # its own singleton key first, then overwrite clustered rows with the shared cluster key.
