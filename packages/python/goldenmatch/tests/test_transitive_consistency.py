@@ -10,7 +10,6 @@ OFF is byte-identical (no-op).
 from __future__ import annotations
 
 import pytest
-
 from goldenmatch.core.transitive_consistency import (
     _transitive_postflight_enabled,
     materialize_and_split,
