@@ -1508,6 +1508,48 @@ configCmd
     }
   });
 
+// ---------- anomalies ----------
+program
+  .command("anomalies")
+  .description("Detect suspicious/fake records (test emails, bad ZIPs, placeholders)")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-s, --sensitivity <level>", "low, medium, or high", "medium")
+  .option("-o, --output <path>", "write anomalies to a CSV instead of printing")
+  .option("-n, --limit <n>", "max rows to print", (v) => parseInt(v, 10), 50)
+  .action(
+    async (
+      files: string[],
+      opts: { sensitivity: string; output?: string; limit: number },
+    ) => {
+      const { detectAnomalies, formatAnomalyReport } = await import("./core/anomaly.js");
+      const rows = loadFilesWithSource(files);
+      let anomalies;
+      try {
+        anomalies = detectAnomalies(rows, opts.sensitivity);
+      } catch (err) {
+        // Python raises ValueError on a bad sensitivity rather than silently
+        // falling through to the most-sensitive behavior. Same contract here.
+        process.stderr.write(`Error: ${(err as Error).message}\n`);
+        process.exit(2);
+      }
+
+      if (opts.output) {
+        writeOutputRows(opts.output, anomalies as unknown as Row[], "csv");
+        process.stdout.write(
+          `Wrote ${anomalies.length} anomal${anomalies.length === 1 ? "y" : "ies"} to ${opts.output}\n`,
+        );
+        return;
+      }
+
+      process.stdout.write(formatAnomalyReport(anomalies.slice(0, opts.limit)) + "\n");
+      if (anomalies.length > opts.limit) {
+        process.stdout.write(
+          `(showing ${opts.limit} of ${anomalies.length}; use --limit to see more)\n`,
+        );
+      }
+    },
+  );
+
 // ---------- sensitivity ----------
 program
   .command("sensitivity")
