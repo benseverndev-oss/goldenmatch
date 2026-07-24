@@ -27,7 +27,7 @@ package does not ship that surface.
 {/* api-surface-matrix:generated:start -- DO NOT EDIT. Regenerate: python scripts/gen_api_surface.py --write */}
 | Package | Python (PyPI) | TypeScript (npm) | CLI | MCP tools | REST | A2A | Native / SQL |
 |---------|:-------------:|:----------------:|-----|:---------:|:----:|:---:|--------------|
-| [GoldenMatch](#goldenmatch) | `3.9.0` | `1.23.0` | `goldenmatch` | 87 | ✓ | ✓ | wheel · Postgres · DuckDB |
+| [GoldenMatch](#goldenmatch) | `3.10.0` | `1.23.0` | `goldenmatch` | 90 | ✓ | ✓ | wheel · Postgres · DuckDB |
 | [GoldenCheck](#goldencheck) | `3.2.0` | `0.6.0` | `goldencheck` | 19 | ✓ | ✓ | wheel |
 | [GoldenFlow](#goldenflow) | `2.1.0` | `0.17.0` | `goldenflow` | 10 | ✓ | ✓ | wheel |
 | [GoldenPipe](#goldenpipe) | `1.4.0` | `0.3.0` | `goldenpipe` | 4 | ✓ | ✓ | core (WASM) |
@@ -53,19 +53,27 @@ neglect:
   (`get_stats`, `get_cluster`, `list_clusters`, `get_golden_record`, `export_results`)
   over the last run and the rollback subsystem (`list_runs`, `rollback`) over the
   `.goldenmatch_runs.json` log, so those are shared too. (These stateful tools live in
-  the node-only MCP server, not the edge-safe core.) The remaining TS-only tools are
-  the three host helpers `read_file`, `write_csv`, and `server_info`. (The scoring /
-  blocking / clustering primitives `score_strings`, `score_pair`, `find_exact_matches`,
-  `find_fuzzy_matches`, and `build_clusters` were TS-only until 2026-07-24; Python now
-  exposes all five, so they are shared.)
+  the node-only MCP server, not the edge-safe core.) **As of 2026-07-24 nothing is
+  TS-only** — the scoring/blocking/clustering primitives (`score_strings`, `score_pair`,
+  `find_exact_matches`, `find_fuzzy_matches`, `build_clusters`) and the host helpers
+  (`read_file`, `write_csv`, `server_info`) were the last holdouts, and Python now
+  exposes all eight.
 
-So GoldenMatch's **83 TS tools vs 87 Python** breaks down as 80 shared operations,
-3 TS-only host helpers, and 7 Python-only tools (the VLM document-ingest pair, the
-distributed routing trio, `list_plugins`, and `pprl_auto_config`) — overlapping
-surfaces sized to their jobs, not a subset. On the shared core the **public function
-names match**, and that parity
+So GoldenMatch's **83 TS tools vs 90 Python** breaks down as 83 shared operations,
+**zero TS-only**, and 7 Python-only tools (the VLM document-ingest pair, the
+distributed routing trio, `list_plugins`, and `pprl_auto_config`). The TS MCP surface
+is now a strict subset of the Python one — every TS tool has a Python counterpart of
+the same name, and what remains Python-only is the set with no JS-ecosystem
+equivalent. On the shared core the **public function names match**, and that parity
 is enforced in CI by the `api_parity` gate, which fails on any *undeclared* Python↔TS
 drift.
+
+<Note>
+  `read_file` and `write_csv` are host conveniences, not ER capabilities. Both route
+  through the same `safe_path` guard as every other file-taking tool, which enforces
+  containment **only when `GOLDENMATCH_ALLOWED_ROOT` is set**. Set it (alongside
+  `GOLDENMATCH_MCP_TOKEN`) when exposing an MCP server to untrusted callers.
+</Note>
 
 **Versions track independently.** Each surface carries its own semver — npm is not
 pinned to the PyPI number — so a lower TypeScript version reflects a smaller,
@@ -120,7 +128,7 @@ graph, privacy-preserving linkage. The flagship — a native wheel, SQL extensio
 
 **Servers** — REST (`goldenmatch serve`: `/match`, `/autoconfig`, `/clusters`,
 `/reviews`, `/controller/telemetry`, …) · A2A (`goldenmatch agent-serve`) · local
-web UI (`goldenmatch serve-ui`) · **87 MCP tools**.
+web UI (`goldenmatch serve-ui`) · **90 MCP tools**.
 
 **Native / SQL** — `goldenmatch-native` wheel, a Postgres extension (pgrx:
 `goldenmatch_dedupe`, `goldenmatch_autoconfig`, `goldenmatch_connected_components`, …),

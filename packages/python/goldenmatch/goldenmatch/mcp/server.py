@@ -442,6 +442,45 @@ _BASE_TOOLS = [
             "required": ["path"],
         },
     ),
+    # Host helpers (reverse-parity with the TS MCP surface). NOT ER capabilities --
+    # they exist so an agent driving this server can stage an input and collect an
+    # output without a second toolchain. Both filesystem tools route through
+    # `safe_path`, the SAME guard every other file-taking tool here uses
+    # (upload_dataset / export_results / the find_* primitives), so they are no more
+    # permissive than the existing surface -- see the containment note on the
+    # handlers below for what that guard does and does not promise.
+    Tool(
+        name="server_info",
+        description="Return metadata about this GoldenMatch MCP server.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="read_file",
+        description="Read a CSV/JSON file and return the first N records.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Input file path"},
+                "limit": {"type": "number", "description": "Max rows to return (default 100)"},
+            },
+            "required": ["path"],
+        },
+    ),
+    Tool(
+        name="write_csv",
+        description="Write a list of record objects to a CSV file.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Output file path"},
+                "rows": {
+                    "type": "array",
+                    "items": {"type": "object", "additionalProperties": True},
+                },
+            },
+            "required": ["path", "rows"],
+        },
+    ),
     Tool(
         name="list_scorers",
         description="List all available similarity scorers.",
@@ -1213,6 +1252,12 @@ def _handle_tool(name: str, args: dict) -> dict:
             args.get("blocking"),
             args.get("threshold"),
         )
+    elif name == "server_info":
+        return _tool_server_info()
+    elif name == "read_file":
+        return _tool_read_file(args["path"], args.get("limit"))
+    elif name == "write_csv":
+        return _tool_write_csv(args["path"], args.get("rows"))
     elif name == "list_scorers":
         return _tool_list_scorers()
     elif name == "list_transforms":
@@ -1758,6 +1803,91 @@ def _tool_list_domains() -> dict:
             "attribute_patterns": list(rb.attribute_patterns.keys()),
         })
     return {"domains": result, "count": len(result)}
+
+
+# ---------------------------------------------------------------------------
+# Host helpers (reverse-parity with the TS MCP surface)
+#
+# These are NOT entity-resolution capabilities -- they let an agent driving this
+# server stage an input and collect an output without a second toolchain.
+#
+# CONTAINMENT, STATED EXACTLY (verified, not assumed): both tools route through
+# `core._paths.safe_path`, which rejects NUL bytes and resolves the path, but
+# enforces CONTAINMENT ONLY WHEN `GOLDENMATCH_ALLOWED_ROOT` IS SET. With that env
+# var configured, traversal (`../`) and absolute escapes are blocked for read AND
+# write. With it UNSET -- the default -- these tools can reach any path the server
+# process can, exactly like the pre-existing `upload_dataset` / `export_results`
+# and the find_*/build_clusters primitives, all of which use the same guard. So
+# this adds no new reach beyond the surface that already existed; an operator
+# exposing this server to untrusted callers should set `GOLDENMATCH_ALLOWED_ROOT`
+# (and `GOLDENMATCH_MCP_TOKEN`, which the HTTP transport already fails closed on).
+#
+# `write_csv` additionally refuses anything that is not a list of objects, so a
+# scalar or bare string cannot be coerced into a surprise file write.
+# ---------------------------------------------------------------------------
+
+_READ_FILE_DEFAULT_LIMIT = 100
+
+
+def _tool_server_info() -> dict:
+    """Server metadata (mirrors TS `server_info`).
+
+    `tool_count` is DERIVED from the live TOOLS list, never a literal -- the TS
+    side does the same, so the number cannot drift from the real surface.
+    """
+    from goldenmatch import __version__
+
+    return {
+        "name": "goldenmatch",
+        "version": __version__,
+        "tool_count": len(TOOLS),
+        "description": "GoldenMatch MCP server (stdio + streamable HTTP)",
+    }
+
+
+def _tool_read_file(path: str, limit: object) -> dict:
+    """Read a file and return the first N records (mirrors TS -> `{total, returned, rows}`)."""
+    p = _safe_path_or_error(path)
+    if isinstance(p, dict):
+        return p
+    try:
+        n = _READ_FILE_DEFAULT_LIMIT if limit is None else max(0, int(limit))
+    except (TypeError, ValueError):
+        return {"error": f"`limit` must be a number, got {limit!r}"}
+
+    try:
+        from goldenmatch.core.ingest import load_file
+
+        rows = load_file(str(p)).collect().to_dicts()
+    except (FileNotFoundError, OSError) as exc:
+        return {"error": f"Could not read {path}: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - malformed file is a tool error, not a crash
+        return {"error": f"Could not parse {path}: {exc}"}
+
+    return {"total": len(rows), "returned": min(len(rows), n), "rows": rows[:n]}
+
+
+def _tool_write_csv(path: str, rows: object) -> dict:
+    """Write record objects to a CSV (mirrors TS -> `{written, path}`)."""
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return {"error": "`rows` must be an array of objects."}
+
+    p = _safe_path_or_error(path)
+    if isinstance(p, dict):
+        return p
+
+    try:
+        import polars as pl
+
+        # An empty list has no schema to infer; write a header-less empty file
+        # rather than raising, so a zero-result export still produces the file.
+        (pl.DataFrame(rows) if rows else pl.DataFrame()).write_csv(str(p))
+    except OSError as exc:
+        return {"error": f"Could not write {path}: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - surface as a tool error
+        return {"error": f"Could not serialize rows to CSV: {exc}"}
+
+    return {"written": len(rows), "path": str(p)}
 
 
 # ---------------------------------------------------------------------------
