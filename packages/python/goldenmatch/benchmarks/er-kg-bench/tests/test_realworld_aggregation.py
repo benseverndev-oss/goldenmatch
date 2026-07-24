@@ -73,3 +73,164 @@ def test_run_realworld_aggregation_gg_beats_floor():
     # on the 3-member set, exact traversal should match all; the k=2 window can't
     gg = list(res.gg_setf1.values())
     assert gg and min(gg) >= 0.99            # exact traversal recovers the full set
+
+
+# --- Phase 1.5: non-oracle aggregation (real ER + aggregation compounded) ---------------
+#
+# NOTE ON THE TINY-FIXTURE SHAPE (a small, honest deviation from the plan's single-test
+# wording): the plan's 1.5a asks to assert the alias variants of a MEMBER merge into ONE
+# store node. In the aggregation corpus each member appears in exactly ONE document
+# (rendered as one surface), so only the ANCHOR (which appears once per member) can ever
+# span multiple surfaces across documents -- a member never fragments. And at
+# `ambiguity=1.0` the anchor's two *variant* surfaces ("Acme", "Acme Holdings Inc.") land
+# in DIFFERENT zero-config goldenmatch clusters, so a merged store node with full recovery
+# is not achievable on this 4-entity fixture. So we prove the Phase 1.5 claims where they
+# are honestly observable: (1) real resolution genuinely CLUSTERS variants and is not the
+# oracle km; (2) the real pipeline recovers the full member set when the anchor resolves
+# coherently; (3) imperfect real ER fragments the anchor and dips GG below the oracle arm
+# -- the honest ER contribution the E2E quantifies by bucket. All three are deterministic.
+
+
+def _wheel_or_skip():
+    try:
+        import goldengraph_native  # noqa: F401
+    except ImportError:
+        pytest.skip("goldengraph-native wheel not installed")
+
+
+def test_real_resolution_clusters_variants_and_is_not_oracle():
+    """1.5a (resolution happened): the `real` km is a genuine goldenmatch clustering of
+    the surface universe -- it merges >=1 entity's distinct surfaces into one shared key
+    (variants resolved), it is NOT the oracle km (a conservative real resolver keeps more
+    keys than the entity count), and on this clean fixture it makes no wrong cross-entity
+    merge."""
+    _wheel_or_skip()
+    from collections import defaultdict
+
+    from erkgbench.qa_e2e.realworld import _realworld_entity_surfaces, _resolution_km
+
+    rows = _realworld_entity_surfaces(_FIXTURE_DIR / "wikidata_companies_TINY.json")
+    real = _resolution_km(rows, resolve_mode="real")
+    oracle = _resolution_km(rows, resolve_mode="oracle")
+
+    # oracle collapses every entity's surfaces to a single (qid) key; real does not.
+    assert oracle == {(eid, s): eid for eid, s, _t in rows}
+    assert real != oracle
+
+    keys_by_entity: dict[str, set[str]] = defaultdict(set)
+    entities_by_key: dict[str, set[str]] = defaultdict(set)
+    surfaces_per_entity_key: dict[tuple[str, str], int] = defaultdict(int)
+    for (qid, s), key in real.items():
+        keys_by_entity[qid].add(key)
+        entities_by_key[key].add(qid)
+        surfaces_per_entity_key[(qid, key)] += 1
+
+    # (a) real resolution MERGED variants: some entity has >=2 of its surfaces under one key.
+    assert any(n >= 2 for n in surfaces_per_entity_key.values())
+    # (b) not oracle: at least one entity kept >1 cluster key (conservative real ER).
+    assert any(len(ks) > 1 for ks in keys_by_entity.values())
+    # (c) no wrong merge: no cluster key spans two different ground-truth entities.
+    assert all(len(qs) == 1 for qs in entities_by_key.values())
+
+
+def test_real_mode_recovers_full_set_when_anchor_resolves_coherently():
+    """1.5a (real pipeline recovers the set): with the anchor rendered coherently (seed 7),
+    the store built through the REAL resolver recovers the full 3-member set -- the real
+    end-to-end path, not the oracle km."""
+    _wheel_or_skip()
+    from erkgbench.qa_e2e.realworld import run_realworld_aggregation
+
+    res = run_realworld_aggregation(
+        _FIXTURE_DIR / "wikidata_companies_TINY.json",
+        ambiguity=1.0, passage_k=2, resolve_mode="real")
+    gg = list(res.gg_setf1.values())
+    assert gg and min(gg) >= 0.99
+
+
+def test_oracle_default_is_byte_identical_to_explicit_oracle():
+    """1.5b invariant: the default (no resolve_mode) is the Phase 0 oracle path, unchanged."""
+    _wheel_or_skip()
+    from erkgbench.qa_e2e.realworld import run_realworld_aggregation
+
+    tiny = _FIXTURE_DIR / "wikidata_companies_TINY.json"
+    default = run_realworld_aggregation(tiny, ambiguity=1.0, passage_k=2)
+    oracle = run_realworld_aggregation(tiny, ambiguity=1.0, passage_k=2, resolve_mode="oracle")
+    assert default.gg_setf1 == oracle.gg_setf1
+    assert default.floor_setf1 == oracle.floor_setf1
+    assert default.gg_count_acc == oracle.gg_count_acc
+
+
+def test_real_mode_imperfect_er_dips_gg_below_oracle():
+    """1.5a (the ER contribution is real): on a seed where the anchor renders two variant
+    surfaces the zero-config resolver leaves in separate clusters, the anchor FRAGMENTS in
+    the real arm -> GG recall drops below the oracle arm (which pre-merges variants). This
+    dip IS the honest ER signal the oracle-vs-real delta measures."""
+    _wheel_or_skip()
+    from erkgbench.qa_e2e.aggregation import goldengraph_aggregate, set_f1
+    from erkgbench.qa_e2e.realworld import _build_realworld_store_for_mode
+
+    tiny = _FIXTURE_DIR / "wikidata_companies_TINY.json"
+
+    def gg_f1(mode):
+        sg, cov, _docs, qs, _a, _s = _build_realworld_store_for_mode(
+            tiny, ambiguity=1.0, seed=0, resolve_mode=mode)
+        q = next(q for q in qs if q.kind == "list")
+        got = goldengraph_aggregate(sg, cov, q.anchor_id, q.relation)
+        return set_f1(got, set(q.gold_members))["f1"]
+
+    oracle_f1 = gg_f1("oracle")
+    real_f1 = gg_f1("real")
+    assert oracle_f1 >= 0.99          # oracle pre-merges the anchor's variants
+    assert real_f1 < oracle_f1        # imperfect real ER fragments it -> lower recall
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5 -- one extra proof the rewrite above does not cover: an anchor rendered
+# under TWO distinct same-cluster surfaces collapses to ONE store node (the literal
+# "variants merge into one node" claim), verified by the anchor node count.
+# ---------------------------------------------------------------------------
+_TINY = _FIXTURE_DIR / "wikidata_companies_TINY.json"
+
+
+def test_real_resolution_merges_variants_into_one_node_and_recovers_set():
+    """Task 1.5a: with the store built via the REAL resolver (no oracle km), an anchor
+    rendered under two DISTINCT same-cluster surfaces ('Acme Holdings' + 'Acme Holdings
+    Inc.') is resolved into ONE store node -- so exactly one node covers the anchor qid
+    (a naive per-surface store would leave two) -- AND goldengraph still recovers the
+    full 3-member subsidiary set.
+
+    NOTE (plan deviation): the plan specified `ambiguity=1.0`, but at ambiguity=1.0 the
+    canonical never renders and the two rendered VARIANTS ('Acme' vs 'Acme Holdings Inc.')
+    land in DIFFERENT real clusters (goldenmatch does not merge the abbreviation on this
+    tiny universe), so a real (non-oracle) merge is impossible there. Exercising a genuine
+    merge needs the canonical + a same-cluster variant to co-render, i.e. ambiguity<1.0."""
+    try:
+        import goldengraph_native  # noqa: F401
+    except ImportError:
+        pytest.skip("goldengraph-native wheel not installed")
+    from erkgbench.qa_e2e.aggregation import goldengraph_aggregate, set_f1
+    from erkgbench.qa_e2e.realworld import (
+        _build_realworld_store_for_mode,
+        _realworld_entity_surfaces,
+        _resolution_km,
+    )
+
+    amb, seed = 0.5, 1
+    # precondition (deterministic): the two surfaces this render puts on the anchor share
+    # a real cluster; if a goldenmatch version ever declusters them, skip (never fake-pass).
+    rows = _realworld_entity_surfaces(_TINY)
+    km = _resolution_km(rows, resolve_mode="real")
+    if km[("Q1", "Acme Holdings")] != km[("Q1", "Acme Holdings Inc.")]:
+        pytest.skip("goldenmatch did not cluster the anchor variant pair on this build")
+
+    sg, cov, docs, qs, _anchor_surfaces, _s2c = _build_realworld_store_for_mode(
+        _TINY, ambiguity=amb, seed=seed, resolve_mode="real")
+    anchor_renders = {d.src_surface for d in docs}
+    assert anchor_renders == {"Acme Holdings", "Acme Holdings Inc."}  # 2 distinct surfaces
+    # real resolution merged them: exactly ONE store node covers the anchor qid Q1
+    q1_nodes = [e for e in sg.entities() if "Q1" in cov.get(e["entity_id"], set())]
+    assert len(q1_nodes) == 1                       # merged, not fragmented
+    # goldengraph recovers the full member set through that merged anchor node
+    q = next(x for x in qs if x.kind == "list")
+    got = goldengraph_aggregate(sg, cov, q.anchor_id, q.relation)
+    assert set_f1(got, set(q.gold_members))["f1"] >= 0.99

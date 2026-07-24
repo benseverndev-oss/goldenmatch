@@ -81,6 +81,67 @@ def _realworld_entity_surfaces(fixture_path):
     return out
 
 
+def _resolution_km(rows, *, resolve_mode: str) -> dict:
+    """(qid, surface) -> record_key. The ONE thing Phase 1.5 swaps.
+
+    `oracle` (Phase 0, DEFAULT): key = the ground-truth qid, so every surface of an
+    entity shares a key and the store pre-merges all variants for free (entity
+    resolution held ORACLE). `real`: key = a real goldenmatch `dedupe_df` CLUSTER over
+    the `(surface, type)` universe -- the SAME zero-config resolver `resolve()` runs
+    per document, applied here as ONE batch clustering of every surface. Surfaces
+    goldenmatch judges the same entity share a cluster key -> the store merges them;
+    variants goldenmatch fails to cluster stay fragmented, and distinct entities it
+    wrongly collides get merged. So the `real` km folds REAL ER quality into the store,
+    exactly the way the ablation `dials.goldengraph_keys` dial models goldengraph-level
+    resolution -- the faithful, feasible realization of "swap the oracle record_keys for
+    real resolver clustering" (the per-document `ingest_corpus` + O(N^2) cross-doc linker
+    is infeasible at the fixture's ~13.5k edges and flaky on tiny data; a batch dedupe of
+    the surface universe is the same goldenmatch resolver, deterministic and O(1) store
+    passes). name+type is two fields, under the 3-field cross-encoder rerank trigger, so
+    it stays fully offline."""
+    if resolve_mode == "oracle":
+        return {(eid, s): eid for eid, s, _t in rows}
+    if resolve_mode != "real":
+        raise ValueError(f"resolve_mode must be 'oracle' or 'real', got {resolve_mode!r}")
+    import goldenmatch as gm
+    import polars as pl
+
+    # `gm.dedupe_df` -> `auto_configure_df` requires a polars frame (the last polars
+    # island in goldenmatch); a pyarrow Table is rejected with TypeError. name+type is
+    # two fields, under the 3-field cross-encoder rerank trigger, so it stays offline.
+    df = pl.DataFrame({"name": [s for _e, s, _t in rows], "type": [t for _e, _s, t in rows]})
+    result = gm.dedupe_df(df)
+    # DedupeResult.clusters may surface only multi-member clusters -> default each row to
+    # its own singleton key first, then overwrite clustered rows with the shared cluster key.
+    cluster_of: dict[int, str] = {i: f"s{i}" for i in range(len(rows))}
+    for cid, info in result.clusters.items():
+        for ri in info["members"]:
+            cluster_of[int(ri)] = f"c{cid}"
+    return {(rows[i][0], rows[i][1]): cluster_of[i] for i in range(len(rows))}
+
+
+def _build_realworld_store_for_mode(fixture_path, *, ambiguity: float, seed: int = 7,
+                                    resolve_mode: str = "oracle"):
+    """Shared store build for both arms. Returns
+    (slice_graph, coverage, docs, qs, anchor_surfaces, s2c_floor). The ONLY difference
+    between arms is the `km` (see `_resolution_km`); the docs, coverage, floor keyspace,
+    and everything downstream are identical, so the oracle-vs-real GG set-F1 delta
+    isolates the entity-resolution contribution."""
+    docs, qs = generate_realworld_aggregation(fixture_path, ambiguity=ambiguity, seed=seed)
+    rows = _realworld_entity_surfaces(fixture_path)
+    km = _resolution_km(rows, resolve_mode=resolve_mode)
+    typ_of = {eid: t for eid, _s, t in rows}
+    s2c_cov: dict = {}                                     # surface -> set(qid) (coverage)
+    s2c_floor: dict = {}                                   # surface -> one qid (floor/anchor)
+    anchor_surfaces: dict = {}
+    for eid, surf, _t in rows:
+        s2c_cov.setdefault(surf, set()).add(eid)
+        s2c_floor.setdefault(surf, eid)
+        anchor_surfaces.setdefault(eid, set()).add(surf)
+    slice_graph, coverage = _build_realworld_store(docs, km, s2c_cov, typ_of)
+    return slice_graph, coverage, docs, qs, anchor_surfaces, s2c_floor
+
+
 def _build_realworld_store(docs, km, s2c_cov, typ_of):
     """Build the native store from the real edge docs, mirroring
     `ablation._build_store_obj` but with FIXTURE-derived coverage (that function's
@@ -130,10 +191,18 @@ def _build_realworld_store(docs, km, s2c_cov, typ_of):
     return slice_graph, coverage
 
 
-def run_realworld_aggregation(fixture_path, *, ambiguity: float, passage_k: int, llm=None):
+def run_realworld_aggregation(fixture_path, *, ambiguity: float, passage_k: int, llm=None,
+                              resolve_mode: str = "oracle"):
     """Mirror of aggregation.run_aggregation_deterministic but sourced from the real
     fixture. All scoring/floor/bucket/gate logic is reused unchanged. Needs the native
-    wheel (via goldengraph_native.PyStore)."""
+    wheel (via goldengraph_native.PyStore).
+
+    `resolve_mode="oracle"` (DEFAULT, Phase 0) holds entity resolution ORACLE -- variants
+    of an entity are pre-merged for free -- so the GG set-F1 isolates the aggregation /
+    traversal capability. `resolve_mode="real"` (Phase 1.5) removes the oracle: the store
+    must merge the alias variants ITSELF via goldenmatch's real resolver (see
+    `_resolution_km`), so GG set-F1 folds in BOTH resolution correctness (variants merged)
+    AND traversal completeness. The oracle-vs-real delta quantifies the ER contribution."""
     from .aggregation import (
         AggregationResult,
         _mean_by_bucket,
@@ -145,18 +214,11 @@ def run_realworld_aggregation(fixture_path, *, ambiguity: float, passage_k: int,
         size_bucket,
     )
 
-    docs, qs = generate_realworld_aggregation(fixture_path, ambiguity=ambiguity, seed=7)
-    rows = _realworld_entity_surfaces(fixture_path)
-    km = {(eid, s): eid for eid, s, _t in rows}            # oracle keys: surface -> its qid
-    typ_of = {eid: t for eid, _s, t in rows}
-    s2c_cov: dict = {}                                     # surface -> set(qid) (coverage)
-    s2c_floor: dict = {}                                   # surface -> one qid (floor/anchor)
-    anchor_surfaces: dict = {}
-    for eid, surf, _t in rows:
-        s2c_cov.setdefault(surf, set()).add(eid)
-        s2c_floor.setdefault(surf, eid)
-        anchor_surfaces.setdefault(eid, set()).add(surf)
-    slice_graph, coverage = _build_realworld_store(docs, km, s2c_cov, typ_of)
+    slice_graph, coverage, docs, qs, anchor_surfaces, s2c_floor = (
+        _build_realworld_store_for_mode(
+            fixture_path, ambiguity=ambiguity, seed=7, resolve_mode=resolve_mode
+        )
+    )
     s2c = s2c_floor
     gg_f1, floor_f1, floor_rec, gg_count, llm_f1 = [], [], [], [], []
     for q in (q for q in qs if q.kind == "list"):

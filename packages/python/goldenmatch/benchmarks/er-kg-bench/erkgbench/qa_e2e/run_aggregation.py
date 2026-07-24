@@ -30,6 +30,10 @@ def _parser() -> argparse.ArgumentParser:
                    help="synthetic fan-out corpus (default) or the committed Wikidata fixture")
     p.add_argument("--fixture", default=None,
                    help="realworld source only: path to the committed Wikidata fixture JSON")
+    p.add_argument("--resolve-mode", choices=("oracle", "real"), default="oracle",
+                   help="realworld source only: oracle ER (Phase 0 default, variants "
+                        "pre-merged) or real goldenmatch resolution (Phase 1.5, the store "
+                        "must cluster the alias variants itself)")
     return p
 
 
@@ -53,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         fixture = args.fixture or (_FIXTURE_DIR / "wikidata_companies_v1.json")
         res = run_realworld_aggregation(
             fixture, ambiguity=args.ambiguity, passage_k=args.passage_k, llm=llm,
+            resolve_mode=args.resolve_mode,
         )
     else:
         res = run_aggregation_deterministic(

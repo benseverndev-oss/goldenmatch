@@ -19,6 +19,14 @@ def test_parser_accepts_realworld_source():
     assert args.source == "realworld" and args.fixture == "f.json"
 
 
+def test_parser_resolve_mode_default_oracle():
+    # Phase 1.5: --resolve-mode defaults to oracle (Phase 0 behavior, byte-identical).
+    assert run_aggregation._parser().parse_args([]).resolve_mode == "oracle"
+    args = run_aggregation._parser().parse_args(
+        ["--source", "realworld", "--fixture", "f.json", "--resolve-mode", "real"])
+    assert args.resolve_mode == "real"
+
+
 def test_cli_realworld_writes_bucketed_table(tmp_path):
     try:
         import goldengraph_native  # noqa: F401
@@ -31,6 +39,25 @@ def test_cli_realworld_writes_bucketed_table(tmp_path):
         "--source", "realworld",
         "--fixture", str(_FIXTURE_DIR / "wikidata_companies_TINY.json"),
         "--ambiguity", "1.0", "--passage-k", "2", "--out-md", str(out),
+    ])
+    assert rc in (0, 1)  # gate verdict, not a crash
+    md = out.read_text(encoding="utf-8")
+    assert "size bucket" in md and "goldengraph set-F1" in md
+
+
+def test_cli_realworld_resolve_mode_real_writes_table(tmp_path):
+    try:
+        import goldengraph_native  # noqa: F401
+    except ImportError:
+        pytest.skip("goldengraph-native wheel not installed")
+    from erkgbench.qa_e2e.realworld import _FIXTURE_DIR
+
+    out = tmp_path / "AGG_real.md"
+    rc = run_aggregation.main([
+        "--source", "realworld",
+        "--fixture", str(_FIXTURE_DIR / "wikidata_companies_TINY.json"),
+        "--ambiguity", "0.5", "--passage-k", "2", "--resolve-mode", "real",
+        "--out-md", str(out),
     ])
     assert rc in (0, 1)  # gate verdict, not a crash
     md = out.read_text(encoding="utf-8")
