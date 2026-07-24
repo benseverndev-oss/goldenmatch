@@ -112,6 +112,7 @@ mcp_tools:
   - pprl_link
   - profile
   - profile_data
+  - read_file
   - retrieve_similar
   - review_config
   - rollback
@@ -121,12 +122,14 @@ mcp_tools:
   - score_pair
   - score_strings
   - sensitivity
+  - server_info
   - shatter_cluster
   - suggest_config
   - suggest_pprl
   - test_domain
   - unmerge_record
   - upload_dataset
+  - write_csv
   python_only:
   - documents_ingest
   - documents_suggest_schema
@@ -135,10 +138,7 @@ mcp_tools:
   - list_plugins
   - plan_routing
   - pprl_auto_config
-  ts_only:
-  - read_file
-  - server_info
-  - write_csv
+  ts_only: []
 cli_commands:
   shared:
   - agent-serve
