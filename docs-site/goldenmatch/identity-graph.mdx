@@ -239,7 +239,9 @@ Both paths produce identical schemas. The migration script also creates three an
   ```
 
   With `emit_singletons: false` the resolver also skips preparing rows no multi-record cluster references, so both wall time and resident memory drop with it.
-- **SQLite ceiling.** SQLite is the right default through the low millions of rows on a single box. Past that, prefer Postgres: it gets a bulk `COPY` path for brand-new identities that SQLite has no equivalent for, and it is the only backend the distributed (Ray) resolver supports. The tradeoff is network latency per run, not a throughput cliff.
+- **SQLite ceiling.** SQLite is the right default through the low millions of rows on a single box. Past that, prefer Postgres: brand-new identities take a bulk `COPY` fast path there, and it is the only backend the distributed (Ray) resolver supports. The tradeoff is network latency per run, not a throughput cliff.
+
+  The SQLite gap is in *our* write path, not in SQLite: the stdlib `sqlite3` driver has no `COPY` equivalent, so resolve writes go row-at-a-time (batched into transactions) rather than as columnar bulk ingest. Arrow-native bulk ingest into SQLite *is* available — the [Apache Arrow ADBC SQLite driver](https://arrow.apache.org/adbc/current/driver/sqlite.html) supports `adbc_ingest` from Python and can be driven from Rust via `adbc_core` + `adbc_driver_manager` — and adopting it would let the SQLite backend share the same staging-table-then-upsert shape the Postgres bulk path uses. That is a planned follow-up, not something GoldenMatch does today.
 - Resolution is **gated and additive** — if the store fails to open, the pipeline logs a warning and continues. Identity never blocks a dedupe.
 - For multi-process writers, the SQLite store uses WAL + a 5s `busy_timeout`. Postgres relies on row-level locks. Single-tenant web UI / CLI invocations are the assumed model; for high-write multi-tenant graphs use Postgres.
 
