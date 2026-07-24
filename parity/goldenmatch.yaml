@@ -159,10 +159,12 @@ cli_commands:
   - match
   - mcp-serve
   - memory
+  - pprl
   - profile
   - rollback
   - runs
   - score
+  - sensitivity
   - serve
   - tui
   - unmerge
@@ -171,10 +173,8 @@ cli_commands:
   - ingest-docs
   - init
   - label
-  - pprl
   - review
   - schedule
-  - sensitivity
   - serve-ui
   - setup
   - sync
