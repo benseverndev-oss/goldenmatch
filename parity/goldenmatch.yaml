@@ -142,14 +142,18 @@ mcp_tools:
 cli_commands:
   shared:
   - agent-serve
+  - analyze-blocking
+  - autoconfig
   - compare-clusters
   - dedupe
   - demo
   - evaluate
+  - explain
   - identity
   - import-splink
   - incremental
   - info
+  - lineage
   - match
   - mcp-serve
   - memory
@@ -157,16 +161,12 @@ cli_commands:
   - score
   - serve
   python_only:
-  - analyze-blocking
   - anomalies
-  - autoconfig
   - config
-  - explain
   - ingest-docs
   - init
   - interactive
   - label
-  - lineage
   - pprl
   - review
   - rollback
