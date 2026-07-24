@@ -74,6 +74,11 @@ on:
         type: boolean
         required: false
         default: true
+      run_threshold_calibration:
+        description: "Run the FS threshold-calibration OFF-vs-ON lane (Otsu adaptive cutoff; gates GOLDENMATCH_FS_CALIBRATE_THRESHOLD)"
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -468,6 +473,86 @@ jobs:
             prob_panel_hon_off/
             prob_panel_hon_on/
             compare_hon/
+          retention-days: 90
+
+  # ── FS threshold-calibration OFF vs ON lane ───────────────────────────────
+  # Runs the panel twice (GOLDENMATCH_FS_CALIBRATE_THRESHOLD 0 vs 1). ON picks the
+  # FS link cutoff per-dataset from the training-pair score distribution (Otsu's
+  # between-class-variance split) instead of the fixed 0.50 default. A threshold
+  # sweep showed 0.50 is badly placed on over/under-merging datasets; Otsu adapts
+  # up (historical_50k over-merge -> F1 +0.04, P 0.72->0.93), down (dblp_acm
+  # under-merge -> F1 +0.49, R 0.27->0.93), or not at all (febrl3/synthetic,
+  # already calibrated). Gates the GOLDENMATCH_FS_CALIBRATE_THRESHOLD default flip.
+  panel-threshold-calibration:
+    if: ${{ inputs.run_threshold_calibration }}
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+          else
+            echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped"
+          fi
+
+      - name: Run panel — calibration OFF (GOLDENMATCH_FS_CALIBRATE_THRESHOLD=0)
+        env:
+          GOLDENMATCH_FS_CALIBRATE_THRESHOLD: "0"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_cal_off
+
+      - name: Run panel — calibration ON (GOLDENMATCH_FS_CALIBRATE_THRESHOLD=1)
+        env:
+          GOLDENMATCH_FS_CALIBRATE_THRESHOLD: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_cal_on
+
+      - name: Compare OFF vs ON (writes verdict to job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_cal_off/panel.json \
+            --v2 prob_panel_cal_on/panel.json \
+            --title "FS threshold-calibration OFF vs ON — GoldenMatch probabilistic path" \
+            --a-label cal-off --b-label cal-on \
+            --out compare_cal/compare.md $FLAG
+
+      - name: Upload OFF/ON panels + comparison
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: prob-panel-threshold-calibration
+          path: |
+            prob_panel_cal_off/
+            prob_panel_cal_on/
+            compare_cal/
           retention-days: 90
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────
