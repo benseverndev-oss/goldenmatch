@@ -79,6 +79,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_post_blocking_u:
+        description: "Run the FS post-blocking-u OFF-vs-ON lane (deconvolve u from the blocked population; the dblp authors-over-weight lever). Controller gate already FAILS this flag; lane only measures the panel/dblp trade-off."
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -473,6 +478,94 @@ jobs:
             prob_panel_hon_off/
             prob_panel_hon_on/
             compare_hon/
+          retention-days: 90
+
+  # ── FS post-blocking-u OFF vs ON lane ─────────────────────────────────────
+  # Runs the panel twice (GOLDENMATCH_FS_POST_BLOCKING_U 0 vs 1). ON replaces the
+  # random-pair u with u DECONVOLVED from the blocked-pair level distribution:
+  # blocked_rate = p_match*m + (1-p_match)*u_blocked, and EM gives m + p_match, so
+  # u_blocked = (blocked_rate - p_match*m)/(1-p_match). Motivation: on dblp_acm the
+  # EM u_authors=0.001 (random) inflates the authors agree-weight to ~+30 and drives
+  # same-author-different-paper false merges; deconvolving u from the blocked
+  # population (authors agree ~65% there) deflates that weight toward 0, letting the
+  # discriminative title decide. NOT A DEFAULT: the controller quality gate already
+  # FAILS this flag (ncvr f1_probabilistic 0.99->0.80, historical 0.81->0.76,
+  # anchor_person_match 1.0->0.94) because on person data it deflates discriminative
+  # blocked fields and is sensitive to the controller's crude p_match. This lane only
+  # measures the dblp/bibliographic upside to decide keep-opt-in vs abandon.
+  panel-post-blocking-u:
+    if: ${{ inputs.run_post_blocking_u }}
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      # DBLP-ACM is the money row for this lever; fetch the Leipzig benchmark
+      # best-effort. On any failure the panel records dblp_acm as skipped.
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+            ls -la "$DEST"
+          else
+            echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped in the panel"
+          fi
+
+      - name: Run panel — post-blocking-u OFF (GOLDENMATCH_FS_POST_BLOCKING_U=0)
+        env:
+          GOLDENMATCH_FS_POST_BLOCKING_U: "0"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_pbu_off
+
+      - name: Run panel — post-blocking-u ON (GOLDENMATCH_FS_POST_BLOCKING_U=1)
+        env:
+          GOLDENMATCH_FS_POST_BLOCKING_U: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_pbu_on
+
+      - name: Compare OFF vs ON (writes verdict to job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_pbu_off/panel.json \
+            --v2 prob_panel_pbu_on/panel.json \
+            --title "FS post-blocking-u OFF vs ON — GoldenMatch probabilistic path" \
+            --a-label pbu-off --b-label pbu-on \
+            --out compare_pbu/compare.md $FLAG
+
+      - name: Upload OFF/ON panels + comparison
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: prob-panel-post-blocking-u
+          path: |
+            prob_panel_pbu_off/
+            prob_panel_pbu_on/
+            compare_pbu/
           retention-days: 90
 
   # ── Transitive-consistency postflight OFF vs ON lane ──────────────────────
