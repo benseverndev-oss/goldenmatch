@@ -375,7 +375,7 @@ export function startMcpServer(): void {
           id,
           result: {
             protocolVersion: "2024-11-05",
-            serverInfo: { name: "goldencheck", version: "0.5.0" },
+            serverInfo: { name: "goldencheck", version: "0.6.0" },
             capabilities: { tools: {} },
           },
         });

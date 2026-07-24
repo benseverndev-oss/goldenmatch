@@ -46,7 +46,7 @@ export const AGENT_CARD: {
   name: "GoldenFlow",
   description:
     "Data transformation -- standardize, clean, and normalize data with auto-detection and domain-aware transforms",
-  version: "0.16.0",
+  version: "0.17.0",
   provider: { organization: "Golden Suite" },
   url: "http://localhost:8150",
   skills: [

@@ -20,7 +20,7 @@ import { listRuns } from "./node/history.js";
 // Ensure all transforms are registered
 import "./core/transforms/index.js";
 
-const VERSION = "0.16.0";
+const VERSION = "0.17.0";
 
 export const program = new Command()
   .name("goldenflow-js")
@@ -246,6 +246,37 @@ transforms:
     console.log("Demo files created:");
     console.log(`  Data:   ${join(dir, "demo_data.csv")}`);
     console.log(`  Config: ${join(dir, "demo_config.yaml")}`);
+  });
+
+// --- mcp-serve ---
+program
+  .command("mcp-serve")
+  .description("Start MCP server over stdio (JSON-RPC 2.0)")
+  .action(async () => {
+    const { startMcpServer } = await import("./node/mcp/server.js");
+    startMcpServer();
+  });
+
+// --- agent-serve (A2A) ---
+program
+  .command("agent-serve")
+  .description("Start the A2A agent server")
+  .option("-p, --port <port>", "port", "8150")
+  .option("-h, --host <host>", "host", "127.0.0.1")
+  .action(async (opts: { port: string; host: string }) => {
+    const { startA2aServer } = await import("./node/a2a/server.js");
+    startA2aServer({ port: parseInt(opts.port, 10), host: opts.host });
+  });
+
+// --- serve (REST API) ---
+program
+  .command("serve")
+  .description("Start the REST API server")
+  .option("-p, --port <port>", "port", "8000")
+  .option("-h, --host <host>", "host", "127.0.0.1")
+  .action(async (opts: { port: string; host: string }) => {
+    const { runServer } = await import("./node/api/server.js");
+    runServer(parseInt(opts.port, 10), opts.host);
   });
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
