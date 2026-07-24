@@ -37,13 +37,7 @@ def _mk():
     ])
 
 
-def test_flag_default_on():
-    assert _fs_calibrate_threshold_enabled() is True
-
-
-@pytest.mark.parametrize("falsy", ["0", "false", "off", "no", "disabled"])
-def test_flag_falsy_disables(monkeypatch, falsy):
-    monkeypatch.setenv(FLAG, falsy)
+def test_flag_default_off():
     assert _fs_calibrate_threshold_enabled() is False
 
 

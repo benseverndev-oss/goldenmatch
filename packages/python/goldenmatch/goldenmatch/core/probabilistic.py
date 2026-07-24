@@ -2231,24 +2231,25 @@ def resolve_thresholds(
 
 
 def _fs_calibrate_threshold_enabled() -> bool:
-    """Unsupervised per-dataset link-threshold calibration. **Default ON (2026-07-23).**
+    """Unsupervised per-dataset link-threshold calibration. **Default OFF.**
 
-    ``GOLDENMATCH_FS_CALIBRATE_THRESHOLD=0`` (or ``false``/``off``/``no``/
-    ``disabled``) restores the fixed 0.50 link cutoff. When on, EM picks the cutoff
+    When ``GOLDENMATCH_FS_CALIBRATE_THRESHOLD`` is truthy, EM picks the link cutoff
     per-dataset from the training-pair normalized-score distribution (Otsu's
     between-class-variance split) instead of the fixed 0.50. The fixed cutoff
     over-merges when non-match pairs pile up just below it and under-merges
     elsewhere; the adaptive cutoff fixes both.
 
-    MEASURED (scripts/bench_er_headtohead panel, GM probabilistic vs Splink, one
-    evaluator; reproduced across two runs) — flipped on after gains spanning both
-    directions with no measured regression on well-calibrated data:
-      historical_50k F1 0.7520 -> 0.7935 (+0.0415), P 0.72->0.93 (over-merge: up)
-      dblp_acm       F1 0.3758 -> 0.8611 (+0.4853), R 0.27->0.93 (under-merge: down)
-      febrl3 +0.0016, synthetic_person unchanged (already calibrated: left alone)
+    MEASURED (scripts/bench_er_headtohead panel, simple auto-config, GM
+    probabilistic vs Splink, reproduced across two runs): historical_50k F1
+    0.7520 -> 0.7935 (+0.0415), dblp_acm F1 0.3758 -> 0.8611 (+0.4853); febrl3/
+    synthetic unchanged. NOT default-on: the auto-config CONTROLLER's refined
+    config yields a different score distribution where Otsu regresses some quality
+    gate datasets (anchor_person_match 1.0 -> 0.94, historical 0.81 -> 0.76). The
+    Otsu selector's config-dependence must be hardened before a default flip. Ships
+    opt-in; default off is byte-identical.
     """
-    return os.environ.get("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1").lower() not in (
-        "0", "false", "off", "no", "disabled",
+    return os.environ.get("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
     )
 
 
