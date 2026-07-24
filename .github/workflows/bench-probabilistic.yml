@@ -74,6 +74,11 @@ on:
         type: boolean
         required: false
         default: true
+      run_transitive:
+        description: "Run the transitive-consistency postflight OFF-vs-ON lane (split weak-bridged clusters; gates GOLDENMATCH_TRANSITIVE_POSTFLIGHT)"
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -468,6 +473,85 @@ jobs:
             prob_panel_hon_off/
             prob_panel_hon_on/
             compare_hon/
+          retention-days: 90
+
+  # ── Transitive-consistency postflight OFF vs ON lane ──────────────────────
+  # Runs the panel twice (GOLDENMATCH_TRANSITIVE_POSTFLIGHT 0 vs 1). ON splits
+  # clusters held together by a single WEAK transitive bridge (a false pair
+  # chaining two entities: A-B real, B-C false, C-D real => one cluster). This is
+  # a cluster-level fix for a failure mode pair-level threshold calibration can't
+  # undo. historical_50k (namesake over-merge) is the money row; gates the
+  # GOLDENMATCH_TRANSITIVE_POSTFLIGHT default flip. Not a gate.
+  panel-transitive:
+    if: ${{ inputs.run_transitive }}
+    runs-on: large-new-64GB
+    timeout-minutes: 180
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Install recordlinkage (for the febrl3 dataset loader)
+        run: pip install recordlinkage
+
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+          else
+            echo "::warning::DBLP-ACM download failed; dblp_acm will be skipped"
+          fi
+
+      - name: Run panel — transitive postflight OFF (GOLDENMATCH_TRANSITIVE_POSTFLIGHT=0)
+        env:
+          GOLDENMATCH_TRANSITIVE_POSTFLIGHT: "0"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_tc_off
+
+      - name: Run panel — transitive postflight ON (GOLDENMATCH_TRANSITIVE_POSTFLIGHT=1)
+        env:
+          GOLDENMATCH_TRANSITIVE_POSTFLIGHT: "1"
+        run: |
+          python scripts/bench_er_headtohead/run_panel.py \
+            --datasets "${{ inputs.compare_datasets || 'historical_50k,dblp_acm,febrl3,synthetic_person' }}" \
+            --out-dir prob_panel_tc_on
+
+      - name: Compare OFF vs ON (writes verdict to job summary)
+        run: |
+          FLAG=""
+          if [ "${{ inputs.fail_on_regression }}" = "true" ]; then FLAG="--fail-on-regression"; fi
+          python scripts/bench_er_headtohead/compare_panels.py \
+            --v1 prob_panel_tc_off/panel.json \
+            --v2 prob_panel_tc_on/panel.json \
+            --title "Transitive-consistency postflight OFF vs ON — GoldenMatch probabilistic path" \
+            --a-label tc-off --b-label tc-on \
+            --out compare_tc/compare.md $FLAG
+
+      - name: Upload OFF/ON panels + comparison
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: prob-panel-transitive
+          path: |
+            prob_panel_tc_off/
+            prob_panel_tc_on/
+            compare_tc/
           retention-days: 90
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────

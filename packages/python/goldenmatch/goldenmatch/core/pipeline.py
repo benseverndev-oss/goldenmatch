@@ -4568,12 +4568,27 @@ def _run_dedupe_pipeline(
             c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
         )
 
+    # Transitive-consistency postflight (GOLDENMATCH_TRANSITIVE_POSTFLIGHT, default
+    # OFF -> no-op). Splits clusters held together by a single weak transitive
+    # bridge (a false pair chaining two entities). Materializes the dict (with
+    # pair_scores from all_pairs) when on; opt-in so the lazy hot path is unchanged.
+    _tc_clusters = None
+    _tc_report = None
+    from goldenmatch.core.transitive_consistency import _transitive_postflight_enabled
+    if _transitive_postflight_enabled():
+        from goldenmatch.core.transitive_consistency import materialize_and_split
+        _tc_clusters, _tc_report = materialize_and_split(_clusters_dict(), all_pairs)
+        if isinstance(report, dict):
+            report["transitive_consistency"] = _tc_report
+
     results = {
         # Frames-out path keeps this LAZY: cluster_frames_to_dict (~900K dict
         # allocations at 1M) runs only if a consumer actually reads .clusters.
         # The columnar/gate-off path already bound a real dict cheaply.
         "clusters": (
-            LazyClusterDict(_clusters_dict)
+            _tc_clusters
+            if _tc_clusters is not None
+            else LazyClusterDict(_clusters_dict)
             if cluster_frames is not None
             else _clusters_dict()
         ),

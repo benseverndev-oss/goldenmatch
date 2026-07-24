@@ -659,6 +659,8 @@ Within whichever path is chosen, the per-block math runs on the native Rust FS k
 | `GOLDENMATCH_GOLDEN_STRATEGY_STRICT` | `0` | Strict golden survivorship. |
 | `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS` / `GOLDENMATCH_NE_TUNER_MIN_CORRECTIONS` | — | Memory re-tuning floors. |
 | `GOLDENMATCH_CLUSTER_SPLIT_EDGE_BUDGET` | ∝ n_rows | Oversized-cluster auto-split work budget. |
+| `GOLDENMATCH_TRANSITIVE_POSTFLIGHT` | `0` (off) | Transitive-consistency cluster postflight. Splits clusters held together by a single weak transitive bridge — an edge whose removal leaves two ≥2-node groups where the weakest edge sits materially below the average (a false pair chaining two entities: A-B real, B-C false, C-D real ⇒ one cluster). A cluster-level fix for a failure mode pair-level threshold calibration can't undo; the split set is reported under `report["transitive_consistency"]`. Default off is byte-identical. |
+| `GOLDENMATCH_TRANSITIVE_WEAK_MARGIN` | `0.15` | How far below the average edge the weakest edge must sit for a cluster to count as a weak transitive bridge (larger = more conservative, splits fewer). Only consulted when `GOLDENMATCH_TRANSITIVE_POSTFLIGHT` is on. |
 | `GOLDENMATCH_COLUMNAR_PIPELINE` | `0` | Columnar pipeline experiment (Phase A opt-in). |
 
 ### Servers, security, storage, LLM/embedding
