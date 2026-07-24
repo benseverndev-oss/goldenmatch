@@ -17,6 +17,13 @@ import {
 import { dedupe, match, scoreStrings } from "./core/api.js";
 import { evaluateClusters, loadGroundTruthPairs } from "./core/index.js";
 import { loadConfigFile } from "./node/config-file.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import {
+  compareClusters,
+  ccmsSummary,
+  parseClustersJson,
+} from "./core/compare-clusters.js";
+import { runIncremental } from "./core/incremental.js";
 import { emitHealerSurface } from "./node/cli-healer.js";
 import type { Row } from "./core/types.js";
 import pkg from "../package.json" with { type: "json" };
@@ -303,6 +310,67 @@ program
       process.exit(1);
     }
   });
+
+// ---------- compare-clusters ----------
+program
+  .command("compare-clusters")
+  .description("Compare two ER clustering outcomes using the CCMS framework")
+  .argument("<file_a>", "first cluster JSON file (baseline / ER1)")
+  .argument("<file_b>", "second cluster JSON file (comparison / ER2)")
+  .option("-o, --output <path>", "save the CCMS summary to JSON")
+  .action((fileA: string, fileB: string, opts: { output?: string }) => {
+    const clustersA = parseClustersJson(JSON.parse(readFileSync(fileA, "utf-8")));
+    const clustersB = parseClustersJson(JSON.parse(readFileSync(fileB, "utf-8")));
+    const s = ccmsSummary(compareClusters(clustersA, clustersB));
+    const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
+    process.stdout.write(
+      `CCMS Cluster Comparison\n` +
+        `  Unchanged (UC):   ${s["unchanged"]} (${pct(s["unchanged_pct"]!)})\n` +
+        `  Merged (MC):      ${s["merged"]} (${pct(s["merged_pct"]!)})\n` +
+        `  Partitioned (PC): ${s["partitioned"]} (${pct(s["partitioned_pct"]!)})\n` +
+        `  Overlapping (OC): ${s["overlapping"]} (${pct(s["overlapping_pct"]!)})\n` +
+        `  Total References: ${s["rc"]}   ER1 clusters: ${s["cc1"]}   ER2 clusters: ${s["cc2"]}\n` +
+        `  TWI: ${s["twi"]!.toFixed(4)}\n`,
+    );
+    if (opts.output) {
+      writeFileSync(opts.output, JSON.stringify(s, null, 2) + "\n", "utf-8");
+      process.stdout.write(`Summary saved to ${opts.output}\n`);
+    }
+  });
+
+// ---------- incremental ----------
+program
+  .command("incremental")
+  .description("Match new records against an existing base dataset incrementally")
+  .argument("<base_file>", "base dataset file path")
+  .requiredOption("-n, --new-records <path>", "new records CSV to match")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .option("-t, --threshold <value>", "override threshold", parseFloat)
+  .option("-o, --output <path>", "output CSV path for the match pairs")
+  .action(
+    (
+      baseFile: string,
+      opts: { newRecords: string; config: string; threshold?: number; output?: string },
+    ) => {
+      const baseRows = readFile(baseFile);
+      const newRows = readFile(opts.newRecords);
+      const config = loadConfigFile(opts.config);
+      const r = runIncremental(baseRows, newRows, config, opts.threshold);
+      process.stdout.write(
+        `Incremental Match Results\n` +
+          `  New records processed: ${r.new_records}\n` +
+          `  Matched to base:       ${r.matched_to_base}\n` +
+          `  New entities:          ${r.new_entities}\n` +
+          `  Total match pairs:     ${r.total_pairs}\n`,
+      );
+      if (opts.output && r.matches.length > 0) {
+        writeCsv(opts.output, r.matches as unknown as Row[]);
+        process.stdout.write(`Match pairs saved to ${opts.output}\n`);
+      } else if (opts.output) {
+        process.stdout.write("No matches found - no output written\n");
+      }
+    },
+  );
 
 // ---------- profile ----------
 program

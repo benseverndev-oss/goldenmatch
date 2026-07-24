@@ -4,6 +4,17 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.18.0] - 2026-07-23
+
+### Added
+- **`compare-clusters` + `incremental` CLI commands.** TS CLI front doors for two capabilities whose cores TS already had, matching the Python CLI commands (`cli_commands python_only -> shared`). No MCP tool-count change.
+  - `compare-clusters <file_a> <file_b> [-o out.json]` - CCMS comparison of two ER cluster JSON files (`parseClustersJson` + `compareClusters` + `ccmsSummary`); prints UC/MC/PC/OC + TWI, optional JSON output. Mirrors Python `cli/compare.py`.
+  - `incremental <base> -n <new-records> -c <config> [-t thr] [-o out.csv]` - match new records against a base dataset (`runIncremental`); prints processed/matched/new-entity/pair counts, optional CSV of the match pairs. Mirrors Python `cli/incremental.py`.
+  - Tests: `tests/unit/cli-compare-incremental.test.ts` (per the repo convention of testing the wrapped core logic). Both smoke-verified end-to-end against the built CLI.
+
+### Deferred (documented)
+- `sensitivity` / `lineage` / `analyze-blocking` / `unmerge` CLI commands stay `python_only`: they need sweep-spec plumbing or an in-memory dedupe-run context that the stateless CLI path doesn't carry - a bounded follow-up, not a silent drop.
+
 ## [1.17.0] - 2026-07-23
 
 ### Added
