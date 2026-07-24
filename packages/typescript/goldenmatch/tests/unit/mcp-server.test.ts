@@ -183,8 +183,8 @@ describe("MCP server — handleTool dispatcher", () => {
 });
 
 describe("MCP server — agent tools wiring", () => {
-  it("TOOLS exposes 79 tools (46 + 4 cross-language naming aliases, #1451; +convert_splink_config +compare_clusters +7 run tools (incl. lineage) +2 rollback tools +2 surgery tools +2 identity-conflict tools +memory_import +schema_match +config_weaknesses +analyze_blocking +certify_recall +incremental +sensitivity +retrieve_similar)", () => {
-    expect(TOOLS.length).toBe(79);
+  it("TOOLS exposes 80 tools (46 + 4 cross-language naming aliases, #1451; +convert_splink_config +compare_clusters +7 run tools (incl. lineage) +2 rollback tools +2 surgery tools +2 identity-conflict tools +memory_import +schema_match +config_weaknesses +analyze_blocking +certify_recall +incremental +sensitivity +retrieve_similar)", () => {
+    expect(TOOLS.length).toBe(80);
   });
 
   it("TOOLS includes the agent skill names", () => {
@@ -208,5 +208,42 @@ describe("MCP server — agent tools wiring", () => {
       ],
     })) as { strategy?: string };
     expect(result.strategy).toBeDefined();
+  });
+});
+
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+describe("pprl_link tool", () => {
+  it("links matching records across two parties without sharing raw values", async () => {
+    // sanitizePath jails to the working dir, so stage the CSVs under cwd.
+    const dir = mkdtempSync(join(process.cwd(), "pprl-tmp-"));
+    const a = join(dir, "a.csv");
+    const b = join(dir, "b.csv");
+    writeFileSync(a, "id,name\n1,alice smith\n2,bob jones\n");
+    writeFileSync(b, "id,name\n1,alice smith\n2,carol white\n");
+    const r = (await handleTool("pprl_link", {
+      file_a: a,
+      file_b: b,
+      fields: ["name"],
+      threshold: 0.85,
+      security_level: "high",
+    })) as {
+      clusters_found: number;
+      match_pairs: number;
+      fields: string[];
+      clusters: Array<{ members: Array<{ party: string }> }>;
+    };
+    rmSync(dir, { recursive: true, force: true });
+    expect(r.fields).toEqual(["name"]);
+    expect(r.clusters_found).toBeGreaterThanOrEqual(1); // alice smith links
+    expect(r.match_pairs).toBeGreaterThanOrEqual(1);
+  });
+
+  it("errors without fields", async () => {
+    const r = (await handleTool("pprl_link", { file_a: "x", file_b: "y" })) as {
+      error?: string;
+    };
+    expect(r.error).toBeTypeOf("string");
   });
 });

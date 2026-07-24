@@ -104,6 +104,7 @@ mcp_tools:
   - memory_export
   - memory_import
   - memory_stats
+  - pprl_link
   - profile
   - profile_data
   - retrieve_similar
@@ -128,7 +129,6 @@ mcp_tools:
   - list_plugins
   - plan_routing
   - pprl_auto_config
-  - pprl_link
   - test_domain
   ts_only:
   - build_clusters
