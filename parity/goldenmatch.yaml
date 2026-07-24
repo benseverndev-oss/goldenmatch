@@ -142,11 +142,13 @@ mcp_tools:
 cli_commands:
   shared:
   - agent-serve
+  - compare-clusters
   - dedupe
   - demo
   - evaluate
   - identity
   - import-splink
+  - incremental
   - info
   - match
   - mcp-serve
@@ -158,10 +160,8 @@ cli_commands:
   - analyze-blocking
   - anomalies
   - autoconfig
-  - compare-clusters
   - config
   - explain
-  - incremental
   - ingest-docs
   - init
   - interactive
