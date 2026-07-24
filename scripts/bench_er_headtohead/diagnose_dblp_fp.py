@@ -176,17 +176,25 @@ def main() -> int:
     lines.append("### EM-learned match weights (log2(m/u) per level; last = top/agree)")
     lines.append("")
     try:
+        import pyarrow as pa
+
         from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
         from goldenmatch.core.blocker import build_blocks
         from goldenmatch.core.probabilistic import load_or_train_em
         cfg = auto_configure_probabilistic_df(records)
         mk = cfg.matchkeys[0]
         blk = getattr(cfg, "blocking", None)
-        blocks = build_blocks(records, blk) if blk is not None else None
+        # build_blocks / load_or_train_em consume the pipeline's internal
+        # __row_id__ column; the raw dataset records don't carry it.
+        rec_ri = records
+        if "__row_id__" not in records.column_names:
+            rec_ri = records.append_column(
+                "__row_id__", pa.array(range(records.num_rows), pa.int64()))
+        blocks = build_blocks(rec_ri, blk) if blk is not None else None
         bfields = []
         for k in (getattr(blk, "keys", None) or []):
             bfields.extend(getattr(k, "fields", []) or [])
-        em = load_or_train_em(records, mk, blocks=blocks, blocking_fields=bfields)
+        em = load_or_train_em(rec_ri, mk, blocks=blocks, blocking_fields=bfields)
         lines.append("| field | scorer | levels | match_weights (per level) | top-level (agree) weight |")
         lines.append("| --- | --- | --- | --- | --- |")
         for f in mk.fields:
