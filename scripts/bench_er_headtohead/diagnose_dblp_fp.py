@@ -169,6 +169,45 @@ def main() -> int:
         lines.append(f"### FALSE merges most agree on `{top_field}` ({fpr[top_field]*100:.0f}%); top values")
         lines.append("")
         lines.append(", ".join(f"{v}({k})" for v, k in agreed.most_common(8) if v))
+    lines.append("")
+
+    # EM-weight inspection: does FS learn to down-weight year (m~=u) / venue
+    # (m<u -> agreement penalized)? match_weights[field][level] = log2(m/u).
+    lines.append("### EM-learned match weights (log2(m/u) per level; last = top/agree)")
+    lines.append("")
+    try:
+        from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+        from goldenmatch.core.blocker import build_blocks
+        from goldenmatch.core.probabilistic import load_or_train_em
+        cfg = auto_configure_probabilistic_df(records)
+        mk = cfg.matchkeys[0]
+        blk = getattr(cfg, "blocking", None)
+        blocks = build_blocks(records, blk) if blk is not None else None
+        bfields = []
+        for k in (getattr(blk, "keys", None) or []):
+            bfields.extend(getattr(k, "fields", []) or [])
+        em = load_or_train_em(records, mk, blocks=blocks, blocking_fields=bfields)
+        lines.append("| field | scorer | levels | match_weights (per level) | top-level (agree) weight |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for f in mk.fields:
+            w = (em.match_weights or {}).get(f.field)
+            if w is None:
+                continue
+            top = w[-1] if w else None
+            wl = "[" + ", ".join(f"{x:+.2f}" for x in w) + "]"
+            lines.append(f"| {f.field} | {f.scorer} | {f.levels} | {wl} | "
+                         f"{top:+.2f} | " if top is not None else
+                         f"| {f.field} | {f.scorer} | {f.levels} | {wl} | - |")
+        lines.append("")
+        lines.append("_A field whose TOP-level (agreement) weight is ~0 or NEGATIVE is one FS "
+                     "already treats as non-evidence / anti-evidence of a match. If year/venue "
+                     "still have large POSITIVE agreement weights despite being non-discriminative/"
+                     "inverted, EM is mis-estimating them -> the lever is fixing EM (clamp agreement "
+                     "weight to <=0 where m<=u). If they're already <=0, the FP is driven elsewhere."
+                     )
+    except Exception as e:
+        lines.append(f"_EM inspection failed ({type(e).__name__}: {e})_")
+
     _emit("\n".join(lines) + "\n")
     return 0
 
