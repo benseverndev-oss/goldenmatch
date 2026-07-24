@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 404,
+      "module_count": 405,
       "modules": [
         {
           "module": "goldenmatch",
@@ -3659,6 +3659,7 @@
             "goldenmatch.core.simhash_blocker",
             "goldenmatch.core.standardize",
             "goldenmatch.core.transform",
+            "goldenmatch.core.transitive_consistency",
             "goldenmatch.core.validate",
             "goldenmatch.distributed",
             "goldenmatch.distributed._utils",
@@ -4584,6 +4585,21 @@
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.frame",
             "goldenmatch.distributed.transforms"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.transitive_consistency",
+          "file": "packages/python/goldenmatch/goldenmatch/core/transitive_consistency.py",
+          "purpose": "Transitive-consistency cluster postflight (inspired by TransClean, 2506.04006).",
+          "defines": [
+            "_is_weak_transitive_bridge",
+            "_transitive_postflight_enabled",
+            "_weak_bridge_margin",
+            "materialize_and_split",
+            "split_weak_transitive_bridges"
+          ],
+          "imports": [
+            "goldenmatch.core.cluster"
           ]
         },
         {
