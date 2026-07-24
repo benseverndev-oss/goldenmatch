@@ -79,6 +79,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_dblp_fp:
+        description: "Run the dblp_acm residual-FP diagnostic (what the calibrated model's false merges agree on)"
+        type: boolean
+        required: false
+        default: false
       em_sample_rows:
         description: "GOLDENMATCH_FS_EM_SAMPLE_ROWS for the panel job (empty = off; validates the EM-block-sample F1)"
         required: false
@@ -554,6 +559,47 @@ jobs:
             prob_panel_cal_on/
             compare_cal/
           retention-days: 90
+
+  # ── dblp_acm residual-FP diagnostic ───────────────────────────────────────
+  # Calibration rescued dblp_acm recall (0.27->0.93) but precision landed ~0.80.
+  # Runs GM (calibration default-ON) on dblp_acm and profiles what the residual
+  # FALSE merges agree on per bibliographic field (title/authors/venue/year) vs
+  # true merges vs random non-matches -> localizes the over-weighted /
+  # non-discriminative field driving the 20% FP. Not a gate.
+  dblp-fp:
+    if: ${{ inputs.run_dblp_fp }}
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      POLARS_SKIP_CPU_CHECK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch[bench] (pulls splink + duckdb + pyarrow + rapidfuzz)
+        run: pip install -e packages/python/goldenmatch[bench]
+
+      - name: Fetch DBLP-ACM (Leipzig, best-effort)
+        continue-on-error: true
+        run: |
+          DEST=packages/python/goldenmatch/tests/benchmarks/datasets/DBLP-ACM
+          mkdir -p "$DEST"
+          if curl -fsSL --retry 3 -o /tmp/dblp-acm.zip https://dbs.uni-leipzig.de/file/DBLP-ACM.zip; then
+            mkdir -p /tmp/dblp-acm && unzip -o /tmp/dblp-acm.zip -d /tmp/dblp-acm
+            for f in DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv; do
+              found=$(find /tmp/dblp-acm -name "$f" | head -1)
+              if [ -n "$found" ]; then cp "$found" "$DEST/$f"; else echo "::warning::DBLP-ACM file $f not in archive"; fi
+            done
+          else
+            echo "::warning::DBLP-ACM download failed"
+          fi
+
+      - name: dblp_acm residual-FP diagnostic (calibrated)
+        run: python scripts/bench_er_headtohead/diagnose_dblp_fp.py --dataset dblp_acm
 
   # ── 3-engine bake-off lane ────────────────────────────────────────────────
   # Runs scripts/bench_er_headtohead/run_bakeoff.py: gm_zeroconfig +
