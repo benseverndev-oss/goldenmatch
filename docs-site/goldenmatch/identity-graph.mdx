@@ -230,7 +230,16 @@ Both paths produce identical schemas. The migration script also creates three an
 
 ## Performance notes
 
-- Resolve runs after clustering, before output. On a 100k-row dedupe the resolve step is dominated by SQLite write throughput (~5-15s). Postgres scales further but adds network latency.
+- Resolve runs after clustering, before output. It is dominated by write throughput, and its cost tracks **the identity graph, not the input frame** — roughly the number of identities created plus records upserted. A 1M-row dedupe that yields 50k multi-record identities does far less resolve work than a 200k-row dedupe that yields 200k.
+- **`emit_singletons` is the single biggest cost lever, and it defaults to `true`.** With it on, every single-record cluster becomes its own identity, so resolve work scales with **row count** rather than with the number of real multi-record entities — on a 14M-row dedupe that is 14M identities, not ~500k. Turn it off unless you specifically need a durable id for records that matched nothing:
+
+  ```yaml
+  identity:
+    emit_singletons: false
+  ```
+
+  With `emit_singletons: false` the resolver also skips preparing rows no multi-record cluster references, so both wall time and resident memory drop with it.
+- **SQLite ceiling.** SQLite is the right default through the low millions of rows on a single box. Past that, prefer Postgres: it gets a bulk `COPY` path for brand-new identities that SQLite has no equivalent for, and it is the only backend the distributed (Ray) resolver supports. The tradeoff is network latency per run, not a throughput cliff.
 - Resolution is **gated and additive** — if the store fails to open, the pipeline logs a warning and continues. Identity never blocks a dedupe.
 - For multi-process writers, the SQLite store uses WAL + a 5s `busy_timeout`. Postgres relies on row-level locks. Single-tenant web UI / CLI invocations are the assumed model; for high-write multi-tenant graphs use Postgres.
 

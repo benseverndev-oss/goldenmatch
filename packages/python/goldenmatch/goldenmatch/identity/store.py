@@ -151,6 +151,36 @@ CREATE INDEX IF NOT EXISTS idx_aliases_entity ON identity_aliases(entity_id);
 """
 
 
+def _sqlite_batch_writes_enabled() -> bool:
+    """Batch the SQLite resolve write path into explicit transactions.
+
+    The SQLite connection is opened ``isolation_level=None`` (autocommit), so
+    before #2105 every INSERT the resolver issued committed on its own -- a WAL
+    sync per statement, and resolve issues ~6 statements per cluster. Measured
+    on a 200k-row store: ~750 us/statement autocommit vs ~30-90 us inside a
+    transaction (8-25x). ``GOLDENMATCH_IDENTITY_SQLITE_BATCH=0`` restores the
+    per-statement autocommit behaviour."""
+    return os.environ.get(
+        "GOLDENMATCH_IDENTITY_SQLITE_BATCH", "1"
+    ).strip() != "0"
+
+
+def _sqlite_batch_size() -> int:
+    """Statements per SQLite transaction inside ``bulk_writes``.
+
+    A single transaction spanning a 14M-row resolve would grow the WAL without
+    bound before it could checkpoint, so the batch commits and re-opens every N
+    writes -- that is the "memory-bounded" half of the fix. Durability is
+    unchanged-or-better versus the pre-#2105 autocommit path, which offered no
+    per-run atomicity either."""
+    raw = os.environ.get("GOLDENMATCH_IDENTITY_SQLITE_BATCH_SIZE", "10000")
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return 10_000
+    return n if n > 0 else 10_000
+
+
 def new_entity_id() -> str:
     """Generate a stable entity id (UUIDv7-shaped, time-ordered)."""
     ts_ms = int(time.time() * 1000) & ((1 << 48) - 1)
@@ -170,6 +200,10 @@ class IdentityStore:
     """Persistence for the Identity Graph (nodes, records, edges, events, aliases)."""
 
     _conn: Any
+    # Class-level defaults so a store built via ``__new__`` (tests/dispatch
+    # probes that skip ``__init__``) still has a sane batching state.
+    _sqlite_batch: int = 0
+    _sqlite_pending: int = 0
 
     def __init__(
         self,
@@ -181,6 +215,12 @@ class IdentityStore:
         client: Any = None,
     ) -> None:
         self._backend = backend
+        # SQLite write batching (#2105). ``_sqlite_batch`` is 0 outside a
+        # ``bulk_writes`` block (statements autocommit as before) and the batch
+        # size inside one; ``_sqlite_pending`` counts statements since the last
+        # commit. Set for every backend so ``_exec`` needs no hasattr guard.
+        self._sqlite_batch = 0
+        self._sqlite_pending = 0
         # Optional psycopg_pool.ConnectionPool for postgres. When set, methods
         # check out a pooled conn for each call. Default None preserves the
         # legacy per-store single-conn behavior the existing tests rely on.
@@ -499,10 +539,21 @@ class IdentityStore:
         single ``conn.transaction()`` collapses those N commits into one and lets
         psycopg pipeline the statements.
 
-        No-op for SQLite (already local + WAL) and Mongo, so callers can wrap
-        unconditionally. Nesting is safe: the bulk COPY helpers open their own
-        ``conn.transaction()`` which becomes a savepoint under this outer one.
-        Errors roll the batch back (atomic per resolve run) instead of leaving a
+        SQLite gets the same treatment for the same reason (#2105). Its
+        connection is opened ``isolation_level=None``, so each statement was its
+        own transaction and paid a WAL sync -- local, but still ~750 us a piece
+        against ~30-90 us batched. Statements commit in
+        ``_sqlite_batch_size()``-sized chunks rather than one run-long
+        transaction so the WAL cannot grow without bound on a multi-million-row
+        resolve. Reads issued inside the batch see the pending writes (same
+        connection), so the absorb / merge branches that read back rows written
+        earlier in the run are unaffected.
+
+        No-op for Mongo, and for SQLite when already inside a transaction
+        (nesting) or when ``GOLDENMATCH_IDENTITY_SQLITE_BATCH=0``, so callers
+        can wrap unconditionally. Nesting is safe on Postgres too: the bulk COPY
+        helpers open their own ``conn.transaction()`` which becomes a savepoint
+        under this outer one. Errors roll the batch back instead of leaving a
         partially-committed graph -- an improvement over the autocommit path,
         which the caller already treats as all-or-nothing (it has no per-cluster
         recovery).
@@ -510,8 +561,27 @@ class IdentityStore:
         if self._backend == "postgres":
             with self._conn.transaction():
                 yield
-        else:
+            return
+        if (
+            self._backend != "sqlite"
+            or not _sqlite_batch_writes_enabled()
+            or self._conn.in_transaction
+        ):
             yield
+            return
+        self._sqlite_batch = _sqlite_batch_size()
+        self._sqlite_pending = 0
+        self._conn.execute("BEGIN")
+        try:
+            yield
+        except BaseException:
+            self._sqlite_batch = 0
+            if self._conn.in_transaction:
+                self._conn.execute("ROLLBACK")
+            raise
+        self._sqlite_batch = 0
+        if self._conn.in_transaction:
+            self._conn.execute("COMMIT")
 
     @contextlib.contextmanager
     def write_pipeline(self) -> Iterator[None]:
@@ -1214,9 +1284,18 @@ class IdentityStore:
     def _exec(self, sql: str, params: tuple) -> None:
         if self._backend == "sqlite":
             self._conn.execute(sql, params)
-        else:
-            with self._conn.cursor() as cur:
-                cur.execute(self._pg_sql(sql), params)
+            # Inside ``bulk_writes`` (``_sqlite_batch`` > 0) commit in chunks so
+            # a multi-million-row resolve cannot grow the WAL without bound
+            # before it gets a chance to checkpoint (#2105).
+            if self._sqlite_batch:
+                self._sqlite_pending += 1
+                if self._sqlite_pending >= self._sqlite_batch:
+                    self._conn.execute("COMMIT")
+                    self._conn.execute("BEGIN")
+                    self._sqlite_pending = 0
+            return
+        with self._conn.cursor() as cur:
+            cur.execute(self._pg_sql(sql), params)
 
     def _fetchone(self, sql: str, params: tuple) -> Any:
         if self._backend == "sqlite":
