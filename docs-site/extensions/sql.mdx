@@ -25,14 +25,28 @@ psql -h localhost -U postgres \
   -c "SELECT goldenmatch.goldenmatch_score('John', 'Jon', 'jaro_winkler');"
 ```
 
-Package installs are also available:
+Prebuilt release tarballs (Linux x86_64, PostgreSQL 15/16/17) are attached to
+each [`goldenmatch-pg-v*` release](https://github.com/benseverndev-oss/goldenmatch/releases?q=goldenmatch-pg).
+Each tarball unpacks a pgrx package tree (the `.so`, the `.control`, and the SQL
+files) that you copy into your PostgreSQL install:
 
 ```bash
-# Debian / Ubuntu
-curl -LO https://github.com/benseverndev-oss/goldenmatch-extensions/releases/latest/download/postgresql-16-goldenmatch_0.2.0_amd64.deb
-sudo dpkg -i postgresql-16-goldenmatch_0.2.0_amd64.deb
-pip install goldenmatch>=1.1.0
+# Pick the latest goldenmatch-pg-v* release and your PG major version.
+VERSION=0.15.0        # latest goldenmatch-pg-v* tag
+PG=16                 # your PostgreSQL major (15, 16, or 17)
+
+curl -LO "https://github.com/benseverndev-oss/goldenmatch/releases/download/goldenmatch-pg-v${VERSION}/goldenmatch_pg-${VERSION}-pg${PG}-linux-x86_64.tar.gz"
+tar -xzf "goldenmatch_pg-${VERSION}-pg${PG}-linux-x86_64.tar.gz"
+
+# The tree mirrors the PG install prefix -- copy it over pg_config's dirs.
+sudo cp -r "goldenmatch_pg-pg${PG}"/* /
+
+# The extension embeds CPython and calls goldenmatch, so install it too:
+pip install goldenmatch
 ```
+
+Other platforms build from source (`cargo pgrx install`) -- see
+[`packages/rust/extensions/CLAUDE.md`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/rust/extensions/CLAUDE.md).
 
 Then enable it:
 
