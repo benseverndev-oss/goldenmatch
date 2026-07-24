@@ -17,7 +17,6 @@ import json
 from pathlib import Path
 
 import pyarrow as pa
-
 from goldenmatch.core.anomaly import detect_anomalies
 
 # Adversarial rows. Every column is a STRING -- leading-zero ZIPs ("00000") would
