@@ -4,6 +4,17 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.21.0] - 2026-07-24
+
+### Added
+- **`runs`, `rollback`, `unmerge`, `config` CLI commands** (parity batch 4) — the run-context cluster. goldenmatch `cli_commands.python_only` **16 → 12**.
+  - `runs [--output-dir]` / `rollback <run_id> [--output-dir]` — list previous runs and roll one back (deleting its output files). Both ride the **already-existing** durable run log (`node/mcp/run-log.ts` over `.goldenmatch_runs.json`), which was ported earlier for the `list_runs`/`rollback` MCP tools.
+  - `unmerge <record_id> --clusters <csv> [--pairs <csv>] [--shatter] [-t thr] [-o out]` — per-entity unmerge over **exported files**, matching Python: a clusters CSV (`__row_id__` + `__cluster_id__`) plus an optional scored-pairs CSV (`id_a,id_b,score`) supplying the edge weights re-clustering needs, since a clusters CSV alone carries no pair scores. Cross-cluster pair rows are ignored. Wraps the existing `unmergeRecord` / `unmergeCluster` cores.
+  - `config {save,load,list,delete,show}` — named config presets, over a new `src/node/preset-store.ts` (port of Python `prefs/store.py::PresetStore`). Same `~/.goldenmatch/presets/<name>.yaml` layout, so presets are interchangeable between the toolkits.
+
+### Known difference (documented)
+- **`runs`/`rollback` `--output-dir` is jailed to the process CWD.** `run-log.ts` routes the path through `sanitizePath` (inherited from the MCP surface, where it stops a tool escaping the working directory). Python's equivalent accepts any path. Passing a directory outside CWD raises rather than silently reading elsewhere; the tests pin this.
+
 ## [1.20.0] - 2026-07-24
 
 ### Added
