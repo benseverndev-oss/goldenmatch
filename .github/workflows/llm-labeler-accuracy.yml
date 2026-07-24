@@ -1,0 +1,74 @@
+name: llm-labeler-accuracy
+
+# Measures whether an LLM is a good enough LABELER of borderline pairs to drive
+# zero-config threshold calibration (auto-config spec "Phase 4: LLM-judge labeling").
+#
+# Reads ground truth we already have, so the answer is cheap and decisive. The
+# headline is NOT raw accuracy but ERROR CORRELATION with FS's own mistakes: labels
+# whose errors mirror the scorer's would ratify its bias rather than correct it.
+#
+# workflow_dispatch only -- it spends real money against OPENAI_API_KEY (budget-capped).
+
+on:
+  workflow_dispatch:
+    inputs:
+      datasets:
+        description: "Comma-separated datasets (both are CI-available with no download)"
+        required: false
+        default: "ncvr_synthetic,historical_50k"
+      row_cap:
+        description: "Row cap per dataset"
+        required: false
+        default: "20000"
+      n_band:
+        description: "Borderline pairs to label per dataset"
+        required: false
+        default: "120"
+      budget_usd:
+        description: "Hard cost cap per dataset (BudgetTracker max_cost_usd)"
+        required: false
+        default: "2.0"
+
+permissions:
+  contents: read
+
+jobs:
+  labeler-accuracy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      GOLDENMATCH_NATIVE: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install goldenmatch (+ openai client)
+        run: |
+          pip install -e packages/python/goldenmatch
+          pip install openai
+
+      # Fail fast and loudly: a missing secret would otherwise look like a clean
+      # "skipped" run and be mistaken for a result.
+      - name: Verify the API key is present
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set; cannot measure the labeler"
+            exit 1
+          fi
+          echo "OPENAI_API_KEY present (${#OPENAI_API_KEY} chars)"
+
+      - name: Measure LLM labeler accuracy vs ground truth
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python scripts/llm_labeler_accuracy.py \
+            --datasets "${{ inputs.datasets }}" \
+            --row-cap "${{ inputs.row_cap }}" \
+            --n-band "${{ inputs.n_band }}" \
+            --budget-usd "${{ inputs.budget_usd }}"
