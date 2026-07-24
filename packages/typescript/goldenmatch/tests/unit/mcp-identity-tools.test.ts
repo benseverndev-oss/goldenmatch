@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("IDENTITY_TOOLS metadata", () => {
-  it("exports the 11 identity tools matching the Python sibling", () => {
+  it("exports the 15 identity tools matching the Python sibling", () => {
     expect(IDENTITY_TOOLS.map((t) => t.name)).toEqual([
       "identity_resolve",
       "identity_list",
@@ -111,8 +111,12 @@ describe("IDENTITY_TOOLS metadata", () => {
       "identity_audit",
       "identity_audit_seal",
       "identity_audit_verify",
+      "identity_show",
+      "identity_profile",
+      "identity_stats",
+      "identity_worklist",
     ]);
-    expect(IDENTITY_TOOL_NAMES.size).toBe(11);
+    expect(IDENTITY_TOOL_NAMES.size).toBe(15);
     for (const t of IDENTITY_TOOLS) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema).toBeTypeOf("object");
@@ -307,5 +311,41 @@ describe("identity tool provenance (actor/trust)", () => {
     );
     expect(mediated!["actor"]).toBe("steward:kim");
     expect(mediated!["trust"]).toBe(0.8);
+  });
+});
+
+describe("identity read tools (show / profile / stats / worklist)", () => {
+  it("identity_show returns the full entity view", async () => {
+    const r = await call("identity_show", { entity_id: "E1" });
+    expect((r["node"] as Record<string, unknown>)["entity_id"]).toBe("E1");
+    expect((r["records"] as unknown[]).length).toBe(1);
+  });
+
+  it("identity_show returns { found: false } for an unknown entity", async () => {
+    const r = await call("identity_show", { entity_id: "NOPE" });
+    expect(r["found"]).toBe(false);
+  });
+
+  it("identity_profile reports records / conflicts / structural version", async () => {
+    const r = await call("identity_profile", { entity_id: "E1" });
+    expect(r["record_count"]).toBe(1);
+    expect(r["conflict_count"]).toBe(1); // the seeded conflicts_with edge
+    expect(r["version"]).toBe(1); // one 'created' structural event
+    expect(r["sources"]).toEqual(["src"]);
+  });
+
+  it("identity_stats summarizes the graph", async () => {
+    const r = await call("identity_stats", {});
+    expect(r["total_entities"]).toBe(2);
+    expect((r["by_status"] as Record<string, number>)["active"]).toBe(2);
+    expect(r["total_conflicts"]).toBe(1);
+  });
+
+  it("identity_worklist surfaces the entity with a conflict", async () => {
+    const r = await call("identity_worklist", {});
+    const items = r["items"] as Record<string, unknown>[];
+    expect(items.some((i) => i["entity_id"] === "E1")).toBe(true);
+    const e1 = items.find((i) => i["entity_id"] === "E1")!;
+    expect(e1["reasons"]).toContain("has_conflicts");
   });
 });
