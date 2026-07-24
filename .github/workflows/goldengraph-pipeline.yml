@@ -151,6 +151,11 @@ jobs:
           python -m pytest tests/test_qa_temporal_store.py -v
           python -m erkgbench.qa_e2e.run_temporal \
             --seed 7 --n-facts 40 --ambiguity 0.6 --out-md TEMPORAL.md
+          # Real-world (Wikidata CEO-history) temporal as-of: the SAME capability on real
+          # successions -- store.as_of respects valid-time; the temporal-blind floor is wrong
+          # on past-date queries.
+          python -m pytest tests/test_realworld_temporal.py -v
+          python scripts/run_realworld_temporal_e2e.py --out-md RESULTS_REALWORLD_TEMPORAL.md
 
       - name: Upload TEMPORAL.md
         if: ${{ always() }}
@@ -158,6 +163,14 @@ jobs:
         with:
           name: goldengraph-temporal
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/TEMPORAL.md
+          if-no-files-found: ignore
+
+      - name: Upload RESULTS_REALWORLD_TEMPORAL.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-realworld-temporal
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/RESULTS_REALWORLD_TEMPORAL.md
           if-no-files-found: ignore
 
       - name: KG-vs-KG capability scorecard gate (deterministic, key-free)
