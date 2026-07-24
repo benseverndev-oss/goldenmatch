@@ -581,38 +581,38 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 | Command | Option | Type | Default | Notes |
 |---|---|---|---|---|
-| `agent-serve` | `--port` | integer | `8200` | Port for the A2A server |
-| `agent-serve` | `--host` | text | `'0.0.0.0'` | Host to bind to |
-| `analyze-blocking` | `files` | text | **required** | File(s) to analyze |
-| `analyze-blocking` | `--config` | text | **required** | Config file with matchkeys |
-| `anomalies` | `files` | text | **required** | Input files (path or path:source_name) |
-| `anomalies` | `--sensitivity` | text | `'medium'` | low, medium, or high |
-| `anomalies` | `--output` | text | `None` | Write anomalies to a CSV instead of printing |
-| `anomalies` | `--limit` | integer | `50` | Max rows to print |
-| `autoconfig` | `files` | text | **required** | Input files as path or path:source_name |
-| `autoconfig` | `--out` | text | `None` | Write committed config to this path instead of stdout. |
-| `autoconfig` | `--domain` | text | `None` | Pin a domain rulebook (electronics, software, …) instead of auto-detecting. |
+| `agent-serve` | `--port` | int | `8200` | Port for the A2A server |
+| `agent-serve` | `--host` | str | `'0.0.0.0'` | Host to bind to |
+| `analyze-blocking` | `files` | str | **required** | File(s) to analyze |
+| `analyze-blocking` | `--config` | str | **required** | Config file with matchkeys |
+| `anomalies` | `files` | str | **required** | Input files (path or path:source_name) |
+| `anomalies` | `--sensitivity` | str | `'medium'` | low, medium, or high |
+| `anomalies` | `--output` | str | `None` | Write anomalies to a CSV instead of printing |
+| `anomalies` | `--limit` | int | `50` | Max rows to print |
+| `autoconfig` | `files` | str | **required** | Input files as path or path:source_name |
+| `autoconfig` | `--out` | str | `None` | Write committed config to this path instead of stdout. |
+| `autoconfig` | `--domain` | str | `None` | Pin a domain rulebook (electronics, software, …) instead of auto-detecting. |
 | `autoconfig` | `--show-controller` | boolean | `True` | Render the controller telemetry panel on stderr. |
 | `autoconfig` | `--verbose` | boolean | `False` | Include indicator priors + decision trace in the panel. |
 | `autoconfig` | `--quiet` | boolean | `False` | Suppress all stderr output (panel + status messages). |
-| `compare-clusters` | `file_a` | text | **required** | First cluster JSON file (baseline / ER1) |
-| `compare-clusters` | `file_b` | text | **required** | Second cluster JSON file (comparison / ER2) |
+| `compare-clusters` | `file_a` | str | **required** | First cluster JSON file (baseline / ER1) |
+| `compare-clusters` | `file_b` | str | **required** | Second cluster JSON file (comparison / ER2) |
 | `compare-clusters` | `--details` | boolean | `False` | Show per-cluster transformation details |
-| `compare-clusters` | `--case-type` | text | `None` | Filter details by case: unchanged, merged, partitioned, overlapping |
+| `compare-clusters` | `--case-type` | str | `None` | Filter details by case: unchanged, merged, partitioned, overlapping |
 | `compare-clusters` | `--output` | path | `None` | Save results to JSON |
-| `config delete` | `name` | text | **required** | Preset name to delete |
-| `config load` | `name` | text | **required** | Preset name to load |
-| `config load` | `--dest` | text | `'goldenmatch.yaml'` | Destination path |
-| `config save` | `name` | text | **required** | Preset name |
-| `config save` | `config_path` | text | **required** | Path to config YAML file |
-| `config show` | `name` | text | **required** | Preset name to display |
-| `dedupe` | `files` | text | **required** | Input files as path or path:source_name |
-| `dedupe` | `--config` | text | `None` | Path to YAML config file (optional - auto-detects if omitted) |
+| `config delete` | `name` | str | **required** | Preset name to delete |
+| `config load` | `name` | str | **required** | Preset name to load |
+| `config load` | `--dest` | str | `'goldenmatch.yaml'` | Destination path |
+| `config save` | `name` | str | **required** | Preset name |
+| `config save` | `config_path` | str | **required** | Path to config YAML file |
+| `config show` | `name` | str | **required** | Preset name to display |
+| `dedupe` | `files` | str | **required** | Input files as path or path:source_name |
+| `dedupe` | `--config` | str | `None` | Path to YAML config file (optional - auto-detects if omitted) |
 | `dedupe` | `--tui` | boolean | `False` | Open the interactive review TUI instead of running directly (auto-config path only). |
 | `dedupe` | `--no-tui` | boolean | `False` | Deprecated: non-interactive is now the default. Accepted for back-compat (no-op). |
-| `dedupe` | `--model` | text | `None` | Override embedding model selection |
+| `dedupe` | `--model` | str | `None` | Override embedding model selection |
 | `dedupe` | `--preview` | boolean | `False` | Preview results without writing files |
-| `dedupe` | `--preview-size` | integer | `10000` | Number of records for preview sample |
+| `dedupe` | `--preview-size` | int | `10000` | Number of records for preview sample |
 | `dedupe` | `--preview-random` | boolean | `False` | Random sample instead of first N |
 | `dedupe` | `--output-golden` | boolean | `False` | Output golden records |
 | `dedupe` | `--output-clusters` | boolean | `False` | Output cluster info |
@@ -623,24 +623,24 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--html-report` | boolean | `False` | Generate standalone HTML report |
 | `dedupe` | `--dashboard` | boolean | `False` | Generate before/after data quality dashboard |
 | `dedupe` | `--across-files-only` | boolean | `False` | Only match across different sources |
-| `dedupe` | `--output-dir` | text | `None` | Output directory |
-| `dedupe` | `--format` | text | `None` | Output format (csv, parquet) |
-| `dedupe` | `--run-name` | text | `None` | Run name for output files |
+| `dedupe` | `--output-dir` | str | `None` | Output directory |
+| `dedupe` | `--format` | str | `None` | Output format (csv, parquet) |
+| `dedupe` | `--run-name` | str | `None` | Run name for output files |
 | `dedupe` | `--auto-fix` | boolean | `False` | Run auto-fix before matching |
 | `dedupe` | `--auto-block` | boolean | `False` | Auto-suggest blocking keys |
 | `dedupe` | `--chunked` | boolean | `False` | Large dataset mode - process in chunks for files >1M records |
-| `dedupe` | `--chunk-size` | integer | `100000` | Records per chunk in chunked mode |
+| `dedupe` | `--chunk-size` | int | `100000` | Records per chunk in chunked mode |
 | `dedupe` | `--diff` | boolean | `False` | Generate before/after CSV diff |
 | `dedupe` | `--diff-html` | boolean | `False` | Generate before/after HTML diff with highlighting |
 | `dedupe` | `--merge-preview` | boolean | `False` | Show merge preview (what will change) without writing |
 | `dedupe` | `--anomalies` | boolean | `False` | Detect suspicious/fake records |
-| `dedupe` | `--anomaly-sensitivity` | text | `'medium'` | low, medium, or high |
+| `dedupe` | `--anomaly-sensitivity` | str | `'medium'` | low, medium, or high |
 | `dedupe` | `--llm-boost` | boolean | `False` | Boost accuracy with LLM-labeled training data |
 | `dedupe` | `--llm-retrain` | boolean | `False` | Force re-labeling (ignore saved model) |
-| `dedupe` | `--llm-provider` | text | `None` | LLM provider: auto, anthropic, or openai |
-| `dedupe` | `--llm-max-labels` | integer | `500` | Max pairs to label with LLM |
-| `dedupe` | `--backend` | text | `None` | Processing backend: default, bucket, chunked, ray, duckdb |
-| `dedupe` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. Layered with config.exclude_columns when both are present. |
+| `dedupe` | `--llm-provider` | str | `None` | LLM provider: auto, anthropic, or openai |
+| `dedupe` | `--llm-max-labels` | int | `500` | Max pairs to label with LLM |
+| `dedupe` | `--backend` | str | `None` | Processing backend: default, bucket, chunked, ray, duckdb |
+| `dedupe` | `--exclude-columns` | str | `None` | Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. Layered with config.exclude_columns when both are present. |
 | `dedupe` | `--show-controller` | boolean | `True` | Render AutoConfigController telemetry (stop_reason, decisions, Path Y) when auto-config ran. No-op for runs with an explicit --config. |
 | `dedupe` | `--suggest` | boolean | `False` | Show verified config-improvement suggestions for this run. |
 | `dedupe` | `--heal` | boolean | `False` | Apply the suggestion heal loop and print the applied trail. |
@@ -651,11 +651,11 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `demo` | `--dashboard` | boolean | `False` | Generate before/after dashboard |
 | `demo` | `--graph` | boolean | `False` | Generate cluster graph |
 | `demo` | `--quiet` | boolean | `False` | Suppress animated output |
-| `evaluate` | `files` | text | **required** | Input files (path or path:source_name) |
+| `evaluate` | `files` | str | **required** | Input files (path or path:source_name) |
 | `evaluate` | `--config` | path | **required** | Config YAML path |
 | `evaluate` | `--ground-truth` | path | `None` | Ground truth CSV path (required unless --certify) |
-| `evaluate` | `--col-a` | text | `'id_a'` | Ground truth column A |
-| `evaluate` | `--col-b` | text | `'id_b'` | Ground truth column B |
+| `evaluate` | `--col-a` | str | `'id_a'` | Ground truth column A |
+| `evaluate` | `--col-b` | str | `'id_b'` | Ground truth column B |
 | `evaluate` | `--threshold` | float | `None` | Override match threshold |
 | `evaluate` | `--output` | path | `None` | Save results to JSON |
 | `evaluate` | `--min-f1` | float | `None` | Minimum F1 score (exit code 1 if below). For CI/CD quality gates. |
@@ -664,206 +664,207 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `evaluate` | `--certify` | boolean | `False` | Estimate recall WITHOUT ground truth (unsupervised, via capture-recapture over the config's matchkeys/passes; needs >=3). |
 | `evaluate` | `--audit-out` | path | `None` | With --certify: emit a stratified audit sample CSV to label for a SAFE recall lower bound. |
 | `evaluate` | `--audit-in` | path | `None` | With --certify: read a labelled audit sample and print the audit-calibrated SAFE lower bound. |
-| `evaluate` | `--audit-n` | integer | `50` | Audit samples per stratum (default 50). |
+| `evaluate` | `--audit-n` | int | `50` | Audit samples per stratum (default 50). |
 | `evaluate` | `--threshold-sweep` | boolean | `False` | Sweep the link threshold over scored pairs: P/R/F1 table + recommended cut (+ Fellegi-Sunter m/u model report when a probabilistic matchkey ran). |
-| `explain` | `files` | text | **required** | Input files (path or path:source_name) |
+| `explain` | `files` | str | **required** | Input files (path or path:source_name) |
 | `explain` | `--config` | path | **required** | Config YAML path |
-| `explain` | `--pair` | text | `None` | Explain a pair: 'id_a,id_b' |
-| `explain` | `--cluster` | integer | `None` | Explain a cluster by id |
-| `identity conflicts` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
-| `identity conflicts` | `--dataset` | text | `None` | Filter to identities in this dataset. |
+| `explain` | `--pair` | str | `None` | Explain a pair: 'id_a,id_b' |
+| `explain` | `--cluster` | int | `None` | Explain a cluster by id |
+| `identity conflicts` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity conflicts` | `--dataset` | str | `None` | Filter to identities in this dataset. |
 | `identity conflicts` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
-| `identity history` | `entity_id` | text | **required** | The entity_id of the identity to operate on. |
-| `identity history` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
-| `identity history` | `--limit` | integer | `50` | Maximum number of events to return. |
+| `identity history` | `entity_id` | str | **required** | The entity_id of the identity to operate on. |
+| `identity history` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity history` | `--limit` | int | `50` | Maximum number of events to return. |
 | `identity history` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
-| `identity list` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
-| `identity list` | `--dataset` | text | `None` | Filter to identities in this dataset. |
-| `identity list` | `--status` | text | `None` | Filter to identities with this status. |
-| `identity list` | `--limit` | integer | `50` | Maximum number of identities to return. |
-| `identity list` | `--offset` | integer | `0` | Number of identities to skip for pagination. |
+| `identity list` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity list` | `--dataset` | str | `None` | Filter to identities in this dataset. |
+| `identity list` | `--status` | str | `None` | Filter to identities with this status. |
+| `identity list` | `--limit` | int | `50` | Maximum number of identities to return. |
+| `identity list` | `--offset` | int | `0` | Number of identities to skip for pagination. |
 | `identity list` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
-| `identity merge` | `keep` | text | **required** | entity_id to keep |
-| `identity merge` | `absorb` | text | **required** | entity_id to absorb |
-| `identity merge` | `--reason` | text | `None` | Optional reason recorded in the event log. |
-| `identity merge` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
-| `identity migrate` | `--dsn` | text | **required** | Postgres DSN; can also be set via GOLDENMATCH_IDENTITY_DSN. |
+| `identity merge` | `keep` | str | **required** | entity_id to keep |
+| `identity merge` | `absorb` | str | **required** | entity_id to absorb |
+| `identity merge` | `--reason` | str | `None` | Optional reason recorded in the event log. |
+| `identity merge` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity migrate` | `--dsn` | str | **required** | Postgres DSN; can also be set via GOLDENMATCH_IDENTITY_DSN. |
 | `identity migrate` | `--stamp-existing` | boolean | `False` | Stamp an existing v1 schema at revision 0001 without re-creating tables. |
-| `identity migrate` | `--revision` | text | `'head'` | Target revision (default: head). |
-| `identity migrate-ids` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
-| `identity migrate-ids` | `--dsn` | text | `None` | Database connection string for the identity store. |
+| `identity migrate` | `--revision` | str | `'head'` | Target revision (default: head). |
+| `identity migrate-ids` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity migrate-ids` | `--dsn` | str | `None` | Database connection string for the identity store. |
 | `identity migrate-ids` | `--dry-run` | boolean | `False` | Report what would change; mutate nothing. |
-| `identity resolve` | `record_id` | text | **required** | `&#123;source&#125;:&#123;pk&#125;` to look up |
-| `identity resolve` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity resolve` | `record_id` | str | **required** | `&#123;source&#125;:&#123;pk&#125;` to look up |
+| `identity resolve` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
 | `identity resolve` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
-| `identity show` | `entity_id` | text | **required** | The entity_id of the identity to operate on. |
-| `identity show` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `identity show` | `entity_id` | str | **required** | The entity_id of the identity to operate on. |
+| `identity show` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
 | `identity show` | `--json` | boolean | `False` | Emit results as JSON instead of a table. |
-| `identity split` | `entity_id` | text | **required** | The entity_id of the identity to operate on. |
-| `identity split` | `record_ids` | text | **required** | record_ids to move to a new identity |
-| `identity split` | `--reason` | text | `None` | Optional reason recorded in the event log. |
-| `identity split` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
-| `import-splink` | `input_path` | text | **required** | Splink settings or trained-model JSON file |
-| `import-splink` | `--output` | text | `'goldenmatch.yaml'` | Output YAML config path |
-| `import-splink` | `--model-out` | text | `None` | Persist imported trained m/u as an FS model JSON; sets model_path in the config |
+| `identity split` | `entity_id` | str | **required** | The entity_id of the identity to operate on. |
+| `identity split` | `record_ids` | str | **required** | record_ids to move to a new identity |
+| `identity split` | `--reason` | str | `None` | Optional reason recorded in the event log. |
+| `identity split` | `--path` | str | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `import-splink` | `input_path` | str | **required** | Splink settings or trained-model JSON file |
+| `import-splink` | `--output` | str | `'goldenmatch.yaml'` | Output YAML config path |
+| `import-splink` | `--model-out` | str | `None` | Persist imported trained m/u as an FS model JSON; sets model_path in the config |
 | `import-splink` | `--strict` | boolean | `False` | Fail on any lossy mapping (warnings), not just errors |
-| `import-splink` | `--upgrade` | text | `None` | Run the data-aware upgrade pass against this dataset (parquet/csv): four levers -- tf_tables, distance_thresholds, fan_out (negative evidence + cluster-guard tuning), calibration. Writes the UPGRADED config/model to --output/--model-out and the faithful baseline alongside as out.baseline.yaml/model.baseline.json. |
-| `import-splink` | `--splink-clusters` | text | `None` | Optional reference cluster mapping (parquet/csv) from the prior Splink run, for agreement measurement. First column = id, second column = cluster_id. |
-| `import-splink` | `--labels` | text | `None` | Optional ground-truth cluster mapping (parquet/csv) for true pairwise + B-cubed F1 measurement. First column = id, second column = cluster_id. |
-| `import-splink` | `--sample-cap` | integer | `100000` | Row cap for --upgrade lever computation and measurement (seeded subsample above it) |
+| `import-splink` | `--upgrade` | str | `None` | Run the data-aware upgrade pass against this dataset (parquet/csv): four levers -- tf_tables, distance_thresholds, fan_out (negative evidence + cluster-guard tuning), calibration. Writes the UPGRADED config/model to --output/--model-out and the faithful baseline alongside as out.baseline.yaml/model.baseline.json. |
+| `import-splink` | `--splink-clusters` | str | `None` | Optional reference cluster mapping (parquet/csv) from the prior Splink run, for agreement measurement. First column = id, second column = cluster_id. |
+| `import-splink` | `--labels` | str | `None` | Optional ground-truth cluster mapping (parquet/csv) for true pairwise + B-cubed F1 measurement. First column = id, second column = cluster_id. |
+| `import-splink` | `--sample-cap` | int | `100000` | Row cap for --upgrade lever computation and measurement (seeded subsample above it) |
 | `import-splink` | `--no-measure` | boolean | `False` | Skip the baseline-vs-upgraded measurement pass |
-| `import-splink` | `--id-column` | text | `None` | Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id) |
-| `incremental` | `base_file` | text | **required** | Base dataset file path |
+| `import-splink` | `--id-column` | str | `None` | Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id) |
+| `incremental` | `base_file` | str | **required** | Base dataset file path |
 | `incremental` | `--new-records` | path | **required** | New records CSV to match |
 | `incremental` | `--config` | path | **required** | Config YAML path |
 | `incremental` | `--output` | path | `None` | Output CSV path |
 | `incremental` | `--threshold` | float | `None` | Override threshold |
-| `incremental` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. |
-| `ingest-docs run` | `docs` | text | **required** | Document paths (PDF/image). |
-| `ingest-docs run` | `--schema` | text | **required** | Target schema JSON file. |
-| `ingest-docs run` | `--out` | text | **required** | Write records here (.csv or .parquet). |
-| `ingest-docs run` | `--backend` | text | `'vlm'` | Extraction backend. |
-| `ingest-docs run` | `--model` | text | `'gpt-4o'` | Vision model. |
-| `ingest-docs suggest-schema` | `sample` | text | **required** | A representative document (PDF/image). |
-| `ingest-docs suggest-schema` | `--out` | text | **required** | Write the proposed schema JSON here. |
-| `ingest-docs suggest-schema` | `--backend` | text | `'vlm'` | Extraction backend. |
-| `ingest-docs suggest-schema` | `--model` | text | `'gpt-4o'` | Vision model. |
-| `init` | `--output` | text | `None` | Output path for generated config |
-| `interactive` | `files` | text | **required** | File(s) to load |
-| `label` | `files` | text | **required** | Input files (path or path:source_name) |
+| `incremental` | `--exclude-columns` | str | `None` | Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. |
+| `ingest-docs run` | `docs` | str | **required** | Document paths (PDF/image). |
+| `ingest-docs run` | `--schema` | str | **required** | Target schema JSON file. |
+| `ingest-docs run` | `--out` | str | **required** | Write records here (.csv or .parquet). |
+| `ingest-docs run` | `--backend` | str | `'vlm'` | Extraction backend. |
+| `ingest-docs run` | `--model` | str | `'gpt-4o'` | Vision model. |
+| `ingest-docs suggest-schema` | `sample` | str | **required** | A representative document (PDF/image). |
+| `ingest-docs suggest-schema` | `--out` | str | **required** | Write the proposed schema JSON here. |
+| `ingest-docs suggest-schema` | `--backend` | str | `'vlm'` | Extraction backend. |
+| `ingest-docs suggest-schema` | `--model` | str | `'gpt-4o'` | Vision model. |
+| `init` | `--output` | str | `None` | Output path for generated config |
+| `interactive` | `files` | str | **required** | File(s) to load |
+| `label` | `files` | str | **required** | Input files (path or path:source_name) |
 | `label` | `--config` | path | **required** | Config YAML path |
 | `label` | `--output` | path | `'ground_truth.csv'` | Output ground truth CSV |
-| `label` | `--n` | integer | `50` | Number of pairs to label |
-| `label` | `--strategy` | text | `'borderline'` | Pair selection: borderline, random, or hardest |
+| `label` | `--n` | int | `50` | Number of pairs to label |
+| `label` | `--strategy` | str | `'borderline'` | Pair selection: borderline, random, or hardest |
 | `label` | `--append` | boolean | `False` | Append to existing ground truth file |
-| `lineage` | `files` | text | **required** | Input files (path or path:source_name) |
+| `lineage` | `files` | str | **required** | Input files (path or path:source_name) |
 | `lineage` | `--config` | path | **required** | Config YAML path |
-| `lineage` | `--output-dir` | text | `None` | Write lineage.json here (default: print a summary) |
-| `lineage` | `--run-name` | text | `'lineage'` | Run name for the lineage file |
-| `lineage` | `--max-pairs` | integer | `10000` | Cap on lineage records (0 = no cap) |
+| `lineage` | `--output-dir` | str | `None` | Write lineage.json here (default: print a summary) |
+| `lineage` | `--run-name` | str | `'lineage'` | Run name for the lineage file |
+| `lineage` | `--max-pairs` | int | `10000` | Cap on lineage records (0 = no cap) |
 | `lineage` | `--nl` | boolean | `False` | Include natural-language explanations |
-| `match` | `target` | text | **required** | Target file as path or path:source_name |
-| `match` | `--against` | text | **required** | Reference files as path or path:source_name |
-| `match` | `--config` | text | `None` | Path to YAML config file (optional - auto-detects if omitted) |
+| `match` | `target` | str | **required** | Target file as path or path:source_name |
+| `match` | `--against` | str | **required** | Reference files as path or path:source_name |
+| `match` | `--config` | str | `None` | Path to YAML config file (optional - auto-detects if omitted) |
 | `match` | `--preview` | boolean | `False` | Preview results without writing files |
-| `match` | `--preview-size` | integer | `10000` | Number of records for preview sample |
+| `match` | `--preview-size` | int | `10000` | Number of records for preview sample |
 | `match` | `--preview-random` | boolean | `False` | Random sample instead of first N |
 | `match` | `--output-matched` | boolean | `False` | Output matched records |
 | `match` | `--output-unmatched` | boolean | `False` | Output unmatched records |
 | `match` | `--output-scores` | boolean | `False` | Output score details |
 | `match` | `--output-all` | boolean | `False` | Output all result types |
 | `match` | `--output-report` | boolean | `False` | Generate summary report |
-| `match` | `--match-mode` | text | `'best'` | Match mode: best or all |
-| `match` | `--output-dir` | text | `None` | Output directory |
-| `match` | `--format` | text | `None` | Output format (csv, parquet) |
-| `match` | `--run-name` | text | `None` | Run name for output files |
+| `match` | `--match-mode` | str | `'best'` | Match mode: best or all |
+| `match` | `--output-dir` | str | `None` | Output directory |
+| `match` | `--format` | str | `None` | Output format (csv, parquet) |
+| `match` | `--run-name` | str | `None` | Run name for output files |
 | `match` | `--auto-fix` | boolean | `False` | Run auto-fix before matching |
 | `match` | `--auto-block` | boolean | `False` | Auto-suggest blocking keys |
-| `match` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. |
+| `match` | `--exclude-columns` | str | `None` | Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. |
 | `match` | `--verbose` | boolean | `False` | Verbose output |
 | `match` | `--quiet` | boolean | `False` | Suppress output |
-| `mcp-serve` | `files` | text | `None` | Data files to load |
-| `mcp-serve` | `--config` | text | `None` | Config YAML file |
-| `mcp-serve` | `--transport` | text | `'stdio'` | Transport: stdio or http |
-| `mcp-serve` | `--host` | text | `'0.0.0.0'` | HTTP host (only for http transport) |
-| `mcp-serve` | `--port` | integer | `8200` | HTTP port (only for http transport) |
-| `memory add` | `--decision` | text | **required** | approve \| reject \| field_correct |
-| `memory add` | `--dataset` | text | **required** | Dataset key (required) |
-| `memory add` | `--id-a` | integer | `None` | Pair-level: first row id |
-| `memory add` | `--id-b` | integer | `None` | Pair-level: second row id |
-| `memory add` | `--cluster-id` | integer | `None` | Field-level: cluster id the correction targets |
-| `memory add` | `--field-name` | text | `None` | Field-level: column being corrected |
-| `memory add` | `--original-value` | text | `None` | Field-level: original chosen value |
-| `memory add` | `--corrected-value` | text | `None` | Field-level: the value the reviewer changed it to |
-| `memory add` | `--reason` | text | `None` | Optional reason |
-| `memory add` | `--matchkey-name` | text | `None` | Optional matchkey scope |
-| `memory add` | `--source` | text | `'steward'` | Source: steward (1.0 trust) \| agent (0.5) \| boost \| unmerge |
-| `memory add` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
-| `memory export` | `out` | text | **required** | Output CSV path |
-| `memory export` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
-| `memory import` | `src` | text | **required** | Source CSV path |
-| `memory import` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
-| `memory learn` | `--matchkey-name` | text | `None` | Limit learning to this matchkey |
-| `memory learn` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
-| `memory show` | `id_a` | integer | **required** | First record ID |
-| `memory show` | `id_b` | integer | **required** | Second record ID |
-| `memory show` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
-| `memory stats` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
+| `mcp-serve` | `files` | str | `None` | Data files to load |
+| `mcp-serve` | `--config` | str | `None` | Config YAML file |
+| `mcp-serve` | `--transport` | str | `'stdio'` | Transport: stdio or http |
+| `mcp-serve` | `--host` | str | `'0.0.0.0'` | HTTP host (only for http transport) |
+| `mcp-serve` | `--port` | int | `8200` | HTTP port (only for http transport) |
+| `memory add` | `--decision` | str | **required** | approve \| reject \| field_correct |
+| `memory add` | `--dataset` | str | **required** | Dataset key (required) |
+| `memory add` | `--id-a` | int | `None` | Pair-level: first row id |
+| `memory add` | `--id-b` | int | `None` | Pair-level: second row id |
+| `memory add` | `--cluster-id` | int | `None` | Field-level: cluster id the correction targets |
+| `memory add` | `--field-name` | str | `None` | Field-level: column being corrected |
+| `memory add` | `--original-value` | str | `None` | Field-level: original chosen value |
+| `memory add` | `--corrected-value` | str | `None` | Field-level: the value the reviewer changed it to |
+| `memory add` | `--reason` | str | `None` | Optional reason |
+| `memory add` | `--matchkey-name` | str | `None` | Optional matchkey scope |
+| `memory add` | `--source` | str | `'steward'` | Source: steward (1.0 trust) \| agent (0.5) \| boost \| unmerge |
+| `memory add` | `--path` | str | `'.goldenmatch/memory.db'` | Memory DB path |
+| `memory export` | `out` | str | **required** | Output CSV path |
+| `memory export` | `--path` | str | `'.goldenmatch/memory.db'` | Memory DB path |
+| `memory import` | `src` | str | **required** | Source CSV path |
+| `memory import` | `--path` | str | `'.goldenmatch/memory.db'` | Memory DB path |
+| `memory learn` | `--matchkey-name` | str | `None` | Limit learning to this matchkey |
+| `memory learn` | `--path` | str | `'.goldenmatch/memory.db'` | Memory DB path |
+| `memory show` | `id_a` | int | **required** | First record ID |
+| `memory show` | `id_b` | int | **required** | Second record ID |
+| `memory show` | `--path` | str | `'.goldenmatch/memory.db'` | Memory DB path |
+| `memory stats` | `--path` | str | `'.goldenmatch/memory.db'` | Memory DB path |
 | `pprl auto-config` | `file` | path | **required** | Data file to analyze (CSV) |
-| `pprl auto-config` | `--security` | text | `'high'` | Security level: standard, high, paranoid |
+| `pprl auto-config` | `--security` | str | `'high'` | Security level: standard, high, paranoid |
 | `pprl auto-config` | `--llm` | boolean | `False` | Use LLM for enhanced recommendations |
 | `pprl link` | `--file-a` | path | **required** | Party A data file (CSV) |
 | `pprl link` | `--file-b` | path | **required** | Party B data file (CSV) |
-| `pprl link` | `--fields` | text | **required** | Comma-separated field names to match on |
+| `pprl link` | `--fields` | str | **required** | Comma-separated field names to match on |
 | `pprl link` | `--threshold` | float | `0.85` | Match threshold |
-| `pprl link` | `--security` | text | `'high'` | Security level: standard, high, paranoid |
-| `pprl link` | `--protocol` | text | `'trusted_third_party'` | Protocol: trusted_third_party or smc |
-| `pprl link` | `--scorer` | text | `'dice'` | Similarity scorer: dice or jaccard |
+| `pprl link` | `--security` | str | `'high'` | Security level: standard, high, paranoid |
+| `pprl link` | `--protocol` | str | `'trusted_third_party'` | Protocol: trusted_third_party or smc |
+| `pprl link` | `--scorer` | str | `'dice'` | Similarity scorer: dice or jaccard |
 | `pprl link` | `--output` | path | `None` | Output CSV path for cluster assignments |
-| `pprl link` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenFlow transforms skip them entirely; PPRL bloom filters never hash them. |
-| `profile` | `files` | text | **required** | File(s) to profile |
+| `pprl link` | `--exclude-columns` | str | `None` | Comma-separated columns to skip across the suite. GoldenFlow transforms skip them entirely; PPRL bloom filters never hash them. |
+| `profile` | `files` | str | **required** | File(s) to profile |
 | `profile` | `--verbose` | boolean | `False` | Show detailed per-column info |
 | `profile` | `--suggest-fixes` | boolean | `False` | Show what auto-fix would do (dry run) |
 | `profile` | `--exclusions` | boolean | `False` | Show GoldenCheck auto-config column exclusions (#404). Lists columns auto-config will skip (audit timestamps, foreign IDs, sentinel values, etc) and why. |
-| `review` | `files` | text | `None` | Input files (path or path:source_name). Omit to review only the pending queue. |
+| `review` | `files` | str | `None` | Input files (path or path:source_name). Omit to review only the pending queue. |
 | `review` | `--config` | path | **required** | Config YAML path |
-| `review` | `--job` | text | `'review'` | Review-queue job name for freshly-gated pairs |
-| `review` | `--queue-path` | text | `None` | SQLite review queue path (default: sibling of the config's memory store, else .goldenmatch/review_queue.db) |
-| `review` | `--memory-path` | text | `'.goldenmatch/memory.db'` | Learning Memory SQLite path |
+| `review` | `--job` | str | `'review'` | Review-queue job name for freshly-gated pairs |
+| `review` | `--queue-path` | str | `None` | SQLite review queue path (default: sibling of the config's memory store, else .goldenmatch/review_queue.db) |
+| `review` | `--memory-path` | str | `'.goldenmatch/memory.db'` | Learning Memory SQLite path |
 | `review` | `--merge-threshold` | float | `0.95` | Scores above this auto-merge (skip review) |
 | `review` | `--review-threshold` | float | `0.75` | Scores >= this go to review |
-| `review` | `--decided-by` | text | `'cli'` | Steward identifier recorded on each decision |
-| `review` | `--limit` | integer | `50` | Max pairs to review this session |
-| `rollback` | `run_id` | text | **required** | Run ID to rollback |
-| `rollback` | `--output-dir` | text | `'.'` | Directory containing run log |
-| `runs` | `--output-dir` | text | `'.'` | Directory containing run log |
-| `schedule` | `files` | text | **required** | Data files to process |
-| `schedule` | `--config` | text | `None` | Config YAML file |
-| `schedule` | `--every` | text | `None` | Run interval (e.g. 1h, 30m, 6h, 1d) |
-| `schedule` | `--cron` | text | `None` | Cron schedule (e.g. '0 6 * * *') |
-| `schedule` | `--output-dir` | text | `'.'` | Output directory |
-| `score` | `a` | text | **required** | First string. |
-| `score` | `b` | text | **required** | Second string. |
-| `score` | `--scorer` | text | `'jaro_winkler'` | Scorer: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble. |
-| `sensitivity` | `files` | text | **required** | Input files (path or path:source_name) |
+| `review` | `--decided-by` | str | `'cli'` | Steward identifier recorded on each decision |
+| `review` | `--limit` | int | `50` | Max pairs to review this session |
+| `rollback` | `run_id` | str | **required** | Run ID to rollback |
+| `rollback` | `--output-dir` | str | `'.'` | Directory containing run log |
+| `runs` | `--output-dir` | str | `'.'` | Directory containing run log |
+| `schedule` | `files` | str | **required** | Data files to process |
+| `schedule` | `--config` | str | `None` | Config YAML file |
+| `schedule` | `--every` | str | `None` | Run interval (e.g. 1h, 30m, 6h, 1d) |
+| `schedule` | `--cron` | str | `None` | Cron schedule (e.g. '0 6 * * *') |
+| `schedule` | `--output-dir` | str | `'.'` | Output directory |
+| `score` | `a` | str | **required** | First string. |
+| `score` | `b` | str | **required** | Second string. |
+| `score` | `--scorer` | str | `'jaro_winkler'` | Scorer: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble. |
+| `sensitivity` | `files` | str | **required** | Input files (path or path:source_name) |
 | `sensitivity` | `--config` | path | **required** | Config YAML path |
-| `sensitivity` | `--sweep` | text | **required** | Sweep spec: field:start:stop:step (repeatable) |
-| `sensitivity` | `--sample` | integer | `None` | Random sample size for speed |
+| `sensitivity` | `--sweep` | str | **required** | Sweep spec: field:start:stop:step (repeatable) |
+| `sensitivity` | `--sample` | int | `None` | Random sample size for speed |
 | `sensitivity` | `--output` | path | `None` | Save results to JSON |
-| `serve` | `files` | text | **required** | Data files to load |
-| `serve` | `--config` | text | `None` | Config YAML file |
-| `serve` | `--host` | text | `'127.0.0.1'` | Server host |
-| `serve` | `--port` | integer | `8080` | Server port |
+| `serve` | `files` | str | **required** | Data files to load |
+| `serve` | `--config` | str | `None` | Config YAML file |
+| `serve` | `--host` | str | `'127.0.0.1'` | Server host |
+| `serve` | `--port` | int | `8080` | Server port |
 | `serve-ui` | `path` | path | `None` | Optional run dir or project dir. |
-| `serve-ui` | `--host` | text | `'127.0.0.1'` | Host to bind. |
-| `serve-ui` | `--port` | integer | `5050` | Port (0 = pick free, default 5050 matches Vite proxy). |
+| `serve-ui` | `--host` | str | `'127.0.0.1'` | Host to bind. |
+| `serve-ui` | `--port` | int | `5050` | Port (0 = pick free, default 5050 matches Vite proxy). |
 | `serve-ui` | `--dev` | boolean | `False` | Skip static; expect Vite at :5173. |
 | `serve-ui` | `--open` | boolean | `True` | Open the UI in a browser once the server starts. |
-| `sync` | `--source-type` | text | `'postgres'` | Database type |
-| `sync` | `--connection-string` | text | `None` | Database URL |
-| `sync` | `--table` | text | **required** | Source table name |
-| `sync` | `--config` | text | `None` | Config YAML file |
-| `sync` | `--output-mode` | text | `'separate'` | separate or in_place |
+| `sync` | `--source-type` | str | `'postgres'` | Database type |
+| `sync` | `--connection-string` | str | `None` | Database URL |
+| `sync` | `--table` | str | **required** | Source table name |
+| `sync` | `--config` | str | `None` | Config YAML file |
+| `sync` | `--output-mode` | str | `'separate'` | separate or in_place |
 | `sync` | `--full-rescan` | boolean | `False` | Force full rescan |
 | `sync` | `--dry-run` | boolean | `False` | Match without writing results |
-| `sync` | `--incremental-column` | text | `None` | Column for incremental detection |
-| `sync` | `--chunk-size` | integer | `10000` | Records per chunk |
-| `sync` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them. Layered with config.exclude_columns when both are set. |
+| `sync` | `--incremental-column` | str | `None` | Column for incremental detection |
+| `sync` | `--chunk-size` | int | `10000` | Records per chunk |
+| `sync` | `--exclude-columns` | str | `None` | Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them. Layered with config.exclude_columns when both are set. |
 | `sync` | `--verbose` | boolean | `False` | Enable debug-level logging output. |
 | `sync` | `--quiet` | boolean | `False` | Suppress informational output. |
-| `unmerge` | `record_id` | integer | **required** | Record row ID to unmerge from its cluster |
-| `unmerge` | `--clusters` | text | `None` | Path to clusters CSV from a previous run |
-| `unmerge` | `--pairs` | text | `None` | Path to scored pairs CSV (id_a,id_b,score) |
+| `tui` | `files` | str | **required** | File(s) to load |
+| `unmerge` | `record_id` | int | **required** | Record row ID to unmerge from its cluster |
+| `unmerge` | `--clusters` | str | `None` | Path to clusters CSV from a previous run |
+| `unmerge` | `--pairs` | str | `None` | Path to scored pairs CSV (id_a,id_b,score) |
 | `unmerge` | `--shatter` | boolean | `False` | Shatter the entire cluster into singletons |
 | `unmerge` | `--threshold` | float | `0.0` | Min score threshold for re-clustering |
-| `unmerge` | `--output` | text | `None` | Where to write the re-clustered CSV (default: &lt;clusters>.unmerged.csv) |
-| `watch` | `--source-type` | text | `'postgres'` | Database type |
-| `watch` | `--connection-string` | text | `None` | Database URL |
-| `watch` | `--table` | text | **required** | Table to watch |
-| `watch` | `--config` | text | `None` | Config YAML file |
-| `watch` | `--interval` | integer | `30` | Seconds between polls |
-| `watch` | `--output-mode` | text | `'separate'` | separate or in_place |
-| `watch` | `--incremental-column` | text | `None` | Column for change detection |
+| `unmerge` | `--output` | str | `None` | Where to write the re-clustered CSV (default: &lt;clusters>.unmerged.csv) |
+| `watch` | `--source-type` | str | `'postgres'` | Database type |
+| `watch` | `--connection-string` | str | `None` | Database URL |
+| `watch` | `--table` | str | **required** | Table to watch |
+| `watch` | `--config` | str | `None` | Config YAML file |
+| `watch` | `--interval` | int | `30` | Seconds between polls |
+| `watch` | `--output-mode` | str | `'separate'` | separate or in_place |
+| `watch` | `--incremental-column` | str | `None` | Column for change detection |
 
 ## MCP tools
 

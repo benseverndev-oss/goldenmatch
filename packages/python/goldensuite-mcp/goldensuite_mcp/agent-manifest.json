@@ -2172,14 +2172,14 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8200",
               "help": "Port for the A2A server"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host to bind to"
@@ -2191,13 +2191,13 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "File(s) to analyze"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Config file with matchkeys"
             }
@@ -2208,27 +2208,27 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
             {
               "name": "--sensitivity",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'medium'",
               "help": "low, medium, or high"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Write anomalies to a CSV instead of printing"
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Max rows to print"
@@ -2240,20 +2240,20 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files as path or path:source_name"
             },
             {
               "name": "--out",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Write committed config to this path instead of stdout."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Pin a domain rulebook (electronics, software, …) instead of auto-detecting."
@@ -2286,13 +2286,13 @@
           "options": [
             {
               "name": "file_a",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "First cluster JSON file (baseline / ER1)"
             },
             {
               "name": "file_b",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Second cluster JSON file (comparison / ER2)"
             },
@@ -2305,7 +2305,7 @@
             },
             {
               "name": "--case-type",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter details by case: unchanged, merged, partitioned, overlapping"
@@ -2324,7 +2324,7 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name to delete"
             }
@@ -2339,13 +2339,13 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name to load"
             },
             {
               "name": "--dest",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'goldenmatch.yaml'",
               "help": "Destination path"
@@ -2357,13 +2357,13 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name"
             },
             {
               "name": "config_path",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Path to config YAML file"
             }
@@ -2374,7 +2374,7 @@
           "options": [
             {
               "name": "name",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Preset name to display"
             }
@@ -2385,13 +2385,13 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files as path or path:source_name"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to YAML config file (optional - auto-detects if omitted)"
@@ -2412,7 +2412,7 @@
             },
             {
               "name": "--model",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Override embedding model selection"
@@ -2426,7 +2426,7 @@
             },
             {
               "name": "--preview-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Number of records for preview sample"
@@ -2503,21 +2503,21 @@
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output directory"
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output format (csv, parquet)"
             },
             {
               "name": "--run-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run name for output files"
@@ -2545,7 +2545,7 @@
             },
             {
               "name": "--chunk-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Records per chunk in chunked mode"
@@ -2580,7 +2580,7 @@
             },
             {
               "name": "--anomaly-sensitivity",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'medium'",
               "help": "low, medium, or high"
@@ -2601,28 +2601,28 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "LLM provider: auto, anthropic, or openai"
             },
             {
               "name": "--llm-max-labels",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "500",
               "help": "Max pairs to label with LLM"
             },
             {
               "name": "--backend",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Processing backend: default, bucket, chunked, ray, duckdb"
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely. Layered with config.exclude_columns when both are present."
@@ -2709,7 +2709,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -2728,14 +2728,14 @@
             },
             {
               "name": "--col-a",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'id_a'",
               "help": "Ground truth column A"
             },
             {
               "name": "--col-b",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'id_b'",
               "help": "Ground truth column B"
@@ -2798,7 +2798,7 @@
             },
             {
               "name": "--audit-n",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Audit samples per stratum (default 50)."
@@ -2817,7 +2817,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -2829,14 +2829,14 @@
             },
             {
               "name": "--pair",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Explain a pair: 'id_a,id_b'"
             },
             {
               "name": "--cluster",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Explain a cluster by id"
@@ -2848,14 +2848,14 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter to identities in this dataset."
@@ -2874,20 +2874,20 @@
           "options": [
             {
               "name": "entity_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "The entity_id of the identity to operate on."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Maximum number of events to return."
@@ -2906,35 +2906,35 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter to identities in this dataset."
             },
             {
               "name": "--status",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Filter to identities with this status."
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Maximum number of identities to return."
             },
             {
               "name": "--offset",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "0",
               "help": "Number of identities to skip for pagination."
@@ -2953,26 +2953,26 @@
           "options": [
             {
               "name": "keep",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "entity_id to keep"
             },
             {
               "name": "absorb",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "entity_id to absorb"
             },
             {
               "name": "--reason",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reason recorded in the event log."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -2984,7 +2984,7 @@
           "options": [
             {
               "name": "--dsn",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Postgres DSN; can also be set via GOLDENMATCH_IDENTITY_DSN."
             },
@@ -2997,7 +2997,7 @@
             },
             {
               "name": "--revision",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'head'",
               "help": "Target revision (default: head)."
@@ -3009,14 +3009,14 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
             },
             {
               "name": "--dsn",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Database connection string for the identity store."
@@ -3035,13 +3035,13 @@
           "options": [
             {
               "name": "record_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "`{source}:{pk}` to look up"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -3060,13 +3060,13 @@
           "options": [
             {
               "name": "entity_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "The entity_id of the identity to operate on."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -3085,26 +3085,26 @@
           "options": [
             {
               "name": "entity_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "The entity_id of the identity to operate on."
             },
             {
               "name": "record_ids",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "record_ids to move to a new identity"
             },
             {
               "name": "--reason",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reason recorded in the event log."
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
@@ -3116,20 +3116,20 @@
           "options": [
             {
               "name": "input_path",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Splink settings or trained-model JSON file"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'goldenmatch.yaml'",
               "help": "Output YAML config path"
             },
             {
               "name": "--model-out",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Persist imported trained m/u as an FS model JSON; sets model_path in the config"
@@ -3143,28 +3143,28 @@
             },
             {
               "name": "--upgrade",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run the data-aware upgrade pass against this dataset (parquet/csv): four levers -- tf_tables, distance_thresholds, fan_out (negative evidence + cluster-guard tuning), calibration. Writes the UPGRADED config/model to --output/--model-out and the faithful baseline alongside as out.baseline.yaml/model.baseline.json."
             },
             {
               "name": "--splink-clusters",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reference cluster mapping (parquet/csv) from the prior Splink run, for agreement measurement. First column = id, second column = cluster_id."
             },
             {
               "name": "--labels",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional ground-truth cluster mapping (parquet/csv) for true pairwise + B-cubed F1 measurement. First column = id, second column = cluster_id."
             },
             {
               "name": "--sample-cap",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Row cap for --upgrade lever computation and measurement (seeded subsample above it)"
@@ -3178,7 +3178,7 @@
             },
             {
               "name": "--id-column",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id)"
@@ -3190,7 +3190,7 @@
           "options": [
             {
               "name": "base_file",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Base dataset file path"
             },
@@ -3222,7 +3222,7 @@
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely."
@@ -3238,32 +3238,32 @@
           "options": [
             {
               "name": "docs",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Document paths (PDF/image)."
             },
             {
               "name": "--schema",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Target schema JSON file."
             },
             {
               "name": "--out",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Write records here (.csv or .parquet)."
             },
             {
               "name": "--backend",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'vlm'",
               "help": "Extraction backend."
             },
             {
               "name": "--model",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'gpt-4o'",
               "help": "Vision model."
@@ -3275,26 +3275,26 @@
           "options": [
             {
               "name": "sample",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "A representative document (PDF/image)."
             },
             {
               "name": "--out",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Write the proposed schema JSON here."
             },
             {
               "name": "--backend",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'vlm'",
               "help": "Extraction backend."
             },
             {
               "name": "--model",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'gpt-4o'",
               "help": "Vision model."
@@ -3306,7 +3306,7 @@
           "options": [
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output path for generated config"
@@ -3318,7 +3318,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "File(s) to load"
             }
@@ -3329,7 +3329,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -3348,14 +3348,14 @@
             },
             {
               "name": "--n",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Number of pairs to label"
             },
             {
               "name": "--strategy",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'borderline'",
               "help": "Pair selection: borderline, random, or hardest"
@@ -3374,7 +3374,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -3386,21 +3386,21 @@
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Write lineage.json here (default: print a summary)"
             },
             {
               "name": "--run-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'lineage'",
               "help": "Run name for the lineage file"
             },
             {
               "name": "--max-pairs",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Cap on lineage records (0 = no cap)"
@@ -3419,19 +3419,19 @@
           "options": [
             {
               "name": "target",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Target file as path or path:source_name"
             },
             {
               "name": "--against",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Reference files as path or path:source_name"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to YAML config file (optional - auto-detects if omitted)"
@@ -3445,7 +3445,7 @@
             },
             {
               "name": "--preview-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Number of records for preview sample"
@@ -3494,28 +3494,28 @@
             },
             {
               "name": "--match-mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'best'",
               "help": "Match mode: best or all"
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output directory"
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output format (csv, parquet)"
             },
             {
               "name": "--run-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run name for output files"
@@ -3536,7 +3536,7 @@
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch never picks these for matchkeys/blocking; GoldenFlow transforms skip them entirely."
@@ -3562,35 +3562,35 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Data files to load"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: stdio or http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "HTTP host (only for http transport)"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8200",
               "help": "HTTP port (only for http transport)"
@@ -3602,82 +3602,82 @@
           "options": [
             {
               "name": "--decision",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "approve | reject | field_correct"
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Dataset key (required)"
             },
             {
               "name": "--id-a",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Pair-level: first row id"
             },
             {
               "name": "--id-b",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Pair-level: second row id"
             },
             {
               "name": "--cluster-id",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Field-level: cluster id the correction targets"
             },
             {
               "name": "--field-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Field-level: column being corrected"
             },
             {
               "name": "--original-value",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Field-level: original chosen value"
             },
             {
               "name": "--corrected-value",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Field-level: the value the reviewer changed it to"
             },
             {
               "name": "--reason",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional reason"
             },
             {
               "name": "--matchkey-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional matchkey scope"
             },
             {
               "name": "--source",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'steward'",
               "help": "Source: steward (1.0 trust) | agent (0.5) | boost | unmerge"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3689,13 +3689,13 @@
           "options": [
             {
               "name": "out",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Output CSV path"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3707,13 +3707,13 @@
           "options": [
             {
               "name": "src",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source CSV path"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3725,14 +3725,14 @@
           "options": [
             {
               "name": "--matchkey-name",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Limit learning to this matchkey"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3744,19 +3744,19 @@
           "options": [
             {
               "name": "id_a",
-              "type": "integer",
+              "type": "int",
               "required": true,
               "help": "First record ID"
             },
             {
               "name": "id_b",
-              "type": "integer",
+              "type": "int",
               "required": true,
               "help": "Second record ID"
             },
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3768,7 +3768,7 @@
           "options": [
             {
               "name": "--path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Memory DB path"
@@ -3786,7 +3786,7 @@
             },
             {
               "name": "--security",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'high'",
               "help": "Security level: standard, high, paranoid"
@@ -3817,7 +3817,7 @@
             },
             {
               "name": "--fields",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Comma-separated field names to match on"
             },
@@ -3830,21 +3830,21 @@
             },
             {
               "name": "--security",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'high'",
               "help": "Security level: standard, high, paranoid"
             },
             {
               "name": "--protocol",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'trusted_third_party'",
               "help": "Protocol: trusted_third_party or smc"
             },
             {
               "name": "--scorer",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'dice'",
               "help": "Similarity scorer: dice or jaccard"
@@ -3858,7 +3858,7 @@
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenFlow transforms skip them entirely; PPRL bloom filters never hash them."
@@ -3870,7 +3870,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "File(s) to profile"
             },
@@ -3902,7 +3902,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Input files (path or path:source_name). Omit to review only the pending queue."
@@ -3915,21 +3915,21 @@
             },
             {
               "name": "--job",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'review'",
               "help": "Review-queue job name for freshly-gated pairs"
             },
             {
               "name": "--queue-path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "SQLite review queue path (default: sibling of the config's memory store, else .goldenmatch/review_queue.db)"
             },
             {
               "name": "--memory-path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.goldenmatch/memory.db'",
               "help": "Learning Memory SQLite path"
@@ -3950,14 +3950,14 @@
             },
             {
               "name": "--decided-by",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'cli'",
               "help": "Steward identifier recorded on each decision"
             },
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "50",
               "help": "Max pairs to review this session"
@@ -3969,13 +3969,13 @@
           "options": [
             {
               "name": "run_id",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Run ID to rollback"
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Directory containing run log"
@@ -3987,7 +3987,7 @@
           "options": [
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Directory containing run log"
@@ -3999,34 +3999,34 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Data files to process"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--every",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Run interval (e.g. 1h, 30m, 6h, 1d)"
             },
             {
               "name": "--cron",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Cron schedule (e.g. '0 6 * * *')"
             },
             {
               "name": "--output-dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Output directory"
@@ -4038,19 +4038,19 @@
           "options": [
             {
               "name": "a",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "First string."
             },
             {
               "name": "b",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Second string."
             },
             {
               "name": "--scorer",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'jaro_winkler'",
               "help": "Scorer: exact, jaro_winkler, levenshtein, token_sort, soundex_match, dice, jaccard, ensemble."
@@ -4062,7 +4062,7 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input files (path or path:source_name)"
             },
@@ -4074,13 +4074,13 @@
             },
             {
               "name": "--sweep",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Sweep spec: field:start:stop:step (repeatable)"
             },
             {
               "name": "--sample",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Random sample size for speed"
@@ -4099,27 +4099,27 @@
           "options": [
             {
               "name": "files",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Data files to load"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'127.0.0.1'",
               "help": "Server host"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8080",
               "help": "Server port"
@@ -4138,14 +4138,14 @@
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'127.0.0.1'",
               "help": "Host to bind."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "5050",
               "help": "Port (0 = pick free, default 5050 matches Vite proxy)."
@@ -4175,34 +4175,34 @@
           "options": [
             {
               "name": "--source-type",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'postgres'",
               "help": "Database type"
             },
             {
               "name": "--connection-string",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Database URL"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source table name"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--output-mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'separate'",
               "help": "separate or in_place"
@@ -4223,21 +4223,21 @@
             },
             {
               "name": "--incremental-column",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column for incremental detection"
             },
             {
               "name": "--chunk-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Records per chunk"
             },
             {
               "name": "--exclude-columns",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them. Layered with config.exclude_columns when both are set."
@@ -4259,24 +4259,35 @@
           ]
         },
         {
+          "command": "tui",
+          "options": [
+            {
+              "name": "files",
+              "type": "str",
+              "required": true,
+              "help": "File(s) to load"
+            }
+          ]
+        },
+        {
           "command": "unmerge",
           "options": [
             {
               "name": "record_id",
-              "type": "integer",
+              "type": "int",
               "required": true,
               "help": "Record row ID to unmerge from its cluster"
             },
             {
               "name": "--clusters",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to clusters CSV from a previous run"
             },
             {
               "name": "--pairs",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to scored pairs CSV (id_a,id_b,score)"
@@ -4297,7 +4308,7 @@
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Where to write the re-clustered CSV (default: <clusters>.unmerged.csv)"
@@ -4309,48 +4320,48 @@
           "options": [
             {
               "name": "--source-type",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'postgres'",
               "help": "Database type"
             },
             {
               "name": "--connection-string",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Database URL"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Table to watch"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Config YAML file"
             },
             {
               "name": "--interval",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "30",
               "help": "Seconds between polls"
             },
             {
               "name": "--output-mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'separate'",
               "help": "separate or in_place"
             },
             {
               "name": "--incremental-column",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column for change detection"
@@ -5666,7 +5677,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8100",
               "help": "Port for the A2A server"
@@ -5691,7 +5702,7 @@
             },
             {
               "name": "--skip",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "[]",
               "help": "Techniques to skip"
@@ -5717,7 +5728,7 @@
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack to apply."
@@ -5742,14 +5753,14 @@
             },
             {
               "name": "--sample-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Bound the cross-tuple (pairwise) pass."
             },
             {
               "name": "--max-constraints",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Cap the ranked number of DCs reported."
@@ -5774,7 +5785,7 @@
             },
             {
               "name": "--ref",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Git ref to compare against (default: HEAD)."
@@ -5830,7 +5841,7 @@
             },
             {
               "name": "--mode",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'safe'",
               "help": "Fix mode: safe, moderate, or aggressive."
@@ -5881,7 +5892,7 @@
             },
             {
               "name": "--last",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "None",
               "help": "Show last N scans."
@@ -5931,7 +5942,7 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'anthropic'",
               "help": "LLM provider: anthropic or openai."
@@ -5947,21 +5958,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: 'stdio' or 'http'"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8100",
               "help": "Port for HTTP transport"
@@ -5979,7 +5990,7 @@
             },
             {
               "name": "--sample-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Rows to sample."
@@ -6003,7 +6014,7 @@
             },
             {
               "name": "--on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "FK mapping 'child_col=parent_col' (repeatable). Omit to auto-detect same-named parent-key columns."
@@ -6017,7 +6028,7 @@
             },
             {
               "name": "--fail-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'error'",
               "help": "CI exit threshold: error/warning/info."
@@ -6063,14 +6074,14 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'anthropic'",
               "help": "LLM provider: anthropic or openai."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack: healthcare, finance, ecommerce."
@@ -6109,14 +6120,14 @@
             },
             {
               "name": "--llm-provider",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'anthropic'",
               "help": "LLM provider: anthropic or openai."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack: healthcare, finance, ecommerce."
@@ -6144,14 +6155,14 @@
             },
             {
               "name": "--webhook",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "URL to POST findings to."
             },
             {
               "name": "--notify-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'grade-drop'",
               "help": "Trigger: grade-drop, any-error, any-warning."
@@ -6198,27 +6209,27 @@
           "options": [
             {
               "name": "connection",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Database connection string (postgres://, snowflake://, etc.)"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Table name to scan."
             },
             {
               "name": "--query",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Custom SQL query."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack."
@@ -6239,7 +6250,7 @@
             },
             {
               "name": "--sample-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "100000",
               "help": "Max rows to fetch."
@@ -6257,28 +6268,28 @@
             },
             {
               "name": "--interval",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'daily'",
               "help": "Interval: hourly, daily, weekly, 5min, 15min, 30min, or seconds."
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack."
             },
             {
               "name": "--webhook",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Webhook URL for notifications."
             },
             {
               "name": "--notify-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'grade-drop'",
               "help": "Trigger: grade-drop, any-error, any-warning."
@@ -6297,14 +6308,14 @@
           "options": [
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host to bind to."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8000",
               "help": "Port to listen on."
@@ -6354,21 +6365,21 @@
             },
             {
               "name": "--interval",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "60",
               "help": "Poll interval in seconds."
             },
             {
               "name": "--pattern",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Glob pattern (e.g., '*.csv')."
             },
             {
               "name": "--exit-on",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Exit on severity: error or warning."
@@ -6914,7 +6925,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8150",
               "help": "Port the A2A agent server listens on."
@@ -6955,7 +6966,7 @@
           "options": [
             {
               "name": "--limit",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "20",
               "help": "Number of recent runs to show"
@@ -7047,21 +7058,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: stdio or http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8150",
               "help": "Port for HTTP transport"
@@ -7090,7 +7101,7 @@
             },
             {
               "name": "--every",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'1h'",
               "help": "Interval (e.g., 5m, 1h, 30s)"
@@ -7116,14 +7127,14 @@
           "options": [
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Network interface the REST API server binds to."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8000",
               "help": "Port the REST API server listens on."
@@ -7141,7 +7152,7 @@
             },
             {
               "name": "--chunk-size",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "10000",
               "help": "Rows per batch"
@@ -7187,7 +7198,7 @@
             },
             {
               "name": "--domain",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Domain pack to use"
@@ -8009,7 +8020,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8250",
               "help": "Port for A2A server"
@@ -8021,7 +8032,7 @@
           "options": [
             {
               "name": "--dir",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'.'",
               "help": "Directory to create config in"
@@ -8033,14 +8044,14 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional data file to load (press 'r' to run)."
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional pipeline YAML config."
@@ -8052,21 +8063,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport type: stdio or http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8250",
               "help": "Port for HTTP transport"
@@ -8078,20 +8089,20 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Input file path"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Pipeline YAML config"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Output file path"
@@ -8105,21 +8116,21 @@
             },
             {
               "name": "--identity-path",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Enable Identity Graph; persist to this SQLite path"
             },
             {
               "name": "--identity-dataset",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Identity Graph dataset namespace"
             },
             {
               "name": "--identity-source-pk",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Column to derive `{source}:{source_pk}` record_id from"
@@ -8138,7 +8149,7 @@
           "options": [
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8000",
               "help": "Port for REST API"
@@ -8154,7 +8165,7 @@
           "options": [
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Pipeline YAML config"
             }
@@ -8449,19 +8460,19 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source CSV file to apply mapping to"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Path to mapping config YAML (required)"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Output CSV path (required)"
             },
@@ -8479,13 +8490,13 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source data to inspect (CSV path, schema YAML, etc.)"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Table name for DB sources"
@@ -8504,47 +8515,47 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source data (CSV path, DataFrame, DB URI, schema YAML)"
             },
             {
               "name": "target",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Target data (same variety of inputs)"
             },
             {
               "name": "--table",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Optional table name for DB sources"
             },
             {
               "name": "--required",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated required target field names"
             },
             {
               "name": "--schema-file",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Path to schema YAML file"
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'table'",
               "help": "Output format: table, json, or yaml"
             },
             {
               "name": "--output",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Save mapping config to this YAML file"
@@ -8577,21 +8588,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "Transport: 'stdio' or 'http'"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host for HTTP transport"
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8100",
               "help": "Port for HTTP transport"
@@ -8603,19 +8614,19 @@
           "options": [
             {
               "name": "source",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Source data to validate (CSV path, etc.)"
             },
             {
               "name": "--config",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Path to mapping config YAML (required)"
             },
             {
               "name": "--required",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Comma-separated required field names"
@@ -8818,21 +8829,21 @@
           "options": [
             {
               "name": "--transport",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'stdio'",
               "help": "stdio | http"
             },
             {
               "name": "--host",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'0.0.0.0'",
               "help": "Host interface to bind when transport is http."
             },
             {
               "name": "--port",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "8300",
               "help": "HTTP port (A2A convention: Analysis = 8300)."
@@ -8844,7 +8855,7 @@
           "options": [
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Dataset name whose run history to check."
             },
@@ -8856,21 +8867,21 @@
             },
             {
               "name": "--baseline",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'rolling_median'",
               "help": "Baseline strategy to compare against, e.g. rolling_median."
             },
             {
               "name": "--window",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "7",
               "help": "Number of prior runs the baseline is computed over."
             },
             {
               "name": "--policy",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "None",
               "help": "Per-metric gates: JSON or \"key=pct,key=pct\"."
@@ -8895,14 +8906,14 @@
             },
             {
               "name": "--analyzers",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'all'",
               "help": "Comma-separated analyzer names, or 'all'."
             },
             {
               "name": "--format",
-              "type": "text",
+              "type": "str",
               "required": false,
               "default": "'markdown'",
               "help": "markdown | json"
@@ -8921,13 +8932,13 @@
           "options": [
             {
               "name": "--metric",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Metric key to trend, e.g. cluster.singleton_ratio."
             },
             {
               "name": "--dataset",
-              "type": "text",
+              "type": "str",
               "required": true,
               "help": "Dataset name whose run history to read."
             },
@@ -8939,7 +8950,7 @@
             },
             {
               "name": "--last",
-              "type": "integer",
+              "type": "int",
               "required": false,
               "default": "30",
               "help": "Number of most recent runs to include in the trend."
