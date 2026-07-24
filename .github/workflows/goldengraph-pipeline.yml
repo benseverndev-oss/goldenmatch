@@ -129,6 +129,10 @@ jobs:
           python -m pytest tests/test_realworld_aggregation.py -v
           python scripts/run_realworld_phase15_e2e.py \
             --anchors-per-bucket 8 --out-md RESULTS_REALWORLD_AGGREGATION.md
+          # Phase 2: the COMPOUNDED win -- co-occurrence corpus + ER-blind floor. goldengraph's
+          # real dedup beats a naive RAG's alias over-counting on the COUNT query.
+          python scripts/run_realworld_phase2_e2e.py \
+            --anchors-per-bucket 8 --out-md RESULTS_REALWORLD_COOCCURRENCE.md
 
       - name: Upload RESULTS_REALWORLD_AGGREGATION.md
         if: ${{ always() }}
@@ -136,6 +140,14 @@ jobs:
         with:
           name: goldengraph-realworld-aggregation
           path: packages/python/goldenmatch/benchmarks/er-kg-bench/RESULTS_REALWORLD_AGGREGATION.md
+          if-no-files-found: ignore
+
+      - name: Upload RESULTS_REALWORLD_COOCCURRENCE.md
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: goldengraph-realworld-cooccurrence
+          path: packages/python/goldenmatch/benchmarks/er-kg-bench/RESULTS_REALWORLD_COOCCURRENCE.md
           if-no-files-found: ignore
 
       - name: Temporal as_of capability gate (deterministic, key-free)
