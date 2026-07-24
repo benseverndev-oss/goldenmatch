@@ -4,6 +4,22 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.19.0] - 2026-07-24
+
+### Added
+- **`analyze-blocking`, `autoconfig`, `lineage`, `explain` CLI commands** (cross-language parity batch 1). Four more `cli_commands python_only -> shared` moves; each is thin wiring over a core TS already had. This **discharges the 1.18.0 "Deferred" note** for `lineage` + `analyze-blocking`: the blocker was the missing in-memory dedupe-run context, and these commands simply run `dedupe` first to build it.
+  - `analyze-blocking <files...> [-c config] [--top n] [-o out.json]` - blocking-strategy suggestions (`analyzeBlocking`) over the configured matchkey fields, de-duplicated across matchkeys; falls back to the fields zero-config picks when no `--config` is given. Mirrors Python `analyze-blocking`.
+  - `autoconfig <files...> [-o out.json]` - derive and print the zero-config `GoldenMatchConfig` (`autoConfigure`): matchkeys, scorers, thresholds, blocking. Mirrors Python `autoconfig`.
+  - `lineage <files...> [-c config] [-o lineage.json]` - run a dedupe and persist the per-pair lineage (`buildLineage`). Mirrors Python `lineage`.
+  - `explain <files...> --pair a,b | --cluster id` - plain-language pair/cluster explanation (`explainPair` / `explainCluster`) over a fresh run. Mirrors Python `explain`.
+  - Tests: `tests/unit/cli-parity-batch1.test.ts`.
+
+### Fixed
+- `lineage` CLI output no longer reports `LineageBundle.recordCount` as a record total. That field is a misnomer in `core/lineage.ts` (it is set to `edges.length`), so the command prints the edge count and `stats.totalRecords` separately. The misnomer is now pinned by a test; it is TS-internal (Python's `build_lineage` returns a bare list of edge dicts with no equivalent field), so no cross-language behavior changed.
+
+### Deferred (documented)
+- `sensitivity` + `unmerge` remain `python_only` from the 1.18.0 list: `sensitivity` needs sweep-spec plumbing (a param-sweep description the CLI has no syntax for yet) and `unmerge` needs a *persisted* run to mutate rather than a fresh in-memory one. Still a bounded follow-up, not a silent drop.
+
 ## [1.18.0] - 2026-07-23
 
 ### Added

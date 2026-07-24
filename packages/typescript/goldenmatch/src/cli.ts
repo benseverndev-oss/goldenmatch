@@ -15,7 +15,15 @@ import {
   writeJson,
 } from "./node/connectors/file.js";
 import { dedupe, match, scoreStrings } from "./core/api.js";
-import { evaluateClusters, loadGroundTruthPairs } from "./core/index.js";
+import {
+  buildLineage,
+  evaluateClusters,
+  explainCluster,
+  explainPair,
+  loadGroundTruthPairs,
+} from "./core/index.js";
+import { analyzeBlocking } from "./core/block-analyzer.js";
+import { autoConfigure } from "./core/autoconfig.js";
 import { loadConfigFile } from "./node/config-file.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
@@ -1083,6 +1091,163 @@ program
       process.exit(1);
     }
   });
+
+// ---------- analyze-blocking ----------
+program
+  .command("analyze-blocking")
+  .description("Analyze data and suggest optimal blocking strategies")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-c, --config <path>", "config file whose matchkey fields to block on")
+  .option("--top <n>", "how many suggestions to show", (v) => parseInt(v, 10), 5)
+  .option("-o, --output <path>", "save the full suggestion list to JSON")
+  .action((files: string[], opts: { config?: string; top: number; output?: string }) => {
+    const rows = loadFilesWithSource(files);
+    // Block on the configured matchkey fields when a config is supplied;
+    // otherwise fall back to the fields zero-config would pick.
+    const cfg = opts.config ? loadConfigFile(opts.config) : autoConfigure(rows);
+    const columns = [
+      ...new Set(
+        (cfg.matchkeys ?? []).flatMap((mk) =>
+          (mk.fields ?? []).map((f) => f.field).filter((f): f is string => !!f),
+        ),
+      ),
+    ];
+    if (columns.length === 0) {
+      process.stderr.write("No matchkey fields to analyze; pass --config.\n");
+      process.exit(1);
+    }
+    const suggestions = analyzeBlocking(rows, columns);
+    process.stdout.write(
+      `Blocking analysis: ${rows.length} records, ${columns.length} candidate field(s)\n`,
+    );
+    for (const s of suggestions.slice(0, opts.top)) {
+      process.stdout.write(
+        `  ${s.description}\n` +
+          `      groups=${s.group_count} max=${s.max_group_size} ` +
+          `mean=${s.mean_group_size.toFixed(1)} comparisons=${s.total_comparisons} ` +
+          `recall~${(s.estimated_recall * 100).toFixed(1)}% score=${s.score.toFixed(3)}\n`,
+      );
+    }
+    if (opts.output) {
+      writeFileSync(opts.output, JSON.stringify(suggestions, null, 2) + "\n", "utf-8");
+      process.stdout.write(`Suggestions saved to ${opts.output}\n`);
+    }
+  });
+
+// ---------- autoconfig ----------
+program
+  .command("autoconfig")
+  .description("Derive a config from the data (zero-config) and print it")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-o, --output <path>", "save the derived config to JSON")
+  .action((files: string[], opts: { output?: string }) => {
+    const rows = loadFilesWithSource(files);
+    const cfg = autoConfigure(rows);
+    const mks = cfg.matchkeys ?? [];
+    process.stdout.write(
+      `Auto-config derived from ${rows.length} records: ${mks.length} matchkey(s)\n`,
+    );
+    for (const mk of mks) {
+      const fields = (mk.fields ?? [])
+        .map((f) => `${f.field}${f.scorer ? `:${f.scorer}` : ""}`)
+        .join(", ");
+      process.stdout.write(
+        `  ${mk.name ?? "(unnamed)"} [${mk.type}]` +
+          `${mk.threshold != null ? ` threshold=${mk.threshold}` : ""}\n` +
+          `      fields: ${fields || "(none)"}\n`,
+      );
+    }
+    if (cfg.blocking) {
+      process.stdout.write(
+        `  blocking: ${cfg.blocking.strategy ?? "static"}` +
+          `${cfg.blocking.keys ? ` on ${cfg.blocking.keys.join(", ")}` : ""}\n`,
+      );
+    }
+    if (opts.output) {
+      writeFileSync(opts.output, JSON.stringify(cfg, null, 2) + "\n", "utf-8");
+      process.stdout.write(`Config saved to ${opts.output}\n`);
+    }
+  });
+
+// ---------- lineage ----------
+program
+  .command("lineage")
+  .description("Build + persist the per-pair match lineage for a run")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-c, --config <path>", "path to YAML config file")
+  .option("-e, --exact <fields>", "comma-separated exact match fields")
+  .option("-f, --fuzzy <fields>", "fuzzy match fields, e.g. 'name:0.85'")
+  .option("-b, --blocking <fields>", "comma-separated blocking keys")
+  .option("-t, --threshold <value>", "overall fuzzy threshold", parseFloat)
+  .option("-o, --output <path>", "lineage JSON output path", "lineage.json")
+  .action(async (files: string[], opts: SharedMatchOpts & { output: string }) => {
+    const rows = loadFilesWithSource(files);
+    const result = await dedupe(rows, buildOptionsFromFlags(opts));
+    const bundle = buildLineage(result);
+    writeFileSync(opts.output, JSON.stringify(bundle, null, 2) + "\n", "utf-8");
+    // NOTE: bundle.recordCount is edges.length (a misnomer in core/lineage.ts),
+    // so report the pair/edge count and the run's record count separately rather
+    // than echoing it as a record total.
+    process.stdout.write(
+      `Lineage: ${bundle.edges.length} pair edge(s) over ` +
+        `${result.stats.totalRecords} record(s) -> ${opts.output}\n`,
+    );
+  });
+
+// ---------- explain ----------
+program
+  .command("explain")
+  .description("Explain why a pair matched, or summarize a cluster")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-c, --config <path>", "path to YAML config file")
+  .option("-e, --exact <fields>", "comma-separated exact match fields")
+  .option("-f, --fuzzy <fields>", "fuzzy match fields, e.g. 'name:0.85'")
+  .option("-b, --blocking <fields>", "comma-separated blocking keys")
+  .option("-t, --threshold <value>", "overall fuzzy threshold", parseFloat)
+  .option("--pair <a,b>", "explain a record pair by row id, e.g. '0,1'")
+  .option("--cluster <id>", "explain a cluster by id", (v) => parseInt(v, 10))
+  .action(
+    async (
+      files: string[],
+      opts: SharedMatchOpts & { pair?: string; cluster?: number },
+    ) => {
+      if (!opts.pair && opts.cluster == null) {
+        process.stderr.write("Pass --pair <a,b> or --cluster <id>.\n");
+        process.exit(1);
+      }
+      const rows = loadFilesWithSource(files);
+      const result = await dedupe(rows, buildOptionsFromFlags(opts));
+      const mk = (result.config.matchkeys ?? [])[0];
+      if (!mk) {
+        process.stderr.write("No matchkey in the resolved config; nothing to explain.\n");
+        process.exit(1);
+      }
+      if (opts.pair) {
+        const [a, b] = opts.pair.split(",").map((s) => parseInt(s.trim(), 10));
+        const rowA = rows[a as number];
+        const rowB = rows[b as number];
+        if (!rowA || !rowB) {
+          process.stderr.write(`Row id out of range (have ${rows.length} rows).\n`);
+          process.exit(1);
+        }
+        const ex = explainPair(rowA, rowB, mk);
+        process.stdout.write(
+          `${ex.explanation}\n` +
+            `  score=${ex.score.toFixed(4)} confidence=${ex.confidence}\n` +
+            ex.reasoning.map((r) => `  - ${r}\n`).join(""),
+        );
+      } else {
+        const cluster = result.clusters.get(opts.cluster as number);
+        if (!cluster) {
+          process.stderr.write(`Cluster ${opts.cluster} not found.\n`);
+          process.exit(1);
+        }
+        process.stdout.write(
+          explainCluster(opts.cluster as number, cluster, rows, mk).summary + "\n",
+        );
+      }
+    },
+  );
 
 // ---------------------------------------------------------------------------
 // Entry point
