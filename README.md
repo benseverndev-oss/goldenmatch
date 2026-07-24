@@ -168,6 +168,8 @@ Entity resolution is the stage most GraphRAG pipelines do badly — duplicate su
 | **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the ER stage of existing KG frameworks (neo4j-graphrag, LlamaIndex PropertyGraphIndex, Graphiti). One framework-agnostic `resolve_entities` core + per-framework adapters. Lift measured by [ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench), not asserted. | in-repo · first PyPI release pending |
 | **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → a durable bi-temporal store`. Engine (store / query / community detection) is pyo3-free Rust; ER is the differentiator. | in-repo · first PyPI release pending |
 
+**Measured, not asserted** ([ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench)): resolution scores **F1 0.602** on the labelled set, ahead of Neo4j-KGBuilder (0.456), neo4j-graphrag (0.403), and MS-GraphRAG / LightRAG / Cognee / mem0 (0.066). Beyond ER quality, a resolved graph does two things a passage-window RAG structurally can't — **exact aggregation** (size-invariant where RAG recall collapses `0.99 → 0.64` as the answer set grows) and **temporal as-of** (`1.000` vs RAG's `0.002` on past-date queries) — both benchmarked on real Wikidata data. What it does *not* differentiate on is multi-hop QA, where a hybrid graph converges to plain text-RAG; the edge is ER + structured queries, and that's what the board measures.
+
 ---
 
 ## Real-world pipelines
