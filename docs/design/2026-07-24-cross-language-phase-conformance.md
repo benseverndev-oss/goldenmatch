@@ -18,6 +18,7 @@ golden → output`.
 |---|---|---|
 | **Identity graph DB** (`.goldenmatch/identity.db`) | ✅ **byte-safe + cryptographically cross-verifiable** | schema byte-identical; audit seal/entry-hash cross-verify (`tests/parity/audit-hash.parity.test.ts`) |
 | **score → cluster** (scored pairs → clusters) | ✅ **byte-safe** (measured) | `tests/parity/cluster-conformance.parity.test.ts` — identical partition on identical pairs across 5 scenarios incl. the oversized-cluster MST auto-split (unambiguous **and** tied-weakest-edge) |
+| **end-to-end split-run** (Python `standardize→block→score` → TS `cluster`) | ✅ **reproduces all-Python** (measured) | `tests/parity/split-run.parity.test.ts` — TS clustering Python's REAL pipeline scored pairs == all-Python clusters; and an independent all-TS run reached the same partition with 0 threshold-flips and max score-delta <1e-3 on the test dataset |
 | **Cluster JSON** (`compare-clusters` interchange) | ✅ **byte-safe** | shared `parseClustersJson`; `cluster-conformance` above |
 | **Config YAML** | ✅ **portable** | language-neutral, shared schema + `config-edits`/`config-optimizer` parity |
 | **Learning Memory** corrections + **run log** + **`record_fingerprint`** | ✅ **portable** | `memory_export`/`import`, `list_runs`/`rollback` ported; fingerprint parity fixture |
@@ -50,11 +51,19 @@ embeddings, or the controller and expect reproduction.
   Python oracle: emits scored-pair scenarios + Python's clustering partition.
 - `packages/typescript/goldenmatch/tests/parity/cluster-conformance.parity.test.ts`
   — reruns each through TS `buildClusters` and asserts the identical partition.
+- `packages/python/goldenmatch/scripts/emit_split_run_fixture.py` +
+  `packages/typescript/goldenmatch/tests/parity/split-run.parity.test.ts` — the
+  **end-to-end split-run**: Python runs a REAL pipeline (`standardize→block→score`)
+  via `MatchEngine`, emits its scored pairs + clusters; the TS test (a) clusters
+  Python's real scored pairs and asserts it reproduces Python's own clusters
+  (handoff fidelity), and (b) runs a full independent all-TS `dedupe` and asserts
+  the same partition + a bounded scored-pairs delta (no threshold flip). Blocking
+  is neutralized (shared key) so any divergence would be scoring/standardize.
 
 **Extending it** (next boundaries, same pattern — Python oracle → TS parity
-test): a *scoring* conformance emitter that scores identical candidate pairs in
-both languages and reports max |Δscore| + threshold-flip count (today the 4dp
-verdict comes from `scorer-ground-truth`); a *standardize* emitter that diffs
-standardized cells to quantify the divergence; and an end-to-end *split-run*
-(standardize+block in one language, score+cluster in the other) asserting the
-final clusters vs the all-one-language reference within a stated tolerance.
+test): a *scoring* conformance emitter that reports max |Δscore| + threshold-flip
+count across a corruption sweep + more scorers; a *standardize* emitter that diffs
+standardized cells (esp. dates) to quantify the known divergence; and a split-run
+over a **corrupted** dataset engineered to sit pairs on the threshold, to find the
+case where the 4dp tolerance actually flips a final cluster (the split-run here
+agrees cleanly, but that is dataset-specific).
