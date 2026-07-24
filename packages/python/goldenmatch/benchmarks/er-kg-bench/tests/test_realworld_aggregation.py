@@ -234,3 +234,69 @@ def test_real_resolution_merges_variants_into_one_node_and_recovers_set():
     q = next(x for x in qs if x.kind == "list")
     got = goldengraph_aggregate(sg, cov, q.anchor_id, q.relation)
     assert set_f1(got, set(q.gold_members))["f1"] >= 0.99
+
+
+# --- Phase 2: co-occurrence corpus + ER-blind floor (compounded ER + aggregation) ------
+def test_cooccurrence_renders_members_under_distinct_aliases():
+    """Phase 2 corpus: a member with >=2 real surfaces is rendered in >=2 docs, EACH under
+    a DISTINCT surface; gold_count is unchanged (the TRUE member set)."""
+    from erkgbench.qa_e2e.realworld import _FIXTURE_DIR, generate_realworld_cooccurrence
+
+    docs, qs = generate_realworld_cooccurrence(
+        _FIXTURE_DIR / "wikidata_companies_TINY.json", mentions_per_member=3, seed=7)
+    q = next(q for q in qs if q.kind == "list")
+    assert q.gold_count == 3  # TINY anchor Q1 has members Q2,Q3,Q4
+    # Q2 "Beta Corp" has canonical + 2 aliases -> rendered in 3 docs under 3 distinct surfaces.
+    q2_docs = [d for d in docs if d.id.startswith("Q1::has_subsidiary::Q2::")]
+    assert len(q2_docs) == 3
+    assert len({d.dst_surface for d in q2_docs}) == 3  # all DISTINCT aliases
+
+
+def test_er_blind_floor_overcounts_while_oracle_floor_is_correct():
+    """The compounded-win mechanism: on the co-occurrence corpus a member recurs under
+    several aliases. The ER-BLIND floor (naive normalization) counts each un-mergeable
+    alias separately -> OVER-counts; the oracle floor (surface->qid) counts each member
+    ONCE. goldenmatch's real dedup lands between the two -- that is the ER contribution."""
+    from erkgbench.qa_e2e.realworld import (
+        _FIXTURE_DIR,
+        _realworld_entity_surfaces,
+        er_blind_floor_count,
+        generate_realworld_cooccurrence,
+        oracle_floor_count,
+    )
+
+    fixture = _FIXTURE_DIR / "wikidata_companies_TINY.json"
+    docs, qs = generate_realworld_cooccurrence(fixture, mentions_per_member=3, seed=7)
+    rows = _realworld_entity_surfaces(fixture)
+    q = next(q for q in qs if q.kind == "list")
+    gold_count = q.gold_count
+
+    anchor_surfaces = {s for eid, s, _t in rows if eid == q.anchor_id}
+    member_surfaces = {s for eid, s, _t in rows if eid != q.anchor_id}
+    surface_to_qid = {s: eid for eid, s, _t in rows}
+
+    er_blind = er_blind_floor_count(
+        docs, anchor_surfaces, passage_k=100, member_surfaces=member_surfaces)
+    oracle = oracle_floor_count(
+        docs, anchor_surfaces, passage_k=100, surface_to_qid=surface_to_qid)
+
+    assert oracle == gold_count            # perfect ER -> exact count
+    assert er_blind > gold_count           # ER-blind -> over-counts the aliases
+    assert er_blind >= oracle              # ER-blindness can only inflate the count
+
+
+def test_cooccurrence_run_gg_beats_er_blind_floor_on_count():
+    """Wheel-gated compounded win: on the co-occurrence corpus, goldengraph's real-ER
+    count-accuracy is >= the ER-blind floor's (its dedup merges aliases the naive floor
+    over-counts). The oracle floor is the perfect-ER ceiling."""
+    _wheel_or_skip()
+    from erkgbench.qa_e2e.realworld import _FIXTURE_DIR, run_realworld_cooccurrence
+
+    res = run_realworld_cooccurrence(
+        _FIXTURE_DIR / "wikidata_companies_TINY.json", mentions_per_member=3, passage_k=100)
+    # single 3-member anchor -> one bucket
+    (gg,) = list(res["gg_count_acc"].values())
+    (orc,) = list(res["oracle_floor_count_acc"].values())
+    (erb,) = list(res["er_blind_count_acc"].values())
+    assert orc >= gg >= erb            # real ER lands between perfect-ER and no-ER
+    assert gg > erb                    # the compounded win: dedup beats the ER-blind floor
