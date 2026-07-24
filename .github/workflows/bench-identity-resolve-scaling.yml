@@ -1,0 +1,54 @@
+name: bench-identity-resolve-scaling
+
+# Scaling harness for the SQLite identity resolve path (issue #2105).
+#
+# #2105 reported resolve going superlinear (5.3x overhead at 250k, 17.4x at 1M)
+# and OOM-killing a 64 GB box at 14M. The check that matters is the SHAPE:
+# ms-per-identity across a scale ladder should be FLAT once resolve is linear in
+# the identity graph rather than in the input frame.
+#
+# Not part of PR gating -- workflow_dispatch only.
+on:
+  workflow_dispatch:
+    inputs:
+      ns:
+        description: "Row counts to sweep (comma-separated)"
+        default: "250000,1000000,4000000"
+      arms:
+        description: "batched (default) and/or autocommit (GOLDENMATCH_IDENTITY_SQLITE_BATCH=0, the pre-#2105 write path)"
+        default: "batched,autocommit"
+      emit_singletons:
+        description: "One identity per record (the schema default) -- far heavier"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # Beefy box so the profile is not starved, and so the 14M-shaped rungs have
+    # somewhere to go (matches the suite bench default).
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Bench identity resolve scaling
+        run: |
+          uv run python packages/python/goldenmatch/scripts/bench_identity_resolve_scaling.py \
+            --ns "${{ inputs.ns }}" \
+            --arms "${{ inputs.arms }}" \
+            ${{ inputs.emit_singletons && '--emit-singletons' || '' }} \
+            --output bench_identity_resolve_scaling.json
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: bench-identity-resolve-scaling-results
+          path: bench_identity_resolve_scaling.json

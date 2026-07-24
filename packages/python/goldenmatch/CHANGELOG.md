@@ -80,6 +80,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **SQLite identity resolve no longer scales with the input frame (#2105).** A 14M-row
+  dedupe with `identity.backend="sqlite"` OOM-killed a 64 GB box, and the resolve step
+  ran 5-17x the cost of the same dedupe with identity off. Three independent causes,
+  all on the SQLite single-node path:
+  - **Unbounded prep (the OOM).** `resolve_clusters` turned EVERY input row into
+    ~2.5 KB of Python heap (row dict + payload dict + record hash + source + pk +
+    record-id candidates) before looking at which rows a cluster actually references
+    — ~35 GB on a 14M-row frame, on top of the pipeline's own resident set. With
+    `emit_singletons=False` the overwhelming majority of those rows are never read
+    again (the reported run resolved 107,723 records out of 1M rows). The prep is now
+    bounded to rows a surviving cluster references, so it scales with the identity
+    graph rather than the frame. Measured **~9x lower peak Python heap** on a
+    50k-400k ladder, and flat per-member instead of per-row.
+  - **One transaction per statement.** `IdentityStore.bulk_writes()` was a deliberate
+    no-op for SQLite ("already local + WAL"), and the connection is opened
+    `isolation_level=None`, so every INSERT committed on its own and paid a WAL sync
+    — while resolve issues ~6 statements per cluster. Measured ~750 us/statement
+    autocommit vs ~30-90 us batched. SQLite now runs the resolve writes inside
+    explicit transactions, committing in `GOLDENMATCH_IDENTITY_SQLITE_BATCH_SIZE`
+    chunks (default 10,000) so the WAL cannot grow without bound on a
+    multi-million-row run. Reads inside the batch see their own pending writes (same
+    connection), so the absorb / merge branches are unaffected. Kill-switch
+    `GOLDENMATCH_IDENTITY_SQLITE_BATCH=0` restores per-statement autocommit.
+  - **A dead per-pair dict.** `scored_pairs` was folded into a
+    `{(record_a, record_b): score}` map that nothing ever read — ~1.2 s and ~102 bytes
+    per million pairs, built over the FULL pre-cluster scored-pair stream (far larger
+    than the edge set on wide-block data) on every resolve. Removed; evidence edges
+    already come from the per-cluster `pair_scores` / `pair_score_view`.
+
+  Net on a 50k-400k ladder shaped like the report (natural PK, ~11% of rows in a
+  multi-record cluster): **2.5-4.5x faster wall and ~9x lower peak Python heap**, with
+  byte-identical store contents. `emit_singletons=True` benefits from the same write
+  batching. Output is unchanged on every backend; Postgres and Mongo paths untouched.
 - **Zero-config Fellegi-Sunter recall no longer collapses at scale (candidate-pair
   projection fix + recall-safe compounding + memory-aware budget).** Zero-config
   FS recall collapsed **1.0 at ≤2.4M → 0.82 at 4.8M → ~0.02 at 30M** (F1 0.030,
