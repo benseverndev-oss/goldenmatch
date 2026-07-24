@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.probabilistic import (
     EMResult,
