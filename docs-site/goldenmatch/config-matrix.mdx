@@ -851,6 +851,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `sync` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them. Layered with config.exclude_columns when both are set. |
 | `sync` | `--verbose` | boolean | `False` | Enable debug-level logging output. |
 | `sync` | `--quiet` | boolean | `False` | Suppress informational output. |
+| `tui` | `files` | text | **required** | File(s) to load |
 | `unmerge` | `record_id` | integer | **required** | Record row ID to unmerge from its cluster |
 | `unmerge` | `--clusters` | text | `None` | Path to clusters CSV from a previous run |
 | `unmerge` | `--pairs` | text | `None` | Path to scored pairs CSV (id_a,id_b,score) |

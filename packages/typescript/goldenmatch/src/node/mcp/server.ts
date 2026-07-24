@@ -4,7 +4,7 @@
  *
  * Node-only: uses node:fs, node:path, node:readline. NOT edge-safe.
  *
- * Exposes 80 tools covering dedupe, match, scoring, explanation,
+ * Exposes 83 tools covering dedupe, match, scoring, explanation,
  * profiling, auto-config (shorthand), evaluation, listings, the Splink ->
  * GoldenMatch config converter (convert_splink_config), CCMS cluster
  * comparison (compare_clusters), Learning Memory (6 memory tools via
@@ -15,9 +15,11 @@
  * get_stats/list_clusters/get_cluster/get_golden_record/export_results/
  * upload_dataset/lineage, backed by the server-held RUN_STORE), the rollback
  * subsystem tools (list_runs/rollback via ROLLBACK_TOOLS, backed by the
- * on-disk .goldenmatch_runs.json run log), and the cluster-surgery tools
+ * on-disk .goldenmatch_runs.json run log), the cluster-surgery tools
  * (unmerge_record/shatter_cluster via SURGERY_TOOLS, which mutate the current
- * RUN_STORE run in place).
+ * RUN_STORE run in place), and the user-defined domain rulebooks
+ * (list_domains/create_domain/test_domain via DOMAIN_TOOLS, over YAML in
+ * .goldenmatch/domains).
  *
  * Every tool dispatch is wrapped in try/catch so a single failure never
  * crashes the JSON-RPC loop; errors come back as `{ error: "<msg>" }`.
@@ -73,6 +75,7 @@ import { getMatchkeys } from "../../core/types.js";
 import { sanitizePath } from "./paths.js";
 import { RUN_STORE } from "./run-store.js";
 import { RUN_TOOLS, RUN_TOOL_NAMES, handleRunTool } from "./run-tools.js";
+import { DOMAIN_TOOLS, DOMAIN_TOOL_NAMES, handleDomainTool } from "./domain-tools.js";
 import {
   ROLLBACK_TOOLS,
   ROLLBACK_TOOL_NAMES,
@@ -679,6 +682,7 @@ export const TOOLS: readonly Tool[] = [
   ...RUN_TOOLS,
   ...ROLLBACK_TOOLS,
   ...SURGERY_TOOLS,
+  ...DOMAIN_TOOLS,
 ];
 
 // ---------------------------------------------------------------------------
@@ -814,6 +818,10 @@ export async function handleTool(
     // Cluster-surgery tools mutate the current run in RUN_STORE in place.
     if (SURGERY_TOOL_NAMES.has(name)) {
       return await handleSurgeryTool(name, args);
+    }
+    // Domain-rulebook tools read/write user YAML under .goldenmatch/domains.
+    if (DOMAIN_TOOL_NAMES.has(name)) {
+      return handleDomainTool(name, args);
     }
     switch (name) {
       case "find_duplicates":   // alias
@@ -1164,7 +1172,7 @@ export async function handleTool(
       case "server_info":
         return {
           name: "goldenmatch-js",
-          version: "1.19.0",
+          version: "1.20.0",
           tool_count: TOOLS.length,
           description:
             "Node-only GoldenMatch MCP server over stdio (JSON-RPC 2.0)",
@@ -1591,7 +1599,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "goldenmatch-js", version: "1.19.0" },
+              serverInfo: { name: "goldenmatch-js", version: "1.20.0" },
               capabilities: { tools: {} },
             },
           });

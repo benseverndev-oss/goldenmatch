@@ -332,6 +332,16 @@ def interactive_cmd(
     tui_app.run()
 
 
+# Same command under the TypeScript CLI's name. `interactive` (Python) and `tui`
+# (TS) were always the SAME operation, so the parity manifest counted one
+# capability as both a python_only and a ts_only gap; both CLIs now answer to
+# both names. Registering the function twice (rather than aliasing) is what the
+# surface emitters actually see.
+app.command("tui", help="Launch the interactive TUI (alias of `interactive`).")(
+    interactive_cmd
+)
+
+
 @app.command("score")
 def score_cmd(
     a: str = typer.Argument(..., help="First string."),

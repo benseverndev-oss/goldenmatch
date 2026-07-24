@@ -4259,6 +4259,17 @@
           ]
         },
         {
+          "command": "tui",
+          "options": [
+            {
+              "name": "files",
+              "type": "text",
+              "required": true,
+              "help": "File(s) to load"
+            }
+          ]
+        },
+        {
           "command": "unmerge",
           "options": [
             {
