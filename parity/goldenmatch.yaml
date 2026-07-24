@@ -143,6 +143,7 @@ cli_commands:
   shared:
   - agent-serve
   - analyze-blocking
+  - anomalies
   - autoconfig
   - compare-clusters
   - config
@@ -169,7 +170,6 @@ cli_commands:
   - tui
   - unmerge
   python_only:
-  - anomalies
   - ingest-docs
   - init
   - label
