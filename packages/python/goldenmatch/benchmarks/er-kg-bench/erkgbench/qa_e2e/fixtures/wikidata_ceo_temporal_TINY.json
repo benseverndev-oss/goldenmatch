@@ -1,0 +1,12 @@
+{
+  "meta": {"source": "wikidata", "pulled": "test", "domain": "ceo_temporal", "current_year": 2026},
+  "entities": [
+    {"qid": "Q1", "canonical": "Acme Corp"},
+    {"qid": "Q2", "canonical": "Alice Anderson"},
+    {"qid": "Q3", "canonical": "Bob Brown"}
+  ],
+  "temporal_facts": [
+    {"anchor_qid": "Q1", "relation": "chief_executive_officer",
+     "a_qid": "Q2", "b_qid": "Q3", "tc": 2019, "start_a": 2010}
+  ]
+}
