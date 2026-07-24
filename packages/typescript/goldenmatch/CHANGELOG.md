@@ -4,6 +4,21 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.25.0] - 2026-07-24
+
+### Added
+- **`schedule` CLI command** (parity batch 8). goldenmatch `cli_commands.python_only` **6 -> 5**.
+  `schedule <files...> [-c cfg] (--every 1h | --cron '0 6 * * *') [--output-dir .] [--max-runs N]`
+  runs dedupe on a repeating interval, writing `<jobId>_run<N>_golden.csv` per run.
+  `src/node/scheduler.ts` ports `core/scheduler.py` (`parseInterval` / `parseCron` / `ScheduledJob`).
+
+### Known shared limitation (deliberately NOT fixed one-sided)
+- **`--cron` is interval-only, not wall-clock.** `parseCron` validates the 5-field shape and then collapses to a coarse interval (daily / hourly) -- it does not compute the next matching time. This is a faithful port of Python's behavior, whose own docstring says "For full cron support, use system cron." Implementing real cron on TypeScript alone would make `--cron "0 6 * * *"` mean *daily at 06:00* on TS and *every 86400s from now* on Python: a silent operational divergence in a scheduling tool, which is worse than a shared limitation. The TS CLI prints a note when `--cron` is used, and the limitation is pinned by tests. Fixing it properly means changing both surfaces together.
+
+### Fixed (bug found while porting)
+- **`--max-runs` now bounds ATTEMPTS, not successes.** Counting only successful runs meant a permanently-failing job ignored the cap and looped forever, because a failed attempt never advances `runCount`. Guarded by a test that would hang under the old semantics. A failing run is still reported and the schedule continues -- a scheduled job that dies on one bad input is worse than one that logs and retries.
+- `parseInterval` rejects a non-integer numeric part (`1.5h`). Python's `int(spec[:-1])` raises on it, so silently reading it as `1h` would have diverged the two CLIs on the same flag.
+
 ## [1.24.0] - 2026-07-24
 
 ### Added

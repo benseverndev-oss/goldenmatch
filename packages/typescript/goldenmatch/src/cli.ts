@@ -9,6 +9,7 @@
 import { Command } from "commander";
 import { extname, basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import {
   readFile,
   writeCsv,
@@ -1507,6 +1508,61 @@ configCmd
       process.exit(1);
     }
   });
+
+// ---------- schedule ----------
+program
+  .command("schedule")
+  .description("Run deduplication on a schedule")
+  .argument("<files...>", "data files to process")
+  .option("-c, --config <path>", "config YAML path")
+  .option("--every <spec>", "run interval (e.g. 1h, 30m, 6h, 1d)")
+  .option("--cron <spec>", "cron schedule (e.g. '0 6 * * *')")
+  .option("--output-dir <dir>", "output directory", ".")
+  .option("--max-runs <n>", "stop after N runs (default: run until interrupted)", (v) =>
+    parseInt(v, 10),
+  )
+  .action(
+    async (
+      files: string[],
+      opts: { config?: string; every?: string; cron?: string; outputDir: string; maxRuns?: number },
+    ) => {
+      const { ScheduledJob, parseInterval, parseCron } = await import("./node/scheduler.js");
+      if (!opts.every && !opts.cron) {
+        process.stderr.write("Error: specify --every or --cron\n");
+        process.exit(1);
+      }
+      let interval: number;
+      try {
+        interval = opts.every ? parseInterval(opts.every) : parseCron(opts.cron!);
+      } catch (err) {
+        process.stderr.write(`Error: ${(err as Error).message}\n`);
+        process.exit(1);
+      }
+      if (opts.cron) {
+        // Be explicit rather than let an operator assume real cron semantics.
+        process.stderr.write(
+          "Note: --cron is simplified (interval only, not wall-clock scheduling), " +
+            "matching the Python CLI. Use system cron for exact times.\n",
+        );
+      }
+
+      const job = new ScheduledJob({
+        jobId: `gm-${randomUUID().replace(/-/g, "").slice(0, 8)}`,
+        filePaths: files,
+        ...(opts.config ? { config: loadConfigFile(opts.config) } : {}),
+        intervalSeconds: interval,
+        outputDir: opts.outputDir,
+        loadRows: (paths) => loadFilesWithSource(paths),
+        out: (s) => process.stdout.write(s + "\n"),
+      });
+      // Ctrl+C finishes the current run's bookkeeping instead of hard-killing.
+      process.on("SIGINT", () => {
+        process.stdout.write("\nStopping after the current run...\n");
+        job.stop();
+      });
+      await job.run(opts.maxRuns !== undefined ? { maxRuns: opts.maxRuns } : {});
+    },
+  );
 
 // ---------- init (interactive config wizard) ----------
 program
