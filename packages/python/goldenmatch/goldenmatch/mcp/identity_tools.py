@@ -26,6 +26,7 @@ from mcp.types import TextContent, Tool
 
 from goldenmatch.identity import (
     IdentityStore,
+    audit_log_page,
     claim_record,
     entity_profile,
     find_by_record,
@@ -38,7 +39,8 @@ from goldenmatch.identity import (
     manual_split,
     mediate_conflict,
     seal_audit_log,
-    steward_worklist,
+    seal_result_dict,
+    steward_worklist_page,
     verify_audit_chain,
 )
 
@@ -463,50 +465,20 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
     if name == "identity_audit":
         limit = int(args.get("limit", 500))
         with _open(args) as s:
-            events = s.export_audit_log(
-                dataset=args.get("dataset"), actor=args.get("actor")
+            return audit_log_page(
+                s, dataset=args.get("dataset"), actor=args.get("actor"), limit=limit
             )
-        items = [
-            {
-                "event_id": e.event_id, "entity_id": e.entity_id, "kind": e.kind,
-                "actor": e.actor, "trust": e.trust,
-                "claim_type": e.claim_type, "evidence_ref": e.evidence_ref,
-                "previous_claim_id": e.previous_claim_id,
-                "recorded_at": e.recorded_at.isoformat() if e.recorded_at else None,
-                "run_name": e.run_name, "dataset": e.dataset, "payload": e.payload,
-            }
-            for e in events[:limit]
-        ]
-        return {"items": items, "total": len(events)}
 
     if name == "identity_audit_seal":
         actor, _ = _actor_trust(args)
         with _open(args) as s:
-            seal = seal_audit_log(s, actor=actor, dataset=args.get("dataset"))
-        if seal is None:
-            return {"sealed": False, "reason": "no new events to seal"}
-        return {
-            "sealed": True,
-            "seal_id": seal.seal_id,
-            "root_hash": seal.root_hash,
-            "event_count": seal.event_count,
-            "last_event_id": seal.last_event_id,
-            "dataset": seal.dataset,
-            "actor": seal.actor,
-        }
+            return seal_result_dict(
+                seal_audit_log(s, actor=actor, dataset=args.get("dataset"))
+            )
 
     if name == "identity_audit_verify":
         with _open(args) as s:
-            result = verify_audit_chain(s, dataset=args.get("dataset"))
-        return {
-            "ok": result.ok,
-            "events_checked": result.events_checked,
-            "seals_checked": result.seals_checked,
-            "content_mismatches": result.content_mismatches,
-            "seal_mismatches": result.seal_mismatches,
-            "missing_sealed_events": result.missing_sealed_events,
-            "summary": result.summary(),
-        }
+            return verify_audit_chain(s, dataset=args.get("dataset")).as_dict()
 
     if name == "identity_show":
         with _open(args) as s:
@@ -524,13 +496,12 @@ def _dispatch(name: str, args: dict) -> dict[str, Any]:
 
     if name == "identity_worklist":
         with _open(args) as s:
-            items = steward_worklist(
+            return steward_worklist_page(
                 s,
                 dataset=args.get("dataset"),
                 weak_confidence=float(args.get("weak_confidence", 0.6)),
                 limit=int(args.get("limit", 50)),
             )
-        return {"items": [it.as_dict() for it in items]}
 
     raise ValueError(f"unknown identity tool: {name}")
 

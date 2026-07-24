@@ -406,3 +406,67 @@ pub fn goldenmatch_identity_list(dataset: String, status: String, db_path: Strin
         Err(e) => pgrx::error!("goldenmatch: {}", e),
     }
 }
+
+// ── Identity audit / MDM reads (post-#1913) ──────────────────────────────
+//
+// Audit chain (`gm_identity_audit` / `_audit_verify`) + MDM operator views
+// (`gm_identity_profile` / `_stats` / `_worklist`). Reads, so they take the
+// same `db_path` store ref as the `goldenmatch_identity_*` reads above (empty
+// → the in-DB Postgres dataset via `goldenmatch.identity_dsn`). Empty
+// `dataset` = no dataset filter.
+
+/// Append-only audit-log page (JSON `{"items": [...], "total": n}`). Empty
+/// ``dataset`` = every dataset; empty ``db_path`` reads the in-DB dataset.
+#[pg_extern]
+pub fn gm_identity_audit(dataset: String, db_path: String) -> String {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_audit(&store_ref, &dataset) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Replay the seal chain + content hashes and report integrity (JSON verdict).
+/// Empty ``db_path`` reads the in-DB dataset.
+#[pg_extern]
+pub fn gm_identity_audit_verify(dataset: String, db_path: String) -> String {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_audit_verify(&store_ref, &dataset) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Full MDM profile of one entity (JSON), or ``{"found": false}`` when absent.
+/// Empty ``db_path`` reads the in-DB dataset.
+#[pg_extern]
+pub fn gm_identity_profile(entity_id: String, db_path: String) -> String {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_profile(&store_ref, &entity_id) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Graph-level identity health summary (JSON). Empty ``dataset`` = whole graph;
+/// empty ``db_path`` reads the in-DB dataset.
+#[pg_extern]
+pub fn gm_identity_stats(dataset: String, db_path: String) -> String {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_stats(&store_ref, &dataset) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}
+
+/// Prioritized steward worklist (JSON `{"items": [...]}`) — active entities with
+/// open conflicts and/or weak confidence. Empty ``dataset`` = all; empty
+/// ``db_path`` reads the in-DB dataset.
+#[pg_extern]
+pub fn gm_identity_worklist(dataset: String, db_path: String) -> String {
+    let store_ref = identity_store_ref(db_path);
+    match goldenmatch_bridge::api::identity_worklist(&store_ref, &dataset) {
+        Ok(json) => json,
+        Err(e) => pgrx::error!("goldenmatch: {}", e),
+    }
+}

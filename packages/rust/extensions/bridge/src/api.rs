@@ -1216,6 +1216,218 @@ pub fn identity_split(
     })
 }
 
+// ─── Identity audit / mediation / MDM SQL surface (post-#1913) ───────────
+//
+// Class-A embedded-Python wrappers over `goldenmatch.identity`, mirroring the
+// #1913 read (`open_identity_store` on a `db_path`/DSN store ref) and write
+// (DSN-required) templates above. Serialization is single-sourced with the MCP
+// tool layer via the `*_dict`/`as_dict`/`*_page` helpers in
+// `goldenmatch.identity`, so SQL output is byte-identical to the MCP surface.
+
+/// `json.dumps(obj, default=str)` — the serialization every identity bridge fn
+/// (and the MCP tool layer) uses, so a dict/dataclass round-trips identically
+/// across the SQL and MCP surfaces.
+fn dumps_default_str<'py>(py: Python<'py>, obj: Bound<'py, PyAny>) -> Result<String, BridgeError> {
+    let json_mod = py.import("json")?;
+    let dumps_kwargs = PyDict::new(py);
+    dumps_kwargs.set_item("default", py.import("builtins")?.getattr("str")?)?;
+    let s: String = json_mod
+        .call_method("dumps", (obj,), Some(&dumps_kwargs))?
+        .extract()?;
+    Ok(s)
+}
+
+/// Append-only audit-log page: JSON `{"items": [...], "total": n}`. Empty
+/// `dataset` = every dataset. `store_ref` is a SQLite path or a libpq DSN
+/// (the pgrx wrapper substitutes the in-DB DSN when the caller passes empty).
+pub fn identity_audit(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let audit_page = identity.getattr("audit_log_page")?;
+        let store = open_identity_store(py, store_ref)?;
+        let kwargs = PyDict::new(py);
+        if !dataset.is_empty() {
+            kwargs.set_item("dataset", dataset)?;
+        }
+        let result = audit_page.call((store.clone(),), Some(&kwargs));
+        let _ = store.call_method0("close");
+        dumps_default_str(py, result?)
+    })
+}
+
+/// Replay the seal chain + per-event content hashes and report integrity as the
+/// JSON verdict (`{"ok", "events_checked", ..., "summary"}`).
+pub fn identity_audit_verify(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let verify = identity.getattr("verify_audit_chain")?;
+        let store = open_identity_store(py, store_ref)?;
+        let kwargs = PyDict::new(py);
+        if !dataset.is_empty() {
+            kwargs.set_item("dataset", dataset)?;
+        }
+        let result = verify.call((store.clone(),), Some(&kwargs));
+        let _ = store.call_method0("close");
+        let verdict = result?.call_method0("as_dict")?;
+        dumps_default_str(py, verdict)
+    })
+}
+
+/// Full MDM profile of one entity, or `{"found": false}` when the entity does
+/// not exist (mirrors `identity_resolve`'s absent-record shape).
+pub fn identity_profile(store_ref: &str, entity_id: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let profile_fn = identity.getattr("entity_profile")?;
+        let store = open_identity_store(py, store_ref)?;
+        let prof = profile_fn.call1((store.clone(), entity_id));
+        let _ = store.call_method0("close");
+        let prof = prof?;
+        if prof.is_none() {
+            return Ok("{\"found\": false}".to_string());
+        }
+        let d = prof.call_method0("as_dict")?;
+        dumps_default_str(py, d)
+    })
+}
+
+/// Graph-level identity health summary (JSON). Empty `dataset` = whole graph.
+pub fn identity_stats(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let stats_fn = identity.getattr("identity_summary_stats")?;
+        let store = open_identity_store(py, store_ref)?;
+        let kwargs = PyDict::new(py);
+        if !dataset.is_empty() {
+            kwargs.set_item("dataset", dataset)?;
+        }
+        let result = stats_fn.call((store.clone(),), Some(&kwargs));
+        let _ = store.call_method0("close");
+        let d = result?.call_method0("as_dict")?;
+        dumps_default_str(py, d)
+    })
+}
+
+/// Prioritized steward worklist: JSON `{"items": [...]}` (active entities with
+/// open conflicts and/or weak confidence). Empty `dataset` = all datasets.
+pub fn identity_worklist(store_ref: &str, dataset: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let worklist_fn = identity.getattr("steward_worklist_page")?;
+        let store = open_identity_store(py, store_ref)?;
+        let kwargs = PyDict::new(py);
+        if !dataset.is_empty() {
+            kwargs.set_item("dataset", dataset)?;
+        }
+        let result = worklist_fn.call((store.clone(),), Some(&kwargs));
+        let _ = store.call_method0("close");
+        dumps_default_str(py, result?)
+    })
+}
+
+/// Seal the audit log (steward write). JSON `{"sealed": false, ...}` when there
+/// is nothing new to seal, else the new seal-anchor fields. DSN-required.
+pub fn identity_audit_seal(dsn: &str, dataset: &str, actor: &str) -> Result<String, BridgeError> {
+    crate::init()?;
+    if dsn.trim().is_empty() {
+        return Err(BridgeError::InvalidConfig(
+            "identity_audit_seal requires a non-empty identity DSN (set the \
+             goldenmatch.identity_dsn GUC)"
+                .to_string(),
+        ));
+    }
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let seal_fn = identity.getattr("seal_audit_log")?;
+        let seal_result = identity.getattr("seal_result_dict")?;
+        let store = open_identity_store(py, dsn)?;
+        let kwargs = PyDict::new(py);
+        if !actor.is_empty() {
+            kwargs.set_item("actor", actor)?;
+        }
+        if !dataset.is_empty() {
+            kwargs.set_item("dataset", dataset)?;
+        }
+        let seal = seal_fn.call((store.clone(),), Some(&kwargs));
+        let _ = store.call_method0("close");
+        let d = seal_result.call1((seal?,))?;
+        dumps_default_str(py, d)
+    })
+}
+
+/// Steward conflict mediation write. `resolution` ∈ `same` / `distinct` /
+/// `defer`. Empty `reason` / `dataset` mean "unset". DSN-required.
+pub fn identity_resolve_conflict(
+    dsn: &str,
+    record_a_id: &str,
+    record_b_id: &str,
+    resolution: &str,
+    reason: &str,
+    dataset: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    if dsn.trim().is_empty() {
+        return Err(BridgeError::InvalidConfig(
+            "identity_resolve_conflict requires a non-empty identity DSN (set \
+             the goldenmatch.identity_dsn GUC)"
+                .to_string(),
+        ));
+    }
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let mediate = identity.getattr("mediate_conflict")?;
+        let store = open_identity_store(py, dsn)?;
+        let kwargs = PyDict::new(py);
+        if !reason.is_empty() {
+            kwargs.set_item("reason", reason)?;
+        }
+        if !dataset.is_empty() {
+            kwargs.set_item("dataset", dataset)?;
+        }
+        let result = mediate.call(
+            (store.clone(), record_a_id, record_b_id, resolution),
+            Some(&kwargs),
+        );
+        let _ = store.call_method0("close");
+        dumps_default_str(py, result?)
+    })
+}
+
+/// Steward claim write: attach `record_id` to `entity_id` (moving it out of any
+/// prior entity). Empty `reason` means "unset". DSN-required.
+pub fn identity_claim(
+    dsn: &str,
+    entity_id: &str,
+    record_id: &str,
+    reason: &str,
+) -> Result<String, BridgeError> {
+    crate::init()?;
+    if dsn.trim().is_empty() {
+        return Err(BridgeError::InvalidConfig(
+            "identity_claim requires a non-empty identity DSN (set the \
+             goldenmatch.identity_dsn GUC)"
+                .to_string(),
+        ));
+    }
+    Python::with_gil(|py| {
+        let identity = py.import("goldenmatch.identity")?;
+        let claim = identity.getattr("claim_record")?;
+        let store = open_identity_store(py, dsn)?;
+        let kwargs = PyDict::new(py);
+        if !reason.is_empty() {
+            kwargs.set_item("reason", reason)?;
+        }
+        let result = claim.call((store.clone(), entity_id, record_id), Some(&kwargs));
+        let _ = store.call_method0("close");
+        dumps_default_str(py, result?)
+    })
+}
+
 // ─── Correction CRUD (Phase 6A of #437 surface sync) ────────────────────
 //
 // File pair-level + field-level + cluster-decision corrections into the

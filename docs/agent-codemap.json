@@ -5593,8 +5593,10 @@
             "_effective_hash",
             "_fold_step",
             "_normalize_dt",
+            "audit_log_page",
             "event_content_hash",
             "seal_audit_log",
+            "seal_result_dict",
             "verify_audit_chain"
           ],
           "imports": [
@@ -5722,7 +5724,8 @@
             "_iter_entities",
             "entity_profile",
             "identity_summary_stats",
-            "steward_worklist"
+            "steward_worklist",
+            "steward_worklist_page"
           ],
           "imports": [
             "goldenmatch.identity.model",
