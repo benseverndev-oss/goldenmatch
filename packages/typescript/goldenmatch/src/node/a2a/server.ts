@@ -226,7 +226,7 @@ export const AGENT_CARD: AgentCard = {
   name: "goldenmatch-js",
   description:
     "Entity resolution agent -- dedupe, match, profile, score, explain, evaluate.",
-  version: "1.22.0",
+  version: "1.23.0",
   provider: {
     organization: "goldenmatch",
     url: "https://github.com/benseverndev-oss/goldenmatch",

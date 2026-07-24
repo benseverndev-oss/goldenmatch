@@ -4,6 +4,20 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.23.0] - 2026-07-24
+
+### Added
+- **`anomalies` CLI command + `src/core/anomaly.ts`** (parity batch 6). goldenmatch `cli_commands.python_only` **10 → 9**. Unlike batches 1-5 this is a **real port**, not wiring — TypeScript had no anomaly module at all.
+  - `anomalies <files...> [-s low|medium|high] [-o out.csv] [-n 50]` — flags fake/test emails, fake phone patterns, suspicious ZIPs, placeholder values (`TBD`/`N/A`/`xxx`/…) and exact duplicate rows.
+  - `detectAnomalies` / `formatAnomalyReport` port `core/anomaly.py`, including its **`>2` duplicate-row boundary** (3+ identical copies flag; exactly 2 do not) and its **strict sensitivity validation** — a miscased or typo'd level throws rather than silently falling through to the most-sensitive behavior, which is the inverse of what a caller asking for `low` wants.
+
+### Parity verification
+- `tests/parity/fixtures/anomaly.json` is **authored by the Python oracle** (`packages/python/goldenmatch/scripts/emit_anomaly_fixture.py` runs the real `core/anomaly.py`); `tests/parity/anomaly.parity.test.ts` asserts the TS port reproduces it exactly — 45 anomalies across all three sensitivity levels plus an explicit-`__row_id__` frame. Regenerate the fixture after any change to `core/anomaly.py`.
+
+### Documented divergences
+- `formatAnomalyReport` drops Python's Rich color markup (no Rich renderer in the TS CLI); grouping, ordering, the 3-item preview and the "… and N more" line are identical.
+- The duplicate-row key mirrors Python's `str(None)` spelling. The `str(5.0)`/`String(5.0)` float divergence documented for PPRL applies but is inert here — the key is only ever compared for equality within one language, never emitted.
+
 ## [1.22.0] - 2026-07-24
 
 ### Added
