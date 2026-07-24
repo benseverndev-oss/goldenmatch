@@ -7,7 +7,7 @@
  */
 
 import { Command } from "commander";
-import { extname, basename } from "node:path";
+import { extname, basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   readFile,
@@ -25,7 +25,7 @@ import {
 import { analyzeBlocking } from "./core/block-analyzer.js";
 import { autoConfigure } from "./core/autoconfig.js";
 import { loadConfigFile } from "./node/config-file.js";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import {
   compareClusters,
   ccmsSummary,
@@ -1507,6 +1507,203 @@ configCmd
       process.exit(1);
     }
   });
+
+// ---------- init (interactive config wizard) ----------
+program
+  .command("init")
+  .description("Launch the interactive config wizard")
+  .option("-o, --output <path>", "output path for the generated config")
+  .action(async (opts: { output?: string }) => {
+    const { runWizard, toYaml } = await import("./node/config-wizard.js");
+    const { createStdinAsk, askYesNo, askWithDefault } = await import("./node/interactive.js");
+    const { ask, close } = createStdinAsk();
+    try {
+      const config = await runWizard(ask, (s) => process.stdout.write(s + "\n"));
+      let target = opts.output;
+      if (!target) {
+        // Python asks before saving when no --output was given; same here.
+        target = (await askYesNo(ask, "\nSave config to file?", true))
+          ? await askWithDefault(ask, "Output path", "goldenmatch.yaml")
+          : undefined;
+      }
+      if (target) {
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, toYaml(config), "utf-8");
+        process.stdout.write(`\nConfig saved to ${target}\n`);
+      } else {
+        process.stdout.write("\n" + toYaml(config));
+      }
+    } finally {
+      close();
+    }
+  });
+
+// ---------- label (build ground truth interactively) ----------
+program
+  .command("label")
+  .description("Build ground truth by labeling record pairs interactively")
+  .argument("<files...>", "input file paths")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .option("-o, --output <path>", "output ground-truth CSV", "ground_truth.csv")
+  .option("-n, --n <count>", "number of pairs to label", (v) => parseInt(v, 10), 50)
+  .option("--strategy <name>", "pair selection: borderline, random, or hardest", "borderline")
+  .option("-a, --append", "append to an existing ground-truth file")
+  .action(
+    async (
+      files: string[],
+      opts: { config: string; output: string; n: number; strategy: string; append?: boolean },
+    ) => {
+      const { selectPairs, runLabelSession } = await import("./node/label-session.js");
+      const { createStdinAsk } = await import("./node/interactive.js");
+      const strategy = opts.strategy as "borderline" | "random" | "hardest";
+      if (!["borderline", "random", "hardest"].includes(strategy)) {
+        process.stderr.write("Error: --strategy must be borderline, random, or hardest\n");
+        process.exit(2);
+      }
+
+      const rows = loadFilesWithSource(files);
+      process.stdout.write("Running pipeline to generate candidate pairs...\n");
+      const result = await dedupe(rows, { config: loadConfigFile(opts.config) });
+      if (result.scoredPairs.length === 0) {
+        process.stderr.write("No pairs found. Check your config.\n");
+        process.exit(1);
+      }
+
+      const rowsById = new Map<number, Row>(rows.map((r, i) => [i, r]));
+      const displayColumns = Object.keys(rows[0] ?? {})
+        .filter((c) => !c.startsWith("__"))
+        .slice(0, 6);
+
+      // --append: skip pairs already present in the existing file (either orientation).
+      const existing = new Set<string>();
+      if (opts.append && existsSync(opts.output)) {
+        for (const r of readFile(opts.output)) {
+          existing.add(`${Number(r["id_a"])}:${Number(r["id_b"])}`);
+        }
+        process.stdout.write(`Loaded ${existing.size} existing labels from ${opts.output}\n`);
+      }
+
+      const { ask, close } = createStdinAsk();
+      let session;
+      try {
+        process.stdout.write(`\nLabel ${opts.n} pairs. Type: y=match, n=no match, s=skip, q=quit\n\n`);
+        session = await runLabelSession({
+          pairs: selectPairs(result.scoredPairs, strategy),
+          rowsById,
+          displayColumns,
+          target: opts.n,
+          ask,
+          existing,
+          out: (s) => process.stdout.write(s + "\n"),
+        });
+      } finally {
+        close();
+      }
+
+      if (session.labels.length === 0) {
+        process.stdout.write("\nNo labels saved.\n");
+        return;
+      }
+      const prior = opts.append && existsSync(opts.output) ? readFile(opts.output) : [];
+      writeOutputRows(opts.output, [...prior, ...session.labels] as unknown as Row[], "csv");
+      const matches = session.labels.filter((l) => l.label === 1).length;
+      process.stdout.write(`\nSaved ${session.labels.length} labels to ${opts.output}\n`);
+      process.stdout.write(
+        `  Matches: ${matches}, Non-matches: ${session.labels.length - matches}, Skipped: ${session.skipped}\n`,
+      );
+    },
+  );
+
+// ---------- review (steward the borderline band) ----------
+program
+  .command("review")
+  .description("Review borderline pairs and record approve/reject decisions")
+  .argument("<files...>", "input file paths")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .option("--memory-path <path>", "Learning Memory SQLite path", ".goldenmatch/memory.db")
+  .option("--merge-threshold <value>", "scores above this auto-merge (skip review)", parseFloat, 0.95)
+  .option("--reject-below <value>", "scores below this are rejected outright", parseFloat, 0.75)
+  .option("--decided-by <who>", "steward identifier recorded on each decision", "cli")
+  .option("-n, --limit <count>", "max pairs to review this session", (v) => parseInt(v, 10), 50)
+  .action(
+    async (
+      files: string[],
+      opts: {
+        config: string;
+        memoryPath: string;
+        mergeThreshold: number;
+        rejectBelow: number;
+        decidedBy: string;
+        limit: number;
+      },
+    ) => {
+      const { gatePairs } = await import("./core/review-queue.js");
+      const { runReviewSession } = await import("./node/label-session.js");
+      const { createStdinAsk } = await import("./node/interactive.js");
+      const { addCorrection } = await import("./node/memory/api.js");
+
+      const rows = loadFilesWithSource(files);
+      process.stdout.write("Running pipeline to generate candidate pairs...\n");
+      const result = await dedupe(rows, { config: loadConfigFile(opts.config) });
+
+      const gated = gatePairs(result.scoredPairs, {
+        approveAbove: opts.mergeThreshold,
+        rejectBelow: opts.rejectBelow,
+      });
+      if (gated.needsReview.length === 0) {
+        process.stdout.write(
+          `\nNothing to review: ${gated.autoApproved.length} auto-approved, ${gated.rejected.length} rejected.\n`,
+        );
+        return;
+      }
+
+      const rowsById = new Map<number, Row>(rows.map((r, i) => [i, r]));
+      const displayColumns = Object.keys(rows[0] ?? {})
+        .filter((c) => !c.startsWith("__"))
+        .slice(0, 6);
+
+      const { ask, close } = createStdinAsk();
+      let session;
+      try {
+        process.stdout.write(
+          `\n${gated.needsReview.length} pair(s) in the review band. ` +
+            `Type: y=match, n=no match, s=skip, q=quit\n\n`,
+        );
+        session = await runReviewSession({
+          items: gated.needsReview.map((i) => ({ idA: i.idA, idB: i.idB, score: i.score })),
+          rowsById,
+          displayColumns,
+          ask,
+          limit: opts.limit,
+          out: (s) => process.stdout.write(s + "\n"),
+        });
+      } finally {
+        close();
+      }
+
+      // Persist AFTER the loop so a mid-session quit still records what was decided.
+      let written = 0;
+      for (const d of session.decisions) {
+        try {
+          await addCorrection({
+            idA: d.idA,
+            idB: d.idB,
+            decision: d.decision,
+            source: "steward",
+            path: opts.memoryPath,
+          });
+          written++;
+        } catch (err) {
+          process.stderr.write(`Failed to record ${d.idA}/${d.idB}: ${(err as Error).message}\n`);
+        }
+      }
+      const approved = session.decisions.filter((d) => d.decision === "approve").length;
+      process.stdout.write(
+        `\nDone. Approved ${approved}, rejected ${session.decisions.length - approved}, skipped ${session.skipped}.\n`,
+      );
+      process.stdout.write(`${written} decision(s) recorded to Learning Memory (${opts.memoryPath}).\n`);
+    },
+  );
 
 // ---------- anomalies ----------
 program

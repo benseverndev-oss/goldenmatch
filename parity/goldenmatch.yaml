@@ -155,13 +155,16 @@ cli_commands:
   - import-splink
   - incremental
   - info
+  - init
   - interactive
+  - label
   - lineage
   - match
   - mcp-serve
   - memory
   - pprl
   - profile
+  - review
   - rollback
   - runs
   - score
@@ -171,9 +174,6 @@ cli_commands:
   - unmerge
   python_only:
   - ingest-docs
-  - init
-  - label
-  - review
   - schedule
   - serve-ui
   - setup
