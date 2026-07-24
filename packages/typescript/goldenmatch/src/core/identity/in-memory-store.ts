@@ -16,6 +16,7 @@ import {
   type IdentityStore,
   type SourceRecord,
 } from "./types.js";
+import { eventContentHash } from "./audit.js";
 
 export class InMemoryIdentityStore implements IdentityStore {
   private readonly identities = new Map<string, IdentityNode>();
@@ -174,7 +175,10 @@ export class InMemoryIdentityStore implements IdentityStore {
   }
 
   async emitEvent(event: IdentityEvent): Promise<number | null> {
-    const stored: IdentityEvent = { ...event, eventId: this.nextEventId++ };
+    // Stamp the tamper-evidence content hash at insert (PR-B), mirroring Python
+    // `store.emit_event`. Only when absent, so a hydrated event keeps its hash.
+    const entryHash = event.entryHash ?? (await eventContentHash(event));
+    const stored: IdentityEvent = { ...event, eventId: this.nextEventId++, entryHash };
     this.events.push(stored);
     return stored.eventId;
   }

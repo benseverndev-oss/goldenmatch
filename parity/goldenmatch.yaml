@@ -74,6 +74,9 @@ mcp_tools:
   - get_cluster
   - get_golden_record
   - get_stats
+  - identity_audit
+  - identity_audit_seal
+  - identity_audit_verify
   - identity_claim
   - identity_conflicts
   - identity_history
@@ -116,9 +119,6 @@ mcp_tools:
   - documents_ingest
   - documents_suggest_schema
   - explain_routing
-  - identity_audit
-  - identity_audit_seal
-  - identity_audit_verify
   - identity_profile
   - identity_show
   - identity_stats
@@ -190,6 +190,9 @@ a2a_skills:
   - deduplicate
   - evaluate
   - explain
+  - identity_audit
+  - identity_audit_seal
+  - identity_audit_verify
   - identity_claim
   - identity_conflicts
   - identity_history
@@ -217,9 +220,6 @@ a2a_skills:
   - configure
   - documents_ingest
   - documents_suggest_schema
-  - identity_audit
-  - identity_audit_seal
-  - identity_audit_verify
   - identity_show
   - incremental
   - list_runs

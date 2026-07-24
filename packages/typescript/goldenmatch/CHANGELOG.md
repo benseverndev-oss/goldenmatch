@@ -4,6 +4,16 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.15.0] - 2026-07-23
+
+### Added
+- **Identity-audit crypto + 3 audit MCP tools (PR-B of the identity-audit port, 72 → 75).** Byte-identical port of Python `identity/audit.py`, so a seal/entry-hash computed in TS verifies under Python and vice-versa over a shared `.goldenmatch/identity.db`.
+  - **`src/core/identity/audit.ts`** (edge-safe, Web Crypto): `canonicalJson` (a purpose-built serializer reproducing Python `json.dumps(sort_keys=True, separators=(",",":"))` with `ensure_ascii` — recursive codepoint key-sort, ASCII `\uXXXX` escaping, Python float repr so `1.0` renders `"1.0"` not `"1"`, integer `previous_claim_id`, conditional claim-authority keys), `eventContentHash`, `foldStep`, `sealAuditLog`, `verifyAuditChain`.
+  - **`emitEvent` stamps `entryHash`** at insert in BOTH stores (`SqliteIdentityStore` + `InMemoryIdentityStore`) when absent, mirroring Python `store.emit_event`.
+  - **3 MCP tools** in `IDENTITY_TOOLS` (so they feed BOTH the MCP surface and the A2A card): `identity_audit` (export the log), `identity_audit_seal` (anchor a tamper-evidence seal), `identity_audit_verify` (replay + detect content edits / deletion / reorder / insertion). Response shapes mirror `mcp/identity_tools.py` exactly. All 3 flip `python_only → shared` under `mcp_tools` AND `a2a_skills`.
+  - **Cross-language parity gate:** `tests/parity/audit-hash.parity.test.ts` against the Python-oracle fixture `tests/parity/fixtures/identity/audit-hash.json` (`scripts/emit_audit_hash_fixture.py`) — TS `eventContentHash` byte-matches Python across non-ASCII payloads, `trust=1.0`, ms-aligned micros, and set/unset claim fields, and `sealAuditLog` reproduces the committed root; plus a tamper-detection case.
+  - **Round-trip fix:** `sqlite-store.ts::parseDate` now treats a naive `recorded_at` (written via `pyIsoformat`) as UTC, so a read-back event re-hashes to its stored `entry_hash` on any machine timezone (already-zoned edge/alias timestamps are untouched). **Sub-ms caveat:** a JS `Date` is ms-precision, so cross-verifying a Python-written sub-millisecond event from TS is an inherent `Date` limitation, not a port defect; TS-authored events are always ms-precision.
+
 ## [1.14.0] - 2026-07-23
 
 ### Added
