@@ -389,6 +389,12 @@ api_parity:
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'
   - 'scripts/check_api_parity.py'
+  # Advisory (non-gating) SQL surfaces: the emitter static-parses the pgrx crate
+  # + the goldenmatch_duckdb package, so a SQL fn add/remove should re-run the
+  # gate to refresh the drift advisory.
+  - 'scripts/emit_sql_surface.py'
+  - 'packages/rust/extensions/postgres/src/**'
+  - 'packages/rust/extensions/duckdb/goldenmatch_duckdb/**'
 # Config-matrix drift gate (scripts/gen_config_matrix.py --check). The generated
 # block of config-matrix.mdx is rendered from the pydantic schema + VALID_*
 # vocabularies + the GOLDENMATCH_* env scan, so it must re-check whenever any of
@@ -552,6 +558,10 @@ native:
   - 'packages/python/goldenmatch/tests/test_embeddings.py'
   - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
   - 'scripts/build_native.py'
+  # The pure-Python == Rust-kernel equivalence gate now runs in this lane
+  # (adversarial-corpus belt-and-suspenders over test_native_parity); re-run
+  # when the gate script itself moves.
+  - 'scripts/check_kernel_equivalence.py'
   # autoconfig-core: the native ext exposes the autoconfig kernel
   # via PyO3; these paths trigger the native build + parity suite.
   - 'packages/rust/extensions/autoconfig-core/**'

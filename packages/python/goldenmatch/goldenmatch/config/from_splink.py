@@ -24,7 +24,7 @@ from goldenmatch.config.schemas import (
 )
 from goldenmatch.core._paths import safe_path
 from goldenmatch.core.probabilistic import EMResult, _training_config_manifest
-from goldenmatch.core.scorer import _date_diff_band
+from goldenmatch.core.scorer import _date_diff_band, _geo_haversine_band
 
 Severity = Literal["info", "warning", "error"]
 
@@ -66,7 +66,9 @@ _DIST_RE = (
 # The column atom is pulled from the try_strptime / try_to_timestamp call (the
 # _l/_r operand); the seconds cutoff is converted to days and snapped to a
 # `_date_diff_band` value -- approximate, like the levenshtein distance->sim map.
-_DATE_DIFF_MARKER = re.compile(r'\bABS\s*\(.*(?:EPOCH|UNIX_TIMESTAMP)\s*\(', re.IGNORECASE)
+# The "looks like" gate is a LINEAR substring check (not a `.*` regex -- these
+# run on arbitrary Splink SQL, so a backtracking marker is a ReDoS risk); the
+# anchored TAIL/COL regexes below are the real structural validators.
 _DATE_DIFF_TAIL = re.compile(r'<=\s*([0-9]+(?:\.[0-9]+)?)\s*$')
 _DATE_DIFF_COL = re.compile(
     r'(?:try_strptime|try_to_timestamp)\s*\(\s*["`]?([A-Za-z_]\w*)_([lr])["`]?\s*,',
@@ -74,9 +76,22 @@ _DATE_DIFF_COL = re.compile(
 )
 _SECONDS_PER_DAY = 86400.0
 
+
+def _looks_like_date_diff(sql_norm: str) -> bool:
+    """Linear (ReDoS-safe) gate for a date/time-difference level."""
+    low = sql_norm.lower()
+    return "abs" in low and ("epoch" in low or "unix_timestamp" in low)
+
+
+def _looks_like_haversine(sql_norm: str) -> bool:
+    """Linear (ReDoS-safe) gate for a great-circle distance level."""
+    low = sql_norm.lower()
+    return "acos" in low and "radians" in low and "6371" in low
+
+
 LevelKind = Literal[
     "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
-    "array_intersect",
+    "array_intersect", "geo_haversine",
 ]
 
 # ArrayIntersectAtSizes levels count the intersection SIZE:
@@ -94,6 +109,24 @@ _ARRAY_INTERSECT_LEVEL_RE = re.compile(
 )
 _ARRAY_ASSUMED_SET_SIZE = 10.0
 _ARRAY_INTERSECT_SCORER = "array_intersect:overlap"
+
+# DistanceInKMAtThresholds is the ONE cross-column comparison: a great-circle
+# (haversine) distance over SEPARATE lat + lng columns, capped in km:
+#   cast( acos( ... radians("lat_l") ... radians("lat_r") ...
+#               radians("lng_r" - "lng_l") ... ) * 6371 as float ) <= <km>
+# goldenmatch's geo_haversine scores ONE combined "lat,long" field, so the
+# conversion synthesizes that field via MatchkeyField.derive_from=[lat,lng] +
+# derive_separator="," (materialized by the pipeline). The lat column is the arg
+# of a bare radians(col_l|col_r); the lng column is the two operands of the
+# radians(col_r - col_l) difference; the km cutoff is the trailing "<= n". The
+# entry gate is the linear `_looks_like_haversine` above; the anchored regexes
+# below do the real extraction.
+_GEO_LAT = re.compile(r'radians\s*\(\s*["`]?([A-Za-z_]\w*)_[lr]["`]?\s*\)', re.IGNORECASE)
+_GEO_LNG = re.compile(
+    r'radians\s*\(\s*["`]?([A-Za-z_]\w*)_r["`]?\s*-\s*["`]?([A-Za-z_]\w*)_l["`]?\s*\)',
+    re.IGNORECASE,
+)
+_GEO_KM = re.compile(r'<=\s*([0-9]+(?:\.[0-9]+)?)\s*$')
 
 # Domain comparators (magnitude-aware) take precedence over string-edit levels
 # in the same Splink comparison -- e.g. DateOfBirthComparison mixes a
@@ -118,6 +151,8 @@ class RecognizedLevel:
     sim_threshold: float | None
     approx: bool = False      # True when the mapping is an approximation (jaro->jw, distance->similarity)
     scorer: str | None = None  # full scorer string when it differs from `kind` (e.g. "array_intersect:overlap")
+    derive_from: list[str] | None = None  # cross-column source cols to synthesize `column` (geo lat+lng)
+    derive_separator: str = " "           # separator joining derive_from (geo needs ",")
 
 
 def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel | None:
@@ -169,7 +204,7 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
         sim = max(0.0, 1 - distance / _LEV_ASSUMED_LEN)
         return RecognizedLevel("levenshtein", col_l, sim, approx=True)
 
-    if _DATE_DIFF_MARKER.search(sql_norm):
+    if _looks_like_date_diff(sql_norm):
         tail = _DATE_DIFF_TAIL.search(sql_norm)
         cols = _DATE_DIFF_COL.findall(sql_norm)
         if tail and cols:
@@ -192,6 +227,25 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
         return RecognizedLevel(
             "array_intersect", col_l, ratio, approx=True, scorer=_ARRAY_INTERSECT_SCORER
         )
+
+    if _looks_like_haversine(sql_norm):
+        km = _GEO_KM.search(sql_norm)
+        lat_bases = {b for b in _GEO_LAT.findall(sql_norm)}
+        lng_m = _GEO_LNG.search(sql_norm)
+        if km and len(lat_bases) == 1 and lng_m and lng_m.group(1) == lng_m.group(2):
+            lat, lng = next(iter(lat_bases)), lng_m.group(1)
+            if lat != lng:
+                # Synthesize a combined "lat,long" field the geo_haversine
+                # scorer parses; the band comes from the km cutoff.
+                return RecognizedLevel(
+                    "geo_haversine",
+                    f"{lat}__{lng}",
+                    _geo_haversine_band(float(km.group(1))),
+                    approx=True,
+                    derive_from=[lat, lng],
+                    derive_separator=",",
+                )
+        # haversine-shaped but couldn't extract a clean lat/lng/km -> drop+warn.
 
     return None
 
@@ -389,6 +443,12 @@ def convert_comparison(
                     f"to overlap-ratio threshold {r.sim_threshold} (assumed set size "
                     f"{int(_ARRAY_ASSUMED_SET_SIZE)}, biased low for recall) ({sql})"
                 )
+            elif r.kind == "geo_haversine":
+                message = (
+                    "approximate mapping: great-circle km cutoff snapped to the nearest "
+                    f"geo_haversine band -> sim {r.sim_threshold}; lat+lng synthesized into "
+                    f"a comma-joined field {r.derive_from} ({sql})"
+                )
             else:
                 message = (
                     f"approximate mapping: jaro_similarity treated as jaro_winkler "
@@ -425,6 +485,13 @@ def convert_comparison(
 
     mapped_to = f"{_PLACEHOLDER_PREFIX} ({col})"
 
+    # A cross-column band (geo_haversine) carries the source columns to
+    # synthesize `col` from; None for every single-column comparator.
+    derive_from = next((r.derive_from for r, _, _ in bands if r.derive_from), None)
+    derive_separator = next(
+        (r.derive_separator for r, _, _ in bands if r.derive_from), " "
+    )
+
     if levels_count == 2:
         if scorer == "exact":
             field = MatchkeyField(field=col, scorer="exact", levels=2, tf_adjustment=tf_adjustment)
@@ -435,6 +502,8 @@ def convert_comparison(
                 levels=2,
                 partial_threshold=thresholds[0],
                 tf_adjustment=tf_adjustment,
+                derive_from=derive_from,
+                derive_separator=derive_separator,
             )
     else:
         field = MatchkeyField(
@@ -443,6 +512,8 @@ def convert_comparison(
             levels=levels_count,
             level_thresholds=thresholds,
             tf_adjustment=tf_adjustment,
+            derive_from=derive_from,
+            derive_separator=derive_separator,
         )
 
     report.info(comp_path, f"converted to field '{col}' (scorer={scorer})", mapped_to=mapped_to)

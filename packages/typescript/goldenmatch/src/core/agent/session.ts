@@ -269,6 +269,7 @@ export class AgentSession {
         fuzzy_fields: [],
         backend: null,
         auto_execute: true,
+        pprl_available: false,
       });
     }
 
@@ -282,6 +283,7 @@ export class AgentSession {
         fuzzy_fields: decision.fuzzy_fields,
         backend: null,
         auto_execute: true,
+        pprl_available: false,
       });
     }
 

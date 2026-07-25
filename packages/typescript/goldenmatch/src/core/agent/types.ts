@@ -40,6 +40,10 @@ export interface StrategyDecision {
   readonly fuzzy_fields: string[];
   readonly backend: string | null;
   readonly auto_execute: boolean;
+  // Parity with Python StrategyDecision.pprl_available: true when sensitive
+  // fields were detected (PPRL is offered as an opt-in), regardless of whether
+  // pprl was the chosen strategy.
+  readonly pprl_available: boolean;
 }
 
 export type Alternative = { strategy: string; why_not: string };

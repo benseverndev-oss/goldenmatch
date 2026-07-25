@@ -91,3 +91,39 @@ def test_zero_config_dedupe_df_larger_block_is_polars_free() -> None:
     # the two byte-identical "Acme Inc" rows (indices 0 and 1) still co-cluster
     assert _cluster_of(result.clusters, 0) == _cluster_of(result.clusters, 1)
     assert "polars" not in sys.modules
+
+
+def test_profile_for_agent_arrow_is_polars_free() -> None:
+    """The agent profiler runs on a ``pa.Table`` with polars absent (it was made
+    arrow-native via the ``to_frame`` abstraction). Locks the 'agent path is
+    polars-free' contract the way the dedupe cases lock the scoring path."""
+    import pyarrow as pa
+    from goldenmatch.core.agent import profile_for_agent, select_strategy
+
+    df = pa.table({
+        "ssn": ["111-22-3333", "444-55-6666", "777-88-9999"],
+        "full_name": ["Alice Smith", "Alice Smith", "Bob Jones"],
+    })
+    profile = profile_for_agent(df)
+    assert profile.row_count == 3
+    assert profile.has_sensitive  # ssn is a sensitive column name
+    # sensitive fields no longer force pprl at the default (allow_pprl=False)
+    decision = select_strategy(profile)
+    assert decision.pprl_available and decision.strategy != "pprl"
+    assert "polars" not in sys.modules
+
+
+def test_agent_session_analyze_arrow_is_polars_free(tmp_path) -> None:
+    """``AgentSession.analyze`` (CSV read via ``read_table_arrow`` + profiling)
+    completes polars-free -- the file-loading half of the agent path."""
+    from goldenmatch.core.agent import AgentSession
+
+    csv = tmp_path / "people.csv"
+    csv.write_text(
+        "ssn,full_name\n111-22-3333,Alice Smith\n444-55-6666,Bob Jones\n",
+        encoding="utf-8",
+    )
+    reasoning = AgentSession().analyze(str(csv))
+    assert reasoning["profile"]["row_count"] == 2
+    assert reasoning["profile"]["has_sensitive"]
+    assert "polars" not in sys.modules

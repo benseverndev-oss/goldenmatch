@@ -371,20 +371,30 @@ def precompute_matchkey_transforms(
     # => skip (the NE no-ops safely rather than raising).
     _derived_exprs: list[pl.Expr] = []
     _seen_derived: set[str] = set()
+
+    def _add_derived(obj: object, separator: str) -> None:
+        src = getattr(obj, "derive_from", None)
+        fld = getattr(obj, "field", None)
+        if not src or fld is None or fld in df.columns or fld in _seen_derived:
+            return
+        if not all(c in df.columns for c in src):
+            return
+        _seen_derived.add(fld)
+        _derived_exprs.append(
+            pl.concat_str(
+                [pl.col(c).cast(pl.Utf8).fill_null("") for c in src],
+                separator=separator,
+            ).alias(fld)
+        )
+
     for mk in matchkeys:
         for ne in (getattr(mk, "negative_evidence", None) or []):
-            src = getattr(ne, "derive_from", None)
-            if not src or ne.field in df.columns or ne.field in _seen_derived:
-                continue
-            if not all(c in df.columns for c in src):
-                continue
-            _seen_derived.add(ne.field)
-            _derived_exprs.append(
-                pl.concat_str(
-                    [pl.col(c).cast(pl.Utf8).fill_null("") for c in src],
-                    separator=" ",
-                ).alias(ne.field)
-            )
+            _add_derived(ne, " ")
+        # MatchkeyField.derive_from (e.g. geo_haversine "lat,long" from a Splink
+        # DistanceInKM conversion) synthesizes its scorer field too, with a
+        # configurable separator (NE always space-joins).
+        for field in mk.fields:
+            _add_derived(field, getattr(field, "derive_separator", " ") or " ")
     if _derived_exprs:
         df = df.with_columns(_derived_exprs)
 
@@ -446,15 +456,22 @@ def precompute_matchkey_transforms_frame(frame, matchkeys: list[MatchkeyConfig])
     # Synthesized NE columns first (matchkey.py legacy order): a derived NE
     # field must exist before its xform signature materializes below.
     seen_derived: set[str] = set()
+
+    def _maybe_derive(f, obj, separator):
+        src = getattr(obj, "derive_from", None)
+        fld = getattr(obj, "field", None)
+        if not src or fld is None or fld in f.columns or fld in seen_derived:
+            return f
+        if not all(c in f.columns for c in src):
+            return f
+        seen_derived.add(fld)
+        return f.with_column(fld, f.derive_ne_joined(list(src), separator=separator))
+
     for mk in matchkeys:
         for ne in (getattr(mk, "negative_evidence", None) or []):
-            src = getattr(ne, "derive_from", None)
-            if not src or ne.field in f.columns or ne.field in seen_derived:
-                continue
-            if not all(c in f.columns for c in src):
-                continue
-            seen_derived.add(ne.field)
-            f = f.with_column(ne.field, f.derive_ne_joined(list(src)))
+            f = _maybe_derive(f, ne, " ")
+        for field in mk.fields:
+            f = _maybe_derive(f, field, getattr(field, "derive_separator", " ") or " ")
 
     seen: set[str] = set()
 

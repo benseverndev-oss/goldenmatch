@@ -1172,12 +1172,27 @@ def _resolve_run_state() -> _RunState:
         return _RunState(None, None, None, [], {})
     raw = sess.data
     if not hasattr(sess, "_mcp_data") or sess._mcp_src is not raw:
+        # AgentSession.data is arrow-native (pyarrow.Table) since the agent path
+        # was made polars-free; augment __row_id__ and materialize rows without
+        # importing polars. A polars frame (defensive: other callers) still works
+        # via the hasattr fallbacks.
         df = raw
-        if df is not None and "__row_id__" not in df.columns:
-            df = df.with_row_index("__row_id__")
+        rows: list[dict] = []
+        if df is not None:
+            import pyarrow as pa
+
+            if isinstance(df, pa.Table):
+                if "__row_id__" not in df.column_names:
+                    df = df.append_column(
+                        "__row_id__", pa.array(range(df.num_rows), type=pa.int64())
+                    )
+                rows = df.to_pylist()
+            else:  # polars frame (non-agent caller)
+                if "__row_id__" not in df.columns:
+                    df = df.with_row_index("__row_id__")
+                rows = df.to_dicts()
         sess._mcp_src = raw
         sess._mcp_data = df
-        rows = df.to_dicts() if df is not None else []
         sess._mcp_rows = rows
         sess._mcp_id_to_idx = {r["__row_id__"]: i for i, r in enumerate(rows)}
     return _RunState(sess.result, sess.config, sess._mcp_data,
@@ -1478,6 +1493,15 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
     matchkeys = rs.config.get_matchkeys()
     all_matches = []
 
+    # match_one is a polars-native primitive (a separate arrow port). The session
+    # frame is arrow-native (pyarrow.Table) since the agent path went polars-free,
+    # so coerce to polars once here for the match_one call.
+    import pyarrow as pa
+    match_data = rs.data
+    if isinstance(match_data, pa.Table):
+        import polars as pl
+        match_data = pl.from_arrow(match_data)
+
     for mk in matchkeys:
         if mk.type != "weighted":
             continue
@@ -1487,7 +1511,7 @@ def _tool_match_record(record: dict, threshold: float | None, top_k: int) -> dic
         mk_copy = copy.deepcopy(mk)
         mk_copy.threshold = t
 
-        matches = match_one(record, rs.data, mk_copy)
+        matches = match_one(record, match_data, mk_copy)
         for row_id, score in matches:
             idx = rs.id_to_idx.get(row_id)
             if idx is not None:

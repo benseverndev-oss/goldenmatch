@@ -144,13 +144,12 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         return {"pending": queue.list_pending()}
 
     if skill_id == "configure":
-        import polars as pl
+        from goldenmatch.core.io_arrow import read_table_arrow
 
         _analysis = session.analyze(params["file_path"])
         decision = select_strategy(
             profile_for_agent(
-                # W5: CSV ingest routes through core/ingest.load_file (io_arrow) at the flip.
-                pl.read_csv(params["file_path"], encoding="utf8-lossy", ignore_errors=True)
+                read_table_arrow(params["file_path"], encoding="utf8-lossy")
             ),
             allow_pprl=allow_pprl,
         )
@@ -501,11 +500,9 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         return _agent_dispatch("suggest_pprl", params, AgentSession)
 
     if skill_id == "profile":
-        import polars as pl
+        from goldenmatch.core.io_arrow import read_table_arrow
 
-        df = pl.read_csv(
-            params["file_path"], encoding="utf8-lossy", ignore_errors=True
-        )
+        df = read_table_arrow(params["file_path"], encoding="utf8-lossy")
         prof = profile_for_agent(df)
         return {
             "row_count": prof.row_count,
@@ -558,17 +555,24 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
 def _serialise_result(obj: Any) -> dict:
     """Best-effort serialisation of pipeline results to JSON-safe dict."""
     if isinstance(obj, dict):
+        import sys
+
+        import pyarrow as pa
+
         out = {}
         for k, v in obj.items():
-            try:
+            # Arrow-native first (pyarrow is a hard dep); check polars ONLY when
+            # it is already imported, so serialising never forces the polars
+            # import on a polars-free install.
+            if isinstance(v, pa.Table):
+                out[k] = {"rows": v.num_rows, "columns": v.column_names}
+                continue
+            if "polars" in sys.modules:
                 import polars as pl
 
-                # W5: native-type dispatch; becomes Frame isinstance at the flip.
                 if isinstance(v, pl.DataFrame):
                     out[k] = {"rows": v.height, "columns": v.columns}
                     continue
-            except ImportError:
-                pass
             if isinstance(v, dict):
                 out[k] = _serialise_result(v)
             elif isinstance(v, (str, int, float, bool, type(None))):

@@ -396,16 +396,17 @@ def matchkey_composite(
     return pc.binary_join_element_wise(*cols, sep_scalar, null_handling="emit_null")
 
 
-def ne_joined_column(field_arrs: Sequence[Any]) -> Any:
-    """precompute_matchkey_transforms' derived-NE source join
-    (matchkey.py:381-386): per-field Utf8 cast + fill_null("") + space-join.
-    fill_null means the join NEVER null-propagates -- a missing part joins as
-    the empty string, exactly like the Polars expression."""
+def ne_joined_column(field_arrs: Sequence[Any], separator: str = " ") -> Any:
+    """precompute_matchkey_transforms' derived source join
+    (matchkey.py:381-386): per-field Utf8 cast + fill_null("") + separator-join
+    (space for NE, "," for a geo_haversine lat,long field). fill_null means the
+    join NEVER null-propagates -- a missing part joins as the empty string,
+    exactly like the Polars expression."""
     import pyarrow as pa
     import pyarrow.compute as pc
 
     filled = [pc.fill_null(cast_utf8(a), "") for a in field_arrs]
     if len(filled) == 1:
         return filled[0]
-    sep_scalar = pa.scalar(" ", type=pa.large_string())
+    sep_scalar = pa.scalar(separator, type=pa.large_string())
     return pc.binary_join_element_wise(*filled, sep_scalar, null_handling="emit_null")

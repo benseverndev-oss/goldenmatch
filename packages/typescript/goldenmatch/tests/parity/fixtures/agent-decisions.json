@@ -40,14 +40,21 @@
           ],
           "has_sensitive": true
         },
-        "strategy": "pprl",
-        "why": "Sensitive fields detected; using privacy-preserving record linkage.",
-        "domain": null,
-        "strong_ids": [],
+        "strategy": "exact_only",
+        "why": "High-uniqueness fields (ssn, name) with no fuzzy candidates. Sensitive fields detected — PPRL is available (opt in with allow_pprl=True).",
+        "domain": "people",
+        "strong_ids": [
+          "ssn",
+          "name"
+        ],
         "fuzzy_fields": [],
         "backend": null,
-        "auto_execute": false,
+        "auto_execute": true,
         "alternatives": [
+          {
+            "strategy": "pprl",
+            "why_not": "No sensitive fields detected, but PPRL is available if data leaves your network."
+          },
           {
             "strategy": "fellegi_sunter",
             "why_not": "Probabilistic model available for automatic parameter estimation."
