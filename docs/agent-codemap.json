@@ -5771,6 +5771,7 @@
             "_golden_record_from_payloads",
             "_hash_payload",
             "_match_record_rows",
+            "_maybe_warn_singleton_sqlite_ceiling",
             "_node_age",
             "_record_id_candidates",
             "_referenced_row_ids",
