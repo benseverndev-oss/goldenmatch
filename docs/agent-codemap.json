@@ -952,7 +952,8 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core._paths",
-            "goldenmatch.core.probabilistic"
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.core.scorer"
           ]
         },
         {
@@ -3717,6 +3718,7 @@
             "_fs_calibrate_threshold_enabled",
             "_fs_calibration_mode",
             "_fs_embedding_vectors",
+            "_fs_evidence_cut",
             "_fs_link_threshold",
             "_fs_monotonic_mode",
             "_fs_name_refdata_available",
