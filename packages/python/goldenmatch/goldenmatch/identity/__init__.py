@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from goldenmatch.identity.audit import (
     AuditVerification,
+    audit_log_page,
     event_content_hash,
     seal_audit_log,
+    seal_result_dict,
     verify_audit_chain,
 )
 from goldenmatch.identity.mediation import (
@@ -41,6 +43,7 @@ from goldenmatch.identity.profile import (
     entity_profile,
     identity_summary_stats,
     steward_worklist,
+    steward_worklist_page,
 )
 from goldenmatch.identity.query import (
     IdentityView,
@@ -146,10 +149,13 @@ __all__ = [
     "entity_profile",
     "identity_summary_stats",
     "steward_worklist",
+    "steward_worklist_page",
     "AuditSeal",
     "AuditVerification",
+    "audit_log_page",
     "event_content_hash",
     "seal_audit_log",
+    "seal_result_dict",
     "verify_audit_chain",
     "ClaimType",
     "EvidenceRef",

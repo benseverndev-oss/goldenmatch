@@ -7,17 +7,26 @@
  */
 
 import { Command } from "commander";
-import { extname, basename } from "node:path";
+import { extname, basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import {
   readFile,
   writeCsv,
   writeJson,
 } from "./node/connectors/file.js";
 import { dedupe, match, scoreStrings } from "./core/api.js";
-import { evaluateClusters, loadGroundTruthPairs } from "./core/index.js";
+import {
+  buildLineage,
+  evaluateClusters,
+  explainCluster,
+  explainPair,
+  loadGroundTruthPairs,
+} from "./core/index.js";
+import { analyzeBlocking } from "./core/block-analyzer.js";
+import { autoConfigure } from "./core/autoconfig.js";
 import { loadConfigFile } from "./node/config-file.js";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import {
   compareClusters,
   ccmsSummary,
@@ -25,7 +34,7 @@ import {
 } from "./core/compare-clusters.js";
 import { runIncremental } from "./core/incremental.js";
 import { emitHealerSurface } from "./node/cli-healer.js";
-import type { Row } from "./core/types.js";
+import type { ClusterInfo, PairKey, Row } from "./core/types.js";
 import pkg from "../package.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
@@ -1051,37 +1060,908 @@ program
     startA2aServer({ port: parseInt(opts.port, 10), host: opts.host });
   });
 
-// ---------- tui ----------
+// ---------- tui / interactive (one command, two names) ----------
+//
+// Python's CLI calls this `interactive`; the TS CLI has always called it `tui`.
+// They are the SAME operation (launch the TUI over optional input files), so the
+// parity manifest was counting ONE capability as BOTH a python_only gap and a
+// ts_only gap. Registering both names on both sides closes both halves.
+//
+// It must be a real second `.command()`, NOT `.alias("interactive")`: the API
+// surface emitter reads `program.commands.map(c => c.name())`, which does not
+// see commander aliases -- an alias would leave the manifest lying.
+interface TuiCmdOpts {
+  config?: string;
+  memoryPath?: string;
+  outputDir?: string;
+}
+
+async function runTuiCommand(files: string[], opts: TuiCmdOpts): Promise<void> {
+  try {
+    const { startTui } = await import("./node/tui/app.js");
+    const tuiOpts: {
+      files?: string[];
+      config?: ReturnType<typeof loadConfigFile>;
+      memoryPath?: string;
+      outputDir?: string;
+    } = {};
+    if (files && files.length > 0) tuiOpts.files = files;
+    if (opts.config) tuiOpts.config = loadConfigFile(opts.config);
+    if (opts.memoryPath) tuiOpts.memoryPath = opts.memoryPath;
+    if (opts.outputDir) tuiOpts.outputDir = opts.outputDir;
+    await startTui(tuiOpts);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`TUI error: ${message}\n`);
+    process.exit(1);
+  }
+}
+
+for (const cmdName of ["tui", "interactive"] as const) {
+  program
+    .command(cmdName)
+    .description("Launch the interactive TUI (requires optional peer deps: ink + react)")
+    .argument("[files...]", "input files to load on startup")
+    .option("-c, --config <path>", "path to YAML config file")
+    .option("--memory-path <path>", "Learning Memory SQLite path for Boost-tab labels")
+    .option("-o, --output-dir <dir>", "directory the Export tab writes into")
+    .action(runTuiCommand);
+}
+
+// ---------- analyze-blocking ----------
 program
-  .command("tui")
-  .description("Launch interactive TUI (requires optional peer deps: ink + react)")
-  .argument("[files...]", "input files to load on startup")
+  .command("analyze-blocking")
+  .description("Analyze data and suggest optimal blocking strategies")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-c, --config <path>", "config file whose matchkey fields to block on")
+  .option("--top <n>", "how many suggestions to show", (v) => parseInt(v, 10), 5)
+  .option("-o, --output <path>", "save the full suggestion list to JSON")
+  .action((files: string[], opts: { config?: string; top: number; output?: string }) => {
+    const rows = loadFilesWithSource(files);
+    // Block on the configured matchkey fields when a config is supplied;
+    // otherwise fall back to the fields zero-config would pick.
+    const cfg = opts.config ? loadConfigFile(opts.config) : autoConfigure(rows);
+    const columns = [
+      ...new Set(
+        (cfg.matchkeys ?? []).flatMap((mk) =>
+          (mk.fields ?? []).map((f) => f.field).filter((f): f is string => !!f),
+        ),
+      ),
+    ];
+    if (columns.length === 0) {
+      process.stderr.write("No matchkey fields to analyze; pass --config.\n");
+      process.exit(1);
+    }
+    const suggestions = analyzeBlocking(rows, columns);
+    process.stdout.write(
+      `Blocking analysis: ${rows.length} records, ${columns.length} candidate field(s)\n`,
+    );
+    for (const s of suggestions.slice(0, opts.top)) {
+      process.stdout.write(
+        `  ${s.description}\n` +
+          `      groups=${s.group_count} max=${s.max_group_size} ` +
+          `mean=${s.mean_group_size.toFixed(1)} comparisons=${s.total_comparisons} ` +
+          `recall~${(s.estimated_recall * 100).toFixed(1)}% score=${s.score.toFixed(3)}\n`,
+      );
+    }
+    if (opts.output) {
+      writeFileSync(opts.output, JSON.stringify(suggestions, null, 2) + "\n", "utf-8");
+      process.stdout.write(`Suggestions saved to ${opts.output}\n`);
+    }
+  });
+
+// ---------- autoconfig ----------
+program
+  .command("autoconfig")
+  .description("Derive a config from the data (zero-config) and print it")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-o, --output <path>", "save the derived config to JSON")
+  .action((files: string[], opts: { output?: string }) => {
+    const rows = loadFilesWithSource(files);
+    const cfg = autoConfigure(rows);
+    const mks = cfg.matchkeys ?? [];
+    process.stdout.write(
+      `Auto-config derived from ${rows.length} records: ${mks.length} matchkey(s)\n`,
+    );
+    for (const mk of mks) {
+      const fields = (mk.fields ?? [])
+        .map((f) => `${f.field}${f.scorer ? `:${f.scorer}` : ""}`)
+        .join(", ");
+      process.stdout.write(
+        `  ${mk.name ?? "(unnamed)"} [${mk.type}]` +
+          `${mk.threshold != null ? ` threshold=${mk.threshold}` : ""}\n` +
+          `      fields: ${fields || "(none)"}\n`,
+      );
+    }
+    if (cfg.blocking) {
+      process.stdout.write(
+        `  blocking: ${cfg.blocking.strategy ?? "static"}` +
+          `${cfg.blocking.keys ? ` on ${cfg.blocking.keys.join(", ")}` : ""}\n`,
+      );
+    }
+    if (opts.output) {
+      writeFileSync(opts.output, JSON.stringify(cfg, null, 2) + "\n", "utf-8");
+      process.stdout.write(`Config saved to ${opts.output}\n`);
+    }
+  });
+
+// ---------- lineage ----------
+program
+  .command("lineage")
+  .description("Build + persist the per-pair match lineage for a run")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
   .option("-c, --config <path>", "path to YAML config file")
-  .option("--memory-path <path>", "Learning Memory SQLite path for Boost-tab labels")
-  .option("-o, --output-dir <dir>", "directory the Export tab writes into")
+  .option("-e, --exact <fields>", "comma-separated exact match fields")
+  .option("-f, --fuzzy <fields>", "fuzzy match fields, e.g. 'name:0.85'")
+  .option("-b, --blocking <fields>", "comma-separated blocking keys")
+  .option("-t, --threshold <value>", "overall fuzzy threshold", parseFloat)
+  .option("-o, --output <path>", "lineage JSON output path", "lineage.json")
+  .action(async (files: string[], opts: SharedMatchOpts & { output: string }) => {
+    const rows = loadFilesWithSource(files);
+    const result = await dedupe(rows, buildOptionsFromFlags(opts));
+    const bundle = buildLineage(result);
+    writeFileSync(opts.output, JSON.stringify(bundle, null, 2) + "\n", "utf-8");
+    // NOTE: bundle.recordCount is edges.length (a misnomer in core/lineage.ts),
+    // so report the pair/edge count and the run's record count separately rather
+    // than echoing it as a record total.
+    process.stdout.write(
+      `Lineage: ${bundle.edges.length} pair edge(s) over ` +
+        `${result.stats.totalRecords} record(s) -> ${opts.output}\n`,
+    );
+  });
+
+// ---------- explain ----------
+program
+  .command("explain")
+  .description("Explain why a pair matched, or summarize a cluster")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-c, --config <path>", "path to YAML config file")
+  .option("-e, --exact <fields>", "comma-separated exact match fields")
+  .option("-f, --fuzzy <fields>", "fuzzy match fields, e.g. 'name:0.85'")
+  .option("-b, --blocking <fields>", "comma-separated blocking keys")
+  .option("-t, --threshold <value>", "overall fuzzy threshold", parseFloat)
+  .option("--pair <a,b>", "explain a record pair by row id, e.g. '0,1'")
+  .option("--cluster <id>", "explain a cluster by id", (v) => parseInt(v, 10))
   .action(
     async (
       files: string[],
-      opts: { config?: string; memoryPath?: string; outputDir?: string },
+      opts: SharedMatchOpts & { pair?: string; cluster?: number },
     ) => {
-    try {
-      const { startTui } = await import("./node/tui/app.js");
-      const tuiOpts: {
-        files?: string[];
-        config?: ReturnType<typeof loadConfigFile>;
-        memoryPath?: string;
-        outputDir?: string;
-      } = {};
-      if (files && files.length > 0) tuiOpts.files = files;
-      if (opts.config) tuiOpts.config = loadConfigFile(opts.config);
-      if (opts.memoryPath) tuiOpts.memoryPath = opts.memoryPath;
-      if (opts.outputDir) tuiOpts.outputDir = opts.outputDir;
-      await startTui(tuiOpts);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`TUI error: ${message}\n`);
+      if (!opts.pair && opts.cluster == null) {
+        process.stderr.write("Pass --pair <a,b> or --cluster <id>.\n");
+        process.exit(1);
+      }
+      const rows = loadFilesWithSource(files);
+      const result = await dedupe(rows, buildOptionsFromFlags(opts));
+      const mk = (result.config.matchkeys ?? [])[0];
+      if (!mk) {
+        process.stderr.write("No matchkey in the resolved config; nothing to explain.\n");
+        process.exit(1);
+      }
+      if (opts.pair) {
+        const [a, b] = opts.pair.split(",").map((s) => parseInt(s.trim(), 10));
+        const rowA = rows[a as number];
+        const rowB = rows[b as number];
+        if (!rowA || !rowB) {
+          process.stderr.write(`Row id out of range (have ${rows.length} rows).\n`);
+          process.exit(1);
+        }
+        const ex = explainPair(rowA, rowB, mk);
+        process.stdout.write(
+          `${ex.explanation}\n` +
+            `  score=${ex.score.toFixed(4)} confidence=${ex.confidence}\n` +
+            ex.reasoning.map((r) => `  - ${r}\n`).join(""),
+        );
+      } else {
+        const cluster = result.clusters.get(opts.cluster as number);
+        if (!cluster) {
+          process.stderr.write(`Cluster ${opts.cluster} not found.\n`);
+          process.exit(1);
+        }
+        process.stdout.write(
+          explainCluster(opts.cluster as number, cluster, rows, mk).summary + "\n",
+        );
+      }
+    },
+  );
+
+// ---------- runs ----------
+program
+  .command("runs")
+  .description("List previous runs (for rollback)")
+  .option("--output-dir <dir>", "directory containing the run log", ".")
+  .action(async (opts: { outputDir: string }) => {
+    const { listRuns } = await import("./node/mcp/run-log.js");
+    const runs = listRuns(opts.outputDir);
+    if (runs.length === 0) {
+      process.stdout.write("No runs recorded.\n");
+      return;
+    }
+    process.stdout.write(`${runs.length} run(s):\n`);
+    for (const r of runs) {
+      const state = r.rolled_back ? "rolled back" : "active";
+      process.stdout.write(
+        `  ${r.run_id}  ${r.timestamp}  ${r.output_files.length} file(s)  [${state}]\n`,
+      );
+    }
+  });
+
+// ---------- rollback ----------
+program
+  .command("rollback")
+  .description("Roll back a previous run by deleting its output files")
+  .argument("<run_id>", "run id to roll back")
+  .option("--output-dir <dir>", "directory containing the run log", ".")
+  .action(async (runId: string, opts: { outputDir: string }) => {
+    const { rollbackRun } = await import("./node/mcp/run-log.js");
+    const res = rollbackRun(runId, opts.outputDir);
+    if ("error" in res) {
+      process.stderr.write(`Error: ${res.error}\n`);
+      if (res.available_runs?.length) {
+        process.stderr.write(`Available runs: ${res.available_runs.join(", ")}\n`);
+      }
       process.exit(1);
     }
+    process.stdout.write(`Rolled back ${res.run_id}\n`);
+    for (const f of res.deleted) process.stdout.write(`  deleted: ${f}\n`);
+    for (const f of res.not_found) process.stdout.write(`  missing: ${f}\n`);
+  });
+
+// ---------- unmerge ----------
+//
+// Operates on EXPORTED FILES, not a live run (same as Python): a clusters CSV
+// carrying `__row_id__` + `__cluster_id__`, plus an optional scored-pairs CSV
+// (`id_a,id_b,score`) supplying the edge weights that re-clustering needs --
+// a clusters CSV alone has no pair scores to re-cluster from.
+program
+  .command("unmerge")
+  .description("Remove a record from its cluster (per-entity unmerge)")
+  .argument("<record_id>", "record row id to unmerge", (v) => parseInt(v, 10))
+  .option("--clusters <path>", "clusters CSV from a previous run (required)")
+  .option("--pairs <path>", "scored-pairs CSV (id_a,id_b,score)")
+  .option("--shatter", "shatter the whole cluster into singletons")
+  .option("-t, --threshold <value>", "min score for re-clustering", parseFloat, 0)
+  .option("-o, --output <path>", "output CSV (default: <clusters>.unmerged.csv)")
+  .action(
+    async (
+      recordId: number,
+      opts: {
+        clusters?: string;
+        pairs?: string;
+        shatter?: boolean;
+        threshold: number;
+        output?: string;
+      },
+    ) => {
+      if (!opts.clusters) {
+        process.stderr.write(
+          "Error: --clusters is required.\n" +
+            "Generate a clusters CSV with: goldenmatch dedupe --output-clusters\n",
+        );
+        process.exit(2);
+      }
+      const { unmergeRecord, unmergeCluster, pairKey } = await import("./core/cluster.js");
+      const rows = readFile(opts.clusters);
+      const first = rows[0];
+      if (!first || !("__row_id__" in first) || !("__cluster_id__" in first)) {
+        process.stderr.write(
+          "Error: clusters file must contain __row_id__ and __cluster_id__ columns.\n",
+        );
+        process.exit(2);
+      }
+
+      // rows -> Map<cluster_id, members[]>
+      const members = new Map<number, number[]>();
+      const rowCid = new Map<number, number>();
+      for (const r of rows) {
+        const rid = Number(r["__row_id__"]);
+        const cid = Number(r["__cluster_id__"]);
+        if (!Number.isFinite(rid) || !Number.isFinite(cid)) continue;
+        rowCid.set(rid, cid);
+        const list = members.get(cid);
+        if (list) list.push(rid);
+        else members.set(cid, [rid]);
+      }
+      const targetCid = rowCid.get(recordId);
+      if (targetCid === undefined) {
+        process.stderr.write(`Record ${recordId} not found in clusters file.\n`);
+        process.exit(1);
+      }
+
+      // Optional scored pairs -> per-cluster pairScores (edge weights).
+      const pairScoresFor = new Map<number, Map<PairKey, number>>();
+      if (opts.pairs) {
+        for (const p of readFile(opts.pairs)) {
+          const a = Number(p["id_a"]);
+          const b = Number(p["id_b"]);
+          const s = Number(p["score"]);
+          if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(s)) continue;
+          const cid = rowCid.get(a);
+          if (cid === undefined || cid !== rowCid.get(b)) continue; // intra-cluster only
+          let m = pairScoresFor.get(cid);
+          if (!m) {
+            m = new Map<PairKey, number>();
+            pairScoresFor.set(cid, m);
+          }
+          m.set(pairKey(a, b), s);
+        }
+      }
+
+      let clusters: Map<number, ClusterInfo> = new Map(
+        [...members].map(([cid, mem]): [number, ClusterInfo] => [
+          cid,
+          {
+            members: mem,
+            size: mem.length,
+            oversized: false,
+            pairScores: pairScoresFor.get(cid) ?? new Map<PairKey, number>(),
+            confidence: 1,
+            bottleneckPair: null,
+            clusterQuality: "strong",
+          },
+        ]),
+      );
+
+      const before = clusters.get(targetCid)?.members.length ?? 0;
+      process.stdout.write(`Unmerge record ${recordId}\n`);
+      process.stdout.write(`  Found in cluster ${targetCid} (${before} members)\n`);
+
+      if (opts.shatter) {
+        process.stdout.write(`  Shattering cluster ${targetCid} into ${before} singletons\n`);
+        clusters = await unmergeCluster(targetCid, clusters);
+      } else {
+        process.stdout.write(`  Removing record ${recordId} from cluster\n`);
+        clusters = await unmergeRecord(recordId, clusters, opts.threshold);
+      }
+
+      // Re-assign cluster ids onto the source rows and write out.
+      const newCid = new Map<number, number>();
+      for (const [cid, info] of clusters) for (const m of info.members) newCid.set(m, cid);
+      const updated = rows.map((r) => ({
+        ...r,
+        __cluster_id__: newCid.get(Number(r["__row_id__"])) ?? null,
+      }));
+      const out = opts.output ?? `${opts.clusters}.unmerged.csv`;
+      writeOutputRows(out, updated as Row[], "csv");
+      process.stdout.write(`  ${clusters.size} cluster(s) after unmerge -> ${out}\n`);
+    },
+  );
+
+// ---------- config (preset sub-app) ----------
+//
+// Mirrors Python's `config` Typer sub-app over the same
+// `~/.goldenmatch/presets/<name>.yaml` layout, so presets are interchangeable.
+const configCmd = program
+  .command("config")
+  .description("Manage saved config presets");
+
+configCmd
+  .command("save")
+  .description("Save a config file as a named preset")
+  .argument("<name>", "preset name")
+  .argument("<config_path>", "path to the config YAML")
+  .action(async (name: string, configPath: string) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      const dest = new PresetStore().save(name, configPath);
+      process.stdout.write(`Preset '${name}' saved to ${dest}\n`);
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("load")
+  .description("Load a named preset to a local file")
+  .argument("<name>", "preset name")
+  .option("-d, --dest <path>", "destination path", "goldenmatch.yaml")
+  .action(async (name: string, opts: { dest: string }) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      const out = new PresetStore().load(name, opts.dest);
+      process.stdout.write(`Preset '${name}' written to ${out}\n`);
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("list")
+  .description("List saved presets")
+  .action(async () => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    const names = new PresetStore().listPresets();
+    if (names.length === 0) {
+      process.stdout.write("No presets saved.\n");
+      return;
+    }
+    for (const n of names) process.stdout.write(`  ${n}\n`);
+  });
+
+configCmd
+  .command("delete")
+  .description("Delete a saved preset")
+  .argument("<name>", "preset name")
+  .action(async (name: string) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      new PresetStore().delete(name);
+      process.stdout.write(`Preset '${name}' deleted\n`);
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("show")
+  .description("Print a saved preset")
+  .argument("<name>", "preset name")
+  .action(async (name: string) => {
+    const { PresetStore } = await import("./node/preset-store.js");
+    try {
+      process.stdout.write(new PresetStore().show(name));
+    } catch (err: unknown) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  });
+
+// ---------- schedule ----------
+program
+  .command("schedule")
+  .description("Run deduplication on a schedule")
+  .argument("<files...>", "data files to process")
+  .option("-c, --config <path>", "config YAML path")
+  .option("--every <spec>", "run interval (e.g. 1h, 30m, 6h, 1d)")
+  .option("--cron <spec>", "cron schedule (e.g. '0 6 * * *')")
+  .option("--output-dir <dir>", "output directory", ".")
+  .option("--max-runs <n>", "stop after N runs (default: run until interrupted)", (v) =>
+    parseInt(v, 10),
+  )
+  .action(
+    async (
+      files: string[],
+      opts: { config?: string; every?: string; cron?: string; outputDir: string; maxRuns?: number },
+    ) => {
+      const { ScheduledJob, parseInterval, parseCron } = await import("./node/scheduler.js");
+      if (!opts.every && !opts.cron) {
+        process.stderr.write("Error: specify --every or --cron\n");
+        process.exit(1);
+      }
+      let interval: number;
+      try {
+        interval = opts.every ? parseInterval(opts.every) : parseCron(opts.cron!);
+      } catch (err) {
+        process.stderr.write(`Error: ${(err as Error).message}\n`);
+        process.exit(1);
+      }
+      if (opts.cron) {
+        // Be explicit rather than let an operator assume real cron semantics.
+        process.stderr.write(
+          "Note: --cron is simplified (interval only, not wall-clock scheduling), " +
+            "matching the Python CLI. Use system cron for exact times.\n",
+        );
+      }
+
+      const job = new ScheduledJob({
+        jobId: `gm-${randomUUID().replace(/-/g, "").slice(0, 8)}`,
+        filePaths: files,
+        ...(opts.config ? { config: loadConfigFile(opts.config) } : {}),
+        intervalSeconds: interval,
+        outputDir: opts.outputDir,
+        loadRows: (paths) => loadFilesWithSource(paths),
+        out: (s) => process.stdout.write(s + "\n"),
+      });
+      // Ctrl+C finishes the current run's bookkeeping instead of hard-killing.
+      process.on("SIGINT", () => {
+        process.stdout.write("\nStopping after the current run...\n");
+        job.stop();
+      });
+      await job.run(opts.maxRuns !== undefined ? { maxRuns: opts.maxRuns } : {});
+    },
+  );
+
+// ---------- init (interactive config wizard) ----------
+program
+  .command("init")
+  .description("Launch the interactive config wizard")
+  .option("-o, --output <path>", "output path for the generated config")
+  .action(async (opts: { output?: string }) => {
+    const { runWizard, toYaml } = await import("./node/config-wizard.js");
+    const { createStdinAsk, askYesNo, askWithDefault } = await import("./node/interactive.js");
+    const { ask, close } = createStdinAsk();
+    try {
+      const config = await runWizard(ask, (s) => process.stdout.write(s + "\n"));
+      let target = opts.output;
+      if (!target) {
+        // Python asks before saving when no --output was given; same here.
+        target = (await askYesNo(ask, "\nSave config to file?", true))
+          ? await askWithDefault(ask, "Output path", "goldenmatch.yaml")
+          : undefined;
+      }
+      if (target) {
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, toYaml(config), "utf-8");
+        process.stdout.write(`\nConfig saved to ${target}\n`);
+      } else {
+        process.stdout.write("\n" + toYaml(config));
+      }
+    } finally {
+      close();
+    }
+  });
+
+// ---------- label (build ground truth interactively) ----------
+program
+  .command("label")
+  .description("Build ground truth by labeling record pairs interactively")
+  .argument("<files...>", "input file paths")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .option("-o, --output <path>", "output ground-truth CSV", "ground_truth.csv")
+  .option("-n, --n <count>", "number of pairs to label", (v) => parseInt(v, 10), 50)
+  .option("--strategy <name>", "pair selection: borderline, random, or hardest", "borderline")
+  .option("-a, --append", "append to an existing ground-truth file")
+  .action(
+    async (
+      files: string[],
+      opts: { config: string; output: string; n: number; strategy: string; append?: boolean },
+    ) => {
+      const { selectPairs, runLabelSession } = await import("./node/label-session.js");
+      const { createStdinAsk } = await import("./node/interactive.js");
+      const strategy = opts.strategy as "borderline" | "random" | "hardest";
+      if (!["borderline", "random", "hardest"].includes(strategy)) {
+        process.stderr.write("Error: --strategy must be borderline, random, or hardest\n");
+        process.exit(2);
+      }
+
+      const rows = loadFilesWithSource(files);
+      process.stdout.write("Running pipeline to generate candidate pairs...\n");
+      const result = await dedupe(rows, { config: loadConfigFile(opts.config) });
+      if (result.scoredPairs.length === 0) {
+        process.stderr.write("No pairs found. Check your config.\n");
+        process.exit(1);
+      }
+
+      const rowsById = new Map<number, Row>(rows.map((r, i) => [i, r]));
+      const displayColumns = Object.keys(rows[0] ?? {})
+        .filter((c) => !c.startsWith("__"))
+        .slice(0, 6);
+
+      // --append: skip pairs already present in the existing file (either orientation).
+      const existing = new Set<string>();
+      if (opts.append && existsSync(opts.output)) {
+        for (const r of readFile(opts.output)) {
+          existing.add(`${Number(r["id_a"])}:${Number(r["id_b"])}`);
+        }
+        process.stdout.write(`Loaded ${existing.size} existing labels from ${opts.output}\n`);
+      }
+
+      const { ask, close } = createStdinAsk();
+      let session;
+      try {
+        process.stdout.write(`\nLabel ${opts.n} pairs. Type: y=match, n=no match, s=skip, q=quit\n\n`);
+        session = await runLabelSession({
+          pairs: selectPairs(result.scoredPairs, strategy),
+          rowsById,
+          displayColumns,
+          target: opts.n,
+          ask,
+          existing,
+          out: (s) => process.stdout.write(s + "\n"),
+        });
+      } finally {
+        close();
+      }
+
+      if (session.labels.length === 0) {
+        process.stdout.write("\nNo labels saved.\n");
+        return;
+      }
+      const prior = opts.append && existsSync(opts.output) ? readFile(opts.output) : [];
+      writeOutputRows(opts.output, [...prior, ...session.labels] as unknown as Row[], "csv");
+      const matches = session.labels.filter((l) => l.label === 1).length;
+      process.stdout.write(`\nSaved ${session.labels.length} labels to ${opts.output}\n`);
+      process.stdout.write(
+        `  Matches: ${matches}, Non-matches: ${session.labels.length - matches}, Skipped: ${session.skipped}\n`,
+      );
+    },
+  );
+
+// ---------- review (steward the borderline band) ----------
+program
+  .command("review")
+  .description("Review borderline pairs and record approve/reject decisions")
+  .argument("<files...>", "input file paths")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .option("--memory-path <path>", "Learning Memory SQLite path", ".goldenmatch/memory.db")
+  .option("--merge-threshold <value>", "scores above this auto-merge (skip review)", parseFloat, 0.95)
+  .option("--reject-below <value>", "scores below this are rejected outright", parseFloat, 0.75)
+  .option("--decided-by <who>", "steward identifier recorded on each decision", "cli")
+  .option("-n, --limit <count>", "max pairs to review this session", (v) => parseInt(v, 10), 50)
+  .action(
+    async (
+      files: string[],
+      opts: {
+        config: string;
+        memoryPath: string;
+        mergeThreshold: number;
+        rejectBelow: number;
+        decidedBy: string;
+        limit: number;
+      },
+    ) => {
+      const { gatePairs } = await import("./core/review-queue.js");
+      const { runReviewSession } = await import("./node/label-session.js");
+      const { createStdinAsk } = await import("./node/interactive.js");
+      const { addCorrection } = await import("./node/memory/api.js");
+
+      const rows = loadFilesWithSource(files);
+      process.stdout.write("Running pipeline to generate candidate pairs...\n");
+      const result = await dedupe(rows, { config: loadConfigFile(opts.config) });
+
+      const gated = gatePairs(result.scoredPairs, {
+        approveAbove: opts.mergeThreshold,
+        rejectBelow: opts.rejectBelow,
+      });
+      if (gated.needsReview.length === 0) {
+        process.stdout.write(
+          `\nNothing to review: ${gated.autoApproved.length} auto-approved, ${gated.rejected.length} rejected.\n`,
+        );
+        return;
+      }
+
+      const rowsById = new Map<number, Row>(rows.map((r, i) => [i, r]));
+      const displayColumns = Object.keys(rows[0] ?? {})
+        .filter((c) => !c.startsWith("__"))
+        .slice(0, 6);
+
+      const { ask, close } = createStdinAsk();
+      let session;
+      try {
+        process.stdout.write(
+          `\n${gated.needsReview.length} pair(s) in the review band. ` +
+            `Type: y=match, n=no match, s=skip, q=quit\n\n`,
+        );
+        session = await runReviewSession({
+          items: gated.needsReview.map((i) => ({ idA: i.idA, idB: i.idB, score: i.score })),
+          rowsById,
+          displayColumns,
+          ask,
+          limit: opts.limit,
+          out: (s) => process.stdout.write(s + "\n"),
+        });
+      } finally {
+        close();
+      }
+
+      // Persist AFTER the loop so a mid-session quit still records what was decided.
+      let written = 0;
+      for (const d of session.decisions) {
+        try {
+          await addCorrection({
+            idA: d.idA,
+            idB: d.idB,
+            decision: d.decision,
+            source: "steward",
+            path: opts.memoryPath,
+          });
+          written++;
+        } catch (err) {
+          process.stderr.write(`Failed to record ${d.idA}/${d.idB}: ${(err as Error).message}\n`);
+        }
+      }
+      const approved = session.decisions.filter((d) => d.decision === "approve").length;
+      process.stdout.write(
+        `\nDone. Approved ${approved}, rejected ${session.decisions.length - approved}, skipped ${session.skipped}.\n`,
+      );
+      process.stdout.write(`${written} decision(s) recorded to Learning Memory (${opts.memoryPath}).\n`);
+    },
+  );
+
+// ---------- anomalies ----------
+program
+  .command("anomalies")
+  .description("Detect suspicious/fake records (test emails, bad ZIPs, placeholders)")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .option("-s, --sensitivity <level>", "low, medium, or high", "medium")
+  .option("-o, --output <path>", "write anomalies to a CSV instead of printing")
+  .option("-n, --limit <n>", "max rows to print", (v) => parseInt(v, 10), 50)
+  .action(
+    async (
+      files: string[],
+      opts: { sensitivity: string; output?: string; limit: number },
+    ) => {
+      const { detectAnomalies, formatAnomalyReport } = await import("./core/anomaly.js");
+      const rows = loadFilesWithSource(files);
+      let anomalies;
+      try {
+        anomalies = detectAnomalies(rows, opts.sensitivity);
+      } catch (err) {
+        // Python raises ValueError on a bad sensitivity rather than silently
+        // falling through to the most-sensitive behavior. Same contract here.
+        process.stderr.write(`Error: ${(err as Error).message}\n`);
+        process.exit(2);
+      }
+
+      if (opts.output) {
+        writeOutputRows(opts.output, anomalies as unknown as Row[], "csv");
+        process.stdout.write(
+          `Wrote ${anomalies.length} anomal${anomalies.length === 1 ? "y" : "ies"} to ${opts.output}\n`,
+        );
+        return;
+      }
+
+      process.stdout.write(formatAnomalyReport(anomalies.slice(0, opts.limit)) + "\n");
+      if (anomalies.length > opts.limit) {
+        process.stdout.write(
+          `(showing ${opts.limit} of ${anomalies.length}; use --limit to see more)\n`,
+        );
+      }
+    },
+  );
+
+// ---------- sensitivity ----------
+program
+  .command("sensitivity")
+  .description("Analyze parameter sensitivity using CCMS cluster comparison")
+  .argument("<files...>", "input file paths (.csv, .tsv, .json, .jsonl)")
+  .requiredOption("-c, --config <path>", "config YAML path")
+  .requiredOption(
+    "-s, --sweep <spec>",
+    "sweep spec 'field:start:stop:step' (repeatable)",
+    (v: string, prev: string[]) => [...prev, v],
+    [] as string[],
+  )
+  .option("--sample <n>", "random sample size for speed", (v) => parseInt(v, 10))
+  .option("-o, --output <path>", "save results to JSON")
+  .action(
+    async (
+      files: string[],
+      opts: { config: string; sweep: string[]; sample?: number; output?: string },
+    ) => {
+      const { runSensitivitySweep, sweepStabilityReport } = await import(
+        "./core/sensitivity.js"
+      );
+      // Python's spec grammar: field:start:stop:step (all numeric after the field).
+      const specs = opts.sweep.map((raw) => {
+        const parts = raw.split(":");
+        if (parts.length !== 4) {
+          process.stderr.write(
+            `Error: bad --sweep '${raw}'; expected field:start:stop:step\n`,
+          );
+          process.exit(2);
+        }
+        const [field, start, stop, step] = parts as [string, string, string, string];
+        const nums = [start, stop, step].map(parseFloat);
+        if (nums.some((n) => !Number.isFinite(n))) {
+          process.stderr.write(`Error: non-numeric range in --sweep '${raw}'\n`);
+          process.exit(2);
+        }
+        return { field, start: nums[0]!, stop: nums[1]!, step: nums[2]! };
+      });
+
+      const rows = loadFilesWithSource(files);
+      const config = loadConfigFile(opts.config);
+      const results = await runSensitivitySweep(
+        rows,
+        config,
+        specs,
+        opts.sample,
+      );
+
+      const report = { results: results.map((r) => sweepStabilityReport(r)) };
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]!;
+        const s = report.results[i]!;
+        process.stdout.write(
+          `${r.param.field}: baseline=${r.baselineValue} ` +
+            `best=${s.best_value} (${s.best_unchanged_pct.toFixed(1)}% unchanged)\n`,
+        );
+        for (const p of s.points) {
+          process.stdout.write(
+            `    ${p.value}: unchanged=${p.unchanged} merged=${p.merged} ` +
+              `partitioned=${p.partitioned} overlapping=${p.overlapping} twi=${p.twi.toFixed(4)}\n`,
+          );
+        }
+      }
+      if (opts.output) {
+        writeFileSync(opts.output, JSON.stringify(report, null, 2) + "\n", "utf-8");
+        process.stdout.write(`Results saved to ${opts.output}\n`);
+      }
+    },
+  );
+
+// ---------- pprl (privacy-preserving record linkage) ----------
+//
+// Python's `pprl` is a Typer sub-app with `link` + `auto-config`. Only `link`
+// is ported: the TS package has the linkage protocol (`runPPRL`) but NOT the
+// PPRL auto-config profiler, which remains tracked as the `pprl_auto_config`
+// python_only MCP tool. `pprl auto-config` therefore errors with a pointer
+// rather than silently doing something different.
+const pprlCmd = program
+  .command("pprl")
+  .description("Privacy-preserving record linkage (bloom-filter CLKs)");
+
+pprlCmd
+  .command("link")
+  .description("Link two parties' records without sharing raw values")
+  .requiredOption("-a, --file-a <path>", "party A data file")
+  .requiredOption("-b, --file-b <path>", "party B data file")
+  .requiredOption("-f, --fields <fields>", "comma-separated fields to match on")
+  .option("-t, --threshold <value>", "match threshold", parseFloat, 0.85)
+  .option("-s, --security <level>", "standard | high | paranoid", "high")
+  .option("-p, --protocol <name>", "trusted_third_party | smc", "trusted_third_party")
+  .option("--scorer <name>", "dice | jaccard", "dice")
+  .option("--salt <key>", "shared HMAC key (both parties must use the same)")
+  .option("-o, --output <path>", "output CSV of cluster assignments")
+  .action(
+    async (opts: {
+      fileA: string;
+      fileB: string;
+      fields: string;
+      threshold: number;
+      security: string;
+      protocol: string;
+      scorer: string;
+      salt?: string;
+      output?: string;
+    }) => {
+      const { runPPRL } = await import("./core/pprl/protocol.js");
+      const security = opts.security as "standard" | "high" | "paranoid";
+      const protocol = opts.protocol as "trusted_third_party" | "smc";
+      const scorer = opts.scorer as "dice" | "jaccard";
+      if (!["standard", "high", "paranoid"].includes(security)) {
+        process.stderr.write(`Error: --security must be standard|high|paranoid\n`);
+        process.exit(2);
+      }
+      if (!["trusted_third_party", "smc"].includes(protocol)) {
+        process.stderr.write(`Error: --protocol must be trusted_third_party|smc\n`);
+        process.exit(2);
+      }
+
+      const rowsA = readFile(opts.fileA);
+      const rowsB = readFile(opts.fileB);
+      const result = runPPRL(rowsA, rowsB, {
+        fields: parseCsvList(opts.fields),
+        securityLevel: security,
+        protocol,
+        threshold: opts.threshold,
+        scorer,
+        ...(opts.salt ? { salt: opts.salt } : {}),
+      });
+
+      process.stdout.write(
+        `PPRL (${protocol}, ${security}): ${result.matchCount} match(es) ` +
+          `over ${result.totalComparisons} comparison(s), ${result.clusters.length} cluster(s)\n`,
+      );
+      if (opts.output) {
+        // One row per cluster member: cluster_id + which party + that party's row id.
+        const rows: Row[] = [];
+        result.clusters.forEach((members, cid) => {
+          for (const m of members) {
+            rows.push({ cluster_id: cid, party: m.party, record_id: m.id });
+          }
+        });
+        writeOutputRows(opts.output, rows, "csv");
+        process.stdout.write(`Cluster assignments written to ${opts.output}\n`);
+      }
+    },
+  );
+
+pprlCmd
+  .command("auto-config")
+  .description("(not ported) profile a file and suggest PPRL parameters")
+  .argument("[file]", "data file to analyze")
+  .action(() => {
+    process.stderr.write(
+      "pprl auto-config is not available in the TypeScript package.\n" +
+        "The PPRL auto-config profiler is Python-only (`pprl_auto_config`).\n" +
+        "Use: goldenmatch pprl auto-config <file>   (Python)\n",
+    );
+    process.exit(2);
   });
 
 // ---------------------------------------------------------------------------

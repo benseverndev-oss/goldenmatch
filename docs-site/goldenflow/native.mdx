@@ -1,0 +1,64 @@
+---
+title: "Native acceleration"
+description: "GoldenFlow's optional compiled Rust/Arrow runtime — which components run native, the `GOLDENFLOW_NATIVE` gate, and how parity is enforced. Generated from the native loader; do not edit by hand."
+keywords: ["goldenflow", "native", "rust", "arrow", "pyo3", "performance", "reference-mode"]
+---
+
+{/* GENERATED FILE — do not edit. Source of truth: goldenflow/goldenflow/core/_native_loader.py. Regenerate: python scripts/gen_native_docs.py --write */}
+
+GoldenFlow is pure-Python by default. An optional compiled kernel (Rust + PyO3/Arrow, crate `packages/rust/extensions/native-flow`) accelerates the CPU-heavy components below. Under reference-mode the compiled path is the reference implementation and pure-Python is the byte-identical fallback — output is the same either way; native only changes wall-clock.
+
+```bash
+pip install goldenflow[native]
+```
+
+## The gate
+
+One env var, `GOLDENFLOW_NATIVE`, read in `goldenflow/goldenflow/core/_native_loader.py`:
+
+- `GOLDENFLOW_NATIVE=auto` (default, or unset) — run native for any component whose kernel symbol is present on the loaded wheel, except the known-divergent components below.
+- `GOLDENFLOW_NATIVE=0` — force the pure-Python fallback everywhere.
+- `GOLDENFLOW_NATIVE=1` — require native; raise if the kernel isn't importable (the CI parity lane).
+
+The kernel is discovered two ways, in order: the in-tree build `goldenflow._native` (local dev / parity lane), then the distributed `goldenflow_native._native` wheel (`pip install goldenflow[native]`). When neither is importable, every path runs pure-Python unchanged.
+
+## Components
+
+Each component maps to the native kernel symbol(s) its `auto` call site invokes (the *floor* symbol first — a component is native-capable when **any** listed symbol is present, so an older wheel stays wheel-skew safe). A ✓ in **Parity-signed** marks a component that cleared the byte-exact sign-off recorded in `_GATED_ON`.
+
+| Component | Kernel symbol(s) | Parity-signed |
+|---|---|---|
+| `phone` | `phone_e164_arrow`, `phone_national_arrow`, `phone_country_code_arrow` | ✓ |
+| `phone_digits` | `phone_digits_arrow` |  |
+| `us_id` | `ssn_format_arrow`, `ssn_mask_arrow`, `ein_format_arrow` |  |
+| `cc` | `cc_validate_arrow` |  |
+| `iban` | `iban_validate_arrow` |  |
+| `isbn` | `isbn_validate_arrow` |  |
+| `ean` | `ean_validate_arrow` |  |
+| `swift` | `swift_validate_arrow` |  |
+| `vat` | `vat_validate_arrow` |  |
+| `aba` | `aba_validate_arrow` |  |
+| `imei` | `imei_validate_arrow` |  |
+| `isin` | `isin_validate_arrow` |  |
+| `cusip` | `cusip_validate_arrow` |  |
+| `npi` | `npi_validate_arrow` |  |
+| `luhn` | `luhn_validate_arrow` |  |
+| `name_transliterate` | `name_transliterate_arrow` |  |
+| `name_script` | `name_script_arrow` |  |
+| `email` | `email_validate_arrow` |  |
+| `url` | `url_normalize_arrow` |  |
+| `company` | `company_normalize_arrow` |  |
+| `numeric` | `currency_strip_arrow` |  |
+| `categorical` | `boolean_normalize_arrow` |  |
+| `names_ext` | `strip_titles_arrow` |  |
+| `address` | `address_standardize_arrow` |  |
+| `autocorrect` | `build_canonical_map_arrow` |  |
+| `text` | `strip_arrow` |  |
+| `phonetic` | `soundex_arrow` |  |
+| `profile` | `infer_type_list_arrow` |  |
+
+**Kept pure-Python under `auto` (GOLDENFLOW_NATIVE reference-mode):** `phone_validate`. These carry (or could bind) a native symbol that is known to diverge from the pure-Python reference, so they stay on the fallback path until their parity battery is green — reachable only via `GOLDENFLOW_NATIVE=1`.
+
+## How parity stays honest
+
+A component joins the native path only after a parity test proves its kernel is byte-identical (or integer-exact) to the pure-Python reference. CI runs a `GOLDENFLOW_NATIVE=1` lane that builds the wheel and asserts native == pure-Python, and `scripts/check_native_symbols.py` reconciles the host's kernel references against the crate's `wrap_pyfunction!` exports so a referenced-but-unregistered symbol fails loudly. Because output is identical with or without the wheel, toggling the gate never changes a result — only speed.

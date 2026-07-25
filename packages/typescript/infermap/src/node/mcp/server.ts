@@ -573,7 +573,7 @@ export function startMcpServer(): void {
             id,
             result: {
               protocolVersion: "2024-11-05",
-              serverInfo: { name: "infermap", version: "0.6.0" },
+              serverInfo: { name: "infermap", version: "0.7.0" },
               capabilities: { tools: {}, resources: {}, prompts: {} },
             },
           });

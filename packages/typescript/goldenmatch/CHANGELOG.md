@@ -4,6 +4,101 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.25.0] - 2026-07-24
+
+### Added
+- **`schedule` CLI command** (parity batch 8). goldenmatch `cli_commands.python_only` **6 -> 5**.
+  `schedule <files...> [-c cfg] (--every 1h | --cron '0 6 * * *') [--output-dir .] [--max-runs N]`
+  runs dedupe on a repeating interval, writing `<jobId>_run<N>_golden.csv` per run.
+  `src/node/scheduler.ts` ports `core/scheduler.py` (`parseInterval` / `parseCron` / `ScheduledJob`).
+
+### Known shared limitation (deliberately NOT fixed one-sided)
+- **`--cron` is interval-only, not wall-clock.** `parseCron` validates the 5-field shape and then collapses to a coarse interval (daily / hourly) -- it does not compute the next matching time. This is a faithful port of Python's behavior, whose own docstring says "For full cron support, use system cron." Implementing real cron on TypeScript alone would make `--cron "0 6 * * *"` mean *daily at 06:00* on TS and *every 86400s from now* on Python: a silent operational divergence in a scheduling tool, which is worse than a shared limitation. The TS CLI prints a note when `--cron` is used, and the limitation is pinned by tests. Fixing it properly means changing both surfaces together.
+
+### Fixed (bug found while porting)
+- **`--max-runs` now bounds ATTEMPTS, not successes.** Counting only successful runs meant a permanently-failing job ignored the cap and looped forever, because a failed attempt never advances `runCount`. Guarded by a test that would hang under the old semantics. A failing run is still reported and the schedule continues -- a scheduled job that dies on one bad input is worse than one that logs and retries.
+- `parseInterval` rejects a non-integer numeric part (`1.5h`). Python's `int(spec[:-1])` raises on it, so silently reading it as `1h` would have diverged the two CLIs on the same flag.
+
+## [1.24.0] - 2026-07-24
+
+### Added
+- **`init`, `label`, and `review` CLI commands** (parity batch 7) -- the interactive tier. goldenmatch `cli_commands.python_only` **9 -> 6**.
+  - `init [-o out.yaml]` -- config wizard. `src/node/config-wizard.ts` ports `config/wizard.py`, including the `suggestTransforms` / `suggestScorer` heuristic tables byte-faithfully, so both wizards propose the same config for the same column names.
+  - `label <files...> -c <config> [-o gt.csv] [-n 50] [--strategy borderline|random|hardest] [-a]` -- build ground truth by labeling pairs (y/n/s/q), writing a CSV for `evaluate`.
+  - `review <files...> -c <config> [--merge-threshold] [--reject-below] [-n 50]` -- steward the borderline band via the existing `gatePairs`, recording approve/reject decisions to Learning Memory.
+
+### Design note
+- **The loops take an injectable `Ask` rather than reading stdin directly** (`src/node/interactive.ts`), so the decision logic is unit-testable by scripting a session. Python's equivalents call Rich prompts inline and therefore have no loop tests; this port deliberately does not reproduce that. 28 tests cover strategy ordering, y/n/s/q handling, mid-session quit preserving work, either-orientation `--append` dedup, 4dp score rounding, and two scripted end-to-end wizard sessions.
+- `review` persists **after** the loop, so a mid-session `q` still records what was already decided.
+- `toYaml` is hand-rolled rather than pulling the optional `yaml` peer dep, so `init` cannot fail on a missing optional dependency. It quotes values YAML would otherwise reinterpret (a column named `no` stays a string).
+
+## [1.23.0] - 2026-07-24
+
+### Added
+- **`anomalies` CLI command + `src/core/anomaly.ts`** (parity batch 6). goldenmatch `cli_commands.python_only` **10 → 9**. Unlike batches 1-5 this is a **real port**, not wiring — TypeScript had no anomaly module at all.
+  - `anomalies <files...> [-s low|medium|high] [-o out.csv] [-n 50]` — flags fake/test emails, fake phone patterns, suspicious ZIPs, placeholder values (`TBD`/`N/A`/`xxx`/…) and exact duplicate rows.
+  - `detectAnomalies` / `formatAnomalyReport` port `core/anomaly.py`, including its **`>2` duplicate-row boundary** (3+ identical copies flag; exactly 2 do not) and its **strict sensitivity validation** — a miscased or typo'd level throws rather than silently falling through to the most-sensitive behavior, which is the inverse of what a caller asking for `low` wants.
+
+### Parity verification
+- `tests/parity/fixtures/anomaly.json` is **authored by the Python oracle** (`packages/python/goldenmatch/scripts/emit_anomaly_fixture.py` runs the real `core/anomaly.py`); `tests/parity/anomaly.parity.test.ts` asserts the TS port reproduces it exactly — 45 anomalies across all three sensitivity levels plus an explicit-`__row_id__` frame. Regenerate the fixture after any change to `core/anomaly.py`.
+
+### Documented divergences
+- `formatAnomalyReport` drops Python's Rich color markup (no Rich renderer in the TS CLI); grouping, ordering, the 3-item preview and the "… and N more" line are identical.
+- The duplicate-row key mirrors Python's `str(None)` spelling. The `str(5.0)`/`String(5.0)` float divergence documented for PPRL applies but is inert here — the key is only ever compared for equality within one language, never emitted.
+
+## [1.22.0] - 2026-07-24
+
+### Added
+- **`sensitivity` + `pprl` CLI commands** (parity batch 5). goldenmatch `cli_commands.python_only` **12 → 10**. Both wrap cores TypeScript already had.
+  - `sensitivity <files...> -c <config> -s field:start:stop:step [--sample n] [-o out.json]` — parameter-sensitivity sweep compared against one baseline clustering via CCMS (`runSensitivitySweep` + `sweepStabilityReport`). `--sweep` is repeatable; the `field:start:stop:step` grammar matches Python's and rejects wrong arity / non-numeric ranges with exit 2 rather than a confusing downstream error.
+  - `pprl link -a <fileA> -b <fileB> -f <fields> [-t thr] [-s level] [-p protocol] [--scorer] [--salt] [-o out.csv]` — privacy-preserving record linkage over bloom-filter CLKs (`runPPRL`), writing one CSV row per cluster member (`cluster_id`, `party`, `record_id`).
+
+### Known difference (documented, exits non-zero)
+- **`pprl auto-config` is not ported.** Python's `pprl` is a Typer sub-app with `link` **and** `auto-config`; the TS package has the linkage protocol but not the PPRL parameter profiler, which stays tracked as the `pprl_auto_config` **python_only MCP tool**. The TS subcommand exists so the gap is visible, and it exits 2 with a pointer to the Python command rather than silently doing something different.
+
+## [1.21.0] - 2026-07-24
+
+### Added
+- **`runs`, `rollback`, `unmerge`, `config` CLI commands** (parity batch 4) — the run-context cluster. goldenmatch `cli_commands.python_only` **16 → 12**.
+  - `runs [--output-dir]` / `rollback <run_id> [--output-dir]` — list previous runs and roll one back (deleting its output files). Both ride the **already-existing** durable run log (`node/mcp/run-log.ts` over `.goldenmatch_runs.json`), which was ported earlier for the `list_runs`/`rollback` MCP tools.
+  - `unmerge <record_id> --clusters <csv> [--pairs <csv>] [--shatter] [-t thr] [-o out]` — per-entity unmerge over **exported files**, matching Python: a clusters CSV (`__row_id__` + `__cluster_id__`) plus an optional scored-pairs CSV (`id_a,id_b,score`) supplying the edge weights re-clustering needs, since a clusters CSV alone carries no pair scores. Cross-cluster pair rows are ignored. Wraps the existing `unmergeRecord` / `unmergeCluster` cores.
+  - `config {save,load,list,delete,show}` — named config presets, over a new `src/node/preset-store.ts` (port of Python `prefs/store.py::PresetStore`). Same `~/.goldenmatch/presets/<name>.yaml` layout, so presets are interchangeable between the toolkits.
+
+### Known difference (documented)
+- **`runs`/`rollback` `--output-dir` is jailed to the process CWD.** `run-log.ts` routes the path through `sanitizePath` (inherited from the MCP surface, where it stops a tool escaping the working directory). Python's equivalent accepts any path. Passing a directory outside CWD raises rather than silently reading elsewhere; the tests pin this.
+
+## [1.20.0] - 2026-07-24
+
+### Added
+- **Domain rulebooks + the `list_domains` / `create_domain` / `test_domain` MCP tools** (parity batch 3; MCP **80 → 83**). Port of Python `core/domain_registry.py` — user-authored YAML extraction rules for a data domain (medical devices, automotive parts, …), the counterpart to the compiled-in `core/domain.ts` extractors.
+  - `src/core/domain-rulebook.ts` (**edge-safe**): rulebook shape, `compileRulebook`, `extractWithRulebook` (brand / identifiers / attributes / normalized name + Python's exact confidence scoring), `matchDomain`. An invalid user regex is skipped and reported, never thrown — one bad pattern can't take down a rulebook.
+  - `src/node/domain-registry.ts` (**node**): YAML `loadRulebook` / `saveRulebook` / `discoverRulebooks` over `.goldenmatch/domains` + `~/.goldenmatch/domains`, in Python's snake_case key order so a rulebook authored by either toolkit loads in the other. `yaml` is an optional peer dep with an actionable error when absent.
+  - `test_domain` reads the current run's rows from `RUN_STORE` (the TS analogue of Python's server-held `_rows`).
+- **`interactive` CLI command** — see below.
+
+### Fixed
+- **`interactive` / `tui` were the same command counted as two gaps.** Python's CLI called it `interactive`, the TS CLI called it `tui`; both launch the TUI over optional input files, so the parity manifest listed one capability as *both* a `python_only` and a `ts_only` gap. Both CLIs now register both names (TS `cli_commands.ts_only` is now **empty**). It had to be a real second `.command()`, not `.alias()` — the surface emitter reads `program.commands.map(c => c.name())` and does not see commander aliases, so an alias would have left the manifest lying.
+
+### Known difference (documented, not a gap)
+- TS `list_domains` returns only user-authored rulebooks. Python additionally ships 7 built-in YAML packs inside its wheel (`goldenmatch/domains/`); the TS package's built-in domain knowledge is the compiled-in `core/domain.ts` extractors instead, so there is no third search path and a fresh TS install lists zero domains where Python lists 7.
+- Regex parity is the common Python/JS subset. Python-only constructs (named groups `(?P<x>…)`, atomic/possessive groups, conditionals) are reported invalid rather than silently mis-matching. `\w`-style word splitting is normalized to `\p{L}\p{N}_` so it stays Unicode-aware like Python's.
+
+## [1.19.0] - 2026-07-24
+
+### Added
+- **`analyze-blocking`, `autoconfig`, `lineage`, `explain` CLI commands** (cross-language parity batch 1). Four more `cli_commands python_only -> shared` moves; each is thin wiring over a core TS already had. This **discharges the 1.18.0 "Deferred" note** for `lineage` + `analyze-blocking`: the blocker was the missing in-memory dedupe-run context, and these commands simply run `dedupe` first to build it.
+  - `analyze-blocking <files...> [-c config] [--top n] [-o out.json]` - blocking-strategy suggestions (`analyzeBlocking`) over the configured matchkey fields, de-duplicated across matchkeys; falls back to the fields zero-config picks when no `--config` is given. Mirrors Python `analyze-blocking`.
+  - `autoconfig <files...> [-o out.json]` - derive and print the zero-config `GoldenMatchConfig` (`autoConfigure`): matchkeys, scorers, thresholds, blocking. Mirrors Python `autoconfig`.
+  - `lineage <files...> [-c config] [-o lineage.json]` - run a dedupe and persist the per-pair lineage (`buildLineage`). Mirrors Python `lineage`.
+  - `explain <files...> --pair a,b | --cluster id` - plain-language pair/cluster explanation (`explainPair` / `explainCluster`) over a fresh run. Mirrors Python `explain`.
+  - Tests: `tests/unit/cli-parity-batch1.test.ts`.
+
+### Fixed
+- `lineage` CLI output no longer reports `LineageBundle.recordCount` as a record total. That field is a misnomer in `core/lineage.ts` (it is set to `edges.length`), so the command prints the edge count and `stats.totalRecords` separately. The misnomer is now pinned by a test; it is TS-internal (Python's `build_lineage` returns a bare list of edge dicts with no equivalent field), so no cross-language behavior changed.
+
+### Deferred (documented)
+- `sensitivity` + `unmerge` remain `python_only` from the 1.18.0 list: `sensitivity` needs sweep-spec plumbing (a param-sweep description the CLI has no syntax for yet) and `unmerge` needs a *persisted* run to mutate rather than a fresh in-memory one. Still a bounded follow-up, not a silent drop.
+
 ## [1.18.0] - 2026-07-23
 
 ### Added

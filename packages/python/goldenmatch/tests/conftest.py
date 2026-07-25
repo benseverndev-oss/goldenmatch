@@ -2,7 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-import polars as pl
 import pytest
 
 # make scripts/ importable as top-level modules (arrow_finish_line_sweep, etc.)
@@ -166,10 +165,17 @@ def tmp_dir(tmp_path):
     return tmp_path
 
 
+# Sample-data fixtures are built with pyarrow (the hard dep) so test collection
+# stays polars-free — goldenmatch is arrow-native and polars is an OPTIONAL extra
+# (root pyproject D6). Importing polars at module scope broke collection whenever
+# the [polars] extra wasn't installed.
 @pytest.fixture
 def sample_csv(tmp_path) -> Path:
+    import pyarrow as pa
+    import pyarrow.csv as pacsv
+
     path = tmp_path / "sample.csv"
-    df = pl.DataFrame({
+    table = pa.table({
         "id": [1, 2, 3, 4, 5],
         "first_name": ["John", "john", "Jane", "JOHN", "Bob"],
         "last_name": ["Smith", "Smith", "Doe", "Smyth", "Jones"],
@@ -177,14 +183,17 @@ def sample_csv(tmp_path) -> Path:
         "zip": ["19382", "19382", "10001", "19383", "90210"],
         "phone": ["267-555-1234", "267-555-1234", "212-555-9999", "267-555-1235", "310-555-0000"],
     })
-    df.write_csv(path)
+    pacsv.write_csv(table, path)
     return path
 
 
 @pytest.fixture
 def sample_csv_b(tmp_path) -> Path:
+    import pyarrow as pa
+    import pyarrow.csv as pacsv
+
     path = tmp_path / "sample_b.csv"
-    df = pl.DataFrame({
+    table = pa.table({
         "id": [101, 102, 103],
         "first_name": ["John", "Alice", "Jane"],
         "last_name": ["Smith", "Wonder", "Doe"],
@@ -192,19 +201,22 @@ def sample_csv_b(tmp_path) -> Path:
         "zip": ["19382", "30301", "10001"],
         "phone": ["267-555-1234", "404-555-1111", "212-555-9999"],
     })
-    df.write_csv(path)
+    pacsv.write_csv(table, path)
     return path
 
 
 @pytest.fixture
 def sample_parquet(tmp_path) -> Path:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     path = tmp_path / "sample.parquet"
-    df = pl.DataFrame({
+    table = pa.table({
         "id": [1, 2, 3],
         "first_name": ["John", "Jane", "Bob"],
         "last_name": ["Smith", "Doe", "Jones"],
         "email": ["john@example.com", "jane@test.com", "bob@test.com"],
         "zip": ["19382", "10001", "90210"],
     })
-    df.write_parquet(path)
+    pq.write_table(table, path)
     return path

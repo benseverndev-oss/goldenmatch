@@ -105,6 +105,8 @@ jobs:
           # canonical SQL file there. Path layout: <PKG_DIR>/usr/share/postgresql/<N>/extension/
           EXT_DIR="${PKG_DIR}/usr/share/postgresql/${PG_VERSION}/extension"
           mkdir -p "${EXT_DIR}"
+          cp sql/goldenmatch_pg--0.16.0.sql "${EXT_DIR}/"
+          cp sql/goldenmatch_pg--0.15.0--0.16.0.sql "${EXT_DIR}/"
           cp sql/goldenmatch_pg--0.15.0.sql "${EXT_DIR}/"
           cp sql/goldenmatch_pg--0.14.0--0.15.0.sql "${EXT_DIR}/"
           cp sql/goldenmatch_pg--0.14.0.sql "${EXT_DIR}/"

@@ -41,8 +41,27 @@ if TYPE_CHECKING:
 def _normalize_dt(value: Any) -> str:
     """Stable string form of a timestamp, identical on the insert side (a
     ``datetime``) and the read-back side (``_to_dt`` returns a ``datetime``),
-    so the content hash round-trips across a store write/read."""
+    so the content hash round-trips across a store write/read.
+
+    **Dropping the tzinfo is load-bearing for the Postgres backend.** Events are
+    created with a naive ``datetime.now()`` and hashed *before* insert, but the
+    Postgres schema stores ``recorded_at`` as ``TIMESTAMPTZ`` and hands back a
+    tz-AWARE datetime, whose ``isoformat()`` carries a ``+00:00`` offset the
+    write-side hash never saw. Every stamped event therefore re-hashed to a
+    different value and ``verify_audit_chain`` reported phantom "content
+    edit(s)" on a perfectly clean in-DB store (caught by the `rust_pgrx`
+    `gm_identity_audit_verify` smoke). Keeping the wall clock exactly as the
+    driver returned it -- in the session timezone the naive value was written in
+    -- makes the read-back string identical to the written one.
+
+    Naive values (every SQLite event, and the write side on both backends) are
+    untouched, so existing entry hashes and the seals chained over them stay
+    valid -- the same back-compat constraint that governs the claim-authority
+    fields in ``event_content_hash`` below.
+    """
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.replace(tzinfo=None)
         return value.isoformat()
     return str(value)
 
@@ -124,6 +143,37 @@ class AuditVerification:
                 f"{len(self.missing_sealed_events)} sealed event(s) missing"
             )
         return "audit chain BROKEN: " + ", ".join(parts)
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-ready verdict, the single serialization the MCP tool, the REST
+        surface, and the SQL ``gm_identity_audit_verify`` bridge all emit."""
+        return {
+            "ok": self.ok,
+            "events_checked": self.events_checked,
+            "seals_checked": self.seals_checked,
+            "content_mismatches": self.content_mismatches,
+            "seal_mismatches": self.seal_mismatches,
+            "missing_sealed_events": self.missing_sealed_events,
+            "summary": self.summary(),
+        }
+
+
+def seal_result_dict(seal: AuditSeal | None) -> dict[str, Any]:
+    """JSON-ready result for a ``seal_audit_log`` call. ``None`` (nothing new to
+    seal) → ``{"sealed": False, ...}``; a fresh seal → its anchor fields. Single
+    source for the MCP ``identity_audit_seal`` tool and the SQL
+    ``gm_identity_audit_seal`` bridge."""
+    if seal is None:
+        return {"sealed": False, "reason": "no new events to seal"}
+    return {
+        "sealed": True,
+        "seal_id": seal.seal_id,
+        "root_hash": seal.root_hash,
+        "event_count": seal.event_count,
+        "last_event_id": seal.last_event_id,
+        "dataset": seal.dataset,
+        "actor": seal.actor,
+    }
 
 
 def seal_audit_log(
@@ -238,3 +288,31 @@ def verify_audit_chain(
         seal_mismatches=seal_mismatches,
         missing_sealed_events=missing_sealed_events,
     )
+
+
+def audit_log_page(
+    store: IdentityStore,
+    *,
+    dataset: str | None = None,
+    actor: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """JSON-ready page of the append-only audit log for compliance export.
+
+    Returns ``{"items": [...], "total": n}`` where ``items`` is truncated to
+    ``limit`` (most recent-order preserved from ``export_audit_log``) and
+    ``total`` is the full unfiltered-by-limit count. Single source for the MCP
+    ``identity_audit`` tool and the SQL ``gm_identity_audit`` bridge."""
+    events = store.export_audit_log(dataset=dataset, actor=actor)
+    items = [
+        {
+            "event_id": e.event_id, "entity_id": e.entity_id, "kind": e.kind,
+            "actor": e.actor, "trust": e.trust,
+            "claim_type": e.claim_type, "evidence_ref": e.evidence_ref,
+            "previous_claim_id": e.previous_claim_id,
+            "recorded_at": e.recorded_at.isoformat() if e.recorded_at else None,
+            "run_name": e.run_name, "dataset": e.dataset, "payload": e.payload,
+        }
+        for e in events[:limit]
+    ]
+    return {"items": items, "total": len(events)}

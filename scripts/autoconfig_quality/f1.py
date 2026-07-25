@@ -9,10 +9,13 @@ share the 0..n-1 row-index space).
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 from itertools import combinations
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import goldenmatch
 import polars as pl
@@ -44,17 +47,29 @@ def _candidate_pairs(df: pl.DataFrame) -> set[tuple[int, int]] | None:
     cap = int(os.environ.get("GOLDENMATCH_QH_ATTR_MAX_PAIRS", "10000000"))
     profiles = profile_columns(df)
     blocking = build_blocking(profiles, df, n_rows_full=df.height)
-    lf = df.with_row_index("__row_id__").lazy()
+    frame = df.with_row_index("__row_id__")
     blocks: list[list[int]] = []
     projected = 0
     try:
-        for b in build_blocks(lf, blocking):
-            ids = b.df.collect()["__row_id__"].to_list()
+        for b in build_blocks(frame, blocking):
+            # build_blocks returns EAGER frames (BlockResult.df is a DataFrame /
+            # pa.Table). This previously passed a LazyFrame and called
+            # b.df.collect(); against the eager result that raises AttributeError,
+            # which the bare `except` below swallowed -- so EVERY run silently
+            # produced an empty candidate set and reported blocking_recall=0.0
+            # next to a final_recall of 1.0. Read the column directly, and accept
+            # either frame flavour so this survives the pyarrow port.
+            col = b.df.column("__row_id__") if hasattr(b.df, "column") else b.df["__row_id__"]
+            ids = col.to_pylist() if hasattr(col, "to_pylist") else col.to_list()
             projected += len(ids) * (len(ids) - 1) // 2
             if projected > cap:
                 return None  # over budget -> skip attribution, keep the F1 floor
             blocks.append(ids)
-    except Exception:
+    except Exception as exc:
+        # Degrade rather than crash the F1 path, but never SILENTLY: an empty
+        # candidate set makes attribution report a meaningless 0.0 blocking_recall.
+        logger.warning("candidate-pair rebuild failed (%s: %s); attribution will "
+                       "report blocking_recall=0.0", type(exc).__name__, exc)
         return set()
     cand: set[tuple[int, int]] = set()
     for ids in blocks:

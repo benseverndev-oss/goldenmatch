@@ -26,22 +26,22 @@ mcp_tools:
   ts_only: []
 cli_commands:
   shared:
+  - agent-serve
   - demo
   - diff
   - history
   - learn
   - map
+  - mcp-serve
   - profile
+  - serve
   - stream
   - transform
   - validate
   python_only:
-  - agent-serve
   - init
   - interactive
-  - mcp-serve
   - schedule
-  - serve
   - watch
   ts_only: []
 a2a_skills:

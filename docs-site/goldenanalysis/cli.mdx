@@ -1,0 +1,16 @@
+---
+title: "GoldenAnalysis CLI"
+description: "Every GoldenAnalysis command for reporting, trending, and regression detection."
+keywords: ["goldenanalysis", "cli", "commands", "report", "regressions"]
+---
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `goldenanalysis report <file>` | Analyze a frame (or re-render a saved report) and print a report. |
+| `goldenanalysis trend <metric>` | Trend a metric over a run history. |
+| `goldenanalysis regressions` | Detect metric regressions vs a baseline. |
+| `goldenanalysis mcp-serve` | Start the GoldenAnalysis MCP server (requires the `[mcp]` extra). |
+
+See [Analyzers](/goldenanalysis/analyzers) for the analyzer catalog and [Cross-run](/goldenanalysis/cross-run) for trend/regression details.

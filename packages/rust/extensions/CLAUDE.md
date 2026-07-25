@@ -110,7 +110,8 @@ essentially the whole single-record transform surface. Released
 
 DuckDB UDFs + Postgres pg_extern functions implementing the contract at
 `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md`
-(monorepo root). Five read-only functions per backend:
+(monorepo root). Five read-only functions per backend (the 0.4.0 baseline —
+PostgreSQL has since added the stateful write + audit/MDM surface, see below):
 
 | Function | Args |
 |---|---|
@@ -125,9 +126,19 @@ DuckDB UDFs + Postgres pg_extern functions implementing the contract at
   Python UDFs cannot easily read session settings; pgrx + pyo3 settings
   round-trips add complexity for no real benefit. Explicit-arg also reads
   better at the SQL call site.
-- **Read-only**: writes must go through the Python `goldenmatch identity
-  merge/split` CLI, REST `/api/v1/identities/{id}/{merge,split}`, or MCP
-  `identity_merge` / `identity_split` tools in the main goldenmatch package.
+- **DuckDB is read-only; PostgreSQL is now a full stateful surface.** The five
+  functions above were the whole surface in 0.4.0. **PostgreSQL since gained the
+  in-DB write path** — `gm_resolve` (#1913 P1, stateful create/absorb/merge into
+  a Postgres-native dataset via the `goldenmatch.identity_dsn` GUC), the reads
+  serving the in-DB dataset on empty `db_path` (#1913 P2), steward
+  `gm_identity_merge`/`gm_identity_split` (#1913 P3), and (0.16.0) the audit
+  chain `gm_identity_audit`/`_audit_seal`/`_audit_verify`, steward mediation
+  `gm_identity_resolve_conflict`/`gm_identity_claim`, and MDM reads
+  `gm_identity_profile`/`_stats`/`_worklist` — 8 class-A bridge wrappers over
+  `goldenmatch.identity`, serialization single-sourced with the MCP tool layer.
+  The write functions are Postgres-only (DuckDB has no durable multi-connection
+  store). DuckDB identity stays read-only; its writes still go through the Python
+  CLI / REST / MCP.
 - **Python dep**: requires `goldenmatch>=1.15.0` (ships `goldenmatch.identity.*`).
 - **Tests**: `duckdb/tests/test_identity.py` -- 9 cases against a
   tmp_path-seeded SQLite identity DB. Postgres-side is CI-only.
@@ -138,7 +149,8 @@ DuckDB UDFs + Postgres pg_extern functions implementing the contract at
 
 Both backends expose the same function set (DuckDB UDFs <-> Postgres
 `pg_extern`, JSON in/JSON out): core scoring/dedupe/match, the 13 core-API
-parity functions, 8 `goldenflow_*` transforms, 5 read-only identity functions,
+parity functions, 8 `goldenflow_*` transforms, the identity functions (5 reads on
+both backends; PostgreSQL additionally has the stateful write + audit/MDM set),
 job-management (`gm_*`), and Learning Memory (`correction_add`/`_list` +
 `memory_learn`/`memory_stats`).
 
@@ -167,7 +179,7 @@ exposed in SQL. These are deferred by design, not gaps -- the rationale:
 | LLM family (`llm_score_pairs`, `llm_cluster_pairs`, `llm_extract_features`) | Needs network + API keys; not safe/deterministic inside a SQL engine. |
 | boost / rerank (`boost_accuracy`, `rerank_top_pairs`) | Bootstraps a HuggingFace cross-encoder (model download); too heavy for a UDF. |
 | `run_graph_er` | Multi-table + relationship config; not a single-table call. |
-| Identity **writes** (`manual_merge`, `manual_split`, `resolve_clusters`) | SQL identity surface is read-only by design; writes go through the Python CLI / REST `/api/v1/identities/...` / MCP `identity_merge`/`identity_split`. |
+| Identity **writes** (`manual_merge`, `manual_split`, `resolve_clusters`, mediation, claims, audit seal) | **PostgreSQL exposes these** (`gm_resolve`, `gm_identity_merge`/`_split`/`_claim`/`_resolve_conflict`/`_audit_seal`) over the `goldenmatch.identity_dsn` store. **DuckDB defers** — no durable multi-connection identity store; its writes go through the Python CLI / REST `/api/v1/identities/...` / MCP. |
 | `auto_map_columns` | InferMap schema mapping -- a separate package, not goldenmatch core. |
 | lineage / output writers (`build_lineage`, `write_output`, `generate_dedupe_report`) | Run-coupled / file-emitting; SQL callers get the data back directly and persist it themselves. |
 
@@ -177,7 +189,7 @@ lockstep (bridge fn + pgrx wrapper + handwritten SQL on the Postgres side;
 
 ## Gotchas
 - **Bridge tests SIGSEGV in pyarrow's mimalloc unless `ARROW_DEFAULT_MEMORY_POOL=system` (2026-07-10).** The `rust` lane's `cargo test --workspace` (bridge is the sole member) intermittently/near-deterministically crashed with `signal: 11 SIGSEGV`. Root cause (gdb): `mi_thread_init` in `pyarrow/libarrow.so`'s bundled **mimalloc** allocator, on a **worker thread** (`start_thread`→`clone3`) calling `pyarrow.array()` (`ConvertPySequence`). goldenmatch's pipeline (the `test_autoconfig_*`/`test_dedupe_*` controller tests) spawns polars/`ThreadPoolExecutor` workers that allocate through pyarrow's mimalloc, whose per-thread heap init faults under this embedded CPython. It is NOT a test-thread race (repro'd at `--test-threads=1`) and NOT goldenmatch logic (each test passes in isolation); it's the *accumulated* thread churn across the 46-test process. Fix: force pyarrow onto the system memory pool via `ARROW_DEFAULT_MEMORY_POOL=system` (the documented Arrow knob), set in CI on the test step. **Verified: 20/20 clean with it vs 20/20 SIGSEGV without**, on a clean py3.12 + `pip install goldenmatch pyarrow` repro (matches CI). A `std::env::set_var` in `init()` would be unsound (env mutation with live threads is exactly the hazard here), so the fix is the process env, not code. Follow-up to weigh: the `rust_pgrx` lane also embeds pyarrow — if it ever shows the same crash, set the pool there too.
-- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain `sql/goldenmatch_pg--0.7.0.sql` (the current `default_version` base) manually, plus the chained upgrade scripts (`--0.5.0--0.6.0.sql`, `--0.6.0--0.7.0.sql`). Bumping the extension version means adding a new `--X.Y.Z.sql` base + `--<prev>--X.Y.Z.sql` migration, bumping `default_version` in `goldenmatch_pg.control` AND `version` in `Cargo.toml`, and adding the hardcoded `cp sql/goldenmatch_pg--*.sql` lines in root `.github/workflows/ci.yml` + `publish-goldenmatch-pg.yml` (the orphaned `packages/.../.github` copies are ignored). A new function in an ALREADY-PUBLISHED version is wrong: published versions are immutable, so the function goes in the NEXT version's base + migration, NOT retro-added to the released base (bit gm_embed/#737 -- it shipped into 0.6.0 which was already released, fixed by moving it to 0.7.0). **CI guard (`pgrx_sql_sync` job → `scripts/check_pgrx_sql_sync.py`):** since the SQL is hand-maintained, a CI job asserts every `#[pg_extern]` in the crate appears as a `CREATE FUNCTION "<name>"` in the base SQL for the current `default_version`. Adding a `#[pg_extern]` without wiring it into the SQL now fails on the PR (Python-only, no pgrx toolchain) instead of surfacing at the pgrx build/smoke, if at all. It enforces Rust→SQL presence only (name-based, no `pg_extern(name=…)` overrides exist in this crate); `extension_sql!` helpers with no matching `#[pg_extern]` are reported as info, not errors.
+- pgrx 0.12.9 does NOT auto-generate SQL files -- must maintain the base SQL for the current `default_version` (now `sql/goldenmatch_pg--0.16.0.sql`) manually, plus the full chain of upgrade scripts (`--0.5.0--0.6.0.sql` … `--0.15.0--0.16.0.sql`). Bumping the extension version means adding a new `--X.Y.Z.sql` base + `--<prev>--X.Y.Z.sql` migration, bumping `default_version` in `goldenmatch_pg.control` AND `version` in `Cargo.toml`, and adding the hardcoded `cp sql/goldenmatch_pg--*.sql` lines in root `.github/workflows/ci.yml` + `publish-goldenmatch-pg.yml` (the orphaned `packages/.../.github` copies are ignored). A new function in an ALREADY-PUBLISHED version is wrong: published versions are immutable, so the function goes in the NEXT version's base + migration, NOT retro-added to the released base (bit gm_embed/#737 -- it shipped into 0.6.0 which was already released, fixed by moving it to 0.7.0). **CI guard (`pgrx_sql_sync` job → `scripts/check_pgrx_sql_sync.py`):** since the SQL is hand-maintained, a CI job asserts every `#[pg_extern]` in the crate appears as a `CREATE FUNCTION "<name>"` in the base SQL for the current `default_version`. Adding a `#[pg_extern]` without wiring it into the SQL now fails on the PR (Python-only, no pgrx toolchain) instead of surfacing at the pgrx build/smoke, if at all. It enforces Rust→SQL presence only (name-based, no `pg_extern(name=…)` overrides exist in this crate); `extension_sql!` helpers with no matching `#[pg_extern]` are reported as info, not errors.
 - pgrx extension functions are in `goldenmatch` schema -- use `goldenmatch.function_name()` in psql, or explicit `::TEXT` casts
 - `cargo` defaults CARGO_HOME to drive root on Windows when CWD is D: -- always set explicitly
 - DuckDB UDFs cannot query same connection (deadlock) -- use `con.cursor()` for table reads
