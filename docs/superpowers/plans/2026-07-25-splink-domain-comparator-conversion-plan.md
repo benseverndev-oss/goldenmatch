@@ -272,3 +272,30 @@ scoring. That's a cross-cutting schema + pipeline feature (higher-risk, own test
 recognizer. **Decision needed from Ben** (see the session hand-off): (a) add the derive_from+separator
 plumbing to MatchkeyField as P3b, or (b) recognize the haversine level but emit it as a DROPPED
 comparison with a clear "cross-column geo not yet representable" warning until the plumbing lands.
+
+## 11. P3b delivered — geo_haversine + MatchkeyField.derive_from (2026-07-25)
+Ben chose "add the derive_from plumbing." `DistanceInKMAtThresholds` now converts, via a NEW
+synthesized-field mechanism on `MatchkeyField`:
+- **Schema:** `MatchkeyField.derive_from: list[str] | None` + `derive_separator: str = " "` (validated
+  >=2 sources). Splink gives separate lat+lng; geo_haversine scores one "lat,long" field, so the
+  converter emits `derive_from=[lat,lng]`, `derive_separator=","`.
+- **Materialization (BOTH lanes):** `precompute_matchkey_transforms` (polars) + `..._frame` (arrow,
+  the goldenmatch default) now synthesize `MatchkeyField.derive_from` fields, not just NE ones,
+  honoring the per-field separator. Threaded a `separator=` param through `Column.derive_ne_joined`
+  (protocol/polars/arrow) + `arrow_derive.ne_joined_column` (default " " keeps NE byte-identical).
+- **Required-columns:** `pipeline._get_required_columns` requires a derive_from field's SOURCES, not
+  the synthesized name (else the raw-frame column check fails on `lat__lng`).
+- **Recognizer:** `_GEO_MARKER`/`_GEO_LAT`/`_GEO_LNG`/`_GEO_KM` match the haversine signature
+  (`acos ... radians ... * 6371 ... <= km`) both dialects; lat = the bare `radians(col_l|col_r)`,
+  lng = the `radians(col_r - col_l)` difference, km -> `_geo_haversine_band`. `RecognizedLevel` gained
+  `derive_from`/`derive_separator`; `convert_comparison` threads them into the MatchkeyField.
+  `DistanceInKM([1,10])` -> `geo_haversine`, field `lat__lng`, levels `[0.85, 0.5]`, derive `,`.
+- **Tests:** `test_from_splink_geo.py` (13) incl. an END-TO-END `dedupe_df` proving nearby coords
+  cluster + far coords don't (the synthesized field really scores). NE space-join unchanged
+  (`test_facility_fullname_ne` green). Full affected suites 319 green; polars-free; codemap +
+  config-matrix + agent-manifest regenerated. No parity-manifest change (geo_haversine is an
+  existing scorer).
+
+**Roadmap now:** P1 array_intersect scorer + P2 date_diff + P3a array_intersect recognizer + P3b
+geo/derive_from all shipped. Numeric = opportunistic. Remaining: P4 `domain_bands` upgrade lever,
+P5 Rust kernels (array_intersect/numeric_diff), P6 TS parity.

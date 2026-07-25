@@ -938,6 +938,8 @@
             "_convert_one_blocking_rule",
             "_findings_preview",
             "_load_settings",
+            "_looks_like_date_diff",
+            "_looks_like_haversine",
             "_patch_field_placeholders",
             "_recognize_blocking_conjunct",
             "_strip_outer_parens",

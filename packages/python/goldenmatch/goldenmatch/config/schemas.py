@@ -236,6 +236,20 @@ class MatchkeyField(BaseModel):
         default=None,
         description="Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries.",
     )
+    # When set, ``field`` is SYNTHESIZED by the pipeline before scoring by
+    # joining ``derive_from`` with ``derive_separator`` (e.g. a geo_haversine
+    # "lat,long" field from ['lat','lng'] with separator ","). Mirrors
+    # NegativeEvidenceField.derive_from, but the separator is configurable (NE
+    # space-joins; geo needs comma so _parse_latlong reads it). None => ``field``
+    # must already exist in the frame.
+    derive_from: list[str] | None = Field(
+        default=None,
+        description="Source columns joined with derive_separator to synthesize the compared field when it is not present in the raw frame.",
+    )
+    derive_separator: str = Field(
+        default=" ",
+        description="Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long).",
+    )
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> MatchkeyField:
@@ -265,6 +279,10 @@ class MatchkeyField(BaseModel):
             self.field = self.column
         elif self.field is None and self.column is None:
             raise ValueError("MatchkeyField requires 'field' or 'column'.")
+        if self.derive_from is not None and len(self.derive_from) < 2:
+            raise ValueError(
+                "derive_from must name at least 2 source columns to synthesize the field"
+            )
         for t in self.transforms:
             FieldTransform(transform=t)  # reuse validation
         if self.scorer is not None and not _is_valid_scorer(self.scorer):

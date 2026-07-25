@@ -1565,6 +1565,20 @@
               "required": false,
               "default": "None",
               "description": "Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries."
+            },
+            {
+              "name": "derive_from",
+              "type": "list[str] | None",
+              "required": false,
+              "default": "None",
+              "description": "Source columns joined with derive_separator to synthesize the compared field when it is not present in the raw frame."
+            },
+            {
+              "name": "derive_separator",
+              "type": "str",
+              "required": false,
+              "default": "' '",
+              "description": "Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long)."
             }
           ]
         },
