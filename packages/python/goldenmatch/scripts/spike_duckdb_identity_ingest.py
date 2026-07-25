@@ -292,8 +292,14 @@ def _run_duckdb_stream(path: str, n: int) -> str:
     _write_parquet_streaming(n, nodes_pq, records_pq)  # bounded-memory source
     conn = duckdb.connect(path)
     try:
-        # Force DuckDB to stream + spill rather than buffer the scan in RAM.
-        conn.execute("SET memory_limit='4GB'")
+        # Enable spilling for the scan/hash; let DuckDB self-manage the budget
+        # (default ~80% RAM) so we measure its TRUE peak RSS. A hard low cap
+        # (e.g. 4GB) OOMs at >=5M because the ON CONFLICT primary-key ART index
+        # is unspillable and grows with N -- itself a finding, exposed via the
+        # optional GOLDENMATCH_SPIKE_DUCKDB_MEMLIMIT override.
+        _memlimit = os.environ.get("GOLDENMATCH_SPIKE_DUCKDB_MEMLIMIT")
+        if _memlimit:
+            conn.execute(f"SET memory_limit='{_memlimit}'")
         conn.execute(f"SET temp_directory='{spill}'")
         conn.execute(_DUCKDB_DDL)
         conn.execute(_UPSERT_NODES_DUCKDB.format(
