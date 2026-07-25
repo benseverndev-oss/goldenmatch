@@ -57,16 +57,26 @@ class TestNativeScorerIdMaps:
     # the Rust score_one match fails. `numeric_diff` is intentionally absent (its
     # band rides the scorer string, which the fixed-id score_one can't carry).
     _COMPARATOR_BUCKET_IDS = {"date_diff": 17, "geo_haversine": 18}
+    # array_intersect (Splink-conversion P5, spec 2026-07-25): REAL score_one arms
+    # at ids 19/20 (jaccard / overlap-coefficient token-set overlap). Unlike
+    # numeric_diff, the mode is a DISCRETE choice, so the two modes map to two fixed
+    # ids the score_one(id,a,b) contract carries. Keyed by all THREE scorer-string
+    # spellings the per-field lookup can see -- bare `array_intersect` and
+    # `array_intersect:jaccard` both -> 19 (jaccard is the default), `:overlap` -> 20.
+    # Pinned so a renumber of the Python map or the Rust score_one match fails.
+    _ARRAY_BUCKET_IDS = {"array_intersect": 19, "array_intersect:jaccard": 19, "array_intersect:overlap": 20}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):
         # _NATIVE_SCORER_IDS = the score_one namespace (0-14) PLUS the two
         # name-scorer bucket ids (15/16, kernel-intercepted) PLUS the two FS domain
-        # comparator score_one arms (17/18).
+        # comparator score_one arms (17/18) PLUS the array_intersect arms (19/20,
+        # keyed by all three mode spellings).
         assert _NATIVE_SCORER_IDS == {
             **self._SCORE_ONE_IDS,
             **self._NAME_BUCKET_IDS,
             **self._COMPARATOR_BUCKET_IDS,
+            **self._ARRAY_BUCKET_IDS,
         }
 
     def test_native_field_scorer_ids_match_score_field_matrix_ordering(self):
