@@ -31,7 +31,7 @@ const fixture = JSON.parse(
 };
 
 /** Canonical partition of a TS clustering: sorted list of sorted member groups. */
-function tsPartition(clusters: Map<number, { members: number[] }>): number[][] {
+function tsPartition(clusters: ReadonlyMap<number, { members: readonly number[] }>): number[][] {
   const groups = [...clusters.values()].map((c) => [...c.members].sort((a, b) => a - b));
   groups.sort((a, b) => {
     const n = Math.min(a.length, b.length);
@@ -51,7 +51,7 @@ describe("cross-language cluster handoff conformance", () => {
         weakClusterThreshold: s.options.weakClusterThreshold,
         autoSplit: s.options.autoSplit,
       });
-      const ts = tsPartition(clusters as Map<number, { members: number[] }>);
+      const ts = tsPartition(clusters);
       expect(ts).toEqual(s.py_partition);
     });
   }

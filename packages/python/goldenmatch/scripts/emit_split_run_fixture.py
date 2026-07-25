@@ -27,7 +27,6 @@ import json
 from pathlib import Path
 
 import polars as pl
-
 from goldenmatch.config.schemas import GoldenMatchConfig
 from goldenmatch.tui.engine import MatchEngine
 

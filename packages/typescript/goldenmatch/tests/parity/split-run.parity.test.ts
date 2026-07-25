@@ -37,7 +37,7 @@ const fx = JSON.parse(
   py_partition: number[][];
 };
 
-function partition(clusters: Map<number, { members: number[] }>): number[][] {
+function partition(clusters: ReadonlyMap<number, { members: readonly number[] }>): number[][] {
   const g = [...clusters.values()].map((c) => [...c.members].sort((a, b) => a - b));
   g.sort((a, b) => {
     const n = Math.min(a.length, b.length);
@@ -67,7 +67,7 @@ const TS_CONFIG: GoldenMatchConfig = {
 describe("cross-language end-to-end split-run conformance", () => {
   it("(a) handoff fidelity: TS clusters Python's real scored pairs == all-Python clusters", () => {
     const clusters = buildClusters(fx.py_scored_pairs, fx.all_ids, {});
-    expect(partition(clusters as Map<number, { members: number[] }>)).toEqual(fx.py_partition);
+    expect(partition(clusters)).toEqual(fx.py_partition);
   });
 
   it("(b) independent all-TS run agrees with all-Python (clusters + scored pairs)", async () => {
@@ -75,7 +75,7 @@ describe("cross-language end-to-end split-run conformance", () => {
     const r = await dedupe(rows, { config: TS_CONFIG });
 
     // --- clusters: independent runs reach the same partition ---
-    expect(partition(r.clusters as Map<number, { members: number[] }>)).toEqual(fx.py_partition);
+    expect(partition(r.clusters)).toEqual(fx.py_partition);
 
     // --- scored pairs: same set + quantify the scoring boundary ---
     const key = (a: number, b: number): string => `${Math.min(a, b)}-${Math.max(a, b)}`;
