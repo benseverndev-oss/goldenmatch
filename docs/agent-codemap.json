@@ -3715,6 +3715,7 @@
             "_fs_batch_rows",
             "_fs_calibration_mode",
             "_fs_embedding_vectors",
+            "_fs_evidence_cut",
             "_fs_link_threshold",
             "_fs_monotonic_mode",
             "_fs_name_refdata_available",
