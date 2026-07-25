@@ -198,6 +198,7 @@
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.block_analyzer",
             "goldenmatch.core.blocker",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.memory.store",
             "goldenmatch.core.quality",
             "goldenmatch.core.review_queue",
