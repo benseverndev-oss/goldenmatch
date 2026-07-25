@@ -1078,6 +1078,7 @@ def test_lever_order_canonical():
     assert _LEVER_ORDER == (
         "tf_tables",
         "distance_thresholds",
+        "domain_bands",
         "fan_out",
         "calibration",
     )
@@ -1139,3 +1140,147 @@ def test_measure_false_records_skip_note():
         f.splink_path == "upgrade:measure" and "skipped" in f.message
         for f in result.report.findings
     )
+
+
+# ── Lever: domain_bands (P4) ──────────────────────────────────────────────────
+#
+# The array_intersect converter (P3a) snapped Splink's intersection COUNT
+# (`>= n`) to an overlap RATIO n / 10 (an assumed set size). domain_bands
+# measures the ACTUAL mean token-set size K on the data and recomputes n / K --
+# mirroring distance_thresholds measuring mean string length L. date_diff /
+# geo_haversine conversions are exact (no assumed constant): passthrough + note.
+
+
+def _array_settings(sizes=(3, 1), column="skills"):
+    """ArrayIntersectAtSizes(sizes) settings -> array_intersect:overlap field."""
+    levels = [
+        {
+            "sql_condition": f'"{column}_l" IS NULL OR "{column}_r" IS NULL',
+            "is_null_level": True,
+        }
+    ]
+    for n in sizes:
+        levels.append({
+            "sql_condition": (
+                f'array_length(list_intersect("{column}_l", "{column}_r")) >= {n}'
+            )
+        })
+    levels.append({"sql_condition": "ELSE"})
+    return {
+        "comparisons": [{"output_column_name": column, "comparison_levels": levels}],
+        "blocking_rules_to_generate_predictions": [f'l."{column}" = r."{column}"'],
+    }
+
+
+def _skills_df(n_tokens, rows=20, column="skills"):
+    toks = "|".join(chr(ord("a") + i) for i in range(n_tokens))
+    return pl.DataFrame({column: [toks] * rows})
+
+
+def test_domain_bands_refines_array_overlap_from_measured_set_size():
+    conversion = from_splink(_array_settings((3, 1)))
+    assert _field(conversion.config, "skills").level_thresholds == [0.3, 0.1]  # n/10
+
+    result = upgrade_splink_conversion(
+        conversion, _skills_df(5), levers={"domain_bands"}, measure=False
+    )
+    # measured mean set size K=5 -> n=3 -> 0.6, n=1 -> 0.2
+    assert _field(result.upgraded_config, "skills").level_thresholds == pytest.approx([0.6, 0.2])
+
+
+def test_domain_bands_copy_on_write_leaves_baseline():
+    conversion = from_splink(_array_settings((3, 1)))
+    upgrade_splink_conversion(
+        conversion, _skills_df(5), levers={"domain_bands"}, measure=False
+    )
+    # the conversion's own config is untouched by the lever.
+    assert _field(conversion.config, "skills").level_thresholds == [0.3, 0.1]
+
+
+def test_domain_bands_skips_array_with_no_tokens():
+    conversion = from_splink(_array_settings((3, 1)))
+    df = pl.DataFrame({"skills": [None] * 10})
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"domain_bands"}, measure=False
+    )
+    # unchanged; a skip warning explains why.
+    assert _field(result.upgraded_config, "skills").level_thresholds == [0.3, 0.1]
+    warns = [f for f in result.report.findings if f.severity == "warning"]
+    assert any("no measurable token sets" in f.message for f in warns)
+
+
+def test_domain_bands_collapse_remaps_mu():
+    """A tiny measured set size clamps both bands to 1.0 -> collapse onto one
+    level; trained m/u must be summed + re-normalized (like distance_thresholds)."""
+    settings = _array_settings((3, 1))
+    # add m/u to the two size levels + ELSE so import_em produces a trained model.
+    mu = {1: (0.55, 0.05), 2: (0.30, 0.15), 3: (0.15, 0.80)}
+    for idx, (m, u) in mu.items():
+        settings["comparisons"][0]["comparison_levels"][idx]["m_probability"] = m
+        settings["comparisons"][0]["comparison_levels"][idx]["u_probability"] = u
+    settings["probability_two_random_records_match"] = 0.01
+
+    conversion = from_splink(settings)
+    assert conversion.em_model is not None
+
+    # K=1 -> n=3 and n=1 both give min(1, n/1)=1.0 -> the two overlap bands
+    # collapse onto one level.
+    result = upgrade_splink_conversion(
+        conversion, _skills_df(1), levers={"domain_bands"}, measure=False
+    )
+    field = _field(result.upgraded_config, "skills")
+    assert field.level_thresholds == pytest.approx([1.0])
+    assert field.levels == 2
+    m = result.em_model.m_probs["skills"]
+    assert len(m) == 2  # ELSE + the single collapsed agree band
+    assert sum(m) == pytest.approx(1.0)
+
+
+def test_domain_bands_date_geo_exact_passthrough():
+    """date_diff / geo_haversine conversions are exact -> unchanged + info note.
+    Also exercises the geo derive_from column-validation path."""
+    date_sql = (
+        'ABS(EPOCH(try_strptime("dob_l", \'%Y-%m-%d\')) - '
+        'EPOCH(try_strptime("dob_r", \'%Y-%m-%d\'))) <= 2629800.0'
+    )
+    settings = {
+        "comparisons": [{
+            "output_column_name": "dob",
+            "comparison_levels": [
+                {
+                    "sql_condition": (
+                        'try_strptime("dob_l", \'%Y-%m-%d\') IS NULL OR '
+                        'try_strptime("dob_r", \'%Y-%m-%d\') IS NULL'
+                    ),
+                    "is_null_level": True,
+                },
+                {"sql_condition": '"dob_l" = "dob_r"'},
+                {"sql_condition": date_sql},
+                {"sql_condition": "ELSE"},
+            ],
+        }],
+        "blocking_rules_to_generate_predictions": ['l."dob" = r."dob"'],
+    }
+    conversion = from_splink(settings)
+    before = list(_field(conversion.config, "dob").level_thresholds or [])
+
+    df = pl.DataFrame({"dob": ["1990-01-01", "1985-06-15"] * 10})
+    result = upgrade_splink_conversion(
+        conversion, df, levers={"domain_bands"}, measure=False
+    )
+    assert _field(result.upgraded_config, "dob").level_thresholds == before
+    infos = [f for f in result.report.findings if f.severity == "info"]
+    assert any("conversion is exact" in f.message for f in infos)
+
+
+def test_domain_bands_applies_without_em_model():
+    """Bare settings (no m/u): array band refinement still applies -- overlap
+    thresholds are config-level, fixed before training (like distance_thresholds)."""
+    conversion = from_splink(_array_settings((3, 1)))
+    assert conversion.em_model is None
+    result = upgrade_splink_conversion(
+        conversion, _skills_df(4), levers={"domain_bands"}, measure=False
+    )
+    # K=4 -> 3/4=0.75, 1/4=0.25
+    assert _field(result.upgraded_config, "skills").level_thresholds == pytest.approx([0.75, 0.25])
+    assert result.em_model is None
