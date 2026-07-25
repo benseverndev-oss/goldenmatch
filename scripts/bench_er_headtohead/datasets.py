@@ -275,12 +275,135 @@ def _synthetic_person() -> tuple[pa.Table, pa.Table]:
     return records, truth
 
 
+def _two_source_leipzig(
+    subdir: str,
+    file_a: str,
+    file_b: str,
+    gt_file: str,
+    gt_cols: tuple[str, str],
+    src_a: str,
+    src_b: str,
+    rename: dict[str, str] | None = None,
+) -> tuple[pa.Table, pa.Table]:
+    """Generic Leipzig two-source ER loader (same shape as ``_dblp_acm``).
+
+    Unions ``file_a`` + ``file_b`` into one records frame with source-prefixed
+    record ids (``<src_a>:<id>`` / ``<src_b>:<id>``) and derives ``cluster_id``
+    from the perfect-mapping pair list via connected components. ``rename``
+    harmonises differently-named columns across the two sources (e.g. Google's
+    ``name`` -> ``title``) so the FS comparison set has shared fields."""
+    base = DATASETS_DIR / subdir
+    a_path, b_path, gt_path = base / file_a, base / file_b, base / gt_file
+    missing = [p for p in (a_path, b_path, gt_path) if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"{subdir} source CSVs not found (vendor under {base}); "
+            f"missing: {[p.name for p in missing]}"
+        )
+
+    import pandas as pd
+
+    def _read_csv(path: Path):
+        return pd.read_csv(
+            path, dtype=str, keep_default_na=False,
+            encoding="utf-8", encoding_errors="replace",
+        )
+
+    def _prefix(pdf, src: str):
+        pdf = pdf.copy()
+        if rename:
+            pdf = pdf.rename(columns=rename)
+        pdf["record_id"] = f"{src}:" + pdf["id"].astype(str)
+        return pdf.drop(columns=["id"])
+
+    records_pdf = pd.concat(
+        [_prefix(_read_csv(a_path), src_a), _prefix(_read_csv(b_path), src_b)],
+        ignore_index=True, sort=False,
+    )
+    records = pa.Table.from_pandas(records_pdf, preserve_index=False)
+
+    gt = _read_csv(gt_path)
+    ca, cb = gt_cols
+    pairs: list[tuple[Hashable, Hashable]] = [
+        (f"{src_a}:{x}", f"{src_b}:{y}") for x, y in zip(gt[ca], gt[cb])
+    ]
+    all_ids = records.column("record_id").to_pylist()
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table(
+        {"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]}
+    )
+    return records, truth
+
+
+def _dblp_scholar() -> tuple[pa.Table, pa.Table]:
+    """Leipzig DBLP-Scholar bibliographic ER. HELD OUT from the tuning panel
+    (dblp_acm is in-panel; this is a distinct, larger, noisier bibliographic
+    linkage — Scholar side is web-scraped) — so it tests whether an FS lever
+    tuned on dblp_acm generalises to unseen bibliographic data."""
+    return _two_source_leipzig(
+        "DBLP-Scholar", "DBLP1.csv", "Scholar.csv",
+        "DBLP-Scholar_perfectMapping.csv", ("idDBLP", "idScholar"),
+        "dblp", "scholar",
+    )
+
+
+def _amazon_google() -> tuple[pa.Table, pa.Table]:
+    """Leipzig Amazon-GoogleProducts ER. HELD OUT and a DIFFERENT DOMAIN
+    (product, not person/bibliographic) — the hardest generalisation test for a
+    threshold lever tuned on PII + bibliographic panels. Google's ``name`` is
+    renamed to ``title`` so the two sources share a comparable field."""
+    return _two_source_leipzig(
+        "Amazon-Google", "Amazon.csv", "GoogleProducts.csv",
+        "Amzon_GoogleProducts_perfectMapping.csv", ("idAmazon", "idGoogleBase"),
+        "amazon", "google", rename={"name": "title"},
+    )
+
+
+def _febrl4() -> tuple[pa.Table, pa.Table]:
+    """recordlinkage's Febrl4 synthetic person LINKAGE dataset (two sources:
+    5k originals + 5k duplicates, 1:1 true links). HELD OUT from the tuning
+    panel (febrl3 is single-source dedup with up to 5 dups/record) — a
+    structurally different PII task, so it tests generalisation of an FS lever
+    tuned on febrl3-shape data."""
+    try:
+        from recordlinkage.datasets import load_febrl4  # type: ignore
+    except ImportError as e:
+        raise DatasetUnavailable(
+            "recordlinkage not installed (pip install recordlinkage) for febrl4"
+        ) from e
+
+    dfa, dfb, links = load_febrl4(return_links=True)
+    # Indices are globally unique across the two frames ('rec-N-org' vs
+    # 'rec-N-dup-0'), so a plain concat keeps record ids distinct.
+    import pandas as pd
+
+    def _prep(df):
+        pdf = df.reset_index()
+        return pdf.rename(columns={str(pdf.columns[0]): "record_id"})
+
+    records_pdf = pd.concat([_prep(dfa), _prep(dfb)], ignore_index=True, sort=False)
+    records = pa.Table.from_pandas(records_pdf, preserve_index=False)
+    records = _cast_column_to_string(records, "record_id")
+
+    all_ids = records.column("record_id").to_pylist()
+    pairs: list[tuple[Hashable, Hashable]] = [(str(a), str(b)) for a, b in links]
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table(
+        {"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]}
+    )
+    return records, truth
+
+
 _LOADERS = {
     "historical_50k": _historical_50k,
     "dblp_acm": _dblp_acm,
     "febrl3": _febrl3,
     "ncvr": _ncvr,
     "synthetic_person": _synthetic_person,
+    # Held-out (never in the FS-lever tuning panel) -- generalisation tests.
+    "febrl4": _febrl4,
+    "dblp_scholar": _dblp_scholar,
+    "amazon_google": _amazon_google,
 }
 
 
