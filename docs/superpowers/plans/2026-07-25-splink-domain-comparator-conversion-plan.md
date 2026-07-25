@@ -207,9 +207,39 @@ End with the Claude Code attribution footer.)
 
 ---
 
-## 7. Open decisions for Ben
-1. **Array count→ratio fidelity** (§3 Array): approximate-ratio+warn (recommended) vs a new
-   `array_intersect:count:<n>` scorer mode.
-2. **Numeric scope** (§3 Numeric): drop numeric from P2 (rare, no standard Splink shape) and make
-   it opportunistic, vs holding P2 for a CustomComparison numeric recognizer.
+## 7. Decisions (RESOLVED 2026-07-25)
+1. **Array count→ratio fidelity** → **(a) approximate-overlap-ratio + warn** (`approx=True`).
+   Consistent with the existing levenshtein distance→sim snap; a `array_intersect:count:<n>`
+   scorer mode is a disproportionate new public surface for a rare comparison and its output
+   isn't a normalized similarity. P3 implementation note: snap `>= n` using **overlap-coefficient**
+   semantics, bias the threshold LOW to preserve recall, warn naming the approximation. Revisit
+   (b) only if a measured recall gap appears.
+2. **Numeric scope** → **dropped from P2, opportunistic.** Splink has no standard generic
+   numeric-difference comparison (magnitude only via `CustomComparison`/`DistanceFunction` with
+   arbitrary SQL), so a recognizer with no ground truth is speculative. **P2 = date recognizer
+   only.** Add a best-effort `ABS("c_l" - "c_r") <= eps` → `numeric_diff` recognizer only when a
+   real `CustomComparison` sample appears.
 3. Everything else in the spec is already approved.
+
+Revised roadmap: **P2 = date recognizer (DONE — this branch)**, **P3 = geo + array
+(approx-overlap-ratio)**, numeric opportunistic, P4-P6 as scoped.
+
+## 8. P2 delivered (2026-07-25)
+`date_diff` recognizer in `from_splink.py`, built against the REAL Splink 4 SQL (both dialects):
+- `recognize_level`: new `date_diff` kind. `_DATE_DIFF_MARKER`/`_DATE_DIFF_TAIL`/`_DATE_DIFF_COL`
+  match `ABS(EPOCH(try_strptime(...)) - ...) <= <secs>` (DuckDB) and the Spark
+  `UNIX_TIMESTAMP([date(]try_to_timestamp(...))` forms (bare + `date()`-wrapped). `days =
+  round(seconds / 86400)`; `sim = _date_diff_band(days)` (imported from `core.scorer` — one source
+  of truth, no band drift), `approx=True`.
+- Shared column atom `_COL_L`/`_COL_R` extended to accept Spark backticks, so exact/sim/dist/null
+  levels also recognize under Spark (a bonus beyond date).
+- `convert_comparison`: **domain-family-wins** rule (`_DOMAIN_KINDS` = date_diff/geo_haversine/
+  array_intersect/numeric_diff). A domain band + string-edit bands in one comparison → keep the
+  domain family + exact, drop the string-edit bands with a warn (DObComparison's damerau level).
+  >1 DISTINCT domain family → drop the whole comparison (defensive; not triggerable until a second
+  domain recognizer lands). The 10yr DOB band snaps to 0.0 → dropped by the existing out-of-range
+  guard, so DObComparison yields 4 levels [1.0, 0.80, 0.60].
+- `import_em`: unchanged — the dropped damerau/10yr levels' m/u resolve to no matching threshold
+  and are dropped + re-normalized (asserted in `test_from_splink_domain.py`).
+- Tests: `tests/test_from_splink_domain.py` (13). No parity-manifest change (`date_diff` is an
+  existing scorer from the 2026-07-23 FS work; P2 only adds a *recognizer*).

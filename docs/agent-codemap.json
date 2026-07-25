@@ -952,7 +952,8 @@
           "imports": [
             "goldenmatch.config.schemas",
             "goldenmatch.core._paths",
-            "goldenmatch.core.probabilistic"
+            "goldenmatch.core.probabilistic",
+            "goldenmatch.core.scorer"
           ]
         },
         {
