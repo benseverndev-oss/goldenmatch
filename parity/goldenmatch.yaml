@@ -304,8 +304,11 @@ transforms:
   python_only: []
   ts_only: []
 # blocking_strategies surface (config.schemas BlockingConfig.strategy <->
-# config-edits.ts VALID_BLOCKING_STRATEGIES). python_only: lsh + simhash (MinHash /
-# SimHash LSH) and perceptual (image-hash LSH) have no TS port yet.
+# config-edits.ts VALID_BLOCKING_STRATEGIES). lsh (MinHash-LSH, sketch-core) +
+# perceptual (banded-hamming pHash-LSH, perceptual-core) ported to TS 2026-07-25
+# (buildLshBlocks/buildPerceptualBlocks, cross-language fixture
+# blocking-strategies.json) -> shared. simhash stays python_only (see the
+# blocking_kernels_deferred reason: model-backed, not edge-portable).
 blocking_strategies:
   shared:
   - adaptive
@@ -313,12 +316,12 @@ blocking_strategies:
   - ann_pairs
   - canopy
   - learned
+  - lsh
   - multi_pass
+  - perceptual
   - sorted_neighborhood
   - static
   python_only:
-  - lsh
-  - perceptual
   - simhash
   ts_only: []
 # scorer_kernels surface: the scorers with a Rust/-core kernel (the REFERENCE fast
@@ -406,6 +409,16 @@ scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
+# blocking_kernels_deferred: the COVERAGE FLOOR for the `blocking_strategies` surface
+# (check_blocking_coverage). Every strategy NOT in `blocking_strategies.shared` (i.e.
+# python_only / ts_only) MUST appear here with a reason, so a non-shared blocking
+# strategy is a conscious, documented decision -- not a silent gap. (Unlike
+# scorer_kernels this is a lighter manifest-map floor, not an emitted partition:
+# blocking is mostly group-by orchestration, and only lsh/simhash/perceptual have a
+# `-core` kernel, so there is no source-level "kernel set" to emit + compare.)
+# `declined --` = won't port (with why); `deferred --` = will (with the blocker).
+blocking_kernels_deferred:
+  simhash: "declined -- model-backed: SimHash blocking embeds every record via a model (numpy + get_embedder); TS ships only the embedding kernel (goldenembed-wasm), no bundled edge model -- the same boundary that makes retrieve_similar require a caller-supplied embedder. Dense-vector blocking is already served by the shared ann/ann_pairs strategies. sketch-core provides the SimHash signature kernel, but the strategy is not edge-portable. (lsh + perceptual, the other two kernel-backed blockers, ARE ported -> shared.)"
 # ─────────────────────────────────────────────────────────────────────────────
 # ADVISORY (non-gating) SQL surfaces — VISIBILITY ONLY. Added 2026-07-25.
 # These record the goldenmatch SQL function inventory so the parity gate can

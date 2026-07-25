@@ -31,6 +31,8 @@ export const VALID_BLOCKING_STRATEGIES = new Set<string>([
   "canopy",
   "ann_pairs",
   "learned",
+  "lsh",
+  "perceptual",
 ]);
 
 export interface ConfigEdit {

@@ -66,7 +66,7 @@ def check_structure(manifest: dict) -> list[ParityFailure]:
         # `scorer_kernels_deferred` is a classification MAP (scorer -> reason),
         # not a shared/python_only/ts_only partition surface; its shape is
         # validated by check_scorer_coverage, so skip the partition checks here.
-        if surface == "scorer_kernels_deferred":
+        if surface in ("scorer_kernels_deferred", "blocking_kernels_deferred"):
             continue
         # Advisory SQL inventory surfaces are `{functions: [...]}`, not
         # shared/python_only/ts_only partitions — checked by check_sql_advisory.
@@ -156,6 +156,69 @@ def check_scorer_coverage(manifest: dict) -> list[ParityFailure]:
     return f
 
 
+def check_blocking_coverage(manifest: dict) -> list[ParityFailure]:
+    """Coverage gate for the blocking surface (goldenmatch): every strategy in the
+    ``blocking_strategies`` surface must be EITHER shared (implemented on both
+    Python AND TS) OR explicitly classified in ``blocking_kernels_deferred`` with
+    a non-empty reason.
+
+    This is the blocking analogue of ``check_scorer_coverage``: it keeps every
+    non-shared (python_only / ts_only) blocking strategy a CONSCIOUS, documented
+    decision instead of a silent gap. It is a lighter manifest-map floor rather
+    than an emitted partition (unlike ``scorer_kernels``) because blocking is
+    mostly group-by orchestration -- only lsh/simhash/perceptual have a ``-core``
+    kernel, so there is no source-level "kernel set" to emit and compare.
+
+    Only runs for goldenmatch (the sole package with a blocking surface).
+    """
+    f: list[ParityFailure] = []
+    if "blocking_strategies" not in manifest:
+        return f
+    body = manifest.get("blocking_strategies", {}) or {}
+    all_strategies = {
+        n for key in ("shared", "python_only", "ts_only") for n in body.get(key, [])
+    }
+    shared = set(body.get("shared", []))
+    deferred = manifest.get("blocking_kernels_deferred", {}) or {}
+    if not isinstance(deferred, dict):
+        return [
+            ParityFailure(
+                "blocking_kernels_deferred", "", "malformed_deferred",
+                "blocking_kernels_deferred must be a mapping of strategy -> reason",
+            )
+        ]
+    deferred_names = set(deferred)
+    # 1. non-shared AND unclassified -> port it (to shared) or defer it with a reason.
+    for n in sorted(all_strategies - shared - deferred_names):
+        f.append(ParityFailure(
+            "blocking_kernels_deferred", n, "uncovered_strategy",
+            f"'{n}' is not shared and has no deferral -> port it to both surfaces "
+            f"(-> blocking_strategies.shared) or add it to blocking_kernels_deferred "
+            f"with a reason",
+        ))
+    # 2. deferred but now shared -> the annotation is stale.
+    for n in sorted(deferred_names & shared):
+        f.append(ParityFailure(
+            "blocking_kernels_deferred", n, "stale_deferral",
+            f"'{n}' is now shared -> remove it from blocking_kernels_deferred",
+        ))
+    # 3. deferred but not a real strategy -> typo or removed strategy.
+    for n in sorted(deferred_names - all_strategies):
+        f.append(ParityFailure(
+            "blocking_kernels_deferred", n, "unknown_deferral",
+            f"'{n}' is deferred but is not in the blocking_strategies surface -> remove it",
+        ))
+    # 4. every live deferral needs a non-empty reason.
+    for n in sorted(deferred_names & all_strategies):
+        reason = deferred.get(n)
+        if not isinstance(reason, str) or not reason.strip():
+            f.append(ParityFailure(
+                "blocking_kernels_deferred", n, "missing_reason",
+                f"'{n}' deferral needs a non-empty reason string",
+            ))
+    return f
+
+
 def _normalize_sql(name: str) -> str:
     """Strip the goldenmatch namespace prefix from a SQL function name so it can
     be compared, heuristically, against a Python operation name.
@@ -236,6 +299,7 @@ def run_checks(manifest: dict, py_desc: dict, ts_desc: dict) -> list[ParityFailu
             continue
         fails += check_partition(s, manifest[s], set(py_desc.get(s, [])), set(ts_desc.get(s, [])))
     fails += check_scorer_coverage(manifest)
+    fails += check_blocking_coverage(manifest)
     return fails
 
 

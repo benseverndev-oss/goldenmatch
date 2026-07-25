@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import { applyTransforms } from "./transforms.js";
 import { buildANNBlocks, buildANNPairBlocks } from "./ann-blocker.js";
+import { MinHashLSHBlocker } from "./lshBlocker.js";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -127,6 +128,126 @@ export function buildStaticBlocks(
     }
   }
 
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// MinHash/LSH blocking (strategy="lsh") — near-duplicate lexical blocking.
+// Faithful port of Python `core/lsh_blocker.py::build_lsh_blocks`: shingle the
+// `lsh.column` text of every row, MinHash it, band into `(band, bucket)` groups
+// (via the already-ported edge-safe `MinHashLSHBlocker`), and emit one block per
+// non-singleton group. Kernel-backed by `sketch-core` (Python native) / `sketch.ts`
+// (TS), so the bucketing is byte-parity across surfaces.
+// ---------------------------------------------------------------------------
+
+export function buildLshBlocks(
+  rows: readonly Row[],
+  config: BlockingConfig,
+): BlockResult[] {
+  const cfg = config.lsh;
+  if (!cfg) throw new Error("LSH blocking requires a 'lsh' config block.");
+  if (rows.length < 2) return [];
+
+  // Python casts the column to Utf8 and fill_null("") -> a null cell blocks as "".
+  const col = cfg.column;
+  const texts = rows.map((r) => {
+    const v = r[col];
+    return v === null || v === undefined ? "" : String(v);
+  });
+
+  const blocker = MinHashLSHBlocker.fromConfig({
+    mode: cfg.mode ?? "char",
+    k: cfg.k ?? 3,
+    numPerms: cfg.numPerms ?? 128,
+    seed: BigInt(cfg.seed ?? 0),
+    ...(cfg.numBands !== undefined ? { numBands: cfg.numBands } : {}),
+    ...(cfg.threshold !== undefined ? { threshold: cfg.threshold } : {}),
+  });
+
+  const results: BlockResult[] = [];
+  for (const [key, members] of blocker.buckets(texts)) {
+    if (members.length < 2) continue;
+    // key is "bandIdx,bucket" (bucket is a u64 rendered decimal).
+    const comma = key.indexOf(",");
+    const bandIdx = key.slice(0, comma);
+    const bucket = key.slice(comma + 1);
+    results.push({
+      blockKey: `lsh_b${bandIdx}_${bucket}`,
+      rows: members.map((i) => rows[i]!),
+      strategy: "minhash_lsh",
+      depth: 0,
+    });
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Perceptual-hash LSH blocking (strategy="perceptual") — media near-duplicates.
+// Faithful port of Python `core/perceptual_blocker.py::build_perceptual_blocks`:
+// parse a column of fixed-width hex perceptual hashes, split each into `numBands`
+// contiguous `hashBits/numBands`-wide bit-bands, group by `(band, bandValue)`,
+// and emit one block per non-singleton group. 64-bit hashes exceed 2^53, so the
+// band math runs on BigInt. Kernel: `perceptual-core` (pHash generation upstream);
+// the blocker itself is pure banded-hamming LSH over the hex strings.
+// ---------------------------------------------------------------------------
+
+/** Parse a hex perceptual hash (`0x` prefix tolerated) to a BigInt, or null.
+ * Mirrors Python `_parse_hash` (null/empty/non-hex -> None). */
+function parsePerceptualHash(v: unknown): bigint | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (s === "") return null;
+  const hex = s.startsWith("0x") || s.startsWith("0X") ? s : `0x${s}`;
+  try {
+    return BigInt(hex);
+  } catch {
+    return null;
+  }
+}
+
+export function buildPerceptualBlocks(
+  rows: readonly Row[],
+  config: BlockingConfig,
+): BlockResult[] {
+  const cfg = config.perceptual;
+  if (!cfg) throw new Error("Perceptual blocking requires a 'perceptual' config block.");
+  if (rows.length < 2) return [];
+
+  const numBands = cfg.numBands ?? 16;
+  const hashBits = cfg.hashBits ?? 64;
+  if (numBands < 1 || hashBits < 1 || hashBits % numBands !== 0) {
+    throw new Error("PerceptualKeyConfig 'hashBits' must be a positive multiple of 'numBands'.");
+  }
+  const w = BigInt(Math.floor(hashBits / numBands));
+  const mask = (1n << w) - 1n;
+  const col = cfg.column;
+
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < rows.length; i++) {
+    const h = parsePerceptualHash(rows[i]![col]);
+    if (h === null) continue;
+    for (let b = 0; b < numBands; b++) {
+      const value = (h >> (BigInt(b) * w)) & mask;
+      const key = `${b},${value.toString()}`;
+      const existing = groups.get(key);
+      if (existing !== undefined) existing.push(i);
+      else groups.set(key, [i]);
+    }
+  }
+
+  const results: BlockResult[] = [];
+  for (const [key, members] of groups) {
+    if (members.length < 2) continue;
+    const comma = key.indexOf(",");
+    const bandIdx = key.slice(0, comma);
+    const value = BigInt(key.slice(comma + 1));
+    results.push({
+      blockKey: `phash_b${bandIdx}_${value.toString(16)}`,
+      rows: members.map((i) => rows[i]!),
+      strategy: "perceptual_lsh",
+      depth: 0,
+    });
+  }
   return results;
 }
 
@@ -583,6 +704,12 @@ export function buildBlocks(
   switch (effectiveConfig.strategy) {
     case "static":
       return buildStaticBlocks(rows, effectiveConfig);
+
+    case "lsh":
+      return buildLshBlocks(rows, effectiveConfig);
+
+    case "perceptual":
+      return buildPerceptualBlocks(rows, effectiveConfig);
 
     case "multi_pass":
       return buildMultiPassBlocks(rows, effectiveConfig);
