@@ -19,7 +19,6 @@ import json
 from pathlib import Path
 
 import polars as pl
-
 from goldenmatch.config.schemas import (
     BlockingConfig,
     LSHKeyConfig,
