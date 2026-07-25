@@ -300,6 +300,19 @@ pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::geo_haversine_similarity(a, b)
 }
 
+/// Set-overlap comparator over delimited strings (score-core id 19, jaccard
+/// default; Splink ArrayIntersect -> GM). Own #[pyfunction] capability marker
+/// like `date_diff_similarity`; a stale pre-array_intersect wheel hits
+/// score_one's catch-all (silent 0.0 for id 19), so the Python caller gates the
+/// native route on `hasattr(_native, "array_intersect_similarity")` and falls
+/// back to the pure-Python mirror (`_array_intersect_similarity_py`) otherwise.
+/// The `:overlap` mode rides the scorer string and declines native regardless
+/// (fixed-id score_one can't carry it), like numeric_diff.
+#[pyfunction]
+pub fn array_intersect_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::array_intersect_similarity(a, b)
+}
+
 /// Character-trigram Jaccard (q-gram) similarity (score-core id 5). Exposed as
 /// its own #[pyfunction] capability marker, exactly like `date_similarity`:
 /// `score_one` / `score_block_pairs` dispatch id 5, but a stale published wheel

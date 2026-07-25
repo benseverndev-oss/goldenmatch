@@ -476,6 +476,59 @@ export function geoHaversineSimilarity(a: string, b: string): number {
   return geoHaversineBand(haversineKm(pa, pb));
 }
 
+// ---------------------------------------------------------------------------
+// array_intersect: set-overlap comparator over delimited strings (Splink
+// ArrayIntersect -> GM). Faithful port of Python `_array_intersect_similarity_py`:
+// split each side into a token SET (first separator present in `|`,`;`,`,`),
+// then Jaccard |A∩B|/|A∪B| (default / `array_intersect:jaccard`) or the overlap
+// coefficient |A∩B|/min(|A|,|B|) (`array_intersect:overlap`); exact-string
+// fallback when either side has no tokens (never null for non-null input). Pure
+// set arithmetic -> byte-exact across TS / Python / (default-mode) Rust kernel.
+// ---------------------------------------------------------------------------
+
+const ARRAY_INTERSECT_SEPARATORS = ["|", ";", ","] as const;
+
+function parseTokenSet(s: string): Set<string> {
+  if (!s) return new Set();
+  const sep = ARRAY_INTERSECT_SEPARATORS.find((c) => s.includes(c));
+  if (sep === undefined) {
+    const tok = s.trim();
+    return tok ? new Set([tok]) : new Set();
+  }
+  const out = new Set<string>();
+  for (const part of s.split(sep)) {
+    const tok = part.trim();
+    if (tok) out.add(tok);
+  }
+  return out;
+}
+
+/** `array_intersect[:jaccard|overlap]` -> mode; bare / malformed -> jaccard. */
+function parseArrayIntersectMode(scorer: string): "jaccard" | "overlap" {
+  const parts = scorer.split(":");
+  if (parts.length === 2 && parts[0] === "array_intersect" && parts[1] === "overlap") {
+    return "overlap";
+  }
+  return "jaccard";
+}
+
+/** Set-overlap similarity over delimited tokens (score-core score_one id 19 for
+ * the jaccard default; the `:overlap` mode stays pure-language until the
+ * parameterized kernel contract lands). */
+export function arrayIntersectSimilarity(a: string, b: string, scorer: string): number {
+  const sa = parseTokenSet(a);
+  const sb = parseTokenSet(b);
+  if (sa.size === 0 || sb.size === 0) return a === b ? 1.0 : 0.0;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter++;
+  if (inter === 0) return 0.0;
+  const denom =
+    parseArrayIntersectMode(scorer) === "overlap"
+      ? Math.min(sa.size, sb.size)
+      : sa.size + sb.size - inter; // |A ∪ B|
+  return inter / denom;
+}
+
 /**
  * Indel (insertion+deletion) edit distance.
  *
@@ -1011,6 +1064,12 @@ export function scoreField(
   scorer: string,
 ): number | null {
   if (valA === null || valB === null) return null;
+
+  // Parameterized scorer: the mode rides the name (`array_intersect:overlap`),
+  // so match by prefix before the exact-name switch (mirrors Python scoreField).
+  if (scorer === "array_intersect" || scorer.startsWith("array_intersect:")) {
+    return arrayIntersectSimilarity(valA, valB, scorer);
+  }
 
   switch (scorer) {
     case "exact":

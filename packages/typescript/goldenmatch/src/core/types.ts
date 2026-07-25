@@ -514,6 +514,7 @@ export const VALID_SCORERS = new Set([
   "alias_match",
   "given_name_aliased_jw",
   "name_freq_weighted_jw",
+  "array_intersect",
 ] as const);
 
 export const VALID_TRANSFORMS = new Set([

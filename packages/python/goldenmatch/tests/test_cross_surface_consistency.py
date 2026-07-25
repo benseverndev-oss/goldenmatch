@@ -50,13 +50,16 @@ class TestNativeScorerIdMaps:
     # over the injected census/alias tables -- they are NOT score_one arms. Pinned
     # here so a renumber of either the Python map or the Rust NB_* consts fails.
     _NAME_BUCKET_IDS = {"name_freq_weighted_jw": 15, "given_name_aliased_jw": 16}
-    # FS domain comparators (spec 2026-07-23, Phase 3): REAL score_one arms at
-    # ids 17/18 (magnitude-aware date-diff / great-circle haversine), sitting
-    # ABOVE the name-scorer 15/16 gap (15/16 are NOT score_one arms -- they're
-    # intercepted by the bucket kernel). Pinned so a renumber of the Python map or
-    # the Rust score_one match fails. `numeric_diff` is intentionally absent (its
-    # band rides the scorer string, which the fixed-id score_one can't carry).
-    _COMPARATOR_BUCKET_IDS = {"date_diff": 17, "geo_haversine": 18}
+    # FS domain comparators (specs 2026-07-23 Phase 3 + 2026-07-25 array_intersect):
+    # REAL score_one arms at ids 17/18/19 (magnitude-aware date-diff / great-circle
+    # haversine / set-overlap array_intersect jaccard-default), sitting ABOVE the
+    # name-scorer 15/16 gap (15/16 are NOT score_one arms -- they're intercepted by
+    # the bucket kernel). Pinned so a renumber of the Python map or the Rust
+    # score_one match fails. `numeric_diff` is intentionally absent (its band rides
+    # the scorer string, which the fixed-id score_one can't carry); array_intersect's
+    # `:overlap` MODE likewise can't ride score_one, so only the bare (id 19) form
+    # is here -- the mode declines native, like numeric_diff.
+    _COMPARATOR_BUCKET_IDS = {"date_diff": 17, "geo_haversine": 18, "array_intersect": 19}
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):

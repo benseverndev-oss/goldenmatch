@@ -254,6 +254,7 @@ a2a_skills:
 scorers:
   shared:
   - alias_match
+  - array_intersect
   - audio_fp
   - date
   - date_diff
@@ -277,12 +278,8 @@ scorers:
   python_only:
   # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
   # splink-domain-comparator-conversion), FS-path only. Kept sorted (parity gate).
-  # date_diff + geo_haversine moved to `shared` on the TS/WASM port (2026-07-25,
-  # Phase 4): pure-TS `dateDiffSimilarity`/`geoHaversineSimilarity` + score_one
-  # ids 17/18 via the score-wasm catch-all, cross-language fixture
-  # scorer-domain-comparators.json (Python-reference oracle == Rust).
-  # Set-overlap over delimited strings (Splink ArrayIntersect -> GM); kernel P5, TS P6.
-  - array_intersect
+  # date_diff + geo_haversine (2026-07-25 Phase 4) and array_intersect (P5/P6,
+  # jaccard default) moved to `shared` on their TS/WASM port + score-core kernel.
   # Magnitude-aware numeric comparator (abs/pct banded distance); needs the
   # parameterized score_one contract before it can be kernel-backed + ported.
   - numeric_diff
@@ -365,6 +362,7 @@ blocking_strategies:
 scorer_kernels:
   shared:
   - alias_match
+  - array_intersect
   - audio_fp
   - date
   - date_diff
@@ -384,13 +382,17 @@ scorer_kernels:
   - soundex_match
   - token_sort
   python_only: []
-  # date_diff + geo_haversine (score_one ids 17/18) are now kernel-backed on BOTH
-  # Python-native (spec 2026-07-23 Phase 3, tests/test_native_date_diff_geo_parity.py)
-  # AND TS/WASM (Phase 4, 2026-07-25): the score-wasm score_matrix catch-all
-  # dispatches score_one(17/18) and the pure-TS fallback matches to 4dp
-  # (tests/parity/scorer-domain-comparators.test.ts + wasm-scorer.test.ts) -> shared.
-  # numeric_diff stays deferred (band rides the scorer string, which the fixed-id
-  # score_one(id,a,b) contract can't carry) -- see scorer_kernels_deferred.
+  # date_diff + geo_haversine (score_one ids 17/18) and array_intersect (id 19,
+  # jaccard default) are kernel-backed on BOTH Python-native (score-core kernels +
+  # pyo3 shims, tests/test_native_{date_diff_geo,array_intersect}_parity.py) AND
+  # TS/WASM: the score-wasm score_matrix catch-all dispatches score_one(17/18/19)
+  # and the pure-TS fallback matches (tests/parity/scorer-domain-comparators.test.ts
+  # + wasm-scorer.test.ts) -> shared. array_intersect's `:overlap` MODE rides the
+  # scorer string (fixed-id score_one can't carry it) so it declines native like
+  # numeric_diff, but the scorer is kernel-backed for its default -> shared (the
+  # `date`-declines-on-stale-wheel contract: the kernel exists + is reachable).
+  # numeric_diff stays deferred (its band, not just a mode enum, rides the string
+  # AND auto-config always emits the parameterized form) -- see scorer_kernels_deferred.
   ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
@@ -404,7 +406,6 @@ scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
-  array_intersect: "deferred -- native score-core kernel is P5 (spec 2026-07-25-splink-domain-comparator-conversion): set-overlap over delimited strings; pure-Python numpy per-pair path until the kernel lands, like soundex_match/date_diff before their kernels"
 # ─────────────────────────────────────────────────────────────────────────────
 # ADVISORY (non-gating) SQL surfaces — VISIBILITY ONLY. Added 2026-07-25.
 # These record the goldenmatch SQL function inventory so the parity gate can
