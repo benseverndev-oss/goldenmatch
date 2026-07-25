@@ -1,6 +1,6 @@
 # Arrow-native SQLite bulk writes via ADBC — design + measurement plan
 
-**Date:** 2026-07-24 • **Status:** Proposed — spike NOT yet run, no dependency added
+**Date:** 2026-07-24 • **Status:** DECIDED 2026-07-25 — **NO-GO on ADBC. Ship the stdlib `staging` path.** See "Spike result" at the end.
 
 ## Question
 
@@ -220,3 +220,39 @@ than it is. Do not run the spike for a decision until #2111 has landed.
 - If option A lands, the `emit_singletons=True` guidance added to
   `identity-graph.mdx` in #2111 should be revisited — the reason for the warning
   is exactly the per-row Python object this would remove.
+
+## Spike result (2026-07-25) — NO-GO
+
+The spike ran (local Linux + the `large-new-64GB` workflow; content-hash
+identical across all arms). Directional local numbers:
+
+| N | arm | wall | peak RSS | db |
+|---|---|---|---|---|
+| 100k | rowpath | 19.95 s | 0.555 GB | 212 MB |
+| 100k | staging | 8.88 s | 0.556 GB | 212 MB |
+| 100k | adbc | 6.24 s | 0.505 GB | 338 MB |
+| 1M | staging | 182.4 s | 4.761 GB | 2175 MB |
+| 1M | adbc | 125.2 s | 4.665 GB | 3430 MB |
+
+Against the pre-committed kill criteria:
+
+- **`staging` captures the win** — 2.25× over `rowpath` at 100k, identical RSS,
+  zero new dependency. The null hypothesis held.
+- **`adbc` vs `staging`: 1.42× wall / 9% RSS at 100k, 1.46× wall / 2% RSS at 1M.**
+  Both below the `≥1.5× wall OR ≥30% RSS` bar → **NO-GO**.
+- **The RSS gap *closes* with scale (9% → 2%)**, refuting "adbc clearly wins on
+  RSS at 5M." The memory floor is the materialised Arrow table itself, not the
+  per-row Python object `adbc` skips — so Arrow-native ingest does **not** fix
+  `emit_singletons=True` at scale, which was the whole prize. `adbc` also writes a
+  larger DB (338 vs 212 MB; 3430 vs 2175 MB).
+
+**Decision: ship stdlib `staging` (staging table + `executemany` + the same
+`INSERT ... SELECT ... ON CONFLICT DO UPDATE`) as the SQLite bulk path; give the
+four `bulk_*` methods a real SQLite branch; do NOT take the `adbc-driver-sqlite`
+dependency.** Option A (whole-store-on-ADBC) is not justified — its only prize
+(Python-object elimination) does not move peak RSS.
+
+The residual memory ceiling (the actual `emit_singletons` scaling problem) is not
+addressed by any in-memory-Arrow write path. The one remaining lever is a
+*streaming* ingest that never materialises the full frame — explored, with DuckDB
+as the vehicle, in `2026-07-25-duckdb-identity-backend.md`.
