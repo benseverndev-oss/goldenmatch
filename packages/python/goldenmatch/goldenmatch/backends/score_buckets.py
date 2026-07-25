@@ -345,6 +345,19 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # story in probabilistic.py + tests/test_native_name_scorer_parity.py).
     "name_freq_weighted_jw": 15,
     "given_name_aliased_jw": 16,
+    # ids 19/20 = array_intersect jaccard / overlap (delimited token-set overlap,
+    # score-core score_one, spec 2026-07-23 Phase 3). The mode rides the scorer
+    # STRING (`array_intersect` / `array_intersect:jaccard` -> jaccard = 19;
+    # `array_intersect:overlap` -> overlap = 20), so unlike the parameter-carrying
+    # `numeric_diff` these are two FIXED ids the fixed-id score_one(id,a,b) contract
+    # CAN convey. Same wheel-skew story as date_diff/geo: routing is GUARDED on the
+    # `array_intersect_jaccard_similarity` capability symbol at the gating site
+    # below, so a stale wheel (whose score_one catch-all scores ids 19/20 as 0.0)
+    # declines to the pure-Python per-pair mirror (`_array_intersect_similarity_py`,
+    # mode bound from the scorer string).
+    "array_intersect": 19,
+    "array_intersect:jaccard": 19,
+    "array_intersect:overlap": 20,
 }
 
 
@@ -702,6 +715,16 @@ def _resolve_score_pair_callable(
             return None
         from goldenmatch.core.scorer import _ensemble_score_single
         return _ensemble_score_single
+    if scorer_name == "array_intersect" or scorer_name.startswith("array_intersect:"):
+        # Delimited token-set overlap (spec 2026-07-23 Phase 3). Per-pair mirror of
+        # score-core::array_intersect_similarity (native ids 19/20); parity-asserted
+        # in tests/test_native_array_intersect_parity.py. The mode (jaccard/overlap)
+        # rides the scorer string, so bind it into a 2-arg callable to match the
+        # (a, b) -> float fast-path contract. Making array_intersect fast-path
+        # eligible routes its configs through the bucket backend (native id 19/20 or
+        # this per-pair mirror) instead of the slow matrix path.
+        from goldenmatch.core.scorer import _array_intersect_similarity_py
+        return lambda a, b: _array_intersect_similarity_py(a, b, scorer_name)
     if scorer_name in ("embedding", "record_embedding"):
         # Still model-backed; not fast-path eligible.
         return None
@@ -1459,6 +1482,7 @@ def score_buckets(
             _ensemble_ok = _mod is not None and hasattr(_mod, "ensemble_similarity")
             _radial_ok = _mod is not None and hasattr(_mod, "radial_similarity")
             _audio_fp_ok = _mod is not None and hasattr(_mod, "audio_fp_similarity")
+            _array_ok = _mod is not None and hasattr(_mod, "array_intersect_jaccard_similarity")
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_date_diff = any(spec[3] == "date_diff" for spec in _field_specs)
             has_geo = any(spec[3] == "geo_haversine" for spec in _field_specs)
@@ -1470,6 +1494,10 @@ def score_buckets(
             has_ensemble = any(spec[3] == "ensemble" for spec in _field_specs)
             has_radial = any(spec[3] == "radial" for spec in _field_specs)
             has_audio_fp = any(spec[3] == "audio_fp" for spec in _field_specs)
+            # array_intersect carries its mode on the scorer string
+            # (`array_intersect[:jaccard|overlap]`); match by prefix so all three
+            # spellings trip the same capability guard.
+            has_array = any((spec[3] or "").startswith("array_intersect") for spec in _field_specs)
             has_initialism = any(spec[3] == "initialism_match" for spec in _field_specs)
             # initialism_match (id 7) has a TWO-part guard: the capability symbol
             # AND a successful legal-form install (id 7 scores against an empty
@@ -1517,6 +1545,7 @@ def score_buckets(
                 or (has_ensemble and not _ensemble_ok)
                 or (has_radial and not _radial_ok)
                 or (has_audio_fp and not _audio_fp_ok)
+                or (has_array and not _array_ok)
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]

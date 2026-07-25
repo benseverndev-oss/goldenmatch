@@ -352,6 +352,62 @@ pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
     }
 }
 
+// --- array_intersect: token-set overlap comparator (score_one ids 19/20) -----
+// The reference for `goldenmatch.core.scorer._array_intersect_similarity_py`.
+// Splits a delimited string into a token set (first separator present in the
+// `| ; ,` order; a value with no separator is a single-element set; tokens are
+// whitespace-trimmed, empties dropped), then scores set overlap:
+//   jaccard (id 19, bare) = |A ∩ B| / |A ∪ B|
+//   overlap (id 20)       = |A ∩ B| / min(|A|, |B|)
+// Either side parsing to an EMPTY set falls back to exact-string equality (so it
+// never returns None for non-null input -- the scalar/vectorized parity anchor).
+
+/// Split `s` into a set of stripped, non-empty tokens, mirroring Python
+/// `core.scorer._parse_token_set` (separators `| ; ,` in that order). `trim`
+/// strips Unicode whitespace like Python `str.strip` (ASCII-scoped parity, as
+/// documented for the other scorers).
+fn parse_token_set(s: &str) -> std::collections::HashSet<&str> {
+    if s.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    match ['|', ';', ','].into_iter().find(|c| s.contains(*c)) {
+        None => {
+            let t = s.trim();
+            if t.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                std::iter::once(t).collect()
+            }
+        }
+        Some(sep) => s
+            .split(sep)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect(),
+    }
+}
+
+/// Token-set overlap similarity; `overlap=false` = Jaccard, `overlap=true` =
+/// overlap coefficient. Empty-set on either side -> exact-string fallback.
+pub fn array_intersect_similarity(a: &str, b: &str, overlap: bool) -> f64 {
+    let sa = parse_token_set(a);
+    let sb = parse_token_set(b);
+    if sa.is_empty() || sb.is_empty() {
+        return if a == b { 1.0 } else { 0.0 };
+    }
+    let inter = sa.intersection(&sb).count();
+    if inter == 0 {
+        return 0.0;
+    }
+    // union size = |A| + |B| - |A ∩ B| (matches Python `len(sa | sb)`).
+    let denom = if overlap {
+        sa.len().min(sb.len())
+    } else {
+        sa.len() + sb.len() - inter
+    };
+    inter as f64 / denom as f64
+}
+
 /// Character-trigram (q-gram) Jaccard set for one raw string, mirroring Python
 /// `goldenmatch.core.scorer._qgram_set` (n=3): lowercase, pad each side with
 /// `n-1` `#` sentinels, and take the set of length-`n` codepoint substrings.
@@ -1193,6 +1249,8 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // silently zeroing via this catch-all.
         17 => date_diff_similarity(a, b),
         18 => geo_haversine_similarity(a, b),
+        19 => array_intersect_similarity(a, b, false), // bare / jaccard
+        20 => array_intersect_similarity(a, b, true),  // overlap
         _ => 0.0,
     }
 }

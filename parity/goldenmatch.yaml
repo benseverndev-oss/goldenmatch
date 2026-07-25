@@ -386,6 +386,12 @@ scorer_kernels:
   # which the fixed-id score_one(id,a,b) contract can't carry).
   - date_diff
   - geo_haversine
+  # array_intersect (Splink-conversion P5, spec 2026-07-25): native score-core
+  # kernel (score_one ids 19/20 -- jaccard / overlap; the mode rides the scorer
+  # STRING, which unlike numeric_diff's continuous band the fixed-id contract CAN
+  # carry as two ids). Byte-parity gated in tests/test_native_array_intersect_
+  # parity.py. TS WASM port is a follow-on (moves to `shared` then).
+  - array_intersect
   ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
@@ -398,8 +404,7 @@ scorer_kernels:
 scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
-  numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
-  array_intersect: "deferred -- native score-core kernel is P5 (spec 2026-07-25-splink-domain-comparator-conversion): set-overlap over delimited strings; pure-Python numpy per-pair path until the kernel lands, like soundex_match/date_diff before their kernels"
+  numeric_diff: "declined -- the abs/pct band rides on the continuous scorer string (numeric_diff:abs:<eps> / :pct:<frac>), which the fixed-id score_one(id,a,b) contract can't carry (contrast array_intersect, whose two discrete modes ARE two fixed ids); auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match before its kernel"
 # ─────────────────────────────────────────────────────────────────────────────
 # ADVISORY (non-gating) SQL surfaces — VISIBILITY ONLY. Added 2026-07-25.
 # These record the goldenmatch SQL function inventory so the parity gate can

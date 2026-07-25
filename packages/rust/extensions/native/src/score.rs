@@ -300,6 +300,25 @@ pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::geo_haversine_similarity(a, b)
 }
 
+/// Array-intersect Jaccard comparator (score-core id 19, FS domain comparators).
+/// Own #[pyfunction] capability marker like `date_diff_similarity`; a stale
+/// wheel hits score_one's catch-all (silent 0.0 for id 19), so the Python
+/// caller gates the native route on `hasattr(_native,
+/// "array_intersect_jaccard_similarity")` and falls back to the pure-Python
+/// per-pair mirror (`_array_intersect_similarity_py`) otherwise.
+#[pyfunction]
+pub fn array_intersect_jaccard_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::array_intersect_similarity(a, b, false)
+}
+
+/// Array-intersect overlap-coefficient comparator (score-core id 20). Own
+/// capability marker (`array_intersect_overlap_similarity`) for the same
+/// wheel-skew gating reason as the jaccard mirror.
+#[pyfunction]
+pub fn array_intersect_overlap_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::array_intersect_similarity(a, b, true)
+}
+
 /// Character-trigram Jaccard (q-gram) similarity (score-core id 5). Exposed as
 /// its own #[pyfunction] capability marker, exactly like `date_similarity`:
 /// `score_one` / `score_block_pairs` dispatch id 5, but a stale published wheel

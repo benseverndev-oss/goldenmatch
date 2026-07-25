@@ -329,3 +329,31 @@ refinement remains a possible follow-on if a labeled/scored separation signal is
 
 **Roadmap now:** P1/P2/P3a/P3b/P4 shipped. Remaining: P5 Rust kernels (array_intersect/numeric_diff),
 P6 TS parity. Numeric stays opportunistic.
+
+## 13. P5 delivered — array_intersect native kernel (2026-07-25)
+Kernel-backs `array_intersect` on the WEIGHTED-BUCKET path, exactly mirroring the Phase-3
+date_diff/geo_haversine cutover (spec 2026-07-23 Phase 3):
+- **score-core** (`packages/rust/extensions/score-core/src/lib.rs`): `array_intersect_similarity(a, b, overlap)`
+  + `parse_token_set` (separators `| ; ,` in that order, matching `core.scorer._parse_token_set`), the
+  pyo3-free REFERENCE. Wired into `score_one` as ids **19** (jaccard/bare) and **20** (overlap). The mode
+  rides the scorer STRING, which — unlike numeric_diff's continuous abs/pct band — the fixed-id
+  `score_one(id,a,b)` contract CAN carry as two discrete ids.
+- **native shims** (`native/src/score.rs` + `lib.rs`): `#[pyfunction] array_intersect_jaccard_similarity` /
+  `array_intersect_overlap_similarity` capability symbols (registered via `wrap_pyfunction!`).
+- **Python wiring** (`backends/score_buckets.py`): `_NATIVE_SCORER_IDS` gains `array_intersect`→19,
+  `array_intersect:jaccard`→19, `array_intersect:overlap`→20; wheel-skew guard `_array_ok` /
+  `has_array` (prefix-match all three spellings) folded into `_skew_block` on the
+  `array_intersect_jaccard_similarity` symbol (a stale wheel declines to the pure per-pair mirror
+  instead of score_one's catch-all silently zeroing the id); `_resolve_score_pair_callable` gains an
+  `array_intersect[:mode]` branch returning a mode-bound `_array_intersect_similarity_py(a, b, scorer)`
+  callable — making it fast-path eligible (native id 19/20 or the per-pair mirror, off the slow matrix path).
+- **parity/goldenmatch.yaml**: `array_intersect` moved `scorer_kernels_deferred` → `scorer_kernels.python_only`
+  (TS WASM = follow-on → `shared` then); `numeric_diff` reason changed `deferred --` → `declined --`
+  (continuous-band vs fixed-id contract; contrast array_intersect's two discrete modes = two ids).
+- **Byte-parity**: `tests/test_native_array_intersect_parity.py` (native==pure per mode across a
+  625-value corpus incl. whitespace / separator / empty-token edges; bare-scorer==jaccard; block-kernel
+  `score_block_pairs` dispatch of ids 19/20 == per-pair mirror). 5 pass. score-core + native clippy clean;
+  suite/config-matrix + native-symbol gates green; codemap unchanged (no new public Python symbol).
+
+**Roadmap now:** P1/P2/P3a/P3b/P4/P5 shipped. Remaining: P6 TS parity (WASM `array_intersect`/`date_diff`/
+`geo_haversine` → move those three to `scorer_kernels.shared`). numeric_diff stays declined (native), opportunistic.
