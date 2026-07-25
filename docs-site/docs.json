@@ -66,6 +66,7 @@
                   "goldenmatch/data-quality",
                   "goldenmatch/pipeline",
                   "goldenmatch/backends-and-scale",
+                  "goldenmatch/native",
                   "goldenmatch/pprl",
                   "goldenmatch/llm",
                   "goldenmatch/learning-memory",
@@ -120,6 +121,7 @@
               "goldenflow/config-matrix",
               "goldenflow/recipes",
               "goldenflow/cli",
+              "goldenflow/native",
               "goldenflow/performance"
             ]
           },
@@ -152,7 +154,8 @@
               "infermap/mapping",
               "infermap/config-matrix",
               "infermap/recipes",
-              "infermap/cli"
+              "infermap/cli",
+              "infermap/native"
             ]
           },
           {
