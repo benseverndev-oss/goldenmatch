@@ -386,6 +386,11 @@ api_parity:
   - 'packages/python/*/*/config/schemas.py'
   - 'packages/typescript/*/src/core/types.ts'
   - 'packages/typescript/*/src/core/config-edits.ts'
+  # infermap declares its scorer surface + kernel coverage in the scorer registry
+  # (not config/schemas) -- the gate can't see an infermap scorer add/kernel change
+  # without these.
+  - 'packages/python/*/*/scorers/__init__.py'
+  - 'packages/typescript/*/src/core/scorers/registry.ts'
   - 'parity/**'
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'

@@ -331,6 +331,38 @@ def test_python_emitter_all_packages_smoke(pkg):
         assert "a2a_skills" not in desc, f"{pkg} should not emit a2a_skills"
 
 
+def test_python_emitter_infermap_scorer_surfaces():
+    """infermap is the second package (after goldenmatch) to model a compute
+    surface: its emitter must produce `scorers` + `scorer_kernels`, sorted, with
+    kernels a subset of scorers, and the deferred set (scorers - kernels) exactly
+    {AliasScorer, LLMScorer}. This is what activates check_scorer_coverage for
+    infermap. Box-safe (needs infermap[mcp] in the venv)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = {**os.environ, "POLARS_SKIP_CPU_CHECK": "1", "INFERMAP_NATIVE": "0",
+           "PYTHONPATH": str(root / "packages" / "python" / "infermap")}
+    proc = subprocess.run([sys.executable, str(root / "scripts" / "emit_python_surface.py"), "infermap"],
+                          capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    desc = json.loads(proc.stdout)
+    for surface in ("scorers", "scorer_kernels"):
+        assert surface in desc, f"infermap must emit {surface}"
+        assert desc[surface] == sorted(desc[surface]) and desc[surface], f"infermap.{surface} empty/unsorted"
+    assert set(desc["scorer_kernels"]) <= set(desc["scorers"])
+    assert set(desc["scorers"]) - set(desc["scorer_kernels"]) == {"AliasScorer", "LLMScorer"}
+
+
+def test_infermap_manifest_activates_scorer_coverage_floor():
+    """The committed parity/infermap.yaml declares both scorers + scorer_kernels,
+    so check_scorer_coverage runs (not skipped) and passes: every scorer is
+    kernel-backed or classified in scorer_kernels_deferred."""
+    import yaml
+    root = pathlib.Path(__file__).resolve().parent.parent
+    m = yaml.safe_load((root / "parity" / "infermap.yaml").read_text())
+    assert "scorers" in m and "scorer_kernels" in m, "infermap manifest must model the compute surface"
+    assert not gate.check_structure(m)
+    assert not gate.check_scorer_coverage(m), "infermap scorer coverage floor must be satisfied"
+
+
 # ── Advisory SQL surfaces (postgres / duckdb) — visibility, non-gating ────────
 
 def test_structure_skips_advisory_sql_surfaces():
