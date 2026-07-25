@@ -92,8 +92,105 @@ def _looks_like_haversine(sql_norm: str) -> bool:
 
 LevelKind = Literal[
     "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
-    "array_intersect", "geo_haversine", "numeric_diff", "cosine",
+    "array_intersect", "geo_haversine", "numeric_diff", "cosine", "token_sort",
 ]
+
+# ForenameSurname is Splink's OTHER cross-column comparator (geo_haversine is
+# the first): a compound name comparison over SEPARATE forename + surname
+# columns whose comparison levels AND two per-part conditions together. Captured
+# live from splink 4 (`ForenameSurnameComparison('forename','surname')`), the
+# non-null/else levels are:
+#   both exact:     ("forename_l" = "forename_r") AND ("surname_l" = "surname_r")
+#   transposition:  "forename_l" = "surname_r" AND "forename_r" = "surname_l"
+#   both fuzzy (t): (jw("forename_l","forename_r") >= t) AND (jw("surname_l","surname_r") >= t)
+#   surname only:   "surname_l" = "surname_r"
+#   forename only:  "forename_l" = "forename_r"
+# GoldenMatch has no per-part-AND comparator, but `token_sort` over a single
+# COMBINED "forename surname" field captures all three compound shapes in one
+# scorer: it is word-order robust, so the forename/surname TRANSPOSITION and the
+# both-exact case both score 1.0, and a per-part fuzzy level maps to a token_sort
+# threshold (approximate -- token_sort_ratio is not per-part jaro_winkler, but it
+# is the faithful single-field analogue). The field is synthesized via
+# MatchkeyField.derive_from=[forename, surname] + derive_separator=" " (the same
+# machinery geo_haversine uses with a "," separator). The two SINGLE-PART levels
+# (surname-only / forename-only) have no place on a combined-field threshold
+# scale and are dropped (subsumed by the synthesized field) in convert_comparison
+# / import_em. The combined column name is the two source columns sorted +
+# "__"-joined (deterministic, so build-time and m/u-import-time agree) --
+# token_sort is order-insensitive so the join order never affects the score.
+_FS_OPERAND = r'["`]?([A-Za-z_]\w*)_([lr])["`]?'
+_FS_EXACT_CONJ = re.compile(rf'{_FS_OPERAND}\s*=\s*{_FS_OPERAND}')
+_FS_JW_CONJ = re.compile(
+    rf'jaro_winkler(?:_similarity)?\s*\(\s*{_FS_OPERAND}\s*,\s*{_FS_OPERAND}\s*\)'
+    r'\s*>=\s*([0-9]*\.?[0-9]+)'
+)
+
+
+def _recognize_forename_surname(sql_norm: str) -> RecognizedLevel | None:
+    """Recognize a Splink ForenameSurname COMPOUND cross-column level.
+
+    Matches the three per-part-AND shapes (both-exact, transposition, both-fuzzy)
+    over two DISTINCT source columns; returns a ``token_sort`` RecognizedLevel on
+    the synthesized combined field. Any other AND-joined SQL (or a single
+    conjunct, which the single-column matchers already handle) returns None.
+    The split is on the literal ``' AND '`` -- ``sql_norm`` has collapsed
+    whitespace, so this is exact and cannot backtrack (py/polynomial-redos).
+    """
+    conjuncts = re.split(r' AND ', sql_norm, flags=re.IGNORECASE)
+    if len(conjuncts) != 2:
+        return None
+
+    parsed: list[tuple[str, str, str, str, str, float | None]] = []
+    for conjunct in conjuncts:
+        c = _strip_outer_parens(conjunct)
+        m = _FS_JW_CONJ.fullmatch(c)
+        if m:
+            parsed.append(("jw", m.group(1), m.group(2).lower(), m.group(3),
+                           m.group(4).lower(), float(m.group(5))))
+            continue
+        m = _FS_EXACT_CONJ.fullmatch(c)
+        if m:
+            parsed.append(("exact", m.group(1), m.group(2).lower(), m.group(3),
+                           m.group(4).lower(), None))
+            continue
+        return None
+
+    bases = {p[1] for p in parsed} | {p[3] for p in parsed}
+    if len(bases) != 2:
+        return None
+    cols = sorted(bases)
+    combined = f"{cols[0]}__{cols[1]}"
+
+    kinds = {p[0] for p in parsed}
+    if kinds == {"exact"}:
+        # both-parts-exact: each conjunct compares one base's _l to its own _r.
+        both_same = all(lc == rc and {ls, rs} == {"l", "r"}
+                        for _, lc, ls, rc, rs, _ in parsed)
+        # transposition: each conjunct compares the two DIFFERENT bases across
+        # the swap (A_l=B_r AND A_r=B_l).
+        both_cross = all(lc != rc and {ls, rs} == {"l", "r"}
+                         for _, lc, ls, rc, rs, _ in parsed)
+        if both_same or both_cross:
+            return RecognizedLevel(
+                "token_sort", combined, 1.0, approx=False,
+                derive_from=cols, derive_separator=" ",
+            )
+        return None
+
+    if kinds == {"jw"}:
+        # both-parts-fuzzy: each conjunct is a same-column jaro_winkler cutoff.
+        if not all(lc == rc and {ls, rs} == {"l", "r"}
+                   for _, lc, ls, rc, rs, _ in parsed):
+            return None
+        # Splink emits the same threshold on both parts; take the looser (min)
+        # if they ever differ, biased for recall.
+        threshold = min(p[5] for p in parsed if p[5] is not None)
+        return RecognizedLevel(
+            "token_sort", combined, threshold, approx=True,
+            derive_from=cols, derive_separator=" ",
+        )
+
+    return None
 
 # Numeric magnitude levels. Splink's standard library has NO first-class numeric
 # comparison (date/time/DistanceInKM/ArrayIntersect + the string-distance family
@@ -294,6 +391,13 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
                 scorer=f"numeric_diff:abs:{_fmt_band(band)}",
             )
 
+    # ForenameSurname compound cross-column level (both-exact / transposition /
+    # both-fuzzy). Tried last: single-column shapes match the matchers above and
+    # return first; only AND-joined per-part conditions reach here.
+    fs = _recognize_forename_surname(sql_norm)
+    if fs is not None:
+        return fs
+
     return None
 
 
@@ -398,6 +502,34 @@ def convert_comparison(
             "disagree -- behavior differs on sparse fields",
             mapped_to=None,
         )
+
+    # Synthesized-field subsumption (ForenameSurname). A compound cross-column
+    # comparison synthesizes a combined field (a band with derive_from set) AND
+    # also emits single-part levels on the SOURCE columns (surname-only /
+    # forename-only exact). Those single-column bands cannot map onto the
+    # combined field's threshold scale and would trip the inconsistent-columns
+    # guard below -- drop them (with a warn), keeping the synthesized field.
+    # No-op for single-column comparisons (empty derive_sources) and for geo
+    # (its levels ALL carry derive_from, so none is a subsumable single-column
+    # band).
+    derive_sources = {
+        s for r, _, _ in bands if r.derive_from for s in r.derive_from
+    }
+    if derive_sources:
+        kept_bands: list[tuple[RecognizedLevel, dict, int]] = []
+        for r, level, j in bands:
+            if r.derive_from is None and r.column in derive_sources:
+                report.warn(
+                    f"{comp_path}.comparison_levels[{j}]",
+                    f"single-column level on '{r.column}' subsumed by the "
+                    f"synthesized combined field {sorted(derive_sources)}; dropped "
+                    "(cannot map to the combined-field threshold scale): "
+                    f"{level.get('sql_condition', '')}",
+                    mapped_to=None,
+                )
+            else:
+                kept_bands.append((r, level, j))
+        bands = kept_bands
 
     agree_families = {r.kind for r, _, _ in bands if r.kind != "exact"}
     domain_families = agree_families & _DOMAIN_KINDS
@@ -520,6 +652,14 @@ def convert_comparison(
                     "approximate mapping: great-circle km cutoff snapped to the nearest "
                     f"geo_haversine band -> sim {r.sim_threshold}; lat+lng synthesized into "
                     f"a comma-joined field {r.derive_from} ({sql})"
+                )
+            elif r.kind == "token_sort":
+                message = (
+                    "approximate mapping: ForenameSurname per-part jaro_winkler "
+                    f">= {r.sim_threshold} on both name parts converted to a token_sort "
+                    f"threshold {r.sim_threshold} on the synthesized combined field "
+                    f"{r.derive_from} (word-order robust; handles the forename/surname "
+                    f"transposition) ({sql})"
                 )
             else:
                 message = (
@@ -974,6 +1114,29 @@ def import_em(
                     level_path,
                     "unrecognized level carried m/u probabilities; dropped, "
                     f"surviving levels for field '{fld.field}' re-normalized",
+                    mapped_to=f"em.m_probs.{fld.field}",
+                )
+                continue
+
+            # Synthesized-field subsumption (ForenameSurname): a single-column
+            # level on a SOURCE column of a synthesized combined field was
+            # dropped by convert_comparison; drop its m/u here too (re-normalize)
+            # -- else _agree_index_for, which resolves by threshold alone, would
+            # misassign a surname-only/forename-only exact (threshold 1.0) onto
+            # the combined field's strongest level. Mirrors the convert_comparison
+            # subsumption exactly. No-op for geo (its levels carry derive_from).
+            if (
+                fld.derive_from
+                and r.derive_from is None
+                and r.column in set(fld.derive_from)
+            ):
+                lost_m += m_p or 0.0
+                lost_u += u_p or 0.0
+                report.warn(
+                    level_path,
+                    f"single-column level on '{r.column}' subsumed by the "
+                    f"synthesized field '{fld.field}'; m/u dropped, surviving "
+                    "levels re-normalized",
                     mapped_to=f"em.m_probs.{fld.field}",
                 )
                 continue
