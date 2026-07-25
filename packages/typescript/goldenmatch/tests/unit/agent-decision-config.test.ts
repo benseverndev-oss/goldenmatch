@@ -13,6 +13,7 @@ const decision = (o: Partial<StrategyDecision>): StrategyDecision => ({
   fuzzy_fields: [],
   backend: null,
   auto_execute: true,
+  pprl_available: false,
   ...o,
 });
 
