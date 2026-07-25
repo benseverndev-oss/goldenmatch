@@ -276,13 +276,14 @@ scorers:
   - record_embedding
   - soundex_match
   - token_sort
-  python_only: []
+  python_only:
   # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
-  # splink-domain-comparator-conversion): ALL of date_diff, geo_haversine,
-  # array_intersect, and numeric_diff are now shared (score-core kernel + TS port).
-  # numeric_diff (2026-07-25 Part D): score_one id 22 for the pct:0.1 default +
-  # a spec-carrying kernel (numeric_diff_similarity(a,b,spec)) on the per-pair
-  # path for the abs/pct parameterized forms; pure-TS numericDiffSimilarity.
+  # splink-domain-comparator-conversion): date_diff, geo_haversine, array_intersect,
+  # and numeric_diff (Part D) are now shared (score-core kernel + TS port). Only
+  # `cosine` remains python-only: vector cosine over two precomputed embedding
+  # columns (Splink CosineSimilarity conversion); pure-Python vector reduction, no
+  # TS/WASM port yet. Kept sorted (parity gate).
+  - cosine
   ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
 # VALID_TRANSFORMS). Currently in exact parity -- no declared deltas.
@@ -411,8 +412,9 @@ scorer_kernels_deferred:
   record_embedding: "n/a -- model-backed multi-field embedding"
   # numeric_diff was kernelized 2026-07-25 (Part D): score_one id 22 default +
   # spec-carrying kernel for the parameterized forms -> moved to scorer_kernels.
-  # Only the two model-backed embedding scorers remain deferred (n/a); every
-  # string/numeric scorer is now kernel-backed. Arc closed.
+  # cosine is the one string/numeric scorer that stays deferred (below); every
+  # OTHER string/numeric scorer is now kernel-backed.
+  cosine: "deferred -- vector cosine over two parsed float-vector columns (Splink CosineSimilarity conversion, 2026-07-25); pure-Python reduction, kernelizable but not a string kernel; no TS/WASM port yet"
 # blocking_kernels_deferred: the COVERAGE FLOOR for the `blocking_strategies` surface
 # (check_blocking_coverage). Every strategy NOT in `blocking_strategies.shared` (i.e.
 # python_only / ts_only) MUST appear here with a reason, so a non-shared blocking
