@@ -116,6 +116,8 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   ensemble: 12,
   radial: 13,
   audio_fp: 14,
+  date_diff: 17,
+  geo_haversine: 18,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

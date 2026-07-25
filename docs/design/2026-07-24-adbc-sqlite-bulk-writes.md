@@ -273,3 +273,41 @@ addressed by any in-memory-Arrow write path — confirmed: even `adbc`, which ne
 builds a Python row, is within 6% of `staging` at 5M. The one remaining lever is a
 *streaming* ingest that never materialises the full frame — explored, with DuckDB
 as the vehicle, in `2026-07-25-duckdb-identity-backend.md`.
+
+---
+
+## Shipped 2026-07-25 — the stdlib `staging` SQLite bulk path
+
+The decided winner landed. `IdentityStore.bulk_upsert_identities` /
+`bulk_upsert_records` / `bulk_add_edges` / `bulk_emit_events` grew a real SQLite
+branch (per-connection TEMP staging table, reused across flushes, +
+`executemany` + `INSERT ... SELECT ... WHERE true ON CONFLICT DO UPDATE`; the
+`WHERE true` is the parser-disambiguation quirk noted above). `resolve_clusters`
+now takes the bulk fast-path for brand-new clusters on **both** SQL backends, and
+the accumulators are flushed in **bounded batches** (`GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS`,
+default 250k) so the write side stays O(batch) rather than stacking a second
+O(N) frame-residency term on the prep floor. `bulk_flush_checkpoint()`
+commit-reopens the SQLite batch transaction per flush so the WAL cannot grow
+without bound.
+
+**Parity contract (no silent regression):** the SQLite bulk path is byte-identical
+to the per-row `upsert_*` loop on the parity surface — status, golden_record,
+confidence, **source-record payloads**, edges (with `controller_snapshot` /
+actor / trust, which SQLite contract tests assert), and **event payloads** (+
+actor / trust). It carries the payloads the leaner Postgres COPY path drops,
+because on SQLite the per-row path stores them and routing brand-new clusters
+through bulk must not lose them (the payload-drop trap flagged above). Edge pairs
+are canonicalized (`canon_record_pair`) so the stored `(a, b)` ordering matches
+the row path. Locked by `tests/identity/test_resolve_scaling.py`
+(`GOLDENMATCH_IDENTITY_BULK=1` vs `=0` produce identical `_dump`; batched vs
+single-flush identical). Kill-switch `GOLDENMATCH_IDENTITY_BULK=0` restores the
+per-row loop.
+
+**Measured (local, 40k singletons, `emit_singletons=True`, SQLite):** per-row path
+185.9 s, staging bulk path **3.95 s (~47×)**, peak RSS bounded and only modestly
+higher (312 vs 227 MB at a single flush; O(batch) beyond). The per-row cost was
+dominated by a `has_run_event` SELECT per singleton cluster, which the bulk path
+skips for brand-new clusters. This does **not** remove the prep frame-residency
+floor (still O(N) on `emit_singletons=True`) — that remains the bounded-streaming
+architectural item — but it makes the write side no longer the bottleneck and
+keeps its residency bounded.
