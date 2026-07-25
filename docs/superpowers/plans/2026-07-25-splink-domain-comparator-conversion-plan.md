@@ -299,3 +299,33 @@ synthesized-field mechanism on `MatchkeyField`:
 **Roadmap now:** P1 array_intersect scorer + P2 date_diff + P3a array_intersect recognizer + P3b
 geo/derive_from all shipped. Numeric = opportunistic. Remaining: P4 `domain_bands` upgrade lever,
 P5 Rust kernels (array_intersect/numeric_diff), P6 TS parity.
+
+## 12. P4 delivered — domain_bands upgrade lever (2026-07-25)
+New `domain_bands` lever in `config/splink_upgrade.py`, registered after `distance_thresholds`,
+before `fan_out`/`calibration` (Stage D). Data-aware refinement of the converter's approximate
+domain bands:
+- **array_intersect** (the one data-refinable approximation): P3a snapped Splink's intersection
+  COUNT `>= n` to an overlap RATIO `n / 10` (`_ARRAY_ASSUMED_SET_SIZE`, a guess).
+  `_lever_domain_bands` measures the ACTUAL mean token-set size K on the sample
+  (`_measure_mean_token_set_size`, reusing `core.scorer._parse_token_set`) and recomputes each band
+  `ratio = min(1, n / K)` — exactly mirroring `distance_thresholds` measuring mean string length L.
+  Copy-on-write; per-band finding (old→new + measured K); band-collapse merges + re-normalizes m/u
+  (same machinery as `distance_thresholds`); applies regardless of `em_model` (config-level bands).
+- **date_diff / geo_haversine**: the Splink cutoff→band conversion is EXACT (seconds→days / km carry
+  no assumed constant), so there's nothing to refine — info-note and passthrough.
+- **`_validate_columns` fix**: also taught the upgrade orchestrator's upfront column check to require
+  a `derive_from` field's SOURCES (geo lat+lng), not the synthesized `lat__lng` — mirrors the P3b
+  `pipeline._get_required_columns` fix, so a geo-converted config can now run `--upgrade`.
+- Tests: `test_splink_upgrade_levers.py` (+7: refine, copy-on-write, skip-empty, collapse+m/u remap,
+  date/geo exact passthrough, bare-settings applies) + updated the two lever-order assertions.
+  Full upgrade+splink suites 128 green; ruff + pyright clean; codemap regenerated.
+
+**Design-scope note:** the spec (Stage D) also envisioned refining date/geo bands from measured
+day-diff/km *distributions*. Those conversions are exact (no assumed constant to fix), and an
+unlabeled distance distribution has no match/non-match separation signal to refine against without
+the scored candidate-pair machinery — so P4 ships the well-defined array-set-size measurement (the
+genuine refinable approximation) and treats date/geo as exact passthrough. A distribution-based
+refinement remains a possible follow-on if a labeled/scored separation signal is wired in.
+
+**Roadmap now:** P1/P2/P3a/P3b/P4 shipped. Remaining: P5 Rust kernels (array_intersect/numeric_diff),
+P6 TS parity. Numeric stays opportunistic.

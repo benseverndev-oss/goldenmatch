@@ -1050,10 +1050,12 @@
             "_estimate_within_block_prior",
             "_lever_calibration",
             "_lever_distance_thresholds",
+            "_lever_domain_bands",
             "_lever_fan_out",
             "_lever_tf_tables",
             "_load_frame",
             "_measure_mean_length",
+            "_measure_mean_token_set_size",
             "_resolve_levers",
             "_sample",
             "_validate_columns",
@@ -1069,6 +1071,7 @@
             "goldenmatch.core.blocker",
             "goldenmatch.core.frame",
             "goldenmatch.core.probabilistic",
+            "goldenmatch.core.scorer",
             "goldenmatch.utils.transforms"
           ]
         },
