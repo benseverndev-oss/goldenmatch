@@ -930,6 +930,150 @@ print(result.memory_stats)
 
 Full guide: [Learning Memory](/goldenmatch/learning-memory).
 
+## More public exports
+
+These symbols are exported from the top-level `goldenmatch` package but are lower-traffic than the surfaces above. One-line summaries follow; authoritative signatures live in the cited source modules.
+
+### Config optimization and edits
+
+Search the config space, or apply a single typed lever to an existing config.
+
+| Symbol | Purpose |
+|---|---|
+| `optimize_config` | Search the candidate-config space and return the best config + trials. |
+| `OptimizeResult` | Outcome of an `optimize_config` search. |
+| `OptimizerTrial` | One scored candidate config from the search. |
+| `GridProposer` | Deterministic threshold sweep (single round is byte-identical to the legacy grid). |
+| `CoordinateDescentProposer` | Deterministic multi-lever search; each round optimizes one lever family. |
+| `LLMProposer` | AI-driven iteration: an LLM agent proposes the next lever moves. |
+| `ThresholdShift` | Shift every perturbable matchkey threshold by a delta (clamped). |
+| `WeightShift` | Reweight one field of a weighted matchkey (floor 0.0). |
+| `ScorerSwap` | Swap one matchkey field's scorer. |
+| `MatchkeyTypeSwap` | Swap a matchkey between `weighted` and `probabilistic`. |
+| `BlockingStrategyEdit` | Change the blocking strategy (keys preserved). |
+| `BlockingKeyEdit` | Add or remove a blocking key, identified by its field set + transforms. |
+
+Source: `goldenmatch/core/config_optimizer.py`, `goldenmatch/core/config_edits.py`.
+
+### Screening and review gating
+
+| Symbol | Purpose |
+|---|---|
+| `gate_pairs` | Split scored pairs into auto-merged, review, and auto-rejected buckets. |
+| `ReviewQueue` | Confidence-gated review queue with pluggable backends. |
+| `screen_record` | Screen one record against a watchlist; return scored, explained hits. |
+| `screen_records` | Batch screening: `screen_record` for each row. |
+| `ScreeningResult` | The ranked hits for one screened record. |
+| `ScreeningHit` | A single watchlist entry the query record resembles. |
+| `FieldReason` | Why one field contributed to a hit: the two values and their similarity. |
+
+Source: `goldenmatch/core/review_queue.py`, `goldenmatch/core/screening.py`.
+
+### Retrieval and entity-aware RAG
+
+| Symbol | Purpose |
+|---|---|
+| `retrieve_similar_records` | Retrieve the top-`k` records in `df` most similar to a query. |
+| `RetrievedRecord` | One record returned by `retrieve_similar_records`. |
+| `entity_aware_retrieve` | Retrieve, resolve, and canonicalize — the entity-aware RAG surface. |
+| `Entity` | One resolved entity: a canonical record + the retrieved records it absorbed. |
+| `EntityRetrievalResult` | The entity-aware retrieval result: distinct entities + dedup headline. |
+
+Source: `goldenmatch/core/retrieval.py`, `goldenmatch/core/rag_surface.py`.
+
+### Vector stores
+
+Persistent embedding indexes behind a unified surface.
+
+| Symbol | Purpose |
+|---|---|
+| `VectorStore` | The unified surface every vector backend implements. |
+| `open_vector_index` | Open (load-or-create) a vector index on the chosen backend. |
+| `DuckDBVectorIndex` | Vector index backed by a DuckDB database file. |
+| `PgVectorIndex` | Vector index backed by Postgres + pgvector. |
+
+Source: `goldenmatch/core/vector_store.py`.
+
+### Embedding operations
+
+| Symbol | Purpose |
+|---|---|
+| `embedding_drift` | Measure embedding-space drift between a reference set and a current set. |
+| `EmbeddingDriftReport` | The measured drift between a reference embedding set and a current one. |
+| `select_field_model` | Choose an embedding model for one field. |
+| `select_field_models` | Choose a per-field embedding model for each text column of `df`. |
+| `FieldModelChoice` | The embedding model chosen for one field + why. |
+| `evaluate_canonicalization` | Measure the quality of a batch of `CanonicalRecord` outputs. |
+| `CanonicalizationEval` | Measured quality of a batch of `canonicalize_cluster` outputs. |
+
+Source: `goldenmatch/core/embedding_ops.py`.
+
+### Recall certification
+
+| Symbol | Purpose |
+|---|---|
+| `estimate_recall` | Estimate recall for a blocking candidate using pair sampling. |
+| `certify_recall_df` | Unsupervised recall estimate for a DataFrame (no ground truth). |
+| `RecallEstimate` | Result of an unsupervised recall estimate (`recall` is `None` when unmeasurable). |
+| `RecallCertificate` | Audit-calibrated recall certificate; `recall_lower` is a safe lower bound. |
+| `audit_calibrated_bound` | Compute a safe recall lower bound from stratified audit counts. |
+
+Source: `goldenmatch/core/recall_certificate.py`, `goldenmatch/core/block_analyzer.py`.
+
+### Canonicalization
+
+| Symbol | Purpose |
+|---|---|
+| `canonicalize_cluster` | Produce a canonical record for one cluster's source records. |
+| `CanonicalRecord` | The canonical record for a cluster, with per-cell provenance. |
+| `explain_cluster_nl` | Generate a template-based natural-language cluster summary. |
+
+Source: `goldenmatch/core/llm_canonicalize.py`, `goldenmatch/core/explain.py`.
+
+### Splink migration result types
+
+Returned by the Splink conversion / upgrade functions (see [Migrating from Splink](/goldenmatch/configuration)).
+
+| Symbol | Purpose |
+|---|---|
+| `SplinkConversion` | Result of `from_splink` (the converted config + mapping report). |
+| `SplinkConversionError` | Raised in strict mode on any lossy mapping, or always on an error-severity issue. |
+| `MigrationResult` | Result of the data-aware `upgrade_splink_conversion` pass. |
+| `SplinkUpgradeError` | Raised on unusable input to `upgrade_splink_conversion`. |
+
+Source: `goldenmatch/config/from_splink.py`, `goldenmatch/config/splink_upgrade.py`.
+
+### Identity graph types and queries
+
+Low-level building blocks behind the [Identity graph](/goldenmatch/identity-graph); most users go through `resolve_clusters` / the CLI instead.
+
+| Symbol | Purpose |
+|---|---|
+| `new_entity_id` | Generate a stable, time-ordered (UUIDv7-shaped) entity id. |
+| `list_identities` | List identities in the store, optionally filtered by dataset/status. |
+| `find_conflicts` | Return evidence edges flagged `conflicts_with` for steward review. |
+| `manual_split` | Detach `record_ids` from an `entity_id` into a brand-new identity. |
+| `ResolveSummary` | Summary of a resolve pass (counts of new/updated/merged identities). |
+| `IdentityNode` | A durable identity node (its members, aliases, and status). |
+| `SourceRecord` | A single record observation; `record_id` is `{source}:{source_pk}`. |
+| `EvidenceEdge` | An edge between records/identities carrying match evidence. |
+| `IdentityEvent` | One entry in an identity's temporal event log. |
+| `IdentityAlias` | An alternate key an identity is known by. |
+| `IdentityStatus` | Enum of identity lifecycle states. |
+| `EdgeKind` | Enum of evidence-edge kinds. |
+| `EventKind` | Enum of identity-event kinds. |
+
+Source: `goldenmatch/identity/`.
+
+### Other exports
+
+| Symbol | Purpose |
+|---|---|
+| `record_fingerprint` | Deterministic, cross-surface-stable SHA-256 fingerprint of a record. |
+| `CorrectionStats` | Statistics from applying Learning Memory corrections. |
+| `CorrectionSource` | Canonical correction-source identifiers (`steward`, `agent`, `llm`, `unmerge`). |
+| `BUILTIN_PLUGINS` | The list of built-in Learning Memory plugins registered by default. |
+
 ## REST API client
 
 ```python

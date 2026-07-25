@@ -4415,6 +4415,10 @@
           "description": "Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`."
         },
         {
+          "name": "build_clusters",
+          "description": "Group records into clusters given a file and matchkey definition."
+        },
+        {
           "name": "certify_recall",
           "description": "Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems."
         },
@@ -4477,6 +4481,14 @@
         {
           "name": "find_duplicates",
           "description": "Find duplicate matches for a record. Provide field values to search against the loaded dataset."
+        },
+        {
+          "name": "find_exact_matches",
+          "description": "Find exact matches on a field in a file. Returns pairs."
+        },
+        {
+          "name": "find_fuzzy_matches",
+          "description": "Find fuzzy matches in a block of rows. Returns scored pairs."
         },
         {
           "name": "fix_quality",
@@ -4647,6 +4659,10 @@
           "description": "Get data quality profile: column types, null rates, unique counts, sample values."
         },
         {
+          "name": "read_file",
+          "description": "Read a CSV/JSON file and return the first N records."
+        },
+        {
           "name": "retrieve_similar",
           "description": "Semantic retrieval (#1089): return the records in a CSV most similar to a free-text query, ranked by cosine similarity. Embeds the chosen column and the query with the zero-config in-house embedder (no cloud/torch by default) and runs ANN search. The read side of the RAG entity-canonicalization epic -- fetch candidate records by query without running a full dedupe."
         },
@@ -4671,8 +4687,20 @@
           "description": "Auto-map columns between two files with different schemas. Returns proposed (col_a, col_b) mappings with a confidence score and method (synonym / name_sim / composite). Useful before matching two sources."
         },
         {
+          "name": "score_pair",
+          "description": "Score two record objects across weighted fields. Returns a combined score."
+        },
+        {
+          "name": "score_strings",
+          "description": "Score similarity between two strings using the requested scorer."
+        },
+        {
           "name": "sensitivity",
           "description": "Parameter-sensitivity analysis: sweep one or more config parameters across a range and report how stable the clustering is at each value (CCMS unchanged %). Use it to find robust thresholds. Auto-configures the file if no config is given."
+        },
+        {
+          "name": "server_info",
+          "description": "Return metadata about this GoldenMatch MCP server."
         },
         {
           "name": "shatter_cluster",
@@ -4697,6 +4725,10 @@
         {
           "name": "upload_dataset",
           "description": "Upload a local file's bytes to the server and get back a server-side path to reuse across other tools (analyze_data, auto_configure, agent_deduplicate, ...). No hosting needed. Send base64 (default) or raw text via `encoding`. Uploaded files are ephemeral scratch, reaped after GOLDENMATCH_MCP_UPLOAD_TTL (default 24h); re-upload if you need a path older than that. Max size GOLDENMATCH_MCP_MAX_UPLOAD_BYTES (default 64MB) -- above it, pass a public http(s) URL as file_path instead."
+        },
+        {
+          "name": "write_csv",
+          "description": "Write a list of record objects to a CSV file."
         }
       ],
       "vocabularies": [
@@ -4710,6 +4742,12 @@
               "meaning": "Matches known name aliases and nicknames (Bob <-> Robert).",
               "best_for": "Names with nicknames",
               "range": "0 or 1"
+            },
+            {
+              "value": "array_intersect",
+              "meaning": "Token-set overlap of delimited strings (Jaccard by default; 'array_intersect:overlap' for the overlap coefficient). FS path.",
+              "best_for": "Delimited lists (tags, categories, phones)",
+              "range": "0.0-1.0"
             },
             {
               "value": "audio_fp",
@@ -5316,6 +5354,7 @@
           "GOLDENMATCH_FS_AUTOCONFIG_V2",
           "GOLDENMATCH_FS_BATCH_ROWS",
           "GOLDENMATCH_FS_BLOCK_SOURCE",
+          "GOLDENMATCH_FS_BUCKET_BATCH",
           "GOLDENMATCH_FS_BUCKET_NATIVE",
           "GOLDENMATCH_FS_CALIBRATED",
           "GOLDENMATCH_FS_CALIBRATE_THRESHOLD",
@@ -5367,6 +5406,8 @@
         "IDENTITY": [
           "GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT",
           "GOLDENMATCH_IDENTITY_DSN",
+          "GOLDENMATCH_IDENTITY_SQLITE_BATCH",
+          "GOLDENMATCH_IDENTITY_SQLITE_BATCH_SIZE",
           "GOLDENMATCH_IDENTITY_WRITE_PIPELINE"
         ],
         "INHOUSE": [

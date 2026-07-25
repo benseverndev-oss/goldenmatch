@@ -3314,14 +3314,13 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return False
     if not mk.fields:
         return False
-    # The native kernel implements ONLY the "unobserved"/neutral missing semantics
-    # (a null field is skipped; FS_SUPPORTS_MISSING_NEUTRAL). Under the "disagree"
-    # mode (#1834/#1851: auto-config picks it per-dataset for null-heavy data like
-    # historical_50k) a null field must instead score as level 0 (evidence AGAINST),
-    # which the kernel cannot express -- scoring nulls as neutral over-matches and
-    # collapses precision. Decline to the numpy path, which honors both modes.
-    if fs_missing_mode(mk) == "disagree":
-        return False
+    # Missing-value mode. "unobserved"/neutral (a null field is skipped) is the
+    # native default. "disagree" (#1834/#1851: auto-config picks it per-dataset for
+    # null-heavy data like historical_50k) scores a null field as level 0 (evidence
+    # AGAINST); the kernel handles it via the `missing_disagree=` kwarg on wheels
+    # that expose FS_SUPPORTS_MISSING_DISAGREE. Older wheels lack the kwarg, so
+    # `needs_disagree` declines them to the numpy path below (which honors both).
+    needs_disagree = fs_missing_mode(mk) == "disagree"
     needs_ensemble = False
     ne_fields = mk.negative_evidence or []
     for ne in ne_fields:
@@ -3367,6 +3366,10 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False
         if not getattr(mod, "FS_SUPPORTS_MISSING_NEUTRAL", False):
             return False  # old wheel: nulls are incorrectly scored as level 0
+        if needs_disagree and not getattr(
+            mod, "FS_SUPPORTS_MISSING_DISAGREE", False
+        ):
+            return False  # old wheel: no missing_disagree kwarg -> numpy path
         if needs_level_thresholds and not getattr(
             mod, "FS_SUPPORTS_LEVEL_THRESHOLDS", False
         ):
@@ -3577,6 +3580,16 @@ def _score_fs_native_frame(
         mod, "FS_SUPPORTS_REQUIRE_POSITIVE_EVIDENCE", False
     ):
         opt_kwargs["require_positive_evidence"] = True
+
+    # Missing="disagree": a null field scores as comparison level 0 (evidence
+    # AGAINST a match) instead of unobserved. Gated on the capability flag so an
+    # older wheel -- which `_fs_native_eligible` already declined for disagree --
+    # never receives the unknown kwarg. When absent, the kernel keeps the neutral
+    # "unobserved" default (byte-identical to before this kwarg).
+    if fs_missing_mode(mk) == "disagree" and getattr(
+        mod, "FS_SUPPORTS_MISSING_DISAGREE", False
+    ):
+        opt_kwargs["missing_disagree"] = True
 
     # Custom banding (goldenmatch-native >= 0.1.14).
     level_thresholds = [

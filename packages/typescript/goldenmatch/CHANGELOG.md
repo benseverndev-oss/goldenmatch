@@ -4,6 +4,34 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.25.0] - 2026-07-24
+
+### Added
+- **`schedule` CLI command** (parity batch 8). goldenmatch `cli_commands.python_only` **6 -> 5**.
+  `schedule <files...> [-c cfg] (--every 1h | --cron '0 6 * * *') [--output-dir .] [--max-runs N]`
+  runs dedupe on a repeating interval, writing `<jobId>_run<N>_golden.csv` per run.
+  `src/node/scheduler.ts` ports `core/scheduler.py` (`parseInterval` / `parseCron` / `ScheduledJob`).
+
+### Known shared limitation (deliberately NOT fixed one-sided)
+- **`--cron` is interval-only, not wall-clock.** `parseCron` validates the 5-field shape and then collapses to a coarse interval (daily / hourly) -- it does not compute the next matching time. This is a faithful port of Python's behavior, whose own docstring says "For full cron support, use system cron." Implementing real cron on TypeScript alone would make `--cron "0 6 * * *"` mean *daily at 06:00* on TS and *every 86400s from now* on Python: a silent operational divergence in a scheduling tool, which is worse than a shared limitation. The TS CLI prints a note when `--cron` is used, and the limitation is pinned by tests. Fixing it properly means changing both surfaces together.
+
+### Fixed (bug found while porting)
+- **`--max-runs` now bounds ATTEMPTS, not successes.** Counting only successful runs meant a permanently-failing job ignored the cap and looped forever, because a failed attempt never advances `runCount`. Guarded by a test that would hang under the old semantics. A failing run is still reported and the schedule continues -- a scheduled job that dies on one bad input is worse than one that logs and retries.
+- `parseInterval` rejects a non-integer numeric part (`1.5h`). Python's `int(spec[:-1])` raises on it, so silently reading it as `1h` would have diverged the two CLIs on the same flag.
+
+## [1.24.0] - 2026-07-24
+
+### Added
+- **`init`, `label`, and `review` CLI commands** (parity batch 7) -- the interactive tier. goldenmatch `cli_commands.python_only` **9 -> 6**.
+  - `init [-o out.yaml]` -- config wizard. `src/node/config-wizard.ts` ports `config/wizard.py`, including the `suggestTransforms` / `suggestScorer` heuristic tables byte-faithfully, so both wizards propose the same config for the same column names.
+  - `label <files...> -c <config> [-o gt.csv] [-n 50] [--strategy borderline|random|hardest] [-a]` -- build ground truth by labeling pairs (y/n/s/q), writing a CSV for `evaluate`.
+  - `review <files...> -c <config> [--merge-threshold] [--reject-below] [-n 50]` -- steward the borderline band via the existing `gatePairs`, recording approve/reject decisions to Learning Memory.
+
+### Design note
+- **The loops take an injectable `Ask` rather than reading stdin directly** (`src/node/interactive.ts`), so the decision logic is unit-testable by scripting a session. Python's equivalents call Rich prompts inline and therefore have no loop tests; this port deliberately does not reproduce that. 28 tests cover strategy ordering, y/n/s/q handling, mid-session quit preserving work, either-orientation `--append` dedup, 4dp score rounding, and two scripted end-to-end wizard sessions.
+- `review` persists **after** the loop, so a mid-session `q` still records what was already decided.
+- `toYaml` is hand-rolled rather than pulling the optional `yaml` peer dep, so `init` cannot fail on a missing optional dependency. It quotes values YAML would otherwise reinterpret (a column named `no` stays a string).
+
 ## [1.23.0] - 2026-07-24
 
 ### Added

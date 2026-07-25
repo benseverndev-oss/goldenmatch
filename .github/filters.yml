@@ -805,6 +805,12 @@ docs:
   - 'scripts/check_docs_consistency.py'
   - 'scripts/check_docs_links.py'
   - 'scripts/check_docs_sections.py'
+  # native.mdx pages are generated from these loaders (gen_native_docs.py --check,
+  # run by check_docs_consistency); a loader edit must re-run the docs gate.
+  - 'scripts/gen_native_docs.py'
+  - 'packages/python/goldenmatch/goldenmatch/core/_native_loader.py'
+  - 'packages/python/goldenflow/goldenflow/core/_native_loader.py'
+  - 'packages/python/infermap/infermap/_native_loader.py'
   - 'scripts/test_docs_sections.py'
   - 'scripts/check_benchmark_claims.py'
   - 'docs/benchmark-claims.json'

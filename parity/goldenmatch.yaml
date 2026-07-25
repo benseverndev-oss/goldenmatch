@@ -58,6 +58,7 @@ mcp_tools:
   - analyze_blocking
   - analyze_data
   - auto_configure
+  - build_clusters
   - certify_recall
   - compare_clusters
   - config_weaknesses
@@ -71,6 +72,8 @@ mcp_tools:
   - explain_pair
   - export_results
   - find_duplicates
+  - find_exact_matches
+  - find_fuzzy_matches
   - fix_quality
   - get_cluster
   - get_golden_record
@@ -109,19 +112,24 @@ mcp_tools:
   - pprl_link
   - profile
   - profile_data
+  - read_file
   - retrieve_similar
   - review_config
   - rollback
   - run_transforms
   - scan_quality
   - schema_match
+  - score_pair
+  - score_strings
   - sensitivity
+  - server_info
   - shatter_cluster
   - suggest_config
   - suggest_pprl
   - test_domain
   - unmerge_record
   - upload_dataset
+  - write_csv
   python_only:
   - documents_ingest
   - documents_suggest_schema
@@ -130,15 +138,7 @@ mcp_tools:
   - list_plugins
   - plan_routing
   - pprl_auto_config
-  ts_only:
-  - build_clusters
-  - find_exact_matches
-  - find_fuzzy_matches
-  - read_file
-  - score_pair
-  - score_strings
-  - server_info
-  - write_csv
+  ts_only: []
 cli_commands:
   shared:
   - agent-serve
@@ -155,15 +155,19 @@ cli_commands:
   - import-splink
   - incremental
   - info
+  - init
   - interactive
+  - label
   - lineage
   - match
   - mcp-serve
   - memory
   - pprl
   - profile
+  - review
   - rollback
   - runs
+  - schedule
   - score
   - sensitivity
   - serve
@@ -171,10 +175,6 @@ cli_commands:
   - unmerge
   python_only:
   - ingest-docs
-  - init
-  - label
-  - review
-  - schedule
   - serve-ui
   - setup
   - sync
@@ -273,8 +273,10 @@ scorers:
   - soundex_match
   - token_sort
   python_only:
-  # FS domain comparators (spec 2026-07-23-fs-domain-comparators), FS-path only.
-  # Native score-core kernels are Phase 3; TS parity port is Phase 4.
+  # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
+  # splink-domain-comparator-conversion), FS-path only. Kept sorted (parity gate).
+  # Set-overlap over delimited strings (Splink ArrayIntersect -> GM); kernel P5, TS P6.
+  - array_intersect
   # Magnitude-aware date comparator (day-distance bands).
   - date_diff
   # Great-circle (haversine) distance on a single combined "lat,long" field.
@@ -397,3 +399,4 @@ scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
+  array_intersect: "deferred -- native score-core kernel is P5 (spec 2026-07-25-splink-domain-comparator-conversion): set-overlap over delimited strings; pure-Python numpy per-pair path until the kernel lands, like soundex_match/date_diff before their kernels"

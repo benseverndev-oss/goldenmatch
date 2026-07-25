@@ -373,6 +373,57 @@ def _geo_haversine_similarity_py(val_a: str, val_b: str) -> float:
     return _geo_haversine_band(_haversine_km(pa, pb))
 
 
+# --- array_intersect: set-overlap comparator over delimited strings --------
+# Spec: docs/superpowers/specs/2026-07-25-splink-domain-comparator-conversion-design.md
+# Splink's ArrayIntersect compares two array-valued fields by intersection size.
+# The FS scoring path is string-only, so `array_intersect` operates on a
+# DELIMITED-STRING representation ("a|b|c"): split both sides into token SETS and
+# return a monotone set-overlap similarity in [0,1] --
+#   array_intersect          -> Jaccard  |A n B| / |A u B|          (default)
+#   array_intersect:jaccard  -> Jaccard  (explicit)
+#   array_intersect:overlap  -> overlap coefficient |A n B| / min(|A|,|B|)
+# Both are non-decreasing in the intersection size (monotone, so the level
+# machinery / isotonic weight enforcement stay well-behaved). Empty token set on
+# either side falls back to exact-string equality (never None for non-null input),
+# so the vectorized NxN loop (which calls the SAME scalar fn) equals the scalar
+# path by construction, mirroring date_diff / numeric_diff / geo_haversine.
+_ARRAY_INTERSECT_SEPARATORS = ("|", ";", ",")  # detection order (pipe preferred)
+
+
+def _parse_token_set(s: str | None) -> frozenset[str]:
+    """Split a delimited string into a set of stripped, non-empty tokens. The
+    first separator present (in `|`, `;`, `,` order) is used; a value with no
+    separator is a single-element set. Regex-free."""
+    if not s:
+        return frozenset()
+    sep = next((c for c in _ARRAY_INTERSECT_SEPARATORS if c in s), None)
+    if sep is None:
+        tok = s.strip()
+        return frozenset((tok,)) if tok else frozenset()
+    return frozenset(t.strip() for t in s.split(sep) if t.strip())
+
+
+def _parse_array_intersect_mode(scorer: str) -> str:
+    """``array_intersect[:jaccard|overlap]`` -> mode; bare / malformed -> jaccard."""
+    parts = scorer.split(":")
+    if len(parts) == 2 and parts[0] == "array_intersect" and parts[1] in ("jaccard", "overlap"):
+        return parts[1]
+    return "jaccard"
+
+
+def _array_intersect_similarity_py(val_a: str, val_b: str, scorer: str) -> float:
+    """Set-overlap similarity over delimited tokens; exact-string fallback when
+    either side has no tokens (so it never returns None for non-null input)."""
+    sa, sb = _parse_token_set(val_a), _parse_token_set(val_b)
+    if not sa or not sb:
+        return 1.0 if val_a == val_b else 0.0
+    inter = len(sa & sb)
+    if inter == 0:
+        return 0.0
+    denom = min(len(sa), len(sb)) if _parse_array_intersect_mode(scorer) == "overlap" else len(sa | sb)
+    return inter / denom
+
+
 def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | None:
     """Score two field values using the specified scorer.
 
@@ -391,6 +442,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _geo_haversine_similarity_py(val_a, val_b)
     elif scorer == "numeric_diff" or scorer.startswith("numeric_diff:"):
         return _numeric_diff_similarity_py(val_a, val_b, scorer)
+    elif scorer == "array_intersect" or scorer.startswith("array_intersect:"):
+        return _array_intersect_similarity_py(val_a, val_b, scorer)
     elif scorer == "jaro_winkler":
         return JaroWinkler.similarity(val_a, val_b)
     elif scorer == "levenshtein":
@@ -829,6 +882,17 @@ def _fuzzy_score_matrix(
         for i in range(n):
             for j in range(i + 1, n):
                 s = _numeric_diff_similarity_py(clean[i], clean[j], scorer_name)
+                matrix[i, j] = matrix[j, i] = s
+    elif scorer_name == "array_intersect" or scorer_name.startswith("array_intersect:"):
+        # Set-overlap comparator (spec 2026-07-25). Same O(n^2) shape as the
+        # other domain comparators -- delimited-set columns land in small
+        # same-key blocks, _field_score_matrix_dedup collapses distinct values,
+        # and calling the SAME scalar fn guarantees scalar == vectorized parity.
+        n = len(clean)
+        matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                s = _array_intersect_similarity_py(clean[i], clean[j], scorer_name)
                 matrix[i, j] = matrix[j, i] = s
     elif scorer_name == "initialism_match":
         return _initialism_score_matrix(values)

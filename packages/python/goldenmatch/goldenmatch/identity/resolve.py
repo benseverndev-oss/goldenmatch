@@ -41,11 +41,52 @@ from goldenmatch.identity.model import (
     IdentityNode,
     IdentityStatus,
     SourceRecord,
-    canon_record_pair,
 )
 from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 log = logging.getLogger("goldenmatch.identity.resolve")
+
+# `emit_singletons=True` turns every input row into an identity, so the SQLite
+# resolve prep + write path scales with the whole input frame rather than with
+# the multi-record identity graph. On the row-at-a-time SQLite backend that
+# becomes impractical in the low millions (measured: 250k rows already slow;
+# `emit_singletons=False` does 1M in ~6 min). Warn once, advisory only, so a
+# large single-node SQLite run gets pointed at the two real levers
+# (`emit_singletons=false` / Postgres) instead of silently degrading.
+_SINGLETON_SQLITE_ROW_CEILING = 100_000
+_singleton_ceiling_warned = False
+
+
+def _maybe_warn_singleton_sqlite_ceiling(store: IdentityStore, n_rows: int) -> None:
+    """One-time, downgrade-safe advisory for the SQLite emit_singletons ceiling.
+
+    Fires at most once per process, only when ``emit_singletons=True`` on a
+    SQLite store over ``>= _SINGLETON_SQLITE_ROW_CEILING`` rows. Anything
+    unexpected (missing attribute, weird backend value) is swallowed -- this is
+    guidance, never a gate, and must not perturb a resolve that would otherwise
+    succeed.
+    """
+    global _singleton_ceiling_warned
+    if _singleton_ceiling_warned:
+        return
+    try:
+        if getattr(store, "_backend", None) != "sqlite":
+            return
+        if n_rows < _SINGLETON_SQLITE_ROW_CEILING:
+            return
+        _singleton_ceiling_warned = True
+        log.warning(
+            "identity resolve: emit_singletons=True on the SQLite backend over "
+            "%d rows turns every row into an identity, so resolve scales with "
+            "the input frame and becomes impractical in the low millions "
+            "(~%d rows is the practical ceiling). Set identity.emit_singletons="
+            "false unless you need a durable id for records that matched "
+            "nothing, or switch to backend=postgres for a bulk COPY write path.",
+            n_rows,
+            _SINGLETON_SQLITE_ROW_CEILING,
+        )
+    except Exception:  # pragma: no cover - advisory must never raise
+        pass
 
 
 @dataclass
@@ -271,6 +312,32 @@ def _frames_iter(
     return rows
 
 
+def _referenced_row_ids(cluster_items: Any, emit_singletons: bool) -> set[int]:
+    """Row ids the resolution body can actually read.
+
+    Everything downstream of the prep -- record ids, the payload rollup, the
+    evidence-edge endpoints, the bottleneck pair -- is reached through a
+    cluster's ``members``. Pair-score endpoints are guaranteed to be members
+    too: ``ClusterPairScores`` only keeps a pair when BOTH endpoints map to the
+    same cluster, and the legacy dict path stores within-cluster pairs. So a row
+    no surviving cluster lists is never looked up, and prepping it is pure cost.
+
+    Mirrors the loop's own skip rules (empty members, and singletons when
+    ``emit_singletons`` is False) so the bound can never drop a row the loop
+    would have used.
+    """
+    needed: set[int] = set()
+    for _cluster_id, info in cluster_items:
+        members = info.get("members") or []
+        if not members:
+            continue
+        if len(members) == 1 and not emit_singletons:
+            continue
+        for member in members:
+            needed.add(int(member))
+    return needed
+
+
 def resolve_clusters(
     clusters: dict[int, dict] | None = None,
     df: Any = None,  # pl.DataFrame | pa.Table (A5: dual-rep dedupe path)
@@ -320,8 +387,12 @@ def resolve_clusters(
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
 
-    if _tf_a5e(df).height == 0:
+    _n_input_rows = _tf_a5e(df).height
+    if _n_input_rows == 0:
         return summary
+
+    if emit_singletons:
+        _maybe_warn_singleton_sqlite_ceiling(store, _n_input_rows)
 
     # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
     # For the dict path this is ``clusters.items()`` (insertion order = build's
@@ -344,6 +415,21 @@ def resolve_clusters(
     from goldenmatch.core.frame import to_frame as _tf_a5
 
     _fa5 = _tf_a5(df)
+
+    # Bound the prep to rows a surviving cluster actually references (#2105).
+    # The block below turns every row it sees into ~2.5 KB of Python heap (row
+    # dict + payload dict + hash + source + pk + record-id candidates). Run over
+    # a whole 14M-row frame that is ~35 GB on top of the pipeline's own resident
+    # set -- enough to OOM a 64 GB box -- and with ``emit_singletons=False`` the
+    # overwhelming majority of those rows are never read again (the reported run
+    # had 107,723 records across 1M rows, ~11%). Filtering first makes the prep
+    # scale with the identity graph rather than with the input frame.
+    # ``emit_singletons=True`` legitimately needs every row and degenerates to
+    # the old behaviour.
+    if "__row_id__" in _fa5.columns:
+        _needed = _referenced_row_ids(cluster_items, emit_singletons)
+        if len(_needed) < _fa5.height:
+            _fa5 = _fa5.filter_in("__row_id__", sorted(_needed))
     rows = _fa5.select_dicts(list(_fa5.columns))
     rowid_to_recid: dict[int, str] = {}
     rowid_to_payload: dict[int, dict[str, Any]] = {}
@@ -356,16 +442,19 @@ def resolve_clusters(
     # Optional batch fingerprinting (GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT=1):
     # compute every no-PK row's h1 hash once via the Arrow batch kernel instead
     # of per-row inside the loop. ``batch_fingerprints`` returns FULL 64-char
-    # hashes positionally aligned to ``df`` rows (None = un-fingerprintable),
-    # so it MUST run on the full df (not a sub-frame) to stay aligned with
-    # ``enumerate(rows)``. Only NO-PK rows get a precomputed hash -- the
-    # PK-detection here mirrors ``_record_id_candidates`` exactly, so a PK row
-    # never receives one (it would be ignored anyway) and a no-PK row always
-    # does. Gate off -> ``h1_by_rowid`` empty -> every row falls to _NOT_BATCHED
-    # -> byte-identical to the per-row path.
+    # hashes positionally aligned to its input's rows (None = un-fingerprintable),
+    # so it MUST run on the SAME frame ``rows`` came from -- i.e. the bounded
+    # ``_fa5``, not the caller's ``df`` -- to stay aligned with
+    # ``enumerate(rows)``. Each row's hash covers only that row's own values, so
+    # restricting the frame changes which hashes are computed, never their
+    # values. Only NO-PK rows get a precomputed hash -- the PK-detection here
+    # mirrors ``_record_id_candidates`` exactly, so a PK row never receives one
+    # (it would be ignored anyway) and a no-PK row always does. Gate off ->
+    # ``h1_by_rowid`` empty -> every row falls to _NOT_BATCHED -> byte-identical
+    # to the per-row path.
     h1_by_rowid: dict[int, str | None] = {}
-    if _batch_fingerprint_enabled():
-        h1_list = batch_fingerprints(df)
+    if _batch_fingerprint_enabled() and rows:
+        h1_list = batch_fingerprints(_fa5.native)
         for i, row in enumerate(rows):
             rid = row.get("__row_id__")
             if rid is None:
@@ -415,14 +504,16 @@ def resolve_clusters(
         if chosen in _existing_by_id:
             preflight_existing[chosen] = _existing_by_id[chosen]
 
-    # 2. Scored pair lookup canonicalized by record_id pair.
-    pair_score_by_recpair: dict[tuple[str, str], float] = {}
-    for a, b, s in scored_pairs:
-        ra = rowid_to_recid.get(int(a))
-        rb = rowid_to_recid.get(int(b))
-        if not ra or not rb:
-            continue
-        pair_score_by_recpair[canon_record_pair(ra, rb)] = float(s)
+    # 2. ``scored_pairs`` is accepted for call-signature compatibility but is
+    # NOT read: evidence edges come from the per-cluster ``pair_scores`` /
+    # ``pair_score_view``, which the cluster build already restricted to
+    # within-cluster pairs. It used to be folded into a
+    # ``{(record_a, record_b): score}`` dict that nothing ever looked up --
+    # ~1.2 s and ~102 bytes per million pairs, over the FULL scored set, on
+    # every resolve (#2105). The pipeline passes the complete pre-cluster pair
+    # stream here, which on wide-block data is far larger than the edge set, so
+    # dropping the dict removes a cost that tracked candidate-pair growth rather
+    # than identity count.
 
     # Bulk-path eligibility: postgres-only, no overlap with existing
     # identities, no weak-conflict edges (the conflict path mutates per

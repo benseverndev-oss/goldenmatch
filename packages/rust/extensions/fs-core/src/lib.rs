@@ -370,6 +370,15 @@ pub struct FsPairParams<'a> {
     /// (emit at the neutral point). No-op under `calibrated` (the posterior folds
     /// the prior into the log-odds + uses a 0.99 Bayes cut).
     pub require_positive_evidence: bool,
+    /// Missing-value semantics (#1846). `false` = "unobserved" (the default): a
+    /// null on EITHER side of a field contributes NO evidence (skipped). `true` =
+    /// "disagree": a null-pair field is forced to comparison level 0 (evidence
+    /// AGAINST a match) and counts as OBSERVED — the pre-#1834 semantics
+    /// auto-config selects per-dataset for null-heavy data (e.g. historical_50k),
+    /// mirroring `score_probabilistic_vectorized`'s `_missing_mode == "disagree"`
+    /// (`lvl = where(observed, lvl, 0); observed = all True`). Lets the native
+    /// kernel serve the disagree path instead of declining to numpy.
+    pub missing_disagree: bool,
 }
 
 /// Dot product of two equal-length f64 slices — the cosine of two L2-normalized
@@ -618,6 +627,14 @@ where
                     }
                 }
             }
+        } else if p.missing_disagree {
+            // #1846 "disagree": a null on either side is evidence AGAINST — the
+            // field is forced to level 0 and counts as observed, exactly as the
+            // numpy `_missing_mode == "disagree"` path (`lvl = where(observed,
+            // lvl, 0); observed = all True`). No sim/TF compute (there is no
+            // value pair); just add the level-0 weight.
+            has_regular_evidence = true;
+            total_weight += p.match_weights[f][0];
         }
     }
     // Negative evidence: exact `_ne_fired` semantics — fires iff both values are
@@ -713,6 +730,7 @@ mod tests {
             emb_vectors: &[],
             emb_dims: &[],
             require_positive_evidence: false,
+            missing_disagree: false,
         };
         let rows = [["alice", "smith"], ["alice", "jones"], ["bob", "brown"]];
         let get = |f: usize, r: usize| Some(rows[r][f]);
@@ -768,6 +786,7 @@ mod tests {
             emb_vectors: &[],
             emb_dims: &[],
             require_positive_evidence: false,
+            missing_disagree: false,
         };
         // field 1 is null for row 1 -> only field 0 observed and agrees (+3.0).
         // Full range is [min_weight=-4, max=6]; normalized = (3-(-4))/(6-(-4)) =
@@ -835,6 +854,7 @@ mod tests {
             emb_vectors: &[],
             emb_dims: &[],
             require_positive_evidence: false,
+            missing_disagree: false,
         };
         let rows = ["William", "Bill"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -856,6 +876,70 @@ mod tests {
             (s_no - 0.0).abs() < 1e-12,
             "no alias table -> plain JW disagreement = 0.0, got {s_no}"
         );
+    }
+
+    #[test]
+    fn score_fs_pair_missing_disagree_adds_level0_weight() {
+        // Two jaro_winkler fields, 2 levels each. Row 0 observes both; row 1's
+        // second field is NULL. Field weights [disagree, agree]: f0=[-3, 5],
+        // f1=[-4, 6]. Full range: min=-7, max=11 -> weight_range=18, base_*=0.
+        let mw = vec![vec![-3.0_f64, 5.0], vec![-4.0_f64, 6.0]];
+        let field_mins = [-3.0_f64, -4.0];
+        let field_maxs = [5.0_f64, 6.0];
+        let regular_min: f64 = field_mins.iter().sum(); // -7
+        let regular_max: f64 = field_maxs.iter().sum(); // 11
+        let (min_weight, weight_range) = (regular_min, regular_max - regular_min);
+        let base = FsPairParams {
+            scorer_ids: &[0, 0],
+            levels: &[2, 2],
+            partial_thresholds: &[0.9, 0.9],
+            field_thresholds: &[None, None],
+            match_weights: &mw,
+            field_mins: &field_mins,
+            field_maxs: &field_maxs,
+            base_min: min_weight - regular_min, // 0
+            base_max: min_weight + weight_range - regular_max, // 0
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: false,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
+            tf_tables: &[],
+            emb_vectors: &[],
+            emb_dims: &[],
+            require_positive_evidence: false,
+            missing_disagree: false,
+        };
+        // f0 exact-agree (level 1 -> +5). Row 1's f1 is null.
+        let get = |f: usize, r: usize| -> Option<&str> {
+            match (f, r) {
+                (0, _) => Some("Smith"),
+                (1, 0) => Some("Alpha"),
+                (1, 1) => None, // null on the second field
+                _ => None,
+            }
+        };
+        let noop_ne = |_: usize, _: usize| None;
+
+        // Unobserved: the null field contributes NO evidence. total = +5.
+        // normalized = (5 - (-7)) / 18 = 12/18.
+        let s_unobs = score_fs_pair(0, 1, &base, get, noop_ne);
+        assert!(
+            (s_unobs - (12.0 / 18.0)).abs() < 1e-12,
+            "unobserved: null field skipped, got {s_unobs}"
+        );
+
+        // Disagree: the null field is forced to level 0 (-4) and counts observed.
+        // total = 5 + (-4) = 1. normalized = (1 - (-7)) / 18 = 8/18.
+        let p_dis = FsPairParams { missing_disagree: true, ..base };
+        let s_dis = score_fs_pair(0, 1, &p_dis, get, noop_ne);
+        assert!(
+            (s_dis - (8.0 / 18.0)).abs() < 1e-12,
+            "disagree: null field adds level-0 weight, got {s_dis}"
+        );
+        assert!(s_dis < s_unobs, "disagree must penalize the missing field");
     }
 
     #[test]
@@ -947,6 +1031,7 @@ mod tests {
             emb_vectors: &[],
             emb_dims: &[],
             require_positive_evidence: false,
+            missing_disagree: false,
         };
         let rows = ["Robert", "Rupert"];
         let get = |_f: usize, r: usize| Some(rows[r]);
@@ -995,6 +1080,7 @@ mod tests {
             emb_vectors: &emb_vectors,
             emb_dims: &emb_dims,
             require_positive_evidence: false,
+            missing_disagree: false,
         };
         // All rows present (non-null) — a synthetic never-null value column.
         let rows = ["x", "x", "x"];
@@ -1079,6 +1165,7 @@ mod tests {
             emb_vectors: &[],
             emb_dims: &[],
             require_positive_evidence: false,
+            missing_disagree: false,
         };
         let rows = ["smith", "smith", "rare", "rare", "jones"];
         let get = |_f: usize, r: usize| Some(rows[r]);
