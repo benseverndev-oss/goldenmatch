@@ -413,6 +413,8 @@ _Identity Graph configuration._
 | `type` | Literal \| None | `None` | `exact`, `weighted`, `probabilistic` -- Workbench hint for which matchkey kind to wrap this field in when translating a flat field list. |
 | `em_iterations` | int \| None | `None` | Per-field cap on EM training iterations for a probabilistic comparison. |
 | `level_thresholds` | list[float] \| None | `None` | Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries. |
+| `derive_from` | list[str] \| None | `None` | Source columns joined with derive_separator to synthesize the compared field when it is not present in the raw frame. |
+| `derive_separator` | str | `' '` | Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long). |
 
 ### `NegativeEvidenceField`
 _v1.11: a field whose disagreement subtracts from a weighted matchkey's_

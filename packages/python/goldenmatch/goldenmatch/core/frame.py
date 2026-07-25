@@ -208,7 +208,7 @@ class Frame(Protocol):
     def derive_matchkey(
         self, fields_with_chains: Sequence[tuple[str, Sequence[str]]], sep: str = "||"
     ) -> Column: ...
-    def derive_ne_joined(self, fields: Sequence[str]) -> Column: ...
+    def derive_ne_joined(self, fields: Sequence[str], separator: str = " ") -> Column: ...
     # W4a tail/distributed ops (fixtures: tests/test_frame_w4_ops.py). Probed
     # semantics: filter_in DROPS null rows on both backends (polars null mask,
     # pc.is_in False); with_pair_canonical min/max_horizontal SKIP nulls;
@@ -721,9 +721,11 @@ class PolarsFrame:
         out = field_exprs[0] if len(field_exprs) == 1 else pl.concat_str(field_exprs, separator=sep)
         return PolarsColumn(self._df.select(out.alias("__mk__"))["__mk__"])
 
-    def derive_ne_joined(self, fields: Sequence[str]) -> PolarsColumn:
+    def derive_ne_joined(self, fields: Sequence[str], separator: str = " ") -> PolarsColumn:
         # precompute_matchkey_transforms' derived-NE join (matchkey.py:381-386).
-        expr = pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("") for c in fields], separator=" ")
+        expr = pl.concat_str(
+            [pl.col(c).cast(pl.Utf8).fill_null("") for c in fields], separator=separator
+        )
         return PolarsColumn(self._df.select(expr.alias("__ne__"))["__ne__"])
 
     # -- W4a tail/distributed ops --------------------------------------------
@@ -1546,10 +1548,14 @@ class ArrowFrame:
         pairs = [(self._tbl.column(f), list(t)) for f, t in fields_with_chains]
         return ArrowColumn(arrow_derive.matchkey_composite(pairs, sep=sep))
 
-    def derive_ne_joined(self, fields: Sequence[str]) -> ArrowColumn:
+    def derive_ne_joined(self, fields: Sequence[str], separator: str = " ") -> ArrowColumn:
         from goldenmatch.core import arrow_derive
 
-        return ArrowColumn(arrow_derive.ne_joined_column([self._tbl.column(f) for f in fields]))
+        return ArrowColumn(
+            arrow_derive.ne_joined_column(
+                [self._tbl.column(f) for f in fields], separator=separator
+            )
+        )
 
     # -- W4a tail/distributed ops --------------------------------------------
 
