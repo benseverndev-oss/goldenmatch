@@ -41,6 +41,7 @@ from goldenmatch.identity.model import (
     IdentityNode,
     IdentityStatus,
     SourceRecord,
+    canon_record_pair,
 )
 from goldenmatch.identity.store import IdentityStore, new_entity_id
 
@@ -55,6 +56,37 @@ log = logging.getLogger("goldenmatch.identity.resolve")
 # (`emit_singletons=false` / Postgres) instead of silently degrading.
 _SINGLETON_SQLITE_ROW_CEILING = 100_000
 _singleton_ceiling_warned = False
+
+
+def _bulk_fast_path_enabled() -> bool:
+    """Kill-switch for the bulk fast-path (SQL backends only anyway).
+
+    ``GOLDENMATCH_IDENTITY_BULK=0`` routes every cluster through the per-row
+    ``upsert_*`` loop instead of the staging / COPY batch write. Default on. The
+    row path is the reference implementation the bulk path is parity-tested
+    against, so this doubles as the switch that exposes it."""
+    return os.environ.get("GOLDENMATCH_IDENTITY_BULK", "1").strip() != "0"
+
+
+def _bulk_flush_rows() -> int:
+    """Source-record rows accumulated before the bulk fast-path flushes.
+
+    The bulk fast-path accumulates brand-new clusters' node / record / edge /
+    event rows in Python lists, then materializes each as a frame and writes it
+    in one batch. Left unbounded that accumulation is O(N) -- the very
+    frame-residency floor the identity-store spikes measured (~22 GB of staged
+    Python rows at 5M). Flushing every ``_bulk_flush_rows`` records caps the
+    accumulator (and the per-flush frame) at O(batch) so the write side never
+    stacks a second O(N) term on the prep. Default 250k keeps small / medium
+    resolves to a single flush (unchanged behaviour, incl. the Postgres COPY
+    bench) while bounding the millions-of-rows case;
+    ``GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS`` overrides."""
+    raw = os.environ.get("GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS", "250000")
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return 250_000
+    return n if n > 0 else 250_000
 
 
 def _maybe_warn_singleton_sqlite_ceiling(store: IdentityStore, n_rows: int) -> None:
@@ -77,11 +109,13 @@ def _maybe_warn_singleton_sqlite_ceiling(store: IdentityStore, n_rows: int) -> N
         _singleton_ceiling_warned = True
         log.warning(
             "identity resolve: emit_singletons=True on the SQLite backend over "
-            "%d rows turns every row into an identity, so resolve scales with "
-            "the input frame and becomes impractical in the low millions "
-            "(~%d rows is the practical ceiling). Set identity.emit_singletons="
-            "false unless you need a durable id for records that matched "
-            "nothing, or switch to backend=postgres for a bulk COPY write path.",
+            "%d rows turns every row into an identity. The write path now uses "
+            "a bounded-batch bulk staging write, but resolve prep still "
+            "materializes every referenced row, so peak memory scales with the "
+            "input frame and stays impractical in the low millions (~%d rows is "
+            "the practical ceiling). Set identity.emit_singletons=false unless "
+            "you need a durable id for records that matched nothing, or switch "
+            "to backend=postgres for the bulk COPY write path.",
             n_rows,
             _SINGLETON_SQLITE_ROW_CEILING,
         )
@@ -515,17 +549,32 @@ def resolve_clusters(
     # dropping the dict removes a cost that tracked candidate-pair growth rather
     # than identity count.
 
-    # Bulk-path eligibility: postgres-only, no overlap with existing
-    # identities, no weak-conflict edges (the conflict path mutates per
-    # cluster and is rare anyway). Anything ineligible falls through to
-    # the slow per-row loop, which preserves correctness for the
+    # Bulk-path eligibility: SQL backends (postgres COPY / SQLite staging), no
+    # overlap with existing identities, no weak-conflict edges (the conflict
+    # path mutates per cluster and is rare anyway). Anything ineligible falls
+    # through to the slow per-row loop, which preserves correctness for the
     # absorb / merge / conflict-detection branches.
-    use_bulk_fast_path = getattr(store, "_backend", None) == "postgres"
+    #
+    # SQLite (#2105 follow-up): brand-new clusters now go through a staging
+    # table + executemany + INSERT..SELECT..ON CONFLICT bulk write instead of
+    # ~6 statements per cluster. The accumulators are flushed in bounded batches
+    # (``_bulk_flush_rows``) so the write side stays O(batch), not O(N) -- it
+    # does not add a second frame-residency term on top of the prep floor that
+    # ``emit_singletons=True`` already carries. The SQLite bulk path carries
+    # source-record + event payloads (byte-identical to the per-row path); only
+    # the edge provenance columns the Postgres COPY path already omits are left
+    # NULL.
+    _bulk_backend = getattr(store, "_backend", None)
+    use_bulk_fast_path = (
+        _bulk_backend in ("postgres", "sqlite") and _bulk_fast_path_enabled()
+    )
+    bulk_flush_threshold = _bulk_flush_rows()
     bulk_node_rows: list[dict[str, Any]] = []
     bulk_record_rows: list[dict[str, Any]] = []
     bulk_edge_rows: list[dict[str, Any]] = []
     bulk_event_rows: list[dict[str, Any]] = []
     bulk_cluster_ids: set = set()
+    bulk_totals = {"clusters": 0, "nodes": 0, "records": 0, "edges": 0, "events": 0}
 
     # Pre-flight the existing identity NODES in one batched read (#1912) so the
     # per-record absorb / merge branches read status/created_at from a dict
@@ -546,6 +595,101 @@ def resolve_clusters(
 
     def _add_edge(e: EvidenceEdge) -> None:
         store.add_edge(e, return_id=False)
+
+    def _flush_bulk() -> None:
+        """Write the currently-accumulated bulk fast-path rows in one batch each
+        (identities -> records -> edges -> events, so the source_records FK is
+        satisfied), checkpoint the SQLite WAL, then clear the accumulators. Both
+        the mid-loop batch flush and the final flush call this; the accumulators
+        are cleared in place so the caller's lists keep filling for the next
+        batch."""
+        if not bulk_node_rows:
+            return
+        from goldenmatch.core.frame import frame_from_rows  # noqa: PLC0415
+
+        # W4b: seam constructor (datetime_us == bare pl.Datetime). The store
+        # write contract stays polars-typed until W5.
+        nodes_df = frame_from_rows(
+            bulk_node_rows,
+            {
+                "entity_id": "utf8",
+                "status": "utf8",
+                "merged_into": "utf8",
+                "golden_record": "utf8",
+                "confidence": "float64",
+                "dataset": "utf8",
+                "created_at": "datetime_us",
+                "updated_at": "datetime_us",
+            },
+            backend="polars",
+        ).native
+        store.bulk_upsert_identities(nodes_df)
+        if bulk_record_rows:
+            records_df = frame_from_rows(
+                bulk_record_rows,
+                {
+                    "record_id": "utf8",
+                    "source": "utf8",
+                    "source_pk": "utf8",
+                    "record_hash": "utf8",
+                    "entity_id": "utf8",
+                    "payload": "utf8",
+                    "dataset": "utf8",
+                    "first_seen_at": "datetime_us",
+                    "last_seen_at": "datetime_us",
+                },
+                backend="polars",
+            ).native
+            store.bulk_upsert_records(records_df)
+        if bulk_edge_rows:
+            edges_df = frame_from_rows(
+                bulk_edge_rows,
+                {
+                    "entity_id": "utf8",
+                    "record_a_id": "utf8",
+                    "record_b_id": "utf8",
+                    "kind": "utf8",
+                    "score": "float64",
+                    "matchkey_name": "utf8",
+                    "controller_snapshot": "utf8",
+                    "run_name": "utf8",
+                    "dataset": "utf8",
+                    "actor": "utf8",
+                    "trust": "float64",
+                    "recorded_at": "datetime_us",
+                },
+                backend="polars",
+            ).native
+            store.bulk_add_edges(edges_df)
+        if bulk_event_rows:
+            events_df = frame_from_rows(
+                bulk_event_rows,
+                {
+                    "entity_id": "utf8",
+                    "kind": "utf8",
+                    "payload": "utf8",
+                    "run_name": "utf8",
+                    "dataset": "utf8",
+                    "actor": "utf8",
+                    "trust": "float64",
+                    "recorded_at": "datetime_us",
+                },
+                backend="polars",
+            ).native
+            store.bulk_emit_events(events_df)
+        # Bound the SQLite WAL across many flushes in one resolve (no-op on
+        # Postgres / outside a batch transaction).
+        store.bulk_flush_checkpoint()
+        bulk_totals["clusters"] += len(bulk_cluster_ids)
+        bulk_totals["nodes"] += len(bulk_node_rows)
+        bulk_totals["records"] += len(bulk_record_rows)
+        bulk_totals["edges"] += len(bulk_edge_rows)
+        bulk_totals["events"] += len(bulk_event_rows)
+        bulk_cluster_ids.clear()
+        bulk_node_rows.clear()
+        bulk_record_rows.clear()
+        bulk_edge_rows.clear()
+        bulk_event_rows.clear()
 
     with store.bulk_writes():
         with store.write_pipeline():
@@ -602,12 +746,20 @@ def resolve_clusters(
                         rid = rowid_to_recid.get(member)
                         if rid is None:
                             continue
+                        payload = rowid_to_payload[member]
                         bulk_record_rows.append({
                             "record_id": rid,
                             "source": rowid_to_source[member],
                             "source_pk": rowid_to_pk[member],
                             "record_hash": rowid_to_hash[member],
                             "entity_id": entity_id,
+                            # Carry the payload so the SQLite bulk path is
+                            # byte-identical to the per-row upsert_record (which
+                            # stores json.dumps(payload)). Postgres selects its
+                            # own leaner column list and ignores this.
+                            "payload": (
+                                json.dumps(payload) if payload is not None else None
+                            ),
                             "dataset": dataset,
                             "first_seen_at": now,
                             "last_seen_at": now,
@@ -627,6 +779,10 @@ def resolve_clusters(
                         rb = rowid_to_recid.get(int(b))
                         if not ra or not rb:
                             continue
+                        # Canonicalize by record_id -- the per-row add_edge does
+                        # (canon_record_pair), so the stored (a, b) ordering
+                        # must match for the bulk path to be parity-identical.
+                        ra, rb = canon_record_pair(ra, rb)
                         bulk_edge_rows.append({
                             "entity_id": entity_id,
                             "record_a_id": ra,
@@ -634,21 +790,47 @@ def resolve_clusters(
                             "kind": EdgeKind.SAME_AS.value,
                             "score": float(score),
                             "matchkey_name": matchkey_name,
+                            # Edge provenance the per-row add_edge records
+                            # (controller_snapshot / actor / trust). SQLite users
+                            # have contract tests asserting these on edges, so the
+                            # bulk path must carry them; Postgres selects its own
+                            # leaner column list and ignores them.
+                            "controller_snapshot": (
+                                json.dumps(controller_snapshot)
+                                if controller_snapshot else None
+                            ),
                             "run_name": run_name,
                             "dataset": dataset,
+                            "actor": actor,
+                            "trust": float(score),
                             "recorded_at": now,
                         })
                         summary.edges_added += 1
                     bulk_event_rows.append({
                         "entity_id": entity_id,
                         "kind": EventKind.CREATED.value,
+                        # payload / actor / trust mirror the per-row CREATED
+                        # event so the SQLite bulk path is byte-identical (the
+                        # payload is in the parity surface; actor / trust are the
+                        # audit spine). Postgres ignores these extra columns.
+                        "payload": json.dumps({
+                            "cluster_id": cluster_id,
+                            "member_count": size,
+                            "record_ids": record_ids,
+                        }),
                         "run_name": run_name,
                         "dataset": dataset,
+                        "actor": actor,
+                        "trust": cluster_conf_check,
                         "recorded_at": now,
                     })
                     summary.events_emitted += 1
                     summary.created += 1
                     bulk_cluster_ids.add(cluster_id)
+                    # Flush at a cluster boundary once the accumulator reaches the
+                    # batch bound -- keeps the write side O(batch), not O(N).
+                    if len(bulk_record_rows) >= bulk_flush_threshold:
+                        _flush_bulk()
                     continue
 
 
@@ -891,81 +1073,20 @@ def resolve_clusters(
                             ))
                             summary.conflicts_flagged += 1
 
-        # 3z. Flush bulk-fast-path accumulators in one COPY each. Order
-        # matters: identities first (so the source_records FK is valid),
-        # then records, then edges, then events.
-        if use_bulk_fast_path and bulk_node_rows:
-            from goldenmatch.core.frame import frame_from_rows
-
-            # W4b: seam constructor (datetime_us == bare pl.Datetime). The store
-            # COPY contract stays polars-typed until W5.
-            nodes_df = frame_from_rows(
-                bulk_node_rows,
-                {
-                    "entity_id": "utf8",
-                    "status": "utf8",
-                    "merged_into": "utf8",
-                    "golden_record": "utf8",
-                    "confidence": "float64",
-                    "dataset": "utf8",
-                    "created_at": "datetime_us",
-                    "updated_at": "datetime_us",
-                },
-                backend="polars",
-            ).native
-            store.bulk_upsert_identities(nodes_df)
-            if bulk_record_rows:
-                records_df = frame_from_rows(
-                    bulk_record_rows,
-                    {
-                        "record_id": "utf8",
-                        "source": "utf8",
-                        "source_pk": "utf8",
-                        "record_hash": "utf8",
-                        "entity_id": "utf8",
-                        "dataset": "utf8",
-                        "first_seen_at": "datetime_us",
-                        "last_seen_at": "datetime_us",
-                    },
-                    backend="polars",
-                ).native
-                store.bulk_upsert_records(records_df)
-            if bulk_edge_rows:
-                edges_df = frame_from_rows(
-                    bulk_edge_rows,
-                    {
-                        "entity_id": "utf8",
-                        "record_a_id": "utf8",
-                        "record_b_id": "utf8",
-                        "kind": "utf8",
-                        "score": "float64",
-                        "matchkey_name": "utf8",
-                        "run_name": "utf8",
-                        "dataset": "utf8",
-                        "recorded_at": "datetime_us",
-                    },
-                    backend="polars",
-                ).native
-                store.bulk_add_edges(edges_df)
-            if bulk_event_rows:
-                events_df = frame_from_rows(
-                    bulk_event_rows,
-                    {
-                        "entity_id": "utf8",
-                        "kind": "utf8",
-                        "run_name": "utf8",
-                        "dataset": "utf8",
-                        "recorded_at": "datetime_us",
-                    },
-                    backend="polars",
-                ).native
-                store.bulk_emit_events(events_df)
-            log.info(
-                "resolve_clusters bulk fast-path: %d clusters / %d nodes / "
-                "%d records / %d edges / %d events flushed in 4 COPY batches",
-                len(bulk_cluster_ids), len(bulk_node_rows), len(bulk_record_rows),
-                len(bulk_edge_rows), len(bulk_event_rows),
-            )
+        # 3z. Flush the final (partial) bulk-fast-path batch. Mid-loop batches
+        # were already flushed at their cluster boundaries; this drains the
+        # remainder. Order inside ``_flush_bulk`` puts identities first so the
+        # source_records FK is valid.
+        if use_bulk_fast_path:
+            _flush_bulk()
+            if bulk_totals["nodes"]:
+                log.info(
+                    "resolve_clusters bulk fast-path (%s): %d clusters / "
+                    "%d nodes / %d records / %d edges / %d events",
+                    _bulk_backend, bulk_totals["clusters"], bulk_totals["nodes"],
+                    bulk_totals["records"], bulk_totals["edges"],
+                    bulk_totals["events"],
+                )
 
     # 4. Split detection: records that previously had an entity_id but did
     # NOT appear in any cluster this run should not be retired here -- they

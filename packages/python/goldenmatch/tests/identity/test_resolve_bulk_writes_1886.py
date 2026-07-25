@@ -99,6 +99,10 @@ class _TxnRecordingStore:
     def bulk_emit_events(self, df):
         self.events.append("bulk_emit_events")
 
+    def bulk_flush_checkpoint(self):
+        # No-op on the fake; the real store commit-reopens the SQLite batch txn.
+        pass
+
     def close(self):
         pass
 

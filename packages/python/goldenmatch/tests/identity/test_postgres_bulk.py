@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime  # noqa: F401  -- datetime used by tests below
-from pathlib import Path
 
 import pytest
 
@@ -74,17 +73,6 @@ def test_bulk_upsert_identities_inserts_then_conflict_updates(pg_url: str) -> No
     node = store.get_identity("e2")
     assert node is not None
     assert node.status == "retired"
-    store.close()
-
-
-def test_bulk_upsert_identities_raises_on_sqlite(tmp_path: Path) -> None:
-    import polars as pl
-    from goldenmatch.identity.store import IdentityStore
-
-    store = IdentityStore(backend="sqlite", path=str(tmp_path / "id.db"))
-    df = pl.DataFrame({"entity_id": ["e1"]})
-    with pytest.raises(NotImplementedError, match="bulk_upsert_identities"):
-        store.bulk_upsert_identities(df)
     store.close()
 
 

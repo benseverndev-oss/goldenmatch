@@ -607,11 +607,85 @@ class IdentityStore:
         else:
             yield
 
+    def _sqlite_stage(self, stage: str, cols: list[str], df: Any) -> None:
+        """Load ``df[cols]`` into a per-connection TEMP staging table, replacing
+        any prior contents. The staging table is reused across flushes
+        (``CREATE ... IF NOT EXISTS`` + ``DELETE FROM``) so a batched resolve
+        does not pay repeated DDL. Datetime cells are isoformatted so the
+        staged rows are byte-identical to what the per-row ``upsert_*`` path
+        writes (which stores ``.isoformat()`` strings). Runs inside whatever
+        transaction ``bulk_writes`` opened."""
+        import polars as pl  # noqa: PLC0415
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            df = df.with_columns([pl.lit(None).alias(c) for c in missing])
+        collist = ", ".join(cols)
+        conn = self._conn
+        conn.execute(f"CREATE TEMP TABLE IF NOT EXISTS {stage} ({collist})")
+        conn.execute(f"DELETE FROM {stage}")
+        placeholders = ", ".join("?" * len(cols))
+        conn.executemany(
+            f"INSERT INTO {stage} ({collist}) VALUES ({placeholders})",
+            (
+                tuple(
+                    v.isoformat() if isinstance(v, datetime) else v for v in row
+                )
+                for row in df.select(cols).iter_rows()
+            ),
+        )
+
+    def bulk_flush_checkpoint(self) -> None:
+        """Commit-and-reopen the current SQLite batch transaction so the WAL
+        cannot grow without bound across the many bulk flushes of one
+        multi-million-row resolve. No-op unless SQLite inside an open
+        ``bulk_writes`` transaction -- mirrors the per-statement chunk commit in
+        ``_exec`` for the bulk (COPY-equivalent) path. TEMP staging tables
+        survive the commit (they live for the connection, not the transaction),
+        so the next flush reuses them."""
+        if self._backend != "sqlite":
+            return
+        if self._sqlite_batch and self._conn.in_transaction:
+            self._conn.execute("COMMIT")
+            self._conn.execute("BEGIN")
+            self._sqlite_pending = 0
+
     def bulk_upsert_identities(self, df: Any) -> None:
+        if self._backend == "sqlite":
+            if df.height == 0:
+                return
+            cols = [
+                "entity_id", "status", "merged_into", "golden_record",
+                "confidence", "dataset", "created_at", "updated_at",
+            ]
+            self._sqlite_stage("_stage_identity_nodes", cols, df)
+            # ``WHERE true`` disambiguates INSERT..SELECT..ON CONFLICT for the
+            # SQLite parser (without it the ON CONFLICT binds to the SELECT).
+            # DO UPDATE set mirrors the per-row ``upsert_identity`` exactly, so
+            # a re-resolve of the same cluster is idempotent (brand-new clusters
+            # never conflict, but keeping the sets identical is the parity
+            # contract with the row path).
+            self._conn.execute(
+                """
+                INSERT INTO identity_nodes
+                    (entity_id, status, merged_into, golden_record,
+                     confidence, dataset, created_at, updated_at)
+                SELECT entity_id, status, merged_into, golden_record,
+                       confidence, dataset, created_at, updated_at
+                FROM _stage_identity_nodes WHERE true
+                ON CONFLICT(entity_id) DO UPDATE SET
+                    status=excluded.status,
+                    merged_into=excluded.merged_into,
+                    golden_record=excluded.golden_record,
+                    confidence=excluded.confidence,
+                    dataset=excluded.dataset,
+                    updated_at=excluded.updated_at
+                """
+            )
+            return
         if self._backend != "postgres":
             raise NotImplementedError(
-                "bulk_upsert_identities requires Postgres backend; "
-                "use upsert_identity in a loop for SQLite",
+                "bulk_upsert_identities requires Postgres or SQLite backend; "
+                "use upsert_identity in a loop for other backends",
             )
         if df.height == 0:
             return
@@ -662,10 +736,41 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_identity_nodes")
 
     def bulk_upsert_records(self, df: Any) -> None:
+        if self._backend == "sqlite":
+            if df.height == 0:
+                return
+            # Carries ``payload`` -- unlike the leaner Postgres COPY path, which
+            # drops it. The per-row SQLite ``upsert_record`` stores payload, so
+            # routing brand-new clusters through this bulk path must too or a
+            # SQLite user silently loses their source-record payloads (the
+            # documented payload-drop trap). ON CONFLICT set mirrors
+            # ``upsert_record``.
+            cols = [
+                "record_id", "source", "source_pk", "record_hash",
+                "entity_id", "payload", "dataset",
+                "first_seen_at", "last_seen_at",
+            ]
+            self._sqlite_stage("_stage_source_records", cols, df)
+            self._conn.execute(
+                """
+                INSERT INTO source_records
+                    (record_id, source, source_pk, record_hash, entity_id,
+                     payload, dataset, first_seen_at, last_seen_at)
+                SELECT record_id, source, source_pk, record_hash, entity_id,
+                       payload, dataset, first_seen_at, last_seen_at
+                FROM _stage_source_records WHERE true
+                ON CONFLICT(record_id) DO UPDATE SET
+                    record_hash=excluded.record_hash,
+                    entity_id=excluded.entity_id,
+                    payload=excluded.payload,
+                    last_seen_at=excluded.last_seen_at
+                """
+            )
+            return
         if self._backend != "postgres":
             raise NotImplementedError(
-                "bulk_upsert_records requires Postgres backend; "
-                "use upsert_record in a loop for SQLite",
+                "bulk_upsert_records requires Postgres or SQLite backend; "
+                "use upsert_record in a loop for other backends",
             )
         if df.height == 0:
             return
@@ -703,10 +808,39 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_source_records")
 
     def bulk_add_edges(self, df: Any) -> None:
+        if self._backend == "sqlite":
+            if df.height == 0:
+                return
+            # ``INSERT OR IGNORE`` honours the UNIQUE(entity_id, record_a_id,
+            # record_b_id, kind, run_name) constraint, matching the per-row
+            # ``add_edge`` (which also uses INSERT OR IGNORE). Carries
+            # controller_snapshot / actor / trust (SQLite has contract tests
+            # asserting edge provenance); field_scores / negative_evidence stay
+            # NULL because the per-row brand-new same_as edge does not set them
+            # either.
+            cols = [
+                "entity_id", "record_a_id", "record_b_id", "kind", "score",
+                "matchkey_name", "controller_snapshot", "run_name", "dataset",
+                "actor", "trust", "recorded_at",
+            ]
+            self._sqlite_stage("_stage_evidence_edges", cols, df)
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO evidence_edges
+                    (entity_id, record_a_id, record_b_id, kind, score,
+                     matchkey_name, controller_snapshot, run_name, dataset,
+                     actor, trust, recorded_at)
+                SELECT entity_id, record_a_id, record_b_id, kind, score,
+                       matchkey_name, controller_snapshot, run_name, dataset,
+                       actor, trust, recorded_at
+                FROM _stage_evidence_edges
+                """
+            )
+            return
         if self._backend != "postgres":
             raise NotImplementedError(
-                "bulk_add_edges requires Postgres backend; "
-                "use add_edge in a loop for SQLite",
+                "bulk_add_edges requires Postgres or SQLite backend; "
+                "use add_edge in a loop for other backends",
             )
         if df.height == 0:
             return
@@ -753,10 +887,35 @@ class IdentityStore:
             cur.execute("DROP TABLE IF EXISTS _stage_evidence_edges")
 
     def bulk_emit_events(self, df: Any) -> None:
+        if self._backend == "sqlite":
+            if df.height == 0:
+                return
+            # Carries payload / actor / trust -- the audit spine the per-row
+            # ``emit_event`` records and which the leaner Postgres COPY path
+            # drops. ``entry_hash`` is left NULL: the seal / verify path already
+            # hashes NULL-entry_hash rows on the fly (pre-#1078 rows do the
+            # same), so the tamper-evidence guarantee holds without
+            # reconstructing an IdentityEvent per row on the flush hot path.
+            cols = [
+                "entity_id", "kind", "payload", "run_name", "dataset",
+                "actor", "trust", "recorded_at",
+            ]
+            self._sqlite_stage("_stage_identity_events", cols, df)
+            self._conn.execute(
+                """
+                INSERT INTO identity_events
+                    (entity_id, kind, payload, run_name, dataset,
+                     actor, trust, recorded_at)
+                SELECT entity_id, kind, payload, run_name, dataset,
+                       actor, trust, recorded_at
+                FROM _stage_identity_events
+                """
+            )
+            return
         if self._backend != "postgres":
             raise NotImplementedError(
-                "bulk_emit_events requires Postgres backend; "
-                "use emit_event in a loop for SQLite",
+                "bulk_emit_events requires Postgres or SQLite backend; "
+                "use emit_event in a loop for other backends",
             )
         if df.height == 0:
             return
