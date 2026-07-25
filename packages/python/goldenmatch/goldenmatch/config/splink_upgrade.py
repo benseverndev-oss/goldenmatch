@@ -143,11 +143,15 @@ def _validate_columns(config: GoldenMatchConfig, df: pl.DataFrame) -> None:
         return
     mk = mks[0]
     columns = set(df.columns)
-    missing = [
-        f.field
-        for f in mk.fields
-        if f.field is not None and f.field != "__record__" and f.field not in columns
-    ]
+    missing: list[str] = []
+    for f in mk.fields:
+        derive_from = getattr(f, "derive_from", None)
+        if derive_from:
+            # A synthesized field (geo_haversine "lat,long") is materialized by
+            # the pipeline from derive_from; require its SOURCES, not itself.
+            missing.extend(c for c in derive_from if c not in columns)
+        elif f.field is not None and f.field != "__record__" and f.field not in columns:
+            missing.append(f.field)
     if missing:
         raise SplinkUpgradeError(
             "upgrade_splink_conversion(): matchkey field(s) missing from data "
@@ -302,6 +306,37 @@ def _measure_mean_length(df: pl.DataFrame, field: str, transforms: list[str]) ->
     return total_len / count
 
 
+def _measure_mean_token_set_size(
+    df: pl.DataFrame, field: str, transforms: list[str]
+) -> float | None:
+    """Mean token-set size of ``field``'s non-null values, parsed the SAME way
+    the ``array_intersect`` scorer parses them (``core.scorer._parse_token_set``:
+    first separator in ``| ; ,``). Mirrors ``_measure_mean_length`` but counts
+    distinct tokens per value instead of characters. Returns ``None`` when the
+    column is absent or every value yields an empty set."""
+    from goldenmatch.core.scorer import _parse_token_set
+    from goldenmatch.utils.transforms import apply_transforms
+
+    if field not in df.columns:
+        return None
+    total = 0
+    count = 0
+    for v in df[field].to_list():
+        if v is None:
+            continue
+        s = str(v)
+        if transforms:
+            s = apply_transforms(s, transforms)
+        toks = _parse_token_set(s)
+        if not toks:
+            continue
+        total += len(toks)
+        count += 1
+    if count == 0:
+        return None
+    return total / count
+
+
 def _lever_distance_thresholds(ctx: _LeverContext) -> None:
     # Applies regardless of em_model presence (band thresholds are
     # config-level, fixed before training) -- see spec "Bare-settings inputs".
@@ -443,6 +478,120 @@ def _lever_distance_thresholds(ctx: _LeverContext) -> None:
             if sum_u > 0:
                 new_u = [v / sum_u for v in new_u]
 
+            ctx.em_model.m_probs[field_name] = new_m
+            ctx.em_model.u_probs[field_name] = new_u
+            ctx.em_model.match_weights[field_name] = [
+                math.log2(max(m, 1e-10) / max(u, 1e-10)) for m, u in zip(new_m, new_u)
+            ]
+
+
+def _lever_domain_bands(ctx: _LeverContext) -> None:
+    # Data-aware refinement of the domain-comparator bands the converter emits.
+    #
+    # date_diff / geo_haversine: the Splink cutoff -> band conversion is EXACT
+    #   (seconds->days / km carry no assumed constant), so there is nothing to
+    #   refine -- info-note and leave unchanged.
+    # array_intersect: the converter snapped Splink's intersection COUNT (`>= n`)
+    #   to an overlap RATIO n / _ARRAY_ASSUMED_SET_SIZE (10, a guess). We measure
+    #   the ACTUAL mean token-set size K on the data and recompute each band
+    #   ratio = min(1, n / K) -- exactly mirroring _lever_distance_thresholds,
+    #   which measures mean string length L to fix the levenshtein assumed length.
+    #   Applies regardless of em_model (band thresholds are config-level); m/u is
+    #   remapped when a band collapses onto another level (as distance_thresholds).
+    from goldenmatch.config.from_splink import _ARRAY_ASSUMED_SET_SIZE
+
+    mk = ctx.upgraded_config.get_matchkeys()[0]
+
+    for f in mk.fields:
+        sc = f.scorer or ""
+        if sc.startswith(("date_diff", "geo_haversine")):
+            ctx.report.info(
+                "upgrade:domain_bands",
+                f"field '{f.field}' ({sc}): Splink cutoff->band conversion is exact "
+                "(no assumed constant), bands unchanged",
+                mapped_to=f"matchkeys[0].fields[{f.field}]",
+            )
+
+    array_fields = [
+        f for f in mk.fields
+        if (f.scorer or "").startswith("array_intersect") and f.field is not None
+    ]
+    if not array_fields:
+        if not any((f.scorer or "").startswith(("date_diff", "geo_haversine")) for f in mk.fields):
+            ctx.report.info(
+                "upgrade:domain_bands", "no domain-comparator fields in config",
+                mapped_to=None,
+            )
+        return
+
+    for f in array_fields:
+        field_name = f.field
+        assert field_name is not None
+        mapped_to = f"matchkeys[0].fields[{field_name}]"
+
+        K = _measure_mean_token_set_size(ctx.df, field_name, f.transforms)
+        if K is None or K <= 0:
+            ctx.report.warn(
+                "upgrade:domain_bands",
+                f"field '{field_name}' has no measurable token sets to size the "
+                "overlap bands from, skipped (bands unchanged)",
+                mapped_to=mapped_to,
+            )
+            continue
+
+        is_two_level = f.level_thresholds is None
+        old_thresholds = [f.partial_threshold] if is_two_level else list(f.level_thresholds or [])
+        old_levels = [f.levels - 1 - i for i in range(len(old_thresholds))]
+
+        # Invert the converter's ratio -> count (n = round(t * assumed_size)),
+        # then recompute against measured K. new_t is monotone non-increasing
+        # (old_t descending), so collisions are always adjacent -- one forward
+        # pass dedupes without a sort. n>=1 and K>0 => new_t in (0, 1] always
+        # (no out-of-range drop, unlike the levenshtein lever).
+        groups: list[dict] = []
+        for old_level, old_t in zip(old_levels, old_thresholds):
+            n = max(1, round(old_t * _ARRAY_ASSUMED_SET_SIZE))
+            new_t = min(1.0, n / K)
+            if groups and math.isclose(groups[-1]["new_t"], new_t, abs_tol=1e-9):
+                groups[-1]["members"].append(old_level)
+                ctx.report.warn(
+                    "upgrade:domain_bands",
+                    f"field '{field_name}': recomputed overlap threshold for count "
+                    f">= {n} collapsed onto an adjacent level ({new_t:.4f}); m/u "
+                    "probabilities summed with the earlier level's",
+                    mapped_to=mapped_to,
+                )
+            else:
+                groups.append({"new_t": new_t, "members": [old_level]})
+                ctx.report.info(
+                    "upgrade:domain_bands",
+                    f"field '{field_name}': count >= {n} overlap threshold "
+                    f"{old_t:.4f} -> {new_t:.4f} (measured mean set size K={K:.2f})",
+                    mapped_to=mapped_to,
+                )
+
+        new_thresholds = [g["new_t"] for g in groups]
+        if is_two_level:
+            f.partial_threshold = new_thresholds[0]
+        else:
+            f.level_thresholds = new_thresholds
+            f.levels = len(groups) + 1
+
+        if ctx.em_model is not None and field_name in ctx.em_model.m_probs:
+            old_m = ctx.em_model.m_probs[field_name]
+            old_u = ctx.em_model.u_probs[field_name]
+            merged_m = [old_m[0]]
+            merged_u = [old_u[0]]
+            for g in groups:
+                merged_m.append(sum(old_m[j] for j in g["members"]))
+                merged_u.append(sum(old_u[j] for j in g["members"]))
+            new_m = [merged_m[0]] + list(reversed(merged_m[1:]))
+            new_u = [merged_u[0]] + list(reversed(merged_u[1:]))
+            sum_m, sum_u = sum(new_m), sum(new_u)
+            if sum_m > 0:
+                new_m = [v / sum_m for v in new_m]
+            if sum_u > 0:
+                new_u = [v / sum_u for v in new_u]
             ctx.em_model.m_probs[field_name] = new_m
             ctx.em_model.u_probs[field_name] = new_u
             ctx.em_model.match_weights[field_name] = [
@@ -697,6 +846,7 @@ def _lever_fan_out(ctx: _LeverContext) -> None:
 _LEVER_REGISTRY: dict[str, Callable[[_LeverContext], None]] = {
     "tf_tables": _lever_tf_tables,
     "distance_thresholds": _lever_distance_thresholds,
+    "domain_bands": _lever_domain_bands,
     "fan_out": _lever_fan_out,
     "calibration": _lever_calibration,
 }
@@ -704,6 +854,7 @@ _LEVER_REGISTRY: dict[str, Callable[[_LeverContext], None]] = {
 _LEVER_ORDER: tuple[str, ...] = (
     "tf_tables",
     "distance_thresholds",
+    "domain_bands",
     "fan_out",
     "calibration",
 )

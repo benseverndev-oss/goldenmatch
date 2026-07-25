@@ -98,6 +98,7 @@ def test_fan_out_in_default_lever_order():
     assert _resolve_levers(None) == [
         "tf_tables",
         "distance_thresholds",
+        "domain_bands",
         "fan_out",
         "calibration",
     ]
