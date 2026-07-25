@@ -221,38 +221,55 @@ than it is. Do not run the spike for a decision until #2111 has landed.
   `identity-graph.mdx` in #2111 should be revisited — the reason for the warning
   is exactly the per-row Python object this would remove.
 
-## Spike result (2026-07-25) — NO-GO
+## Spike result (2026-07-25) — NO-GO on the dependency
 
-The spike ran (local Linux + the `large-new-64GB` workflow; content-hash
-identical across all arms). Directional local numbers:
+The spike ran on the sanctioned `large-new-64GB` runner (the authoritative
+numbers below), content-hash identical across all three arms at every scale. (A
+local-Linux pre-run agreed on the RSS story but understated `adbc`'s wall
+advantage — a slower local `staging` — so the box numbers are what count.)
 
-| N | arm | wall | peak RSS | db |
-|---|---|---|---|---|
-| 100k | rowpath | 19.95 s | 0.555 GB | 212 MB |
-| 100k | staging | 8.88 s | 0.556 GB | 212 MB |
-| 100k | adbc | 6.24 s | 0.505 GB | 338 MB |
-| 1M | staging | 182.4 s | 4.761 GB | 2175 MB |
-| 1M | adbc | 125.2 s | 4.665 GB | 3430 MB |
+| N | arm | wall | peak RSS | db | adbc vs staging → harness |
+|---|---|---|---|---|---|
+| 100k | rowpath | 13.74 s | 0.662 GB | 212 MB | |
+| 100k | staging | 5.44 s | 0.659 GB | 212 MB | |
+| 100k | adbc | 3.29 s | 0.566 GB | 338 MB | 1.65× wall, 14% RSS → **GO** |
+| 1M | rowpath | 175.94 s | 5.714 GB | 2175 MB | |
+| 1M | staging | 65.65 s | 5.715 GB | 2175 MB | |
+| 1M | adbc | 41.32 s | 5.294 GB | 3430 MB | 1.59× wall, 7% RSS → **GO** |
+| 5M | rowpath | 987.39 s | 24.719 GB | 10906 MB | |
+| 5M | staging | 445.05 s | 26.039 GB | 10906 MB | |
+| 5M | adbc | 392.15 s | 24.543 GB | 17184 MB | 1.13× wall, 6% RSS → **NO-GO** |
 
-Against the pre-committed kill criteria:
+The per-scale harness verdicts are **GO / GO / NO-GO**. Reading them honestly:
 
-- **`staging` captures the win** — 2.25× over `rowpath` at 100k, identical RSS,
-  zero new dependency. The null hypothesis held.
-- **`adbc` vs `staging`: 1.42× wall / 9% RSS at 100k, 1.46× wall / 2% RSS at 1M.**
-  Both below the `≥1.5× wall OR ≥30% RSS` bar → **NO-GO**.
-- **The RSS gap *closes* with scale (9% → 2%)**, refuting "adbc clearly wins on
-  RSS at 5M." The memory floor is the materialised Arrow table itself, not the
+- **`staging` is the always-safe win, zero new dependency.** ~2.5× over `rowpath`
+  at 100k, ~2.7× at 1M, ~2.2× at 5M, byte-identical output, identical RSS. The
+  null hypothesis (ship `staging`) holds regardless of what ADBC does.
+- **The memory prize — the whole stated motivation — is refuted at every scale.**
+  `adbc` is only 14% → 7% → **6%** lower peak RSS than `staging`, never within
+  reach of the 30% bar, and the gap **narrows** with scale (at 5M, 24.5 vs 26.0
+  GB). The materialised Arrow table + engine write buffers are the floor, not the
   per-row Python object `adbc` skips — so Arrow-native ingest does **not** fix
-  `emit_singletons=True` at scale, which was the whole prize. `adbc` also writes a
-  larger DB (338 vs 212 MB; 3430 vs 2175 MB).
+  `emit_singletons=True` at scale, which was the entire reason to consider it.
+- **`adbc`'s wall advantage is real but at the wrong scale.** It clears the 1.5×
+  bar at 100k/1M (1.65× / 1.59×) but **decays to 1.13× at 5M** — precisely the
+  scale where a bulk path is actually needed; sub-1M SQLite already finishes in
+  under a minute with `staging`.
+- **`adbc` costs more where it counts.** It writes a **58% larger DB at 5M**
+  (17.2 vs 10.9 GB), needs a bundled-shared-library dependency, and carries the
+  single-writer / dual-connection complexity from the design above.
 
-**Decision: ship stdlib `staging` (staging table + `executemany` + the same
-`INSERT ... SELECT ... ON CONFLICT DO UPDATE`) as the SQLite bulk path; give the
+**Decision: ship stdlib `staging` for the SQLite bulk path (staging table +
+`executemany` + the same `INSERT ... SELECT ... ON CONFLICT DO UPDATE`); give the
 four `bulk_*` methods a real SQLite branch; do NOT take the `adbc-driver-sqlite`
-dependency.** Option A (whole-store-on-ADBC) is not justified — its only prize
-(Python-object elimination) does not move peak RSS.
+dependency.** This is a considered call, not a clean sub-threshold miss: ADBC's
+one durable win (wall at small N) is at scales that don't need it, its win
+evaporates at the scale that does, it never delivers the memory prize, and it
+costs a native dependency + larger files + a more confusing transaction model.
+Option A (whole-store-on-ADBC) is therefore not justified.
 
 The residual memory ceiling (the actual `emit_singletons` scaling problem) is not
-addressed by any in-memory-Arrow write path. The one remaining lever is a
+addressed by any in-memory-Arrow write path — confirmed: even `adbc`, which never
+builds a Python row, is within 6% of `staging` at 5M. The one remaining lever is a
 *streaming* ingest that never materialises the full frame — explored, with DuckDB
 as the vehicle, in `2026-07-25-duckdb-identity-backend.md`.
