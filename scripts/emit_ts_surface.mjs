@@ -74,6 +74,17 @@ async function emit(pkg) {
     descriptor.scorer_kernels = [...t.WASM_COVERED_SCORERS].sort();
   }
 
+  // infermap M:N scorer surface + its infermap-core kernel coverage. Mirrors the
+  // Python emitter (infermap.scorers.SCORER_NAMES / SCORER_KERNELS); deltas live
+  // in parity/infermap.yaml (activates check_scorer_coverage for infermap).
+  if (pkg === "infermap") {
+    const t = await load("dist/core/index.js");
+    if (!t.SCORER_NAMES || !t.SCORER_KERNELS)
+      throw new Error(`${pkg}: expected SCORER_NAMES + SCORER_KERNELS in dist/core/index.js`);
+    descriptor.scorers = [...t.SCORER_NAMES].sort();
+    descriptor.scorer_kernels = [...t.SCORER_KERNELS].sort();
+  }
+
   return descriptor;
 }
 

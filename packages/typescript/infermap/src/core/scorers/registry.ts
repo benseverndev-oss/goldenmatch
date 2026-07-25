@@ -9,6 +9,38 @@ import { ProfileScorer } from "./profile.js";
 import { FuzzyNameScorer } from "./fuzzy-name.js";
 import { InitialismScorer } from "./initialism.js";
 
+// --- Cross-language parity surface (parity/infermap.yaml) -------------------
+// SCORER_NAMES is a declared string set (not derived from instantiated classes)
+// so no scorer class needs importing here; the drift guard
+// tests/unit/scorer-parity-surface.test.ts asserts it against the real classes.
+// The full set of built-in scorer identities (each scorer class's `.name`),
+// mirrored 1:1 by the Python registry (infermap/scorers/__init__.py SCORER_NAMES)
+// and enforced by the api_parity `scorers` surface. Kept in sync with the class
+// `.name` literals by scorers.test.ts (asserts against instantiated scorers).
+export const SCORER_NAMES: ReadonlySet<string> = new Set([
+  "AliasScorer",
+  "ExactScorer",
+  "FuzzyNameScorer",
+  "InitialismScorer",
+  "LLMScorer",
+  "PatternTypeScorer",
+  "ProfileScorer",
+]);
+
+// The scorers backed by an `infermap-core` Rust kernel (native + wasm) — the
+// reference fast path. Mirrors Python `SCORER_KERNELS`; every scorer NOT here is
+// a pure-language fallback classified in parity/infermap.yaml
+// scorer_kernels_deferred (the check_scorer_coverage floor). The TS WASM side is
+// the InfermapBackend methods (core/wasm/backend.ts): exact/fuzzyName/initialism/
+// profile/patternMatchTypes.
+export const SCORER_KERNELS: ReadonlySet<string> = new Set([
+  "ExactScorer",
+  "FuzzyNameScorer",
+  "InitialismScorer",
+  "PatternTypeScorer",
+  "ProfileScorer",
+]);
+
 export function defaultScorers(): Scorer[] {
   return [
     new ExactScorer(),
