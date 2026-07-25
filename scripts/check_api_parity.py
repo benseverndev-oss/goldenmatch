@@ -212,7 +212,6 @@ def check_sql_advisory(manifest: dict, sql_desc: dict, py_ops: set[str]) -> list
         normalized = {_normalize_sql(n) for n in emitted}
         covered = {op for op in py_ops if op in normalized or any(
             nz == op or nz.startswith(op + "_") or op.startswith(nz + "_") for nz in normalized)}
-        uncovered = sorted(py_ops - covered)
         if py_ops:
             lines.append(f"  coverage (heuristic): {len(covered)}/{len(py_ops)} Python ops have a {surface} entrypoint")
     return lines
