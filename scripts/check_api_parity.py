@@ -9,6 +9,16 @@ from typing import NamedTuple
 
 SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies", "scorer_kernels")
 
+# ADVISORY (non-gating) SQL surfaces: the Postgres (pgrx) + DuckDB function
+# inventories. These give VISIBILITY into whether the SQL surfaces track the
+# Python reference — they are reported but NEVER affect the exit code, because
+# the SQL surfaces delegate to the Python library (a scorer/transform can't drift)
+# and their operation coverage is a roadmap concern, not a per-PR gate. Recorded
+# in the manifest as `{functions: [...]}` inventory blocks and reconciled by
+# check_sql_advisory(). check_structure() skips them so the gating partition
+# checks don't treat them as unknown surfaces.
+ADVISORY_SQL_SURFACES = ("postgres", "duckdb")
+
 
 class ParityFailure(NamedTuple):
     surface: str
@@ -57,6 +67,10 @@ def check_structure(manifest: dict) -> list[ParityFailure]:
         # not a shared/python_only/ts_only partition surface; its shape is
         # validated by check_scorer_coverage, so skip the partition checks here.
         if surface == "scorer_kernels_deferred":
+            continue
+        # Advisory SQL inventory surfaces are `{functions: [...]}`, not
+        # shared/python_only/ts_only partitions — checked by check_sql_advisory.
+        if surface in ADVISORY_SQL_SURFACES:
             continue
         if surface not in SURFACES:
             f.append(ParityFailure(surface, "", "unknown_surface", f"unknown surface '{surface}' (allowed: {', '.join(SURFACES)})"))
@@ -142,6 +156,68 @@ def check_scorer_coverage(manifest: dict) -> list[ParityFailure]:
     return f
 
 
+def _normalize_sql(name: str) -> str:
+    """Strip the goldenmatch namespace prefix from a SQL function name so it can
+    be compared, heuristically, against a Python operation name.
+    `goldenmatch_identity_resolve` / `gm_resolve` -> `identity_resolve` / `resolve`."""
+    for pfx in ("goldenmatch_", "gm_"):
+        if name.startswith(pfx):
+            return name[len(pfx):]
+    return name
+
+
+def _py_operation_surface(py_desc: dict, manifest: dict) -> set[str]:
+    """The Python capability surface to measure SQL coverage against: MCP tools +
+    CLI commands. Prefers the live descriptor (CI, where goldenmatch[mcp] is
+    installed); falls back to the manifest's own gated lists when the descriptor
+    is absent (e.g. the box, where the emitter env-gapped)."""
+    ops: set[str] = set()
+    for surface in ("mcp_tools", "cli_commands"):
+        live = py_desc.get(surface) if py_desc else None
+        if live:
+            ops |= set(live)
+        else:
+            body = manifest.get(surface) or {}
+            ops |= {n for key in ("shared", "python_only") for n in body.get(key, [])}
+    return ops
+
+
+def check_sql_advisory(manifest: dict, sql_desc: dict, py_ops: set[str]) -> list[str]:
+    """ADVISORY (non-gating) reconciliation of the SQL surfaces. Returns human-
+    readable report lines; the caller prints them but NEVER fails on them.
+
+    Two kinds of visibility, per SQL dialect:
+      1. DRIFT (robust): the emitted function set vs the manifest `functions`
+         inventory — functions added in source but not recorded, and recorded but
+         no longer in source. This is the maintenance signal for the inventory.
+      2. COVERAGE (heuristic): how many Python operations (MCP tools + CLI) have a
+         namespace-normalized match among the SQL functions — i.e. which Python
+         capabilities have NO SQL entrypoint. Labeled heuristic because SQL names
+         are hand-chosen and the prefix-normalized match is approximate."""
+    lines: list[str] = []
+    for surface in ADVISORY_SQL_SURFACES:
+        emitted = set(sql_desc.get(surface, []) or [])
+        if not emitted and surface not in manifest:
+            continue  # dialect not present for this package
+        declared = set((manifest.get(surface) or {}).get("functions", []))
+        added = sorted(emitted - declared)
+        removed = sorted(declared - emitted)
+        lines.append(f"[{surface}] {len(emitted)} function(s) in source, {len(declared)} in manifest")
+        for n in added:
+            lines.append(f"  drift: '{n}' exists in source but is NOT in parity manifest -> add to {surface}.functions")
+        for n in removed:
+            lines.append(f"  drift: '{n}' is in the manifest but no longer in source -> remove from {surface}.functions")
+
+        # Heuristic coverage: Python ops with no normalized SQL match.
+        normalized = {_normalize_sql(n) for n in emitted}
+        covered = {op for op in py_ops if op in normalized or any(
+            nz == op or nz.startswith(op + "_") or op.startswith(nz + "_") for nz in normalized)}
+        uncovered = sorted(py_ops - covered)
+        if py_ops:
+            lines.append(f"  coverage (heuristic): {len(covered)}/{len(py_ops)} Python ops have a {surface} entrypoint")
+    return lines
+
+
 def init_manifest(py_desc: dict, ts_desc: dict) -> dict:
     out = {"package": py_desc.get("package", ts_desc.get("package", ""))}
     for s in SURFACES:
@@ -219,6 +295,26 @@ def main(argv=None):
 
     manifest = _load_yaml(manifest_path)
     fails = run_checks(manifest, py_desc, ts_desc)
+
+    # ADVISORY (non-gating) SQL surface report. Runs regardless of the gating
+    # result and NEVER changes the exit code. The SQL emitter is a static source
+    # parse (no toolchain), so it is best-effort here — a parse hiccup must not
+    # break the gating gate.
+    sql_cmd = ([sys.executable, str(root / "scripts" / "emit_sql_surface.py"), args.package])
+    try:
+        import json as _json
+        import subprocess as _sp
+        _proc = _sp.run(sql_cmd, capture_output=True, text=True)
+        sql_desc = _json.loads(_proc.stdout) if _proc.returncode == 0 and _proc.stdout.strip() else {}
+    except Exception as e:  # noqa: BLE001 — advisory, must never gate
+        sql_desc = {}
+        sys.stderr.write(f"(advisory) SQL surface emitter unavailable: {e}\n")
+    advisory = check_sql_advisory(manifest, sql_desc, _py_operation_surface(py_desc, manifest))
+    if advisory:
+        print("\nadvisory: SQL surfaces (visibility only — does NOT affect the gate)")
+        for line in advisory:
+            print(f"  {line}")
+
     if not fails:
         print(f"parity OK: {args.package} manifest exactly partitions the real MCP + CLI surface")
         return 0

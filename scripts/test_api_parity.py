@@ -259,3 +259,88 @@ def test_python_emitter_all_packages_smoke(pkg):
             f"{pkg}.a2a_skills empty/unsorted"
     else:
         assert "a2a_skills" not in desc, f"{pkg} should not emit a2a_skills"
+
+
+# ── Advisory SQL surfaces (postgres / duckdb) — visibility, non-gating ────────
+
+def test_structure_skips_advisory_sql_surfaces():
+    # postgres/duckdb are `{functions: [...]}` inventory blocks, NOT partitions —
+    # check_structure must not flag them as unknown_surface.
+    m = {"postgres": {"functions": ["goldenmatch_dedupe"]},
+         "duckdb": {"functions": ["goldenmatch_score"]}}
+    assert not any(f.kind == "unknown_surface" for f in gate.check_structure(m))
+
+
+def test_normalize_sql_strips_namespace():
+    assert gate._normalize_sql("goldenmatch_identity_resolve") == "identity_resolve"
+    assert gate._normalize_sql("gm_resolve") == "resolve"
+    assert gate._normalize_sql("apply") == "apply"  # unprefixed unchanged
+
+
+def test_sql_advisory_reports_drift_both_directions():
+    m = {"postgres": {"functions": ["goldenmatch_dedupe", "old_removed_fn"]}}
+    sql = {"postgres": ["goldenmatch_dedupe", "goldenmatch_new_fn"], "duckdb": []}
+    lines = gate.check_sql_advisory(m, sql, py_ops={"dedupe"})
+    joined = "\n".join(lines)
+    assert "goldenmatch_new_fn" in joined and "NOT in parity manifest" in joined
+    assert "old_removed_fn" in joined and "no longer in source" in joined
+
+
+def test_sql_advisory_clean_when_inventory_matches():
+    m = {"postgres": {"functions": ["goldenmatch_dedupe"]}}
+    sql = {"postgres": ["goldenmatch_dedupe"], "duckdb": []}
+    lines = gate.check_sql_advisory(m, sql, py_ops={"dedupe"})
+    assert not any("drift:" in l for l in lines)
+
+
+def test_sql_advisory_coverage_heuristic_counts_matches():
+    # goldenmatch_identity_resolve normalizes to identity_resolve (exact match);
+    # gm_resolve -> resolve; sensitivity has no SQL entrypoint (uncovered).
+    m = {"postgres": {"functions": ["goldenmatch_identity_resolve", "goldenmatch_dedupe"]}}
+    sql = {"postgres": ["goldenmatch_identity_resolve", "goldenmatch_dedupe"], "duckdb": []}
+    lines = gate.check_sql_advisory(m, sql, py_ops={"identity_resolve", "dedupe", "sensitivity"})
+    cov = [l for l in lines if "coverage (heuristic)" in l]
+    assert cov and "2/3" in cov[0]
+
+
+def test_sql_advisory_absent_dialect_is_skipped():
+    # No emitted functions and no manifest block -> nothing reported for that dialect.
+    lines = gate.check_sql_advisory(manifest={}, sql_desc={}, py_ops={"dedupe"})
+    assert lines == []
+
+
+def test_py_operation_surface_prefers_live_descriptor():
+    manifest = {"mcp_tools": {"shared": ["m_manifest"], "python_only": []},
+                "cli_commands": {"shared": ["c_manifest"], "python_only": []}}
+    live = {"mcp_tools": ["m_live"], "cli_commands": ["c_live"]}
+    assert gate._py_operation_surface(live, manifest) == {"m_live", "c_live"}
+    # falls back to manifest when descriptor absent
+    assert gate._py_operation_surface({}, manifest) == {"m_manifest", "c_manifest"}
+
+
+def test_sql_emitter_goldenmatch_static_parse():
+    """The SQL emitter is a STATIC source parse — box-safe, no toolchain, no install."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    proc = subprocess.run([sys.executable, str(root / "scripts" / "emit_sql_surface.py"), "goldenmatch"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    desc = json.loads(proc.stdout)
+    assert desc["package"] == "goldenmatch"
+    for surface in ("postgres", "duckdb"):
+        assert desc[surface] == sorted(desc[surface]) and desc[surface], f"{surface} empty/unsorted"
+    # goldenmatch-owned present; sibling kernels + internal impls excluded
+    assert "goldenmatch_score" in desc["postgres"]
+    assert "goldenmatch_score" in desc["duckdb"]
+    assert not any(n.startswith(("goldencheck_", "goldenflow_", "_")) for n in desc["postgres"])
+    assert not any(n.startswith(("goldencheck_", "goldenflow_", "_")) for n in desc["duckdb"])
+    # DuckDB macro captured (public name over the _impl UDF)
+    assert "goldenmatch_autoconfig" in desc["duckdb"]
+
+
+def test_sql_emitter_unknown_package_empty():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    proc = subprocess.run([sys.executable, str(root / "scripts" / "emit_sql_surface.py"), "goldencheck"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    desc = json.loads(proc.stdout)
+    assert desc["postgres"] == [] and desc["duckdb"] == []

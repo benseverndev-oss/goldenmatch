@@ -400,3 +400,143 @@ scorer_kernels_deferred:
   record_embedding: "n/a -- model-backed multi-field embedding"
   numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
   array_intersect: "deferred -- native score-core kernel is P5 (spec 2026-07-25-splink-domain-comparator-conversion): set-overlap over delimited strings; pure-Python numpy per-pair path until the kernel lands, like soundex_match/date_diff before their kernels"
+# ─────────────────────────────────────────────────────────────────────────────
+# ADVISORY (non-gating) SQL surfaces — VISIBILITY ONLY. Added 2026-07-25.
+# These record the goldenmatch SQL function inventory so the parity gate can
+# REPORT (never fail on) whether the Postgres/DuckDB surfaces track the Python
+# reference. They are intentionally NOT gating: the SQL surfaces delegate to the
+# Python library for scoring (`goldenmatch_score(a,b,scorer)` -> the same
+# `score_strings` / `score-core` reference), so scorers/transforms can't drift;
+# operation coverage is a roadmap concern, not a per-PR gate.
+#
+# `postgres`  = goldenmatch-owned `#[pg_extern]` fns in the goldenmatch_pg pgrx
+#               crate (siblings goldencheck_*/goldenflow_* excluded).
+# `duckdb`    = goldenmatch-owned UDFs/macros the goldenmatch_duckdb package
+#               registers (create_function + CREATE MACRO; siblings/`_impl` excluded).
+#
+# Both are emitted by STATIC source parse (scripts/emit_sql_surface.py — no pgrx
+# toolchain, no built extension, box-safe) and reconciled by
+# check_api_parity.check_sql_advisory(): DRIFT (source vs this inventory) is
+# reported robustly; COVERAGE vs the Python MCP+CLI surface is a labeled
+# heuristic. To refresh after adding/removing a SQL fn:
+#   python3 scripts/emit_sql_surface.py goldenmatch   # then sync the lists below
+# ─────────────────────────────────────────────────────────────────────────────
+postgres:
+  functions:
+  - apply
+  - correction_add
+  - correction_list
+  - gm_clusters
+  - gm_configure
+  - gm_drop
+  - gm_embed
+  - gm_golden
+  - gm_identity_audit
+  - gm_identity_audit_seal
+  - gm_identity_audit_verify
+  - gm_identity_claim
+  - gm_identity_merge
+  - gm_identity_profile
+  - gm_identity_resolve_conflict
+  - gm_identity_split
+  - gm_identity_stats
+  - gm_identity_worklist
+  - gm_jobs
+  - gm_pairs
+  - gm_resolve
+  - gm_run
+  - gm_telemetry
+  - goldenmatch_autoconfig
+  - goldenmatch_autoconfig_telemetry
+  - goldenmatch_autofix_table
+  - goldenmatch_compare_clusters
+  - goldenmatch_connected_components
+  - goldenmatch_connected_components_str
+  - goldenmatch_dedupe
+  - goldenmatch_dedupe_clusters
+  - goldenmatch_dedupe_full
+  - goldenmatch_dedupe_full_telemetry
+  - goldenmatch_dedupe_pairs
+  - goldenmatch_dedupe_table
+  - goldenmatch_detect_anomalies
+  - goldenmatch_detect_domain
+  - goldenmatch_embed_local
+  - goldenmatch_evaluate
+  - goldenmatch_explain
+  - goldenmatch_extract_features
+  - goldenmatch_hnsw_pairs
+  - goldenmatch_identity_conflicts
+  - goldenmatch_identity_history
+  - goldenmatch_identity_list
+  - goldenmatch_identity_resolve
+  - goldenmatch_identity_view
+  - goldenmatch_lsh_pairs
+  - goldenmatch_match
+  - goldenmatch_match_pairs
+  - goldenmatch_match_tables
+  - goldenmatch_pair_dedup
+  - goldenmatch_pair_dedup_str
+  - goldenmatch_perceptual_hamming
+  - goldenmatch_perceptual_phash
+  - goldenmatch_postflight
+  - goldenmatch_preflight
+  - goldenmatch_profile_table
+  - goldenmatch_record_fingerprint
+  - goldenmatch_score
+  - goldenmatch_score_pair
+  - goldenmatch_score_probabilistic
+  - goldenmatch_suggest_threshold
+  - goldenmatch_train_em
+  - goldenmatch_validate_table
+  - memory_learn
+  - memory_stats
+duckdb:
+  functions:
+  - gm_configure
+  - gm_drop
+  - gm_golden
+  - gm_jobs
+  - gm_run
+  - gm_telemetry
+  - goldenmatch_autoconfig
+  - goldenmatch_autoconfig_telemetry
+  - goldenmatch_autofix_table
+  - goldenmatch_compare_clusters
+  - goldenmatch_connected_components
+  - goldenmatch_connected_components_str
+  - goldenmatch_correction_add
+  - goldenmatch_correction_list
+  - goldenmatch_dedupe
+  - goldenmatch_dedupe_full
+  - goldenmatch_dedupe_table
+  - goldenmatch_detect_anomalies
+  - goldenmatch_detect_domain
+  - goldenmatch_embed_local
+  - goldenmatch_evaluate
+  - goldenmatch_explain
+  - goldenmatch_extract_features
+  - goldenmatch_hnsw_pairs
+  - goldenmatch_identity_conflicts
+  - goldenmatch_identity_history
+  - goldenmatch_identity_list
+  - goldenmatch_identity_resolve
+  - goldenmatch_identity_view
+  - goldenmatch_lsh_pairs
+  - goldenmatch_match
+  - goldenmatch_match_tables
+  - goldenmatch_memory_learn
+  - goldenmatch_memory_stats
+  - goldenmatch_pair_dedup
+  - goldenmatch_pair_dedup_str
+  - goldenmatch_perceptual_hamming
+  - goldenmatch_perceptual_phash
+  - goldenmatch_postflight
+  - goldenmatch_preflight
+  - goldenmatch_profile_table
+  - goldenmatch_record_fingerprint
+  - goldenmatch_score
+  - goldenmatch_score_pair
+  - goldenmatch_score_probabilistic
+  - goldenmatch_suggest_threshold
+  - goldenmatch_train_em
+  - goldenmatch_validate_table
