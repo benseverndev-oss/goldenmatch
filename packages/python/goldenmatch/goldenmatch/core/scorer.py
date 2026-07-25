@@ -313,6 +313,49 @@ def _numeric_diff_similarity_py(val_a: str, val_b: str, scorer: str) -> float:
     return 1.0 - dist / band  # 1.0 at dist 0, linear decay to the band edge
 
 
+# --- cosine: vector cosine similarity over two precomputed embedding columns ---
+# The counterpart of Splink's `array_cosine_similarity(vec_l, vec_r) >= t` (the
+# EMBEDDING/semantic comparison, over columns that already hold vectors). Unlike
+# the `embedding` scorer (which EMBEDS text at score time via a model), this takes
+# two already-computed vectors and just measures the angle -- so a converted
+# Splink cosine config keeps its exact operating point (the threshold maps
+# DIRECTLY, no band approximation). Each side is a delimited float vector
+# ("0.1,0.2,0.3", whitespace-separated, or a "[...]"/"(...)"-bracketed list);
+# unparseable / length-mismatched / zero-norm input falls back to exact-string
+# equality (never None) so scalar == vectorized by construction, like the other
+# domain comparators. Negative cosines clamp to 0.0 -- GoldenMatch similarities
+# live in [0,1], and clamping a negative to 0 changes no `>= t` decision for the
+# t in (0,1] that any real threshold uses.
+def _parse_vector(s: str | None) -> list[float] | None:
+    if not s:
+        return None
+    inner = s.strip().strip("[](){}").strip()
+    if not inner:
+        return None
+    parts = inner.split(",") if "," in inner else inner.split()
+    try:
+        v = [float(p) for p in parts if p.strip() != ""]
+    except ValueError:
+        return None
+    if not v or any(not math.isfinite(x) for x in v):
+        return None
+    return v
+
+
+def _cosine_similarity_py(val_a: str, val_b: str) -> float:
+    """Cosine similarity of two parsed float vectors, clamped to [0, 1];
+    exact-string fallback when either side won't parse or has zero norm."""
+    a, b = _parse_vector(val_a), _parse_vector(val_b)
+    if a is None or b is None or len(a) != len(b):
+        return 1.0 if val_a == val_b else 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 1.0 if val_a == val_b else 0.0
+    return min(1.0, max(0.0, dot / (na * nb)))
+
+
 # --- geo_haversine: great-circle distance comparator -----------------------
 # Spec: docs/superpowers/specs/2026-07-23-fs-domain-comparators-design.md
 # String similarity on coordinates is meaningless; great-circle distance is the
@@ -444,6 +487,8 @@ def score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | No
         return _numeric_diff_similarity_py(val_a, val_b, scorer)
     elif scorer == "array_intersect" or scorer.startswith("array_intersect:"):
         return _array_intersect_similarity_py(val_a, val_b, scorer)
+    elif scorer == "cosine":
+        return _cosine_similarity_py(val_a, val_b)
     elif scorer == "jaro_winkler":
         return JaroWinkler.similarity(val_a, val_b)
     elif scorer == "levenshtein":
@@ -893,6 +938,16 @@ def _fuzzy_score_matrix(
         for i in range(n):
             for j in range(i + 1, n):
                 s = _array_intersect_similarity_py(clean[i], clean[j], scorer_name)
+                matrix[i, j] = matrix[j, i] = s
+    elif scorer_name == "cosine":
+        # Vector cosine over two precomputed embedding columns (Splink parity,
+        # 2026-07-25). Same O(n^2) shape as the other domain comparators; calling
+        # the SAME scalar fn guarantees scalar == vectorized parity by construction.
+        n = len(clean)
+        matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                s = _cosine_similarity_py(clean[i], clean[j])
                 matrix[i, j] = matrix[j, i] = s
     elif scorer_name == "initialism_match":
         return _initialism_score_matrix(values)

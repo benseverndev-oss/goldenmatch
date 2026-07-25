@@ -52,7 +52,8 @@ _ELSE_RE = r'ELSE'
 _NULL_RE = rf'{_COL_L}\s+IS\s+NULL\s+OR\s+{_COL_R}\s+IS\s+NULL'
 _EXACT_RE = rf'{_COL_L}\s*=\s*{_COL_R}'
 _SIM_RE = (
-    r'(jaro_winkler_similarity|jaro_winkler|jaro_similarity|jaccard)'
+    r'(jaro_winkler_similarity|jaro_winkler|jaro_similarity|jaccard'
+    r'|array_cosine_similarity)'
     rf'\s*\(\s*{_COL_L}\s*,\s*{_COL_R}\s*\)\s*>=\s*([0-9]*\.?[0-9]+)'
 )
 _DIST_RE = (
@@ -91,7 +92,7 @@ def _looks_like_haversine(sql_norm: str) -> bool:
 
 LevelKind = Literal[
     "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
-    "array_intersect", "geo_haversine", "numeric_diff",
+    "array_intersect", "geo_haversine", "numeric_diff", "cosine",
 ]
 
 # Numeric magnitude levels. Splink's standard library has NO first-class numeric
@@ -170,6 +171,10 @@ _SIM_KIND: dict[str, tuple[LevelKind, bool]] = {
     "jaro_winkler": ("jaro_winkler", False),
     "jaro_similarity": ("jaro_winkler", True),
     "jaccard": ("jaccard", False),
+    # Splink CosineSimilarityAtThresholds: `array_cosine_similarity(l, r) >= t`
+    # over precomputed vector columns. GoldenMatch's `cosine` scorer is the same
+    # measure, so the threshold maps DIRECTLY -- not an approximation (approx=False).
+    "array_cosine_similarity": ("cosine", False),
 }
 
 

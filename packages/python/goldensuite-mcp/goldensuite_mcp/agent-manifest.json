@@ -4770,6 +4770,12 @@
               "range": "0.0-1.0"
             },
             {
+              "value": "cosine",
+              "meaning": "Cosine similarity of two PRECOMPUTED float-vector columns (parsed from a delimited/bracketed string); direct, not model-embedded like 'embedding'.",
+              "best_for": "Precomputed embedding columns",
+              "range": "0.0-1.0"
+            },
+            {
               "value": "date",
               "meaning": "Damerau-Levenshtein over canonical ISO date digits; typo-tolerant.",
               "best_for": "Dates (dob, birth_date)",
