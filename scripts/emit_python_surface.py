@@ -80,8 +80,17 @@ def _scorer_kernels() -> list[str]:
     # every OTHER scorer in VALID_SCORERS is a pure-Python fallback. Mirrors TS
     # `WASM_COVERED_SCORERS`; the Python/TS delta (e.g. `date` is native on Python,
     # not yet in the TS WASM kernel) is declared in parity/goldenmatch.yaml.
+    #
+    # Collapse mode-suffixed dispatch keys to the BASE scorer name so this surface
+    # has the same granularity as `_scorers()` (VALID_SCORERS is bare names +
+    # regex-validated modes). A moded native scorer is ONE kernel with per-mode
+    # dispatch ids -- e.g. `array_intersect` (score_one 19=jaccard / 20=overlap)
+    # is keyed as `array_intersect` / `:jaccard` / `:overlap` in the runtime dict
+    # (the per-field id lookup + perf guard need the exact strings), but the parity
+    # surface declares the one `array_intersect` kernel. No-op for every un-moded
+    # key (none carries a `:`).
     from goldenmatch.backends.score_buckets import _NATIVE_SCORER_IDS
-    return sorted(_NATIVE_SCORER_IDS)
+    return sorted({name.split(":", 1)[0] for name in _NATIVE_SCORER_IDS})
 
 
 # The only per-package variance on the Python side is the CLI module path.
