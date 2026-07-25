@@ -162,7 +162,7 @@ def test_combined_column_name_is_deterministic_across_shapes() -> None:
         '"name_l" = "name_r"',
         # a mixed exact+fuzzy AND is not a recognized ForenameSurname shape
         '("forename_l" = "forename_r") AND '
-        '(jaro_winkler_similarity("surname_l", "surname_r") >= 0.9)',
+        + '(jaro_winkler_similarity("surname_l", "surname_r") >= 0.9)',
         # three-conjunct AND is not the two-part shape
         '("a_l" = "a_r") AND ("b_l" = "b_r") AND ("c_l" = "c_r")',
         # same base column on both conjuncts -> only one source column
