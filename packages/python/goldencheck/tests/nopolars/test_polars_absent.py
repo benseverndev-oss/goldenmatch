@@ -177,3 +177,39 @@ def test_scan_dataframe_accepts_arrow_table_without_polars() -> None:
     findings, _profile = scan_dataframe(tbl)
     assert isinstance(findings, list)
     assert "polars" not in sys.modules
+
+
+def test_cell_quality_fuzzy_variant_arrow_without_polars() -> None:
+    # cell_quality (the GoldenMatch survivorship / quality-aware-blocking bridge) is
+    # arrow-native: it detects fuzzy non-canonical values on a pa.Table polars-free.
+    import pyarrow as pa
+    from goldencheck import cell_quality
+
+    # >=50 rows clears the fuzzy MIN_ROWS guard; "Californa" is a near-duplicate
+    # variant of the canonical (more frequent) "California".
+    states = ["California"] * 40 + ["Californa"] * 3 + ["Texas"] * 12 + ["Nevada"] * 5
+    tbl = pa.table({"state": states, "__row_id__": list(range(len(states)))})
+    scores = cell_quality(tbl)
+
+    # the three "Californa" cells are penalized as fuzzy variants (weight 0.6);
+    # the canonical spelling and the __-internal column are not.
+    assert {c for (_i, c) in scores} == {"state"}
+    assert len(scores) == 3
+    assert all(w == 0.6 for w in scores.values())
+    assert "polars" not in sys.modules
+
+
+def test_cell_quality_future_date_arrow_without_polars() -> None:
+    # The date/datetime branch (future-dated penalty) also runs on a pa.Table
+    # polars-free, via pyarrow.compute.
+    import datetime as _dt
+
+    import pyarrow as pa
+    from goldencheck import cell_quality
+
+    dates = [_dt.date(2020, 1, 1)] * 5 + [_dt.date(2099, 1, 1)]
+    tbl = pa.table({"d": pa.array(dates, type=pa.date32())})
+    scores = cell_quality(tbl)
+
+    assert scores == {(5, "d"): 0.3}
+    assert "polars" not in sys.modules
