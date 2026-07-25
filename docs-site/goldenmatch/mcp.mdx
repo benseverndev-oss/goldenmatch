@@ -1,10 +1,10 @@
 ---
 title: "MCP server"
-description: "Connect GoldenMatch to Claude Desktop, Claude Code, and other MCP clients — 82 tools for autonomous entity resolution, data inspection, Learning Memory, and Identity Graph."
+description: "Connect GoldenMatch to Claude Desktop, Claude Code, and other MCP clients — 85 tools for autonomous entity resolution, data inspection, Learning Memory, and Identity Graph."
 keywords: ["mcp", "claude desktop", "model context protocol", "entity resolution", "learning memory"]
 ---
 
-GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 82 tools total, spanning agent-level tools for autonomous ER, data tools for inspection and management, config-suggestion and PPRL tools, Learning Memory tools for persisting steward decisions, and Identity Graph tools.
+GoldenMatch provides an MCP (Model Context Protocol) server for integration with Claude Desktop, Claude Code, and other MCP-compatible AI assistants. 85 tools total, spanning agent-level tools for autonomous ER, data tools for inspection and management, config-suggestion and PPRL tools, Learning Memory tools for persisting steward decisions, Identity Graph tools, and document-extraction tools.
 
 <Tip>
   Looking for AI-to-AI autonomy? See the [ER Agent (A2A)](/goldenmatch/agent) page for agent framework integration (LangChain, CrewAI, AutoGen).
@@ -323,7 +323,43 @@ Undo a previous run by deleting its output files (looked up by run_id). Destruct
 "Roll back run 2026-06-05-abc123"
 ```
 
-In addition, 18 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental, certify_recall, retrieve_similar). See [ER Agent](/goldenmatch/agent) for details.
+### More base tools (introspection, scoring, I/O)
+
+Beyond the sections above, the base surface exposes these tools. They round out the 39 base tools and are mostly leaf primitives an agent composes.
+
+| Tool | Behavior |
+|---|---|
+| `list_clusters` | List duplicate clusters: cluster IDs, sizes, and member counts. |
+| `get_golden_record` | Get the merged golden (canonical) record for a cluster. |
+| `shatter_cluster` | Break an entire cluster into individual records. |
+| `profile_data` | Data-quality profile: column types, null rates, unique counts, sample values. (Also the target of the `profile` alias.) |
+| `review_config` | Run the config healer over the loaded dataset and report recommended fixes. |
+| `config_weaknesses` | Diagnose weaknesses in the loaded run's config. |
+| `convert_splink_config` | Convert a Splink settings JSON (bare or trained) into a GoldenMatch config. |
+| `export_results` | Export matching results to a file (CSV or JSON). |
+| `write_csv` | Write a list of record objects to a CSV file. |
+| `read_file` | Read a CSV/JSON file and return the first N records. |
+| `score_strings` | Score similarity between two strings with the requested scorer. |
+| `score_pair` | Score two record objects across weighted fields; returns a combined score. |
+| `find_exact_matches` | Find exact matches on a field in a file; returns pairs. |
+| `find_fuzzy_matches` | Find fuzzy matches in a block of rows; returns scored pairs. |
+| `build_clusters` | Group records into clusters given a file and matchkey definition. |
+| `list_scorers` | List all available similarity scorers. |
+| `list_transforms` | List all available field transforms. |
+| `list_strategies` | List all golden-record survivorship strategies. |
+| `list_blocking_strategies` | List all blocking strategy names. |
+| `server_info` | Return metadata about this GoldenMatch MCP server. |
+
+### Document extraction tools
+
+Two tools extract structured records from unstructured documents (PDF / image). See [Documents](/goldenmatch/documents).
+
+| Tool | Behavior |
+|---|---|
+| `documents_suggest_schema` | Propose a target extraction schema (JSON) from a sample document image/PDF. |
+| `documents_ingest` | Extract records from documents (PDF/image) against a target schema. |
+
+In addition, 19 **agent-level tools** are available for autonomous operation (analyze_data, auto_configure, controller_telemetry, agent_deduplicate, agent_match_sources, agent_explain_pair, agent_explain_cluster, agent_review_queue, agent_approve_reject, agent_compare_strategies, suggest_pprl, scan_quality, fix_quality, run_transforms, sensitivity, incremental, certify_recall, retrieve_similar, upload_dataset). See [ER Agent](/goldenmatch/agent) for details.
 
 ### AutoConfigController telemetry (v1.7-v1.12)
 
@@ -404,9 +440,9 @@ Three tools plan and validate distributed execution routing for a run.
 
 ### Tool count breakdown
 
-The 69 distinct tools reconcile as: 18 agent-level + 7 Learning Memory + 15 Identity Graph + 3 routing + 26 base data/inspection tools.
+The 85 distinct tools reconcile as: 19 agent-level + 7 Learning Memory + 15 Identity Graph + 3 routing + 39 base data/inspection + 2 document-extraction tools.
 
-The server additionally advertises 5 cross-language naming aliases — `dedupe`, `match`, `explain_pair`, `profile`, and `explain_cluster` — alternate names that match the TypeScript server's tool names, so an agent trained against either server can call the other. They forward to the canonical handlers above (`find_duplicates`, `match_record`, `explain_match`, `profile_data`, `agent_explain_cluster`), bringing the advertised total to 74. The TypeScript server mirrors this: it also answers to the Python names (`find_duplicates`, `match_record`, `explain_match`, `profile_data`).
+The server additionally advertises 5 cross-language naming aliases — `dedupe`, `match`, `explain_pair`, `profile`, and `explain_cluster` — alternate names that match the TypeScript server's tool names, so an agent trained against either server can call the other. They forward to the canonical handlers above (`find_duplicates`, `match_record`, `explain_match`, `profile_data`, `agent_explain_cluster`), bringing the advertised total to 90. The TypeScript server mirrors this: it also answers to the Python names (`find_duplicates`, `match_record`, `explain_match`, `profile_data`).
 
 ## How it works
 

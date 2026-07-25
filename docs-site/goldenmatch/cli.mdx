@@ -28,8 +28,19 @@ keywords: ["cli", "commands", "dedupe", "flags"]
 | `goldenmatch rollback RUN_ID` | Undo a previous merge run. |
 | `goldenmatch unmerge RECORD_ID --clusters FILE` | Remove a record from its cluster and re-cluster the rest; writes the updated clusters CSV. Use `--shatter` to break the whole cluster apart. |
 | `goldenmatch runs` | List previous runs for rollback. |
+| `goldenmatch schedule FILE [...]` | Run deduplication on a recurring schedule. |
+| `goldenmatch autoconfig FILE [...]` | Run the AutoConfig controller and print the committed config + telemetry **without** running the pipeline. |
+| `goldenmatch score A B [--scorer NAME]` | Score string similarity between two values (default `jaro_winkler`). |
+| `goldenmatch explain --config CONFIG ...` | Explain why a pair matched, or summarize a cluster, in plain language. |
+| `goldenmatch lineage FILE --config CONFIG` | Build and persist the per-pair match lineage for a run. |
+| `goldenmatch anomalies FILE` | Detect suspicious / fake records as a standalone pass. |
+| `goldenmatch agent-serve FILE [...]` | Start the A2A agent server for AI-to-AI discovery. |
+| `goldenmatch info` | Show package version and available scorers / strategies / blocking / transforms. |
+| `goldenmatch tui FILE [...]` | Launch the interactive TUI (alias of `interactive`). |
 | `goldenmatch memory stats\|learn\|export\|import\|show` | Manage the Learning Memory store. |
-| `goldenmatch config save\|load\|list\|show` | Manage config presets. |
+| `goldenmatch config save\|load\|list\|delete\|show` | Manage config presets. |
+| `goldenmatch identity resolve\|history\|list\|show\|conflicts\|merge\|split\|migrate-ids\|migrate` | Inspect and maintain the persistent identity graph (`entity_id` stability, manual merges/splits, conflict review, id-scheme migration). See [Identity graph](/goldenmatch/identity-graph). |
+| `goldenmatch ingest-docs suggest-schema\|run` | Extract structured records from unstructured documents (schema suggestion + extraction). See [Documents](/goldenmatch/documents). |
 | `goldenmatch import-splink SETTINGS.json -o CONFIG.yaml [--model-out MODEL.json] [--upgrade DATA]` | Convert a Splink settings or trained-model JSON to a GoldenMatch config; `--model-out` persists trained m/u probabilities for reuse. `--upgrade DATA.parquet` additionally runs the data-aware upgrade pass (TF tables, measured distance thresholds, fan-out defenses: NE suggestion + cluster-guard tuning, threshold calibration) and writes the faithful baseline alongside as `*.baseline.*`. |
 | `goldenmatch compare-clusters A B` | Cluster comparison (unchanged / merged / partitioned / overlapping). |
 | `goldenmatch sensitivity FILE` | Parameter sweep over threshold, blocking, and matchkey. |

@@ -255,7 +255,7 @@ Both paths produce identical schemas. The migration script also creates three an
 
 ## Migration / backfill
 
-Existing projects without an identity graph don't get retroactive `entity_id` stability. New runs will assign fresh UUIDs from the moment you enable identity. A best-effort backfill command that walks lineage JSONL + cluster snapshots is on the v2.1 roadmap.
+Existing projects without an identity graph don't get retroactive `entity_id` stability. New runs will assign fresh UUIDs from the moment you enable identity. A best-effort backfill command that walks lineage JSONL + cluster snapshots is a planned follow-up and is not yet available; today you enable identity and let stability accrue from the first resolved run forward.
 
 ## Migrating legacy record ids
 

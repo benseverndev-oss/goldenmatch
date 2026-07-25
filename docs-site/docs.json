@@ -129,7 +129,8 @@
               "goldenpipe/overview",
               "goldenpipe/stages",
               "goldenpipe/config-matrix",
-              "goldenpipe/recipes"
+              "goldenpipe/recipes",
+              "goldenpipe/cli"
             ]
           },
           {
@@ -140,6 +141,7 @@
               "goldenanalysis/cross-run",
               "goldenanalysis/config-matrix",
               "goldenanalysis/recipes",
+              "goldenanalysis/cli",
               "goldenanalysis/native"
             ]
           },
@@ -149,7 +151,8 @@
               "infermap/overview",
               "infermap/mapping",
               "infermap/config-matrix",
-              "infermap/recipes"
+              "infermap/recipes",
+              "infermap/cli"
             ]
           },
           {
