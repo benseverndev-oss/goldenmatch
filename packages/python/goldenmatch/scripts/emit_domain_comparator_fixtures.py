@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 from goldenmatch.core.scorer import (
+    _array_intersect_similarity_py,
     _date_diff_similarity_py,
     _geo_haversine_similarity_py,
 )
@@ -74,11 +75,36 @@ GEO_PAIRS = [
     ("40.0,-73.0", "notcoords"),         # one side unparseable -> 0.0
 ]
 
+# array_intersect: token-set overlap over a delimited string. jaccard (default)
+# = |A∩B|/|A∪B|; overlap = |A∩B|/min(|A|,|B|); empty token set on either side
+# -> exact-string fallback. Pure set arithmetic (rational), so TS == Python ==
+# the default-mode Rust kernel byte-exact. Covers separators (| ; ,), both modes,
+# partial/full/disjoint overlap, single-token (no sep), and empty fallback.
+ARRAY_PAIRS = [
+    ("array_intersect", "a|b|c", "a|b|c"),        # identical -> 1.0
+    ("array_intersect", "a|b|c", "b|c|d"),        # 2/4 jaccard -> 0.5
+    ("array_intersect", "a|b", "c|d"),            # disjoint -> 0.0
+    ("array_intersect", "a|b|c", "a"),            # subset jaccard 1/3
+    ("array_intersect:jaccard", "a|b|c", "b|c|d"),  # explicit jaccard -> 0.5
+    ("array_intersect:overlap", "a|b|c", "a"),    # overlap 1/min(3,1) -> 1.0
+    ("array_intersect:overlap", "a|b|c", "b|c|d"),  # overlap 2/min(3,3) -> 0.666..
+    ("array_intersect", "x;y;z", "y;z"),          # semicolon sep, 2/3
+    ("array_intersect", "p,q,r", "q,r,s"),        # comma sep, 2/4 -> 0.5
+    ("array_intersect", "solo", "solo"),          # single token (no sep) -> 1.0
+    ("array_intersect", "solo", "other"),         # single token disjoint -> 0.0
+    ("array_intersect", "", ""),                  # empty -> exact fallback 1.0
+    ("array_intersect", "a|b", ""),               # one empty -> exact fallback 0.0
+    ("array_intersect", " a | b ", "b|a"),        # whitespace-stripped, reorder -> 1.0
+    ("array_intersect:overlap", "a|b|c|d", "a|b"),  # overlap 2/min(4,2) -> 1.0
+]
+
 rows: list[list] = []
 for a, b in DATE_PAIRS:
     rows.append(["date_diff", a, b, round(_date_diff_similarity_py(a, b), 6)])
 for a, b in GEO_PAIRS:
     rows.append(["geo_haversine", a, b, round(_geo_haversine_similarity_py(a, b), 6)])
+for scorer, a, b in ARRAY_PAIRS:
+    rows.append([scorer, a, b, round(_array_intersect_similarity_py(a, b, scorer), 6)])
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text(

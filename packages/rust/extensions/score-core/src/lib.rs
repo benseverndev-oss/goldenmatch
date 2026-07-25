@@ -384,6 +384,51 @@ fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     set
 }
 
+// --- array_intersect: set-overlap comparator over delimited strings ---------
+// The reference for `goldenmatch.core.scorer._array_intersect_similarity_py`
+// (Splink ArrayIntersect -> GM). score_one id 19 covers the DEFAULT (jaccard)
+// mode only -- the `:overlap` mode rides the scorer string, which the fixed-id
+// score_one(id, a, b) contract can't carry, so it declines native like
+// numeric_diff (the Python/TS pure-language path handles overlap).
+const ARRAY_INTERSECT_SEPARATORS: [char; 3] = ['|', ';', ','];
+
+/// Split a delimited string into a set of stripped, non-empty tokens -- the
+/// first separator present (in `|`, `;`, `,` order) is used; a value with no
+/// separator is a single-element set; empty/whitespace-only -> empty set.
+/// Mirrors Python `_parse_token_set`.
+fn array_intersect_token_set(s: &str) -> std::collections::HashSet<&str> {
+    let sep = ARRAY_INTERSECT_SEPARATORS.iter().find(|c| s.contains(**c));
+    match sep {
+        None => {
+            let tok = s.trim();
+            if tok.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                std::iter::once(tok).collect()
+            }
+        }
+        Some(&c) => s.split(c).map(str::trim).filter(|t| !t.is_empty()).collect(),
+    }
+}
+
+/// Jaccard set-overlap over delimited tokens (score_one id 19, default mode):
+/// `|A ∩ B| / |A ∪ B|`. Empty token set on either side -> exact-string equality
+/// (never None for non-null input); a zero intersection -> 0.0. Byte-parity with
+/// `_array_intersect_similarity_py(a, b, "array_intersect")` (the jaccard branch).
+pub fn array_intersect_similarity(a: &str, b: &str) -> f64 {
+    let sa = array_intersect_token_set(a);
+    let sb = array_intersect_token_set(b);
+    if sa.is_empty() || sb.is_empty() {
+        return if a == b { 1.0 } else { 0.0 };
+    }
+    let inter = sa.intersection(&sb).count();
+    if inter == 0 {
+        return 0.0;
+    }
+    let union = sa.len() + sb.len() - inter;
+    inter as f64 / union as f64
+}
+
 /// Character-trigram (q-gram) Jaccard similarity on two raw strings, the
 /// reference for `goldenmatch.core.scorer._qgram_score_single` (n=3):
 /// `|A ∩ B| / |A ∪ B|` over the padded q-gram sets. Identical strings (incl.
@@ -1193,6 +1238,9 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // silently zeroing via this catch-all.
         17 => date_diff_similarity(a, b),
         18 => geo_haversine_similarity(a, b),
+        // id 19 = array_intersect (jaccard default; the `:overlap` mode rides the
+        // scorer string and declines native, like numeric_diff).
+        19 => array_intersect_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -1273,6 +1321,39 @@ mod tests {
     fn score_one_id5_is_qgram() {
         assert_eq!(score_one(5, "abc", "abc"), 1.0);
         assert_eq!(score_one(5, "abc", "abd"), qgram_similarity("abc", "abd"));
+    }
+
+    #[test]
+    fn array_intersect_jaccard_default() {
+        // identical -> 1.0
+        assert_eq!(array_intersect_similarity("a|b|c", "a|b|c"), 1.0);
+        // {a,b,c} vs {b,c,d}: inter 2, union 4 -> 0.5
+        assert_eq!(array_intersect_similarity("a|b|c", "b|c|d"), 0.5);
+        // disjoint -> 0.0
+        assert_eq!(array_intersect_similarity("a|b", "c|d"), 0.0);
+        // subset {a,b,c} vs {a}: inter 1, union 3 -> 1/3
+        let s = array_intersect_similarity("a|b|c", "a");
+        assert!((s - 1.0 / 3.0).abs() < 1e-12, "got {s}");
+        // separator precedence + whitespace strip + reorder: {a,b} both -> 1.0
+        assert_eq!(array_intersect_similarity(" a | b ", "b|a"), 1.0);
+        // other separators
+        assert_eq!(array_intersect_similarity("x;y;z", "y;z"), 2.0 / 3.0);
+        assert_eq!(array_intersect_similarity("p,q,r", "q,r,s"), 0.5);
+        // single token, no separator
+        assert_eq!(array_intersect_similarity("solo", "solo"), 1.0);
+        assert_eq!(array_intersect_similarity("solo", "other"), 0.0);
+        // empty token set on either side -> exact-string equality fallback
+        assert_eq!(array_intersect_similarity("", ""), 1.0);
+        assert_eq!(array_intersect_similarity("a|b", ""), 0.0);
+    }
+
+    #[test]
+    fn score_one_id19_is_array_intersect() {
+        assert_eq!(score_one(19, "a|b|c", "a|b|c"), 1.0);
+        assert_eq!(
+            score_one(19, "a|b|c", "b|c|d"),
+            array_intersect_similarity("a|b|c", "b|c|d")
+        );
     }
 
     #[test]

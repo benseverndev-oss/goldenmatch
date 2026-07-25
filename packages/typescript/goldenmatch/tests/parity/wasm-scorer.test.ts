@@ -566,6 +566,45 @@ d("WASM geo_haversine matches the pure-TS scoreField reference (4dp)", () => {
   }
 });
 
+// array_intersect (score_one id 19, jaccard default): token-set Jaccard over a
+// delimited string. Both the WASM kernel and the pure-TS `arrayIntersectSimilarity`
+// do identical set arithmetic (|A∩B|/|A∪B|), so the WASM matrix is byte-exact with
+// the pure-TS fallback. Only the BARE form is WASM-covered — `array_intersect:overlap`
+// rides the scorer string (mode) which the fixed-id score_matrix can't carry, so it
+// stays pure-TS and is covered by scorer-domain-comparators.test.ts, not here.
+// Reference is the pure-TS `scoreField`; asserted byte-exact.
+type ArrayIntersectCase = readonly [a: string, b: string, note: string];
+const ARRAY_INTERSECT_CASES: readonly ArrayIntersectCase[] = [
+  ["a|b|c", "a|b|c", "identical -> 1.0"],
+  ["a|b|c", "b|c|d", "2/4 jaccard -> 0.5"],
+  ["a|b", "c|d", "disjoint -> 0.0"],
+  ["a|b|c", "a", "subset 1/3"],
+  ["x;y;z", "y;z", "semicolon sep -> 2/3"],
+  ["p,q,r", "q,r,s", "comma sep -> 0.5"],
+  ["solo", "solo", "single token no sep -> 1.0"],
+  [" a | b ", "b|a", "whitespace-stripped, reorder -> 1.0"],
+  ["", "", "both empty -> exact fallback 1.0"],
+  ["a|b", "", "one empty -> exact fallback 0.0"],
+];
+
+d("WASM array_intersect matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of ARRAY_INTERSECT_CASES) {
+    it(`array_intersect("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "array_intersect");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "array_intersect");
+      // Rational set arithmetic on both surfaces -> byte-exact.
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();

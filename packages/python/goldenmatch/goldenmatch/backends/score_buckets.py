@@ -268,6 +268,13 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # the fixed-id score_one(id,a,b) can't convey.
     "date_diff": 17,
     "geo_haversine": 18,
+    # id 19 = array_intersect (set-overlap over delimited strings, score-core
+    # score_one, jaccard DEFAULT only). Same wheel-skew story: guarded on the
+    # `array_intersect_similarity` capability symbol below. Only the bare key is
+    # here -- `array_intersect:overlap` carries its mode on the scorer string,
+    # which the fixed-id score_one(id,a,b) can't convey, so it declines native
+    # (and the fast path) exactly like `numeric_diff`.
+    "array_intersect": 19,
     # id 5 = qgram (char-trigram Jaccard, score-core score_one). Same wheel-skew
     # story as date: routing is GUARDED on the `qgram_similarity` capability
     # symbol at the gating site below, so a stale wheel (pre-qgram, whose
@@ -614,6 +621,15 @@ def _resolve_score_pair_callable(
         # tests/test_native_date_diff_geo_parity.py.
         from goldenmatch.core.scorer import _geo_haversine_similarity_py
         return _geo_haversine_similarity_py
+    if scorer_name == "array_intersect" or scorer_name.startswith("array_intersect:"):
+        # Set-overlap comparator over delimited strings. Per-pair mirror of
+        # score-core::array_intersect_similarity (native id 19, jaccard default);
+        # the mode is bound from the scorer string so `:overlap` scores correctly
+        # off the fast path (it declines native + the vec lane -- fixed-id
+        # score_one can't carry the mode). Parity-asserted in
+        # tests/test_native_array_intersect_parity.py.
+        from goldenmatch.core.scorer import _array_intersect_similarity_py
+        return lambda a, b: _array_intersect_similarity_py(a, b, scorer_name)
     if scorer_name == "qgram":
         # Character-trigram Jaccard (n=3). Per-pair mirror of the matrix path
         # (_qgram_score_matrix) AND of score-core::qgram_similarity (native
@@ -1451,6 +1467,7 @@ def score_buckets(
             _date_ok = _mod is not None and hasattr(_mod, "date_similarity")
             _date_diff_ok = _mod is not None and hasattr(_mod, "date_diff_similarity")
             _geo_ok = _mod is not None and hasattr(_mod, "geo_haversine_similarity")
+            _array_intersect_ok = _mod is not None and hasattr(_mod, "array_intersect_similarity")
             _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
             _soundex_ok = _mod is not None and hasattr(_mod, "soundex_similarity")
             _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
@@ -1462,6 +1479,9 @@ def score_buckets(
             has_date = any(spec[3] == "date" for spec in _field_specs)
             has_date_diff = any(spec[3] == "date_diff" for spec in _field_specs)
             has_geo = any(spec[3] == "geo_haversine" for spec in _field_specs)
+            # Only the BARE array_intersect maps to native id 19; the `:overlap`
+            # form isn't in _NATIVE_SCORER_IDS so it never takes the native route.
+            has_array_intersect = any(spec[3] == "array_intersect" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             has_dice = any(spec[3] == "dice" for spec in _field_specs)
@@ -1506,6 +1526,7 @@ def score_buckets(
                 (has_date and not _date_ok)
                 or (has_date_diff and not _date_diff_ok)
                 or (has_geo and not _geo_ok)
+                or (has_array_intersect and not _array_intersect_ok)
                 or (has_qgram and not _qgram_ok)
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)
