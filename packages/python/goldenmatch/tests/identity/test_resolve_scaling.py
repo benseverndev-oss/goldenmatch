@@ -274,6 +274,115 @@ def test_resolve_commits_everything_it_wrote(store):
 
 
 # --------------------------------------------------------------------------
+# 4. emit_singletons SQLite ceiling advisory
+# --------------------------------------------------------------------------
+
+@pytest.fixture()
+def _reset_singleton_warn(monkeypatch):
+    """The advisory fires at most once per process; reset the module flag so
+    each test observes the first-fire behaviour independently."""
+    import goldenmatch.identity.resolve as R
+
+    monkeypatch.setattr(R, "_singleton_ceiling_warned", False)
+    return R
+
+
+def test_singleton_ceiling_warns_once_on_large_sqlite(
+    store, caplog, _reset_singleton_warn
+):
+    """emit_singletons=True on SQLite at/above the ceiling logs one advisory,
+    and only once even across repeated resolves."""
+    R = _reset_singleton_warn
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        R._maybe_warn_singleton_sqlite_ceiling(
+            store, R._SINGLETON_SQLITE_ROW_CEILING
+        )
+        R._maybe_warn_singleton_sqlite_ceiling(
+            store, R._SINGLETON_SQLITE_ROW_CEILING * 20
+        )
+
+    warnings = [
+        rec for rec in caplog.records
+        if "emit_singletons=True on the SQLite backend" in rec.message
+    ]
+    assert len(warnings) == 1, "advisory must fire exactly once per process"
+    assert "emit_singletons=false" in warnings[0].message
+    assert "backend=postgres" in warnings[0].message
+
+
+def test_singleton_ceiling_silent_below_threshold(
+    store, caplog, _reset_singleton_warn
+):
+    """Below the ceiling SQLite is the right default -- no advisory."""
+    R = _reset_singleton_warn
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        R._maybe_warn_singleton_sqlite_ceiling(
+            store, R._SINGLETON_SQLITE_ROW_CEILING - 1
+        )
+    assert not [
+        rec for rec in caplog.records
+        if "emit_singletons=True on the SQLite backend" in rec.message
+    ]
+
+
+def test_singleton_ceiling_silent_on_non_sqlite(caplog, _reset_singleton_warn):
+    """The advisory is SQLite-only -- Postgres has the bulk COPY fast path."""
+    R = _reset_singleton_warn
+    import logging
+
+    class _FakeStore:
+        _backend = "postgres"
+
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        R._maybe_warn_singleton_sqlite_ceiling(
+            _FakeStore(), R._SINGLETON_SQLITE_ROW_CEILING * 100
+        )
+    assert not [
+        rec for rec in caplog.records
+        if "emit_singletons=True on the SQLite backend" in rec.message
+    ]
+
+
+def test_singleton_ceiling_advisory_is_downgrade_safe(
+    tmp_path, caplog, monkeypatch, _reset_singleton_warn
+):
+    """End-to-end: with the ceiling lowered, emit_singletons=True over it warns
+    but still resolves normally (advisory, never a gate); emit_singletons=False
+    over the same size stays silent."""
+    R = _reset_singleton_warn
+    import logging
+
+    monkeypatch.setattr(R, "_SINGLETON_SQLITE_ROW_CEILING", 3)
+
+    def _warns_for(emit: bool, db_name: str) -> bool:
+        s = IdentityStore(path=str(tmp_path / db_name))
+        R._singleton_ceiling_warned = False
+        caplog.clear()
+        with caplog.at_level(
+            logging.WARNING, logger="goldenmatch.identity.resolve"
+        ):
+            resolve_clusters(
+                {1: _cluster([0, 1])}, _df(5), [], "mk", s, run_name="r1",
+                source_pk_col="unique_id", emit_singletons=emit,
+            )
+        warned = any(
+            "emit_singletons=True on the SQLite backend" in rec.message
+            for rec in caplog.records
+        )
+        # downgrade-safe: the resolve still produced identities either way.
+        assert s.count_identities() >= 1
+        s.close()
+        return warned
+
+    assert _warns_for(True, "a.db") is True
+    assert _warns_for(False, "b.db") is False
+
+
+# --------------------------------------------------------------------------
 # 3. scored_pairs must not drive cost
 # --------------------------------------------------------------------------
 

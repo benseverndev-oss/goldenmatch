@@ -46,6 +46,48 @@ from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 log = logging.getLogger("goldenmatch.identity.resolve")
 
+# `emit_singletons=True` turns every input row into an identity, so the SQLite
+# resolve prep + write path scales with the whole input frame rather than with
+# the multi-record identity graph. On the row-at-a-time SQLite backend that
+# becomes impractical in the low millions (measured: 250k rows already slow;
+# `emit_singletons=False` does 1M in ~6 min). Warn once, advisory only, so a
+# large single-node SQLite run gets pointed at the two real levers
+# (`emit_singletons=false` / Postgres) instead of silently degrading.
+_SINGLETON_SQLITE_ROW_CEILING = 100_000
+_singleton_ceiling_warned = False
+
+
+def _maybe_warn_singleton_sqlite_ceiling(store: IdentityStore, n_rows: int) -> None:
+    """One-time, downgrade-safe advisory for the SQLite emit_singletons ceiling.
+
+    Fires at most once per process, only when ``emit_singletons=True`` on a
+    SQLite store over ``>= _SINGLETON_SQLITE_ROW_CEILING`` rows. Anything
+    unexpected (missing attribute, weird backend value) is swallowed -- this is
+    guidance, never a gate, and must not perturb a resolve that would otherwise
+    succeed.
+    """
+    global _singleton_ceiling_warned
+    if _singleton_ceiling_warned:
+        return
+    try:
+        if getattr(store, "_backend", None) != "sqlite":
+            return
+        if n_rows < _SINGLETON_SQLITE_ROW_CEILING:
+            return
+        _singleton_ceiling_warned = True
+        log.warning(
+            "identity resolve: emit_singletons=True on the SQLite backend over "
+            "%d rows turns every row into an identity, so resolve scales with "
+            "the input frame and becomes impractical in the low millions "
+            "(~%d rows is the practical ceiling). Set identity.emit_singletons="
+            "false unless you need a durable id for records that matched "
+            "nothing, or switch to backend=postgres for a bulk COPY write path.",
+            n_rows,
+            _SINGLETON_SQLITE_ROW_CEILING,
+        )
+    except Exception:  # pragma: no cover - advisory must never raise
+        pass
+
 
 @dataclass
 class ResolveSummary:
@@ -345,8 +387,12 @@ def resolve_clusters(
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
 
-    if _tf_a5e(df).height == 0:
+    _n_input_rows = _tf_a5e(df).height
+    if _n_input_rows == 0:
         return summary
+
+    if emit_singletons:
+        _maybe_warn_singleton_sqlite_ceiling(store, _n_input_rows)
 
     # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
     # For the dict path this is ``clusters.items()`` (insertion order = build's
