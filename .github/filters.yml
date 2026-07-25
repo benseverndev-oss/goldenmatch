@@ -558,6 +558,10 @@ native:
   - 'packages/python/goldenmatch/tests/test_embeddings.py'
   - 'packages/python/goldenmatch/tests/test_inhouse_embedder.py'
   - 'scripts/build_native.py'
+  # The pure-Python == Rust-kernel equivalence gate now runs in this lane
+  # (adversarial-corpus belt-and-suspenders over test_native_parity); re-run
+  # when the gate script itself moves.
+  - 'scripts/check_kernel_equivalence.py'
   # autoconfig-core: the native ext exposes the autoconfig kernel
   # via PyO3; these paths trigger the native build + parity suite.
   - 'packages/rust/extensions/autoconfig-core/**'
