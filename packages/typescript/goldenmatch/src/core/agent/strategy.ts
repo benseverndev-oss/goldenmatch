@@ -135,9 +135,13 @@ export function profileForAgent(rows: readonly Row[]): DataProfile {
  * Python's `hits/len(signals)` formula, so only clear-cut domain datasets are
  * guaranteed to agree on the domain branch (documented Wave-1 caveat).
  */
-export function selectStrategy(profile: DataProfile): StrategyDecision {
-  // 1. Sensitive data -> PPRL.
-  if (profile.has_sensitive) {
+export function selectStrategy(
+  profile: DataProfile,
+  allowPprl = false,
+): StrategyDecision {
+  // 1. PPRL only when opted in (allow_pprl) AND sensitive fields are present —
+  //    manual review required. Parity with Python select_strategy(allow_pprl=).
+  if (profile.has_sensitive && allowPprl) {
     return {
       strategy: "pprl",
       why: "Sensitive fields detected; using privacy-preserving record linkage.",
@@ -146,9 +150,29 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
       fuzzy_fields: [],
       backend: null,
       auto_execute: false,
+      pprl_available: true,
     };
   }
 
+  const decision = selectStrategyTree(profile);
+  if (profile.has_sensitive) {
+    // Sensitive fields present but not opted into PPRL: run the normal tree and
+    // flag PPRL as available (opt-in), mirroring Python's appended note.
+    return {
+      ...decision,
+      pprl_available: true,
+      why:
+        decision.why +
+        " Sensitive fields detected — PPRL is available (opt in with allow_pprl=True).",
+    };
+  }
+  return decision;
+}
+
+/** Non-PPRL strategy tree (domain detection through fallback). Port of Python
+ *  `_select_strategy_tree`. Every branch sets `pprl_available: false`; the
+ *  `selectStrategy` wrapper flips it on when sensitive fields are present. */
+function selectStrategyTree(profile: DataProfile): StrategyDecision {
   // Detect domain (best-effort; never throws out of selection).
   let domainName: string | null = null;
   let domainConfidence = 0.0;
@@ -193,6 +217,7 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
       fuzzy_fields: [],
       backend,
       auto_execute: true,
+      pprl_available: false,
     };
   }
 
@@ -206,6 +231,7 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
       fuzzy_fields: fuzzyCandidates,
       backend,
       auto_execute: true,
+      pprl_available: false,
     };
   }
 
@@ -219,6 +245,7 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
       fuzzy_fields: fuzzyCandidates,
       backend,
       auto_execute: true,
+      pprl_available: false,
     };
   }
 
@@ -233,6 +260,7 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
       fuzzy_fields: [],
       backend,
       auto_execute: true,
+      pprl_available: false,
     };
   }
 
@@ -247,6 +275,7 @@ export function selectStrategy(profile: DataProfile): StrategyDecision {
       .map((f) => f.name),
     backend,
     auto_execute: true,
+    pprl_available: false,
   };
 }
 

@@ -43,6 +43,15 @@ $PY "$GM/scripts/emit_ts_parity_fixtures.py" \
     --indicators-out "$PARITY/indicators-fixtures.json" \
     --ne-out "$PARITY/negative-evidence-fixtures.json"
 
+echo "== goldenmatch: agent decisions (analyze + select_strategy) =="
+# Arrow-native since 2026-07-25, so this runs polars-free; wiring it here closes
+# the #856 hole that let the select_strategy pprl-gate drift sit undetected.
+$PY "$GM/scripts/emit_agent_fixtures.py"
+
+echo "== goldenmatch: anomaly + rapidfuzz scorer goldens =="
+$PY "$GM/scripts/emit_anomaly_fixture.py"
+$PY "$GM/scripts/emit_scorer_parity_fixtures.py"
+
 echo "== goldenmatch: v2 (planner / EM / domain / tuners / blocker / clustering / golden) =="
 $PY "$GM/scripts/emit_v2_parity_fixtures.py" --out "$PARITY/v2-fixtures.json"
 

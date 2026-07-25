@@ -50,13 +50,18 @@ def _write_agent_correction(
         df = getattr(session, "data", None)
         if df is not None:
             try:
+                from goldenmatch.core.frame import to_frame
                 from goldenmatch.core.memory.corrections import (
                     build_row_lookup,
                     compute_field_hash,
                     compute_record_hash,
                 )
 
-                cols = [c for c in df.columns if not c.startswith("__")]
+                # df is arrow-native (pyarrow.Table) on the agent path; take
+                # column NAMES via the frame abstraction (pa.Table.columns is
+                # the arrays, not names). build_row_lookup/compute_record_hash
+                # already accept a Table via to_frame.
+                cols = [c for c in to_frame(df).columns if not c.startswith("__")]
                 if cols:
                     lookup = build_row_lookup(df, cols)
                     if ca in lookup and cb in lookup:
