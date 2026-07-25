@@ -313,6 +313,18 @@ pub fn array_intersect_similarity(a: &str, b: &str) -> f64 {
     goldenmatch_score_core::array_intersect_similarity(a, b)
 }
 
+/// Magnitude-aware numeric comparator (score-core; pct:0.1 default at score_one
+/// id 22, parameterized abs/pct forms via the `spec` arg). Own #[pyfunction]
+/// capability marker like `array_intersect_similarity`; the per-pair path passes
+/// the FULL scorer string as `spec` so `numeric_diff:abs:<eps>` /
+/// `numeric_diff:pct:<frac>` are kernel-backed, while the batch score_one(22) path
+/// uses the default. A stale wheel lacking the symbol declines to the pure-Python
+/// mirror (`_numeric_diff_similarity_py`).
+#[pyfunction]
+pub fn numeric_diff_similarity(a: &str, b: &str, spec: &str) -> f64 {
+    goldenmatch_score_core::numeric_diff_similarity(a, b, spec)
+}
+
 /// Character-trigram Jaccard (q-gram) similarity (score-core id 5). Exposed as
 /// its own #[pyfunction] capability marker, exactly like `date_similarity`:
 /// `score_one` / `score_block_pairs` dispatch id 5, but a stale published wheel

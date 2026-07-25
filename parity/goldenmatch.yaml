@@ -269,20 +269,20 @@ scorers:
   - jaro_winkler
   - levenshtein
   - name_freq_weighted_jw
+  - numeric_diff
   - phash
   - qgram
   - radial
   - record_embedding
   - soundex_match
   - token_sort
-  python_only:
+  python_only: []
   # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
-  # splink-domain-comparator-conversion), FS-path only. Kept sorted (parity gate).
-  # date_diff + geo_haversine (2026-07-25 Phase 4) and array_intersect (P5/P6,
-  # jaccard default) moved to `shared` on their TS/WASM port + score-core kernel.
-  # Magnitude-aware numeric comparator (abs/pct banded distance); needs the
-  # parameterized score_one contract before it can be kernel-backed + ported.
-  - numeric_diff
+  # splink-domain-comparator-conversion): ALL of date_diff, geo_haversine,
+  # array_intersect, and numeric_diff are now shared (score-core kernel + TS port).
+  # numeric_diff (2026-07-25 Part D): score_one id 22 for the pct:0.1 default +
+  # a spec-carrying kernel (numeric_diff_similarity(a,b,spec)) on the per-pair
+  # path for the abs/pct parameterized forms; pure-TS numericDiffSimilarity.
   ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
 # VALID_TRANSFORMS). Currently in exact parity -- no declared deltas.
@@ -379,23 +379,24 @@ scorer_kernels:
   - jaro_winkler
   - levenshtein
   - name_freq_weighted_jw
+  - numeric_diff
   - phash
   - qgram
   - radial
   - soundex_match
   - token_sort
   python_only: []
-  # date_diff + geo_haversine (score_one ids 17/18) and array_intersect (id 19,
-  # jaccard default) are kernel-backed on BOTH Python-native (score-core kernels +
-  # pyo3 shims, tests/test_native_{date_diff_geo,array_intersect}_parity.py) AND
-  # TS/WASM: the score-wasm score_matrix catch-all dispatches score_one(17/18/19)
-  # and the pure-TS fallback matches (tests/parity/scorer-domain-comparators.test.ts
-  # + wasm-scorer.test.ts) -> shared. array_intersect's `:overlap` MODE rides the
-  # scorer string (fixed-id score_one can't carry it) so it declines native like
-  # numeric_diff, but the scorer is kernel-backed for its default -> shared (the
-  # `date`-declines-on-stale-wheel contract: the kernel exists + is reachable).
-  # numeric_diff stays deferred (its band, not just a mode enum, rides the string
-  # AND auto-config always emits the parameterized form) -- see scorer_kernels_deferred.
+  # The FS domain comparators are ALL kernel-backed on BOTH Python-native
+  # (score-core kernels + pyo3 shims) AND TS/WASM now -> shared: date_diff/
+  # geo_haversine (score_one ids 17/18), array_intersect (id 19, jaccard default),
+  # numeric_diff (id 22, pct:0.1 default). Their MODE/BAND-parameterized forms
+  # (array_intersect:overlap, numeric_diff:abs|pct:<band>) ride the scorer string
+  # which the fixed-id score_one can't carry, so those forms flow through the
+  # spec-carrying kernel on the per-pair path (numeric_diff) / decline to pure
+  # (array_intersect:overlap) -- but each scorer's DEFAULT is kernel-backed +
+  # reachable, which is the `shared` contract (the `date`-declines-on-stale-wheel
+  # rule). Parity: tests/parity/scorer-domain-comparators.test.ts + wasm-scorer.test.ts
+  # + tests/test_native_{date_diff_geo,array_intersect,numeric_diff}_parity.py.
   ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
@@ -408,7 +409,10 @@ scorer_kernels:
 scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
-  numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
+  # numeric_diff was kernelized 2026-07-25 (Part D): score_one id 22 default +
+  # spec-carrying kernel for the parameterized forms -> moved to scorer_kernels.
+  # Only the two model-backed embedding scorers remain deferred (n/a); every
+  # string/numeric scorer is now kernel-backed. Arc closed.
 # blocking_kernels_deferred: the COVERAGE FLOOR for the `blocking_strategies` surface
 # (check_blocking_coverage). Every strategy NOT in `blocking_strategies.shared` (i.e.
 # python_only / ts_only) MUST appear here with a reason, so a non-shared blocking

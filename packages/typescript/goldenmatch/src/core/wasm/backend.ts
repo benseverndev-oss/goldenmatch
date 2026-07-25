@@ -122,6 +122,10 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   // is NOT a key: the mode rides the scorer string, which the fixed-id wasm
   // score_matrix can't carry, so it stays pure-TS (like the Python native decline).
   array_intersect: 19,
+  // Bare (pct:0.1-default) form only -> score_one id 22. Parameterized
+  // `numeric_diff:abs|pct:<band>` forms ride the scorer string (fixed-id
+  // score_matrix can't carry the band) and stay pure-TS. (ids 20/21 = name scorers.)
+  numeric_diff: 22,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

@@ -429,6 +429,70 @@ pub fn array_intersect_similarity(a: &str, b: &str) -> f64 {
     inter as f64 / union as f64
 }
 
+// --- numeric_diff: magnitude-aware numeric comparator ----------------------
+// The reference for `goldenmatch.core.scorer._numeric_diff_similarity_py`. The
+// band + mode ride the scorer STRING (`numeric_diff:abs:<eps>` /
+// `numeric_diff:pct:<frac>`; bare / malformed -> pct:0.1), which the fixed-id
+// `score_one(id, a, b)` can't carry -- so the SPEC-carrying kernel below is used
+// by the per-pair native path for the parameterized forms, and score_one id 22
+// covers the DEFAULT (pct:0.1) form for the batch surface (like array_intersect's
+// jaccard default at id 19). Unparseable input -> exact-string equality (never
+// None for non-null input), matching the Python mirror.
+const NUMERIC_DIFF_DEFAULT: (&str, f64) = ("pct", 0.1);
+const NUMERIC_PCT_EPS: f64 = 1e-9; // guards the pct denominator when both ~0
+
+/// `numeric_diff[:abs|pct:<band>]` -> `(mode, band)`; bare / malformed -> the
+/// default (`pct`, 0.1). Mirrors Python `_parse_numeric_diff_spec`.
+fn parse_numeric_diff_spec(scorer: &str) -> (&'static str, f64) {
+    let parts: Vec<&str> = scorer.split(':').collect();
+    if parts.len() == 3 && parts[0] == "numeric_diff" && (parts[1] == "abs" || parts[1] == "pct") {
+        if let Ok(band) = parts[2].parse::<f64>() {
+            if band > 0.0 {
+                return (if parts[1] == "abs" { "abs" } else { "pct" }, band);
+            }
+        }
+    }
+    NUMERIC_DIFF_DEFAULT
+}
+
+/// Float value of a string, else None (also None for `nan`/`inf` -- garbage
+/// numerics must read as unparseable). Mirrors Python `_parse_float`.
+fn parse_numeric_float(s: &str) -> Option<f64> {
+    let v: f64 = s.trim().parse().ok()?;
+    if v.is_finite() {
+        Some(v)
+    } else {
+        None
+    }
+}
+
+/// Banded numeric-distance similarity (score_one id 22 for the pct:0.1 default;
+/// the parameterized forms flow through the `spec` arg on the per-pair path).
+/// Byte-parity with `_numeric_diff_similarity_py`.
+pub fn numeric_diff_similarity(a: &str, b: &str, spec: &str) -> f64 {
+    match (parse_numeric_float(a), parse_numeric_float(b)) {
+        (Some(x), Some(y)) => {
+            let (mode, band) = parse_numeric_diff_spec(spec);
+            let mut dist = (x - y).abs();
+            if mode == "pct" {
+                dist /= x.abs().max(y.abs()).max(NUMERIC_PCT_EPS);
+            }
+            if dist >= band {
+                0.0
+            } else {
+                1.0 - dist / band // 1.0 at dist 0, linear decay to the band edge
+            }
+        }
+        _ => {
+            if a == b {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 /// Character-trigram (q-gram) Jaccard similarity on two raw strings, the
 /// reference for `goldenmatch.core.scorer._qgram_score_single` (n=3):
 /// `|A ∩ B| / |A ∪ B|` over the padded q-gram sets. Identical strings (incl.
@@ -1239,8 +1303,12 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         17 => date_diff_similarity(a, b),
         18 => geo_haversine_similarity(a, b),
         // id 19 = array_intersect (jaccard default; the `:overlap` mode rides the
-        // scorer string and declines native, like numeric_diff).
+        // scorer string, carried on the per-pair path).
         19 => array_intersect_similarity(a, b),
+        // id 22 = numeric_diff DEFAULT (pct:0.1); parameterized abs/pct forms ride
+        // the spec on the per-pair path via numeric_diff_similarity(a,b,spec).
+        // (ids 20/21 are the score-wasm name scorers, not score_one arms here.)
+        22 => numeric_diff_similarity(a, b, "numeric_diff"),
         _ => 0.0,
     }
 }
@@ -1353,6 +1421,39 @@ mod tests {
         assert_eq!(
             score_one(19, "a|b|c", "b|c|d"),
             array_intersect_similarity("a|b|c", "b|c|d")
+        );
+    }
+
+    #[test]
+    fn numeric_diff_bands_and_modes() {
+        // pct default (0.1 band): identical -> 1.0
+        assert_eq!(numeric_diff_similarity("100", "100", "numeric_diff"), 1.0);
+        // pct: |100-105|/105 = 0.0476 < 0.1 -> 1 - 0.476 = 0.5238...
+        let s = numeric_diff_similarity("100", "105", "numeric_diff");
+        assert!((s - (1.0 - (5.0 / 105.0) / 0.1)).abs() < 1e-12, "got {s}");
+        // pct: |100-900|/900 = 0.888 >= 0.1 -> 0.0
+        assert_eq!(numeric_diff_similarity("100", "900", "numeric_diff:pct:0.1"), 0.0);
+        // abs mode: |10-11| = 1 < band 2 -> 1 - 0.5 = 0.5
+        assert_eq!(numeric_diff_similarity("10", "11", "numeric_diff:abs:2"), 0.5);
+        // abs mode: |10-13| = 3 >= band 2 -> 0.0
+        assert_eq!(numeric_diff_similarity("10", "13", "numeric_diff:abs:2"), 0.0);
+        // unparseable -> exact-string fallback
+        assert_eq!(numeric_diff_similarity("x", "x", "numeric_diff"), 1.0);
+        assert_eq!(numeric_diff_similarity("x", "y", "numeric_diff"), 0.0);
+        assert_eq!(numeric_diff_similarity("nan", "nan", "numeric_diff"), 1.0); // nan unparseable -> exact
+        // malformed spec -> default pct:0.1
+        assert_eq!(
+            numeric_diff_similarity("100", "105", "numeric_diff:bogus"),
+            numeric_diff_similarity("100", "105", "numeric_diff"),
+        );
+    }
+
+    #[test]
+    fn score_one_id22_is_numeric_diff_default() {
+        assert_eq!(score_one(22, "100", "100"), 1.0);
+        assert_eq!(
+            score_one(22, "100", "105"),
+            numeric_diff_similarity("100", "105", "numeric_diff"),
         );
     }
 
