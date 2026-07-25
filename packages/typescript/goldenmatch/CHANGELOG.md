@@ -4,6 +4,19 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.24.0] - 2026-07-24
+
+### Added
+- **`init`, `label`, and `review` CLI commands** (parity batch 7) -- the interactive tier. goldenmatch `cli_commands.python_only` **9 -> 6**.
+  - `init [-o out.yaml]` -- config wizard. `src/node/config-wizard.ts` ports `config/wizard.py`, including the `suggestTransforms` / `suggestScorer` heuristic tables byte-faithfully, so both wizards propose the same config for the same column names.
+  - `label <files...> -c <config> [-o gt.csv] [-n 50] [--strategy borderline|random|hardest] [-a]` -- build ground truth by labeling pairs (y/n/s/q), writing a CSV for `evaluate`.
+  - `review <files...> -c <config> [--merge-threshold] [--reject-below] [-n 50]` -- steward the borderline band via the existing `gatePairs`, recording approve/reject decisions to Learning Memory.
+
+### Design note
+- **The loops take an injectable `Ask` rather than reading stdin directly** (`src/node/interactive.ts`), so the decision logic is unit-testable by scripting a session. Python's equivalents call Rich prompts inline and therefore have no loop tests; this port deliberately does not reproduce that. 28 tests cover strategy ordering, y/n/s/q handling, mid-session quit preserving work, either-orientation `--append` dedup, 4dp score rounding, and two scripted end-to-end wizard sessions.
+- `review` persists **after** the loop, so a mid-session `q` still records what was already decided.
+- `toYaml` is hand-rolled rather than pulling the optional `yaml` peer dep, so `init` cannot fail on a missing optional dependency. It quotes values YAML would otherwise reinterpret (a column named `no` stays a string).
+
 ## [1.23.0] - 2026-07-24
 
 ### Added
