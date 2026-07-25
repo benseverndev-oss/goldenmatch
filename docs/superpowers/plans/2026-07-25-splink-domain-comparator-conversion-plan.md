@@ -243,3 +243,32 @@ Revised roadmap: **P2 = date recognizer (DONE — this branch)**, **P3 = geo + a
   and are dropped + re-normalized (asserted in `test_from_splink_domain.py`).
 - Tests: `tests/test_from_splink_domain.py` (13). No parity-manifest change (`date_diff` is an
   existing scorer from the 2026-07-23 FS work; P2 only adds a *recognizer*).
+
+## 9. P3a delivered — array_intersect recognizer (2026-07-25)
+`ArrayIntersectAtSizes` (`array_length(list_intersect(...)) >= n` DuckDB /
+`SIZE(ARRAY_INTERSECT(...)) >= n` Spark) now recognized. Per the resolved decision (7.1):
+- `_ARRAY_INTERSECT_LEVEL_RE` extracts column + count. Count `>= n` snaps to overlap ratio
+  `min(1.0, n / _ARRAY_ASSUMED_SET_SIZE)` (`_ARRAY_ASSUMED_SET_SIZE = 10`, biased low for recall),
+  emits scorer `array_intersect:overlap` (P1's scorer), `approx=True` + a warn naming the snap.
+- `RecognizedLevel` gained an optional `scorer` override (kind stays `array_intersect` for the
+  single-domain-family check; the scorer STRING carries the `:overlap` mode). `convert_comparison`
+  resolves the field scorer from that override, else the family kind.
+- `ArrayIntersectAtSizes([3,1])` → `array_intersect:overlap`, 3 levels `[0.3, 0.1]`.
+- Tests added to `test_from_splink_domain.py` (recognizer both dialects, conversion, snap warn,
+  trained import, + the now-triggerable two-distinct-domain-families guard). No parity-manifest
+  change (`array_intersect` is P1's existing scorer). Full splink suite 166 green; polars-free.
+
+## 10. Geo (geo_haversine) — BLOCKED on a schema decision (P3b)
+Deferred from P3a: the plan (3) assumed a `MatchkeyField` with `derive_from=[lat,lng]` + a comma
+concat. VERIFIED that assumption is WRONG in two ways:
+1. `derive_from` lives on `NegativeEvidenceField`, NOT `MatchkeyField` — the converter emits
+   `MatchkeyField`, which has no synthesized-field mechanism.
+2. `NegativeEvidenceField.derive_from` **space-joins** its sources, but `geo_haversine`'s
+   `_parse_latlong` requires a **comma/semicolon** separator ("lat,long"). Space-join wouldn't parse.
+So geo is NOT just a recognizer — `geo_haversine` scores ONE combined "lat,long" field, while Splink
+gives two SEPARATE columns. Making it work end-to-end needs a NEW `MatchkeyField` synthesized-field
+mechanism (`derive_from` + a `,` separator) AND pipeline materialization of that field before
+scoring. That's a cross-cutting schema + pipeline feature (higher-risk, own tests + parity), not a
+recognizer. **Decision needed from Ben** (see the session hand-off): (a) add the derive_from+separator
+plumbing to MatchkeyField as P3b, or (b) recognize the haversine level but emit it as a DROPPED
+comparison with a clear "cross-column geo not yet representable" warning until the plumbing lands.
