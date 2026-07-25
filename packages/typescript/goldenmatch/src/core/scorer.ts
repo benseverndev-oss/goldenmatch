@@ -427,7 +427,10 @@ const EARTH_RADIUS_KM = 6371.0088;
  * (hex/etc.) that JS `Number` would otherwise accept. */
 function parseCoordFloat(s: string): number | null {
   const t = s.trim();
-  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t)) return null;
+  // ReDoS-safe float shape: the two digit runs are separated by a REQUIRED `.`
+  // (`\d+(?:\.\d*)?`), never adjacent optional-dot quantifiers, so there is no
+  // polynomial backtracking on long digit strings. Same accepted set as before.
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(t)) return null;
   const v = Number(t);
   return Number.isFinite(v) ? v : null;
 }

@@ -30,8 +30,8 @@ The Rust / Arrow-native / fused `-core` kernels are the source of truth for scor
 
 | Substrate | Scorers |
 |---|---|
-| Rust `-core` kernel — Python + TS | `alias_match`, `audio_fp`, `date`, `dice`, `ensemble`, `exact`, `given_name_aliased_jw`, `initialism_match`, `jaccard`, `jaro_winkler`, `levenshtein`, `name_freq_weighted_jw`, `phash`, `qgram`, `radial`, `soundex_match`, `token_sort` |
-| Rust `-core` kernel — Python arrow-native only (TS falls back) | `date_diff`, `geo_haversine` |
+| Rust `-core` kernel — Python + TS | `alias_match`, `audio_fp`, `date`, `date_diff`, `dice`, `ensemble`, `exact`, `geo_haversine`, `given_name_aliased_jw`, `initialism_match`, `jaccard`, `jaro_winkler`, `levenshtein`, `name_freq_weighted_jw`, `phash`, `qgram`, `radial`, `soundex_match`, `token_sort` |
+| Rust `-core` kernel — Python arrow-native only (TS falls back) | — |
 | WASM `-core` kernel — TS only (Python falls back) | — |
 | Language fallback — no `-core` kernel | `array_intersect`, `embedding`, `numeric_diff`, `record_embedding` |
 
@@ -44,7 +44,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 | `goldenmatch` | mcp_tools | 83 | 7 | 0 |
 | `goldenmatch` | cli_commands | 32 | 5 | 0 |
 | `goldenmatch` | a2a_skills | 33 | 14 | 13 |
-| `goldenmatch` | scorers | 19 | 4 | 0 |
+| `goldenmatch` | scorers | 21 | 2 | 0 |
 | `goldenmatch` | transforms | 13 | 0 | 0 |
 | `goldencheck` | mcp_tools | 18 | 1 | 0 |
 | `goldencheck` | cli_commands | 14 | 8 | 0 |
@@ -67,7 +67,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 - `goldenmatch` **cli_commands** — Python-only: `ingest-docs`, `serve-ui`, `setup`, `sync`, `watch`.
 - `goldenmatch` **a2a_skills** — Python-only: `analyze_blocking`, `compare_clusters`, `configure`, `documents_ingest`, `documents_suggest_schema`, `incremental`, `list_runs`, `pprl`, `quality`, `retrieve_similar`, `review`, `rollback`, `schema_match`, `sensitivity`.
 - `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `fix_quality`, `identity_profile`, `identity_stats`, `identity_worklist`, `memory_import`, `scan_quality`, `score`.
-- `goldenmatch` **scorers** — Python-only: `array_intersect`, `date_diff`, `geo_haversine`, `numeric_diff`.
+- `goldenmatch` **scorers** — Python-only: `array_intersect`, `numeric_diff`.
 - `goldencheck` **mcp_tools** — Python-only: `install_domain`.
 - `goldencheck` **cli_commands** — Python-only: `denial-constraints`, `init`, `learn`, `refs`, `review`, `scan-db`, `schedule`, `serve`.
 - `goldenflow` **cli_commands** — Python-only: `init`, `interactive`, `schedule`, `watch`.
