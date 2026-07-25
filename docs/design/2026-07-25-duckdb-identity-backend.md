@@ -32,36 +32,48 @@ batched `rowpath`, a stdlib `staging` table + `executemany` + upsert, and
 Arrow-native `adbc` ingest into the same staging table) measured, byte-identical
 output across all arms:
 
+Authoritative `large-new-64GB` numbers, content-hash identical across all arms:
+
 | N | arm | wall | peak RSS | db size |
 |---|---|---|---|---|
-| 100k (local, Linux) | rowpath | 19.95 s | 0.555 GB | 212 MB |
-| 100k | staging | 8.88 s | 0.556 GB | 212 MB |
-| 100k | adbc | 6.24 s | 0.505 GB | 338 MB |
-| 1M (local, Linux) | staging | 182.4 s | 4.761 GB | 2175 MB |
-| 1M | adbc | 125.2 s | 4.665 GB | 3430 MB |
+| 100k | rowpath | 13.74 s | 0.662 GB | 212 MB |
+| 100k | staging | 5.44 s | 0.659 GB | 212 MB |
+| 100k | adbc | 3.29 s | 0.566 GB | 338 MB |
+| 1M | rowpath | 175.94 s | 5.714 GB | 2175 MB |
+| 1M | staging | 65.65 s | 5.715 GB | 2175 MB |
+| 1M | adbc | 41.32 s | 5.294 GB | 3430 MB |
+| 5M | rowpath | 987.39 s | 24.719 GB | 10906 MB |
+| 5M | staging | 445.05 s | 26.039 GB | 10906 MB |
+| 5M | adbc | 392.15 s | 24.543 GB | 17184 MB |
 
-(The authoritative `large-new-64GB` run adds the 5M point and the 1M `rowpath`
-baseline; numbers here are local Linux and directional, but the *ratios* are the
-decision input and are stable across the two measured scales.)
+Per-scale harness verdict (`adbc` vs `staging`, GO if ≥1.5× wall OR ≥30% RSS):
+**GO / GO / NO-GO** — 1.65× wall·14% RSS, 1.59× wall·7% RSS, 1.13× wall·6% RSS.
 
 Two findings drive everything below:
 
 1. **`staging` (stdlib, zero new dependency) captures the bulk of the win.** It
-   is ~2.25× faster than `rowpath` at 100k with identical peak RSS. The
-   `emit_singletons=False` OOM was already removed by #2111; `staging` banks the
-   remaining per-statement throughput win with no dependency.
+   is ~2.5× over `rowpath` at 100k, ~2.7× at 1M, ~2.2× at 5M, with identical peak
+   RSS. The `emit_singletons=False` OOM was already removed by #2111; `staging`
+   banks the remaining per-statement throughput win with no dependency. (`adbc`
+   is a further ~1.6× faster than `staging` at 100k/1M, but that advantage decays
+   to 1.13× at 5M — the scale where a bulk path is actually needed — and it is
+   the *wall*, not the memory, that ADBC moves.)
 2. **Arrow-native ingest does *not* fix the memory ceiling.** `adbc` ingests the
    Arrow table directly — no `to_pylist()`, no per-row Python dict — yet its peak
-   RSS is within **2% of `staging` at 1M** (4.665 vs 4.761 GB), and the gap is
-   *closing* with scale (9% at 100k → 2% at 1M). The doc's headline hypothesis —
-   "eliminating the per-row Python object is the real prize" — is **refuted**:
-   the memory floor is the **materialised Arrow table itself** (~2.2 GB of
-   JSON-in-string payloads for 1M identities + 2.14M records), plus the engine's
-   write buffers, not the `to_pylist` delta on top of it.
+   RSS is only **14% → 7% → 6% below `staging`** across 100k/1M/5M, never within
+   reach of the 30% bar, and the gap **narrows** with scale (at 5M, 24.5 vs 26.0
+   GB). The doc's headline hypothesis — "eliminating the per-row Python object is
+   the real prize" — is **refuted**: the memory floor is the **materialised Arrow
+   table itself** (~JSON-in-string payloads across the identity + record columns)
+   plus the engine's write buffers, not the `to_pylist` delta on top of it.
 
-The ADBC verdict, by its own pre-committed kill criteria (`< 1.5× wall AND
-< 30% RSS at 1M ⇒ NO-GO; only proceed if Arrow ingest clearly wins on RSS at
-5M`): **NO-GO. Ship `staging`, drop the ADBC dependency.**
+The per-scale harness verdict is GO / GO / NO-GO (adbc clears the 1.5× wall bar
+at 100k/1M but decays to 1.13× at 5M, and never approaches the 30% RSS bar). The
+**net** ADBC decision is still **NO-GO on the dependency** — the wall win is at
+scales that don't need a bulk path and evaporates at 5M, the memory prize never
+materialises, and it costs a native dependency + 58%-larger files + the
+single-writer complexity. Ship stdlib `staging`. (Full reasoning in the ADBC
+doc's "Spike result".)
 
 **The load-bearing consequence for DuckDB:** DuckDB's bulk write, when handed the
 same in-memory Arrow table, sits behind the *same* Arrow-table memory floor as
@@ -93,7 +105,7 @@ throughput:
    Unlike the spike's in-memory arms, DuckDB can `read_parquet`/scan a source
    lazily and spill, so an ingest that streams from the *source* (rather than a
    fully-materialised in-memory Arrow table) could bound peak RSS below `staging`'s
-   4.7 GB at 1M. This is conditional on the write path handing DuckDB a lazy
+   ~5.7 GB at 1M / ~26 GB at 5M. This is conditional on the write path handing DuckDB a lazy
    source, which the current resolve path does not — see the measurement below.
 4. **Direction fit + already a dependency.** `duckdb>=0.9` and `pyarrow>=10` are
    already present; the Frame seam has an Arrow lane; the chunked/prepared-record
@@ -156,7 +168,7 @@ is **memory under a streaming ingest.** Add two arms to the existing harness
 - `duckdb_stream` — write the source to Parquet first, then
   `INSERT ... SELECT ... FROM read_parquet(...) ON CONFLICT DO UPDATE` so DuckDB
   scans and spills instead of holding the frame. **This is the real test:** does
-  streaming ingest bound peak RSS below `staging`'s ~4.7 GB at 1M?
+  streaming ingest bound peak RSS below `staging`'s ~5.7 GB at 1M / ~26 GB at 5M?
 
 **Kill criteria (pre-committed, mirroring the ADBC doc):**
 
