@@ -391,6 +391,12 @@ api_parity:
   # without these.
   - 'packages/python/*/*/scorers/__init__.py'
   - 'packages/typescript/*/src/core/scorers/registry.ts'
+  # goldenflow declares its transform vocabulary via @register_transform /
+  # registerTransform across the transform modules (+ the TS-only LLM corrector) --
+  # the gate can't see a transform add/remove on one language without these.
+  - 'packages/python/*/*/transforms/**'
+  - 'packages/typescript/*/src/core/transforms/**'
+  - 'packages/typescript/*/src/core/llm/corrector.ts'
   - 'parity/**'
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'

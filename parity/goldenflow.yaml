@@ -54,3 +54,133 @@ a2a_skills:
   - transform-data
   python_only: []
   ts_only: []
+# The transform vocabulary (each transform's registered name). Emitted from
+# goldenflow.transforms.list_transforms (Python, all submodules registered via
+# `import goldenflow`) <-> core/transforms/registry.ts listTransforms() (TS). This
+# is the cross-language `transforms` parity surface -- the goldenflow analogue of
+# goldenmatch's transforms surface (a partition, no kernel floor; goldenflow-core
+# kernel-backing is separately guarded by the native_symbols `literal` idiom gate).
+# 113 transforms are shared 1:1 across Python + TS. The one delta is the TS-only
+# edge-side LLM corrector.
+transforms:
+  shared:
+  - aba_validate
+  - abs_value
+  - address_expand
+  - address_standardize
+  - age_from_dob
+  - boolean_normalize
+  - category_auto_correct
+  - category_from_file
+  - category_standardize
+  - cc_brand
+  - cc_format
+  - cc_mask
+  - cc_validate
+  - clamp
+  - collapse_whitespace
+  - comma_decimal
+  - company_extract_legal
+  - company_normalize
+  - company_strip_legal
+  - country_standardize
+  - currency_strip
+  - cusip_validate
+  - date_eu
+  - date_iso8601
+  - date_parse
+  - date_shift
+  - date_us
+  - date_validate
+  - datetime_iso8601
+  - double_metaphone_alt
+  - double_metaphone_primary
+  - ean_validate
+  - ein_format
+  - email_canonical
+  - email_extract_domain
+  - email_lowercase
+  - email_mask
+  - email_normalize
+  - email_validate
+  - extract_day
+  - extract_day_of_week
+  - extract_month
+  - extract_numbers
+  - extract_quarter
+  - extract_year
+  - fill_zero
+  - fix_mojibake
+  - fraction_to_decimal
+  - gender_standardize
+  - iban_format
+  - iban_validate
+  - imei_validate
+  - initial_expand
+  - isbn_normalize
+  - isbn_validate
+  - isin_validate
+  - lowercase
+  - luhn_validate
+  - merge_name
+  - name_initials
+  - name_proper
+  - name_script
+  - name_transliterate
+  - nickname_standardize
+  - normalize_line_endings
+  - normalize_quotes
+  - normalize_unicode
+  - npi_validate
+  - null_standardize
+  - ordinal_to_int
+  - pad_left
+  - pad_right
+  - percentage_normalize
+  - phone_country_code
+  - phone_digits
+  - phone_e164
+  - phone_national
+  - phone_validate
+  - remove_digits
+  - remove_emojis
+  - remove_html_tags
+  - remove_punctuation
+  - remove_urls
+  - roman_to_int
+  - round
+  - scientific_to_decimal
+  - soundex
+  - split_address
+  - split_name
+  - split_name_reverse
+  - ssn_format
+  - ssn_mask
+  - state_abbreviate
+  - state_expand
+  - strip
+  - strip_middle
+  - strip_suffixes
+  - strip_titles
+  - swift_format
+  - swift_validate
+  - title_case
+  - to_integer
+  - truncate
+  - unit_normalize
+  - uppercase
+  - url_canonical
+  - url_extract_domain
+  - url_normalize
+  - url_strip_tracking
+  - url_strip_www
+  - vat_format
+  - vat_validate
+  - zip_normalize
+  python_only: []
+  # category_llm_correct is a TS-only, edge-safe LLM-assisted categorical
+  # corrector (core/llm/corrector.ts): a passthrough sync transform whose real
+  # work is an async fetch to a model. Model-backed + edge-only, so it has no
+  # Python transform equivalent -- a declared delta, not silent drift.
+  ts_only:
+  - category_llm_correct
