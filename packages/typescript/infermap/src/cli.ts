@@ -28,6 +28,7 @@ Usage:
   infermap apply <source> --config <file> --output <file>
   infermap inspect <source> [--table <name>]
   infermap validate <source> --config <file> [--required <fields>] [--strict]
+  infermap mcp-serve
   infermap --help
 
 Common options:
@@ -272,7 +273,7 @@ async function cmdValidate(argv: string[]): Promise<number> {
 // ---------- entrypoint ----------
 
 // Canonical CLI command set (mirrors the main() dispatch); read by the API-parity emitter.
-export const COMMANDS = ["apply", "inspect", "map", "validate"];
+export const COMMANDS = ["apply", "inspect", "map", "mcp-serve", "validate"];
 
 async function main(): Promise<number> {
   const [, , cmd, ...rest] = process.argv;
@@ -295,6 +296,12 @@ async function main(): Promise<number> {
         return await cmdInspect(rest);
       case "validate":
         return await cmdValidate(rest);
+      case "mcp-serve": {
+        // Zero-dep JSON-RPC-over-stdio loop; runs until stdin closes.
+        const { startMcpServer } = await import("./node/mcp/server.js");
+        startMcpServer();
+        return 0;
+      }
       default:
         process.stderr.write(`Unknown command: ${cmd}\n\n${USAGE}`);
         return 1;

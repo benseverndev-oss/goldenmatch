@@ -1,0 +1,17 @@
+---
+title: "InferMap CLI"
+description: "Every InferMap command for schema mapping and inspection."
+keywords: ["infermap", "cli", "commands", "schema", "mapping"]
+---
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `infermap map SOURCE TARGET` | Map fields from `SOURCE` to a `TARGET` schema. |
+| `infermap apply CONFIG SOURCE OUTPUT` | Apply a saved mapping config to a source CSV, writing renamed columns to `OUTPUT`. |
+| `infermap inspect SOURCE` | Inspect a data source: show fields, types, samples, and stats. |
+| `infermap validate CONFIG SOURCE` | Validate that source columns exist for a saved mapping config. |
+| `infermap mcp-serve` | Start the MCP server for Claude Desktop (stdio) or remote deployment (http). |
+
+See [Mapping](/infermap/mapping) for how mappings are inferred and [Config matrix](/infermap/config-matrix) for the config reference.

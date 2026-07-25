@@ -292,3 +292,18 @@ def steward_worklist(
         it.entity_id,
     ))
     return items[:limit]
+
+
+def steward_worklist_page(
+    store: IdentityStore,
+    dataset: str | None = None,
+    *,
+    weak_confidence: float = 0.6,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """JSON-ready steward worklist: ``{"items": [...]}``. Single source for the
+    MCP ``identity_worklist`` tool and the SQL ``gm_identity_worklist`` bridge."""
+    items = steward_worklist(
+        store, dataset, weak_confidence=weak_confidence, limit=limit
+    )
+    return {"items": [it.as_dict() for it in items]}

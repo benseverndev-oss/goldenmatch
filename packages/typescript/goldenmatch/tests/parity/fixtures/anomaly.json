@@ -1,0 +1,748 @@
+{
+  "cases": [
+    {
+      "name": "adversarial_low",
+      "rows": [
+        {
+          "email": "test@foo.com",
+          "phone": "212-555-0100",
+          "zip": "02134",
+          "note": "ok"
+        },
+        {
+          "email": "noreply@corp.com",
+          "phone": "212-555-0101",
+          "zip": "02135",
+          "note": "ok"
+        },
+        {
+          "email": "someone@example.com",
+          "phone": "212-555-0102",
+          "zip": "02136",
+          "note": "ok"
+        },
+        {
+          "email": "aaa@corp.com",
+          "phone": "212-555-0103",
+          "zip": "02137",
+          "note": "ok"
+        },
+        {
+          "email": "qwerty@corp.com",
+          "phone": "212-555-0104",
+          "zip": "02138",
+          "note": "ok"
+        },
+        {
+          "email": "real.person@corp.com",
+          "phone": "555-0199",
+          "zip": "02139",
+          "note": "ok"
+        },
+        {
+          "email": "other.person@corp.com",
+          "phone": "000-1234",
+          "zip": "02140",
+          "note": "ok"
+        },
+        {
+          "email": "third.person@corp.com",
+          "phone": "11111222",
+          "zip": "02141",
+          "note": "ok"
+        },
+        {
+          "email": "zip.one@corp.com",
+          "phone": "212-555-0105",
+          "zip": "00000",
+          "note": "ok"
+        },
+        {
+          "email": "zip.two@corp.com",
+          "phone": "212-555-0106",
+          "zip": "99999",
+          "note": "ok"
+        },
+        {
+          "email": "ph.one@corp.com",
+          "phone": "212-555-0107",
+          "zip": "02142",
+          "note": "TBD"
+        },
+        {
+          "email": "ph.two@corp.com",
+          "phone": "212-555-0108",
+          "zip": "02143",
+          "note": "N/A"
+        },
+        {
+          "email": "ph.three@corp.com",
+          "phone": "212-555-0109",
+          "zip": "02144",
+          "note": "  Unknown  "
+        },
+        {
+          "email": null,
+          "phone": null,
+          "zip": null,
+          "note": null
+        },
+        {
+          "email": "pair@corp.com",
+          "phone": "212-555-0110",
+          "zip": "02145",
+          "note": "ok"
+        },
+        {
+          "email": "pair@corp.com",
+          "phone": "212-555-0110",
+          "zip": "02145",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        }
+      ],
+      "sensitivity": "low",
+      "expected": [
+        {
+          "row_id": 0,
+          "column": "email",
+          "type": "fake_email",
+          "value": "test@foo.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^test@"
+        },
+        {
+          "row_id": 1,
+          "column": "email",
+          "type": "fake_email",
+          "value": "noreply@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^noreply@"
+        },
+        {
+          "row_id": 2,
+          "column": "email",
+          "type": "fake_email",
+          "value": "someone@example.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: @example\\.com$"
+        },
+        {
+          "row_id": 3,
+          "column": "email",
+          "type": "fake_email",
+          "value": "aaa@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^a{3,}@"
+        },
+        {
+          "row_id": 4,
+          "column": "email",
+          "type": "fake_email",
+          "value": "qwerty@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^qwerty"
+        },
+        {
+          "row_id": 10,
+          "column": "note",
+          "type": "placeholder",
+          "value": "TBD",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 11,
+          "column": "note",
+          "type": "placeholder",
+          "value": "N/A",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 12,
+          "column": "note",
+          "type": "placeholder",
+          "value": "  Unknown  ",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 16,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        },
+        {
+          "row_id": 17,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        },
+        {
+          "row_id": 18,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        }
+      ]
+    },
+    {
+      "name": "adversarial_medium",
+      "rows": [
+        {
+          "email": "test@foo.com",
+          "phone": "212-555-0100",
+          "zip": "02134",
+          "note": "ok"
+        },
+        {
+          "email": "noreply@corp.com",
+          "phone": "212-555-0101",
+          "zip": "02135",
+          "note": "ok"
+        },
+        {
+          "email": "someone@example.com",
+          "phone": "212-555-0102",
+          "zip": "02136",
+          "note": "ok"
+        },
+        {
+          "email": "aaa@corp.com",
+          "phone": "212-555-0103",
+          "zip": "02137",
+          "note": "ok"
+        },
+        {
+          "email": "qwerty@corp.com",
+          "phone": "212-555-0104",
+          "zip": "02138",
+          "note": "ok"
+        },
+        {
+          "email": "real.person@corp.com",
+          "phone": "555-0199",
+          "zip": "02139",
+          "note": "ok"
+        },
+        {
+          "email": "other.person@corp.com",
+          "phone": "000-1234",
+          "zip": "02140",
+          "note": "ok"
+        },
+        {
+          "email": "third.person@corp.com",
+          "phone": "11111222",
+          "zip": "02141",
+          "note": "ok"
+        },
+        {
+          "email": "zip.one@corp.com",
+          "phone": "212-555-0105",
+          "zip": "00000",
+          "note": "ok"
+        },
+        {
+          "email": "zip.two@corp.com",
+          "phone": "212-555-0106",
+          "zip": "99999",
+          "note": "ok"
+        },
+        {
+          "email": "ph.one@corp.com",
+          "phone": "212-555-0107",
+          "zip": "02142",
+          "note": "TBD"
+        },
+        {
+          "email": "ph.two@corp.com",
+          "phone": "212-555-0108",
+          "zip": "02143",
+          "note": "N/A"
+        },
+        {
+          "email": "ph.three@corp.com",
+          "phone": "212-555-0109",
+          "zip": "02144",
+          "note": "  Unknown  "
+        },
+        {
+          "email": null,
+          "phone": null,
+          "zip": null,
+          "note": null
+        },
+        {
+          "email": "pair@corp.com",
+          "phone": "212-555-0110",
+          "zip": "02145",
+          "note": "ok"
+        },
+        {
+          "email": "pair@corp.com",
+          "phone": "212-555-0110",
+          "zip": "02145",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        }
+      ],
+      "sensitivity": "medium",
+      "expected": [
+        {
+          "row_id": 0,
+          "column": "email",
+          "type": "fake_email",
+          "value": "test@foo.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^test@"
+        },
+        {
+          "row_id": 1,
+          "column": "email",
+          "type": "fake_email",
+          "value": "noreply@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^noreply@"
+        },
+        {
+          "row_id": 2,
+          "column": "email",
+          "type": "fake_email",
+          "value": "someone@example.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: @example\\.com$"
+        },
+        {
+          "row_id": 3,
+          "column": "email",
+          "type": "fake_email",
+          "value": "aaa@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^a{3,}@"
+        },
+        {
+          "row_id": 4,
+          "column": "email",
+          "type": "fake_email",
+          "value": "qwerty@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^qwerty"
+        },
+        {
+          "row_id": 5,
+          "column": "phone",
+          "type": "fake_phone",
+          "value": "555-0199",
+          "severity": "medium",
+          "reason": "Suspicious phone number pattern"
+        },
+        {
+          "row_id": 6,
+          "column": "phone",
+          "type": "fake_phone",
+          "value": "000-1234",
+          "severity": "medium",
+          "reason": "Suspicious phone number pattern"
+        },
+        {
+          "row_id": 7,
+          "column": "phone",
+          "type": "fake_phone",
+          "value": "11111222",
+          "severity": "medium",
+          "reason": "Suspicious phone number pattern"
+        },
+        {
+          "row_id": 8,
+          "column": "zip",
+          "type": "suspicious_zip",
+          "value": "00000",
+          "severity": "medium",
+          "reason": "Suspicious zip code: 00000"
+        },
+        {
+          "row_id": 9,
+          "column": "zip",
+          "type": "suspicious_zip",
+          "value": "99999",
+          "severity": "medium",
+          "reason": "Suspicious zip code: 99999"
+        },
+        {
+          "row_id": 10,
+          "column": "note",
+          "type": "placeholder",
+          "value": "TBD",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 11,
+          "column": "note",
+          "type": "placeholder",
+          "value": "N/A",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 12,
+          "column": "note",
+          "type": "placeholder",
+          "value": "  Unknown  ",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 16,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        },
+        {
+          "row_id": 17,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        },
+        {
+          "row_id": 18,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        }
+      ]
+    },
+    {
+      "name": "adversarial_high",
+      "rows": [
+        {
+          "email": "test@foo.com",
+          "phone": "212-555-0100",
+          "zip": "02134",
+          "note": "ok"
+        },
+        {
+          "email": "noreply@corp.com",
+          "phone": "212-555-0101",
+          "zip": "02135",
+          "note": "ok"
+        },
+        {
+          "email": "someone@example.com",
+          "phone": "212-555-0102",
+          "zip": "02136",
+          "note": "ok"
+        },
+        {
+          "email": "aaa@corp.com",
+          "phone": "212-555-0103",
+          "zip": "02137",
+          "note": "ok"
+        },
+        {
+          "email": "qwerty@corp.com",
+          "phone": "212-555-0104",
+          "zip": "02138",
+          "note": "ok"
+        },
+        {
+          "email": "real.person@corp.com",
+          "phone": "555-0199",
+          "zip": "02139",
+          "note": "ok"
+        },
+        {
+          "email": "other.person@corp.com",
+          "phone": "000-1234",
+          "zip": "02140",
+          "note": "ok"
+        },
+        {
+          "email": "third.person@corp.com",
+          "phone": "11111222",
+          "zip": "02141",
+          "note": "ok"
+        },
+        {
+          "email": "zip.one@corp.com",
+          "phone": "212-555-0105",
+          "zip": "00000",
+          "note": "ok"
+        },
+        {
+          "email": "zip.two@corp.com",
+          "phone": "212-555-0106",
+          "zip": "99999",
+          "note": "ok"
+        },
+        {
+          "email": "ph.one@corp.com",
+          "phone": "212-555-0107",
+          "zip": "02142",
+          "note": "TBD"
+        },
+        {
+          "email": "ph.two@corp.com",
+          "phone": "212-555-0108",
+          "zip": "02143",
+          "note": "N/A"
+        },
+        {
+          "email": "ph.three@corp.com",
+          "phone": "212-555-0109",
+          "zip": "02144",
+          "note": "  Unknown  "
+        },
+        {
+          "email": null,
+          "phone": null,
+          "zip": null,
+          "note": null
+        },
+        {
+          "email": "pair@corp.com",
+          "phone": "212-555-0110",
+          "zip": "02145",
+          "note": "ok"
+        },
+        {
+          "email": "pair@corp.com",
+          "phone": "212-555-0110",
+          "zip": "02145",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        },
+        {
+          "email": "trip@corp.com",
+          "phone": "212-555-0111",
+          "zip": "02146",
+          "note": "ok"
+        }
+      ],
+      "sensitivity": "high",
+      "expected": [
+        {
+          "row_id": 0,
+          "column": "email",
+          "type": "fake_email",
+          "value": "test@foo.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^test@"
+        },
+        {
+          "row_id": 1,
+          "column": "email",
+          "type": "fake_email",
+          "value": "noreply@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^noreply@"
+        },
+        {
+          "row_id": 2,
+          "column": "email",
+          "type": "fake_email",
+          "value": "someone@example.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: @example\\.com$"
+        },
+        {
+          "row_id": 3,
+          "column": "email",
+          "type": "fake_email",
+          "value": "aaa@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^a{3,}@"
+        },
+        {
+          "row_id": 4,
+          "column": "email",
+          "type": "fake_email",
+          "value": "qwerty@corp.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^qwerty"
+        },
+        {
+          "row_id": 5,
+          "column": "phone",
+          "type": "fake_phone",
+          "value": "555-0199",
+          "severity": "medium",
+          "reason": "Suspicious phone number pattern"
+        },
+        {
+          "row_id": 6,
+          "column": "phone",
+          "type": "fake_phone",
+          "value": "000-1234",
+          "severity": "medium",
+          "reason": "Suspicious phone number pattern"
+        },
+        {
+          "row_id": 7,
+          "column": "phone",
+          "type": "fake_phone",
+          "value": "11111222",
+          "severity": "medium",
+          "reason": "Suspicious phone number pattern"
+        },
+        {
+          "row_id": 8,
+          "column": "zip",
+          "type": "suspicious_zip",
+          "value": "00000",
+          "severity": "medium",
+          "reason": "Suspicious zip code: 00000"
+        },
+        {
+          "row_id": 9,
+          "column": "zip",
+          "type": "suspicious_zip",
+          "value": "99999",
+          "severity": "medium",
+          "reason": "Suspicious zip code: 99999"
+        },
+        {
+          "row_id": 10,
+          "column": "note",
+          "type": "placeholder",
+          "value": "TBD",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 11,
+          "column": "note",
+          "type": "placeholder",
+          "value": "N/A",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 12,
+          "column": "note",
+          "type": "placeholder",
+          "value": "  Unknown  ",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        },
+        {
+          "row_id": 16,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        },
+        {
+          "row_id": 17,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        },
+        {
+          "row_id": 18,
+          "column": "(all)",
+          "type": "exact_duplicate_row",
+          "value": "3 identical copies",
+          "severity": "high",
+          "reason": "Exact duplicate row (possible copy-paste)"
+        }
+      ]
+    },
+    {
+      "name": "explicit_row_id",
+      "rows": [
+        {
+          "__row_id__": 100,
+          "email": "test@a.com",
+          "note": "ok"
+        },
+        {
+          "__row_id__": 200,
+          "email": "fine@a.com",
+          "note": "xxx"
+        }
+      ],
+      "sensitivity": "high",
+      "expected": [
+        {
+          "row_id": 100,
+          "column": "email",
+          "type": "fake_email",
+          "value": "test@a.com",
+          "severity": "high",
+          "reason": "Matches fake email pattern: ^test@"
+        },
+        {
+          "row_id": 200,
+          "column": "note",
+          "type": "placeholder",
+          "value": "xxx",
+          "severity": "high",
+          "reason": "Placeholder value detected"
+        }
+      ]
+    }
+  ]
+}

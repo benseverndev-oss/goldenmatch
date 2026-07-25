@@ -1,0 +1,103 @@
+---
+title: "Cross-language parity & phase-handoff limits"
+description: "What actually round-trips between the Python and TypeScript ports of GoldenMatch — which pipeline phases you can hand off byte-for-byte, which are tolerance-bounded, and which can't cross at all."
+keywords: ["parity", "typescript", "python", "interoperability", "cross-language", "handoff", "conformance", "limits"]
+---
+
+GoldenMatch ships as a Python toolkit and a TypeScript port that expose the **same
+operations** — the two are at *surface parity*. A tempting inference is that you
+can therefore run any pipeline phase in one language, hand the intermediate result
+to the other, and continue seamlessly.
+
+<Warning>
+**Surface parity is not the same as artifact interoperability.** "The same
+functions exist in both languages" does not imply "a phase's output round-trips
+byte-for-byte." Some boundaries genuinely do; others are numerically
+tolerance-bounded (a rounding difference can flip a match decision); a few can't
+cross at all. This page tells you *which is which*, with the evidence.
+</Warning>
+
+The pipeline: `ingest → standardize → matchkeys → block → score → cluster → golden → output`.
+
+## Verdict table
+
+Each verdict below is **measured** by a conformance test (or a documented
+architectural boundary), not assumed.
+
+| Boundary / artifact | Verdict | Why |
+| --- | --- | --- |
+| **Identity graph DB** (`.goldenmatch/identity.db`) | ✅ **Byte-safe + cryptographically cross-verifiable** | Schema is byte-identical; the audit seal / entry-hash chain cross-verifies — a seal written by Python validates under TypeScript and vice-versa. |
+| **`score → cluster`** (scored pairs → clusters) | ✅ **Byte-safe (measured)** | Identical scored pairs produce the identical cluster partition across languages — including the oversized-cluster MST auto-split, even with tied weakest edges. |
+| **End-to-end split-run** (Python `standardize→block→score` → TS `cluster`) | ✅ **Reproduces the single-language run (measured)** | A real half-Python/half-TS pipeline reaches the same clusters as an all-Python run; an independent all-TS run agreed on the test dataset (0 threshold flips). |
+| **Cluster JSON**, **config YAML**, **Learning Memory**, **run log**, **`record_fingerprint`** | ✅ **Portable** | Language-neutral formats with shared parsers / stable hashing. |
+| **String scoring** (a scorer's numeric score) | 🟡 **Tolerance-bounded (4 decimals)** | Scores agree to 4 dp — a pair sitting *exactly* on a threshold can flip the match. Byte-identical only when the shared Rust/WASM scorer is enabled. |
+| **Standardize / transforms** | 🟠 **Divergent — not byte-portable** | Different standardizer implementations; **dates cannot be byte-ported** (`dateutil` fuzzy parsing vs a `chrono`-style parser). |
+| **Embeddings** | 🟠 **Cosine-tolerance only** | The TS port has no PyTorch/Vertex; vectors are caller-supplied and agree to ~1e-7 cosine, not byte-for-byte. |
+| **Auto-config / controller commit** | 🟠 **Structural, not byte-equal** | The controller can commit a *different* config on the same data across languages. |
+| **Distributed / Ray / bucket backend, document (VLM) ingest, distributed routing** | ⛔ **Python-only by architecture** | No TypeScript execution path by design. |
+
+## What this means in practice
+
+<Tip>
+**Hand off at a durable-artifact boundary and it's seamless.** Score/cluster in
+either language, persist the **identity graph** or **cluster JSON**, and resume in
+the other — you get the same answer. Identity is the flagship: it doesn't just
+round-trip, it *cross-verifies* cryptographically.
+</Tip>
+
+**Handing off mid-numeric-pipeline is only as strong as the weakest link in the
+chain.** If your hand-off point sits after `standardize`, after `score` (without
+the shared WASM scorer), or after an embedding step, the resumed pipeline can
+reach a **different** result than an all-one-language run. The failure modes are
+concrete:
+
+- a threshold decision **flipping** on a 4th-decimal score difference, or
+- a **date / standardized value not reproducing** across the parsers.
+
+### Guidance
+
+- **Prefer the `cluster` or `identity` boundary** for cross-language hand-off —
+  both are byte-safe.
+- If you must hand off at the **`score`** boundary, enable the shared WASM scorer
+  on the TypeScript side (byte-identical for the covered scorers:
+  `jaro_winkler` / `levenshtein` / `token_sort` / `exact`, plus Fellegi–Sunter via
+  `fs-wasm`) and **avoid re-thresholding** across the boundary.
+- **Do not** split a pipeline across `standardize` / dates, embeddings, or the
+  auto-config controller and expect bit-exact reproduction. Run those phases in a
+  single language, then hand off the durable artifact.
+- The **distributed / VLM / routing** phases have no TS path — run them in Python.
+
+## How this is verified (the conformance harness)
+
+These verdicts are backed by a runnable **cross-language conformance harness**
+(Python oracle → TypeScript parity test), so they stay honest as the code evolves:
+
+- **Clustering boundary** — a Python emitter produces scored-pair scenarios plus
+  Python's cluster partition; the TS test reruns each through `buildClusters` and
+  asserts the identical partition. Scenarios include the divergence-prone
+  oversized-cluster MST auto-split (unambiguous **and** tied-weakest-edge).
+- **End-to-end split-run** — Python runs a real pipeline (`MatchEngine`) and emits
+  its scored pairs + clusters; the TS test (a) clusters Python's real scored pairs
+  and asserts it reproduces Python's own clusters (hand-off fidelity), and (b) runs
+  a full independent all-TS `dedupe` and asserts the same partition plus a bounded
+  scored-pairs delta (no threshold flip). Blocking is neutralized so any divergence
+  would be scoring/standardize, not a different candidate set.
+- **Scoring tolerance** — the scorer ground-truth parity test pins scores to 4
+  decimals across languages.
+
+<Note>
+**Known limit of the current evidence.** The split-run's clean agreement is
+*dataset-specific* — the scorers happened to agree closely and no pair sat exactly
+on the threshold. The 4-dp tolerance can still flip a cluster on adversarial data;
+the honest next step (tracked in the design note) is a split-run over a **corrupted
+dataset engineered to sit pairs on the threshold**, to find and quantify the
+flipping case. "Passed on a fair test" is not "can never flip."
+</Note>
+
+## Reference
+
+- Design note + full verdict table: `docs/design/2026-07-24-cross-language-phase-conformance.md`
+- Harness: `tests/parity/cluster-conformance.parity.test.ts`,
+  `tests/parity/split-run.parity.test.ts`, and their Python oracles under
+  `packages/python/goldenmatch/scripts/emit_*_conformance_fixture.py` /
+  `emit_split_run_fixture.py`.

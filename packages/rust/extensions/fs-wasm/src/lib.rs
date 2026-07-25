@@ -99,6 +99,7 @@ pub fn score_block_pairs_fs_impl(
         // (its parity fixtures are byte-locked); the net-zero filter is opt-in on
         // the Python engine first. See the fs-net-zero-evidence-filter spec.
         require_positive_evidence: false,
+        missing_disagree: false,
     };
 
     let mut out: Vec<(i64, i64, f64)> = Vec::new();

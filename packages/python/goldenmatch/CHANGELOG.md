@@ -4,6 +4,41 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [3.10.0] - 2026-07-24
+
+### Added
+- **3 host-helper MCP tools** (`server_info`, `read_file`, `write_csv`) -- the last
+  `ts_only` entries. **`mcp_tools.ts_only` is now EMPTY**: the TS MCP surface is a
+  strict subset of the Python one (83 shared, 0 TS-only, 7 Python-only). goldenmatch
+  MCP tools **87 -> 90**. `server_info.tool_count` is DERIVED from the live tool list,
+  never a literal, so it cannot drift from the real surface.
+
+### Security note (behavior unchanged, now documented + tested)
+- `read_file` / `write_csv` route through the same `core._paths.safe_path` guard every
+  other file-taking tool uses. That guard rejects NUL bytes and resolves the path, but
+  **enforces containment only when `GOLDENMATCH_ALLOWED_ROOT` is set**. With it unset
+  (the default) these tools reach anything the server process can -- identical to the
+  pre-existing `upload_dataset` / `export_results`, so this adds no new reach. Both
+  modes are now pinned by tests, and the contract is stated on the API-surface page.
+  `write_csv` additionally refuses anything that is not a list of objects.
+
+## [3.9.0] - 2026-07-24
+
+### Added
+- **5 core-primitive MCP tools** (`score_strings`, `score_pair`, `find_exact_matches`,
+  `find_fuzzy_matches`, `build_clusters`) -- closing the REVERSE parity gap: the
+  TypeScript MCP server exposed these while Python did not. Each is a thin, STATELESS
+  wrapper over a function goldenmatch already had, so an agent can score two strings,
+  score two records, enumerate a file's exact/fuzzy pairs, or cluster a file without
+  first loading a run into session state. Wire shapes mirror the TS handlers exactly,
+  including the 100-pair / 200-cluster response caps. goldenmatch MCP tools **82 -> 87**;
+  `mcp_tools.ts_only` **8 -> 3** (only `read_file`, `write_csv`, `server_info` remain).
+
+### Fixed
+- `docs-site/reference/api-surface.mdx` prose was stale beyond the generated block: it
+  listed all 7 primitives as TS-only and claimed "~31 Python-only tools" when the real
+  figure is 7. Corrected alongside the counts.
+
 ## [Unreleased]
 
 ### Added
@@ -80,6 +115,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **SQLite identity resolve no longer scales with the input frame (#2105).** A 14M-row
+  dedupe with `identity.backend="sqlite"` OOM-killed a 64 GB box, and the resolve step
+  ran 5-17x the cost of the same dedupe with identity off. Three independent causes,
+  all on the SQLite single-node path:
+  - **Unbounded prep (the OOM).** `resolve_clusters` turned EVERY input row into
+    ~2.5 KB of Python heap (row dict + payload dict + record hash + source + pk +
+    record-id candidates) before looking at which rows a cluster actually references
+    — ~35 GB on a 14M-row frame, on top of the pipeline's own resident set. With
+    `emit_singletons=False` the overwhelming majority of those rows are never read
+    again (the reported run resolved 107,723 records out of 1M rows). The prep is now
+    bounded to rows a surviving cluster references, so it scales with the identity
+    graph rather than the frame. Measured **~9x lower peak Python heap** on a
+    50k-400k ladder, and flat per-member instead of per-row.
+  - **One transaction per statement.** `IdentityStore.bulk_writes()` was a deliberate
+    no-op for SQLite ("already local + WAL"), and the connection is opened
+    `isolation_level=None`, so every INSERT committed on its own and paid a WAL sync
+    — while resolve issues ~6 statements per cluster. Measured ~750 us/statement
+    autocommit vs ~30-90 us batched. SQLite now runs the resolve writes inside
+    explicit transactions, committing in `GOLDENMATCH_IDENTITY_SQLITE_BATCH_SIZE`
+    chunks (default 10,000) so the WAL cannot grow without bound on a
+    multi-million-row run. Reads inside the batch see their own pending writes (same
+    connection), so the absorb / merge branches are unaffected. Kill-switch
+    `GOLDENMATCH_IDENTITY_SQLITE_BATCH=0` restores per-statement autocommit.
+  - **A dead per-pair dict.** `scored_pairs` was folded into a
+    `{(record_a, record_b): score}` map that nothing ever read — ~1.2 s and ~102 bytes
+    per million pairs, built over the FULL pre-cluster scored-pair stream (far larger
+    than the edge set on wide-block data) on every resolve. Removed; evidence edges
+    already come from the per-cluster `pair_scores` / `pair_score_view`.
+
+  Net on a 50k-400k ladder shaped like the report (natural PK, ~11% of rows in a
+  multi-record cluster): **2.5-4.5x faster wall and ~9x lower peak Python heap**, with
+  byte-identical store contents. `emit_singletons=True` benefits from the same write
+  batching. Output is unchanged on every backend; Postgres and Mongo paths untouched.
 - **Zero-config Fellegi-Sunter recall no longer collapses at scale (candidate-pair
   projection fix + recall-safe compounding + memory-aware budget).** Zero-config
   FS recall collapsed **1.0 at ≤2.4M → 0.82 at 4.8M → ~0.02 at 30M** (F1 0.030,

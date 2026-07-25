@@ -485,6 +485,100 @@ pub fn gm_identity_split(dataset: String, entity_id: String, record_id: String) 
     }
 }
 
+// ── Identity audit / mediation writes (post-#1913) ───────────────────────
+//
+// Steward writes into the in-DB Postgres identity dataset, DSN-resolved via
+// `resolve_identity_dsn()` like `gm_identity_merge`/`gm_identity_split`. Empty
+// optional args (`reason`, `dataset`) mean "unset". Like all in-DB identity
+// writes (§3.1 of the #1913 design), these commit on the store's own libpq
+// connection, NOT the caller's SQL transaction; replay is idempotent.
+
+/// Seal the audit log for tamper-evidence (steward write). Returns
+/// `{"sealed": false, ...}` when there is nothing new to seal, else the new
+/// seal-anchor JSON. `dataset` empty = the global seal chain.
+#[pg_extern]
+pub fn gm_identity_audit_seal(dataset: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB audit seal needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_audit_seal(&dsn, &dataset, "") {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_audit_seal(dataset={}) failed: {}",
+            dataset,
+            e
+        ),
+    }
+}
+
+/// Steward conflict mediation (steward write). `resolution` ∈ `same` /
+/// `distinct` / `defer`; `same` keeps the entity, `distinct` splits `record_b`
+/// out, `defer` only logs. Empty `reason` / `dataset` mean "unset". Returns the
+/// mediation result JSON.
+#[pg_extern]
+pub fn gm_identity_resolve_conflict(
+    dataset: String,
+    record_a: String,
+    record_b: String,
+    resolution: String,
+    reason: String,
+) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB conflict mediation needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_resolve_conflict(
+        &dsn,
+        &record_a,
+        &record_b,
+        &resolution,
+        &reason,
+        &dataset,
+    ) {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_resolve_conflict(a={}, b={}, resolution={}) failed: {}",
+            record_a,
+            record_b,
+            resolution,
+            e
+        ),
+    }
+}
+
+/// Steward claim (steward write): attach `record_id` to `entity_id`, moving it
+/// out of any prior entity + emitting a `claimed` event. Empty `reason` = unset.
+/// Returns the claim result JSON.
+#[pg_extern]
+pub fn gm_identity_claim(entity_id: String, record_id: String, reason: String) -> String {
+    let dsn = resolve_identity_dsn().unwrap_or_else(|| {
+        pgrx::error!(
+            "goldenmatch: in-DB identity claim needs a DSN — set \
+             `ALTER SYSTEM SET goldenmatch.identity_dsn = '...'` (or the \
+             GOLDENMATCH_IDENTITY_DSN / GOLDENMATCH_DATABASE_URL backend env) \
+             pointing at this database"
+        )
+    });
+    match goldenmatch_bridge::api::identity_claim(&dsn, &entity_id, &record_id, &reason) {
+        Ok(s) => s,
+        Err(e) => pgrx::error!(
+            "goldenmatch: gm_identity_claim(entity={}, record={}) failed: {}",
+            entity_id,
+            record_id,
+            e
+        ),
+    }
+}
+
 /// Resolve the identity DSN: the `goldenmatch.identity_dsn` GUC first, then the
 /// `GOLDENMATCH_IDENTITY_DSN` / `GOLDENMATCH_DATABASE_URL` backend env. Returns
 /// `None` (→ a clear error at the call site) when nothing is configured. A

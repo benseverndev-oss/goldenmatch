@@ -348,7 +348,7 @@ export function startMcpServer(): void {
           id,
           result: {
             protocolVersion: "2024-11-05",
-            serverInfo: { name: "goldenflow", version: "0.16.0" },
+            serverInfo: { name: "goldenflow", version: "0.17.0" },
             capabilities: { tools: {} },
           },
         });

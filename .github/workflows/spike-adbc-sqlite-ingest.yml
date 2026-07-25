@@ -1,0 +1,53 @@
+name: spike-adbc-sqlite-ingest
+
+# Decides docs/design/2026-07-24-adbc-sqlite-bulk-writes.md: is Arrow-native
+# (ADBC) bulk ingest into SQLite worth taking a dependency for?
+#
+# Three arms -- today's batched row path, a staging table + stdlib executemany
+# (the NO-DEPENDENCY control), and ADBC ingest. Every arm's resulting database
+# is content-hashed, so a faster arm that writes different bytes fails loudly.
+#
+# adbc-driver-sqlite is installed ONLY for this job via `uv run --with`; it is
+# deliberately NOT a package dependency unless and until this spike says GO.
+#
+# Not part of PR gating -- workflow_dispatch only.
+on:
+  workflow_dispatch:
+    inputs:
+      ns:
+        description: "Identity counts to sweep (comma-separated)"
+        default: "100000,1000000,5000000"
+      arms:
+        description: "rowpath,staging,adbc"
+        default: "rowpath,staging,adbc"
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: large-new-64GB
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+      - run: uv sync --all-packages
+      - name: Spike ADBC vs staging vs row path
+        # --with layers adbc-driver-sqlite over the project env for this run
+        # only; it does not enter uv.lock or the package's dependencies.
+        run: |
+          uv run --with adbc-driver-sqlite python \
+            packages/python/goldenmatch/scripts/spike_adbc_sqlite_ingest.py \
+            --ns "${{ inputs.ns }}" \
+            --arms "${{ inputs.arms }}" \
+            --output spike_adbc_sqlite_ingest.json
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4
+        with:
+          name: spike-adbc-sqlite-ingest-results
+          path: spike_adbc_sqlite_ingest.json

@@ -66,6 +66,7 @@ REGISTRY: dict[str, PackageSpec] = {
                 "date_diff": {"meaning": "Day-distance banded similarity; magnitude-aware (a year gap is a weak partial, not a near-match). FS path.", "range": "0.0-1.0", "best_for": "Dates (dob, birth_date)"},
                 "numeric_diff": {"meaning": "Banded numeric distance (abs/pct); magnitude-aware, so string-close numbers that are far apart no longer read as near-agreement. FS path.", "range": "0.0-1.0", "best_for": "Amounts, measurements, ages"},
                 "geo_haversine": {"meaning": "Great-circle (haversine) distance banded to a similarity, on a single combined 'lat,long' field. FS path.", "range": "0.0-1.0", "best_for": "Coordinates (lat,long)"},
+                "array_intersect": {"meaning": "Token-set overlap of delimited strings (Jaccard by default; 'array_intersect:overlap' for the overlap coefficient). FS path.", "range": "0.0-1.0", "best_for": "Delimited lists (tags, categories, phones)"},
                 "phash": {"meaning": "Perceptual-hash Hamming similarity.", "range": "0.0-1.0", "best_for": "Images"},
                 "audio_fp": {"meaning": "Audio-fingerprint similarity.", "range": "0.0-1.0", "best_for": "Audio clips"},
                 "radial": {"meaning": "Rotation/crop-invariant radial-variance similarity.", "range": "0.0-1.0", "best_for": "Rotated/cropped images"},

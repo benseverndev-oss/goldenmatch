@@ -555,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
                 [str(SCRIPTS / "check_version_consistency.py")])
     run_subgate(res, "readme_callouts --check (subprocess)",
                 [str(SCRIPTS / "sync_readme_callouts.py"), "--check"])
+    run_subgate(res, "native_docs --check (subprocess)",
+                [str(SCRIPTS / "gen_native_docs.py"), "--check"])
     check_roster_matrix(res)
     check_docs_nav_integrity(res)
     check_changelog_versions(res)

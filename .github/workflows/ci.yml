@@ -2915,9 +2915,11 @@ jobs:
           cargo pgrx install "--pg-config=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" --release --features "pg${PG_VERSION}" --no-default-features
           # pgrx 0.12.9 doesn't auto-emit the SQL extension file — copy the
           # handwritten ones into PG's extension dir so `CREATE EXTENSION`
-          # (installs default_version, now 0.15.0) and `ALTER EXTENSION ... UPDATE`
+          # (installs default_version, now 0.16.0) and `ALTER EXTENSION ... UPDATE`
           # find them. The schema files are the canonical declaration of public
           # function signatures.
+          cp sql/goldenmatch_pg--0.16.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
+          cp sql/goldenmatch_pg--0.15.0--0.16.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.14.0--0.15.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
           cp sql/goldenmatch_pg--0.14.0.sql "/usr/share/postgresql/${PG_VERSION}/extension/"
@@ -3366,6 +3368,79 @@ jobs:
                 RAISE EXCEPTION 'gm_identity_merge: expected absorbed entity to own 0 records + keeper to own 3, got absorbed=% keeper=%', back_recs, big_recs;
               END IF;
               RAISE NOTICE 'gm_identity_merge: % (keeper records=%)', merge_res, big_recs;
+            END $$;
+            -- 0.16.0: identity audit chain + steward mediation + MDM operator
+            -- reads over the SAME in-DB dataset. All 8 new gm_identity_*
+            -- functions. Empty dataset = the global chain / whole graph, so the
+            -- seal covers every event resolve/split/merge emitted regardless of
+            -- per-event dataset tagging.
+            DO $$
+            DECLARE
+              big_entity text; rec_a text; rec_b text;
+              seal_res jsonb; verify_res jsonb; audit_res jsonb;
+              prof jsonb; stats_res jsonb; worklist_res jsonb;
+              conflict_res jsonb; claim_res jsonb;
+            BEGIN
+              SELECT entity_id INTO big_entity
+                FROM source_records GROUP BY entity_id ORDER BY count(*) DESC LIMIT 1;
+              SELECT record_id INTO rec_a
+                FROM source_records WHERE entity_id = big_entity ORDER BY record_id LIMIT 1;
+              SELECT record_id INTO rec_b
+                FROM source_records WHERE entity_id = big_entity ORDER BY record_id OFFSET 1 LIMIT 1;
+
+              -- AUDIT SEAL: resolve/split/merge emitted events -> a global seal
+              -- folds them, so there IS something new to seal.
+              seal_res := goldenmatch.gm_identity_audit_seal('')::jsonb;
+              IF (seal_res->>'sealed')::boolean IS NOT TRUE THEN
+                RAISE EXCEPTION 'gm_identity_audit_seal: expected sealed=true (events exist), got %', seal_res;
+              END IF;
+
+              -- AUDIT VERIFY: replay the seal chain + content hashes -> intact.
+              verify_res := goldenmatch.gm_identity_audit_verify('', '')::jsonb;
+              IF (verify_res->>'ok')::boolean IS NOT TRUE THEN
+                RAISE EXCEPTION 'gm_identity_audit_verify: expected ok=true, got %', verify_res;
+              END IF;
+
+              -- AUDIT READ: the append-only log page is non-empty.
+              audit_res := goldenmatch.gm_identity_audit('', '')::jsonb;
+              IF (audit_res->>'total')::int < 1 OR jsonb_array_length(audit_res->'items') < 1 THEN
+                RAISE EXCEPTION 'gm_identity_audit: expected a non-empty log, got %', audit_res;
+              END IF;
+
+              -- PROFILE: the surviving entity owns its 3 records.
+              prof := goldenmatch.gm_identity_profile(big_entity, '')::jsonb;
+              IF (prof->>'record_count')::int <> 3 THEN
+                RAISE EXCEPTION 'gm_identity_profile: expected record_count=3 for %, got %', big_entity, prof;
+              END IF;
+
+              -- STATS: whole-graph health summary reports the entities.
+              stats_res := goldenmatch.gm_identity_stats('', '')::jsonb;
+              IF (stats_res->>'total_entities')::int < 1 THEN
+                RAISE EXCEPTION 'gm_identity_stats: expected total_entities>=1, got %', stats_res;
+              END IF;
+
+              -- WORKLIST: returns an items array (may be empty; assert the shape).
+              worklist_res := goldenmatch.gm_identity_worklist('', '')::jsonb;
+              IF jsonb_typeof(worklist_res->'items') <> 'array' THEN
+                RAISE EXCEPTION 'gm_identity_worklist: expected an items array, got %', worklist_res;
+              END IF;
+
+              -- RESOLVE_CONFLICT: a `defer` verdict logs a mediation edge only
+              -- (no structural change), proving the write path loads.
+              conflict_res := goldenmatch.gm_identity_resolve_conflict('', rec_a, rec_b, 'defer', 'ci-smoke')::jsonb;
+              IF conflict_res->>'resolution' IS NULL THEN
+                RAISE EXCEPTION 'gm_identity_resolve_conflict: expected a verdict, got %', conflict_res;
+              END IF;
+
+              -- CLAIM: re-claim a record into the entity it already lives in -> a
+              -- safe no-op move (moved=false), proving the claim write path loads.
+              claim_res := goldenmatch.gm_identity_claim(big_entity, rec_a, 'ci-smoke')::jsonb;
+              IF (claim_res->>'moved')::boolean IS NOT FALSE THEN
+                RAISE EXCEPTION 'gm_identity_claim(same entity): expected moved=false, got %', claim_res;
+              END IF;
+
+              RAISE NOTICE 'gm_identity audit/mediation/MDM smoke OK: sealed=% verify_ok=% audit_total=% profile_recs=%',
+                seal_res->>'sealed', verify_res->>'ok', audit_res->>'total', prof->>'record_count';
             END $$;
           EOSQL
           echo "=== PG ${PG_VERSION} smoke passed ==="

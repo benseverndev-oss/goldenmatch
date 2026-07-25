@@ -851,6 +851,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `sync` | `--exclude-columns` | text | `None` | Comma-separated columns to skip across the suite. GoldenMatch auto-config never picks these for matchkeys/blocking; GoldenFlow transforms skip them. Layered with config.exclude_columns when both are set. |
 | `sync` | `--verbose` | boolean | `False` | Enable debug-level logging output. |
 | `sync` | `--quiet` | boolean | `False` | Suppress informational output. |
+| `tui` | `files` | text | **required** | File(s) to load |
 | `unmerge` | `record_id` | integer | **required** | Record row ID to unmerge from its cluster |
 | `unmerge` | `--clusters` | text | `None` | Path to clusters CSV from a previous run |
 | `unmerge` | `--pairs` | text | `None` | Path to scored pairs CSV (id_a,id_b,score) |
@@ -867,7 +868,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 
 ## MCP tools
 
-82 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
+90 MCP tool(s) exposed by `goldenmatch.mcp.server` -- the programmatic / agent surface. Config-bearing tools take the same knobs as above.
 
 | Tool | Description |
 |---|---|
@@ -882,6 +883,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `analyze_blocking` | Diagnose blocking on the loaded dataset: returns ranked blocking key candidates with block counts, max block size, total candidate comparisons, and estimated recall. Use it to explain why matching is slow or produces too many candidate pairs. |
 | `analyze_data` | Profile a dataset (read-only, runs no matching and writes nothing): column stats, the detected domain/entity type, data-quality signals, and a recommended entity-resolution strategy. Takes a file path or an uploaded dataset. Use it before deduplicating to understand the data and preview the strategy the auto-config would pick. |
 | `auto_configure` | Run AutoConfigController on a CSV; return the committed GoldenMatchConfig (incl. negative_evidence / Path Y when chosen) plus telemetry — stop_reason, health, decision trace, indicator column priors. Programmatic equivalent of `goldenmatch autoconfig`. |
+| `build_clusters` | Group records into clusters given a file and matchkey definition. |
 | `certify_recall` | Estimate match RECALL without ground truth (unsupervised). Treats each auto-configured matchkey/pass as a decorrelated system and uses capture-recapture over their overlaps to estimate how many true matches were missed. Returns a point estimate (a safe lower bound additionally needs a small labelled audit; see `goldenmatch evaluate --certify --audit-out`). Needs >=3 decorrelated systems. |
 | `compare_clusters` | Compare two ER clustering outcomes on the same dataset without ground truth (CCMS): classifies each cluster as unchanged / merged / partitioned / overlapping and returns the Talburt-Wang Index. Both inputs are JSON cluster files (as written by export-style output). |
 | `config_weaknesses` | Diagnose weaknesses in the loaded run's auto-config: columns admitted that shouldn't be (source/provenance labels, per-row IDs), oversized or shared-value blocks, null sinks, low-signal matchkeys, and over-merging. Returns ranked findings, each with a plain-English explanation + a concrete fix, plus a one-paragraph summary. |
@@ -898,6 +900,8 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `explain_routing` | Human-readable explanation of why each stage is routed the way it is, with the driver-RAM projection that drove it. |
 | `export_results` | Export matching results to a file (CSV or JSON). |
 | `find_duplicates` | Find duplicate matches for a record. Provide field values to search against the loaded dataset. |
+| `find_exact_matches` | Find exact matches on a field in a file. Returns pairs. |
+| `find_fuzzy_matches` | Find fuzzy matches in a block of rows. Returns scored pairs. |
 | `fix_quality` | Run GoldenCheck scan and apply fixes to a CSV file. Returns the fixed data summary and a manifest of all fixes applied. Requires goldencheck: pip install goldenmatch[quality] |
 | `get_cluster` | Get details of a specific cluster: all member records and their field values. |
 | `get_golden_record` | Get the merged golden (canonical) record for a cluster. |
@@ -940,19 +944,24 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `pprl_link` | Run privacy-preserving record linkage between two parties' data. Computes bloom filters, matches records without sharing raw data. Specify fields, threshold, and security level. |
 | `profile` | Alias for `profile_data`. Get data quality profile: column types, null rates, unique counts, sample values. |
 | `profile_data` | Get data quality profile: column types, null rates, unique counts, sample values. |
+| `read_file` | Read a CSV/JSON file and return the first N records. |
 | `retrieve_similar` | Semantic retrieval (#1089): return the records in a CSV most similar to a free-text query, ranked by cosine similarity. Embeds the chosen column and the query with the zero-config in-house embedder (no cloud/torch by default) and runs ANN search. The read side of the RAG entity-canonicalization epic -- fetch candidate records by query without running a full dedupe. |
 | `review_config` | Run the config healer over the loaded dataset: analyze the dedupe run and return ranked, self-verified suggestions for improving the matching config (thresholds, scorers, negative evidence, blocking). Each suggestion carries an id, kind, target, rationale, and a machine-applicable patch. Requires the native kernel (pip install goldenmatch[native]); returns an empty list otherwise. |
 | `rollback` | Undo a previous run by DELETING its output files (looked up by run_id in the run log). Destructive: removes the files that run wrote. Use list_runs first to find the run_id. |
 | `run_transforms` | Run GoldenFlow data transforms on a CSV file. Normalizes phone numbers (E.164), dates (ISO), categorical spelling, and Unicode issues. Returns a manifest of transforms applied. Requires goldenflow: pip install goldenmatch[transform] |
 | `scan_quality` | Run GoldenCheck data quality scan on a CSV file. Returns issues found (encoding errors, Unicode problems, format violations) without applying fixes. Requires goldencheck: pip install goldenmatch[quality] |
 | `schema_match` | Auto-map columns between two files with different schemas. Returns proposed (col_a, col_b) mappings with a confidence score and method (synonym / name_sim / composite). Useful before matching two sources. |
+| `score_pair` | Score two record objects across weighted fields. Returns a combined score. |
+| `score_strings` | Score similarity between two strings using the requested scorer. |
 | `sensitivity` | Parameter-sensitivity analysis: sweep one or more config parameters across a range and report how stable the clustering is at each value (CCMS unchanged %). Use it to find robust thresholds. Auto-configures the file if no config is given. |
+| `server_info` | Return metadata about this GoldenMatch MCP server. |
 | `shatter_cluster` | Break an entire cluster into individual records. All members become singletons. Use when a cluster is completely wrong. |
 | `suggest_config` | Analyze bad merges and suggest config changes. Provide examples of incorrect merges (pairs that should NOT have matched) and GoldenMatch will identify which fields/thresholds to tighten. Example: [&#123;"record_a": &#123;...&#125;, "record_b": &#123;...&#125;, "reason": "different people"&#125;] |
 | `suggest_pprl` | Check if data needs privacy-preserving matching |
 | `test_domain` | Test a domain extraction rulebook against sample records. Shows what features would be extracted from the loaded data. |
 | `unmerge_record` | Remove a record from its cluster. The record becomes a singleton. Remaining cluster members are re-clustered using stored pair scores. Use this to fix bad merges. |
 | `upload_dataset` | Upload a local file's bytes to the server and get back a server-side path to reuse across other tools (analyze_data, auto_configure, agent_deduplicate, ...). No hosting needed. Send base64 (default) or raw text via `encoding`. Uploaded files are ephemeral scratch, reaped after GOLDENMATCH_MCP_UPLOAD_TTL (default 24h); re-upload if you need a path older than that. Max size GOLDENMATCH_MCP_MAX_UPLOAD_BYTES (default 64MB) -- above it, pass a public http(s) URL as file_path instead. |
+| `write_csv` | Write a list of record objects to a CSV file. |
 
 ## Enumerated vocabularies
 
@@ -964,6 +973,7 @@ _`VALID_SCORERS` -- `MatchkeyField.scorer` / `NegativeEvidenceField.scorer`._
 | Value | Meaning | Best for | Range |
 |---|---|---|---|
 | `alias_match` | Matches known name aliases and nicknames (Bob &lt;-> Robert). | Names with nicknames | 0 or 1 |
+| `array_intersect` | Token-set overlap of delimited strings (Jaccard by default; 'array_intersect:overlap' for the overlap coefficient). FS path. | Delimited lists (tags, categories, phones) | 0.0-1.0 |
 | `audio_fp` | Audio-fingerprint similarity. | Audio clips | 0.0-1.0 |
 | `date` | Damerau-Levenshtein over canonical ISO date digits; typo-tolerant. | Dates (dob, birth_date) | 0.0-1.0 |
 | `date_diff` | Day-distance banded similarity; magnitude-aware (a year gap is a weak partial, not a near-match). FS path. | Dates (dob, birth_date) | 0.0-1.0 |
@@ -1104,7 +1114,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-169 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+172 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1133,12 +1143,12 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **FD** (1): `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`
 - **FIELD** (1): `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`
 - **FRAME** (2): `GOLDENMATCH_FRAME`, `GOLDENMATCH_FRAME_LANE`
-- **FS** (29): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
+- **FS** (30): `GOLDENMATCH_FS_ARROW_STREAM`, `GOLDENMATCH_FS_AUTOCONFIG_V2`, `GOLDENMATCH_FS_BATCH_ROWS`, `GOLDENMATCH_FS_BLOCK_SOURCE`, `GOLDENMATCH_FS_BUCKET_BATCH`, `GOLDENMATCH_FS_BUCKET_NATIVE`, `GOLDENMATCH_FS_CALIBRATED`, `GOLDENMATCH_FS_COLUMNAR_CLUSTER`, `GOLDENMATCH_FS_DEFAULT_BUCKET`, `GOLDENMATCH_FS_DOMAIN_COMPARATORS`, `GOLDENMATCH_FS_EM_AGG_BLOCKS`, `GOLDENMATCH_FS_EM_BLOCK_SLIM`, `GOLDENMATCH_FS_EM_SAMPLE_ROWS`, `GOLDENMATCH_FS_MAX_PASS_PAIRS`, `GOLDENMATCH_FS_MISSING`, `GOLDENMATCH_FS_MONOTONIC`, `GOLDENMATCH_FS_NATIVE`, `GOLDENMATCH_FS_OOC_ARROW_CLUSTER`, `GOLDENMATCH_FS_OOC_DEBUG`, `GOLDENMATCH_FS_OOC_WAVE_ROWS`, `GOLDENMATCH_FS_OUT_OF_CORE`, `GOLDENMATCH_FS_POST_BLOCKING_U`, `GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE`, `GOLDENMATCH_FS_ROUTE_MIN_ROWS`, `GOLDENMATCH_FS_SCORED_PAIRS_MAX`, `GOLDENMATCH_FS_STRIP_HONORIFICS`, `GOLDENMATCH_FS_TF_ADJUSTMENT`, `GOLDENMATCH_FS_VECTORIZED`, `GOLDENMATCH_FS_VEC_MAX_ELEMS`, `GOLDENMATCH_FS_WORKERS`
 - **FUSED** (5): `GOLDENMATCH_FUSED_BLOCK_CONCURRENCY`, `GOLDENMATCH_FUSED_BYTES_PER_CELL`, `GOLDENMATCH_FUSED_BYTES_PER_PAIR`, `GOLDENMATCH_FUSED_PRESSURE_FRACTION`, `GOLDENMATCH_FUSED_RSS_SCALE`
 - **GOLDEN** (4): `GOLDENMATCH_GOLDEN_FUSED`, `GOLDENMATCH_GOLDEN_SLIM_MULTIDF`, `GOLDENMATCH_GOLDEN_STRATEGY_STRICT`, `GOLDENMATCH_GOLDEN_TUNER_MIN_CORRECTIONS`
 - **GPU** (3): `GOLDENMATCH_GPU_API_KEY`, `GOLDENMATCH_GPU_ENDPOINT`, `GOLDENMATCH_GPU_MODE`
 - **HEAL** (2): `GOLDENMATCH_HEAL_MIN_HEALTH_GAIN`, `GOLDENMATCH_HEAL_STEP_CAP`
-- **IDENTITY** (3): `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT`, `GOLDENMATCH_IDENTITY_DSN`, `GOLDENMATCH_IDENTITY_WRITE_PIPELINE`
+- **IDENTITY** (5): `GOLDENMATCH_IDENTITY_BATCH_FINGERPRINT`, `GOLDENMATCH_IDENTITY_DSN`, `GOLDENMATCH_IDENTITY_SQLITE_BATCH`, `GOLDENMATCH_IDENTITY_SQLITE_BATCH_SIZE`, `GOLDENMATCH_IDENTITY_WRITE_PIPELINE`
 - **INHOUSE** (1): `GOLDENMATCH_INHOUSE_MODEL`
 - **LLAMA** (1): `GOLDENMATCH_LLAMA_GGUF`
 - **LLM** (2): `GOLDENMATCH_LLM_BASE_URL`, `GOLDENMATCH_LLM_MODEL`

@@ -39,8 +39,9 @@ from dataset.concepts_loader import Concept, load_concepts  # pyright: ignore[re
 _HERE = Path(__file__).resolve().parent  # dataset/
 _REPO_ROOT = Path(__file__).resolve().parents[6]  # worktree root
 
-# Extensions checkout (optional; skip silently when absent).
-_EXTENSIONS_DIR = Path("D:/show_case/goldenmatch-extensions")
+# SQL extensions now live in-monorepo (the standalone goldenmatch-extensions
+# repo was archived + folded in). Optional; skip silently when absent.
+_EXTENSIONS_DIR = _REPO_ROOT / "packages" / "rust" / "extensions"
 
 # GitHub repos to search for issues/PRs when the local checkouts miss.
 _DEFAULT_REPOS = [

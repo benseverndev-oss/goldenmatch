@@ -128,6 +128,31 @@ What sets it apart:
 
 ---
 
+## Cross-language interoperability (know the limits)
+
+The Python and TypeScript ports are at **surface parity** — the same operations
+exist in both. That is *not* the same as being able to hand any pipeline phase
+from one language to the other and back byte-for-byte. Some boundaries genuinely
+round-trip; others are numerically tolerance-bounded; a few can't cross at all.
+Each verdict below is **measured** by a conformance harness, not assumed:
+
+| Boundary | Verdict |
+| --- | --- |
+| **Identity graph DB** | ✅ byte-safe + cryptographically cross-verifiable (a seal written by one toolkit validates under the other) |
+| **`score → cluster`** and the **end-to-end split-run** (score in Python, cluster in TS) | ✅ byte-safe — reproduces the single-language run |
+| Cluster JSON · config YAML · Learning Memory · run log · `record_fingerprint` | ✅ portable |
+| **String scoring** | 🟡 4-decimal tolerance — a pair on a threshold can flip (byte-identical only with the shared WASM scorer) |
+| **Standardize / dates** · embeddings · auto-config controller | 🟠 divergent — not byte-portable |
+| Distributed / Ray · document (VLM) ingest · distributed routing | ⛔ Python-only by architecture |
+
+**Rule of thumb:** hand off at the **cluster** or **identity** boundary and it's
+seamless; don't split a pipeline across `standardize`/dates, embeddings, or the
+controller and expect bit-exact reproduction. Full detail, guidance, and the
+runnable harness that keeps these verdicts honest:
+[Cross-language parity & phase-handoff limits](https://docs.bensevern.dev/concepts/cross-language-parity).
+
+---
+
 ## The healing loop
 
 GoldenMatch's core workflow is a loop, not a one-shot:
@@ -167,6 +192,8 @@ Entity resolution is the stage most GraphRAG pipelines do badly — duplicate su
 |---|---|---|
 | **[goldenmatch-kg](packages/python/goldenmatch-kg/README.md)** | Drop-in GoldenMatch resolution as the ER stage of existing KG frameworks (neo4j-graphrag, LlamaIndex PropertyGraphIndex, Graphiti). One framework-agnostic `resolve_entities` core + per-framework adapters. Lift measured by [ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench), not asserted. | in-repo · first PyPI release pending |
 | **[goldengraph](packages/python/goldengraph/README.md)** | Build-your-own-KG from text — `text → LLM extraction → GoldenMatch resolution → a durable bi-temporal store`. Engine (store / query / community detection) is pyo3-free Rust; ER is the differentiator. | in-repo · first PyPI release pending |
+
+**Measured, not asserted** ([ER-KG-Bench](packages/python/goldenmatch/benchmarks/er-kg-bench)): resolution scores **F1 0.602** on the labelled set, ahead of Neo4j-KGBuilder (0.456), neo4j-graphrag (0.403), and MS-GraphRAG / LightRAG / Cognee / mem0 (0.066). Beyond ER quality, a resolved graph does two things a passage-window RAG structurally can't — **exact aggregation** (size-invariant where RAG recall collapses `0.99 → 0.64` as the answer set grows) and **temporal as-of** (`1.000` vs RAG's `0.002` on past-date queries) — both benchmarked on real Wikidata data. What it does *not* differentiate on is multi-hop QA, where a hybrid graph converges to plain text-RAG; the edge is ER + structured queries, and that's what the board measures.
 
 ---
 

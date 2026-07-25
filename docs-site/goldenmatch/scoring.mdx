@@ -17,6 +17,7 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `date_diff` | Day-distance bands; magnitude-aware (a year gap is a weak partial) | 0.0--1.0 | Dates (`dob`, `birth_date`) |
 | `numeric_diff` | Banded numeric distance (`:abs:<eps>` / `:pct:<frac>`); magnitude-aware | 0.0--1.0 | Amounts, measurements, ages |
 | `geo_haversine` | Great-circle (haversine) km distance banded, on a `lat,long` field | 0.0--1.0 | Coordinates (`lat,long`) |
+| `array_intersect` | Token-set overlap of delimited strings (`:jaccard` / `:overlap`) | 0.0--1.0 | Delimited lists (tags, categories, phones) |
 | `token_sort` | Sort tokens, then ratio | 0.0--1.0 | Names, addresses |
 | `soundex_match` | Phonetic code comparison | 0 or 1 | Names |
 | `ensemble` | max(jaro_winkler, token_sort, soundex) | 0.0--1.0 | Names with reordering |
@@ -58,6 +59,7 @@ The same magnitude-blindness afflicts numbers and coordinates: `levenshtein("100
 
 - **`numeric_diff`** parses both sides to a float and maps the distance to a monotone `[0,1]` ramp — `numeric_diff:abs:<eps>` for an absolute band (`|a−b|`) or `numeric_diff:pct:<frac>` for a relative band (`|a−b| / max(|a|,|b|)`); bare `numeric_diff` = `pct:0.1`. Auto-config admits numeric columns as `numeric_diff:pct:0.1`.
 - **`geo_haversine`** parses one combined `"lat,long"` field per side and bands the great-circle (haversine) km distance (≤0.1 km → 1.0, ≤1 km → 0.85, ≤10 km → 0.5, ≤100 km → 0.2, else 0). Auto-config admits a column whose sampled values parse as coordinates. (Two *separate* lat/long columns are a deferred cross-field comparator.)
+- **`array_intersect`** splits each side on delimiters (`|`, `;`, `,`) into a token set and scores their overlap — bare `array_intersect` = Jaccard (`|A∩B| / |A∪B|`); `array_intersect:overlap` = the overlap coefficient (`|A∩B| / min(|A|,|B|)`). An empty side falls back to exact-string equality. Compares delimited lists (tags, categories, multi-valued phones) as sets rather than as raw strings, so member reordering no longer reads as disagreement.
 
 Both fall back to exact-string equality on unparseable input (never returning `None` for non-null values), so the scalar and vectorized scoring paths agree by construction — and, like `date_diff`, they are scale-neutral: just new scorers flowing through the unchanged level → m/u → weight machinery, leaving blocking, the pair set, memory, and clustering untouched. Default off is byte-identical.
 

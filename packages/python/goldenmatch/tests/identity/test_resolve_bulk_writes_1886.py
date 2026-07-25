@@ -162,13 +162,40 @@ def test_bulk_writes_dispatch_postgres_uses_conn_transaction():
         pg._conn.log.append("body")
     assert pg._conn.log == ["txn-enter", "body", "txn-exit"]
 
-    # sqlite: no transaction object touched, still yields.
+
+def test_bulk_writes_dispatch_sqlite_opens_a_transaction(monkeypatch):
+    # #2105: sqlite used to be a deliberate no-op here ("already local + WAL"),
+    # which left every statement to autocommit and pay its own WAL sync. It now
+    # opens an explicit transaction, with a kill-switch back to the old path.
+    from goldenmatch.identity.store import IdentityStore
+
+    class _FakeConn:
+        def __init__(self):
+            self.log = []
+            self.in_transaction = False
+        def execute(self, sql, params=None):
+            self.log.append(sql)
+            if sql == "BEGIN":
+                self.in_transaction = True
+            elif sql in ("COMMIT", "ROLLBACK"):
+                self.in_transaction = False
+
+    monkeypatch.delenv("GOLDENMATCH_IDENTITY_SQLITE_BATCH", raising=False)
     lite = IdentityStore.__new__(IdentityStore)
     lite._backend = "sqlite"
-    ran = []
+    lite._conn = _FakeConn()
     with lite.bulk_writes():
-        ran.append("body")
-    assert ran == ["body"]
+        lite._conn.log.append("body")
+    assert lite._conn.log == ["BEGIN", "body", "COMMIT"]
+
+    # Kill-switch: back to per-statement autocommit, conn untouched.
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_SQLITE_BATCH", "0")
+    lite2 = IdentityStore.__new__(IdentityStore)
+    lite2._backend = "sqlite"
+    lite2._conn = _FakeConn()
+    with lite2.bulk_writes():
+        lite2._conn.log.append("body")
+    assert lite2._conn.log == ["body"]
 
 
 def test_write_pipeline_dispatch_postgres_uses_conn_pipeline(monkeypatch):

@@ -1,10 +1,10 @@
 # GoldenMatch
 
 ## Related Projects
-- **SQL Extensions repo:** `D:\show_case\goldenmatch-extensions` -- Postgres extension + DuckDB UDFs. Has its own CLAUDE.md.
+- **SQL Extensions (in-monorepo):** `packages/rust/extensions/` -- Postgres (pgrx) extension + DuckDB UDFs, over a shared pyo3 `bridge`. See `packages/rust/extensions/CLAUDE.md`. (The old standalone `benseverndev-oss/goldenmatch-extensions` repo is ARCHIVED (last push 2026-05-01) -- it was folded into this monorepo; do NOT look for a separate `D:\show_case\goldenmatch-extensions` checkout.)
 - **PyPI:** `goldenmatch` (Python toolkit), `goldenmatch-duckdb` (DuckDB UDFs)
 - **npm:** `goldenmatch` (TypeScript port at `packages/goldenmatch-js/`)
-- **GitHub:** `benseverndev-oss/goldenmatch`, `benseverndev-oss/goldenmatch-extensions`
+- **GitHub:** `benseverndev-oss/goldenmatch` (extensions live here now, under `packages/rust/extensions/`; the standalone `goldenmatch-extensions` repo is archived)
 
 ## TypeScript Port
 Lives at `packages/typescript/goldenmatch/`. See that package's CLAUDE.md for npm release flow, edge-safety rules, parity harness, and port-specific gotchas.
@@ -42,7 +42,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 
 ## Architecture
 - Pipeline: ingest → column_map → auto_fix → validate → standardize → matchkeys → block → score → cluster → golden → output
-- SQL extensions: see `D:\show_case\goldenmatch-extensions\CLAUDE.md` for Postgres/DuckDB architecture
+- SQL extensions: see `packages/rust/extensions/CLAUDE.md` for Postgres/DuckDB architecture
 - `goldenmatch/core/agent.py` -- AgentSession, profile_for_agent, select_strategy, build_alternatives. Autonomous ER: profiles data -> detects domain -> selects strategy -> runs pipeline -> returns reasoning
 - `goldenmatch/core/review_queue.py` -- ReviewQueue (memory/SQLite/Postgres backends), ReviewItem, gate_pairs(). Confidence gating: >0.95 auto-merge, 0.75-0.95 review, <0.75 reject
 - `goldenmatch/core/memory/` -- Learning Memory: persistent corrections + rule learning. `store.py` (MemoryStore, SQLite/Postgres CRUD, trust-based upsert), `corrections.py` (apply_corrections with dual-hash staleness detection), `learner.py` (MemoryLearner, threshold tuning from 10+ corrections). Config: `MemoryConfig` in schemas.py, optional `memory:` YAML section
@@ -233,7 +233,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - **Idempotency**: replaying the same `(run_name, entity_id, kind)` is a no-op via `has_run_event()`; `evidence_edges` has UNIQUE(entity_id, record_a_id, record_b_id, run_name).
 - **Surfaces**: Python (`goldenmatch.identity.*` + root re-exports), CLI (`goldenmatch identity list/show/resolve/history/conflicts/merge/split`), REST (`/api/v1/identities/...`), web "Identities" tab, MCP (`identity_*` × 6 tools), A2A (6 skills), TS edge-safe core (`InMemoryIdentityStore` + `query.ts` helpers). TS persistent SQLite backend + pipeline-driven population are v2 follow-ups.
 - **Postgres surface**: `goldenmatch/db/migrations/identity_v1.sql` is the canonical schema + analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`). `IdentityStore(backend="postgres", connection=...)` creates the same schema on first connect.
-- **DuckDB / extensions contract**: `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md` — UDF signatures the `goldenmatch-extensions` repo must expose.
+- **DuckDB / extensions contract**: `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md` — UDF signatures `packages/rust/extensions/` (Postgres pgrx + DuckDB) must expose.
 - **Test count discipline**: Identity adds 47 Python tests (4 modules under `tests/identity/` + `tests/test_mcp_identity_tools.py` + `tests/web/test_router_identity.py`) and 13 TS tests (`tests/identity/`).
 - **A2A skill count is 38** (`_SKILLS` in `a2a/server.py`). Update `test_agent_card_has_38_skills` in `tests/test_a2a.py` if you add a skill.
 - **`pipeline.run_dedupe_df` result** now has `identity_summary: dict | None` (None when identity disabled).
@@ -368,8 +368,7 @@ Hosted on Railway, registered on Smithery:
 - DuckDB `.pl()` (Polars conversion) requires `pyarrow` as a dependency
 - Rust `cargo` defaults `CARGO_HOME` to the drive root on Windows when CWD is D: -- always set `CARGO_HOME="C:/Users/bsevern/.cargo"` explicitly
 - `winget install Rustlang.Rustup` fails silently on Windows without Developer Mode -- use `rustup-init.exe -y` with `RUSTUP_WINDOWS_PATH_TYPE=hardlink`
-- goldenmatch-extensions CI: 4 jobs (lint, bridge tests, postgres extension, duckdb tests). Release workflow builds binaries + Docker image on GitHub Release tag
-- goldenmatch-extensions uses `benzsevern` GitHub account (same auth switch requirement as main repo)
+- SQL-extension CI is IN this monorepo: `ci.yml`'s `rust_pgrx` lane (ci-required, PG 15/16/17, `cargo pgrx install` + psql smoke) builds/tests the Postgres extension; `publish-goldenmatch-pg.yml` + `publish-goldenmatch-duckdb.yml` cut the releases (tags `goldenmatch-pg-v*` / `goldenmatch-duckdb-v*`). No separate extensions-repo CI.
 - Trunk (pgt.dev) shut down July 2025 -- do not reference it for Postgres extension distribution
 - dbdev (database.dev) only supports SQL/PL/pgSQL extensions (TLE) -- compiled C extensions not eligible
 - `typing_extensions` on Ubuntu CI: system package at `/usr/lib/python3/dist-packages/` overrides pip install -- must `sudo rm -f` the system file first

@@ -14,7 +14,7 @@ function sanitizePath(raw: string): string {
   return resolved;
 }
 
-const VERSION = "0.16.0";
+const VERSION = "0.17.0";
 
 /** Strip stack / errno / syscall fields from objects + Error instances so
  *  unauthenticated callers don't see internal paths / library versions. */
