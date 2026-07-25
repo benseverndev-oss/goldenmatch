@@ -4744,6 +4744,12 @@
               "range": "0 or 1"
             },
             {
+              "value": "array_intersect",
+              "meaning": "Token-set overlap of delimited strings (Jaccard by default; 'array_intersect:overlap' for the overlap coefficient). FS path.",
+              "best_for": "Delimited lists (tags, categories, phones)",
+              "range": "0.0-1.0"
+            },
+            {
               "value": "audio_fp",
               "meaning": "Audio-fingerprint similarity.",
               "best_for": "Audio clips",

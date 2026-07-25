@@ -273,8 +273,10 @@ scorers:
   - soundex_match
   - token_sort
   python_only:
-  # FS domain comparators (spec 2026-07-23-fs-domain-comparators), FS-path only.
-  # Native score-core kernels are Phase 3; TS parity port is Phase 4.
+  # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
+  # splink-domain-comparator-conversion), FS-path only. Kept sorted (parity gate).
+  # Set-overlap over delimited strings (Splink ArrayIntersect -> GM); kernel P5, TS P6.
+  - array_intersect
   # Magnitude-aware date comparator (day-distance bands).
   - date_diff
   # Great-circle (haversine) distance on a single combined "lat,long" field.
@@ -397,3 +399,4 @@ scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
   numeric_diff: "deferred -- native score-core kernel declined (spec 2026-07-23-fs-domain-comparators Phase 3): the abs/pct band rides on the scorer string, which the fixed-id score_one(id,a,b) contract can't carry, and auto-config emits the parameterized form which would decline native regardless; pure-Python numpy path, like soundex_match declining"
+  array_intersect: "deferred -- native score-core kernel is P5 (spec 2026-07-25-splink-domain-comparator-conversion): set-overlap over delimited strings; pure-Python numpy per-pair path until the kernel lands, like soundex_match/date_diff before their kernels"

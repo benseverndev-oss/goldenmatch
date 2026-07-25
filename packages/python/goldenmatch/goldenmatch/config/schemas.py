@@ -45,6 +45,12 @@ VALID_SCORERS = frozenset({
     # parses ONE combined "lat,long" field per side and bands the km distance.
     # (Two separate lat/long columns are the deferred cross-field comparator.) FS.
     "geo_haversine",
+    # Set-overlap comparator over delimited strings (spec 2026-07-25, Splink
+    # ArrayIntersect conversion): splits "a|b|c" into token sets and returns a
+    # monotone [0,1] set overlap. Bare `array_intersect` / `array_intersect:jaccard`
+    # = Jaccard; `array_intersect:overlap` = overlap coefficient (min denominator).
+    # The suffixed forms validate via _ARRAY_INTERSECT_RE below. FS path.
+    "array_intersect",
     # Hamming similarity over a hex perceptual hash (image pHash) -- the
     # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
     "phash",
@@ -88,12 +94,21 @@ _BLOOM_FILTER_RE = re.compile(r"^bloom_filter:\d+:\d+:\d+$")
 # numeric_diff:abs:<eps> / numeric_diff:pct:<frac> -- the band-parameterized forms
 # of the numeric_diff scorer (bare `numeric_diff` is a plain VALID_SCORERS member).
 _NUMERIC_DIFF_RE = re.compile(r"^numeric_diff:(abs|pct):\d+(\.\d+)?$")
+# array_intersect:jaccard / array_intersect:overlap -- the mode-parameterized
+# forms of the array_intersect scorer (bare `array_intersect` is a plain
+# VALID_SCORERS member = jaccard).
+_ARRAY_INTERSECT_RE = re.compile(r"^array_intersect:(jaccard|overlap)$")
 
 
 def _is_valid_scorer(scorer: str) -> bool:
     """A scorer name is valid if it's a VALID_SCORERS member or a recognized
-    parameterized form (currently the ``numeric_diff:abs|pct:<band>`` suffix)."""
-    return scorer in VALID_SCORERS or bool(_NUMERIC_DIFF_RE.match(scorer))
+    parameterized form (``numeric_diff:abs|pct:<band>`` or
+    ``array_intersect:jaccard|overlap``)."""
+    return (
+        scorer in VALID_SCORERS
+        or bool(_NUMERIC_DIFF_RE.match(scorer))
+        or bool(_ARRAY_INTERSECT_RE.match(scorer))
+    )
 
 
 # ── FieldTransform ──────────────────────────────────────────────────────────
