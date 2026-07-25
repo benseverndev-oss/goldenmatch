@@ -272,9 +272,17 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # score_one, jaccard DEFAULT only). Same wheel-skew story: guarded on the
     # `array_intersect_similarity` capability symbol below. Only the bare key is
     # here -- `array_intersect:overlap` carries its mode on the scorer string,
-    # which the fixed-id score_one(id,a,b) can't convey, so it declines native
-    # (and the fast path) exactly like `numeric_diff`.
+    # which the fixed-id score_one(id,a,b) can't convey, so the `:overlap` form
+    # declines the batch id (the per-pair path carries the mode).
     "array_intersect": 19,
+    # id 22 = numeric_diff DEFAULT (pct:0.1), score-core score_one. (ids 20/21 are
+    # the score-wasm name scorers, not score_one arms.) The parameterized
+    # abs/pct forms carry their band on the scorer string, which the fixed id
+    # can't convey -- they decline the batch id but ARE kernel-backed on the
+    # per-pair path via numeric_diff_similarity(a,b,spec) (see
+    # _resolve_score_pair_callable). Guarded on the `numeric_diff_similarity`
+    # capability symbol below.
+    "numeric_diff": 22,
     # id 5 = qgram (char-trigram Jaccard, score-core score_one). Same wheel-skew
     # story as date: routing is GUARDED on the `qgram_similarity` capability
     # symbol at the gating site below, so a stale wheel (pre-qgram, whose
@@ -630,6 +638,20 @@ def _resolve_score_pair_callable(
         # tests/test_native_array_intersect_parity.py.
         from goldenmatch.core.scorer import _array_intersect_similarity_py
         return lambda a, b: _array_intersect_similarity_py(a, b, scorer_name)
+    if scorer_name == "numeric_diff" or scorer_name.startswith("numeric_diff:"):
+        # Magnitude-aware numeric comparator. The band/mode ride the scorer string
+        # (numeric_diff:abs:<eps> / :pct:<frac>), which the fixed-id score_one(22)
+        # can't carry -- so bind the FULL scorer string as the spec and prefer the
+        # native score-core kernel (numeric_diff_similarity(a,b,spec)) when the
+        # wheel exposes it, else the byte-identical pure-Python mirror. This makes
+        # the parameterized forms kernel-backed on the per-pair path (score_one(22)
+        # covers the pct:0.1 default on the batch path). Parity-asserted in
+        # tests/test_native_numeric_diff_parity.py.
+        _mod = native_module()
+        if _mod is not None and hasattr(_mod, "numeric_diff_similarity"):
+            return lambda a, b: _mod.numeric_diff_similarity(a, b, scorer_name)
+        from goldenmatch.core.scorer import _numeric_diff_similarity_py
+        return lambda a, b: _numeric_diff_similarity_py(a, b, scorer_name)
     if scorer_name == "qgram":
         # Character-trigram Jaccard (n=3). Per-pair mirror of the matrix path
         # (_qgram_score_matrix) AND of score-core::qgram_similarity (native
@@ -1468,6 +1490,7 @@ def score_buckets(
             _date_diff_ok = _mod is not None and hasattr(_mod, "date_diff_similarity")
             _geo_ok = _mod is not None and hasattr(_mod, "geo_haversine_similarity")
             _array_intersect_ok = _mod is not None and hasattr(_mod, "array_intersect_similarity")
+            _numeric_diff_ok = _mod is not None and hasattr(_mod, "numeric_diff_similarity")
             _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
             _soundex_ok = _mod is not None and hasattr(_mod, "soundex_similarity")
             _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
@@ -1482,6 +1505,13 @@ def score_buckets(
             # Only the BARE array_intersect maps to native id 19; the `:overlap`
             # form isn't in _NATIVE_SCORER_IDS so it never takes the native route.
             has_array_intersect = any(spec[3] == "array_intersect" for spec in _field_specs)
+            # numeric_diff: the bare form maps to native id 22 (batch). The
+            # parameterized forms take the per-pair native path (guarded there on
+            # the same symbol), so any numeric_diff-family field must gate on it.
+            has_numeric_diff = any(
+                spec[3] == "numeric_diff" or spec[3].startswith("numeric_diff:")
+                for spec in _field_specs
+            )
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             has_dice = any(spec[3] == "dice" for spec in _field_specs)
@@ -1527,6 +1557,7 @@ def score_buckets(
                 or (has_date_diff and not _date_diff_ok)
                 or (has_geo and not _geo_ok)
                 or (has_array_intersect and not _array_intersect_ok)
+                or (has_numeric_diff and not _numeric_diff_ok)
                 or (has_qgram and not _qgram_ok)
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)

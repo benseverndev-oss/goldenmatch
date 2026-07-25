@@ -59,7 +59,13 @@ class TestNativeScorerIdMaps:
     # the scorer string, which the fixed-id score_one can't carry); array_intersect's
     # `:overlap` MODE likewise can't ride score_one, so only the bare (id 19) form
     # is here -- the mode declines native, like numeric_diff.
-    _COMPARATOR_BUCKET_IDS = {"date_diff": 17, "geo_haversine": 18, "array_intersect": 19}
+    _COMPARATOR_BUCKET_IDS = {
+        "date_diff": 17, "geo_haversine": 18, "array_intersect": 19,
+        # id 22 = numeric_diff DEFAULT (pct:0.1); 20/21 are the score-wasm name
+        # scorers (not score_one arms). The parameterized abs/pct forms ride the
+        # spec on the per-pair path, not a fixed id.
+        "numeric_diff": 22,
+    }
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 
     def test_native_scorer_ids_match_score_one_ordering(self):

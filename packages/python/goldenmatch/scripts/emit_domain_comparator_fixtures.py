@@ -25,6 +25,7 @@ from goldenmatch.core.scorer import (
     _array_intersect_similarity_py,
     _date_diff_similarity_py,
     _geo_haversine_similarity_py,
+    _numeric_diff_similarity_py,
 )
 
 OUT = (
@@ -98,6 +99,26 @@ ARRAY_PAIRS = [
     ("array_intersect:overlap", "a|b|c|d", "a|b"),  # overlap 2/min(4,2) -> 1.0
 ]
 
+# numeric_diff: magnitude-aware numeric distance. band + mode ride the scorer
+# string (numeric_diff:abs:<eps> / :pct:<frac>, bare = pct:0.1). Unparseable ->
+# exact-string equality. Pure float arithmetic -> byte-exact TS == Python == Rust.
+NUMERIC_PAIRS = [
+    ("numeric_diff", "100", "100"),         # identical -> 1.0
+    ("numeric_diff", "100", "105"),         # pct 5/105=0.0476 -> 1-0.476
+    ("numeric_diff", "100", "900"),         # pct 0.888 >= 0.1 -> 0.0
+    ("numeric_diff:pct:0.5", "100", "120"), # pct 20/120=0.166 < 0.5
+    ("numeric_diff:abs:2", "10", "11"),     # abs 1 < 2 -> 0.5
+    ("numeric_diff:abs:2", "10", "13"),     # abs 3 >= 2 -> 0.0
+    ("numeric_diff", "-5", "-5"),           # negatives, identical -> 1.0
+    ("numeric_diff", "0", "0"),             # both zero (pct eps guard) -> 1.0
+    ("numeric_diff:abs:10", "0", "0"),      # abs both zero -> 1.0
+    ("numeric_diff", "1.5e2", "150"),       # scientific notation parse -> 1.0
+    ("numeric_diff", "abc", "abc"),         # unparseable equal -> 1.0
+    ("numeric_diff", "abc", "def"),         # unparseable unequal -> 0.0
+    ("numeric_diff", "", ""),               # empty -> exact fallback 1.0
+    ("numeric_diff:bogus", "100", "105"),   # malformed spec -> default pct:0.1
+]
+
 rows: list[list] = []
 for a, b in DATE_PAIRS:
     rows.append(["date_diff", a, b, round(_date_diff_similarity_py(a, b), 6)])
@@ -105,6 +126,8 @@ for a, b in GEO_PAIRS:
     rows.append(["geo_haversine", a, b, round(_geo_haversine_similarity_py(a, b), 6)])
 for scorer, a, b in ARRAY_PAIRS:
     rows.append([scorer, a, b, round(_array_intersect_similarity_py(a, b, scorer), 6)])
+for scorer, a, b in NUMERIC_PAIRS:
+    rows.append([scorer, a, b, round(_numeric_diff_similarity_py(a, b, scorer), 6)])
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text(

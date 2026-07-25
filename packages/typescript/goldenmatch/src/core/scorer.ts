@@ -529,6 +529,47 @@ export function arrayIntersectSimilarity(a: string, b: string, scorer: string): 
   return inter / denom;
 }
 
+// ---------------------------------------------------------------------------
+// numeric_diff: magnitude-aware numeric comparator (score-core score_one id 22
+// for the pct:0.1 default). Faithful port of Python `_numeric_diff_similarity_py`:
+// parse both to float, map the distance to a monotone [0,1] ramp in one of two
+// modes (band + mode ride the scorer string: `numeric_diff:abs:<eps>` /
+// `numeric_diff:pct:<frac>`, bare = pct:0.1). Unparseable -> exact-string
+// equality (never null for non-null input). Pure float arithmetic -> byte-exact
+// across TS / Python / the Rust kernel.
+// ---------------------------------------------------------------------------
+
+const NUMERIC_DIFF_DEFAULT: readonly [string, number] = ["pct", 0.1];
+const NUMERIC_PCT_EPS = 1e-9;
+
+function parseNumericFloat(s: string): number | null {
+  const t = s.trim();
+  if (t === "") return null;
+  const v = Number(t);
+  return Number.isFinite(v) ? v : null;
+}
+
+/** `numeric_diff[:abs|pct:<band>]` -> [mode, band]; bare / malformed -> pct:0.1. */
+function parseNumericDiffSpec(scorer: string): readonly [string, number] {
+  const parts = scorer.split(":");
+  if (parts.length === 3 && parts[0] === "numeric_diff" && (parts[1] === "abs" || parts[1] === "pct")) {
+    const band = Number(parts[2]);
+    if (Number.isFinite(band) && band > 0) return [parts[1], band];
+  }
+  return NUMERIC_DIFF_DEFAULT;
+}
+
+/** Banded numeric-distance similarity (score-core score_one id 22 / spec-carried). */
+export function numericDiffSimilarity(a: string, b: string, scorer: string): number {
+  const x = parseNumericFloat(a);
+  const y = parseNumericFloat(b);
+  if (x === null || y === null) return a === b ? 1.0 : 0.0;
+  const [mode, band] = parseNumericDiffSpec(scorer);
+  let dist = Math.abs(x - y);
+  if (mode === "pct") dist /= Math.max(Math.abs(x), Math.abs(y), NUMERIC_PCT_EPS);
+  return dist >= band ? 0.0 : 1.0 - dist / band;
+}
+
 /**
  * Indel (insertion+deletion) edit distance.
  *
@@ -1069,6 +1110,9 @@ export function scoreField(
   // so match by prefix before the exact-name switch (mirrors Python scoreField).
   if (scorer === "array_intersect" || scorer.startsWith("array_intersect:")) {
     return arrayIntersectSimilarity(valA, valB, scorer);
+  }
+  if (scorer === "numeric_diff" || scorer.startsWith("numeric_diff:")) {
+    return numericDiffSimilarity(valA, valB, scorer);
   }
 
   switch (scorer) {

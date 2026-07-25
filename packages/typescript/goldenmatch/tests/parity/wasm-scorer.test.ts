@@ -605,6 +605,42 @@ d("WASM array_intersect matches the pure-TS scoreField reference (exact)", () =>
   }
 });
 
+// numeric_diff (score_one id 22, pct:0.1 default): magnitude-aware numeric ramp.
+// Both the WASM kernel and the pure-TS `numericDiffSimilarity` do identical float
+// arithmetic, so the WASM matrix is byte-exact with the pure-TS fallback. Only the
+// BARE (default pct:0.1) form is WASM-covered — parameterized `numeric_diff:abs|pct`
+// forms ride the scorer string (fixed-id score_matrix can't carry the band) and stay
+// pure-TS (covered by scorer-domain-comparators.test.ts). Reference: pure-TS scoreField.
+type NumericDiffCase = readonly [a: string, b: string, note: string];
+const NUMERIC_DIFF_CASES: readonly NumericDiffCase[] = [
+  ["100", "100", "identical -> 1.0"],
+  ["100", "105", "pct 5/105 < 0.1 -> partial"],
+  ["100", "900", "pct 0.888 >= 0.1 -> 0.0"],
+  ["0", "0", "both zero (pct eps guard) -> 1.0"],
+  ["-5", "-5", "negatives identical -> 1.0"],
+  ["1.5e2", "150", "scientific notation -> 1.0"],
+  ["abc", "abc", "unparseable equal -> 1.0"],
+  ["abc", "def", "unparseable unequal -> 0.0"],
+];
+
+d("WASM numeric_diff matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of NUMERIC_DIFF_CASES) {
+    it(`numeric_diff("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "numeric_diff");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "numeric_diff");
+      // Identical float arithmetic on both surfaces -> byte-exact.
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();
