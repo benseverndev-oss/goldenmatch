@@ -66,13 +66,28 @@ _DIST_RE = (
 # The column atom is pulled from the try_strptime / try_to_timestamp call (the
 # _l/_r operand); the seconds cutoff is converted to days and snapped to a
 # `_date_diff_band` value -- approximate, like the levenshtein distance->sim map.
-_DATE_DIFF_MARKER = re.compile(r'\bABS\s*\(.*(?:EPOCH|UNIX_TIMESTAMP)\s*\(', re.IGNORECASE)
+# The "looks like" gate is a LINEAR substring check (not a `.*` regex -- these
+# run on arbitrary Splink SQL, so a backtracking marker is a ReDoS risk); the
+# anchored TAIL/COL regexes below are the real structural validators.
 _DATE_DIFF_TAIL = re.compile(r'<=\s*([0-9]+(?:\.[0-9]+)?)\s*$')
 _DATE_DIFF_COL = re.compile(
     r'(?:try_strptime|try_to_timestamp)\s*\(\s*["`]?([A-Za-z_]\w*)_([lr])["`]?\s*,',
     re.IGNORECASE,
 )
 _SECONDS_PER_DAY = 86400.0
+
+
+def _looks_like_date_diff(sql_norm: str) -> bool:
+    """Linear (ReDoS-safe) gate for a date/time-difference level."""
+    low = sql_norm.lower()
+    return "abs" in low and ("epoch" in low or "unix_timestamp" in low)
+
+
+def _looks_like_haversine(sql_norm: str) -> bool:
+    """Linear (ReDoS-safe) gate for a great-circle distance level."""
+    low = sql_norm.lower()
+    return "acos" in low and "radians" in low and "6371" in low
+
 
 LevelKind = Literal[
     "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
@@ -103,8 +118,9 @@ _ARRAY_INTERSECT_SCORER = "array_intersect:overlap"
 # conversion synthesizes that field via MatchkeyField.derive_from=[lat,lng] +
 # derive_separator="," (materialized by the pipeline). The lat column is the arg
 # of a bare radians(col_l|col_r); the lng column is the two operands of the
-# radians(col_r - col_l) difference; the km cutoff is the trailing "<= n".
-_GEO_MARKER = re.compile(r'acos\s*\(.*\*\s*6371', re.IGNORECASE)
+# radians(col_r - col_l) difference; the km cutoff is the trailing "<= n". The
+# entry gate is the linear `_looks_like_haversine` above; the anchored regexes
+# below do the real extraction.
 _GEO_LAT = re.compile(r'radians\s*\(\s*["`]?([A-Za-z_]\w*)_[lr]["`]?\s*\)', re.IGNORECASE)
 _GEO_LNG = re.compile(
     r'radians\s*\(\s*["`]?([A-Za-z_]\w*)_r["`]?\s*-\s*["`]?([A-Za-z_]\w*)_l["`]?\s*\)',
@@ -188,7 +204,7 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
         sim = max(0.0, 1 - distance / _LEV_ASSUMED_LEN)
         return RecognizedLevel("levenshtein", col_l, sim, approx=True)
 
-    if _DATE_DIFF_MARKER.search(sql_norm):
+    if _looks_like_date_diff(sql_norm):
         tail = _DATE_DIFF_TAIL.search(sql_norm)
         cols = _DATE_DIFF_COL.findall(sql_norm)
         if tail and cols:
@@ -212,7 +228,7 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
             "array_intersect", col_l, ratio, approx=True, scorer=_ARRAY_INTERSECT_SCORER
         )
 
-    if _GEO_MARKER.search(sql_norm):
+    if _looks_like_haversine(sql_norm):
         km = _GEO_KM.search(sql_norm)
         lat_bases = {b for b in _GEO_LAT.findall(sql_norm)}
         lng_m = _GEO_LNG.search(sql_norm)
