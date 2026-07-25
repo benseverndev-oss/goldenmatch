@@ -91,8 +91,37 @@ def _looks_like_haversine(sql_norm: str) -> bool:
 
 LevelKind = Literal[
     "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
-    "array_intersect", "geo_haversine",
+    "array_intersect", "geo_haversine", "numeric_diff",
 ]
+
+# Numeric magnitude levels. Splink's standard library has NO first-class numeric
+# comparison (date/time/DistanceInKM/ArrayIntersect + the string-distance family
+# are the built-ins); numeric magnitude arrives via a CustomComparison whose
+# canonical shape -- captured live from splink 4, byte-identical in DuckDB + Spark
+# -- is `ABS("c_l" - "c_r") <= <eps>`. GoldenMatch's `numeric_diff:abs:<band>`
+# scorer is a LINEAR RAMP (sim = 1 - dist/band, 0 beyond), not a hard cutoff, so
+# the conversion is approximate in shape (warn + approx=True). We set band = 2*eps
+# and sim_threshold = 0.5: a pair exactly at the Splink cutoff (dist = eps) then
+# scores 1 - eps/(2*eps) = 0.5, so under the `>=` level semantics "score >= 0.5
+# <=> dist <= eps" reproduces `<= eps` EXACTLY (boundary inclusive) -- mirroring
+# date_diff's "threshold = the score a pair at the cutoff earns" convention. The
+# mapping is deterministic PER LEVEL (band + threshold come only from that level's
+# own eps, no cross-level knowledge), so `recognize_level` yields the same value
+# at field-build AND m/u-import time and `_agree_index_for` aligns automatically.
+# Only the ABSOLUTE form is recognized; a relative/pct CustomComparison
+# (`ABS(a-b)/GREATEST(...) <= f`) is too shape-variable to match and falls through
+# (dropped + warned), matching today's behavior for unrecognized SQL.
+_NUMERIC_DIFF_RE = re.compile(
+    rf'ABS\s*\(\s*{_COL_L}\s*-\s*{_COL_R}\s*\)\s*<=\s*([0-9]*\.?[0-9]+)',
+    re.IGNORECASE,
+)
+
+
+def _fmt_band(x: float) -> str:
+    """Fixed-point band string for a `numeric_diff:abs:<band>` scorer -- no
+    scientific notation (which the schema's `_NUMERIC_DIFF_RE` rejects) and no
+    trailing zeros (`2.0` -> `"2"`, `0.5` -> `"0.5"`)."""
+    return f"{x:.6f}".rstrip("0").rstrip(".")
 
 # ArrayIntersectAtSizes levels count the intersection SIZE:
 #   DuckDB: array_length(list_intersect("c_l", "c_r")) >= <n>
@@ -247,6 +276,19 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
                 )
         # haversine-shaped but couldn't extract a clean lat/lng/km -> drop+warn.
 
+    m = _NUMERIC_DIFF_RE.fullmatch(sql_norm)
+    if m:
+        col_l, col_r, eps = m.group(1), m.group(2), float(m.group(3))
+        if col_l == col_r and eps > 0.0:
+            band = 2.0 * eps  # a pair at dist=eps scores 1 - eps/band = 0.5
+            return RecognizedLevel(
+                "numeric_diff",
+                col_l,
+                0.5,
+                approx=True,
+                scorer=f"numeric_diff:abs:{_fmt_band(band)}",
+            )
+
     return None
 
 
@@ -399,7 +441,25 @@ def convert_comparison(
     # A recognized band may carry a full scorer string (e.g. array_intersect's
     # ":overlap" mode) that differs from its family kind; prefer it, else use
     # the family kind (date_diff, jaro_winkler, ...) or "exact" for exact-only.
-    if families:
+    if families == {"numeric_diff"}:
+        # Every numeric_diff band snaps to sim 0.5 (band = 2*eps, so a pair AT the
+        # cutoff scores 0.5), so multiple Splink cutoffs collapse to ONE level.
+        # Keep the LOOSEST band (largest 2*eps -> widest match window, biased for
+        # recall) and warn when >1 distinct cutoff is collapsed. `band` is the
+        # trailing `numeric_diff:abs:<band>` value.
+        numeric_scorers = {
+            r.scorer for r, _, _ in bands if r.kind == "numeric_diff" and r.scorer
+        }
+        scorer = max(numeric_scorers, key=lambda s: float(s.rsplit(":", 1)[1]))
+        if len(numeric_scorers) > 1:
+            report.warn(
+                comp_path,
+                f"multiple numeric-distance cutoffs collapsed to the loosest band "
+                f"({scorer}); numeric_diff's linear ramp represents one band, so the "
+                "finer cutoffs' gradation is not preserved",
+                mapped_to=None,
+            )
+    elif families:
         scorer = next(
             (r.scorer for r, _, _ in bands if r.kind != "exact" and r.scorer),
             next(iter(families)),
@@ -435,6 +495,13 @@ def convert_comparison(
                 message = (
                     "approximate mapping: date-difference cutoff snapped to the nearest "
                     f"day-distance band -> sim {r.sim_threshold} ({sql})"
+                )
+            elif r.kind == "numeric_diff":
+                message = (
+                    "approximate mapping: numeric-distance cutoff ABS(a-b) <= eps "
+                    "converted to a numeric_diff linear ramp with band = 2*eps, so a "
+                    f"pair at the cutoff scores sim {r.sim_threshold} (Splink's hard "
+                    f"cutoff becomes a ramp; boundary reproduced exactly) ({sql})"
                 )
             elif r.kind == "array_intersect":
                 count = round((r.sim_threshold or 0.0) * _ARRAY_ASSUMED_SET_SIZE)

@@ -938,6 +938,7 @@
             "_agree_index_for",
             "_convert_one_blocking_rule",
             "_findings_preview",
+            "_fmt_band",
             "_load_settings",
             "_looks_like_date_diff",
             "_looks_like_haversine",
