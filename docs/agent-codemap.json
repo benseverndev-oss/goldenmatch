@@ -1473,11 +1473,12 @@
           ],
           "imports": [
             "goldenmatch._api",
-            "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.domain_registry",
             "goldenmatch.core.evaluate",
+            "goldenmatch.core.frame",
+            "goldenmatch.core.io_arrow",
             "goldenmatch.core.review_queue",
             "goldenmatch.web.controller_telemetry"
           ]
@@ -5941,6 +5942,7 @@
             "goldenmatch.core._logging",
             "goldenmatch.core.agent",
             "goldenmatch.core.autoconfig",
+            "goldenmatch.core.frame",
             "goldenmatch.core.incremental",
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.store",
