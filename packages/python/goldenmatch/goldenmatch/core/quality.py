@@ -143,18 +143,32 @@ def blocking_risk(df: pl.DataFrame) -> dict[str, float] | None:
         from goldencheck import cell_quality
     except ImportError:
         return None
-    n = df.height
+    # Arrow-native: GoldenMatch is polars-free, so operate on a pyarrow.Table.
+    # The arrow runtime hands us one directly; a polars frame (or anything with
+    # to_arrow) is coerced once. cell_quality is itself arrow-native.
+    import pyarrow as pa
+
+    if isinstance(df, pa.Table):
+        tbl = df
+    else:
+        _to_arrow = getattr(df, "to_arrow", None)
+        tbl = _to_arrow() if callable(_to_arrow) else pa.table(df)
+    n = tbl.num_rows
     if n == 0:
         return None
     try:
-        positional = cell_quality(df)
+        positional = cell_quality(tbl)
     except Exception:  # noqa: BLE001 - never let DQ scoring break auto-config
         logger.debug("goldencheck.cell_quality failed; skipping blocking risk", exc_info=True)
         return None
     if not positional:
         return None
 
-    string_cols = {c for c, dt in zip(df.columns, df.dtypes) if dt == pl.Utf8}
+    string_cols = {
+        f.name
+        for f in tbl.schema
+        if pa.types.is_string(f.type) or pa.types.is_large_string(f.type)
+    }
     counts: dict[str, int] = {}
     for (_idx, col), _weight in positional.items():
         if col in string_cols:

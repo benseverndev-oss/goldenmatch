@@ -127,3 +127,22 @@ def test_agent_session_analyze_arrow_is_polars_free(tmp_path) -> None:
     assert reasoning["profile"]["row_count"] == 2
     assert reasoning["profile"]["has_sensitive"]
     assert "polars" not in sys.modules
+
+
+def test_blocking_risk_arrow_is_polars_free() -> None:
+    """``core.quality.blocking_risk`` (the quality-aware-blocking recall lever's
+    GoldenCheck bridge) runs on a ``pa.Table`` polars-free. It routes through the
+    arrow-native ``goldencheck.cell_quality``; before the arrow port it crashed on
+    ``df.height`` / ``pl.Utf8`` the moment the recall lever was enabled."""
+    import pyarrow as pa
+    from goldenmatch.core.quality import blocking_risk
+
+    # 60 rows (clears the fuzzy 50-row guard); "Californa" is a near-duplicate
+    # variant of the canonical (more frequent) "California" -> 15/60 = 0.25 risk.
+    state = ["California"] * 40 + ["Californa"] * 15 + ["Texas"] * 5
+    tbl = pa.table({"__row_id__": list(range(len(state))), "state": state})
+
+    risk = blocking_risk(tbl)
+    assert risk is not None and "state" in risk
+    assert abs(risk["state"] - 0.25) < 1e-9
+    assert "polars" not in sys.modules

@@ -7849,10 +7849,11 @@
             "_clusters",
             "_future_penalties",
             "_fuzzy_penalties",
+            "_to_arrow",
+            "_true_indices",
             "cell_quality"
           ],
           "imports": [
-            "goldencheck._polars_lazy",
             "goldencheck.core._native_loader",
             "goldencheck.profilers.fuzzy_values"
           ]

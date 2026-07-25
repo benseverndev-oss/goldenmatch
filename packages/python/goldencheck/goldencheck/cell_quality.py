@@ -17,15 +17,23 @@ Null cells are NOT penalized here -- GoldenMatch's survivorship already ignores
 nulls (it only chooses among non-null values).
 
 ``row_index`` is the 0-based positional index into ``df``; the caller maps it to
-its own row id. Internal columns (``__``-prefixed) are skipped. Pure-Polars +
-the optional native fuzzy kernel; degrades to the Python fallback when the
-``goldencheck`` native extension isn't installed.
+its own row id. Internal columns (``__``-prefixed) are skipped.
+
+**Arrow-native.** GoldenMatch is arrow-native (polars was evicted), so this
+bridge operates on a ``pyarrow.Table`` via ``pyarrow.compute`` -- no Polars in
+the path. A Polars ``DataFrame`` (or any object exposing ``to_arrow()``) is
+accepted for back-compat and coerced to Arrow once. The fuzzy near-duplicate
+clustering runs on the native kernel (or its ``list[str]`` Python fallback) as
+before -- that half was always frame-agnostic.
 """
 from __future__ import annotations
 
 import datetime as _dt
+from typing import Any
 
-from goldencheck._polars_lazy import pl
+import pyarrow as pa
+import pyarrow.compute as pc
+
 from goldencheck.core._native_loader import native_enabled, native_module
 from goldencheck.profilers.fuzzy_values import _MAX_DISTINCT as _FUZZY_MAX_DISTINCT
 from goldencheck.profilers.fuzzy_values import (
@@ -41,6 +49,23 @@ __all__ = ["cell_quality"]
 # the lowest (worst) weight.
 _PENALTY_FUZZY_VARIANT = 0.6
 _PENALTY_FUTURE_DATED = 0.3
+
+
+def _to_arrow(df: Any) -> pa.Table:
+    """Coerce the input to a ``pyarrow.Table`` without importing Polars.
+
+    Accepts an Arrow table directly (the GoldenMatch arrow-native path); a Polars
+    ``DataFrame`` (or anything else exposing ``to_arrow()``) is converted via its
+    own method, so this stays polars-free."""
+    if isinstance(df, pa.Table):
+        return df
+    to_arrow = getattr(df, "to_arrow", None)
+    if callable(to_arrow):
+        out = to_arrow()
+        if isinstance(out, pa.Table):
+            return out
+        return pa.table(out)
+    return pa.table(df)
 
 
 def _clusters(values: list[str]) -> list[list[int]]:
@@ -59,21 +84,26 @@ def _apply(scores: dict[tuple[int, str], float], idx: int, col: str, weight: flo
         scores[key] = weight
 
 
-def _fuzzy_penalties(df: pl.DataFrame, col: str, scores: dict[tuple[int, str], float]) -> None:
-    s = df[col]
-    distinct = s.drop_nulls().unique()
-    n_distinct = distinct.len()
-    if df.height < _MIN_ROWS or n_distinct < _MIN_DISTINCT or n_distinct > _FUZZY_MAX_DISTINCT:
+def _true_indices(mask: pa.ChunkedArray | pa.Array) -> list[int]:
+    """0-based positional indices where a boolean array is True (nulls = False)."""
+    return [i for i, v in enumerate(mask.to_pylist()) if v]
+
+
+def _fuzzy_penalties(
+    col_arr: pa.ChunkedArray, col: str, n_rows: int, scores: dict[tuple[int, str], float]
+) -> None:
+    distinct = pc.unique(col_arr.drop_null())
+    n_distinct = len(distinct)
+    if n_rows < _MIN_ROWS or n_distinct < _MIN_DISTINCT or n_distinct > _FUZZY_MAX_DISTINCT:
         return
-    values: list[str] = distinct.to_list()
+    values: list[str] = distinct.to_pylist()
     clusters = _clusters(values)
     if not clusters:
         return
 
     # Frequency per value -> canonical = most frequent variant in each cluster.
-    vc = s.value_counts()
-    count_col = vc.columns[-1]  # "count" (name has varied across polars versions)
-    freq = dict(zip(vc[col].to_list(), vc[count_col].to_list()))
+    vc = pc.value_counts(col_arr)  # StructArray of {values, counts}
+    freq = dict(zip(vc.field("values").to_pylist(), vc.field("counts").to_pylist()))
 
     penalized: set[str] = set()
     for cluster in clusters:
@@ -83,38 +113,46 @@ def _fuzzy_penalties(df: pl.DataFrame, col: str, scores: dict[tuple[int, str], f
     if not penalized:
         return
 
-    for idx in s.is_in(list(penalized)).fill_null(False).arg_true().to_list():
+    mask = pc.fill_null(pc.is_in(col_arr, value_set=pa.array(list(penalized))), False)
+    for idx in _true_indices(mask):
         _apply(scores, int(idx), col, _PENALTY_FUZZY_VARIANT)
 
 
-def _future_penalties(df: pl.DataFrame, col: str, scores: dict[tuple[int, str], float]) -> None:
-    s = df[col]
-    # TODO(W-path): route via dtype_category
-    is_date = s.dtype == pl.Date
-    now: _dt.date | _dt.datetime = _dt.date.today() if is_date else _dt.datetime.now()
+def _future_penalties(
+    col_arr: pa.ChunkedArray, col: str, scores: dict[tuple[int, str], float]
+) -> None:
+    t = col_arr.type
+    if pa.types.is_date(t):
+        now: Any = pa.scalar(_dt.date.today(), type=t)
+    else:  # timestamp / datetime
+        now = pa.scalar(_dt.datetime.now())
     try:
-        mask = (s > now).fill_null(False)
-        future_idx = mask.arg_true().to_list()
+        mask = pc.fill_null(pc.greater(col_arr, now), False)
+        future_idx = _true_indices(mask)
     except Exception:  # noqa: BLE001 - tz-aware vs naive, exotic dtype
         return
     for idx in future_idx:
         _apply(scores, int(idx), col, _PENALTY_FUTURE_DATED)
 
 
-def cell_quality(df: pl.DataFrame) -> dict[tuple[int, str], float]:
+def cell_quality(df: Any) -> dict[tuple[int, str], float]:
     """Sparse per-cell quality weights for quality-weighted survivorship.
 
     Returns ``{(row_index, column): weight}`` for penalized cells only; a clean
-    cell is absent (treat as 1.0)."""
+    cell is absent (treat as 1.0). Accepts a ``pyarrow.Table`` (arrow-native
+    path) or any object exposing ``to_arrow()`` (e.g. a Polars ``DataFrame``)."""
+    tbl = _to_arrow(df)
     scores: dict[tuple[int, str], float] = {}
-    if df.height < 2:
+    if tbl.num_rows < 2:
         return scores
-    for col in df.columns:
+    n_rows = tbl.num_rows
+    for col in tbl.column_names:
         if col.startswith("__"):  # internal columns (row id, source, ...)
             continue
-        dtype = df[col].dtype
-        if dtype == pl.Utf8:
-            _fuzzy_penalties(df, col, scores)
-        elif dtype in (pl.Date, pl.Datetime):
-            _future_penalties(df, col, scores)
+        col_arr = tbl.column(col)
+        t = col_arr.type
+        if pa.types.is_string(t) or pa.types.is_large_string(t):
+            _fuzzy_penalties(col_arr, col, n_rows, scores)
+        elif pa.types.is_date(t) or pa.types.is_timestamp(t):
+            _future_penalties(col_arr, col, scores)
     return scores
