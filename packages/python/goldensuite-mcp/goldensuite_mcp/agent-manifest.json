@@ -4659,6 +4659,10 @@
           "description": "Get data quality profile: column types, null rates, unique counts, sample values."
         },
         {
+          "name": "read_file",
+          "description": "Read a CSV/JSON file and return the first N records."
+        },
+        {
           "name": "retrieve_similar",
           "description": "Semantic retrieval (#1089): return the records in a CSV most similar to a free-text query, ranked by cosine similarity. Embeds the chosen column and the query with the zero-config in-house embedder (no cloud/torch by default) and runs ANN search. The read side of the RAG entity-canonicalization epic -- fetch candidate records by query without running a full dedupe."
         },
@@ -4695,6 +4699,10 @@
           "description": "Parameter-sensitivity analysis: sweep one or more config parameters across a range and report how stable the clustering is at each value (CCMS unchanged %). Use it to find robust thresholds. Auto-configures the file if no config is given."
         },
         {
+          "name": "server_info",
+          "description": "Return metadata about this GoldenMatch MCP server."
+        },
+        {
           "name": "shatter_cluster",
           "description": "Break an entire cluster into individual records. All members become singletons. Use when a cluster is completely wrong."
         },
@@ -4717,6 +4725,10 @@
         {
           "name": "upload_dataset",
           "description": "Upload a local file's bytes to the server and get back a server-side path to reuse across other tools (analyze_data, auto_configure, agent_deduplicate, ...). No hosting needed. Send base64 (default) or raw text via `encoding`. Uploaded files are ephemeral scratch, reaped after GOLDENMATCH_MCP_UPLOAD_TTL (default 24h); re-upload if you need a path older than that. Max size GOLDENMATCH_MCP_MAX_UPLOAD_BYTES (default 64MB) -- above it, pass a public http(s) URL as file_path instead."
+        },
+        {
+          "name": "write_csv",
+          "description": "Write a list of record objects to a CSV file."
         }
       ],
       "vocabularies": [

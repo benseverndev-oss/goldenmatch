@@ -4,6 +4,24 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [3.10.0] - 2026-07-24
+
+### Added
+- **3 host-helper MCP tools** (`server_info`, `read_file`, `write_csv`) -- the last
+  `ts_only` entries. **`mcp_tools.ts_only` is now EMPTY**: the TS MCP surface is a
+  strict subset of the Python one (83 shared, 0 TS-only, 7 Python-only). goldenmatch
+  MCP tools **87 -> 90**. `server_info.tool_count` is DERIVED from the live tool list,
+  never a literal, so it cannot drift from the real surface.
+
+### Security note (behavior unchanged, now documented + tested)
+- `read_file` / `write_csv` route through the same `core._paths.safe_path` guard every
+  other file-taking tool uses. That guard rejects NUL bytes and resolves the path, but
+  **enforces containment only when `GOLDENMATCH_ALLOWED_ROOT` is set**. With it unset
+  (the default) these tools reach anything the server process can -- identical to the
+  pre-existing `upload_dataset` / `export_results`, so this adds no new reach. Both
+  modes are now pinned by tests, and the contract is stated on the API-surface page.
+  `write_csv` additionally refuses anything that is not a list of objects.
+
 ## [3.9.0] - 2026-07-24
 
 ### Added
