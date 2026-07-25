@@ -191,13 +191,10 @@ def test_abs_time_diff_no_string_edit_level():
     )
 
 
-def test_unrecognized_level_dropped_date_diff_still_wins():
-    """An unrecognized level (no array_intersect SQL recognizer exists yet --
-    P1 added the scorer, not a from_splink recognizer) is dropped with a
-    warning; the recognized date_diff bands still build a clean date field.
-    (The `len(domain_families) > 1` guard is defensive for future recognizers;
-    it can't be triggered through recognize_level today, since date_diff is the
-    only recognizable domain kind.)"""
+def test_two_distinct_domain_families_drops_comparison():
+    """A comparison mixing two DIFFERENT recognized domain families (date_diff +
+    array_intersect -- an impossible real Splink shape, but the guard must hold)
+    is dropped, not silently coerced onto one scorer."""
     comp = {
         "output_column_name": "dob",
         "comparison_levels": [
@@ -205,7 +202,7 @@ def test_unrecognized_level_dropped_date_diff_still_wins():
             {"sql_condition": _DUCK_1MO},
             {
                 "sql_condition": (
-                    "array_length(list_intersect(\"dob_l\", \"dob_r\")) >= 2"
+                    'array_length(list_intersect("dob_l", "dob_r")) >= 2'
                 )
             },
             {"sql_condition": "ELSE"},
@@ -213,10 +210,9 @@ def test_unrecognized_level_dropped_date_diff_still_wins():
     }
     report = ConversionReport()
     field = convert_comparison(comp, 0, report)
-    assert field is not None
-    assert field.scorer == "date_diff"
+    assert field is None
     assert any(
-        "unrecognized sql_condition" in f.message
+        "multiple domain comparator families" in f.message
         for f in report.findings
         if f.severity == "warning"
     )
@@ -280,3 +276,99 @@ def test_trained_dob_import_maps_bands_and_drops_string_edit_mass():
         and f.splink_path.endswith("comparison_levels[5]")
         for f in warns
     )
+
+
+# --- array_intersect (ArrayIntersectAtSizes) ---------------------------------
+#
+# Splink counts the intersection SIZE (`>= n`); GoldenMatch's array_intersect
+# scorer returns a RATIO, so `>= n` is snapped to an overlap-coefficient
+# threshold n / 10 (assumed set size, biased low for recall) + a warn. Decision:
+# docs/superpowers/plans/2026-07-25-splink-domain-comparator-conversion-plan.md 7.
+
+_DUCK_ARRAY_3 = 'array_length(list_intersect("skills_l", "skills_r")) >= 3'
+_DUCK_ARRAY_1 = 'array_length(list_intersect("skills_l", "skills_r")) >= 1'
+_SPARK_ARRAY_3 = "SIZE(ARRAY_INTERSECT(`skills_l`, `skills_r`)) >= 3"
+
+
+@pytest.mark.parametrize(
+    "sql,expected_ratio",
+    [
+        (_DUCK_ARRAY_3, 0.3),
+        (_DUCK_ARRAY_1, 0.1),
+        (_SPARK_ARRAY_3, 0.3),   # Spark SIZE(ARRAY_INTERSECT(...)) form
+    ],
+)
+def test_array_intersect_recognized_both_dialects(sql, expected_ratio):
+    r = recognize_level(sql)
+    assert r is not None
+    assert r.kind == "array_intersect"
+    assert r.column == "skills"
+    assert r.scorer == "array_intersect:overlap"
+    assert r.sim_threshold == pytest.approx(expected_ratio, abs=1e-9)
+    assert r.approx is True
+
+
+def test_array_intersect_mismatched_columns_dropped():
+    assert (
+        recognize_level('array_length(list_intersect("skills_l", "tags_r")) >= 1')
+        is None
+    )
+
+
+def _array_comparison():
+    """Real DuckDB ArrayIntersectAtSizes([3, 1]): null, two size levels, ELSE."""
+    return {
+        "output_column_name": "skills",
+        "comparison_levels": [
+            {
+                "sql_condition": '"skills_l" IS NULL OR "skills_r" IS NULL',
+                "is_null_level": True,
+            },
+            {"sql_condition": _DUCK_ARRAY_3},
+            {"sql_condition": _DUCK_ARRAY_1},
+            {"sql_condition": "ELSE"},
+        ],
+    }
+
+
+def test_array_comparison_converts_to_overlap_field():
+    report = ConversionReport()
+    field = convert_comparison(_array_comparison(), 0, report)
+
+    assert field is not None
+    assert field.field == "skills"
+    # the ":overlap" scorer string (not the bare "array_intersect" family kind).
+    assert field.scorer == "array_intersect:overlap"
+    assert field.levels == 3
+    assert field.level_thresholds == [0.3, 0.1]
+
+
+def test_array_comparison_warns_on_count_to_ratio_snap():
+    report = ConversionReport()
+    convert_comparison(_array_comparison(), 0, report)
+    warns = [f.message for f in report.findings if f.severity == "warning"]
+
+    assert any("count >= 3" in w and "overlap-ratio" in w for w in warns)
+    assert any("count >= 1" in w for w in warns)
+    assert any("biased low for recall" in w for w in warns)
+
+
+def test_trained_array_import_maps_ratio_bands():
+    comp = _array_comparison()
+    comp["comparison_levels"][1]["m_probability"] = 0.55
+    comp["comparison_levels"][1]["u_probability"] = 0.05
+    comp["comparison_levels"][2]["m_probability"] = 0.30
+    comp["comparison_levels"][2]["u_probability"] = 0.15
+    comp["comparison_levels"][3]["m_probability"] = 0.15
+    comp["comparison_levels"][3]["u_probability"] = 0.80
+    settings = _trained_settings([comp])
+
+    report = ConversionReport()
+    field = convert_comparison(comp, 0, report)
+    em = import_em([(comp, 0, field)], settings, report)
+    assert em is not None
+
+    m = em.m_probs["skills"]
+    assert len(m) == 3
+    # >=3 band (ratio 0.3) is the top level (index 2); >=1 band index 1; ELSE 0.
+    assert m[2] > m[1] > m[0]

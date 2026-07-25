@@ -75,8 +75,25 @@ _DATE_DIFF_COL = re.compile(
 _SECONDS_PER_DAY = 86400.0
 
 LevelKind = Literal[
-    "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff"
+    "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
+    "array_intersect",
 ]
+
+# ArrayIntersectAtSizes levels count the intersection SIZE:
+#   DuckDB: array_length(list_intersect("c_l", "c_r")) >= <n>
+#   Spark:  SIZE(ARRAY_INTERSECT(`c_l`, `c_r`)) >= <n>
+# GoldenMatch's array_intersect scorer returns a RATIO, not a count, so there is
+# no exact count->ratio map without set sizes at convert time. We snap `>= n` to
+# an overlap-coefficient threshold n / _ARRAY_ASSUMED_SET_SIZE (biased LOW to
+# preserve recall) and emit `array_intersect:overlap` (overlap is closer to an
+# absolute-intersection count than Jaccard) with approx=True + a warn.
+_ARRAY_INTERSECT_LEVEL_RE = re.compile(
+    r'(?:array_length\s*\(\s*list_intersect|size\s*\(\s*array_intersect)\s*\(\s*'
+    rf'{_COL_L}\s*,\s*{_COL_R}\s*\)\s*\)\s*>=\s*([0-9]+)',
+    re.IGNORECASE,
+)
+_ARRAY_ASSUMED_SET_SIZE = 10.0
+_ARRAY_INTERSECT_SCORER = "array_intersect:overlap"
 
 # Domain comparators (magnitude-aware) take precedence over string-edit levels
 # in the same Splink comparison -- e.g. DateOfBirthComparison mixes a
@@ -100,6 +117,7 @@ class RecognizedLevel:
     column: str | None
     sim_threshold: float | None
     approx: bool = False      # True when the mapping is an approximation (jaro->jw, distance->similarity)
+    scorer: str | None = None  # full scorer string when it differs from `kind` (e.g. "array_intersect:overlap")
 
 
 def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel | None:
@@ -164,6 +182,16 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
                 )
         # ABS(...EPOCH/UNIX_TIMESTAMP...) shape but no clean single-column
         # date-difference -> fall through to None (level dropped + warned).
+
+    m = _ARRAY_INTERSECT_LEVEL_RE.fullmatch(sql_norm)
+    if m:
+        col_l, col_r, count = m.group(1), m.group(2), int(m.group(3))
+        if col_l != col_r:
+            return None
+        ratio = min(1.0, count / _ARRAY_ASSUMED_SET_SIZE)
+        return RecognizedLevel(
+            "array_intersect", col_l, ratio, approx=True, scorer=_ARRAY_INTERSECT_SCORER
+        )
 
     return None
 
@@ -314,7 +342,16 @@ def convert_comparison(
         report.warn(comp_path, "no usable agree levels, comparison dropped", mapped_to=None)
         return None
 
-    scorer = next(iter(families)) if families else "exact"
+    # A recognized band may carry a full scorer string (e.g. array_intersect's
+    # ":overlap" mode) that differs from its family kind; prefer it, else use
+    # the family kind (date_diff, jaro_winkler, ...) or "exact" for exact-only.
+    if families:
+        scorer = next(
+            (r.scorer for r, _, _ in bands if r.kind != "exact" and r.scorer),
+            next(iter(families)),
+        )
+    else:
+        scorer = "exact"
 
     columns = {r.column for r, _, _ in bands if r.column is not None}
     if len(columns) > 1:
@@ -344,6 +381,13 @@ def convert_comparison(
                 message = (
                     "approximate mapping: date-difference cutoff snapped to the nearest "
                     f"day-distance band -> sim {r.sim_threshold} ({sql})"
+                )
+            elif r.kind == "array_intersect":
+                count = round((r.sim_threshold or 0.0) * _ARRAY_ASSUMED_SET_SIZE)
+                message = (
+                    f"approximate mapping: array-intersection count >= {count} snapped "
+                    f"to overlap-ratio threshold {r.sim_threshold} (assumed set size "
+                    f"{int(_ARRAY_ASSUMED_SET_SIZE)}, biased low for recall) ({sql})"
                 )
             else:
                 message = (
