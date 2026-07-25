@@ -46,11 +46,15 @@ describe("AgentSession.analyze", () => {
     expect(session.reasoning).toBe(r);
   });
 
-  it("flags sensitive data and selects pprl", () => {
+  it("flags sensitive data and offers pprl (opt-in, not forced)", () => {
+    // Parity with Python analyze (allow_pprl=False default): sensitive fields
+    // are detected and PPRL is offered as an alternative, but the normal tree
+    // runs — PPRL is no longer auto-selected.
     const session = new AgentSession();
     const r = session.analyze([{ ssn: "111-22-3333" }]);
     expect(r.profile.has_sensitive).toBe(true);
-    expect(r.strategy).toBe("pprl");
-    expect(r.auto_execute).toBe(false);
+    expect(r.strategy).not.toBe("pprl");
+    expect(r.auto_execute).toBe(true);
+    expect(r.alternatives.map((a) => a.strategy)).toContain("pprl");
   });
 });

@@ -21,10 +21,19 @@ const prof = (
 });
 
 describe("selectStrategy decision table", () => {
-  it("sensitive -> pprl, auto_execute false", () => {
-    const d = selectStrategy(prof([f("ssn", {})], { has_sensitive: true }));
+  it("sensitive + allowPprl -> pprl, auto_execute false", () => {
+    const d = selectStrategy(prof([f("ssn", {})], { has_sensitive: true }), true);
     expect(d.strategy).toBe("pprl");
     expect(d.auto_execute).toBe(false);
+    expect(d.pprl_available).toBe(true);
+  });
+
+  it("sensitive (default, no opt-in) -> normal tree + pprl_available", () => {
+    // Parity with Python select_strategy(allow_pprl=False): PPRL is offered, not forced.
+    const d = selectStrategy(prof([f("ssn", {})], { has_sensitive: true }));
+    expect(d.strategy).not.toBe("pprl");
+    expect(d.pprl_available).toBe(true);
+    expect(d.auto_execute).toBe(true);
   });
 
   it("strong id only -> exact_only", () => {
