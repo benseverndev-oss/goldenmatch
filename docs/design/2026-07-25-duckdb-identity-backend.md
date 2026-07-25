@@ -1,6 +1,6 @@
 # DuckDB as an Identity Store backend — design + decision
 
-**Date:** 2026-07-25 • **Status:** Proposed — perf motivation refuted by the ADBC spike; remaining case is strategic and needs its own measurement before building
+**Date:** 2026-07-25 • **Status:** DECIDED — **NO-GO on the performance case** (`duckdb_stream` spike ran; streaming does not bound RSS below `staging`). Any DuckDB identity backend is now purely a server-less + analytical product decision. See "Spike result".
 
 ## Question
 
@@ -210,18 +210,56 @@ is **memory under a streaming ingest.** Add two arms to the existing harness
    a hard core dep. It is already a `[duckdb]` extra; the identity backend rides
    that.
 
+## Spike result (2026-07-25) — the streaming lever is refuted
+
+The harness (`scripts/spike_duckdb_identity_ingest.py`, `spike-duckdb-identity-ingest`
+workflow) ran on `large-new-64GB`, content-hash identical across every completing arm:
+
+| N | staging | duckdb_inmem | duckdb_stream |
+|---|---|---|---|
+| 100k | **0.557 GB** | 0.860 GB (+54%) | 0.823 GB (+48%) |
+| 1M | **4.533 GB** | 6.146 GB (+36%) | 4.484 GB (−1%) |
+| 5M | **22.42 GB** | 30.48 GB (+36%) | *did not complete under a bounded budget* |
+
+(DuckDB DB files are ~3–7× smaller — columnar — the one clear DuckDB win, but that is
+disk, not the memory metric. Wall: the DuckDB arms are ~1.3–1.4× faster, also not the
+metric.)
+
+Three findings, all pointing the same way:
+
+1. **`duckdb_inmem` is strictly *worse* on memory** — +36% peak RSS vs `staging` at
+   both 1M and 5M (30.5 vs 22.4 GB at 5M). Registering the in-memory Arrow table and
+   upserting into a DuckDB file costs *more* than the Python-frame + SQLite path, not
+   less. This is the "confirms the frame is the floor" arm, and it confirms the floor
+   is, if anything, higher for DuckDB.
+2. **`duckdb_stream` never opens a gap** — +48% at 100k, dead-even (−1%) at 1M. The
+   ≥30%-less-RSS bar is never approached, let alone cleared.
+3. **The frame floor is replaced by an *index* floor, not removed.** DuckDB's
+   `ON CONFLICT` upsert must hold the entire primary-key **ART index in RAM
+   (indexes are not spillable)**, and it grows with N. At 5M the stream arm could not
+   complete under a bounded budget: it OOM'd a hard 4 GB `memory_limit` on CI
+   (`OutOfMemory 3.7/3.7 GiB`) and OOM'd a self-managed 15 GB box locally. So streaming
+   the *scan* buys nothing — the unspillable conflict index is the real ceiling, and a
+   streaming ingest still needs a **generous** memory budget that scales with the row
+   count, not a tight one.
+
+**Verdict: NO-GO on the performance case.** The single lever that could have justified
+a DuckDB identity backend on memory-at-scale — a streaming ingest bounding RSS below
+`staging` — does not exist for an upsert. Both DuckDB arms are memory-neutral-to-worse
+than the stdlib `staging` path the ADBC spike already crowned.
+
 ## Recommendation
 
-**Adopt Option C now** (ship the ADBC spike's `staging` winner for the SQLite bulk
-path; keep Postgres for past-the-millions) and **do not build the DuckDB backend
-on a performance argument** — the ADBC spike refuted the Arrow-native-write-path
-motivation that DuckDB would otherwise inherit.
+**Adopt Option C.** Ship the ADBC spike's stdlib `staging` path for the SQLite bulk
+write; keep Postgres for past-the-low-millions. **Do not build a DuckDB identity
+backend on any performance argument** — the spike shows DuckDB is memory-neutral-to-
+worse than `staging` at every scale, and cannot bound-complete a 5M upsert under a
+tight budget.
 
-Keep the DuckDB backend as a **live proposal with a single gating experiment**: the
-`duckdb_stream` arm above. It is the only path on which DuckDB could beat `staging`
-on the metric that matters (memory at scale), *and* it is the only lever that would
-hand a single-node user the bulk fast path without a Postgres server. If that arm
-clears ≥ 30% RSS at 5M, Option A becomes the most valuable identity-scale work on
-the board that does not require a server. If it does not, a DuckDB identity backend
-is a product decision about server-less analytical storage, to be prioritised on
-user demand — not a performance project.
+A DuckDB identity backend is now **purely a product decision**, justified — if ever —
+only by its *non-performance* merits: a **server-less** bulk path (no Postgres) plus
+**native analytical read views** (`v_identities` / `v_identity_pairs` / profile
+aggregations). Prioritise it on real user demand for server-less-analytical identity
+storage, not as a scale-memory project. If it is built, size its memory budget for the
+unspillable `ON CONFLICT` index (Option A, `backend="duckdb"`), and carry the
+payload-drop / byte-parity / encoding traps above.
