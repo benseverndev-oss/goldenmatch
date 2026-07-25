@@ -5777,6 +5777,8 @@
           "defines": [
             "ResolveSummary",
             "_batch_fingerprint_enabled",
+            "_bulk_fast_path_enabled",
+            "_bulk_flush_rows",
             "_cluster_confidence",
             "_frames_iter",
             "_golden_record_from_members",
