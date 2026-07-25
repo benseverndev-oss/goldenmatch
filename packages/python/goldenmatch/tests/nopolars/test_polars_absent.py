@@ -135,7 +135,6 @@ def test_blocking_risk_arrow_is_polars_free() -> None:
     arrow-native ``goldencheck.cell_quality``; before the arrow port it crashed on
     ``df.height`` / ``pl.Utf8`` the moment the recall lever was enabled."""
     import pyarrow as pa
-
     from goldenmatch.core.quality import blocking_risk
 
     # 60 rows (clears the fuzzy 50-row guard); "Californa" is a near-duplicate
