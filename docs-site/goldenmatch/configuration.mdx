@@ -204,7 +204,7 @@ memory:
   dataset: customers            # tag corrections so one DB can hold memory for many tables
   learning:
     threshold_min_corrections: 10   # learner runs once per matchkey at this floor
-    weights_min_corrections: 50     # field-weight learner floor (stub in v1.6, returns null)
+    weights_min_corrections: 50     # field-weight learner floor (not yet implemented; the learner returns null)
 
 output:
   directory: ./output
@@ -587,7 +587,7 @@ The optional `memory:` section enables persistent corrections. Once a steward, a
 | `reanchor` | `true` | Re-anchor by `record_hash` when row IDs miss; ambiguous re-anchors report `stale_ambiguous`. |
 | `dataset` | `null` | Tag corrections; isolates per-table memory in shared DBs. |
 | `learning.threshold_min_corrections` | `10` | Trust-weighted grid search runs once a matchkey crosses this floor. |
-| `learning.weights_min_corrections` | `50` | Field-weight learning is stubbed in v1.6.0 and returns `null`. |
+| `learning.weights_min_corrections` | `50` | Field-weight learning is not yet implemented — the learner returns `null` until per-field scores are persisted with corrections. Threshold tuning (above) is the active learning mechanism. |
 
 Full guide: [Learning Memory](/goldenmatch/learning-memory).
 
