@@ -100,6 +100,18 @@ def _infermap_scorer_kernels() -> list[str]:
     return sorted(SCORER_KERNELS)
 
 
+def _goldenflow_transforms() -> list[str]:
+    # goldenflow's registered transform identities. `import goldenflow` triggers
+    # every transform submodule's registration side-effect (goldenflow/__init__.py
+    # imports address/names/email/... ), so list_transforms() sees the full set.
+    # Mirrors TS `listTransforms()` (core/transforms/registry.ts); the api_parity
+    # `transforms` surface. Intended cross-language deltas (e.g. the TS-only
+    # LLM corrector) are declared in parity/goldenflow.yaml.
+    import goldenflow  # noqa: F401  (registration side-effects)
+    from goldenflow.transforms import list_transforms
+    return sorted({t.name for t in list_transforms()})
+
+
 # The only per-package variance on the Python side is the CLI module path.
 _CLI_MODULE = {
     "goldenmatch": "goldenmatch.cli.main",
@@ -126,7 +138,13 @@ REGISTRY = {
           # compute surface, so they're skipped.
           **({"scorers": (_infermap_scorers, None),
               "scorer_kernels": (_infermap_scorer_kernels, None)}
-             if pkg == "infermap" else {})}
+             if pkg == "infermap" else {}),
+          # goldenflow's transform vocabulary -- the cross-language `transforms`
+          # parity surface (mirrors goldenmatch's transforms surface: partition
+          # only, no kernel floor). Catches a transform available on one language
+          # but not the other; intended deltas live in parity/goldenflow.yaml.
+          **({"transforms": (_goldenflow_transforms, None)}
+             if pkg == "goldenflow" else {})}
     for pkg, mod in _CLI_MODULE.items()
 }
 
