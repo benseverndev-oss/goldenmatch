@@ -578,7 +578,7 @@ def _run_fs_streaming_dedupe(
         )
     else:
         blocks = _build_em_blocks(score_frame, blocking)
-    blocking_fields = collect_blocking_fields(blocking)
+    blocking_fields = collect_blocking_fields(blocking, for_em=True)
     em_result = load_or_train_em(
         score_frame, mk, blocks=blocks, blocking_fields=blocking_fields,
         target_ids=None,
@@ -719,9 +719,11 @@ def _score_probabilistic_matchkey(
         blocks = build_blocks(block_frame, config.blocking)
     else:
         blocks = []
-    # Collect from keys AND passes (multi_pass puts keys in `.passes`).
+    # Collect from keys AND passes (multi_pass puts keys in `.passes`); for_em
+    # keeps additive orthogonal-anchor fields EM-trained (not demoted).
     blocking_fields = (
-        collect_blocking_fields(config.blocking) if config.blocking else []
+        collect_blocking_fields(config.blocking, for_em=True)
+        if config.blocking else []
     )
     # Reuses mk.model_path when set (Splink-style train-once), else trains.
     em_result = load_or_train_em(
@@ -2694,7 +2696,8 @@ def _run_fused_fs_match_short_circuit(
         else []
     )
     blocking_fields = (
-        collect_blocking_fields(config.blocking) if config.blocking else []
+        collect_blocking_fields(config.blocking, for_em=True)
+        if config.blocking else []
     )
     em_result = load_or_train_em(
         collected_df, mk, blocks=blocks, blocking_fields=blocking_fields,

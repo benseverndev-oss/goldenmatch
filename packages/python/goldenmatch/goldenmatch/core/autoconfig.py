@@ -880,6 +880,57 @@ def _strip_honorifics_for(profile: ColumnProfile) -> bool:
     )
 
 
+# Coverage / cardinality bands for the "unused orthogonal field" blocking rule
+# (`_diversify_unused_orthogonal_blocking`). A field earns an additive single-field
+# blocking pass only when it is WELL-POPULATED (null rate under the ceiling) AND
+# sits in a MODERATE cardinality band -- neither near-constant (a gender-like field
+# at ~0.002 makes two giant blocks) nor near-unique (a surrogate key makes
+# singletons with no co-blocking value). Field-agnostic BY DESIGN: the win on
+# historical_50k is `birth_place` (an orthogonal anchor for the ~22% of true pairs
+# whose corrupted names never co-block), but the rule NEVER names it -- selection is
+# by data shape so it generalizes to whatever orthogonal field a dataset carries.
+_ORTHO_BLOCK_NULL_CEILING = 0.4
+_ORTHO_BLOCK_CARD_FLOOR = 0.02
+_ORTHO_BLOCK_CARD_CEILING = 0.9
+
+
+def _fs_orthogonal_blocking_enabled() -> bool:
+    """Field-agnostic orthogonal-anchor blocking for the FS path.
+
+    **Default OFF.** When ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`` is truthy,
+    ``_diversify_unused_orthogonal_blocking`` adds an additive single-field
+    blocking pass on every well-populated, moderate-cardinality field the existing
+    name/date/zip passes don't already cover. Where the v2 diversify lever
+    (``_diversify_probabilistic_blocking``) only diversifies onto ``date`` +
+    ``zip``/``identifier``/``phone`` col_types, this selects by DATA SHAPE (coverage
+    + cardinality band) rather than col_type, so it catches an orthogonal anchor a
+    dataset's classifier happened to miss -- e.g. historical_50k's ``birth_place``,
+    which profiles as ``name`` (null 0.13, card 0.48) and slips past the v2
+    whitelist, leaving the FS candidate set gated entirely on the corrupted name
+    keys (blocking_recall caps ~0.78). Passes are marked ``additive`` so the anchor
+    stays EM-trained (co-locate WITHOUT demoting the discriminator);
+    ``_bound_probabilistic_blocking_pairs`` runs after to bound/drop any pass too
+    large at full N.
+
+    **Out-of-panel result (`validate_fs_holdout.py`, OFF->ON) — a PERSON/PII-regime
+    lever, NOT a safe blanket default, which is why it stays OFF:**
+      control historical_50k F1 0.826->0.847, febrl3 0.987->0.994, dblp_acm/synth flat
+      HOLDOUT febrl4 0.989->0.995 (+0.006, recall-driven — GENERALISES on PII)
+      HOLDOUT dblp_scholar 0.329->0.086 (-0.24), amazon_google ~flat
+    On bibliographic/product data the "orthogonal anchor" (venue/year) is a TOPIC
+    bucket, not an identity anchor: it co-blocks + adds match weight while the only
+    real discriminator (a noisy title) can't reject the false pairs, so precision
+    collapses (a SCORING over-merge, not a block-size blowup — venue's blocks are
+    tiny). No blocking-side guard separates the regimes; the honest scoping is
+    person-data. Flip on ONLY behind dataset-type detection (person-like: name +
+    date + geo present), never globally, per the ``GOLDENMATCH_FS_AUTOCONFIG_V2``
+    precedent. Default-off is byte-identical (helper returns ``blocking`` unchanged).
+    """
+    return os.environ.get("GOLDENMATCH_FS_ORTHOGONAL_BLOCKING", "0").lower() in (
+        "1", "true", "on", "yes", "enabled",
+    )
+
+
 # Fraction of a column's non-null sample values that must parse as valid
 # coordinates for it to be admitted as a single-field geo_haversine column.
 _LATLONG_SAMPLE_FLOOR = 0.8
@@ -5261,6 +5312,12 @@ def auto_configure_probabilistic_df(
     # identifier) so the FS candidate set isn't gated entirely on (corrupted)
     # name keys. Purely additive — recall ceiling can only rise.
     blocking = _diversify_probabilistic_blocking(blocking, profiles, df)
+    # Field-agnostic orthogonal-anchor blocking (default OFF, out-of-panel
+    # validated): add a pass on any well-populated, moderate-cardinality field the
+    # name/date/zip passes don't already cover -- the generalization that catches a
+    # misclassified orthogonal anchor (e.g. historical_50k `birth_place`, which
+    # profiles as `name` and escapes the v2 date/zip whitelist above).
+    blocking = _diversify_unused_orthogonal_blocking(blocking, profiles, df)
     # Pair-budget gate: bound EVERY pass (build_blocking's soundex passes + the
     # diversified ones) by candidate pairs Σ C(block,2), not just block rows —
     # the row ceiling let ~12.9B-pair configs (dob-YEAR + name-soundex mega-
@@ -5391,6 +5448,108 @@ def _diversify_probabilistic_blocking(
         return blocking
 
     # Fold into a multi_pass union; keep the original keys/passes as passes.
+    base_passes = list(blocking.passes or []) or list(blocking.keys or [])
+    return blocking.model_copy(update={
+        "strategy": "multi_pass",
+        "passes": base_passes + new_passes,
+        "auto_select": False,
+    })
+
+
+def _diversify_unused_orthogonal_blocking(
+    blocking: BlockingConfig | None,
+    profiles: list[ColumnProfile],
+    df: Any = None,
+) -> BlockingConfig | None:
+    """Add an additive blocking pass on each unused, well-populated,
+    moderate-cardinality field -- a field-agnostic generalization of the
+    orthogonal-anchor idea in ``_diversify_probabilistic_blocking``.
+
+    ``_diversify_probabilistic_blocking`` only diversifies onto ``date`` and
+    ``zip``/``identifier``/``phone`` col_types. But the strongest orthogonal anchor
+    a dataset carries may be classified as something else -- on historical_50k the
+    ``birth_place`` column (50.7% of the missed true pairs share it exactly) profiles
+    as ``name`` (null 0.13, card 0.48) and slips past that whitelist, so the FS
+    candidate set stays gated entirely on the (corrupted) name keys and
+    blocking_recall caps at ~0.78. This rule instead selects by DATA SHAPE, not
+    col_type: any field with ``null_rate <= _ORTHO_BLOCK_NULL_CEILING`` and
+    cardinality in ``[_ORTHO_BLOCK_CARD_FLOOR, _ORTHO_BLOCK_CARD_CEILING)`` that no
+    existing pass already keys on earns a single-field ``strip`` pass. Field-level
+    (not signature-level) dedup so a field the name passes / v2 diversify already
+    cover (dob-year, postcode-strip, the name composites) is never re-added.
+
+    Purely additive (recall can only rise; scoring still decides precision). A cheap
+    arrow-agnostic per-pass row guard drops a pass whose SAMPLE max block already
+    exceeds the FS scorer row cap; the real full-N bound is
+    ``_bound_probabilistic_blocking_pairs``, which runs after this over the whole
+    pass list.
+
+    **Default OFF** (``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING``); out-of-panel validated
+    separately from v2. Off => byte-identical (returns ``blocking`` unchanged).
+    """
+    if blocking is None or not _fs_orthogonal_blocking_enabled():
+        return blocking
+
+    # Fields ALREADY keyed by some pass (any transform) -- don't re-add a field the
+    # name passes / v2 diversify already cover. Field-level so we never duplicate.
+    covered: set[str] = set()
+    for k in list(blocking.keys or []) + list(blocking.passes or []):
+        covered.update(k.fields)
+
+    # Cheap arrow-agnostic per-pass sanity guard (sample scale). The real full-N
+    # bound is `_bound_probabilistic_blocking_pairs`, which runs after.
+    bframe = None
+    sample_n = 1
+    row_cap = 7071
+    if df is not None:
+        try:
+            from goldenmatch.core.frame import to_frame as _tf
+            from goldenmatch.core.probabilistic import _fs_vec_max_elems
+
+            bframe = _tf(df)
+            sample_n = max(int(bframe.height), 1)
+            cap = _fs_vec_max_elems()
+            if cap > 0:
+                row_cap = int(cap**0.5)
+        except Exception:
+            bframe = None
+
+    new_passes: list[BlockingKeyConfig] = []
+    for p in profiles:
+        if p.name in covered:
+            continue
+        if p.null_rate > _ORTHO_BLOCK_NULL_CEILING:
+            continue
+        if not (
+            _ORTHO_BLOCK_CARD_FLOOR <= p.cardinality_ratio < _ORTHO_BLOCK_CARD_CEILING
+        ):
+            continue
+        transforms = ["strip"]
+        if bframe is not None:
+            proj = _project_pass_pairs(
+                bframe, [(p.name, tuple(transforms))], sample_n, sample_n
+            )
+            if proj is not None and proj[0] > row_cap:
+                logger.debug(
+                    "orthogonal blocking: dropping oversized pass %s (sample max "
+                    "block %d rows > FS row cap %d)",
+                    p.name, proj[0], row_cap,
+                )
+                continue
+        # additive=True: co-locate the missed pairs WITHOUT demoting the field from
+        # EM scoring. An orthogonal anchor (e.g. birth_place) is typically ALSO a
+        # useful FS discriminator; demoting it to a fixed neutral weight the moment
+        # it becomes a blocking key measurably costs F1 (birth_place kept-in-EM beat
+        # demoted on historical_50k), and demoting a strong name discriminator
+        # collapses recall outright. See BlockingKeyConfig.additive.
+        new_passes.append(
+            BlockingKeyConfig(fields=[p.name], transforms=transforms, additive=True)
+        )
+        covered.add(p.name)
+
+    if not new_passes:
+        return blocking
+
     base_passes = list(blocking.passes or []) or list(blocking.keys or [])
     return blocking.model_copy(update={
         "strategy": "multi_pass",
@@ -5692,7 +5851,11 @@ def _bound_probabilistic_blocking_pairs(
                 ft = {f: list(t) for f, t in cspecs}
                 return (
                     BlockingKeyConfig(
-                        fields=[f for f, _ in cspecs], field_transforms=ft
+                        fields=[f for f, _ in cspecs], field_transforms=ft,
+                        # Preserve the additive (orthogonal-anchor, EM-trained)
+                        # intent across a scale bound -- else a compounded anchor
+                        # would silently revert to a demoted primary key.
+                        additive=getattr(key, "additive", False),
                     ),
                     cproj,
                 )

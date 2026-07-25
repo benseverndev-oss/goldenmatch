@@ -436,7 +436,9 @@ def build_em_blocks_agg(frame: Any, config: BlockingConfig) -> list:
     return results
 
 
-def collect_blocking_fields(config: BlockingConfig) -> list[str]:
+def collect_blocking_fields(
+    config: BlockingConfig, *, for_em: bool = False
+) -> list[str]:
     """All column names a blocking config groups on, across keys/passes/sub-blocks.
 
     Used by the Fellegi-Sunter pipeline to tell EM which fields are blocking
@@ -446,6 +448,14 @@ def collect_blocking_fields(config: BlockingConfig) -> list[str]:
     behavior) left the exclusion list empty and degraded multi-pass FS
     (Febrl4: 95.7% -> 98.4% F1 once the pass fields are excluded). Order is
     preserved and de-duplicated.
+
+    ``for_em`` selects the EM-DEMOTION set rather than the full field inventory: a
+    field that appears ONLY in ``additive`` passes (orthogonal anchors that should
+    stay EM-trained -- see ``BlockingKeyConfig.additive``) is excluded, so EM keeps
+    learning its weight from the other passes' pairs. A field that also keys a
+    non-additive (primary) pass is still demoted. Default ``for_em=False`` returns
+    every field a pass groups on (block-building, projection) and is byte-identical
+    to the historical behavior; with no additive pass present the two agree exactly.
     """
     seen: set[str] = set()
     out: list[str] = []
@@ -453,6 +463,23 @@ def collect_blocking_fields(config: BlockingConfig) -> list[str]:
     groups.extend(config.keys or [])
     groups.extend(config.passes or [])
     groups.extend(config.sub_block_keys or [])
+    if for_em:
+        # A field is EM-demoted only if some NON-additive pass keys on it. Fields
+        # confined to additive passes stay EM-trained comparison fields.
+        primary: set[str] = set()
+        additive_only: set[str] = set()
+        for key in groups:
+            target = additive_only if getattr(key, "additive", False) else primary
+            target.update(key.fields)
+        demote = primary  # additive-only fields excluded by construction
+        for key in groups:
+            if getattr(key, "additive", False):
+                continue
+            for f in key.fields:
+                if f in demote and f not in seen:
+                    seen.add(f)
+                    out.append(f)
+        return out
     for key in groups:
         for f in key.fields:
             if f not in seen:

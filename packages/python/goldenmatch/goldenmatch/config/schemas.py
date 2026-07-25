@@ -729,6 +729,21 @@ class BlockingKeyConfig(BaseModel):
         default_factory=dict,
         description="Per-field transform chains overriding the key-level transforms for the named fields only.",
     )
+    # An ADDITIVE pass co-locates candidate pairs (like any blocking pass) but its
+    # field(s) stay EM-trained comparison fields on the Fellegi-Sunter path, rather
+    # than being demoted to a fixed neutral weight. Used by the orthogonal-anchor
+    # blocking rule (autoconfig ``_diversify_unused_orthogonal_blocking``): a field
+    # like ``birth_place`` that is BOTH a useful discriminator AND a good orthogonal
+    # block key would otherwise lose its learned weight the moment it becomes a
+    # blocking key (measured: demoting it costs F1 vs keeping it EM-trained). EM
+    # still conditions out each pass's own always-agree bias per-pass via block
+    # provenance, so an additive field learns its weight from the OTHER passes'
+    # pairs. Default False => byte-identical (every field a pass keys on is demoted,
+    # the historical behavior). See ``collect_blocking_fields(for_em=True)``.
+    additive: bool = Field(
+        default=False,
+        description="If true, this pass co-locates pairs but its fields remain EM-trained comparison fields (Fellegi-Sunter path) instead of being demoted to fixed neutral weights.",
+    )
 
     @model_validator(mode="after")
     def _validate_fields_nonempty(self) -> BlockingKeyConfig:
