@@ -10,7 +10,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from goldenmatch._polars_lazy import pl
+from goldenmatch.core.frame import to_frame
+from goldenmatch.core.io_arrow import read_table_arrow
 from goldenmatch.core.review_queue import ReviewQueue, gate_pairs
 
 logger = logging.getLogger(__name__)
@@ -62,44 +63,51 @@ class StrategyDecision:
 # ── Profiling ────────────────────────────────────────────────────────────────
 
 
-def profile_for_agent(df: pl.DataFrame) -> DataProfile:
-    """Profile a DataFrame for strategy selection.
+def profile_for_agent(df: Any) -> DataProfile:
+    """Profile a table for strategy selection.
 
     For each column computes uniqueness, null rate, and average string length.
     Detects sensitive fields by column name pattern matching.
+
+    Accepts a ``pyarrow.Table`` (the arrow-native default), a ``dict`` of arrow
+    columns, an already-wrapped ``Frame``, or a ``polars.DataFrame`` — all via
+    ``to_frame``, which keeps the profiler polars-free (the arrow branches run
+    before the polars isinstance). Column stats delegate to the ``Column``
+    protocol, which is byte-value-equivalent across the arrow and polars
+    backends (``n_unique`` folds null into one distinct group, matching polars'
+    ``Series.n_unique``; ``str_len_chars`` is codepoint length, == polars
+    ``str.len_bytes`` for ASCII).
     """
-    height = df.height
+    frame = to_frame(df)
+    height = frame.height
     fields: list[FieldProfile] = []
     has_sensitive = False
 
-    for col in df.columns:
+    for col in frame.columns:
         col_lower = col.lower().replace(" ", "_")
         if col_lower in _SENSITIVE_PATTERNS:
             has_sensitive = True
 
-        series = df[col]
-        dtype = series.dtype
+        column = frame.column(col)
 
-        # Determine type category
-        if dtype in (pl.Utf8, pl.String, pl.Categorical):
+        # Determine type category from the cross-backend semantic dtype tag.
+        semantic = column.semantic_dtype()
+        if semantic == "text":
             ftype = "string"
-        elif dtype.is_numeric():
+        elif semantic == "numeric":
             ftype = "numeric"
         else:
             ftype = "other"
 
         # Uniqueness
-        n_unique = series.n_unique()
-        uniqueness = n_unique / height if height > 0 else 0.0
+        uniqueness = column.n_unique() / height if height > 0 else 0.0
 
         # Null rate
-        null_count = series.null_count()
-        null_rate = null_count / height if height > 0 else 0.0
+        null_rate = column.null_count() / height if height > 0 else 0.0
 
         # Average length (string columns only)
         if ftype == "string":
-            lengths = series.cast(pl.Utf8).str.len_bytes()
-            avg_length = lengths.drop_nulls().mean() or 0.0
+            avg_length = column.cast_str().str_len_chars().drop_nulls().mean() or 0.0
         else:
             avg_length = 0.0
 
@@ -330,7 +338,7 @@ def _decision_to_config(decision: StrategyDecision) -> Any:
 # ── Agent session ────────────────────────────────────────────────────────────
 
 
-def _reasoning_frame(df: pl.DataFrame, config: Any = None) -> pl.DataFrame:
+def _reasoning_frame(df: Any, config: Any = None) -> Any:
     """Drop caller-excluded columns before profiling for the ``reasoning`` payload.
 
     The ``reasoning`` explanation is profiled separately from the actual
@@ -348,8 +356,11 @@ def _reasoning_frame(df: pl.DataFrame, config: Any = None) -> pl.DataFrame:
 
         force_exclude, force_include = _resolve_effective_exclusion_overrides(config)
         keep = set(force_include)
-        drop = [c for c in force_exclude if c not in keep and c in df.columns]
-        return df.drop(drop) if drop else df
+        # ``df`` is a pyarrow.Table on the arrow-native path (read_table_arrow);
+        # column names live on ``.column_names`` and drop is ``.drop_columns``.
+        present = list(getattr(df, "column_names", None) or df.columns)
+        drop = [c for c in force_exclude if c not in keep and c in present]
+        return df.drop_columns(drop) if drop else df
     except Exception:
         return df
 
@@ -361,7 +372,7 @@ class AgentSession:
     """
 
     def __init__(self) -> None:
-        self.data: pl.DataFrame | None = None
+        self.data: Any = None  # pyarrow.Table on the arrow-native path
         self.config: Any = None
         self.result: Any = None
         self.review_queue = ReviewQueue(backend="memory")
@@ -432,7 +443,7 @@ class AgentSession:
         """
         from goldenmatch.core.autoconfig import auto_configure_df
 
-        df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        df = read_table_arrow(file_path, encoding="utf8-lossy")
         self.data = df
         cfg = auto_configure_df(df)
         self.config = cfg
@@ -448,7 +459,7 @@ class AgentSession:
 
     def analyze(self, file_path: str, allow_pprl: bool = False) -> dict[str, Any]:
         """Load a CSV and return profiling + strategy analysis."""
-        df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        df = read_table_arrow(file_path, encoding="utf8-lossy")
         self.data = df
 
         profile = profile_for_agent(_reasoning_frame(df))
@@ -502,7 +513,7 @@ class AgentSession:
         """
         from goldenmatch._api import dedupe_df
 
-        df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        df = read_table_arrow(file_path, encoding="utf8-lossy")
         self.data = df
 
         # Profile + decision are kept ONLY for the `reasoning` field; they do
@@ -589,8 +600,8 @@ class AgentSession:
         """
         from goldenmatch._api import match_df
 
-        df_a = pl.read_csv(file_a, encoding="utf8-lossy", ignore_errors=True)
-        df_b = pl.read_csv(file_b, encoding="utf8-lossy", ignore_errors=True)
+        df_a = read_table_arrow(file_a, encoding="utf8-lossy")
+        df_b = read_table_arrow(file_b, encoding="utf8-lossy")
 
         # Profile the target (first file) — used only for the `reasoning`
         # payload, NOT to build the actual matching config when config is None
@@ -641,7 +652,7 @@ class AgentSession:
         """
         from goldenmatch._api import dedupe_df
 
-        df = pl.read_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+        df = read_table_arrow(file_path, encoding="utf8-lossy")
         self.data = df
 
         profile = profile_for_agent(df)
@@ -677,7 +688,7 @@ class AgentSession:
                 clusters = res.clusters or {}
                 multi_clusters = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
                 total_matched = sum(c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1)
-                match_rate = total_matched / df.height if df.height > 0 else 0.0
+                match_rate = total_matched / df.num_rows if df.num_rows > 0 else 0.0
 
                 metrics: dict[str, Any] = {
                     "clusters": multi_clusters,
