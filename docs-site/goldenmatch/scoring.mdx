@@ -18,6 +18,7 @@ GoldenMatch provides 10+ scoring methods for comparing record pairs. Scoring run
 | `numeric_diff` | Banded numeric distance (`:abs:<eps>` / `:pct:<frac>`); magnitude-aware | 0.0--1.0 | Amounts, measurements, ages |
 | `geo_haversine` | Great-circle (haversine) km distance banded, on a `lat,long` field | 0.0--1.0 | Coordinates (`lat,long`) |
 | `array_intersect` | Token-set overlap of delimited strings (`:jaccard` / `:overlap`) | 0.0--1.0 | Delimited lists (tags, categories, phones) |
+| `cosine` | Cosine of two **precomputed** float-vector columns (parsed from a delimited/bracketed string); direct, not model-embedded like `embedding` | 0.0--1.0 | Precomputed embedding columns |
 | `token_sort` | Sort tokens, then ratio | 0.0--1.0 | Names, addresses |
 | `soundex_match` | Phonetic code comparison | 0 or 1 | Names |
 | `ensemble` | max(jaro_winkler, token_sort, soundex) | 0.0--1.0 | Names with reordering |
