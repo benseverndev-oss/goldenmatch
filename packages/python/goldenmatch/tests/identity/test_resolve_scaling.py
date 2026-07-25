@@ -383,6 +383,143 @@ def test_singleton_ceiling_advisory_is_downgrade_safe(
 
 
 # --------------------------------------------------------------------------
+# 5. SQLite bulk fast-path == per-row path (byte-identical store contents)
+# --------------------------------------------------------------------------
+
+def _resolve_into(path, clusters, df, *, bulk: bool, monkeypatch, batch=None):
+    """Resolve into a fresh SQLite store with the bulk fast-path on or off."""
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK", "1" if bulk else "0")
+    if batch is not None:
+        monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS", str(batch))
+    s = IdentityStore(path=str(path))
+    resolve_clusters(
+        clusters, df, [], "mk", s, run_name="r1",
+        source_pk_col="unique_id", emit_singletons=True,
+    )
+    dump = _dump(s)
+    s.close()
+    return dump
+
+
+def test_sqlite_bulk_fast_path_matches_row_path(tmp_path, monkeypatch):
+    """Brand-new clusters routed through the SQLite staging bulk write must land
+    byte-identical store contents to the per-row upsert loop -- same identities,
+    golden records, payloads, edges, and event payloads. This is the no-silent-
+    regression gate for flipping SQLite onto the bulk fast-path."""
+    df = _df(40)
+    # A mix of multi-member and singleton clusters, all brand-new (bulk-eligible).
+    clusters = {
+        1: _cluster([0, 1, 2]),
+        2: _cluster([3, 4]),
+        3: _cluster([5]),
+        4: _cluster([6, 7, 8, 9]),
+    }
+    clusters.update({i: _cluster([i + 5]) for i in range(5, 35)})
+
+    row = _resolve_into(tmp_path / "row.db", clusters, df, bulk=False,
+                        monkeypatch=monkeypatch)
+    bulk = _resolve_into(tmp_path / "bulk.db", clusters, df, bulk=True,
+                         monkeypatch=monkeypatch)
+    assert bulk == row
+    assert len(bulk) == len(clusters)
+
+
+def test_sqlite_bulk_batched_flush_matches_single_flush(tmp_path, monkeypatch):
+    """A tiny flush threshold forces many mid-loop batch flushes; the result
+    must be identical to one final flush (batching is a memory bound, never a
+    correctness change)."""
+    df = _df(60)
+    clusters = {i: _cluster([i]) for i in range(60)}
+    clusters[100] = _cluster([0, 1, 2])  # a multi-member cluster spanning a batch
+
+    one = _resolve_into(tmp_path / "one.db", clusters, df, bulk=True,
+                        monkeypatch=monkeypatch, batch=10_000)
+    many = _resolve_into(tmp_path / "many.db", clusters, df, bulk=True,
+                         monkeypatch=monkeypatch, batch=3)
+    assert many == one
+
+
+def test_sqlite_bulk_carries_event_provenance(tmp_path, monkeypatch):
+    """Beyond the _dump surface: the bulk CREATED events must keep actor + trust
+    (the audit spine), not just payload -- otherwise SQLite users lose event
+    provenance the per-row path records."""
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK", "1")
+    s = IdentityStore(path=str(tmp_path / "id.db"))
+    resolve_clusters(
+        {1: _cluster([0, 1], score=0.9)}, _df(5), [], "mk", s,
+        run_name="r1", source_pk_col="unique_id", emit_singletons=False,
+        actor="tester",
+    )
+    node = s.list_identities(limit=10)[0]
+    events = s.history(node.entity_id)
+    created = [e for e in events if e.kind == "created"]
+    assert created, "bulk path must emit a CREATED event"
+    assert created[0].actor == "tester"
+    assert created[0].trust is not None and abs(created[0].trust - 0.9) < 1e-9
+    assert created[0].payload and created[0].payload.get("member_count") == 2
+    s.close()
+
+
+def test_bulk_upsert_identities_works_on_sqlite(tmp_path):
+    """SQLite grew a real bulk write path (#2105 follow-up): staging table +
+    executemany + INSERT..SELECT..ON CONFLICT, replacing the old
+    NotImplementedError. Round-trips golden_record + confidence like Postgres."""
+    import json
+    from datetime import datetime
+
+    store = IdentityStore(path=str(tmp_path / "id.db"))
+    ts = datetime.now()
+    golden = {"name": "Alice"}
+    df = pl.DataFrame({
+        "entity_id": ["e1", "e2"],
+        "status": ["active", "active"],
+        "merged_into": [None, None],
+        "golden_record": [json.dumps(golden), None],
+        "confidence": [0.9, None],
+        "dataset": ["d", "d"],
+        "created_at": [ts, ts],
+        "updated_at": [ts, ts],
+    })
+    store.bulk_upsert_identities(df)
+    assert store.count_identities() == 2
+    node = store.get_identity("e1")
+    assert node is not None
+    assert node.golden_record == golden
+    assert node.confidence is not None and abs(node.confidence - 0.9) < 1e-9
+    store.close()
+
+
+def test_bulk_methods_raise_on_mongo():
+    """The bulk fast-path is SQL-backend only; a non-SQL backend (mongo) still
+    routes through the per-row loop, so the bulk entry points reject it loudly
+    rather than silently no-op."""
+    store = IdentityStore.__new__(IdentityStore)
+    store._backend = "mongo"
+    df = pl.DataFrame({"entity_id": ["e1"]})
+    with pytest.raises(NotImplementedError, match="bulk_upsert_identities"):
+        store.bulk_upsert_identities(df)
+
+
+def test_sqlite_bulk_commits_and_bounds_transaction(tmp_path, monkeypatch):
+    """End-to-end via the bulk path: everything is committed on return (a fresh
+    connection sees it) and the resolve does not leave an open transaction."""
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK", "1")
+    monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS", "5")
+    s = IdentityStore(path=str(tmp_path / "id.db"))
+    clusters = {i: _cluster([i]) for i in range(30)}
+    resolve_clusters(
+        clusters, _df(30), [], "mk", s, run_name="r1",
+        source_pk_col="unique_id", emit_singletons=True,
+    )
+    assert not s._conn.in_transaction
+    assert s.count_identities() == 30
+    fresh = IdentityStore(path=str(tmp_path / "id.db"))
+    assert fresh.count_identities() == 30
+    fresh.close()
+    s.close()
+
+
+# --------------------------------------------------------------------------
 # 3. scored_pairs must not drive cost
 # --------------------------------------------------------------------------
 

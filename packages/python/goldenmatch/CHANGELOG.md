@@ -4,6 +4,21 @@ All notable changes to GoldenMatch are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [Unreleased]
+
+### Changed
+- **Identity resolve: SQLite bulk write fast-path.** `resolve_clusters` now routes
+  brand-new clusters through a staging-table bulk write on the SQLite backend (not
+  just Postgres): a per-connection TEMP staging table + `executemany` +
+  `INSERT..SELECT..ON CONFLICT DO UPDATE`, replacing the per-cluster row loop. On a
+  40k-singleton `emit_singletons=True` resolve this cut wall time ~47x (185.9s ->
+  3.95s). Accumulators flush in bounded batches
+  (`GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS`, default 250k) so write-side memory stays
+  O(batch); `GOLDENMATCH_IDENTITY_BULK=0` restores the per-row loop. Store contents
+  are byte-identical to the per-row path (payloads and event/edge provenance carried;
+  parity-gated). This does not remove the O(N) prep frame-residency floor that
+  `emit_singletons=True` still carries -- that remains separate bounded-streaming work.
+
 ## [3.10.0] - 2026-07-24
 
 ### Added
