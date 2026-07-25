@@ -17,12 +17,18 @@ Five commitments turn the North Star into a test every change must pass:
 |---|---|
 | **Zero-config should embarrass the alternatives.** First run needs nothing; the no-tuning path keeps getting *more* correct (first run zero, next run reuse). | Does this raise the floor for the user who configures nothing — or does it only help experts? |
 | **Correctness must be scale-invariant.** The same input gives the same answer from a laptop CSV to 100M+ rows. | Does this preserve answer-parity across scales — or did we buy speed with accuracy? |
-| **Every capability must reach every surface.** Power shows up in CLI, library, SQL, MCP, and A2A — not stranded on one. | Is this reachable from where the user actually works — or did we strand it on one surface? |
+| **Shared capabilities must conform across surfaces.** Where a behavior is shared, it is semantically consistent across CLI, library, SQL, MCP, and A2A — no surface silently invents its own answer. A capability may be richer on its primary surface, but surface-specific gaps must be explicit, justified, and declared (not accidental). | Is this reachable from where the user actually works and consistent where it is shared — or did we strand it on one surface, or let a surface drift to its own semantics? |
 | **Out-of-the-box should approach the hand-tuned expert.** The gap to a specialist's best manual result keeps shrinking. | Does this close the gap to expert-tuned — or widen it? |
 | **Advanced, never black-box.** As the engine gets cleverer, every decision stays traceable and auditable. | Can the user see **why** — even for the newest, smartest path? |
 
 The honest gap-assessment against these five commitments, and the sequenced plan to close
 it, is [../planning/north-star-roadmap.md](../planning/north-star-roadmap.md).
+
+Commitment 3 was reworded on 2026-07-25 from "every capability must reach every surface"
+(identical exposure everywhere) to "shared capabilities must conform" — identical exposure
+mandated the multi-runtime parity tax the two-engine architecture retires. Rationale and the
+full contract model are in
+[../../docs/design/2026-07-25-one-product-two-engines.md](../../docs/design/2026-07-25-one-product-two-engines.md).
 
 ## The product loop (healing)
 The **healing loop** is the *user-facing expression* of two commitments —
@@ -83,4 +89,4 @@ the `CLAUDE.md` files (see [structure.md](structure.md)); designs are in
 `docs/superpowers/specs/`.
 
 ---
-**Classification:** foundation/stable • **Last updated:** 2026-06-26
+**Classification:** foundation/stable • **Last updated:** 2026-07-25
