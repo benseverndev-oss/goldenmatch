@@ -28,7 +28,8 @@ Commitment 3 was reworded on 2026-07-25 from "every capability must reach every 
 (identical exposure everywhere) to "shared capabilities must conform" — identical exposure
 mandated the multi-runtime parity tax the two-engine architecture retires. Rationale and the
 full contract model are in
-[../../docs/design/2026-07-25-one-product-two-engines.md](../../docs/design/2026-07-25-one-product-two-engines.md).
+[../architecture/one-product-two-engines.md](../architecture/one-product-two-engines.md)
+(decision [../decisions/0047-one-product-two-engines-architecture.md](../decisions/0047-one-product-two-engines-architecture.md)).
 
 ## The product loop (healing)
 The **healing loop** is the *user-facing expression* of two commitments —
@@ -62,8 +63,21 @@ infermap (type inference).
   block → score → cluster → golden → output.
 
 ## The governing arc (current)
+**One product, two engines, many surfaces — the architecture frame that colors every
+architectural decision** (full doc: [../architecture/one-product-two-engines.md](../architecture/one-product-two-engines.md),
+decision [../decisions/0047-one-product-two-engines-architecture.md](../decisions/0047-one-product-two-engines-architecture.md)).
+GoldenMatch is one product built from two coupled engines: an **Identity Compute Engine**
+(Arrow-native at bulk boundaries, Rust-authoritative, measurement-driven kernels, replaceable
+execution backends) and an **Identity Control Plane** (transaction-native state machine —
+stable IDs, merge/split, provenance, audit, SQLite/Postgres). Both are exposed through many
+product surfaces governed by **specification + conformance** (one authoritative semantic owner
+per capability; scoped, classified fallbacks). Arrow is the bulk data contract, *not* the
+universal calling convention or the definition of correctness; DataFusion/Ray/Sail/Ballista/
+Spark are backends, none synonymous with GoldenMatch. When an architectural change competes
+with this frame, it must conform or amend the frame (doc + decision 0047) in the same PR.
+
 **Arrow-native → engine portability — in service of the *scale-invariant correctness*
-commitment.** The engine work is a *means*, not the North Star: making every pipeline
+commitment.** The compute-engine work is a *means*, not the North Star: making every pipeline
 stage a frames-in/frames-out relational op a query engine can plan, spill, and
 distribute (DataFusion single-box out-of-core; Sail distributed) is how we keep the
 same answer correct from a laptop CSV to 100M+ rows. One-box peak RSS was retired as
