@@ -46,6 +46,15 @@ from goldenmatch.identity.store import IdentityStore, new_entity_id
 
 log = logging.getLogger("goldenmatch.identity.resolve")
 
+# Above this row count, ``emit_singletons=True`` on the SQLite backend degenerates
+# into an identity-per-record write storm (#2105): the prep can no longer be bounded
+# to referenced rows, resolve work scales with the whole frame, and it OOMs a 64 GB
+# box around the low millions (measured: 250k already impractical at >25 min, while
+# ``emit_singletons=False`` does 1M in ~6 min). 100k mirrors the pipeline's other
+# scale gate (``REFUSE_AT_N``) and is a conservative floor for the warning.
+_EMIT_SINGLETONS_SCALE_WARN_ROWS = 100_000
+_emit_singletons_scale_warned = False
+
 
 @dataclass
 class ResolveSummary:
@@ -345,8 +354,31 @@ def resolve_clusters(
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
 
-    if _tf_a5e(df).height == 0:
+    _height = _tf_a5e(df).height
+    if _height == 0:
         return summary
+
+    # #2105 follow-up: warn (once) when the identity-per-record path is used at a
+    # scale where it does not survive. ``emit_singletons=True`` cannot bound the prep
+    # to referenced rows (every row becomes an identity), so on SQLite it scales with
+    # the input frame and OOMs in the low millions. Postgres takes a bulk-COPY fast
+    # path, so the warning is SQLite-only. Downgrade-safe: never blocks resolution.
+    global _emit_singletons_scale_warned
+    if (
+        emit_singletons
+        and _height >= _EMIT_SINGLETONS_SCALE_WARN_ROWS
+        and getattr(store, "_backend", None) == "sqlite"
+        and not _emit_singletons_scale_warned
+    ):
+        _emit_singletons_scale_warned = True
+        log.warning(
+            "identity.emit_singletons=True over %d rows on the SQLite backend: "
+            "resolve writes one identity PER RECORD, so cost scales with the input "
+            "frame (not the ~real-entity count) and can OOM in the low millions. "
+            "Set identity.emit_singletons=false unless you need a durable id for "
+            "records that matched nothing; past the low millions use backend=postgres.",
+            _height,
+        )
 
     # Iteration source: ascending-cluster_id ``(cluster_id, info)`` pairs.
     # For the dict path this is ``clusters.items()`` (insertion order = build's

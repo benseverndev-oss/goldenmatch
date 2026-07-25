@@ -20,6 +20,8 @@ lands in the store.
 """
 from __future__ import annotations
 
+import logging
+
 import polars as pl
 import pytest
 from goldenmatch.identity import IdentityStore, resolve_clusters
@@ -301,3 +303,75 @@ def test_scored_pairs_do_not_affect_output(tmp_path):
     b.close()
 
     assert dump_a == dump_b
+
+
+# --------------------------------------------------------------------------
+# 4. emit_singletons scale warning (#2105 follow-up)
+# --------------------------------------------------------------------------
+#
+# ``emit_singletons=True`` can't bound the prep and degenerates to an
+# identity-per-record write storm that OOMs SQLite in the low millions. Past a
+# row-count floor the resolver logs a one-time, downgrade-safe warning pointing at
+# ``emit_singletons=false`` / Postgres. The threshold is monkeypatched down so a
+# tiny frame exercises it.
+
+
+def _arm_warn(monkeypatch, threshold=5):
+    import goldenmatch.identity.resolve as R
+
+    monkeypatch.setattr(R, "_EMIT_SINGLETONS_SCALE_WARN_ROWS", threshold)
+    monkeypatch.setattr(R, "_emit_singletons_scale_warned", False)
+
+
+def _singleton_msgs(caplog) -> list[str]:
+    return [r.message for r in caplog.records if "emit_singletons=True" in r.message]
+
+
+def test_emit_singletons_scale_warns_on_sqlite(store, monkeypatch, caplog):
+    _arm_warn(monkeypatch, threshold=5)
+    df = _df(6)  # >= threshold
+    clusters = {i + 1: _cluster([i]) for i in range(6)}
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        resolve_clusters(
+            clusters, df, [], "mk", store, run_name="r1",
+            source_pk_col="unique_id", emit_singletons=True,
+        )
+    assert _singleton_msgs(caplog), "expected a scale warning for emit_singletons=True"
+    assert store.count_identities() == 6  # warning is advisory, resolution still runs
+
+
+def test_no_warn_when_emit_singletons_false(store, monkeypatch, caplog):
+    _arm_warn(monkeypatch, threshold=5)
+    df = _df(50)
+    clusters = {1: _cluster([0, 1])}
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        resolve_clusters(
+            clusters, df, [], "mk", store, run_name="r1",
+            source_pk_col="unique_id", emit_singletons=False,
+        )
+    assert not _singleton_msgs(caplog)
+
+
+def test_no_warn_below_threshold(store, monkeypatch, caplog):
+    _arm_warn(monkeypatch, threshold=1000)
+    df = _df(10)  # below threshold
+    clusters = {i + 1: _cluster([i]) for i in range(10)}
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        resolve_clusters(
+            clusters, df, [], "mk", store, run_name="r1",
+            source_pk_col="unique_id", emit_singletons=True,
+        )
+    assert not _singleton_msgs(caplog)
+
+
+def test_warns_only_once_per_process(store, monkeypatch, caplog):
+    _arm_warn(monkeypatch, threshold=5)
+    df = _df(6)
+    clusters = {i + 1: _cluster([i]) for i in range(6)}
+    with caplog.at_level(logging.WARNING, logger="goldenmatch.identity.resolve"):
+        for run in ("r1", "r2"):
+            resolve_clusters(
+                clusters, df, [], "mk", store, run_name=run,
+                source_pk_col="unique_id", emit_singletons=True,
+            )
+    assert len(_singleton_msgs(caplog)) == 1
