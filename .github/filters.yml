@@ -385,6 +385,7 @@ api_parity:
   # these the gate can't see a scorer/transform added on one side only.
   - 'packages/python/*/*/config/schemas.py'
   - 'packages/typescript/*/src/core/types.ts'
+  - 'packages/typescript/*/src/core/config-edits.ts'
   - 'parity/**'
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'

@@ -196,6 +196,76 @@ def test_scorer_coverage_absent_surfaces_skipped():
     assert gate.check_scorer_coverage({"package": "goldencheck"}) == []
 
 
+def _blk_manifest(shared, python_only, deferred):
+    """Minimal manifest for the blocking-coverage gate."""
+    return {
+        "package": "gm",
+        "blocking_strategies": {
+            "shared": sorted(shared),
+            "python_only": sorted(python_only),
+            "ts_only": [],
+        },
+        "blocking_kernels_deferred": deferred,
+    }
+
+
+def test_blocking_coverage_all_covered_passes():
+    m = _blk_manifest(
+        shared={"static", "lsh", "perceptual"},
+        python_only={"simhash"},
+        deferred={"simhash": "declined -- model-backed"},
+    )
+    assert gate.check_blocking_coverage(m) == []
+
+
+def test_blocking_coverage_uncovered_strategy_fails():
+    # `simhash` is python_only with no deferral -> must be classified.
+    m = _blk_manifest(
+        shared={"static", "lsh"},
+        python_only={"simhash"},
+        deferred={},
+    )
+    fails = gate.check_blocking_coverage(m)
+    assert kinds(fails) == ["uncovered_strategy"]
+    assert fails[0].name == "simhash"
+
+
+def test_blocking_coverage_stale_deferral_fails():
+    # `lsh` is shared but still listed as deferred -> remove the annotation.
+    m = _blk_manifest(
+        shared={"static", "lsh"},
+        python_only=set(),
+        deferred={"lsh": "declined -- stale"},
+    )
+    fails = gate.check_blocking_coverage(m)
+    assert kinds(fails) == ["stale_deferral"]
+
+
+def test_blocking_coverage_unknown_deferral_fails():
+    m = _blk_manifest(
+        shared={"static"},
+        python_only=set(),
+        deferred={"bogus": "declined -- typo"},
+    )
+    fails = gate.check_blocking_coverage(m)
+    assert kinds(fails) == ["unknown_deferral"]
+
+
+def test_blocking_coverage_missing_reason_fails():
+    for empty in ("", "   ", None):
+        m = _blk_manifest(
+            shared={"static"},
+            python_only={"simhash"},
+            deferred={"simhash": empty},
+        )
+        fails = gate.check_blocking_coverage(m)
+        assert kinds(fails) == ["missing_reason"], empty
+
+
+def test_blocking_coverage_absent_surface_skipped():
+    assert gate.check_blocking_coverage({"package": "goldencheck"}) == []
+
+
 def test_scorer_coverage_malformed_deferred_fails():
     m = _cov_manifest(kernel_backed=set(), all_scorers={"exact"}, deferred=["not", "a", "map"])
     fails = gate.check_scorer_coverage(m)

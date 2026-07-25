@@ -167,6 +167,28 @@ export interface CanopyConfig {
   readonly maxCanopySize: number;
 }
 
+/** MinHash/LSH blocking on a text column. Mirrors Python `LSHKeyConfig`.
+ * Provide `threshold` (band/row split via optimalBands) OR `numBands` (must
+ * divide `numPerms`; wins when both set). */
+export interface LSHKeyConfig {
+  readonly column: string;
+  readonly mode?: "char" | "word";
+  readonly k?: number;
+  readonly numPerms?: number;
+  readonly seed?: number;
+  readonly threshold?: number;
+  readonly numBands?: number;
+}
+
+/** Banded hamming-LSH over a column of fixed-width hex perceptual hashes.
+ * Mirrors Python `PerceptualKeyConfig`. `hashBits` must be a positive multiple
+ * of `numBands`. */
+export interface PerceptualKeyConfig {
+  readonly column: string;
+  readonly numBands?: number;
+  readonly hashBits?: number;
+}
+
 export interface BlockingConfig {
   readonly strategy:
     | "static"
@@ -176,7 +198,9 @@ export interface BlockingConfig {
     | "ann"
     | "canopy"
     | "ann_pairs"
-    | "learned";
+    | "learned"
+    | "lsh"
+    | "perceptual";
   readonly keys: readonly BlockingKeyConfig[];
   readonly maxBlockSize: number;
   readonly skipOversized: boolean;
@@ -197,6 +221,8 @@ export interface BlockingConfig {
   readonly learnedMinReduction?: number;
   readonly learnedPredicateDepth?: number;
   readonly learnedCachePath?: string;
+  readonly lsh?: LSHKeyConfig;
+  readonly perceptual?: PerceptualKeyConfig;
 }
 
 // ---------------------------------------------------------------------------
