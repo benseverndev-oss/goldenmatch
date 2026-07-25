@@ -48,21 +48,25 @@ weaknesses:
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
-    severity: high
+    severity: medium   # downgraded from high: the acute payload-drop bug is fixed;
+                       # the remaining gap is the design of a versioned contract
     declared: true   # named as the 9 seam in the frame
-    title: "Compute->control handoff is ad-hoc in-memory args, not a versioned batch; evidence payload carriage is implicit and already drops"
+    title: "Compute->control handoff is ad-hoc in-memory args, not a versioned batch (payload-drop bug now fixed)"
     detail: >-
       resolve_clusters() takes live polars/Arrow frames plus loose args
       (controller_snapshot: dict, run_name: str, matchkey_name: str) -- no schema,
-      no version, no bundled provenance. Evidence payload carriage is hand-mirrored
-      across three write paths by comment discipline, and the #2132 payload-drop trap
-      is LIVE: the Postgres bulk-edge writer omits controller_snapshot/actor/trust
-      that the per-row and SQLite-bulk paths persist. Which evidence survives the seam
-      depends on the storage backend + flush path.
+      no version, no bundled provenance. FIXED (Wave B): the #2132 payload-drop trap
+      that was LIVE on ALL THREE Postgres bulk paths -- bulk_upsert_records dropped
+      payload, bulk_add_edges dropped controller_snapshot/actor/trust, bulk_emit_events
+      dropped payload/actor/trust -- now carries them (the schema has the columns and
+      the per-row Postgres path already wrote them), locked by
+      tests/identity/test_postgres_bulk_payload_parity.py. REMAINING: the handoff is
+      still not a versioned, explicitly-specified resolution-batch contract (design
+      work, folded into the Wave C control-plane manifesto).
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:375
       - packages/python/goldenmatch/goldenmatch/identity/store.py:847
-      - packages/python/goldenmatch/goldenmatch/identity/store.py:821
+      - packages/python/goldenmatch/tests/identity/test_postgres_bulk_payload_parity.py
 
   - id: fs-default-ts-path-unwired-second-source
     tenet: T1

@@ -753,10 +753,10 @@ def resolve_clusters(
                             "source_pk": rowid_to_pk[member],
                             "record_hash": rowid_to_hash[member],
                             "entity_id": entity_id,
-                            # Carry the payload so the SQLite bulk path is
-                            # byte-identical to the per-row upsert_record (which
-                            # stores json.dumps(payload)). Postgres selects its
-                            # own leaner column list and ignores this.
+                            # Carry the payload so the bulk path is byte-identical
+                            # to the per-row upsert_record (which stores
+                            # json.dumps(payload)) on BOTH SQLite and Postgres --
+                            # source_records has the payload column on each.
                             "payload": (
                                 json.dumps(payload) if payload is not None else None
                             ),
@@ -793,8 +793,9 @@ def resolve_clusters(
                             # Edge provenance the per-row add_edge records
                             # (controller_snapshot / actor / trust). SQLite users
                             # have contract tests asserting these on edges, so the
-                            # bulk path must carry them; Postgres selects its own
-                            # leaner column list and ignores them.
+                            # bulk path must carry them -- and the Postgres bulk
+                            # path now carries them too (evidence_edges has the
+                            # columns on both backends).
                             "controller_snapshot": (
                                 json.dumps(controller_snapshot)
                                 if controller_snapshot else None
