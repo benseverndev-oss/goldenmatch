@@ -58,6 +58,7 @@ mcp_tools:
   - analyze_blocking
   - analyze_data
   - auto_configure
+  - build_clusters
   - certify_recall
   - compare_clusters
   - config_weaknesses
@@ -71,6 +72,8 @@ mcp_tools:
   - explain_pair
   - export_results
   - find_duplicates
+  - find_exact_matches
+  - find_fuzzy_matches
   - fix_quality
   - get_cluster
   - get_golden_record
@@ -115,6 +118,8 @@ mcp_tools:
   - run_transforms
   - scan_quality
   - schema_match
+  - score_pair
+  - score_strings
   - sensitivity
   - shatter_cluster
   - suggest_config
@@ -131,12 +136,7 @@ mcp_tools:
   - plan_routing
   - pprl_auto_config
   ts_only:
-  - build_clusters
-  - find_exact_matches
-  - find_fuzzy_matches
   - read_file
-  - score_pair
-  - score_strings
   - server_info
   - write_csv
 cli_commands:
