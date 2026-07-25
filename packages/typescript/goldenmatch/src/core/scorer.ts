@@ -307,6 +307,172 @@ export function dateSimilarity(a: string, b: string): number {
   return levenshteinSimilarity(a, b);
 }
 
+// ---------------------------------------------------------------------------
+// date_diff: magnitude-aware date comparator (score-core score_one id 17)
+// Faithful port of score-core `date_diff_similarity` / Python
+// `_date_diff_similarity_py`: parse both sides to a proleptic-Gregorian day
+// ordinal and band by DAY-DISTANCE (a year gap is a weak partial, unlike the
+// magnitude-blind `date` scorer). MM/DD transposition floored to the <=31d band;
+// edit-distance (`dateSimilarity`) fallback when either side won't parse.
+// ---------------------------------------------------------------------------
+
+const DATE_DIFF_BANDS: ReadonlyArray<readonly [number, number]> = [
+  [0, 1.0],
+  [1, 0.92],
+  [31, 0.8],
+  [366, 0.6],
+  [1827, 0.3],
+];
+
+/** [year, month, day] parsed from ISO `YYYY-MM-DD` (or `/` sep, 1-digit m/d),
+ * compact `YYYYMMDD`, or bare `YYYY` (→ Jan 1). null otherwise. Range validity
+ * is checked at ordinal time (mirrors Python `_date_parts`). */
+function dateParts(s: string): [number, number, number] | null {
+  const t = s.trim();
+  if (t === "") return null;
+  const sep = t.includes("-") ? "-" : t.includes("/") ? "/" : "";
+  if (sep) {
+    const bits = t.split(sep);
+    if (
+      bits.length === 3 &&
+      bits[0]!.length === 4 &&
+      bits.every((b) => /^\d+$/.test(b))
+    ) {
+      return [Number(bits[0]), Number(bits[1]), Number(bits[2])];
+    }
+    return null;
+  }
+  if (t.length === 8 && /^\d{8}$/.test(t)) {
+    return [Number(t.slice(0, 4)), Number(t.slice(4, 6)), Number(t.slice(6, 8))];
+  }
+  if (t.length === 4 && /^\d{4}$/.test(t)) {
+    return [Number(t), 1, 1];
+  }
+  return null;
+}
+
+function daysInMonth(y: number, m: number): number {
+  if (m === 2) {
+    const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+    return leap ? 29 : 28;
+  }
+  return [31, 0, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1] ?? 0;
+}
+
+/** Howard Hinnant's days_from_civil for a VALID (y,m,d), else null — rejecting
+ * exactly what `datetime.date(y,m,d)` rejects. Only date DIFFERENCES are used,
+ * so the epoch offset cancels; mirrors score-core `date_to_days`. */
+function dateToDays(y: number, m: number, d: number): number | null {
+  if (y < 1 || y > 9999 || m < 1 || m > 12) return null;
+  if (d < 1 || d > daysInMonth(y, m)) return null;
+  const yy = m <= 2 ? y - 1 : y;
+  const era = Math.trunc((yy >= 0 ? yy : yy - 399) / 400);
+  const yoe = yy - era * 400;
+  const doy = Math.trunc((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.trunc(yoe / 4) - Math.trunc(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+function dateDiffBand(d: number): number {
+  for (const [lim, val] of DATE_DIFF_BANDS) {
+    if (d <= lim) return val;
+  }
+  return 0.0;
+}
+
+/** Day-distance banded date similarity (score-core score_one id 17). */
+export function dateDiffSimilarity(a: string, b: string): number {
+  const pa = dateParts(a);
+  const pb = dateParts(b);
+  const oa = pa ? dateToDays(pa[0], pa[1], pa[2]) : null;
+  const ob = pb ? dateToDays(pb[0], pb[1], pb[2]) : null;
+  if (oa === null || ob === null) return dateSimilarity(a, b);
+  let d = Math.abs(oa - ob);
+  if (d !== 0) {
+    // A month<->day swap on either operand collapsing the distance to 0 is a
+    // data-entry transposition (1990-01-02 vs 1990-02-01) -> floor at <=31d.
+    for (const [parts, other] of [
+      [pa, ob],
+      [pb, oa],
+    ] as const) {
+      if (parts === null) continue;
+      const sw = dateToDays(parts[0], parts[2], parts[1]);
+      if (sw !== null && sw === other) {
+        d = Math.min(d, 31);
+        break;
+      }
+    }
+  }
+  return dateDiffBand(d);
+}
+
+// ---------------------------------------------------------------------------
+// geo_haversine: great-circle distance comparator (score-core score_one id 18)
+// Faithful port of score-core `geo_haversine_similarity` / Python
+// `_geo_haversine_similarity_py`: parse ONE combined "lat,long" field per side
+// and band the haversine km distance; exact-string fallback when either side
+// won't parse (never returns null for a non-null pair).
+// ---------------------------------------------------------------------------
+
+const GEO_HAVERSINE_BANDS: ReadonlyArray<readonly [number, number]> = [
+  [0.1, 1.0],
+  [1.0, 0.85],
+  [10.0, 0.5],
+  [100.0, 0.2],
+];
+const EARTH_RADIUS_KM = 6371.0088;
+
+/** Strict float parse matching Python `float()` / Rust `parse::<f64>()` on the
+ * coordinate shapes used here: rejects empty, NaN/Inf, and non-decimal forms
+ * (hex/etc.) that JS `Number` would otherwise accept. */
+function parseCoordFloat(s: string): number | null {
+  const t = s.trim();
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t)) return null;
+  const v = Number(t);
+  return Number.isFinite(v) ? v : null;
+}
+
+function parseLatLong(s: string): [number, number] | null {
+  const t = s.trim();
+  if (t === "") return null;
+  const sep = t.includes(",") ? "," : t.includes(";") ? ";" : "";
+  if (!sep) return null;
+  const bits = t.split(sep);
+  if (bits.length !== 2) return null;
+  const lat = parseCoordFloat(bits[0]!);
+  const lon = parseCoordFloat(bits[1]!);
+  if (lat === null || lon === null) return null;
+  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return null;
+  return [lat, lon];
+}
+
+function haversineKm(a: readonly [number, number], b: readonly [number, number]): number {
+  const toRad = Math.PI / 180.0;
+  const lat1 = a[0] * toRad;
+  const lat2 = b[0] * toRad;
+  const dlat = lat2 - lat1;
+  const dlon = (b[1] - a[1]) * toRad;
+  const h =
+    Math.sin(dlat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dlon / 2) ** 2;
+  return 2.0 * EARTH_RADIUS_KM * Math.asin(Math.min(1.0, Math.sqrt(h)));
+}
+
+function geoHaversineBand(km: number): number {
+  for (const [lim, val] of GEO_HAVERSINE_BANDS) {
+    if (km <= lim) return val;
+  }
+  return 0.0;
+}
+
+/** Haversine-distance banded similarity on a `lat,long` field (id 18). */
+export function geoHaversineSimilarity(a: string, b: string): number {
+  const pa = parseLatLong(a);
+  const pb = parseLatLong(b);
+  if (pa === null || pb === null) return a === b ? 1.0 : 0.0;
+  return geoHaversineBand(haversineKm(pa, pb));
+}
+
 /**
  * Indel (insertion+deletion) edit distance.
  *
@@ -852,6 +1018,10 @@ export function scoreField(
       return levenshteinSimilarity(valA, valB);
     case "date":
       return dateSimilarity(valA, valB);
+    case "date_diff":
+      return dateDiffSimilarity(valA, valB);
+    case "geo_haversine":
+      return geoHaversineSimilarity(valA, valB);
     case "token_sort":
       return tokenSortRatio(valA, valB);
     case "soundex_match":

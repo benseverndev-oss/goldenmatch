@@ -497,6 +497,8 @@ export const VALID_SCORERS = new Set([
   "jaro_winkler",
   "levenshtein",
   "date",
+  "date_diff",
+  "geo_haversine",
   "token_sort",
   "soundex_match",
   "embedding",

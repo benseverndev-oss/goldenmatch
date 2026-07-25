@@ -52,6 +52,9 @@ echo "== goldenmatch: anomaly + rapidfuzz scorer goldens =="
 $PY "$GM/scripts/emit_anomaly_fixture.py"
 $PY "$GM/scripts/emit_scorer_parity_fixtures.py"
 
+echo "== goldenmatch: domain comparators (date_diff / geo_haversine) =="
+$PY "$GM/scripts/emit_domain_comparator_fixtures.py"
+
 echo "== goldenmatch: v2 (planner / EM / domain / tuners / blocker / clustering / golden) =="
 $PY "$GM/scripts/emit_v2_parity_fixtures.py" --out "$PARITY/v2-fixtures.json"
 

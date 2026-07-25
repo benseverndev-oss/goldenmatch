@@ -256,10 +256,12 @@ scorers:
   - alias_match
   - audio_fp
   - date
+  - date_diff
   - dice
   - embedding
   - ensemble
   - exact
+  - geo_haversine
   - given_name_aliased_jw
   - initialism_match
   - jaccard
@@ -275,13 +277,14 @@ scorers:
   python_only:
   # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
   # splink-domain-comparator-conversion), FS-path only. Kept sorted (parity gate).
+  # date_diff + geo_haversine moved to `shared` on the TS/WASM port (2026-07-25,
+  # Phase 4): pure-TS `dateDiffSimilarity`/`geoHaversineSimilarity` + score_one
+  # ids 17/18 via the score-wasm catch-all, cross-language fixture
+  # scorer-domain-comparators.json (Python-reference oracle == Rust).
   # Set-overlap over delimited strings (Splink ArrayIntersect -> GM); kernel P5, TS P6.
   - array_intersect
-  # Magnitude-aware date comparator (day-distance bands).
-  - date_diff
-  # Great-circle (haversine) distance on a single combined "lat,long" field.
-  - geo_haversine
-  # Magnitude-aware numeric comparator (abs/pct banded distance).
+  # Magnitude-aware numeric comparator (abs/pct banded distance); needs the
+  # parameterized score_one contract before it can be kernel-backed + ported.
   - numeric_diff
   ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
@@ -364,9 +367,11 @@ scorer_kernels:
   - alias_match
   - audio_fp
   - date
+  - date_diff
   - dice
   - ensemble
   - exact
+  - geo_haversine
   - given_name_aliased_jw
   - initialism_match
   - jaccard
@@ -378,14 +383,14 @@ scorer_kernels:
   - radial
   - soundex_match
   - token_sort
-  python_only:
-  # FS domain comparators (spec 2026-07-23), Phase 3: native score-core kernels
-  # (score_one ids 17/18), byte-parity gated in tests/test_native_date_diff_geo_
-  # parity.py. Python-native-backed only; the TS WASM port is Phase 4 (they move
-  # to `shared` then). numeric_diff stays deferred (band rides the scorer string,
-  # which the fixed-id score_one(id,a,b) contract can't carry).
-  - date_diff
-  - geo_haversine
+  python_only: []
+  # date_diff + geo_haversine (score_one ids 17/18) are now kernel-backed on BOTH
+  # Python-native (spec 2026-07-23 Phase 3, tests/test_native_date_diff_geo_parity.py)
+  # AND TS/WASM (Phase 4, 2026-07-25): the score-wasm score_matrix catch-all
+  # dispatches score_one(17/18) and the pure-TS fallback matches to 4dp
+  # (tests/parity/scorer-domain-comparators.test.ts + wasm-scorer.test.ts) -> shared.
+  # numeric_diff stays deferred (band rides the scorer string, which the fixed-id
+  # score_one(id,a,b) contract can't carry) -- see scorer_kernels_deferred.
   ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a

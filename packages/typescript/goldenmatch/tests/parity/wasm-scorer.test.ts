@@ -491,6 +491,81 @@ d("WASM alias_match matches the pure-TS scoreField reference (exact)", () => {
   }
 });
 
+// date_diff (score_one id 17): day-distance banded date similarity. Both the
+// WASM kernel and the pure-TS `dateDiffSimilarity` parse to a proleptic-Gregorian
+// day ordinal (Hinnant days_from_civil) and assign a DISCRETE band, so the WASM
+// matrix is byte-exact with the pure-TS fallback on every parseable pair; the
+// unparseable branch is the `date` edit-distance scorer (already byte-exact, id 4
+// above). Reference is the pure-TS `scoreField`; asserted byte-exact.
+type DateDiffCase = readonly [a: string, b: string, note: string];
+const DATE_DIFF_CASES: readonly DateDiffCase[] = [
+  ["1990-05-12", "1990-05-12", "same -> 1.0"],
+  ["1990-01-01", "1990-01-02", "1 day -> 0.92"],
+  ["1990-01-01", "1990-01-15", "14 days -> 0.80"],
+  ["1990-01-01", "1990-06-01", "~151 days -> 0.60"],
+  ["1990-01-01", "1993-01-01", "~3 y -> 0.30"],
+  ["1990-01-01", "2000-01-01", "10 y -> 0.0"],
+  ["1990-01-02", "1990-02-01", "MM/DD transposition -> floored 0.80"],
+  ["1990", "1991", "bare year, 365 d -> 0.60"],
+  ["19900101", "19900103", "compact YYYYMMDD, 2 d -> 0.80"],
+  ["1990-13-40", "1990-13-40", "invalid -> date edit-dist fallback -> 1.0"],
+  ["1990-05-12", "not-a-date", "one side unparseable -> fallback"],
+];
+
+d("WASM date_diff matches the pure-TS scoreField reference (exact)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of DATE_DIFF_CASES) {
+    it(`date_diff("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "date_diff");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "date_diff");
+      // Discrete band on both surfaces -> byte-exact, not merely 4dp.
+      expect(m[0]![1]!).toBe(ref!);
+    });
+  }
+});
+
+// geo_haversine (score_one id 18): great-circle km banded to a DISCRETE value.
+// The haversine float itself differs by ULPs between Rust libm and JS Math, but
+// every case here sits well inside a band, so the band assignment — and thus the
+// output — is identical across surfaces. Reference is the pure-TS `scoreField`;
+// asserted to 4dp (the discrete bands make that effectively exact away from edges).
+type GeoCase = readonly [a: string, b: string, note: string];
+const GEO_CASES: readonly GeoCase[] = [
+  ["40.0,-73.0", "40.0,-73.0", "same -> 1.0"],
+  ["40.0,-73.0", "40.0003,-73.0", "~0.033 km -> 1.0"],
+  ["40.0,-73.0", "40.004,-73.0", "~0.44 km -> 0.85"],
+  ["40.0,-73.0", "40.05,-73.0", "~5.6 km -> 0.5"],
+  ["40.0,-73.0", "40.5,-73.0", "~55.6 km -> 0.2"],
+  ["40.0,-73.0", "45.0,-73.0", "~556 km -> 0.0"],
+  ["40.0;-73.0", "40.05;-73.0", "semicolon sep -> 0.5"],
+  ["abc", "abc", "unparseable equal -> exact 1.0"],
+  ["abc", "def", "unparseable unequal -> 0.0"],
+  ["40.0,-73.0", "notcoords", "one side unparseable -> 0.0"],
+];
+
+d("WASM geo_haversine matches the pure-TS scoreField reference (4dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of GEO_CASES) {
+    it(`geo_haversine("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "geo_haversine");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "geo_haversine");
+      expect(m[0]![1]!).toBeCloseTo(ref!, 4);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();
