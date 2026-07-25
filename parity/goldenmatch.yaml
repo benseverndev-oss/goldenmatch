@@ -379,19 +379,20 @@ scorer_kernels:
   - soundex_match
   - token_sort
   python_only:
-  # FS domain comparators (spec 2026-07-23), Phase 3: native score-core kernels
-  # (score_one ids 17/18), byte-parity gated in tests/test_native_date_diff_geo_
-  # parity.py. Python-native-backed only; the TS WASM port is Phase 4 (they move
-  # to `shared` then). numeric_diff stays deferred (band rides the scorer string,
-  # which the fixed-id score_one(id,a,b) contract can't carry).
+  # Native score-core kernels, Python-native-backed only; the TS WASM ports are a
+  # follow-on (they move to `shared` then). ALPHABETICALLY SORTED (check_structure
+  # enforces it).
+  # - array_intersect (Splink-conversion P5, spec 2026-07-25): score_one ids 19/20
+  #   -- jaccard / overlap; the mode rides the scorer STRING, which unlike
+  #   numeric_diff's continuous band the fixed-id contract CAN carry as two ids.
+  #   Byte-parity gated in tests/test_native_array_intersect_parity.py.
+  # - date_diff / geo_haversine (FS domain comparators, spec 2026-07-23 Phase 3):
+  #   score_one ids 17/18, byte-parity gated in tests/test_native_date_diff_geo_
+  #   parity.py. numeric_diff stays deferred (band rides the scorer string, which
+  #   the fixed-id score_one(id,a,b) contract can't carry).
+  - array_intersect
   - date_diff
   - geo_haversine
-  # array_intersect (Splink-conversion P5, spec 2026-07-25): native score-core
-  # kernel (score_one ids 19/20 -- jaccard / overlap; the mode rides the scorer
-  # STRING, which unlike numeric_diff's continuous band the fixed-id contract CAN
-  # carry as two ids). Byte-parity gated in tests/test_native_array_intersect_
-  # parity.py. TS WASM port is a follow-on (moves to `shared` then).
-  - array_intersect
   ts_only: []
 # scorer_kernels_deferred: the COVERAGE FLOOR. Every scorer in the `scorers` surface
 # that is NOT kernel-backed (absent from `scorer_kernels`) MUST appear here with a
