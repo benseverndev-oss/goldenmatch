@@ -67,6 +67,29 @@ def _fs_bucket_native_enabled() -> bool:
     )
 
 
+def _fs_bucket_batch_enabled() -> bool:
+    """Whether the NON-native FS bucket path coalesces small blocks into one
+    row-capped ``score_probabilistic_vectorized_batch`` call (default ON).
+
+    The native bucket path (``_fs_bucket_native_enabled``) already scores a whole
+    block-sorted bucket in one kernel call. But when the native kernel is
+    DECLINED — the common case is the ``missing="disagree"`` mode auto-config
+    picks for null-heavy data like ``historical_50k``, which the kernel can't
+    express — the numpy ``prob_scorer`` ran once PER BLOCK, so a 7-pass scheme
+    over thousands of tiny blocks paid the per-call fan-out thousands of times
+    (measured 95s for a 50k dedupe, dominated by ~6k-block passes). This routes
+    those blocks through the #869 batched matrix scorer instead, which is
+    byte-identical to the per-block loop (each block's DIAGONAL sub-matrix is the
+    same value pairs) and honours ``missing="disagree"``.
+
+    ``GOLDENMATCH_FS_BUCKET_BATCH=0`` forces the per-block loop (parity escape
+    hatch). Only engages for the vectorized-numpy path (scalar / ensemble /
+    embedding / find_fuzzy_matches fallbacks stay per-block)."""
+    return os.environ.get("GOLDENMATCH_FS_BUCKET_BATCH", "1").strip().lower() not in (
+        "0", "false", "no", "off", "disabled",
+    )
+
+
 # One-time guard so the stale-native-wheel warning (issue #688) fires at most
 # once per process instead of once per score_buckets call.
 _WARNED_STALE_NATIVE_WHEEL = False
@@ -1346,9 +1369,12 @@ def score_buckets(
     # scorers) — mirrors the pipeline's probabilistic_block_scorer.
     prob_scorer = None
     fs_bucket_native = False
+    fs_bucket_batch = False
     if is_probabilistic:
         from goldenmatch.core.probabilistic import (
             _fs_native_eligible,
+            _fs_vectorized_enabled,
+            _fs_vectorized_supported,
             probabilistic_block_scorer,
         )
         prob_scorer = probabilistic_block_scorer(mk, em_result)
@@ -1359,6 +1385,17 @@ def score_buckets(
         # per-block loop by construction (the kernel isolates blocks by the
         # sizes list). GOLDENMATCH_FS_BUCKET_NATIVE=0 forces the per-block loop.
         fs_bucket_native = _fs_bucket_native_enabled() and _fs_native_eligible(mk)
+        # When the native kernel is DECLINED (e.g. missing="disagree" on
+        # null-heavy data) the numpy scorer otherwise runs once per block. Batch
+        # the small blocks into one row-capped score_probabilistic_vectorized_
+        # batch call instead (byte-identical, #869). Only the vectorized-numpy
+        # scorer batches; scalar / ensemble / embedding stay per-block.
+        fs_bucket_batch = (
+            not fs_bucket_native
+            and _fs_bucket_batch_enabled()
+            and _fs_vectorized_enabled()
+            and _fs_vectorized_supported(mk)
+        )
 
     # #1803 item 1: build the FS exclude handle ONCE here, before the bucket
     # worker loop — the FS analog of the weighted path's Track 1 Fix B below.
@@ -1956,6 +1993,71 @@ def score_buckets(
         local_pairs: list[tuple[int, int, float]] = []
         local_blocks = 0
         offset = 0
+
+        # Batched numpy FS: coalesce the small blocks of this bucket into
+        # row-capped score_probabilistic_vectorized_batch calls instead of one
+        # prob_scorer call per block. Byte-identical to the per-block loop (#869:
+        # each block's DIAGONAL sub-matrix is the same value pairs, same
+        # frozen_exclude), but pays the per-call overhead once per ~cap rows
+        # rather than once per (often ~16-row) block -- the historical_50k
+        # disagree-mode fan-out fix. Oversized blocks flush the batch and take
+        # the per-block _split_oversized path. across_files/target_ids are
+        # per-pair predicates, applied here as post-filters exactly as the native
+        # branch does (equivalent to the per-block _score_block_frame filters).
+        if fs_bucket_batch:
+            from goldenmatch.core.probabilistic import (
+                _fs_batch_rows,
+                score_probabilistic_vectorized_batch,
+            )
+
+            cap = _fs_batch_rows()
+            batch_frames: list = []
+            batch_rows = 0
+
+            def _flush_batch() -> None:
+                nonlocal batch_frames, batch_rows, local_pairs, local_blocks
+                if not batch_frames:
+                    return
+                pairs = score_probabilistic_vectorized_batch(
+                    batch_frames, mk, em_result, frozen_exclude
+                )
+                if across_files_only and source_lookup:
+                    pairs = [
+                        (a, b, s) for a, b, s in pairs
+                        if source_lookup.get(a) != source_lookup.get(b)
+                    ]
+                if target_ids is not None:
+                    pairs = [
+                        (a, b, s) for a, b, s in pairs
+                        if (a in target_ids) != (b in target_ids)
+                    ]
+                local_pairs.extend(pairs)
+                local_blocks += len(batch_frames)
+                batch_frames = []
+                batch_rows = 0
+
+            for size in size_list:
+                if size >= 2:
+                    if size > max_block_size:
+                        _flush_batch()  # keep oversized off the batch matrix
+                        for sub in _split_oversized(
+                            sorted_df.slice(offset, size), size
+                        ):
+                            pairs = _score_block_frame(sub)
+                            if pairs is None:
+                                continue
+                            local_pairs.extend(pairs)
+                            local_blocks += 1
+                        offset += size
+                        continue
+                    batch_frames.append(sorted_df.slice(offset, size))
+                    batch_rows += size
+                    if batch_rows >= cap:
+                        _flush_batch()
+                offset += size
+            _flush_batch()
+            return local_pairs, local_blocks
+
         for size in size_list:
             if size >= 2:
                 if size > max_block_size:
