@@ -24,6 +24,7 @@ from goldenmatch.config.schemas import (
 )
 from goldenmatch.core._paths import safe_path
 from goldenmatch.core.probabilistic import EMResult, _training_config_manifest
+from goldenmatch.core.scorer import _date_diff_band
 
 Severity = Literal["info", "warning", "error"]
 
@@ -42,9 +43,10 @@ _LEV_ASSUMED_LEN = 10
 _PLACEHOLDER_PREFIX = "matchkeys[?].fields[?]"
 
 # Column atom: Splink serializes comparison-level columns as "col_l" / "col_r"
-# (the _l/_r suffix INSIDE the quotes) or bare col_l / col_r.
-_COL_L = r'"?([A-Za-z_]\w*)_l"?'
-_COL_R = r'"?([A-Za-z_]\w*)_r"?'
+# (DuckDB, double-quoted), `col_l` / `col_r` (Spark, backtick-quoted), or bare
+# col_l / col_r -- the _l/_r suffix sits INSIDE the quotes.
+_COL_L = r'["`]?([A-Za-z_]\w*)_l["`]?'
+_COL_R = r'["`]?([A-Za-z_]\w*)_r["`]?'
 
 _ELSE_RE = r'ELSE'
 _NULL_RE = rf'{_COL_L}\s+IS\s+NULL\s+OR\s+{_COL_R}\s+IS\s+NULL'
@@ -58,7 +60,31 @@ _DIST_RE = (
     rf'\s*\(\s*{_COL_L}\s*,\s*{_COL_R}\s*\)\s*<=\s*([0-9]+)'
 )
 
-LevelKind = Literal["null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard"]
+# Date/time-difference levels compare two parsed timestamps in SECONDS:
+#   DuckDB: ABS(EPOCH(try_strptime("c_l",'..')) - EPOCH(try_strptime("c_r",'..'))) <= <secs>
+#   Spark:  ABS(UNIX_TIMESTAMP([date(]try_to_timestamp(`c_l`,'..')[)]) - UNIX_TIMESTAMP(..)) <= <secs>
+# The column atom is pulled from the try_strptime / try_to_timestamp call (the
+# _l/_r operand); the seconds cutoff is converted to days and snapped to a
+# `_date_diff_band` value -- approximate, like the levenshtein distance->sim map.
+_DATE_DIFF_MARKER = re.compile(r'\bABS\s*\(.*(?:EPOCH|UNIX_TIMESTAMP)\s*\(', re.IGNORECASE)
+_DATE_DIFF_TAIL = re.compile(r'<=\s*([0-9]+(?:\.[0-9]+)?)\s*$')
+_DATE_DIFF_COL = re.compile(
+    r'(?:try_strptime|try_to_timestamp)\s*\(\s*["`]?([A-Za-z_]\w*)_([lr])["`]?\s*,',
+    re.IGNORECASE,
+)
+_SECONDS_PER_DAY = 86400.0
+
+LevelKind = Literal[
+    "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff"
+]
+
+# Domain comparators (magnitude-aware) take precedence over string-edit levels
+# in the same Splink comparison -- e.g. DateOfBirthComparison mixes a
+# damerau_levenshtein level with date-difference levels; the domain family wins
+# and the string-edit level is dropped (see convert_comparison).
+_DOMAIN_KINDS: frozenset[str] = frozenset(
+    {"date_diff", "geo_haversine", "array_intersect", "numeric_diff"}
+)
 
 _SIM_KIND: dict[str, tuple[LevelKind, bool]] = {
     "jaro_winkler_similarity": ("jaro_winkler", False),
@@ -124,6 +150,20 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
             return None
         sim = max(0.0, 1 - distance / _LEV_ASSUMED_LEN)
         return RecognizedLevel("levenshtein", col_l, sim, approx=True)
+
+    if _DATE_DIFF_MARKER.search(sql_norm):
+        tail = _DATE_DIFF_TAIL.search(sql_norm)
+        cols = _DATE_DIFF_COL.findall(sql_norm)
+        if tail and cols:
+            bases = {c for c, _ in cols}
+            sides = {s.lower() for _, s in cols}
+            if len(bases) == 1 and sides == {"l", "r"}:
+                days = round(float(tail.group(1)) / _SECONDS_PER_DAY)
+                return RecognizedLevel(
+                    "date_diff", next(iter(bases)), _date_diff_band(days), approx=True
+                )
+        # ABS(...EPOCH/UNIX_TIMESTAMP...) shape but no clean single-column
+        # date-difference -> fall through to None (level dropped + warned).
 
     return None
 
@@ -230,15 +270,45 @@ def convert_comparison(
             mapped_to=None,
         )
 
-    families = {r.kind for r, _, _ in bands if r.kind != "exact"}
-    if len(families) > 1:
+    agree_families = {r.kind for r, _, _ in bands if r.kind != "exact"}
+    domain_families = agree_families & _DOMAIN_KINDS
+    if len(domain_families) > 1:
         report.warn(
             comp_path,
-            f"mixed comparator families {sorted(families)} in one comparison, "
-            "comparison dropped",
+            f"multiple domain comparator families {sorted(domain_families)} in one "
+            "comparison, comparison dropped",
             mapped_to=None,
         )
         return None
+    if domain_families:
+        # Domain-family-wins: a magnitude-aware comparator (e.g. date_diff) and a
+        # string-edit level (e.g. damerau_levenshtein) co-occur in one Splink
+        # comparison (DateOfBirthComparison). Keep the domain family + exact and
+        # drop the string-edit bands rather than dropping the whole comparison.
+        winner = next(iter(domain_families))
+        kept: list[tuple[RecognizedLevel, dict, int]] = []
+        for r, level, j in bands:
+            if r.kind in ("exact", winner):
+                kept.append((r, level, j))
+            else:
+                report.warn(
+                    f"{comp_path}.comparison_levels[{j}]",
+                    f"domain comparator '{winner}' takes precedence; string-edit "
+                    f"level dropped: {level.get('sql_condition', '')}",
+                    mapped_to=None,
+                )
+        bands = kept
+        families = {winner}
+    else:
+        families = agree_families
+        if len(families) > 1:
+            report.warn(
+                comp_path,
+                f"mixed comparator families {sorted(families)} in one comparison, "
+                "comparison dropped",
+                mapped_to=None,
+            )
+            return None
 
     if not bands:
         report.warn(comp_path, "no usable agree levels, comparison dropped", mapped_to=None)
@@ -269,6 +339,11 @@ def convert_comparison(
                 message = (
                     f"approximate mapping: edit distance <= {distance} converted via "
                     f"sim = 1 - distance/{_LEV_ASSUMED_LEN} -> {r.sim_threshold} ({sql})"
+                )
+            elif r.kind == "date_diff":
+                message = (
+                    "approximate mapping: date-difference cutoff snapped to the nearest "
+                    f"day-distance band -> sim {r.sim_threshold} ({sql})"
                 )
             else:
                 message = (
