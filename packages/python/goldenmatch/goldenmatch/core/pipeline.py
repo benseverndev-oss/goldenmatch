@@ -1620,7 +1620,7 @@ def _get_required_columns(config: GoldenMatchConfig) -> list[str]:
                     c for c in f.columns
                     if not (c.startswith("__") and c.endswith("__"))
                 )
-            elif getattr(f, "derive_from", None):
+            elif f.derive_from:
                 # A synthesized field (e.g. geo_haversine "lat,long") is built by
                 # the pipeline from derive_from; require its SOURCES, not itself.
                 cols.update(
