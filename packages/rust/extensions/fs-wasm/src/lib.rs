@@ -182,10 +182,26 @@ mod wasm {
     use super::*;
     use wasm_bindgen::prelude::*;
 
-    /// Zero-config FS block scoring (no NE, no custom banding, no cross-batch
-    /// exclude — the `auto_configure_probabilistic_df` shape). `field_values_flat`
-    /// / `field_nulls` are column-major (`field 0` rows, then `field 1` …).
-    /// Returns a JSON array of `[a, b, score]` triples.
+    /// FS block scoring. `field_values_flat` / `field_nulls` are column-major
+    /// (`field 0` rows, then `field 1` …). Returns a JSON array of `[a, b, score]`
+    /// triples.
+    ///
+    /// The trailing arguments carry the capabilities `score_block_pairs_fs_impl`
+    /// (and `fs_core::score_fs_pair`) already support but the zero-config shape
+    /// does not exercise. They are ADDITIVE — passing the empty/None defaults
+    /// (empty `level_thresholds_lens`, `n_ne = 0`, empty `ne_*`) reproduces the
+    /// prior byte-identical zero-config output:
+    ///
+    /// * Custom level-banding (`fs_core` `field_thresholds`) arrives ragged as a
+    ///   flat `f64` buffer + a per-field length vector (the same flat+lens idiom
+    ///   as `match_weights`), with a `-1` length sentinel meaning "no custom
+    ///   thresholds for this field" (→ `None`). An EMPTY `level_thresholds_lens`
+    ///   means every field is `None` (the old hardcoded behavior).
+    /// * Negative evidence mirrors the native pyo3 `score_block_pairs_fs`
+    ///   shape: `ne_values_flat`/`ne_nulls` are column-major over `n_ne` NE
+    ///   fields × `n_rows` (reshaped exactly like the regular field values), plus
+    ///   parallel `ne_scorer_ids`/`ne_thresholds`/`ne_weights` (length `n_ne`).
+    ///   `n_ne = 0` = no negative evidence.
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen]
     pub fn score_block_pairs_fs(
@@ -204,6 +220,16 @@ mod wasm {
         min_weight: f64,
         weight_range: f64,
         threshold: f64,
+        // --- ADDITIVE: custom level-banding (ragged flat+lens, -1 = None) ---
+        level_thresholds_flat: Vec<f64>,
+        level_thresholds_lens: Vec<i32>,
+        // --- ADDITIVE: negative evidence (column-major over n_ne fields) ---
+        ne_values_flat: Vec<String>,
+        ne_nulls: Vec<u8>,
+        n_ne: usize,
+        ne_scorer_ids: Vec<u8>,
+        ne_thresholds: Vec<f64>,
+        ne_weights: Vec<f64>,
     ) -> String {
         let n_rows = row_ids.len();
         let field_values = reshape_columns(field_values_flat, &field_nulls, n_fields, n_rows);
@@ -214,8 +240,28 @@ mod wasm {
             match_weights.push(match_weights_flat[wi..wi + len].to_vec());
             wi += len;
         }
-        let field_thresholds: Vec<Option<Vec<f64>>> = vec![None; n_fields];
-        let empty_ne: Vec<Vec<Option<String>>> = Vec::new();
+        // Custom level-banding: empty lens => all None (zero-config default),
+        // else per-field ragged decode with -1 = None (mirrors the native pyo3
+        // `level_thresholds: Option<Vec<Option<Vec<f64>>>>` shape).
+        let field_thresholds: Vec<Option<Vec<f64>>> = if level_thresholds_lens.is_empty() {
+            vec![None; n_fields]
+        } else {
+            let mut out: Vec<Option<Vec<f64>>> = Vec::with_capacity(level_thresholds_lens.len());
+            let mut ti = 0usize;
+            for &len in &level_thresholds_lens {
+                if len < 0 {
+                    out.push(None);
+                } else {
+                    let l = len as usize;
+                    out.push(Some(level_thresholds_flat[ti..ti + l].to_vec()));
+                    ti += l;
+                }
+            }
+            out
+        };
+        // Negative evidence: reshape column-major values exactly like the
+        // regular field values (n_ne fields × n_rows). n_ne == 0 => empty NE.
+        let ne_values = reshape_columns(ne_values_flat, &ne_nulls, n_ne, n_rows);
         let exclude: HashSet<(i64, i64)> = HashSet::new();
         let pairs = score_block_pairs_fs_impl(
             &row_ids,
@@ -231,10 +277,10 @@ mod wasm {
             min_weight,
             weight_range,
             threshold,
-            &empty_ne,
-            &[],
-            &[],
-            &[],
+            &ne_values,
+            &ne_scorer_ids,
+            &ne_thresholds,
+            &ne_weights,
             &exclude,
         );
         pairs_to_json(&pairs)
