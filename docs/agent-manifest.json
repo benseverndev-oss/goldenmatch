@@ -9275,6 +9275,10 @@
       "path": "packages/rust/extensions/analysis-native"
     },
     {
+      "name": "cluster-wasm",
+      "path": "packages/rust/extensions/cluster-wasm"
+    },
+    {
       "name": "fingerprint-wasm",
       "path": "packages/rust/extensions/fingerprint-wasm"
     },
