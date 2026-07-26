@@ -125,7 +125,7 @@ def migrate_splink_cmd(
 def _run_and_write(
     conversion: SplinkConversion, data: str, output: str, id_column: str | None
 ) -> None:
-    import goldenmatch._api as api
+    from goldenmatch._api import dedupe_df
     from goldenmatch.config.splink_upgrade import _load_frame
 
     df = _load_frame(data)
@@ -145,7 +145,7 @@ def _run_and_write(
                 model_path = str(Path(tmp) / "em.json")
                 em.save_json(model_path)
                 config.get_matchkeys()[0].model_path = model_path
-        result = api.dedupe_df(df, config=config, source_name="migrate_splink")
+        result = dedupe_df(df, config=config, source_name="migrate_splink")
 
     written = _write_output(result.golden, output) if result.golden is not None else 0
     total = result.total_records
