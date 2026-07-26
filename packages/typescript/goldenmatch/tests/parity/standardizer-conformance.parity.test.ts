@@ -34,14 +34,25 @@ const fixture = JSON.parse(
   summary: { agree: number; diverge: number };
 };
 
+function rows(name: string): {
+  py: Record<string, string | null>;
+  ts: Record<string, string>;
+} {
+  const py = fixture.python[name];
+  const ts = fixture.typescript[name];
+  if (!py || !ts) throw new Error(`fixture missing rows for standardizer '${name}'`);
+  return { py, ts };
+}
+
 describe("standardizer cross-surface characterization (0046 divergent boundary)", () => {
   it("TS standardizer output is pinned to the committed fixture", () => {
     for (const name of fixture.standardizers) {
+      const { ts } = rows(name);
       for (const s of fixture.inputs) {
         expect(
           applyStandardizer(s, name),
           `TS standardizer '${name}' on ${JSON.stringify(s)} drifted from the fixture`,
-        ).toBe(fixture.typescript[name][s]);
+        ).toBe(ts[s]);
       }
     }
   });
@@ -50,15 +61,16 @@ describe("standardizer cross-surface characterization (0046 divergent boundary)"
     let agree = 0;
     let diverge = 0;
     for (const name of fixture.standardizers) {
+      const { py, ts } = rows(name);
       for (const s of fixture.inputs) {
-        const py = fixture.python[name][s];
-        const ts = applyStandardizer(s, name);
-        if (py === ts) {
+        const pyVal = py[s];
+        const tsVal = applyStandardizer(s, name);
+        if (pyVal === tsVal) {
           agree++;
         } else {
           diverge++;
           // A recorded divergence must still be recorded as one on the TS side.
-          expect(ts).toBe(fixture.typescript[name][s]);
+          expect(tsVal).toBe(ts[s]);
         }
       }
     }
@@ -70,7 +82,7 @@ describe("standardizer cross-surface characterization (0046 divergent boundary)"
 
   it("pins the dominant divergence: Python null vs TS empty-string on invalid input", () => {
     // email on a non-email input: Python None (JSON null) vs TS "".
-    expect(fixture.python.email.MCDONALD).toBeNull();
+    expect(rows("email").py.MCDONALD).toBeNull();
     expect(applyStandardizer("MCDONALD", "email")).toBe("");
   });
 });
