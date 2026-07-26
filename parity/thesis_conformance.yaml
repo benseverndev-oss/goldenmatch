@@ -48,24 +48,24 @@ weaknesses:
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
-    severity: medium   # downgraded from high: the acute payload-drop bug is fixed;
-                       # the remaining gap is the design of a versioned contract
+    severity: low   # Wave B fixed the acute bug; Wave C/C1 landed the versioned
+                    # contract object; only refactor completeness remains
     declared: true   # named as the 9 seam in the frame
-    title: "Compute->control handoff is ad-hoc in-memory args, not a versioned batch (payload-drop bug now fixed)"
+    title: "Compute->control handoff is now a versioned ResolutionBatch (payload-drop fixed; data-array fold remains)"
     detail: >-
-      resolve_clusters() takes live polars/Arrow frames plus loose args
-      (controller_snapshot: dict, run_name: str, matchkey_name: str) -- no schema,
-      no version, no bundled provenance. FIXED (Wave B): the #2132 payload-drop trap
-      that was LIVE on ALL THREE Postgres bulk paths -- bulk_upsert_records dropped
-      payload, bulk_add_edges dropped controller_snapshot/actor/trust, bulk_emit_events
-      dropped payload/actor/trust -- now carries them (the schema has the columns and
-      the per-row Postgres path already wrote them), locked by
-      tests/identity/test_postgres_bulk_payload_parity.py. REMAINING: the handoff is
-      still not a versioned, explicitly-specified resolution-batch contract (design
-      work, folded into the Wave C control-plane manifesto).
+      FIXED (Wave B): the #2132 payload-drop trap that was LIVE on all three Postgres
+      bulk paths now carries provenance, locked by test_postgres_bulk_payload_parity.py.
+      LANDED (Wave C / C1): identity/resolution_batch.py::ResolutionBatch -- a versioned
+      (CONTRACT_VERSION=1), immutable contract bundling the metadata/config half of the
+      seam (was loose args: controller_snapshot/run_id/matchkey/actor/emit_singletons/
+      weak_confidence_threshold) + the frame-residency budget (flush_rows) as a CONTRACT
+      TERM, not a bare env read. resolve_clusters consumes it (additive `batch` param;
+      byte-identical when absent -- test_resolution_batch_c1.py proves same store
+      dispatch). REMAINING (C1 follow-on): fold the bulk DATA arrays (records/clusters/
+      pair-evidence) into the batch + extract an apply_batch(store, batch) body.
     evidence:
-      - packages/python/goldenmatch/goldenmatch/identity/resolve.py:375
-      - packages/python/goldenmatch/goldenmatch/identity/store.py:847
+      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py
+      - packages/python/goldenmatch/tests/identity/test_resolution_batch_c1.py
       - packages/python/goldenmatch/tests/identity/test_postgres_bulk_payload_parity.py
 
   - id: fs-default-ts-path-unwired-second-source
@@ -179,14 +179,16 @@ weaknesses:
     tenet: T4
     severity: low
     declared: true
-    title: "Compute/control shared frame-residency budget is comment-documented, not contract-specified"
+    title: "Compute/control shared frame-residency budget: now a contract field (was env-only)"
     detail: >-
-      Control-plane write memory explicitly stacks on the compute prep floor
-      (emit_singletons materializes every referenced row; ~35 GB on a 14M frame). This
-      is well acknowledged and bounded with flush knobs, but lives only as inline
-      comments + env vars, not as a specified shared budget in a seam contract -- becomes
-      a contract line item once the versioned batch (see no-versioned-resolution-batch-contract)
-      exists.
+      Control-plane write memory stacks on the compute prep floor (emit_singletons
+      materializes every referenced row; ~35 GB on a 14M frame), bounded by flushing
+      every flush_rows records. ADDRESSED-IN-PART (Wave C / C1): flush_rows is now a
+      field on ResolutionBatch (a contract term), and emit_singletons rides the same
+      contract, instead of the budget living only in inline comments + the
+      GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS env var. REMAINING: the prep-floor half of
+      the budget (the compute side) is still implicit; the full shared-budget accounting
+      lands with the C1 data-array fold.
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:71
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:453
