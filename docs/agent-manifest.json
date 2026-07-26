@@ -443,6 +443,13 @@
               "description": "Fields whose disagreement penalizes the match score, catching false positives that agree on other fields."
             },
             {
+              "name": "guard",
+              "type": "str | None",
+              "required": false,
+              "default": "None",
+              "description": "Pair predicate (over a_<col>/b_<col>) gating whether this whole matchkey fires on a pair."
+            },
+            {
               "name": "em_iterations",
               "type": "int",
               "required": false,
@@ -1579,6 +1586,13 @@
               "required": false,
               "default": "' '",
               "description": "Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long)."
+            },
+            {
+              "name": "guard",
+              "type": "str | None",
+              "required": false,
+              "default": "None",
+              "description": "Pair predicate (over a_<col>/b_<col>) gating whether this field contributes; weighted matchkeys only."
             }
           ]
         },
@@ -3122,6 +3136,73 @@
               "required": false,
               "default": "'.goldenmatch/identity.db'",
               "help": "Path to the identity graph database."
+            }
+          ]
+        },
+        {
+          "command": "import-dbt",
+          "options": [
+            {
+              "name": "manifest",
+              "type": "text",
+              "required": true,
+              "help": "dbt manifest.json (from `dbt compile` / `dbt parse`)"
+            },
+            {
+              "name": "--output",
+              "type": "text",
+              "required": false,
+              "default": "'goldenmatch.yaml'",
+              "help": "Output YAML config path"
+            },
+            {
+              "name": "--catalog",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "dbt catalog.json (from `dbt docs generate`); supplies model column lists so recognized most-recent survivorship is emitted as golden_rules (otherwise it is only reported)"
+            },
+            {
+              "name": "--strict",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Fail on any lossy finding (warnings), not just errors"
+            },
+            {
+              "name": "--min-confidence",
+              "type": "float",
+              "required": false,
+              "default": "0.5",
+              "help": "ER-model identification confidence floor for signal extraction"
+            },
+            {
+              "name": "--verify",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Prove the distillation reproduces your dbt pipeline: run the converted config on a sample of --source and report pairwise cluster agreement against this output table (parquet/csv; first two columns = id, cluster_id). Needs --source."
+            },
+            {
+              "name": "--source",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Source rows the dbt ER model consumed (parquet/csv), for --verify"
+            },
+            {
+              "name": "--verify-sample",
+              "type": "integer",
+              "required": false,
+              "default": "5000",
+              "help": "Rows of --source to run through GoldenMatch for --verify"
+            },
+            {
+              "name": "--id-column",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Column holding each source row's id (default: auto-detect unique_id/id/record_id)"
             }
           ]
         },
@@ -5442,6 +5523,9 @@
         ],
         "ENSEMBLE": [
           "GOLDENMATCH_ENSEMBLE_KERNEL"
+        ],
+        "ER": [
+          "GOLDENMATCH_ER_MODEL_DIR"
         ],
         "FACILITY": [
           "GOLDENMATCH_FACILITY_NAME_NE"
@@ -9191,6 +9275,10 @@
       "path": "packages/rust/extensions/analysis-native"
     },
     {
+      "name": "cluster-wasm",
+      "path": "packages/rust/extensions/cluster-wasm"
+    },
+    {
       "name": "fingerprint-wasm",
       "path": "packages/rust/extensions/fingerprint-wasm"
     },
@@ -9273,6 +9361,10 @@
     {
       "name": "goldenmatch-bridge",
       "path": "packages/rust/extensions/bridge"
+    },
+    {
+      "name": "goldenmatch-cluster-core",
+      "path": "packages/rust/extensions/cluster-core"
     },
     {
       "name": "goldenmatch-datafusion-udf",

@@ -98,6 +98,10 @@ Default `20000000`. Candidate-pair count per kernel call below which the native 
 
 Default `10000`. Row count below which the native MinHash/LSH batch sketcher (#1081) runs in the calling thread instead of fanning out to rayon — the same #688 calling-thread-vs-fanout guard, applied to the `sketch` kernel. The SimHash batch sketcher (#1090) shares this threshold. Relevant whenever the `sketch` kernel runs native — which is the default under `auto` since #1090 (set `GOLDENMATCH_NATIVE=0` to force the Python path), or under `GOLDENMATCH_NATIVE=1`. `0` forces rayon always, a huge value forces sequential always.
 
+### `GOLDENMATCH_ER_MODEL_DIR`
+
+Default `~/.cache/goldenmatch/er-matcher`. Directory where the local ER-matcher LLM boost caches its downloaded GGUF weights. Set it to relocate the cache — e.g. to a shared volume, a larger disk, or a read-only mount that ships the weights pre-seeded. The pinned model is sha256-verified on resolve regardless of location, so a relocated (or externally populated) cache is checked the same way as the default one.
+
 ---
 
 ## Backend selection

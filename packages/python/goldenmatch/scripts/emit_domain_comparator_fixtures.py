@@ -23,6 +23,7 @@ from pathlib import Path
 
 from goldenmatch.core.scorer import (
     _array_intersect_similarity_py,
+    _cosine_similarity_py,
     _date_diff_similarity_py,
     _geo_haversine_similarity_py,
     _numeric_diff_similarity_py,
@@ -119,6 +120,28 @@ NUMERIC_PAIRS = [
     ("numeric_diff:bogus", "100", "105"),   # malformed spec -> default pct:0.1
 ]
 
+# cosine (score_one id 23): vector cosine over two precomputed float-vector
+# columns. Parse (strip brackets, split on `,` else whitespace), cosine, clamp
+# [0,1]; unparseable / length-mismatch / zero-norm -> exact-string equality.
+# Values chosen so cross-surface float noise can't flip them (orthogonal -> 0,
+# parallel -> ~1; the one 45-degree case is well away from any decision edge).
+COSINE_PAIRS = [
+    ("1,0,0", "1,0,0"),          # identical -> 1.0
+    ("1,0", "0,1"),              # orthogonal -> 0.0
+    ("1,0", "-1,0"),             # opposite -> clamped 0.0
+    ("1,0", "1,1"),              # 45 deg -> 1/sqrt(2) ~ 0.7071
+    ("2,0,0", "1,0,0"),          # magnitude-invariant -> 1.0
+    ("1 0 0", "[1, 0, 0]"),      # whitespace + bracketed forms -> 1.0
+    ("(0.5 0.5)", "0.5,0.5"),    # paren + space + comma forms -> ~1.0
+    ("1,0", "1,0,0"),            # length mismatch -> exact fallback 0.0
+    ("0,0", "1,0"),              # zero-norm -> exact fallback 0.0
+    ("0,0", "0,0"),              # zero-norm but equal strings -> 1.0
+    ("x,y", "x,y"),              # unparseable equal -> 1.0
+    ("x,y", "a,b"),              # unparseable unequal -> 0.0
+    ("", ""),                    # empty -> exact fallback 1.0
+    ("0.6,0.8", "0.6,0.8"),      # unit vector identical -> 1.0
+]
+
 rows: list[list] = []
 for a, b in DATE_PAIRS:
     rows.append(["date_diff", a, b, round(_date_diff_similarity_py(a, b), 6)])
@@ -128,6 +151,8 @@ for scorer, a, b in ARRAY_PAIRS:
     rows.append([scorer, a, b, round(_array_intersect_similarity_py(a, b, scorer), 6)])
 for scorer, a, b in NUMERIC_PAIRS:
     rows.append([scorer, a, b, round(_numeric_diff_similarity_py(a, b, scorer), 6)])
+for a, b in COSINE_PAIRS:
+    rows.append(["cosine", a, b, round(_cosine_similarity_py(a, b), 6)])
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text(

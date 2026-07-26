@@ -13,6 +13,7 @@
     "./core/hnsw-wasm": { "types": "./dist/core/hnswWasm.d.ts", "import": "./dist/core/hnswWasm.js", "require": "./dist/core/hnswWasm.cjs" },
     "./core/sketch-wasm": { "types": "./dist/core/sketchWasm.d.ts", "import": "./dist/core/sketchWasm.js", "require": "./dist/core/sketchWasm.cjs" },
     "./core/graph-wasm": { "types": "./dist/core/graphWasm.d.ts", "import": "./dist/core/graphWasm.js", "require": "./dist/core/graphWasm.cjs" },
+    "./core/cluster-wasm": { "types": "./dist/core/clusterWasm.d.ts", "import": "./dist/core/clusterWasm.js", "require": "./dist/core/clusterWasm.cjs" },
     "./core/fingerprint-wasm": { "types": "./dist/core/fingerprintWasm.d.ts", "import": "./dist/core/fingerprintWasm.js", "require": "./dist/core/fingerprintWasm.cjs" },
     "./core/goldenembed-wasm": { "types": "./dist/core/goldenembedWasm.d.ts", "import": "./dist/core/goldenembedWasm.js", "require": "./dist/core/goldenembedWasm.cjs" },
     "./core/fs-wasm": { "types": "./dist/core/fsWasm.d.ts", "import": "./dist/core/fsWasm.js", "require": "./dist/core/fsWasm.cjs" },

@@ -27,31 +27,38 @@ tenets:
 weaknesses:
   - id: incremental-resolution-no-persisted-index
     tenet: T4
-    severity: critical
+    severity: low   # RESOLVED: C2 (persisted index + bidirectional query) + C4
+                    # (bounded-work scale proof) landed; only broader-corpus RSS
+                    # benchmarking beyond the CI-stable proof remains
     declared: true   # named as OPEN 9.1 in the frame
-    title: "Incremental resolution against a persisted identity index is absent"
+    title: "Incremental resolution against a persisted identity index (C2/C4 landed)"
     detail: >-
-      No path scores/blocks NEW records against a PERSISTED index of prior identities.
-      Both incremental entry points require the entire prior corpus in-memory and
-      re-block it per record; StreamProcessor grows the corpus in RAM every record.
-      The store has no block-key/fingerprint index (source_records indexed only on
-      entity_id/source/record_hash), so fuzzy candidate generation against persisted
-      identities is impossible. This is the frame's own OPEN 9.1 -- compute that reads
-      durable state, which neither engine homes -- and it caps the product exactly
-      where the thesis says it becomes most valuable.
-      IN PROGRESS (C2): §4 fork DECIDED (ii) control-plane-owned index by the owner
-      2026-07-26. Slice 1 LANDED -- the persisted `identity_record_block_keys` store
-      index (SQLite + Postgres + Alembic 0005, schema v6) + the
-      `index_record_block_keys`/`candidates_by_block_keys` write/query API. Still OPEN:
-      the incremental resolve path does not yet POPULATE or QUERY the index (nothing
-      reads it), so the full-corpus re-block remains until the next slices wire the
-      bidirectional seam + the exact-matchkey fix.
+      RESOLVED (manifesto §4(ii), owner-decided (ii) control-plane-owned index 2026-07-26).
+      The incremental path now scores a NEW record against its block-mates gathered from a
+      PERSISTED store index -- no full-corpus in-RAM re-block. Landed across four slices:
+      SLICE 1 -- the persisted `identity_record_block_keys` store index (SQLite + Postgres +
+      Alembic 0005, schema v6) + `index_record_block_keys`/`candidates_by_block_keys`
+      write/query API. SLICE 2 -- `identity/block_index.py`: the stateless block-key compute
+      (`compute_record_block_keys`/`compute_frame_block_keys`, reusing the pipeline's own
+      `_build_block_key_expr`) + `backfill_block_index` population. SLICE 3 -- `_resolve_via_index`
+      wires the bidirectional seam into `resolve_record_incremental` (compute keys -> query the
+      index -> gather ONLY block-mate payloads -> resolve -> self-populate the index); the
+      full-`df` path stays byte-identical when `blocking` is None. SLICE 3b -- `_exact_match_rows`
+      closes the exact-matchkey gap (`match_one` returned `[]` for exact matchkeys), so exact-only
+      incremental resolve works, and it flows to every caller (index path, `match_record_to_entity`,
+      StreamProcessor). C4 -- a CI-stable bounded-work proof: the candidate gather is EXACTLY the
+      block-mates and the resolve's store-read work is INVARIANT in corpus size M (test at M=100 vs
+      M=1000), plus a tracemalloc ceiling -- the measured kill criterion in deterministic form.
+      REMAINING (non-blocking): no-PK content-hash record ids (the index path is PK-scoped) and a
+      large-corpus RSS benchmark beyond the CI proof.
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/store.py   # identity_record_block_keys + index API
-      - packages/python/goldenmatch/goldenmatch/identity/resolve.py:1270
-      - packages/python/goldenmatch/goldenmatch/core/streaming.py:129
-      - packages/python/goldenmatch/goldenmatch/core/streaming.py:149
-    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 decided (ii); C2 slice 1 landed -- next: population + bidirectional query + exact-matchkey fix)"
+      - packages/python/goldenmatch/goldenmatch/identity/block_index.py   # stateless compute + backfill
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py   # _resolve_via_index + _exact_match_rows
+      - packages/python/goldenmatch/tests/identity/test_incremental_index.py   # index==full-df parity
+      - packages/python/goldenmatch/tests/identity/test_incremental_exact.py   # exact-matchkey path
+      - packages/python/goldenmatch/tests/identity/test_incremental_scale.py   # C4 bounded-work proof
+    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 (ii) delivered; C2 + C4 landed; optional: no-PK ids + large-corpus RSS bench)"
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
@@ -160,36 +167,62 @@ weaknesses:
 
   - id: standalone-ts-algorithms-no-shared-kernel
     tenet: T1
-    severity: medium
-    declared: true   # declared in TS CLAUDE.md / wave1b spec
-    title: "Clustering and goldenanalysis frame kernels are standalone TS, byte-safety rests on fixtures not a shared kernel"
+    severity: low   # was medium; RESOLVED -- Family A now shares a kernel
+                    # (cluster-wasm), Family B is a declared fixture-locked boundary
+    declared: true   # declared in TS CLAUDE.md / wave1b spec + parity manifests
+    title: "Clustering + goldenanalysis frame kernels: Family A shares a kernel (cluster-wasm); Family B declared fixture-locked"
     detail: >-
-      TS clustering (buildClusters + MST oversized-split) is a pure-TS reimplementation
-      of the Python clustering; its cross-language correctness rests entirely on the
-      cluster-conformance/split-run parity harness over two independent impls, not a
-      shared kernel. goldenanalysis frame kernels (distinct_count/null_ratio/
-      duplicate_row_ratio) have no WASM (Wave 1b consciously deferred) and are locked
-      only by a hand-authored fixture -- which itself caught a real NaN/null bug,
-      evidence the boundary was genuinely divergent before the fixture.
+      TWO families, both resolved. (A) TS clustering: connected-components was already shared
+      to WASM (graph-wasm); the MST oversized-split + confidence half is NOW shared too.
+      RESOLVED across three slices: the kernels were extracted from the pyo3-only native crate
+      into a pyo3-free `cluster-core` (A1), given a wasm-bindgen `cluster-wasm` surface, and TS
+      `splitOversizedCluster`/`computeClusterConfidence` reroute to it behind the opt-in
+      `cluster-wasm` backend registry (A2) -- exactly the graph-wasm pattern; pure-TS stays the
+      byte-identical default fallback, and the split partition is deterministic so wasm ==
+      pure-TS components exactly (parity-tested + the Python cluster-handoff oracle). So the
+      MST-split kernel is one source of truth across Python-native + TS, not two impls.
+      (B) goldenanalysis frame kernels (distinct_count/null_ratio/duplicate_row_ratio): the
+      Arrow-value interning has no clean WASM boundary (Wave 1b consciously deferred), so this
+      is an ACCEPTED fixture-locked boundary -- declared at the surface as
+      `frame_kernels_deferred` in parity/goldenanalysis.yaml (same idiom as
+      blocking_kernels_deferred/scorer_kernels_deferred) and locked by the adversarial
+      cross-surface fixture. Stays low: revisit only on a real in-browser frame-dedup workload
+      (then arrow-in-wasm is the thesis-pure path).
     evidence:
-      - packages/typescript/goldenmatch/src/core/cluster
+      - packages/rust/extensions/cluster-core/src/lib.rs
+      - packages/rust/extensions/cluster-wasm/src/lib.rs
+      - packages/typescript/goldenmatch/src/core/cluster.ts
+      - packages/typescript/goldenmatch/tests/parity/cluster-wasm.parity.test.ts
+      - parity/goldenanalysis.yaml
       - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
-      - packages/python/goldenanalysis/tests/test_frame_kernels_parity.py
 
   - id: a2a-skills-bidirectional-fracture
     tenet: T1
-    severity: medium
+    severity: low   # was medium; the one genuine surface INCONSISTENCY (the MDM
+                    # trio, shared on MCP but ts_only on A2A) is now reconciled;
+                    # the remaining two-sided gap is ALL verified-intentional
+                    # divergence, not a conform gap
     declared: true   # gate-enforced partition
-    title: "goldenmatch a2a_skills surface is bidirectionally fractured (14 python_only vs 13 ts_only)"
+    title: "goldenmatch a2a_skills two-sided gap is now all intentional divergence (MDM trio reconciled)"
     detail: >-
-      The only surface in the repo with genuine two-sided divergence: 14 python_only vs
-      13 ts_only a2a skills. Some is naming/granularity (PY quality vs TS scan_quality+
-      fix_quality; identity trio ts_only on the A2A card but shared on MCP), but it is
-      the widest single-surface gap and a "shared capabilities must conform"
-      (commitment 3) hotspot. Gate-enforced as declared, so it is intentional-but-large,
-      not drift.
+      Was the widest single-surface gap (14 python_only vs 13 ts_only). RECONCILED
+      2026-07-26: the one case that was a genuine "shared capability that doesn't conform"
+      (commitment 3) -- the #1114 MDM read-side trio identity_profile / identity_stats /
+      identity_worklist, which is SHARED on the MCP surface but was ts_only on the A2A card
+      -- is fixed by advertising it on Python's A2A card too (the capability already existed
+      via entity_profile/identity_summary_stats/steward_worklist + the MCP tools). Gap is now
+      14 python_only vs 10 ts_only, and every remaining divergence is VERIFIED-DIFFERENT, NOT
+      drift: PY's richer file-lifecycle/routing skills (configure/list_runs/rollback/review/
+      incremental/sensitivity/schema_match/compare_clusters/analyze_blocking/retrieve_similar/
+      documents_*) which the edge-safe TS surface intentionally omits; PY `quality` vs TS
+      `scan_quality`+`fix_quality` (1:2 granularity); PY `pprl` RUNS linkage vs TS `suggest_pprl`
+      SUGGESTS params; and TS's edge agent_* variants + score/memory_import primitives. Two
+      surfaces exposing genuinely different capabilities is what commitment 3 ALLOWS -- the
+      conform requirement applied to the one shared-but-unadvertised case, now closed.
     evidence:
       - parity/goldenmatch.yaml
+      - packages/python/goldenmatch/goldenmatch/a2a/server.py   # identity_profile/stats/worklist skill defs
+      - packages/python/goldenmatch/goldenmatch/a2a/skills.py   # trio delegates to mcp.identity_tools._dispatch
 
   - id: frame-residency-coupling-not-contractual
     tenet: T4

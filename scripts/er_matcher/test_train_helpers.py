@@ -1,0 +1,101 @@
+"""Tests for the ER-matcher trainer's PURE helpers (no torch / no GPU).
+
+Locks config load+validate, the measured max_seq_len policy, and the chat-target
+construction (which must round-trip through the shared parse_verdict -- training
+and serving share ONE contract). The heavy training loop (_train_runtime.py) is
+GPU-only and out of scope here; these are the decisions it depends on."""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+import train as tr  # noqa: E402,I001
+from goldenmatch.core.er_matcher.prompt import SERIALIZER_VERSION, parse_verdict  # noqa: E402
+
+
+def test_load_config_roundtrips_committed_yaml():
+    cfg = tr.load_config(Path(__file__).with_name("config.yaml"))
+    assert cfg.base_model == "Qwen/Qwen2.5-3B-Instruct"
+    assert cfg.packing is True
+    assert cfg.serializer_version == SERIALIZER_VERSION
+
+
+def test_load_config_rejects_unknown_key(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("base_model: x\nbogus_key: 1\n")
+    with pytest.raises(ValueError, match="unknown config keys"):
+        tr.load_config(p)
+
+
+def test_config_validate_catches_bad_values():
+    with pytest.raises(ValueError, match="seq_len_percentile"):
+        tr.TrainConfig(seq_len_percentile=0).validate()
+    with pytest.raises(ValueError, match="serializer_version"):
+        tr.TrainConfig(serializer_version="v0").validate()
+    with pytest.raises(ValueError, match="match_confidence"):
+        tr.TrainConfig(match_confidence=0.2).validate()
+    with pytest.raises(ValueError, match="nomatch_confidence"):
+        tr.TrainConfig(nomatch_confidence=0.9).validate()
+
+
+def test_measured_max_seq_len_p95_rounded_capped():
+    # 100 lengths 1..100; P95 nearest-rank = 95 -> round up to mult 64 -> 128
+    lengths = list(range(1, 101))
+    assert tr.measured_max_seq_len(lengths, percentile=95.0, cap=1024, multiple_of=64) == 128
+    # cap bites: huge lengths -> capped at 256
+    assert tr.measured_max_seq_len([5000] * 10, percentile=95.0, cap=256, multiple_of=64) == 256
+    # empty -> floor at multiple_of
+    assert tr.measured_max_seq_len([], percentile=95.0, cap=1024, multiple_of=64) == 64
+    # small lengths floor at multiple_of
+    assert tr.measured_max_seq_len([3, 4, 5], percentile=95.0, cap=1024, multiple_of=64) == 64
+
+
+def _row(match: bool) -> dict:
+    return {
+        "a": {"name": "Acme Corp", "city": "Boston", "id": "A1"},
+        "b": ({"name": "Acme Corp", "city": "Boston", "id": "A1"} if match
+              else {"name": "Beta LLC", "city": "Boston", "id": "B9"}),
+        "label": "match" if match else "no_match",
+        "domain": "org",
+    }
+
+
+def test_example_to_messages_shape_and_roundtrip():
+    cfg = tr.TrainConfig()
+    for match in (True, False):
+        msgs = tr.example_to_messages(_row(match), cfg)
+        assert [m["role"] for m in msgs] == ["system", "user", "assistant"]
+        # the assistant TARGET must parse back via the SHARED runtime parser to
+        # the same verdict -- training target == serving contract.
+        v = parse_verdict(msgs[-1]["content"])
+        assert v is not None
+        assert v["match"] is match
+        expect_conf = cfg.match_confidence if match else cfg.nomatch_confidence
+        assert v["confidence"] == pytest.approx(expect_conf)
+        assert v["reason"]  # non-empty deterministic reason
+
+
+def test_auto_reason_lists_agreements_and_conflicts():
+    cfg = tr.TrainConfig()
+    match_reason = parse_verdict(tr.example_to_messages(_row(True), cfg)[-1]["content"])["reason"]
+    assert "agree on" in match_reason
+    nomatch_reason = parse_verdict(tr.example_to_messages(_row(False), cfg)[-1]["content"])["reason"]
+    assert "conflict on" in nomatch_reason or "insufficient" in nomatch_reason
+
+
+def test_serialized_token_lengths_uses_injected_tokenizer():
+    rows = [_row(True), _row(False)]
+    # stub tokenizer = whitespace split; lengths are positive + deterministic
+    lens = tr.serialized_token_lengths(rows, lambda t: t.split())
+    assert len(lens) == 2 and all(n > 0 for n in lens)
+
+
+def test_read_jsonl(tmp_path):
+    p = tmp_path / "d.jsonl"
+    p.write_text('{"a":1}\n\n{"b":2}\n')
+    assert tr.read_jsonl(p) == [{"a": 1}, {"b": 2}]

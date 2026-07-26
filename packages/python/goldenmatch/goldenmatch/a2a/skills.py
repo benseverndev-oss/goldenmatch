@@ -259,6 +259,10 @@ def dispatch_skill(skill_id: str, params: dict, allow_pprl: bool = False) -> dic
         # Agent Memory #1075/#1078: agent-writable ops + audit export + seal/verify
         "identity_claim", "identity_resolve_conflict", "identity_audit",
         "identity_audit_seal", "identity_audit_verify",
+        # #1114 MDM read-side ops: shared on MCP, now advertised on the A2A card
+        # too (they were ts_only on A2A -- a surface inconsistency, not a real
+        # divergence, since the capability already exists here).
+        "identity_profile", "identity_stats", "identity_worklist",
     }:
         from goldenmatch.mcp.identity_tools import _dispatch as _identity_dispatch
         # Reuse MCP dispatch since the contract is identical (JSON in/out).

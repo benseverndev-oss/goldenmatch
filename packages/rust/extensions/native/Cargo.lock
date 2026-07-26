@@ -541,6 +541,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenmatch-cluster-core"
+version = "0.1.0"
+
+[[package]]
 name = "goldenmatch-documents-core"
 version = "0.1.0"
 dependencies = [
@@ -577,6 +581,7 @@ dependencies = [
  "arrow",
  "blake2",
  "goldenmatch-autoconfig-core",
+ "goldenmatch-cluster-core",
  "goldenmatch-documents-core",
  "goldenmatch-fingerprint-core",
  "goldenmatch-fs-core",
