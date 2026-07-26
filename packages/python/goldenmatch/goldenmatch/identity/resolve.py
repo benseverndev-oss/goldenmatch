@@ -1156,6 +1156,40 @@ def _node_age(
 # identically to a batch run -- none of that logic is re-implemented here.
 
 
+def _exact_match_rows(
+    record: dict[str, Any], df: pl.DataFrame, mk: MatchkeyConfig
+) -> dict[int, float]:
+    """Existing ``__row_id__``s that EXACTLY match ``record`` on an exact
+    matchkey (score 1.0) -- closes the ``match_one`` exact-matchkey gap (C2
+    slice 3b, manifesto §4(ii)).
+
+    ``match_one`` returns ``[]`` for exact matchkeys (``threshold is None``), so
+    an exact-only incremental resolve never matched anything. This computes the
+    record's matchkey key with the SAME ``build_matchkey_expr`` the batch
+    pipeline uses (field transforms + ``||`` concat), then finds every df row
+    sharing that key. Null/blank keys match nothing (the pipeline's own
+    ``filter_nonblank_key`` invariant -- two records both missing a field are
+    NOT an exact match). A field absent from the record or the frame -> no match.
+    """
+    from goldenmatch.core.matchkey import build_matchkey_expr
+
+    fields = [f.field for f in mk.fields]
+    if not fields or any(record.get(f) is None for f in fields):
+        return {}
+    if any(f not in df.columns for f in fields):
+        return {}
+    alias = f"__mk_{mk.name}__"
+    expr = build_matchkey_expr(mk)
+    # The record's key: build_matchkey_expr casts each field to Utf8, so a raw
+    # int record value keys identically to a stringified frame value.
+    rec_frame = pl.DataFrame([{f: record.get(f) for f in fields}])
+    key = rec_frame.select(expr).to_series()[0]
+    if key is None or str(key).strip() == "":
+        return {}
+    keyed = df.select(["__row_id__", expr]).filter(pl.col(alias) == key)
+    return {int(r): 1.0 for r in keyed["__row_id__"].to_list()}
+
+
 def _match_record_rows(
     record: dict[str, Any],
     df: pl.DataFrame,
@@ -1170,22 +1204,26 @@ def _match_record_rows(
     """Best score per existing ``__row_id__`` the record matches, across all
     matchkeys.
 
-    Uses ``match_one`` per matchkey, so it covers the threshold-bearing matchkey
-    types (weighted / probabilistic / fuzzy). Exact matchkeys (``threshold is
-    None``) contribute nothing -- ``match_one`` returns ``[]`` for them; an
-    exact-only incremental path is a follow-up. A failing matchkey is skipped
-    (logged), never fatal.
+    Threshold-bearing matchkeys (weighted / probabilistic / fuzzy) go through
+    ``match_one``; exact matchkeys (``type == "exact"``, ``threshold is None``)
+    go through ``_exact_match_rows`` (``match_one`` returns ``[]`` for them). A
+    failing matchkey is skipped (logged), never fatal.
     """
     from goldenmatch.core.match_one import match_one
 
     best: dict[int, float] = {}
     for mk in matchkeys or []:
         try:
-            hits = match_one(
-                record, df, mk,
-                ann_blocker=ann_blocker, embedder=embedder,
-                ann_column=ann_column, top_k=top_k, store=base_store,
-            )
+            if getattr(mk, "type", None) == "exact":
+                hits: list[tuple[int, float]] = list(
+                    _exact_match_rows(record, df, mk).items()
+                )
+            else:
+                hits = match_one(
+                    record, df, mk,
+                    ann_blocker=ann_blocker, embedder=embedder,
+                    ann_column=ann_column, top_k=top_k, store=base_store,
+                )
         except Exception:
             log.warning(
                 "match_one failed for matchkey %r; skipping",
@@ -1286,9 +1324,9 @@ def _resolve_via_index(
 
     No full-corpus materialization. Record ids are PK-based (``source_pk_col``),
     so the candidate frame can be all-string without shifting any record id.
-    Exact matchkeys (``match_one`` returns ``[]``) are a documented follow-up;
-    this covers the threshold-bearing matchkey types. Falls back to a
-    create-only path when there are no candidates.
+    Covers both exact matchkeys (via ``_exact_match_rows``) and the
+    threshold-bearing types (via ``match_one``). Falls back to a create-only
+    path when there are no candidates.
     """
     from goldenmatch.identity.block_index import compute_record_block_keys
 
