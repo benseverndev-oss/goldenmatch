@@ -91,6 +91,64 @@ describe("fs-wasm cross-surface parity", () => {
 });
 
 // ---------------------------------------------------------------------------
+// PR2 cross-language GATE: NE + custom banding + a partial-MISSING field. The
+// fixture (`fs_block_scoring_ne_banding.json`) is AUTHORED by the SAME Python
+// native `score_block_pairs_fs` (the reroute's oracle,
+// `scripts/emit_fs_wasm_fixture.py`) with the level_thresholds + ne_* kwargs the
+// fs-wasm entry marshals — and NO require_positive_evidence / missing_disagree
+// (both default off), so the TS kernel reproduces Python-native EXACTLY. This is
+// the case where the reroute's FIXED full-field normalization differs from the
+// pure-TS per-pair shrinking range — the intended #1854 alignment.
+// ---------------------------------------------------------------------------
+interface NeBandingFixture extends Fixture {
+  level_thresholds: (number[] | null)[];
+  ne_values: (string | null)[][];
+  ne_scorer_ids: number[];
+  ne_thresholds: number[];
+  ne_weights: number[];
+}
+
+const neFixture: NeBandingFixture = JSON.parse(
+  readFileSync(
+    resolve(here, "fixtures/fs/fs_block_scoring_ne_banding.json"),
+    "utf8",
+  ),
+);
+
+describe("fs-wasm NE + banding + missing cross-surface parity", () => {
+  it("reproduces the native score_block_pairs_fs oracle with NE + custom banding + a missing field", () => {
+    const pairs = scoreBlockPairsFs({
+      rowIds: neFixture.row_ids,
+      blockSizes: neFixture.block_sizes,
+      fieldValues: neFixture.field_values,
+      scorerIds: neFixture.scorer_ids,
+      levels: neFixture.levels,
+      partialThresholds: neFixture.partial_thresholds,
+      matchWeights: neFixture.match_weights,
+      calibrated: neFixture.calibrated,
+      priorW: neFixture.prior_w,
+      minWeight: neFixture.min_weight,
+      weightRange: neFixture.weight_range,
+      threshold: neFixture.threshold,
+      levelThresholds: neFixture.level_thresholds,
+      neValues: neFixture.ne_values,
+      neScorerIds: neFixture.ne_scorer_ids,
+      neThresholds: neFixture.ne_thresholds,
+      neWeights: neFixture.ne_weights,
+    });
+
+    const got = pairs
+      .map(([a, b, s]) => [a, b, Number(s.toFixed(6))] as const)
+      .sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+    const want = neFixture.expected_pairs
+      .map(([a, b, s]) => [a, b, Number(s.toFixed(6))] as const)
+      .sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+
+    expect(got).toEqual(want);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ADDITIVE-marshaling proof: the widened fs-wasm entry carries Fellegi-Sunter
 // negative evidence + custom level-banding through to the shared
 // `fs_core::score_fs_pair` kernel. Oracle = the pure-TS `scoreProbabilistic`
