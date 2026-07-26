@@ -257,6 +257,17 @@ class MatchkeyField(BaseModel):
         default=" ",
         description="Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long).",
     )
+    # Field-level guard: a pair-level predicate (referencing both records via
+    # `a_<col>` / `b_<col>`) that must hold for THIS field to contribute. When it
+    # fails for a pair, the field drops out of the weighted average (remaining
+    # weights renormalize). Well-defined on weighted matchkeys only; exact /
+    # probabilistic field guards raise (use the matchkey-level guard). Reuses the
+    # `when:` mini-language (core/survivorship/conditions.py). See
+    # docs/superpowers/specs/2026-07-26-guarded-matchkeys-design.md.
+    guard: str | None = Field(
+        default=None,
+        description="Pair predicate (over a_<col>/b_<col>) gating whether this field contributes; weighted matchkeys only.",
+    )
 
     @model_validator(mode="after")
     def _resolve_field_column(self) -> MatchkeyField:
@@ -556,6 +567,17 @@ class MatchkeyConfig(BaseModel):
         default=None,
         description="Fields whose disagreement penalizes the match score, catching false positives that agree on other fields.",
     )
+    # Guarded/conditional matchkey: a pair-level predicate (over a_<col>/b_<col>)
+    # that must hold for this matchkey to fire on a candidate pair. When it fails,
+    # the matchkey does not emit that pair (the pair may still match via another
+    # matchkey — a per-matchkey pre-filter, not a global veto). Valid on all three
+    # types; reuses the `when:` mini-language. A matchkey carrying a guard is
+    # routed off the vectorized fast paths onto the per-pair path (like negative
+    # evidence). Spec: docs/superpowers/specs/2026-07-26-guarded-matchkeys-design.md.
+    guard: str | None = Field(
+        default=None,
+        description="Pair predicate (over a_<col>/b_<col>) gating whether this whole matchkey fires on a pair.",
+    )
     # Fellegi-Sunter EM parameters
     em_iterations: int = Field(
         default=20,
@@ -681,6 +703,43 @@ class MatchkeyConfig(BaseModel):
                         f"field '{ne.field}' sets 'penalty', but probabilistic matchkeys use "
                         "EM-learned NE weights; set penalty_bits to override."
                     )
+        # Guards: parse + require a_/b_ prefixes at config time (column existence
+        # is checked later, where the frame's columns are known). v1 wires
+        # matchkey-level guards on exact + weighted matchkeys. Probabilistic
+        # matchkey guards and field-level guards (weighted-average
+        # drop-and-renormalize) are a planned follow-up -- reject them here so a
+        # guard is never SILENTLY ignored. Spec:
+        # docs/superpowers/specs/2026-07-26-guarded-matchkeys-design.md.
+        from goldenmatch.core.guard import GuardError, guard_columns
+
+        if self.guard is not None:
+            try:
+                guard_columns(self.guard)
+            except GuardError as exc:
+                raise ValueError(f"Matchkey '{self.name}': {exc}") from None
+            if self.type not in ("exact", "weighted"):
+                raise ValueError(
+                    f"Matchkey '{self.name}' (type={self.type!r}): matchkey-level "
+                    "guards are wired for exact and weighted matchkeys; a guard on a "
+                    "probabilistic matchkey is a planned follow-up (not yet applied). "
+                    "Guard an exact/weighted matchkey instead, or drop the guard."
+                )
+        for f in self.fields:
+            fguard = getattr(f, "guard", None)
+            if fguard is None:
+                continue
+            try:
+                guard_columns(fguard)
+            except GuardError as exc:
+                raise ValueError(
+                    f"Matchkey '{self.name}' field '{f.field}': {exc}"
+                ) from None
+            raise ValueError(
+                f"Matchkey '{self.name}' field '{f.field}': field-level guards "
+                "(dropping a field from the weighted average when its guard fails) "
+                "are a planned follow-up and not yet applied. Use the matchkey-level "
+                "'guard' to gate the whole matchkey for now."
+            )
         return self
 
     # ── Typed accessors ──

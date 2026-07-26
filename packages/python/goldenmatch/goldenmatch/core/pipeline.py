@@ -2720,6 +2720,22 @@ def _run_fused_fs_match_short_circuit(
     )
 
 
+def _collect_guard_columns(matchkeys: list) -> set[str]:
+    """Union of raw columns referenced by any matchkey- or field-level guard."""
+    from goldenmatch.core.guard import GuardError, guard_columns
+
+    cols: set[str] = set()
+    for mk in matchkeys:
+        for expr in (getattr(mk, "guard", None), *[getattr(f, "guard", None) for f in mk.fields]):
+            if not expr:
+                continue
+            try:
+                cols |= guard_columns(expr)
+            except GuardError:
+                continue  # validated at config time; ignore here
+    return cols
+
+
 def _run_dedupe_pipeline(
     combined_lf: Any,  # pl.LazyFrame (classic) | seam Frame (D2s-d2b Frame lane)
     config: GoldenMatchConfig,
@@ -2754,6 +2770,29 @@ def _run_dedupe_pipeline(
     wraps the same caller-side ``df`` in a fresh LazyFrame.
     """
     memory_store = _open_memory_store(config)
+
+    # ── Guarded-matchkey raw-value capture ──
+    # A guard is a pair predicate over RAW column values (e.g. `a_ssn !=
+    # '000-00-0000'`). The prep steps below (auto_fix / standardize / transform /
+    # quality) mutate columns in place (an SSN column can be phone-normalized to
+    # `+1000000000`), which would make guard literals unpredictable. Collect the
+    # guard-referenced columns' raw values into a Python dict NOW, before any
+    # prep, keyed by `__row_id__` -- held OUTSIDE the frame so no prep stage can
+    # touch it (an in-frame snapshot column gets normalized too, and a list-typed
+    # column breaks the quality scanner). No-op when no matchkey carries a guard.
+    _raw_guard_values: dict[str, dict[int, Any]] = {}
+    _guard_cols = _collect_guard_columns(matchkeys)
+    if _guard_cols and hasattr(combined_lf, "collect_schema"):
+        try:
+            _schema_names = set(combined_lf.collect_schema().names())
+            _want = [c for c in sorted(_guard_cols) if c in _schema_names]
+            if _want and "__row_id__" in _schema_names:
+                _snap = combined_lf.select(["__row_id__", *_want]).collect()
+                _rids = _snap["__row_id__"].to_list()
+                for c in _want:
+                    _raw_guard_values[c] = dict(zip(_rids, _snap[c].to_list()))
+        except Exception:  # noqa: BLE001 -- best-effort; guard falls back to prepared col
+            _raw_guard_values = {}
 
     # ── Attack C cache lookup (map_elements spec Tier 2): quality + transform
     # + auto-fix are deterministic in (input_lf, config.quality, config.transform,
@@ -3267,7 +3306,7 @@ def _run_dedupe_pipeline(
                 # as zero-copy int64 numpy arrays, build matched_pairs +
                 # all_pairs in one pass via vectorized minimum/maximum +
                 # bulk list-of-tuples construction.
-                if not mk.negative_evidence and not across_files_only:
+                if not mk.negative_evidence and not across_files_only and not mk.guard:
                     import numpy as _np
 
                     from goldenmatch.core.scorer import _find_exact_match_ids
@@ -3308,6 +3347,12 @@ def _run_dedupe_pipeline(
                         )
                         pairs = _apply_negative_evidence_to_exact_pairs(
                             pairs, mk, _as_polars_df(collected_df)
+                        )
+                    if mk.guard:
+                        # Guarded matchkey: drop pairs failing the pair predicate.
+                        from goldenmatch.core.scorer import _apply_guard_to_exact_pairs
+                        pairs = _apply_guard_to_exact_pairs(
+                            pairs, mk, raw_values=_raw_guard_values,
                         )
                     if across_files_only:
                         pairs = [
@@ -3365,6 +3410,11 @@ def _run_dedupe_pipeline(
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
                     )
+                    if mk.guard:
+                        from goldenmatch.core.scorer import _apply_guard_to_exact_pairs
+                        pairs = _apply_guard_to_exact_pairs(
+                            pairs, mk, raw_values=_raw_guard_values,
+                        )
                     all_pairs.extend(pairs)
                     fuzzy_pair_count += len(pairs)
                     continue  # skip the legacy build_blocks path below
@@ -3524,6 +3574,11 @@ def _run_dedupe_pipeline(
                         across_files_only=across_files_only,
                         source_lookup=source_lookup if across_files_only else None,
                         **_scorer_kwargs,  # pyright: ignore[reportArgumentType]
+                    )
+                if mk.guard:
+                    from goldenmatch.core.scorer import _apply_guard_to_exact_pairs
+                    pairs = _apply_guard_to_exact_pairs(
+                        pairs, mk, raw_values=_raw_guard_values,
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)

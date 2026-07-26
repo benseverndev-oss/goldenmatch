@@ -570,6 +570,71 @@ export function numericDiffSimilarity(a: string, b: string, scorer: string): num
   return dist >= band ? 0.0 : 1.0 - dist / band;
 }
 
+// ---------------------------------------------------------------------------
+// cosine (the `cosine` SCORER, score-core score_one id 23): vector cosine over
+// two PRECOMPUTED float-vector columns (Splink `array_cosine_similarity`). This
+// is DISTINCT from `cosineSimilarity(number[], number[])` above, which is the
+// embedder's numeric cosine used by the `embedding` scorer -- this one PARSES
+// delimited vector strings. Faithful port of Python `_cosine_similarity_py`:
+// parse each side (strip brackets, split on `,` else whitespace), cosine, clamp
+// [0,1]; unparseable / length-mismatch / zero-norm -> exact-string equality
+// (never null for non-null input). No mode/param, so score-core id 23 covers it.
+// ---------------------------------------------------------------------------
+
+/** Parse a delimited float vector, mirroring Python `_parse_vector`: strip outer
+ *  brackets/braces, split on `,` if present else whitespace, drop empty tokens;
+ *  null on empty result or any non-finite component. */
+const _COSINE_BRACKETS = "[](){}";
+
+/** Strip any leading/trailing bracket/brace chars — a linear char-scan (NOT a
+ *  regex, to avoid a polynomial-regex ReDoS finding), matching Python
+ *  `str.strip("[](){}")` and Rust `trim_matches`. */
+function stripCosineBrackets(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && _COSINE_BRACKETS.includes(s[start]!)) start++;
+  while (end > start && _COSINE_BRACKETS.includes(s[end - 1]!)) end--;
+  return s.slice(start, end);
+}
+
+function parseCosineVector(s: string): number[] | null {
+  const inner = stripCosineBrackets(s.trim()).trim();
+  if (inner === "") return null;
+  const parts = inner.includes(",") ? inner.split(",") : inner.split(/\s+/);
+  const v: number[] = [];
+  for (const p of parts) {
+    const t = p.trim();
+    if (t === "") continue;
+    const x = Number(t);
+    if (!Number.isFinite(x)) return null;
+    v.push(x);
+  }
+  return v.length === 0 ? null : v;
+}
+
+/** Vector cosine similarity (score-core score_one id 23), clamped to [0,1];
+ *  exact-string fallback on parse failure / length mismatch / zero norm. */
+export function vectorCosineSimilarity(a: string, b: string): number {
+  const va = parseCosineVector(a);
+  const vb = parseCosineVector(b);
+  if (va === null || vb === null || va.length !== vb.length) {
+    return a === b ? 1.0 : 0.0;
+  }
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < va.length; i++) {
+    const x = va[i]!;
+    const y = vb[i]!;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  if (denom === 0) return a === b ? 1.0 : 0.0;
+  return Math.min(1.0, Math.max(0.0, dot / denom));
+}
+
 /**
  * Indel (insertion+deletion) edit distance.
  *
@@ -1128,6 +1193,8 @@ export function scoreField(
       return dateDiffSimilarity(valA, valB);
     case "geo_haversine":
       return geoHaversineSimilarity(valA, valB);
+    case "cosine":
+      return vectorCosineSimilarity(valA, valB);
     case "token_sort":
       return tokenSortRatio(valA, valB);
     case "soundex_match":

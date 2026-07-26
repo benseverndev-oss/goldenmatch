@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 405,
+      "module_count": 419,
       "modules": [
         {
           "module": "goldenmatch",
@@ -591,6 +591,22 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.import_dbt",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/import_dbt.py",
+          "purpose": "CLI command: distill a hand-rolled dbt project's ER logic into a config.",
+          "defines": [
+            "_render_report_table",
+            "_render_verify_table",
+            "_run_verify",
+            "import_dbt_cmd"
+          ],
+          "imports": [
+            "goldenmatch.config.dbt_verify",
+            "goldenmatch.config.from_dbt",
+            "goldenmatch.config.from_splink"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.import_splink",
           "file": "packages/python/goldenmatch/goldenmatch/cli/import_splink.py",
           "purpose": "CLI command: convert a Splink settings or trained-model JSON file into a",
@@ -598,12 +614,15 @@
             "_baseline_path",
             "_render_delta_table",
             "_render_report_table",
+            "_render_verify_table",
+            "_run_verify",
             "_write_pair",
             "import_splink_cmd"
           ],
           "imports": [
             "goldenmatch.config.from_splink",
-            "goldenmatch.config.splink_upgrade"
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_verify"
           ]
         },
         {
@@ -695,6 +714,7 @@
             "goldenmatch.cli.evaluate",
             "goldenmatch.cli.explain",
             "goldenmatch.cli.identity",
+            "goldenmatch.cli.import_dbt",
             "goldenmatch.cli.import_splink",
             "goldenmatch.cli.incremental",
             "goldenmatch.cli.ingest_docs",
@@ -703,6 +723,7 @@
             "goldenmatch.cli.match",
             "goldenmatch.cli.mcp_serve",
             "goldenmatch.cli.memory",
+            "goldenmatch.cli.migrate_splink",
             "goldenmatch.cli.pprl",
             "goldenmatch.cli.review",
             "goldenmatch.cli.rollback",
@@ -770,6 +791,22 @@
           "imports": [
             "goldenmatch",
             "goldenmatch.core.memory.store"
+          ]
+        },
+        {
+          "module": "goldenmatch.cli.migrate_splink",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/migrate_splink.py",
+          "purpose": "CLI command: one-shot Splink migration -- convert, verify, and run.",
+          "defines": [
+            "_run_and_write",
+            "_write_output",
+            "migrate_splink_cmd"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.cli.import_splink",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.splink_upgrade"
           ]
         },
         {
@@ -925,18 +962,77 @@
           "file": "packages/python/goldenmatch/goldenmatch/config/__init__.py"
         },
         {
+          "module": "goldenmatch.config.dbt_verify",
+          "file": "packages/python/goldenmatch/goldenmatch/config/dbt_verify.py",
+          "purpose": "Auto-verify a dbt -> GoldenMatch conversion against the pipeline's own output.",
+          "defines": [
+            "DbtVerification",
+            "_load_output_mapping",
+            "_multi_cluster_count",
+            "verify_against_dbt"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_upgrade_measure"
+          ]
+        },
+        {
+          "module": "goldenmatch.config.from_dbt",
+          "file": "packages/python/goldenmatch/goldenmatch/config/from_dbt.py",
+          "purpose": "Hand-rolled dbt -> GoldenMatch config converter (distill + verify).",
+          "defines": [
+            "DbtConversion",
+            "DbtConversionCoverage",
+            "DbtConversionError",
+            "ErModel",
+            "RecognizedSignal",
+            "_balanced_args",
+            "_blocking_signal_from_cols",
+            "_build_coverage",
+            "_col_field",
+            "_emit_config",
+            "_emit_survivorship",
+            "_fuzzy_from_match",
+            "_fuzzy_predicate_re",
+            "_load_catalog",
+            "_load_manifest",
+            "_manifest_dialect",
+            "_model_columns",
+            "_name_signal",
+            "_order_by_survivorship",
+            "_shape_signal",
+            "_split_top_level",
+            "_unique_test_columns",
+            "_unwrap_column",
+            "extract_signals",
+            "from_dbt",
+            "identify_er_models"
+          ],
+          "imports": [
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core._paths"
+          ]
+        },
+        {
           "module": "goldenmatch.config.from_splink",
           "file": "packages/python/goldenmatch/goldenmatch/config/from_splink.py",
           "purpose": "Splink -> GoldenMatch config converter.",
           "defines": [
             "ConversionFinding",
             "ConversionReport",
+            "CoverageSummary",
             "RecognizedLevel",
             "SplinkConversion",
             "SplinkConversionError",
+            "SplinkLinkerLike",
             "_BlockConjunct",
             "_agree_index_for",
             "_convert_one_blocking_rule",
+            "_extract_linker_settings",
             "_findings_preview",
             "_fmt_band",
             "_load_settings",
@@ -944,6 +1040,7 @@
             "_looks_like_haversine",
             "_patch_field_placeholders",
             "_recognize_blocking_conjunct",
+            "_recognize_forename_surname",
             "_strip_outer_parens",
             "convert_blocking",
             "convert_comparison",
@@ -1020,6 +1117,7 @@
           ],
           "imports": [
             "goldenmatch.core.autoconfig_verify",
+            "goldenmatch.core.guard",
             "goldenmatch.plugins.registry"
           ]
         },
@@ -1122,6 +1220,27 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.config.splink_upgrade"
+          ]
+        },
+        {
+          "module": "goldenmatch.config.splink_verify",
+          "file": "packages/python/goldenmatch/goldenmatch/config/splink_verify.py",
+          "purpose": "Auto-verify a Splink -> GoldenMatch conversion against a locally-installed Splink.",
+          "defines": [
+            "SplinkVerification",
+            "_multi_cluster_count",
+            "_run_goldenmatch",
+            "_run_splink",
+            "_splink_available",
+            "verify_against_splink"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_upgrade_measure",
+            "goldenmatch.core.probabilistic"
           ]
         },
         {
@@ -2767,6 +2886,67 @@
           ]
         },
         {
+          "module": "goldenmatch.core.er_matcher",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/__init__.py",
+          "purpose": "OSS ER-matcher LLM boost (spec/plan 2026-07-26).",
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.client",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/client.py",
+          "purpose": "Local ER-matcher client (P6, Path A).",
+          "defines": [
+            "LocalMatcherClient",
+            "_extract_text",
+            "_urllib_post"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.prompt",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/prompt.py",
+          "purpose": "Prompt / serializer / verdict-parser for the OSS ER-matcher LLM boost.",
+          "defines": [
+            "_norm_cell",
+            "build_chat",
+            "parse_verdict",
+            "render_target",
+            "serialize_pair_v1"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.registry",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/registry.py",
+          "purpose": "Pinned model registry for the OSS ER-matcher (P6).",
+          "defines": [
+            "ModelSpec",
+            "cache_dir",
+            "resolve_model",
+            "sha256_file",
+            "verify"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.serve_local",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/serve_local.py",
+          "purpose": "Launch a local OpenAI-compatible ER-matcher server (P6, Path A).",
+          "defines": [
+            "_have_server",
+            "build_server_argv",
+            "main"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.registry"
+          ]
+        },
+        {
           "module": "goldenmatch.core.evaluate",
           "file": "packages/python/goldenmatch/goldenmatch/core/evaluate.py",
           "purpose": "Evaluation engine -- precision, recall, F1 from ground truth pairs.",
@@ -2931,7 +3111,8 @@
             "build_golden_records_df",
             "build_golden_records_from_frames",
             "golden_records_to_provenance",
-            "merge_field"
+            "merge_field",
+            "most_complete_value"
           ],
           "imports": [
             "goldenmatch._polars_lazy",
@@ -3086,6 +3267,21 @@
             "goldenmatch.core.collective",
             "goldenmatch.core.ingest",
             "goldenmatch.core.pipeline"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.guard",
+          "file": "packages/python/goldenmatch/goldenmatch/core/guard.py",
+          "purpose": "Guarded / conditional matchkeys — pair-predicate evaluation.",
+          "defines": [
+            "GuardError",
+            "guard_columns",
+            "guard_passes",
+            "pair_resolved",
+            "validate_guard"
+          ],
+          "imports": [
+            "goldenmatch.core.survivorship.conditions"
           ]
         },
         {
@@ -3569,6 +3765,7 @@
             "_as_polars_df",
             "_build_em_blocks",
             "_cast_user_cols_to_str",
+            "_collect_guard_columns",
             "_columnar_pipeline_enabled",
             "_default_distributed_partitions",
             "_derive_review_queue_path",
@@ -3652,6 +3849,7 @@
             "goldenmatch.core.golden",
             "goldenmatch.core.golden_fused",
             "goldenmatch.core.golden_rules_refiner",
+            "goldenmatch.core.guard",
             "goldenmatch.core.ingest",
             "goldenmatch.core.lineage",
             "goldenmatch.core.llm_budget",
@@ -4065,6 +4263,7 @@
             "__getattr__",
             "_alias_match_single",
             "_alias_score_matrix",
+            "_apply_guard_to_exact_pairs",
             "_apply_negative_evidence",
             "_apply_negative_evidence_to_exact_pairs",
             "_array_intersect_similarity_py",
@@ -4145,6 +4344,7 @@
             "goldenmatch.core.cross_encoder",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
+            "goldenmatch.core.guard",
             "goldenmatch.core.matchkey",
             "goldenmatch.core.perceptual",
             "goldenmatch.core.profile_emitter",
@@ -4756,6 +4956,15 @@
           "module": "goldenmatch.db.alembic.versions.0004_claim_authority",
           "file": "packages/python/goldenmatch/goldenmatch/db/alembic/versions/0004_claim_authority.py",
           "purpose": "Claim-authority tier: claim_type + evidence_ref + previous_claim_id.",
+          "defines": [
+            "downgrade",
+            "upgrade"
+          ]
+        },
+        {
+          "module": "goldenmatch.db.alembic.versions.0005_record_block_keys",
+          "file": "packages/python/goldenmatch/goldenmatch/db/alembic/versions/0005_record_block_keys.py",
+          "purpose": "Persisted blocking index for incremental resolution (C2).",
           "defines": [
             "downgrade",
             "upgrade"
@@ -5629,6 +5838,26 @@
           ]
         },
         {
+          "module": "goldenmatch.identity.block_index",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/block_index.py",
+          "purpose": "Block-key computation + population for the persisted blocking index (C2).",
+          "defines": [
+            "_pass_signature",
+            "_passes_of",
+            "backfill_block_index",
+            "compute_frame_block_keys",
+            "compute_record_block_keys"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.blocker",
+            "goldenmatch.core.frame",
+            "goldenmatch.identity.resolve",
+            "goldenmatch.identity.store"
+          ]
+        },
+        {
           "module": "goldenmatch.identity.fingerprint_batch",
           "file": "packages/python/goldenmatch/goldenmatch/identity/fingerprint_batch.py",
           "purpose": "Batch record fingerprinting for identity id derivation.",
@@ -5783,6 +6012,19 @@
           ]
         },
         {
+          "module": "goldenmatch.identity.resolution_batch",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py",
+          "purpose": "The versioned compute->control seam contract (Wave C, milestone C1).",
+          "defines": [
+            "ResolutionBatch",
+            "_default_flush_rows",
+            "bulk_fast_path_enabled"
+          ],
+          "imports": [
+            "goldenmatch.identity.resolve"
+          ]
+        },
+        {
           "module": "goldenmatch.identity.resolve",
           "file": "packages/python/goldenmatch/goldenmatch/identity/resolve.py",
           "purpose": "Identity resolution -- map run-local clusters to durable identity_ids.",
@@ -5792,6 +6034,7 @@
             "_bulk_fast_path_enabled",
             "_bulk_flush_rows",
             "_cluster_confidence",
+            "_exact_match_rows",
             "_frames_iter",
             "_golden_record_from_members",
             "_golden_record_from_payloads",
@@ -5801,6 +6044,7 @@
             "_node_age",
             "_record_id_candidates",
             "_referenced_row_ids",
+            "_resolve_via_index",
             "_row_to_payload",
             "derive_record_id",
             "match_record_to_entity",
@@ -5814,9 +6058,13 @@
             "goldenmatch.core.cluster",
             "goldenmatch.core.cluster_pairscores",
             "goldenmatch.core.frame",
+            "goldenmatch.core.golden",
             "goldenmatch.core.match_one",
+            "goldenmatch.core.matchkey",
+            "goldenmatch.identity.block_index",
             "goldenmatch.identity.fingerprint_batch",
             "goldenmatch.identity.model",
+            "goldenmatch.identity.resolution_batch",
             "goldenmatch.identity.store"
           ]
         },
@@ -11430,9 +11678,14 @@
         {
           "module": "infermap.assignment",
           "file": "packages/python/infermap/infermap/assignment.py",
-          "purpose": "Optimal assignment via the Hungarian algorithm.",
+          "purpose": "Optimal 1:1 assignment via the Hungarian algorithm.",
           "defines": [
+            "_linear_sum_assignment",
+            "_lsa_pure",
             "optimal_assign"
+          ],
+          "imports": [
+            "infermap._native_loader"
           ]
         },
         {

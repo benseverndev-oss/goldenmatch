@@ -325,6 +325,17 @@ pub fn numeric_diff_similarity(a: &str, b: &str, spec: &str) -> f64 {
     goldenmatch_score_core::numeric_diff_similarity(a, b, spec)
 }
 
+/// Vector cosine similarity over two precomputed float-vector columns (score-core
+/// id 23). Own #[pyfunction] capability marker like `numeric_diff_similarity`;
+/// cosine has no mode/param, so score_one(23) covers it fully. A stale wheel
+/// lacking the symbol declines to the pure-Python mirror (`_cosine_similarity_py`)
+/// -- the Python caller gates the native route on
+/// `hasattr(_native, "cosine_similarity")`.
+#[pyfunction]
+pub fn cosine_similarity(a: &str, b: &str) -> f64 {
+    goldenmatch_score_core::cosine_similarity(a, b)
+}
+
 /// Character-trigram Jaccard (q-gram) similarity (score-core id 5). Exposed as
 /// its own #[pyfunction] capability marker, exactly like `date_similarity`:
 /// `score_one` / `score_block_pairs` dispatch id 5, but a stale published wheel

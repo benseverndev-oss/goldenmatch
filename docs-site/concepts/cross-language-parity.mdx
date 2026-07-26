@@ -30,7 +30,7 @@ architectural boundary), not assumed.
 | **`score → cluster`** (scored pairs → clusters) | ✅ **Byte-safe (measured)** | Identical scored pairs produce the identical cluster partition across languages — including the oversized-cluster MST auto-split, even with tied weakest edges. |
 | **End-to-end split-run** (Python `standardize→block→score` → TS `cluster`) | ✅ **Reproduces the single-language run (measured)** | A real half-Python/half-TS pipeline reaches the same clusters as an all-Python run; an independent all-TS run agreed on the test dataset (0 threshold flips). |
 | **Cluster JSON**, **config YAML**, **Learning Memory**, **run log**, **`record_fingerprint`** | ✅ **Portable** | Language-neutral formats with shared parsers / stable hashing. |
-| **String scoring** (a scorer's numeric score) | 🟡 **Tolerance-bounded (4 decimals)** | Scores agree to 4 dp — a pair sitting *exactly* on a threshold can flip the match. Byte-identical only when the shared Rust/WASM scorer is enabled. |
+| **String scoring** (a scorer's numeric score) | 🟡 **Tolerance-bounded (4 decimals)** | Scores agree to 4 dp — a pair sitting *exactly* on a threshold can flip the match. Byte-identical with the shared Rust/WASM scorer for the byte-exact scorers (`jaro_winkler` / `levenshtein` / `token_sort` / `exact` / `date` / `qgram`); `ensemble`, `radial`, and the name scorers stay ~4 dp **even with WASM** (reduction/recomposition order). |
 | **Standardize / transforms** | 🟠 **Divergent — not byte-portable** | Different standardizer implementations; **dates cannot be byte-ported** (`dateutil` fuzzy parsing vs a `chrono`-style parser). |
 | **Embeddings** | 🟠 **Cosine-tolerance only** | The TS port has no PyTorch/Vertex; vectors are caller-supplied and agree to ~1e-7 cosine, not byte-for-byte. |
 | **Auto-config / controller commit** | 🟠 **Structural, not byte-equal** | The controller can commit a *different* config on the same data across languages. |
@@ -59,9 +59,12 @@ concrete:
 - **Prefer the `cluster` or `identity` boundary** for cross-language hand-off —
   both are byte-safe.
 - If you must hand off at the **`score`** boundary, enable the shared WASM scorer
-  on the TypeScript side (byte-identical for the covered scorers:
-  `jaro_winkler` / `levenshtein` / `token_sort` / `exact`, plus Fellegi–Sunter via
-  `fs-wasm`) and **avoid re-thresholding** across the boundary.
+  on the TypeScript side (byte-identical only for the byte-exact covered scorers:
+  `jaro_winkler` / `levenshtein` / `token_sort` / `exact`) and **avoid
+  re-thresholding** across the boundary. Note: the default TS Fellegi–Sunter path
+  is pure-TS `probabilistic.ts`, **not** `fs-wasm` (that kernel ships and is
+  parity-gated but has no pipeline caller yet), so FS scoring is at the 4-dp
+  tolerance, not byte-identical.
 - **Do not** split a pipeline across `standardize` / dates, embeddings, or the
   auto-config controller and expect bit-exact reproduction. Run those phases in a
   single language, then hand off the durable artifact.

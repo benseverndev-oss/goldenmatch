@@ -266,7 +266,18 @@ class _SQLiteBackend:
 
     def _connect(self) -> sqlite3.Connection:
         import sqlite3  # noqa: PLC0415 -- lazy, see #364
-        return sqlite3.connect(str(self._db_path))
+        # #130 class: the default journal_mode=delete intermittently raises
+        # "database is locked" under parallel load (as MemoryStore already
+        # found and fixed the same way). WAL (one writer + concurrent readers)
+        # plus a generous busy_timeout make these per-call connections robust
+        # when the disk is saturated -- e.g. the full CI matrix under `-n auto`,
+        # where a swallowed enqueue failure otherwise flakes the memory e2e
+        # review-queue assertions. WAL is persisted per-database; busy_timeout
+        # is per-connection, so both are (re)applied on every connect.
+        con = sqlite3.connect(str(self._db_path), timeout=30.0)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=30000")
+        return con
 
     def _init_db(self) -> None:
         con = self._connect()

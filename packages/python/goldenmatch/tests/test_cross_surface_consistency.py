@@ -65,6 +65,9 @@ class TestNativeScorerIdMaps:
         # scorers (not score_one arms). The parameterized abs/pct forms ride the
         # spec on the per-pair path, not a fixed id.
         "numeric_diff": 22,
+        # id 23 = cosine (vector cosine over two precomputed float-vector columns).
+        # No mode/param, so the fixed id covers it fully (a real score_one arm).
+        "cosine": 23,
     }
     _FIELD_MATRIX_IDS = {"jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3, "soundex_match": 4}
 

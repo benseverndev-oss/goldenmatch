@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies", "scorer_kernels")
+SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies", "scorer_kernels", "analyzers")
 
 # ADVISORY (non-gating) SQL surfaces: the Postgres (pgrx) + DuckDB function
 # inventories. These give VISIBILITY into whether the SQL surfaces track the
@@ -66,7 +66,16 @@ def check_structure(manifest: dict) -> list[ParityFailure]:
         # `scorer_kernels_deferred` is a classification MAP (scorer -> reason),
         # not a shared/python_only/ts_only partition surface; its shape is
         # validated by check_scorer_coverage, so skip the partition checks here.
-        if surface in ("scorer_kernels_deferred", "blocking_kernels_deferred"):
+        # `frame_kernels_deferred` is the same idiom for the goldenanalysis frame
+        # kernels (distinct/null_ratio/duplicate_row_ratio): the counting is in
+        # analysis-core but the Arrow-bound interning has no clean WASM boundary
+        # (Wave 1b deferred), so the TS<->Python boundary is locked by an
+        # adversarial fixture, not a shared kernel -- declared here at the surface.
+        if surface in (
+            "scorer_kernels_deferred",
+            "blocking_kernels_deferred",
+            "frame_kernels_deferred",
+        ):
             continue
         # Advisory SQL inventory surfaces are `{functions: [...]}`, not
         # shared/python_only/ts_only partitions — checked by check_sql_advisory.

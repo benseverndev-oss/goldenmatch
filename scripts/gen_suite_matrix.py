@@ -88,7 +88,7 @@ def _a2a_skills(pkg: str) -> int | None:
     return None
 # The cross-language surfaces the parity manifests partition, in render order.
 # (blocking_strategies joins once the api_parity manifest declares it.)
-PARITY_SURFACES = ["mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms"]
+PARITY_SURFACES = ["mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "analyzers"]
 
 
 def _load_parity(pkg: str) -> dict:

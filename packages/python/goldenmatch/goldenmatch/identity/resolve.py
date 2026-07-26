@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from goldenmatch.config.schemas import MatchkeyConfig
     from goldenmatch.core.cluster import ClusterFrames
     from goldenmatch.core.cluster_pairscores import ClusterPairScores
+    from goldenmatch.identity.resolution_batch import ResolutionBatch
 
 from goldenmatch.core._hashing import record_fingerprint
 from goldenmatch.identity.fingerprint_batch import (
@@ -243,9 +244,14 @@ def _golden_record_from_members(
 ) -> dict[str, Any]:
     """Roll up cluster members into a single representative row (most-complete).
 
-    A5: seam-driven both lanes (column reads + Python folds).
+    A5: seam-driven both lanes (column reads + Python folds). The per-column
+    rollup rule (longest non-null string, ties by input order) is
+    single-sourced through ``core.golden.most_complete_value`` -- the same
+    ``most_complete`` implementation the config-driven pipeline + the
+    survivorship provenance layer use -- instead of a hand-rolled loop (T1).
     """
     from goldenmatch.core.frame import to_frame
+    from goldenmatch.core.golden import most_complete_value
 
     members = to_frame(df).filter_in("__row_id__", row_ids)
     if members.height == 0:
@@ -254,31 +260,32 @@ def _golden_record_from_members(
     for col in members.columns:
         if col.startswith("__"):
             continue
-        non_null = [v for v in members.column(col).to_list() if v is not None]
-        if not non_null:
+        col_values = members.column(col).to_list()
+        if all(v is None for v in col_values):
             continue
-        # Pick the longest non-null string representation (most-complete)
-        values = [(str(v), v) for v in non_null]
-        values.sort(key=lambda x: len(x[0]), reverse=True)
-        out[col] = values[0][1]
+        out[col] = most_complete_value(col_values)
     return out
 
 
 def _golden_record_from_payloads(
     payload_by_row_id: dict[int, dict[str, Any]], row_ids: list[int]
 ) -> dict[str, Any]:
-    """Roll up pre-indexed member payloads without re-scanning the frame."""
+    """Roll up pre-indexed member payloads without re-scanning the frame.
+
+    Same ``most_complete`` rule as ``_golden_record_from_members``, single-
+    sourced through ``core.golden.most_complete_value`` (T1).
+    """
+    from goldenmatch.core.golden import most_complete_value
+
     members = [payload_by_row_id[row_id] for row_id in row_ids if row_id in payload_by_row_id]
     if not members:
         return {}
     out: dict[str, Any] = {}
     for col in members[0]:
-        non_null = [member[col] for member in members if member.get(col) is not None]
-        if not non_null:
+        col_values = [member.get(col) for member in members]
+        if all(v is None for v in col_values):
             continue
-        values = [(str(value), value) for value in non_null]
-        values.sort(key=lambda item: len(item[0]), reverse=True)
-        out[col] = values[0][1]
+        out[col] = most_complete_value(col_values)
     return out
 
 
@@ -388,6 +395,7 @@ def resolve_clusters(
     pair_score_view: ClusterPairScores | None = None,
     cluster_frames: ClusterFrames | None = None,
     actor: str = "pipeline",
+    batch: ResolutionBatch | None = None,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
 
@@ -417,6 +425,29 @@ def resolve_clusters(
         raise ValueError("resolve_clusters requires `df` and `store`")
     if scored_pairs is None:
         scored_pairs = []
+
+    # Wave C / C1: the metadata + config half of the compute->control seam is a
+    # versioned ResolutionBatch (identity-control-plane-manifesto.md §3). A caller
+    # may pass one (authoritative); otherwise it is built from the loose kwargs, so
+    # every current caller is byte-identical. The body below reads the rebound
+    # locals exactly as before; ``flush_rows`` is now a contract term, not a bare
+    # env read.
+    from goldenmatch.identity.resolution_batch import ResolutionBatch as _RB
+    if batch is None:
+        batch = _RB.from_args(
+            run_id=run_name, dataset=dataset, matchkey_name=matchkey_name,
+            source_pk_col=source_pk_col, controller_snapshot=controller_snapshot,
+            actor=actor, emit_singletons=emit_singletons,
+            weak_confidence_threshold=weak_confidence_threshold,
+        )
+    run_name = batch.run_id
+    dataset = batch.dataset
+    matchkey_name = batch.matchkey_name
+    source_pk_col = batch.source_pk_col
+    controller_snapshot = batch.controller_snapshot
+    actor = batch.actor
+    emit_singletons = batch.emit_singletons
+    weak_confidence_threshold = batch.weak_confidence_threshold
 
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
@@ -560,15 +591,16 @@ def resolve_clusters(
     # ~6 statements per cluster. The accumulators are flushed in bounded batches
     # (``_bulk_flush_rows``) so the write side stays O(batch), not O(N) -- it
     # does not add a second frame-residency term on top of the prep floor that
-    # ``emit_singletons=True`` already carries. The SQLite bulk path carries
-    # source-record + event payloads (byte-identical to the per-row path); only
-    # the edge provenance columns the Postgres COPY path already omits are left
-    # NULL.
+    # ``emit_singletons=True`` already carries. Both bulk backends now carry
+    # source-record + event payloads AND edge provenance (controller_snapshot /
+    # actor / trust) byte-identical to the per-row path; only field_scores /
+    # negative_evidence are left NULL on a brand-new same_as edge, because the
+    # per-row path does not set them there either.
     _bulk_backend = getattr(store, "_backend", None)
     use_bulk_fast_path = (
         _bulk_backend in ("postgres", "sqlite") and _bulk_fast_path_enabled()
     )
-    bulk_flush_threshold = _bulk_flush_rows()
+    bulk_flush_threshold = batch.flush_rows
     bulk_node_rows: list[dict[str, Any]] = []
     bulk_record_rows: list[dict[str, Any]] = []
     bulk_edge_rows: list[dict[str, Any]] = []
@@ -753,10 +785,10 @@ def resolve_clusters(
                             "source_pk": rowid_to_pk[member],
                             "record_hash": rowid_to_hash[member],
                             "entity_id": entity_id,
-                            # Carry the payload so the SQLite bulk path is
-                            # byte-identical to the per-row upsert_record (which
-                            # stores json.dumps(payload)). Postgres selects its
-                            # own leaner column list and ignores this.
+                            # Carry the payload so the bulk path is byte-identical
+                            # to the per-row upsert_record (which stores
+                            # json.dumps(payload)) on BOTH SQLite and Postgres --
+                            # source_records has the payload column on each.
                             "payload": (
                                 json.dumps(payload) if payload is not None else None
                             ),
@@ -793,8 +825,9 @@ def resolve_clusters(
                             # Edge provenance the per-row add_edge records
                             # (controller_snapshot / actor / trust). SQLite users
                             # have contract tests asserting these on edges, so the
-                            # bulk path must carry them; Postgres selects its own
-                            # leaner column list and ignores them.
+                            # bulk path must carry them -- and the Postgres bulk
+                            # path now carries them too (evidence_edges has the
+                            # columns on both backends).
                             "controller_snapshot": (
                                 json.dumps(controller_snapshot)
                                 if controller_snapshot else None
@@ -1123,6 +1156,40 @@ def _node_age(
 # identically to a batch run -- none of that logic is re-implemented here.
 
 
+def _exact_match_rows(
+    record: dict[str, Any], df: pl.DataFrame, mk: MatchkeyConfig
+) -> dict[int, float]:
+    """Existing ``__row_id__``s that EXACTLY match ``record`` on an exact
+    matchkey (score 1.0) -- closes the ``match_one`` exact-matchkey gap (C2
+    slice 3b, manifesto §4(ii)).
+
+    ``match_one`` returns ``[]`` for exact matchkeys (``threshold is None``), so
+    an exact-only incremental resolve never matched anything. This computes the
+    record's matchkey key with the SAME ``build_matchkey_expr`` the batch
+    pipeline uses (field transforms + ``||`` concat), then finds every df row
+    sharing that key. Null/blank keys match nothing (the pipeline's own
+    ``filter_nonblank_key`` invariant -- two records both missing a field are
+    NOT an exact match). A field absent from the record or the frame -> no match.
+    """
+    from goldenmatch.core.matchkey import build_matchkey_expr
+
+    fields = [f.field for f in mk.fields]
+    if not fields or any(record.get(f) is None for f in fields):
+        return {}
+    if any(f not in df.columns for f in fields):
+        return {}
+    alias = f"__mk_{mk.name}__"
+    expr = build_matchkey_expr(mk)
+    # The record's key: build_matchkey_expr casts each field to Utf8, so a raw
+    # int record value keys identically to a stringified frame value.
+    rec_frame = pl.DataFrame([{f: record.get(f) for f in fields}])
+    key = rec_frame.select(expr).to_series()[0]
+    if key is None or str(key).strip() == "":
+        return {}
+    keyed = df.select(["__row_id__", expr]).filter(pl.col(alias) == key)
+    return {int(r): 1.0 for r in keyed["__row_id__"].to_list()}
+
+
 def _match_record_rows(
     record: dict[str, Any],
     df: pl.DataFrame,
@@ -1137,22 +1204,26 @@ def _match_record_rows(
     """Best score per existing ``__row_id__`` the record matches, across all
     matchkeys.
 
-    Uses ``match_one`` per matchkey, so it covers the threshold-bearing matchkey
-    types (weighted / probabilistic / fuzzy). Exact matchkeys (``threshold is
-    None``) contribute nothing -- ``match_one`` returns ``[]`` for them; an
-    exact-only incremental path is a follow-up. A failing matchkey is skipped
-    (logged), never fatal.
+    Threshold-bearing matchkeys (weighted / probabilistic / fuzzy) go through
+    ``match_one``; exact matchkeys (``type == "exact"``, ``threshold is None``)
+    go through ``_exact_match_rows`` (``match_one`` returns ``[]`` for them). A
+    failing matchkey is skipped (logged), never fatal.
     """
     from goldenmatch.core.match_one import match_one
 
     best: dict[int, float] = {}
     for mk in matchkeys or []:
         try:
-            hits = match_one(
-                record, df, mk,
-                ann_blocker=ann_blocker, embedder=embedder,
-                ann_column=ann_column, top_k=top_k, store=base_store,
-            )
+            if getattr(mk, "type", None) == "exact":
+                hits: list[tuple[int, float]] = list(
+                    _exact_match_rows(record, df, mk).items()
+                )
+            else:
+                hits = match_one(
+                    record, df, mk,
+                    ann_blocker=ann_blocker, embedder=embedder,
+                    ann_column=ann_column, top_k=top_k, store=base_store,
+                )
         except Exception:
             log.warning(
                 "match_one failed for matchkey %r; skipping",
@@ -1224,9 +1295,130 @@ def match_record_to_entity(
     return out
 
 
+def _resolve_via_index(
+    record: dict[str, Any],
+    blocking: Any,  # BlockingConfig
+    matchkeys: list[MatchkeyConfig],
+    store: IdentityStore,
+    run_name: str,
+    *,
+    source: str,
+    source_pk_col: str | None,
+    dataset: str | None,
+    ann_blocker: Any,
+    embedder: Any,
+    ann_column: str | None,
+    top_k: int,
+    base_store: Any,
+) -> str | None:
+    """Incremental resolution against the PERSISTED block-key index (C2 slice 3,
+    manifesto §4(ii)) -- the bidirectional seam. Instead of re-blocking the whole
+    in-RAM corpus, it:
+
+      1. computes the new record's block keys (stateless compute);
+      2. queries the store index for candidate record_ids (control read);
+      3. gathers ONLY those candidates' rows from the store payloads;
+      4. scores + resolves the new record against that bounded candidate frame;
+      5. indexes the new record's block keys (self-population, so the next
+         record finds it).
+
+    No full-corpus materialization. Record ids are PK-based (``source_pk_col``),
+    so the candidate frame can be all-string without shifting any record id.
+    Covers both exact matchkeys (via ``_exact_match_rows``) and the
+    threshold-bearing types (via ``match_one``). Falls back to a create-only
+    path when there are no candidates.
+    """
+    from goldenmatch.identity.block_index import compute_record_block_keys
+
+    keys = compute_record_block_keys(record, blocking)
+    candidate_rids = sorted(store.candidates_by_block_keys(keys)) if keys else []
+
+    # Gather candidate rows from the store payloads (NOT a corpus frame).
+    cand_rows: list[dict[str, Any]] = []
+    for rid in candidate_rids:
+        rec = store.get_record(rid)
+        if rec is None:
+            continue
+        row = {
+            k: (None if v is None else str(v))
+            for k, v in (rec.payload or {}).items()
+        }
+        row["__source__"] = rec.source
+        cand_rows.append(row)
+
+    # Column union (record + candidates); all Utf8 (PK-based ids are dtype-safe).
+    field_cols: set[str] = {k for k in record if not k.startswith("__")}
+    for r in cand_rows:
+        field_cols.update(k for k in r if not k.startswith("__"))
+    ordered = ["__row_id__", "__source__", *sorted(field_cols)]
+    schema = {c: (pl.Int64 if c == "__row_id__" else pl.Utf8) for c in ordered}
+
+    for i, r in enumerate(cand_rows):
+        r["__row_id__"] = i
+    new_rid = len(cand_rows)
+    new_row: dict[str, Any] = {"__row_id__": new_rid, "__source__": source}
+    for c in field_cols:
+        v = record.get(c)
+        new_row[c] = None if v is None else str(v)
+
+    def _norm(r: dict[str, Any]) -> dict[str, Any]:
+        return {c: r.get(c) for c in ordered}
+
+    cand_frame = (
+        pl.DataFrame([_norm(r) for r in cand_rows], schema=schema)
+        if cand_rows else pl.DataFrame(schema=schema)
+    )
+
+    # Score the new record against the bounded candidate frame (not the corpus).
+    matches = _match_record_rows(
+        record, cand_frame, matchkeys,
+        ann_blocker=ann_blocker, embedder=embedder,
+        ann_column=ann_column, top_k=top_k, base_store=base_store,
+    )
+    matched_ids = [int(m) for m in matches]
+
+    matched_frame = (
+        cand_frame.filter(pl.col("__row_id__").is_in(matched_ids))
+        if matched_ids else None
+    )
+    mini_plus = (
+        pl.concat([matched_frame, pl.DataFrame([_norm(new_row)], schema=schema)])
+        if matched_frame is not None and not matched_frame.is_empty()
+        else pl.DataFrame([_norm(new_row)], schema=schema)
+    )
+
+    members = [new_rid, *matched_ids]
+    pair_scores = {
+        (min(new_rid, m), max(new_rid, m)): float(s) for m, s in matches.items()
+    }
+    clusters = {
+        0: {
+            "members": members,
+            "size": len(members),
+            "pair_scores": pair_scores,
+            "confidence": min(matches.values()) if matches else None,
+        }
+    }
+    scored_pairs = [(new_rid, m, float(s)) for m, s in matches.items()]
+    mk_name = getattr(matchkeys[0], "name", None) if matchkeys else None
+    resolve_clusters(
+        clusters=clusters, df=mini_plus, scored_pairs=scored_pairs,
+        matchkey_name=mk_name, store=store, run_name=run_name, dataset=dataset,
+        source_pk_col=source_pk_col, emit_singletons=True,
+        weak_confidence_threshold=0.0,
+    )
+
+    primary_id, _ = _record_id_candidates(new_row, source, source_pk_col)
+    entity_id = store.find_entity_by_record(primary_id)
+    # Self-populate: index the new record so the NEXT incoming record finds it.
+    if keys:
+        store.index_record_block_keys(primary_id, entity_id, keys)
+    return entity_id
+
+
 def resolve_record_incremental(
     record: dict[str, Any],
-    df: pl.DataFrame,
+    df: pl.DataFrame | None,
     matchkeys: list[MatchkeyConfig],
     store: IdentityStore,
     run_name: str = "",
@@ -1239,6 +1431,7 @@ def resolve_record_incremental(
     ann_column: str | None = None,
     top_k: int = 20,
     base_store: Any = None,
+    blocking: Any = None,  # BlockingConfig -> index-backed candidate generation
 ) -> str | None:
     """Resolve a single new record to an existing entity or create one.
 
@@ -1251,7 +1444,8 @@ def resolve_record_incremental(
 
     Args:
         record: the new record (field -> value); the same shape as ``df`` rows.
-        df: the existing frame, with a ``__row_id__`` column.
+        df: the existing frame, with a ``__row_id__`` column. Required for the
+            legacy full-corpus path; may be ``None`` when ``blocking`` is given.
         matchkeys: the resolved matchkeys to match on (threshold-bearing types).
         store: the ``IdentityStore`` to read/write.
         run_name: batch/run name for event idempotency.
@@ -1261,12 +1455,36 @@ def resolve_record_incremental(
         dataset: optional dataset tag.
         ann_blocker / embedder / ann_column / top_k / base_store: forwarded to
             ``match_one`` for ANN-accelerated candidate retrieval.
+        blocking: a ``BlockingConfig``. When set, candidates are drawn from the
+            persisted block-key index (manifesto §4(ii) bidirectional seam)
+            instead of ``df`` -- the record's block-mates are gathered from the
+            store, scored, and resolved without materializing the whole corpus.
+            The record must use PK-based ids (``source_pk_col``). ``None``
+            (default) keeps the byte-identical full-``df`` path.
 
     Returns:
         The ``entity_id`` the record resolved to (existing or newly created), or
         ``None`` if it could not be read back. Never raises on a valid input.
     """
     source = source or str(record.get("__source__", "dataframe"))
+
+    # Index-backed path (manifesto §4(ii)): when a blocking config is supplied,
+    # generate candidates from the PERSISTED block-key index instead of the
+    # in-RAM corpus -- no full-corpus materialization. The legacy ``df`` path
+    # below is byte-unchanged when ``blocking`` is None.
+    if blocking is not None:
+        return _resolve_via_index(
+            record, blocking, matchkeys, store, run_name,
+            source=source, source_pk_col=source_pk_col, dataset=dataset,
+            ann_blocker=ann_blocker, embedder=embedder,
+            ann_column=ann_column, top_k=top_k, base_store=base_store,
+        )
+
+    if df is None:
+        raise ValueError(
+            "resolve_record_incremental requires either df (full-corpus path) "
+            "or blocking (index-backed path)"
+        )
     matches = _match_record_rows(
         record, df, matchkeys,
         ann_blocker=ann_blocker, embedder=embedder,

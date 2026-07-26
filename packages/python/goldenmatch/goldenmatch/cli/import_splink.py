@@ -13,15 +13,28 @@ goldenmatch.config.splink_upgrade.upgrade_splink_conversion(). With
 `--upgrade`, the faithful baseline conversion is written alongside the
 upgraded config/model as an `*.baseline.*` pair so the trust anchor stays
 on disk next to the tuned artifacts.
+
+The `--verify` flag runs an auto-verification (goldenmatch.config.
+splink_verify.verify_against_splink): on a sample of the given dataset it
+runs BOTH the original Splink settings (when `splink` is installed) and the
+converted config, then reports pairwise cluster agreement -- a one-command
+proof the conversion preserved Splink's linking decisions. Best-effort: it
+degrades to a skip notice when splink is absent or the settings can't run
+under the local DuckDB engine.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 import yaml
 from rich.console import Console
 from rich.table import Table
+
+if TYPE_CHECKING:
+    from goldenmatch.config.from_splink import SplinkConversion
+    from goldenmatch.config.splink_verify import SplinkVerification
 
 console = Console()
 err_console = Console(stderr=True)
@@ -44,6 +57,67 @@ def _render_report_table(findings) -> Table | None:
             f.message,
             f.mapped_to or "",
         )
+    return table
+
+
+def _run_verify(
+    input_path: str,
+    conversion: SplinkConversion,
+    data: str,
+    sample: int,
+    threshold: float,
+) -> None:
+    """Run the auto-verify pass and print a table (or a skip notice).
+
+    Reloads the original settings (the converter doesn't retain the raw dict)
+    and hands them to ``verify_against_splink`` with the converted config +
+    imported model. Any skip reason is already recorded as a report finding;
+    a returned result is rendered as an agreement table.
+    """
+    from goldenmatch.config.from_splink import _load_settings
+    from goldenmatch.config.splink_verify import verify_against_splink
+
+    settings = _load_settings(input_path)
+    result = verify_against_splink(
+        settings,
+        data,
+        conversion.config,
+        em_model=conversion.em_model,
+        sample_size=sample,
+        match_threshold=threshold,
+        report=conversion.report,
+    )
+    if result is None:
+        console.print(
+            "[dim]Splink verification skipped (see findings for the reason).[/dim]"
+        )
+        return
+    console.print(_render_verify_table(result))
+
+
+def _render_verify_table(verification: SplinkVerification) -> Table:
+    """Render a SplinkVerification as an agreement summary table."""
+    a = verification.agreement
+    verdict = (
+        "[green]faithful[/green]"
+        if verification.is_faithful
+        else "[yellow]divergent[/yellow]"
+    )
+    table = Table(
+        title=f"Splink agreement ({verdict}) - splink {verification.splink_version}",
+        header_style="bold #d4a017",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("pairwise F1 (GoldenMatch vs Splink)", f"{a['f1']:.3f}")
+    table.add_row("pairwise precision", f"{a['precision']:.3f}")
+    table.add_row("pairwise recall", f"{a['recall']:.3f}")
+    table.add_row("records compared", str(verification.n_shared_ids))
+    table.add_row(
+        "multi-record clusters (GM / Splink)",
+        f"{verification.gm_multi_clusters} / {verification.splink_multi_clusters}",
+    )
+    table.add_row("Splink match threshold", f"{verification.match_threshold:.2f}")
     return table
 
 
@@ -216,6 +290,27 @@ def import_splink_cmd(
             "joins (default: auto-detect unique_id/id/record_id)"
         ),
     ),
+    verify: str | None = typer.Option(
+        None,
+        "--verify",
+        help=(
+            "Prove the conversion preserved behaviour: run BOTH the original "
+            "Splink settings (needs `pip install splink`) AND the converted "
+            "config on a sample of this dataset (parquet/csv) and report "
+            "pairwise cluster agreement. Best-effort -- skipped with a notice "
+            "if splink is absent or the settings can't run under DuckDB."
+        ),
+    ),
+    verify_sample: int = typer.Option(
+        5000,
+        "--verify-sample",
+        help="Rows to run through both engines for --verify (seeded subsample above it)",
+    ),
+    verify_threshold: float = typer.Option(
+        0.5,
+        "--verify-threshold",
+        help="Splink match-probability cut for --verify clustering",
+    ),
 ) -> None:
     """Convert a Splink settings (or trained-model) JSON file into a GoldenMatch YAML config."""
     from goldenmatch.config.from_splink import SplinkConversionError, from_splink
@@ -244,6 +339,9 @@ def import_splink_cmd(
                 f"[green]Trained model persisted to[/green] [cyan]{model_out}[/cyan] "
                 f"(set as matchkeys[0].model_path)."
             )
+
+        if verify is not None:
+            _run_verify(input_path, conversion, verify, verify_sample, verify_threshold)
 
         table = _render_report_table(conversion.report.findings)
         if table is not None:

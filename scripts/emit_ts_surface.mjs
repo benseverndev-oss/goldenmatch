@@ -85,6 +85,28 @@ async function emit(pkg) {
     descriptor.scorer_kernels = [...t.SCORER_KERNELS].sort();
   }
 
+  // goldenflow transform vocabulary -- the `transforms` parity surface. Every
+  // transform module self-registers on import (core/transforms/index.js side
+  // effects, incl. the LLM corrector); listTransforms() then returns the full
+  // set. Mirrors the Python emitter (goldenflow.transforms.list_transforms);
+  // deltas live in parity/goldenflow.yaml.
+  if (pkg === "goldenflow") {
+    const t = await load("dist/core/index.js");
+    if (typeof t.listTransforms !== "function")
+      throw new Error(`${pkg}: expected listTransforms() in dist/core/index.js`);
+    descriptor.transforms = t.listTransforms().map((x) => x.name).sort();
+  }
+
+  // goldenanalysis analyzer registry -- the `analyzers` parity surface. Mirrors
+  // the Python emitter (goldenanalysis.registry.available_analyzers); deltas live
+  // in parity/goldenanalysis.yaml.
+  if (pkg === "goldenanalysis") {
+    const t = await load("dist/core/index.js");
+    if (typeof t.availableAnalyzers !== "function")
+      throw new Error(`${pkg}: expected availableAnalyzers() in dist/core/index.js`);
+    descriptor.analyzers = [...t.availableAnalyzers()].sort();
+  }
+
   return descriptor;
 }
 

@@ -198,6 +198,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `rerank_model` | str | `'cross-encoder/ms-marco-MiniLM-L-6-v2'` | Cross-encoder model used to rerank borderline pairs when rerank is on. |
 | `rerank_band` | float | `0.1` | Half-width of the score band around the threshold within which pairs are reranked. |
 | `negative_evidence` | list[NegativeEvidenceField] \| None | `None` | [`NegativeEvidenceField`](#negativeevidencefield) -- Fields whose disagreement penalizes the match score, catching false positives that agree on other fields. |
+| `guard` | str \| None | `None` | Pair predicate (over a_&lt;col>/b_&lt;col>) gating whether this whole matchkey fires on a pair. |
 | `em_iterations` | int | `20` | Maximum EM iterations when training probabilistic weights. |
 | `convergence_threshold` | float | `0.001` | EM stops early once parameter change between iterations falls below this value. |
 | `link_threshold` | float \| None | `None` | Probabilistic match probability at or above which a pair is auto-linked. |
@@ -415,6 +416,7 @@ _Identity Graph configuration._
 | `level_thresholds` | list[float] \| None | `None` | Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries. |
 | `derive_from` | list[str] \| None | `None` | Source columns joined with derive_separator to synthesize the compared field when it is not present in the raw frame. |
 | `derive_separator` | str | `' '` | Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long). |
+| `guard` | str \| None | `None` | Pair predicate (over a_&lt;col>/b_&lt;col>) gating whether this field contributes; weighted matchkeys only. |
 
 ### `NegativeEvidenceField`
 _v1.11: a field whose disagreement subtracts from a weighted matchkey's_
@@ -706,6 +708,15 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `identity split` | `record_ids` | text | **required** | record_ids to move to a new identity |
 | `identity split` | `--reason` | text | `None` | Optional reason recorded in the event log. |
 | `identity split` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `import-dbt` | `manifest` | text | **required** | dbt manifest.json (from `dbt compile` / `dbt parse`) |
+| `import-dbt` | `--output` | text | `'goldenmatch.yaml'` | Output YAML config path |
+| `import-dbt` | `--catalog` | text | `None` | dbt catalog.json (from `dbt docs generate`); supplies model column lists so recognized most-recent survivorship is emitted as golden_rules (otherwise it is only reported) |
+| `import-dbt` | `--strict` | boolean | `False` | Fail on any lossy finding (warnings), not just errors |
+| `import-dbt` | `--min-confidence` | float | `0.5` | ER-model identification confidence floor for signal extraction |
+| `import-dbt` | `--verify` | text | `None` | Prove the distillation reproduces your dbt pipeline: run the converted config on a sample of --source and report pairwise cluster agreement against this output table (parquet/csv; first two columns = id, cluster_id). Needs --source. |
+| `import-dbt` | `--source` | text | `None` | Source rows the dbt ER model consumed (parquet/csv), for --verify |
+| `import-dbt` | `--verify-sample` | integer | `5000` | Rows of --source to run through GoldenMatch for --verify |
+| `import-dbt` | `--id-column` | text | `None` | Column holding each source row's id (default: auto-detect unique_id/id/record_id) |
 | `import-splink` | `input_path` | text | **required** | Splink settings or trained-model JSON file |
 | `import-splink` | `--output` | text | `'goldenmatch.yaml'` | Output YAML config path |
 | `import-splink` | `--model-out` | text | `None` | Persist imported trained m/u as an FS model JSON; sets model_path in the config |
@@ -716,6 +727,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `import-splink` | `--sample-cap` | integer | `100000` | Row cap for --upgrade lever computation and measurement (seeded subsample above it) |
 | `import-splink` | `--no-measure` | boolean | `False` | Skip the baseline-vs-upgraded measurement pass |
 | `import-splink` | `--id-column` | text | `None` | Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id) |
+| `import-splink` | `--verify` | text | `None` | Prove the conversion preserved behaviour: run BOTH the original Splink settings (needs `pip install splink`) AND the converted config on a sample of this dataset (parquet/csv) and report pairwise cluster agreement. Best-effort -- skipped with a notice if splink is absent or the settings can't run under DuckDB. |
+| `import-splink` | `--verify-sample` | integer | `5000` | Rows to run through both engines for --verify (seeded subsample above it) |
+| `import-splink` | `--verify-threshold` | float | `0.5` | Splink match-probability cut for --verify clustering |
 | `incremental` | `base_file` | text | **required** | Base dataset file path |
 | `incremental` | `--new-records` | path | **required** | New records CSV to match |
 | `incremental` | `--config` | path | **required** | Config YAML path |
@@ -792,6 +806,15 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `memory show` | `id_b` | integer | **required** | Second record ID |
 | `memory show` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
 | `memory stats` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
+| `migrate-splink` | `input_path` | text | **required** | Splink settings or trained-model JSON file |
+| `migrate-splink` | `data` | text | **required** | Data to deduplicate (parquet/csv) |
+| `migrate-splink` | `--output` | text | `'clusters.parquet'` | Where to write the deduplicated (golden) records (parquet/csv) |
+| `migrate-splink` | `--config-out` | text | `None` | Also write the converted GoldenMatch YAML config here |
+| `migrate-splink` | `--verify` | boolean | `True` | Verify the conversion against a locally-installed Splink on a sample (default on; skipped with a notice if splink is absent) |
+| `migrate-splink` | `--verify-sample` | integer | `5000` | Rows to run through both engines for --verify |
+| `migrate-splink` | `--verify-threshold` | float | `0.5` | Splink match-probability cut for --verify |
+| `migrate-splink` | `--strict` | boolean | `False` | Fail on any lossy mapping (warnings), not just errors |
+| `migrate-splink` | `--id-column` | text | `None` | Column holding each row's id (default: auto-detect unique_id/id/record_id) |
 | `pprl auto-config` | `file` | path | **required** | Data file to analyze (CSV) |
 | `pprl auto-config` | `--security` | text | `'high'` | Security level: standard, high, paranoid |
 | `pprl auto-config` | `--llm` | boolean | `False` | Use LLM for enhanced recommendations |
@@ -1118,7 +1141,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 
 ## Environment variables (index)
 
-177 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
+178 `GOLDENMATCH_*` runtime knob(s) read by the package, scanned from source so this is complete. Details in [Tuning & opt-ins](/goldenmatch/tuning). Grouped by area:
 
 - **AGENT** (1): `GOLDENMATCH_AGENT_TOKEN`
 - **ALLOWED** (1): `GOLDENMATCH_ALLOWED_ROOT`
@@ -1143,6 +1166,7 @@ _`_PLANNING_EFFORTS` -- `planning_effort`._
 - **EMBEDDING** (1): `GOLDENMATCH_EMBEDDING_PROVIDER`
 - **ENABLE** (1): `GOLDENMATCH_ENABLE_DISTRIBUTED_RAY`
 - **ENSEMBLE** (1): `GOLDENMATCH_ENSEMBLE_KERNEL`
+- **ER** (1): `GOLDENMATCH_ER_MODEL_DIR`
 - **FACILITY** (1): `GOLDENMATCH_FACILITY_NAME_NE`
 - **FD** (1): `GOLDENMATCH_FD_NEGATIVE_EVIDENCE`
 - **FIELD** (1): `GOLDENMATCH_FIELD_GROUP_SURVIVORSHIP`

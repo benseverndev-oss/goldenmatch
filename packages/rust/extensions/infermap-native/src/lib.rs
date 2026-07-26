@@ -62,6 +62,15 @@ fn pattern_match_types(samples: Vec<String>) -> PyResult<Vec<u32>> {
     Ok(infermap_core::pattern_match_types(&samples))
 }
 
+/// Optimal 1:1 assignment (MINIMIZE cost). Takes a rectangular cost matrix as a
+/// list of rows; returns (row, col) pairs. The single cross-language reference
+/// (replaces scipy on the Python path); the host wraps this in `optimal_assign`
+/// (score->cost, min_confidence filter, score rounding).
+#[pyfunction]
+fn linear_sum_assignment(cost: Vec<Vec<f64>>) -> PyResult<Vec<(usize, usize)>> {
+    Ok(infermap_core::linear_sum_assignment(&cost))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -74,5 +83,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(self::initialism_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::profile_score, m)?)?;
     m.add_function(wrap_pyfunction!(self::pattern_match_types, m)?)?;
+    m.add_function(wrap_pyfunction!(self::linear_sum_assignment, m)?)?;
     Ok(())
 }

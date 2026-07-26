@@ -33,10 +33,22 @@ boundary, and publish the limits:
   - **Byte-safe:** identity graph DB (+ cryptographic cross-verification),
     `score → cluster`, end-to-end split-run, cluster JSON, config YAML, Learning
     Memory, run log, `record_fingerprint`.
-  - **Tolerance-bounded (4dp):** string scoring — byte-identical only with the
-    shared Rust/WASM scorer.
+  - **Tolerance-bounded (4dp):** string scoring. Byte-identical Python↔TS only for
+    scorers whose score is byte-exact under the shared Rust/WASM kernel; `ensemble`
+    (id 12), `radial` (id 13), and the name scorers (ids 20/21) stay **~4dp even
+    with the WASM scorer** (reduction/recomposition order, 1-ULP class) — see the
+    2026-07-26 amendment.
   - **Divergent (not byte-portable):** standardize/dates (`dateutil` vs `chrono`),
-    embeddings (no torch/Vertex; cosine-tolerance), auto-config controller commit.
+    embeddings (no torch/Vertex; cosine-tolerance), auto-config controller commit,
+    and **PPRL CLKs on float fields** (`str(5.0)`="5.0" vs `String(5.0)`="5" →
+    non-equal filters; cast floats to strings before PPRL).
+  - **Second source of truth (conformance-gated, not the shared kernel):** the
+    default TS Fellegi-Sunter path is pure-TS `probabilistic.ts` (via `pipeline.ts`),
+    **not** the `fs-wasm` kernel — which ships and is parity-gated
+    (`fs-wasm.parity.test.ts`) but has no pipeline caller. The parameterized scorer
+    modes `numeric_diff:abs|pct` and `array_intersect:overlap` likewise ride a
+    per-pair / pure-TS mirror (the fixed-id `score_one` kernel can't carry the mode
+    string), fixtured (`scorer-domain-comparators.json`) but not kernel-single-sourced.
   - **Python-only by architecture:** distributed/Ray/bucket, document (VLM) ingest,
     distributed routing.
 - **Guidance:** hand off at the `cluster` or `identity` boundary (byte-safe); do
@@ -55,3 +67,54 @@ boundary, and publish the limits:
   tracked in the design note — is a split-run over a corrupted dataset engineered
   to sit pairs on the threshold, to find and quantify the flipping case. "Passed
   on a fair test" is not "can never flip", and the docs say so.
+
+## Amendment (2026-07-26): scorer-level conformance caveats
+
+Thesis-conformance audit (decision 0047; weakness `undeclared-cross-surface-divergences`)
+surfaced scorer- and package-level divergences the original verdict table did not
+name — verified against `main` before recording:
+
+- **`ensemble`/`radial`/name scorers are ~4dp even with the shared WASM scorer**, not
+  byte-exact. Documented at `packages/typescript/goldenmatch/src/core/wasm/backend.ts`
+  (ensemble id 12 maxes over an un-normalized `score_one(2)`; radial id 13 does a
+  left-to-right f64 reduction; name ids 20/21 are WASM-rapidfuzz-JW vs pure-TS JW).
+  Reduction/recomposition order, same 1-ULP class as native↔pure-Python. The prior
+  row read "byte-identical … with the shared Rust/WASM scorer", which over-claimed for
+  these ids.
+- **The default TS Fellegi-Sunter path is pure-TS, not the shared kernel.**
+  `pipeline.ts` scores probabilistic matchkeys via `probabilistic.ts::scoreProbabilistic`;
+  `fs-wasm` (`goldenmatch-fs-core`, `src/core/fsWasm.ts`) exists and passes
+  `tests/parity/fs-wasm.parity.test.ts` but is called by **no pipeline/engine site**.
+  So FS scoring parity rests on the hand-written pure-TS port (at the string-scoring
+  tolerance), not the WASM kernel. Wiring the pipeline to `fs-wasm` is tracked as
+  weakness `fs-default-ts-path-unwired-second-source` (Wave D).
+- **PPRL CLKs diverge on float fields.** `str(5.0)`="5.0" (Python) vs `String(5.0)`="5"
+  (JS) yields non-equal bloom filters; the `pprl.json` fixtures dodge it by using
+  string fields. Guidance: cast floats to strings before PPRL if cross-language CLK
+  equality matters. (`packages/typescript/goldenmatch/CLAUDE.md`, PPRL parity note.)
+- **Out of this ADR's scope, tracked elsewhere:** goldenanalysis frame-kernel Python↔TS
+  parity (no WASM, Wave 1b deferred) is a *goldenanalysis* boundary, locked by
+  `frame_kernels_adversarial.json`; it belongs in goldenanalysis's own conformance docs,
+  not this goldenmatch phase-handoff ADR.
+
+Guidance addition: PPRL float fields join `standardize`/dates, embeddings, and the
+controller as boundaries not to split across without casting/tolerance.
+
+**Standardize now has a runnable characterization (was prose-only).** The verdict
+table listed `standardize` divergent but with no test — the only non-exact boundary
+lacking one. Two corrections + a test:
+- goldenmatch ships **no date standardizer** — date parsing (`dateutil` vs `chrono`)
+  is *GoldenFlow's* transform, with its own year-guard fixtures. The goldenmatch
+  standardize divergence is the standardizer SET, not dates. The "dates" framing in
+  the table's divergent row refers to that cross-package transform, not a goldenmatch
+  standardizer.
+- The measured Python↔TS standardizer divergence (54 of 150 cells over 10
+  standardizers) is now pinned by `standardizer-conformance.json` +
+  `tests/parity/standardizer-conformance.parity.test.ts` (TS) +
+  `tests/test_standardizer_conformance.py` (Python), regenerated by
+  `scripts/emit_standardizer_conformance_fixture.py`. **Dominant, previously-undeclared
+  divergence: Python standardizers return `None` for non-matching input, TS returns
+  `""`** (email/phone/zip5 = 38 of 54); the rest is whitespace handling (name_*) and
+  title-casing (`name_proper`/`address`: `O'Brien`→`O'brien`, `4B`→`4b`, `E2E`→`E2e`).
+  `state`/`strip`/`trim_whitespace` are byte-identical. The pair pins both sides so the
+  divergence cannot silently widen.

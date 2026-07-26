@@ -42,6 +42,7 @@ _GATED_ON: frozenset[str] = frozenset(
         "initialism_score",
         "profile_score",
         "pattern_match_types",
+        "linear_sum_assignment",
     }
 )
 
@@ -54,6 +55,7 @@ _COMPONENT_SYMBOLS: dict[str, str] = {
     "initialism_score": "initialism_score",
     "profile_score": "profile_score",
     "pattern_match_types": "pattern_match_types",
+    "linear_sum_assignment": "linear_sum_assignment",
 }
 
 

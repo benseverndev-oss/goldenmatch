@@ -674,6 +674,47 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
     return filtered
 
 
+def _apply_guard_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # called from core/pipeline.py (outside slice)
+    pairs: list[tuple[int, int, float]],
+    matchkey: MatchkeyConfig,
+    raw_values: dict[str, dict[int, Any]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Filter emitted pairs by the matchkey-level guard predicate.
+
+    Drops any pair whose guard (a pair predicate over ``a_<col>``/``b_<col>``)
+    is False — the matchkey does not fire on that pair. Pairs pass through
+    unchanged when the matchkey has no guard.
+
+    ``raw_values`` (``{col: {row_id: raw_value}}``) is the RAW (pre-prep) column
+    snapshot the pipeline captured at entry, keyed by ``__row_id__`` — so guard
+    literals match the config author's un-standardized data. The pipeline
+    captures a snapshot for EVERY guard-referenced column that exists at entry
+    (``_collect_guard_columns``), so this needs no access to the prepared frame
+    (which would be an arrow->polars bridge); a column absent from the snapshot
+    resolves to ``None`` (the guard misses -> the pair is dropped, fail-safe).
+    """
+    if not matchkey.guard:
+        return pairs
+    from goldenmatch.core.guard import guard_columns, guard_passes
+
+    raw_values = raw_values or {}
+    cols = guard_columns(matchkey.guard)
+
+    def _rec(row_id: int) -> dict:
+        rec: dict = {}
+        for c in cols:
+            raw = raw_values.get(c)
+            if raw is not None and row_id in raw:
+                rec[c] = raw[row_id]
+        return rec
+
+    filtered: list[tuple[int, int, float]] = []
+    for row_a, row_b, score in pairs:
+        if guard_passes(matchkey.guard, cols, _rec(row_a), _rec(row_b)):
+            filtered.append((row_a, row_b, score))
+    return filtered
+
+
 def find_exact_matches(
     lf: Any, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:

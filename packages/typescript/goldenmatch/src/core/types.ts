@@ -542,6 +542,7 @@ export const VALID_SCORERS = new Set([
   "name_freq_weighted_jw",
   "array_intersect",
   "numeric_diff",
+  "cosine",
 ] as const);
 
 export const VALID_TRANSFORMS = new Set([

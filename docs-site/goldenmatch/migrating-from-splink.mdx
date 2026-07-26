@@ -1,0 +1,96 @@
+---
+title: "Migrating from Splink"
+description: "Convert a Splink model to a GoldenMatch config, verify it reproduces Splink's clustering, and run it — in one command or one line of Python."
+keywords: ["goldenmatch", "splink", "migration", "convert", "from_splink", "migrate-splink", "record linkage", "fellegi-sunter"]
+---
+
+Already have a [Splink](https://moj-analytical-services.github.io/splink/) model? GoldenMatch converts it directly — comparisons, blocking rules, and trained m/u probabilities — so you keep the tuning work you've already done. The conversion is **built against real captured Splink 4 SQL**, **verifiable** against your installed Splink, and reports a **coverage scorecard** so you can see exactly what carried over.
+
+## One command
+
+```bash
+goldenmatch migrate-splink model.json data.csv -o clusters.parquet
+```
+
+That single command:
+
+1. **converts** `model.json` (a Splink settings dict / saved model) to a GoldenMatch config;
+2. prints a **coverage scorecard**;
+3. **verifies** the conversion reproduces Splink's clustering on a sample (when `splink` is installed) and prints the pairwise agreement;
+4. **runs the dedupe** on `data.csv` and writes the canonical (golden) records.
+
+```text
+Converted model.json -- 5/5 comparisons (2 exact, 3 approximate) -- 3/3 blocking rules -- 100% coverage
+
+  Splink agreement (faithful) - splink 4.0.16
+  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+  ┃ Metric                              ┃ Value ┃
+  ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+  │ pairwise F1 (GoldenMatch vs Splink) │ 0.991 │
+  │ multi-record clusters (GM / Splink) │ 4/4   │
+  └─────────────────────────────────────┴───────┘
+
+Deduped 48,213 rows -> 41,006 entities (7,207 multi-record clusters). Wrote clusters.parquet
+```
+
+Useful flags: `--config-out config.yaml` also writes the converted config; `--no-verify` skips the Splink check; `--verify-sample N` sets the verification sample size; `--strict` fails on any lossy mapping.
+
+## Or one line of Python
+
+`from_splink` accepts a settings **dict**, a path to a **JSON** model, a live **`Linker`**, or a not-yet-fitted **`SettingsCreator`** — whatever you already have in hand, no export step:
+
+```python
+from goldenmatch.config.from_splink import from_splink
+
+conv = from_splink(my_linker)            # or "model.json", a settings dict, or a SettingsCreator
+print(conv.coverage.line())              # 5/5 comparisons (2 exact, 3 approximate) -- 3/3 blocking rules -- 100% coverage
+
+import goldenmatch as gm
+result = gm.dedupe_df(df, config=conv.config)
+```
+
+When the Splink model was **trained**, `conv.em_model` carries the imported m/u weights. Persist it and point the config at it so GoldenMatch scores with Splink's weights instead of re-fitting:
+
+```python
+conv.em_model.save_json("model.em.json")
+conv.config.matchkeys[0].model_path = "model.em.json"
+```
+
+## Verify it preserved behaviour
+
+The migration is only trustworthy if GoldenMatch reproduces Splink's *decisions*. `verify_against_splink` runs **both** engines on a sample of your data and reports pairwise cluster agreement — no need to run Splink separately or hand over its output:
+
+```python
+from goldenmatch.config.splink_verify import verify_against_splink
+
+v = verify_against_splink(settings, df, conv.config, em_model=conv.em_model)
+if v is not None:                        # None when splink isn't installed
+    print(v.agreement["f1"], v.is_faithful)   # e.g. 0.991, True
+```
+
+`is_faithful` is `True` at pairwise **F1 ≥ 0.95**. Verification is best-effort: it returns `None` (never raises) when `splink` isn't installed or the settings can't run under the local DuckDB engine (e.g. a Spark-dialect export whose SQL uses Spark-only functions).
+
+## What converts
+
+The converter recognizes the full Splink comparison library, in both the DuckDB (double-quoted) and Spark (backtick-quoted) dialects.
+
+| Splink construct | → GoldenMatch |
+|---|---|
+| `ExactMatch` | `exact` scorer (direct) |
+| `LevenshteinAtThresholds` / `DamerauLevenshtein` | `levenshtein` (distance → similarity, approximate) |
+| `JaroWinklerAtThresholds` / `JaroAtThresholds` | `jaro_winkler` (direct; jaro treated as jaro-winkler) |
+| `JaccardAtThresholds` | `jaccard` (direct) |
+| `CosineSimilarityAtThresholds` | `cosine` over precomputed vector columns (direct) |
+| `ArrayIntersectAtSizes` | `array_intersect` (count → overlap ratio, approximate) |
+| `DateOfBirth` / `AbsoluteDateDifference` | `date_diff` (day-distance bands, approximate) |
+| `DistanceInKMAtThresholds` | `geo_haversine` over a synthesized `lat,long` field (approximate) |
+| numeric `CustomComparison` (`ABS(a − b) <= eps`) | `numeric_diff` (linear ramp, approximate) |
+| `ForenameSurname` | `token_sort` over a synthesized combined name field (handles the forename/surname transposition) |
+| blocking rules (`l.col = r.col`, `SUBSTR(...)`, `IS NOT NULL` guards) | `BlockingConfig` (`static` / `multi_pass`) |
+| trained `m_probability` / `u_probability` | imported `EMResult` (re-indexed, re-normalized) |
+
+**Approximate** mappings are where Splink's measure and GoldenMatch's aren't identical (a distance/count/km/date snap), flagged in the report so you know exactly what's lossy. Constructs the converter doesn't recognize are dropped with a warning and reflected in the coverage scorecard, so nothing is silently lost.
+
+<Note>
+`splink` is an optional dependency — the conversion itself never needs it. It's only used for the agreement check, which degrades to a skip notice when absent.
+</Note>
