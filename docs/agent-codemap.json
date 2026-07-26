@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 408,
+      "module_count": 409,
       "modules": [
         {
           "module": "goldenmatch",
@@ -4799,6 +4799,15 @@
           "module": "goldenmatch.db.alembic.versions.0004_claim_authority",
           "file": "packages/python/goldenmatch/goldenmatch/db/alembic/versions/0004_claim_authority.py",
           "purpose": "Claim-authority tier: claim_type + evidence_ref + previous_claim_id.",
+          "defines": [
+            "downgrade",
+            "upgrade"
+          ]
+        },
+        {
+          "module": "goldenmatch.db.alembic.versions.0005_record_block_keys",
+          "file": "packages/python/goldenmatch/goldenmatch/db/alembic/versions/0005_record_block_keys.py",
+          "purpose": "Persisted blocking index for incremental resolution (C2).",
           "defines": [
             "downgrade",
             "upgrade"

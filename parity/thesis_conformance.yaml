@@ -39,12 +39,19 @@ weaknesses:
       identities is impossible. This is the frame's own OPEN 9.1 -- compute that reads
       durable state, which neither engine homes -- and it caps the product exactly
       where the thesis says it becomes most valuable.
+      IN PROGRESS (C2): §4 fork DECIDED (ii) control-plane-owned index by the owner
+      2026-07-26. Slice 1 LANDED -- the persisted `identity_record_block_keys` store
+      index (SQLite + Postgres + Alembic 0005, schema v6) + the
+      `index_record_block_keys`/`candidates_by_block_keys` write/query API. Still OPEN:
+      the incremental resolve path does not yet POPULATE or QUERY the index (nothing
+      reads it), so the full-corpus re-block remains until the next slices wire the
+      bidirectional seam + the exact-matchkey fix.
     evidence:
+      - packages/python/goldenmatch/goldenmatch/identity/store.py   # identity_record_block_keys + index API
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:1270
       - packages/python/goldenmatch/goldenmatch/core/streaming.py:129
       - packages/python/goldenmatch/goldenmatch/core/streaming.py:149
-      - packages/python/goldenmatch/goldenmatch/identity/store.py:79
-    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4, milestone C2 -- needs the incremental-resolution fork decision)"
+    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 decided (ii); C2 slice 1 landed -- next: population + bidirectional query + exact-matchkey fix)"
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
