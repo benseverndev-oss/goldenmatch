@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from goldenmatch.config.schemas import (
     BlockingConfig,
@@ -52,7 +52,8 @@ _ELSE_RE = r'ELSE'
 _NULL_RE = rf'{_COL_L}\s+IS\s+NULL\s+OR\s+{_COL_R}\s+IS\s+NULL'
 _EXACT_RE = rf'{_COL_L}\s*=\s*{_COL_R}'
 _SIM_RE = (
-    r'(jaro_winkler_similarity|jaro_winkler|jaro_similarity|jaccard)'
+    r'(jaro_winkler_similarity|jaro_winkler|jaro_similarity|jaccard'
+    r'|array_cosine_similarity)'
     rf'\s*\(\s*{_COL_L}\s*,\s*{_COL_R}\s*\)\s*>=\s*([0-9]*\.?[0-9]+)'
 )
 _DIST_RE = (
@@ -91,8 +92,134 @@ def _looks_like_haversine(sql_norm: str) -> bool:
 
 LevelKind = Literal[
     "null", "exact", "else", "jaro_winkler", "levenshtein", "jaccard", "date_diff",
-    "array_intersect", "geo_haversine",
+    "array_intersect", "geo_haversine", "numeric_diff", "cosine", "token_sort",
 ]
+
+# ForenameSurname is Splink's OTHER cross-column comparator (geo_haversine is
+# the first): a compound name comparison over SEPARATE forename + surname
+# columns whose comparison levels AND two per-part conditions together. Captured
+# live from splink 4 (`ForenameSurnameComparison('forename','surname')`), the
+# non-null/else levels are:
+#   both exact:     ("forename_l" = "forename_r") AND ("surname_l" = "surname_r")
+#   transposition:  "forename_l" = "surname_r" AND "forename_r" = "surname_l"
+#   both fuzzy (t): (jw("forename_l","forename_r") >= t) AND (jw("surname_l","surname_r") >= t)
+#   surname only:   "surname_l" = "surname_r"
+#   forename only:  "forename_l" = "forename_r"
+# GoldenMatch has no per-part-AND comparator, but `token_sort` over a single
+# COMBINED "forename surname" field captures all three compound shapes in one
+# scorer: it is word-order robust, so the forename/surname TRANSPOSITION and the
+# both-exact case both score 1.0, and a per-part fuzzy level maps to a token_sort
+# threshold (approximate -- token_sort_ratio is not per-part jaro_winkler, but it
+# is the faithful single-field analogue). The field is synthesized via
+# MatchkeyField.derive_from=[forename, surname] + derive_separator=" " (the same
+# machinery geo_haversine uses with a "," separator). The two SINGLE-PART levels
+# (surname-only / forename-only) have no place on a combined-field threshold
+# scale and are dropped (subsumed by the synthesized field) in convert_comparison
+# / import_em. The combined column name is the two source columns sorted +
+# "__"-joined (deterministic, so build-time and m/u-import-time agree) --
+# token_sort is order-insensitive so the join order never affects the score.
+_FS_OPERAND = r'["`]?([A-Za-z_]\w*)_([lr])["`]?'
+_FS_EXACT_CONJ = re.compile(rf'{_FS_OPERAND}\s*=\s*{_FS_OPERAND}')
+_FS_JW_CONJ = re.compile(
+    rf'jaro_winkler(?:_similarity)?\s*\(\s*{_FS_OPERAND}\s*,\s*{_FS_OPERAND}\s*\)'
+    r'\s*>=\s*([0-9]*\.?[0-9]+)'
+)
+
+
+def _recognize_forename_surname(sql_norm: str) -> RecognizedLevel | None:
+    """Recognize a Splink ForenameSurname COMPOUND cross-column level.
+
+    Matches the three per-part-AND shapes (both-exact, transposition, both-fuzzy)
+    over two DISTINCT source columns; returns a ``token_sort`` RecognizedLevel on
+    the synthesized combined field. Any other AND-joined SQL (or a single
+    conjunct, which the single-column matchers already handle) returns None.
+    The split is on the literal ``' AND '`` -- ``sql_norm`` has collapsed
+    whitespace, so this is exact and cannot backtrack (py/polynomial-redos).
+    """
+    conjuncts = re.split(r' AND ', sql_norm, flags=re.IGNORECASE)
+    if len(conjuncts) != 2:
+        return None
+
+    parsed: list[tuple[str, str, str, str, str, float | None]] = []
+    for conjunct in conjuncts:
+        c = _strip_outer_parens(conjunct)
+        m = _FS_JW_CONJ.fullmatch(c)
+        if m:
+            parsed.append(("jw", m.group(1), m.group(2).lower(), m.group(3),
+                           m.group(4).lower(), float(m.group(5))))
+            continue
+        m = _FS_EXACT_CONJ.fullmatch(c)
+        if m:
+            parsed.append(("exact", m.group(1), m.group(2).lower(), m.group(3),
+                           m.group(4).lower(), None))
+            continue
+        return None
+
+    bases = {p[1] for p in parsed} | {p[3] for p in parsed}
+    if len(bases) != 2:
+        return None
+    cols = sorted(bases)
+    combined = f"{cols[0]}__{cols[1]}"
+
+    kinds = {p[0] for p in parsed}
+    if kinds == {"exact"}:
+        # both-parts-exact: each conjunct compares one base's _l to its own _r.
+        both_same = all(lc == rc and {ls, rs} == {"l", "r"}
+                        for _, lc, ls, rc, rs, _ in parsed)
+        # transposition: each conjunct compares the two DIFFERENT bases across
+        # the swap (A_l=B_r AND A_r=B_l).
+        both_cross = all(lc != rc and {ls, rs} == {"l", "r"}
+                         for _, lc, ls, rc, rs, _ in parsed)
+        if both_same or both_cross:
+            return RecognizedLevel(
+                "token_sort", combined, 1.0, approx=False,
+                derive_from=cols, derive_separator=" ",
+            )
+        return None
+
+    if kinds == {"jw"}:
+        # both-parts-fuzzy: each conjunct is a same-column jaro_winkler cutoff.
+        if not all(lc == rc and {ls, rs} == {"l", "r"}
+                   for _, lc, ls, rc, rs, _ in parsed):
+            return None
+        # Splink emits the same threshold on both parts; take the looser (min)
+        # if they ever differ, biased for recall.
+        threshold = min(p[5] for p in parsed if p[5] is not None)
+        return RecognizedLevel(
+            "token_sort", combined, threshold, approx=True,
+            derive_from=cols, derive_separator=" ",
+        )
+
+    return None
+
+# Numeric magnitude levels. Splink's standard library has NO first-class numeric
+# comparison (date/time/DistanceInKM/ArrayIntersect + the string-distance family
+# are the built-ins); numeric magnitude arrives via a CustomComparison whose
+# canonical shape -- captured live from splink 4, byte-identical in DuckDB + Spark
+# -- is `ABS("c_l" - "c_r") <= <eps>`. GoldenMatch's `numeric_diff:abs:<band>`
+# scorer is a LINEAR RAMP (sim = 1 - dist/band, 0 beyond), not a hard cutoff, so
+# the conversion is approximate in shape (warn + approx=True). We set band = 2*eps
+# and sim_threshold = 0.5: a pair exactly at the Splink cutoff (dist = eps) then
+# scores 1 - eps/(2*eps) = 0.5, so under the `>=` level semantics "score >= 0.5
+# <=> dist <= eps" reproduces `<= eps` EXACTLY (boundary inclusive) -- mirroring
+# date_diff's "threshold = the score a pair at the cutoff earns" convention. The
+# mapping is deterministic PER LEVEL (band + threshold come only from that level's
+# own eps, no cross-level knowledge), so `recognize_level` yields the same value
+# at field-build AND m/u-import time and `_agree_index_for` aligns automatically.
+# Only the ABSOLUTE form is recognized; a relative/pct CustomComparison
+# (`ABS(a-b)/GREATEST(...) <= f`) is too shape-variable to match and falls through
+# (dropped + warned), matching today's behavior for unrecognized SQL.
+_NUMERIC_DIFF_RE = re.compile(
+    rf'ABS\s*\(\s*{_COL_L}\s*-\s*{_COL_R}\s*\)\s*<=\s*([0-9]*\.?[0-9]+)',
+    re.IGNORECASE,
+)
+
+
+def _fmt_band(x: float) -> str:
+    """Fixed-point band string for a `numeric_diff:abs:<band>` scorer -- no
+    scientific notation (which the schema's `_NUMERIC_DIFF_RE` rejects) and no
+    trailing zeros (`2.0` -> `"2"`, `0.5` -> `"0.5"`)."""
+    return f"{x:.6f}".rstrip("0").rstrip(".")
 
 # ArrayIntersectAtSizes levels count the intersection SIZE:
 #   DuckDB: array_length(list_intersect("c_l", "c_r")) >= <n>
@@ -141,6 +268,10 @@ _SIM_KIND: dict[str, tuple[LevelKind, bool]] = {
     "jaro_winkler": ("jaro_winkler", False),
     "jaro_similarity": ("jaro_winkler", True),
     "jaccard": ("jaccard", False),
+    # Splink CosineSimilarityAtThresholds: `array_cosine_similarity(l, r) >= t`
+    # over precomputed vector columns. GoldenMatch's `cosine` scorer is the same
+    # measure, so the threshold maps DIRECTLY -- not an approximation (approx=False).
+    "array_cosine_similarity": ("cosine", False),
 }
 
 
@@ -247,6 +378,26 @@ def recognize_level(sql: str, *, is_null_level: bool = False) -> RecognizedLevel
                 )
         # haversine-shaped but couldn't extract a clean lat/lng/km -> drop+warn.
 
+    m = _NUMERIC_DIFF_RE.fullmatch(sql_norm)
+    if m:
+        col_l, col_r, eps = m.group(1), m.group(2), float(m.group(3))
+        if col_l == col_r and eps > 0.0:
+            band = 2.0 * eps  # a pair at dist=eps scores 1 - eps/band = 0.5
+            return RecognizedLevel(
+                "numeric_diff",
+                col_l,
+                0.5,
+                approx=True,
+                scorer=f"numeric_diff:abs:{_fmt_band(band)}",
+            )
+
+    # ForenameSurname compound cross-column level (both-exact / transposition /
+    # both-fuzzy). Tried last: single-column shapes match the matchers above and
+    # return first; only AND-joined per-part conditions reach here.
+    fs = _recognize_forename_surname(sql_norm)
+    if fs is not None:
+        return fs
+
     return None
 
 
@@ -352,6 +503,34 @@ def convert_comparison(
             mapped_to=None,
         )
 
+    # Synthesized-field subsumption (ForenameSurname). A compound cross-column
+    # comparison synthesizes a combined field (a band with derive_from set) AND
+    # also emits single-part levels on the SOURCE columns (surname-only /
+    # forename-only exact). Those single-column bands cannot map onto the
+    # combined field's threshold scale and would trip the inconsistent-columns
+    # guard below -- drop them (with a warn), keeping the synthesized field.
+    # No-op for single-column comparisons (empty derive_sources) and for geo
+    # (its levels ALL carry derive_from, so none is a subsumable single-column
+    # band).
+    derive_sources = {
+        s for r, _, _ in bands if r.derive_from for s in r.derive_from
+    }
+    if derive_sources:
+        kept_bands: list[tuple[RecognizedLevel, dict, int]] = []
+        for r, level, j in bands:
+            if r.derive_from is None and r.column in derive_sources:
+                report.warn(
+                    f"{comp_path}.comparison_levels[{j}]",
+                    f"single-column level on '{r.column}' subsumed by the "
+                    f"synthesized combined field {sorted(derive_sources)}; dropped "
+                    "(cannot map to the combined-field threshold scale): "
+                    f"{level.get('sql_condition', '')}",
+                    mapped_to=None,
+                )
+            else:
+                kept_bands.append((r, level, j))
+        bands = kept_bands
+
     agree_families = {r.kind for r, _, _ in bands if r.kind != "exact"}
     domain_families = agree_families & _DOMAIN_KINDS
     if len(domain_families) > 1:
@@ -399,7 +578,25 @@ def convert_comparison(
     # A recognized band may carry a full scorer string (e.g. array_intersect's
     # ":overlap" mode) that differs from its family kind; prefer it, else use
     # the family kind (date_diff, jaro_winkler, ...) or "exact" for exact-only.
-    if families:
+    if families == {"numeric_diff"}:
+        # Every numeric_diff band snaps to sim 0.5 (band = 2*eps, so a pair AT the
+        # cutoff scores 0.5), so multiple Splink cutoffs collapse to ONE level.
+        # Keep the LOOSEST band (largest 2*eps -> widest match window, biased for
+        # recall) and warn when >1 distinct cutoff is collapsed. `band` is the
+        # trailing `numeric_diff:abs:<band>` value.
+        numeric_scorers = {
+            r.scorer for r, _, _ in bands if r.kind == "numeric_diff" and r.scorer
+        }
+        scorer = max(numeric_scorers, key=lambda s: float(s.rsplit(":", 1)[1]))
+        if len(numeric_scorers) > 1:
+            report.warn(
+                comp_path,
+                f"multiple numeric-distance cutoffs collapsed to the loosest band "
+                f"({scorer}); numeric_diff's linear ramp represents one band, so the "
+                "finer cutoffs' gradation is not preserved",
+                mapped_to=None,
+            )
+    elif families:
         scorer = next(
             (r.scorer for r, _, _ in bands if r.kind != "exact" and r.scorer),
             next(iter(families)),
@@ -436,6 +633,13 @@ def convert_comparison(
                     "approximate mapping: date-difference cutoff snapped to the nearest "
                     f"day-distance band -> sim {r.sim_threshold} ({sql})"
                 )
+            elif r.kind == "numeric_diff":
+                message = (
+                    "approximate mapping: numeric-distance cutoff ABS(a-b) <= eps "
+                    "converted to a numeric_diff linear ramp with band = 2*eps, so a "
+                    f"pair at the cutoff scores sim {r.sim_threshold} (Splink's hard "
+                    f"cutoff becomes a ramp; boundary reproduced exactly) ({sql})"
+                )
             elif r.kind == "array_intersect":
                 count = round((r.sim_threshold or 0.0) * _ARRAY_ASSUMED_SET_SIZE)
                 message = (
@@ -448,6 +652,14 @@ def convert_comparison(
                     "approximate mapping: great-circle km cutoff snapped to the nearest "
                     f"geo_haversine band -> sim {r.sim_threshold}; lat+lng synthesized into "
                     f"a comma-joined field {r.derive_from} ({sql})"
+                )
+            elif r.kind == "token_sort":
+                message = (
+                    "approximate mapping: ForenameSurname per-part jaro_winkler "
+                    f">= {r.sim_threshold} on both name parts converted to a token_sort "
+                    f"threshold {r.sim_threshold} on the synthesized combined field "
+                    f"{r.derive_from} (word-order robust; handles the forename/surname "
+                    f"transposition) ({sql})"
                 )
             else:
                 message = (
@@ -906,6 +1118,29 @@ def import_em(
                 )
                 continue
 
+            # Synthesized-field subsumption (ForenameSurname): a single-column
+            # level on a SOURCE column of a synthesized combined field was
+            # dropped by convert_comparison; drop its m/u here too (re-normalize)
+            # -- else _agree_index_for, which resolves by threshold alone, would
+            # misassign a surname-only/forename-only exact (threshold 1.0) onto
+            # the combined field's strongest level. Mirrors the convert_comparison
+            # subsumption exactly. No-op for geo (its levels carry derive_from).
+            if (
+                fld.derive_from
+                and r.derive_from is None
+                and r.column in set(fld.derive_from)
+            ):
+                lost_m += m_p or 0.0
+                lost_u += u_p or 0.0
+                report.warn(
+                    level_path,
+                    f"single-column level on '{r.column}' subsumed by the "
+                    f"synthesized field '{fld.field}'; m/u dropped, surviving "
+                    "levels re-normalized",
+                    mapped_to=f"em.m_probs.{fld.field}",
+                )
+                continue
+
             if r.kind == "null":
                 # Splink convention: null levels carry no evidentiary m/u.
                 # Ignore even if present rather than let them participate.
@@ -1164,7 +1399,49 @@ class SplinkConversion:
     em_model: EMResult | None
 
 
-def _load_settings(source: dict | str | Path) -> dict:
+@runtime_checkable
+class SplinkLinkerLike(Protocol):
+    """Duck-typed shape of a live Splink ``Linker``.
+
+    A Linker holds its settings in memory; ``from_splink`` extracts them so a
+    caller can pass the Linker directly instead of first exporting a JSON file.
+    We match on the presence of the settings-serialization entry point rather
+    than importing splink (keeping ``from_splink`` import-light + polars-free).
+    """
+
+    misc: object
+
+
+def _extract_linker_settings(obj: object) -> dict | None:
+    """Return the in-memory settings dict of a live Splink Linker, or None.
+
+    Splink 4 exposes it via ``linker.misc.save_model_to_json(out_path=None)``
+    (returns the dict, writes nothing when the path is None); some shapes put
+    ``save_model_to_json`` directly on the linker. Duck-typed on purpose -- no
+    splink import -- so a non-Linker object simply returns None and the caller
+    raises the normal "unsupported source" error.
+    """
+    saver = getattr(getattr(obj, "misc", None), "save_model_to_json", None)
+    if not callable(saver):
+        saver = getattr(obj, "save_model_to_json", None)
+    if not callable(saver):
+        return None
+    try:
+        # out_path=None -> return the dict, write nothing. Try the keyword
+        # first (clearest intent), fall back to positional / no-arg shapes.
+        try:
+            result = saver(out_path=None)
+        except TypeError:
+            try:
+                result = saver(None)
+            except TypeError:
+                result = saver()
+    except Exception:  # noqa: BLE001 -- any serialization failure -> not usable
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _load_settings(source: dict | str | Path | SplinkLinkerLike) -> dict:
     if isinstance(source, dict):
         return dict(source)  # shallow copy: never mutate the caller's dict
 
@@ -1188,8 +1465,14 @@ def _load_settings(source: dict | str | Path) -> dict:
             )
         return data
 
+    # A live Splink Linker (or any object that can serialize its settings).
+    linker_settings = _extract_linker_settings(source)
+    if linker_settings is not None:
+        return dict(linker_settings)
+
     raise SplinkConversionError(
-        f"from_splink() source must be a dict, str, or Path, got {type(source).__name__}"
+        f"from_splink() source must be a dict, str, Path, or a Splink Linker, "
+        f"got {type(source).__name__}"
     )
 
 
@@ -1223,13 +1506,18 @@ def _patch_field_placeholders(report: ConversionReport, comp_path: str, field_id
             f.mapped_to = resolved + f.mapped_to[len(_PLACEHOLDER_PREFIX):]
 
 
-def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkConversion:
-    """Convert a Splink settings dict / JSON file into a GoldenMatch config.
+def from_splink(
+    source: dict | str | Path | SplinkLinkerLike, *, strict: bool = False
+) -> SplinkConversion:
+    """Convert a Splink settings dict / JSON file / live Linker into a config.
 
     Args:
-        source: A Splink settings dict, or a path (``str``/``Path``) to a
-            JSON file containing one. Bare (untrained) or trained (carrying
-            ``m_probability``/``u_probability``) settings are both accepted.
+        source: One of -- a Splink settings **dict**; a **path**
+            (``str``/``Path``) to a JSON settings file; or a live Splink
+            **Linker** object (its in-memory settings are extracted via
+            ``linker.misc.save_model_to_json``, so no export step is needed).
+            Bare (untrained) or trained (carrying
+            ``m_probability``/``u_probability``) settings are all accepted.
         strict: When True, ANY warning or error finding raises
             :class:`SplinkConversionError` (a fully lossless conversion is
             required). When False (default), only error-severity findings

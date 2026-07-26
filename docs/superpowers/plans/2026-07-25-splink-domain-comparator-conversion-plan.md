@@ -329,3 +329,36 @@ refinement remains a possible follow-on if a labeled/scored separation signal is
 
 **Roadmap now:** P1/P2/P3a/P3b/P4 shipped. Remaining: P5 Rust kernels (array_intersect/numeric_diff),
 P6 TS parity. Numeric stays opportunistic.
+
+## 14. numeric_diff Splink recognizer delivered (2026-07-25)
+The converter side of numeric (the "opportunistic" gap the kernel PRs don't touch). Splink has no
+first-class numeric comparison; magnitude arrives via a `CustomComparison` whose canonical shape —
+captured live from splink 4, **byte-identical DuckDB + Spark** — is `ABS("c_l" - "c_r") <= <eps>`.
+- **Recognizer** (`from_splink.py`): `_NUMERIC_DIFF_RE` (`ABS(col_l - col_r) <= n`, case-insensitive,
+  quoted/backtick/bare cols) + a `recognize_level` branch + `numeric_diff` added to `LevelKind`.
+  Emits `numeric_diff:abs:<band>` with **band = 2·eps** and **sim_threshold = 0.5**: a pair exactly
+  at the cutoff (dist = eps) scores `1 − eps/(2eps) = 0.5`, so under the `>=` level semantics
+  "score ≥ 0.5 ⟺ dist ≤ eps" reproduces `<= eps` EXACTLY (boundary inclusive) — mirroring
+  date_diff's "threshold = the score a pair at the cutoff earns". Placed after the haversine branch;
+  the date_diff gate (needs epoch/unix_timestamp) correctly declines a bare ABS, so no shadowing.
+- **Deterministic per level** (band + threshold from that level's OWN eps, no cross-level state), so
+  `recognize_level` yields the same 0.5 at field-build AND m/u-import time and `_agree_index_for`
+  aligns automatically — dodging the parity trap that cross-level band-normalization would create.
+- **Multi-cutoff**: every numeric level snaps to sim 0.5, so multiple Splink cutoffs collapse to ONE
+  numeric_diff level; `convert_comparison` keeps the LOOSEST band (largest 2·eps, recall-biased) and
+  warns. Single-cutoff (the common case) is exact.
+- **Scope**: only the ABSOLUTE form; a relative/pct `CustomComparison` (`ABS(a-b)/GREATEST(…) <= f`)
+  is too shape-variable and falls through (dropped + warned), matching today's behavior. `approx=True`
+  + a per-level "band = 2*eps" warn surfaces the ramp-vs-cutoff approximation.
+- Single-cutoff → field `numeric_diff:abs:<2eps>`, **3 levels [1.0, 0.5]** (exact / within-eps / else).
+  Trained m/u import round-trips (all levels survive, no dropped-mass warn). Scorer schema-valid
+  (`_is_valid_scorer`). from_splink stays polars-free.
+- Tests: `test_from_splink_numeric.py` (18) + updated one assertion in `test_from_splink_domain.py`
+  (a bare ABS is now numeric_diff, not None). Full from_splink suite 166 green; ruff + pyright clean;
+  codemap regenerated. No parity-manifest/config-matrix change (recognizer only, `numeric_diff` was
+  already a VALID_SCORERS member from the FS domain-comparator work).
+
+**Roadmap now:** the converter recognizes all four domain families (date_diff, geo_haversine,
+array_intersect, numeric_diff). Kernels: array_intersect (#2134) + date_diff/geo (#2130) shipped;
+numeric_diff kernel is #2138 (in flight). Remaining: P6 TS *converter* parity (the recognizers are
+Python-only; the TS port has its own `fromSplink`).

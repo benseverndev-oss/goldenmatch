@@ -15,7 +15,7 @@ export { ProfileScorer } from "./scorers/profile.js";
 export { FuzzyNameScorer } from "./scorers/fuzzy-name.js";
 export { LLMScorer } from "./scorers/llm.js";
 export type { LLMAdapter, LLMScorerOptions } from "./scorers/llm.js";
-export { defaultScorers, defineScorer } from "./scorers/registry.js";
+export { defaultScorers, defineScorer, SCORER_NAMES, SCORER_KERNELS } from "./scorers/registry.js";
 export {
   jaroSimilarity,
   jaroWinklerSimilarity,

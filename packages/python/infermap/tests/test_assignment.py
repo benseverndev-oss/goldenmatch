@@ -1,8 +1,26 @@
 """Tests for infermap.assignment.optimal_assign."""
 from __future__ import annotations
 
+import json
+import pathlib
+
 import numpy as np
-from infermap.assignment import optimal_assign
+from infermap.assignment import _lsa_pure, optimal_assign
+
+_PARITY_FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "assignment_parity.json"
+
+
+def test_lsa_matches_cross_language_fixture():
+    """The committed assignment_parity.json is the SINGLE cross-language oracle
+    (read directly by the TS parity test too -- no copy). The pure-Python LAP
+    reference (== the Rust infermap-core kernel, gated by test_native_parity) must
+    reproduce every case, so a drift in either the fixture or the algorithm fails
+    here and in the TS mirror."""
+    cases = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
+    assert cases, "assignment parity fixture is empty"
+    for case in cases:
+        got = [list(p) for p in _lsa_pure(case["cost"])]
+        assert got == case["pairs"], case["cost"]
 
 
 def test_perfect_diagonal():

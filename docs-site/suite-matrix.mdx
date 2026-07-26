@@ -26,14 +26,14 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 
 The Rust / Arrow-native / fused `-core` kernels are the source of truth for scoring; each language surface either dispatches to the kernel (the fast path) or runs a byte-identical pure-language **fallback**. This tracks which scorers a kernel actually backs vs which are fallback-only. Sources: Python `_NATIVE_SCORER_IDS` (arrow bucket kernel) and TS `WASM_COVERED_SCORERS` (`-core` WASM), gated as the `scorer_kernels` api_parity surface.
 
-**21 of 23 scorers are kernel-backed** (the reference fast path); the other 2 are pure-language fallbacks with no `-core` kernel.
+**21 of 24 scorers are kernel-backed** (the reference fast path); the other 3 are pure-language fallbacks with no `-core` kernel.
 
 | Substrate | Scorers |
 |---|---|
 | Rust `-core` kernel — Python + TS | `alias_match`, `array_intersect`, `audio_fp`, `date`, `date_diff`, `dice`, `ensemble`, `exact`, `geo_haversine`, `given_name_aliased_jw`, `initialism_match`, `jaccard`, `jaro_winkler`, `levenshtein`, `name_freq_weighted_jw`, `numeric_diff`, `phash`, `qgram`, `radial`, `soundex_match`, `token_sort` |
 | Rust `-core` kernel — Python arrow-native only (TS falls back) | — |
 | WASM `-core` kernel — TS only (Python falls back) | — |
-| Language fallback — no `-core` kernel | `embedding`, `record_embedding` |
+| Language fallback — no `-core` kernel | `cosine`, `embedding`, `record_embedding` |
 
 ## Cross-language parity (Python ↔ TypeScript)
 
@@ -44,7 +44,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 | `goldenmatch` | mcp_tools | 83 | 7 | 0 |
 | `goldenmatch` | cli_commands | 32 | 5 | 0 |
 | `goldenmatch` | a2a_skills | 33 | 14 | 13 |
-| `goldenmatch` | scorers | 23 | 0 | 0 |
+| `goldenmatch` | scorers | 23 | 1 | 0 |
 | `goldenmatch` | transforms | 13 | 0 | 0 |
 | `goldencheck` | mcp_tools | 18 | 1 | 0 |
 | `goldencheck` | cli_commands | 14 | 8 | 0 |
@@ -52,13 +52,16 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 | `goldenflow` | mcp_tools | 10 | 0 | 0 |
 | `goldenflow` | cli_commands | 12 | 4 | 0 |
 | `goldenflow` | a2a_skills | 6 | 0 | 0 |
+| `goldenflow` | transforms | 113 | 0 | 1 |
 | `goldenpipe` | mcp_tools | 4 | 0 | 0 |
 | `goldenpipe` | cli_commands | 7 | 1 | 0 |
 | `goldenpipe` | a2a_skills | 4 | 0 | 0 |
 | `goldenanalysis` | mcp_tools | 4 | 0 | 0 |
 | `goldenanalysis` | cli_commands | 4 | 0 | 0 |
+| `goldenanalysis` | analyzers | 4 | 0 | 0 |
 | `infermap` | mcp_tools | 4 | 0 | 0 |
 | `infermap` | cli_commands | 5 | 0 | 0 |
+| `infermap` | scorers | 7 | 0 | 0 |
 
 ## Gaps & asymmetries (auto-detected)
 
@@ -67,9 +70,11 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 - `goldenmatch` **cli_commands** — Python-only: `ingest-docs`, `serve-ui`, `setup`, `sync`, `watch`.
 - `goldenmatch` **a2a_skills** — Python-only: `analyze_blocking`, `compare_clusters`, `configure`, `documents_ingest`, `documents_suggest_schema`, `incremental`, `list_runs`, `pprl`, `quality`, `retrieve_similar`, `review`, `rollback`, `schema_match`, `sensitivity`.
 - `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `fix_quality`, `identity_profile`, `identity_stats`, `identity_worklist`, `memory_import`, `scan_quality`, `score`.
+- `goldenmatch` **scorers** — Python-only: `cosine`.
 - `goldencheck` **mcp_tools** — Python-only: `install_domain`.
 - `goldencheck` **cli_commands** — Python-only: `denial-constraints`, `init`, `learn`, `refs`, `review`, `scan-db`, `schedule`, `serve`.
 - `goldenflow` **cli_commands** — Python-only: `init`, `interactive`, `schedule`, `watch`.
+- `goldenflow` **transforms** — TS-only: `category_llm_correct`.
 - `goldenpipe` **cli_commands** — Python-only: `interactive`.
 
 {/* suite-matrix:generated:end */}

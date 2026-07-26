@@ -598,12 +598,15 @@
             "_baseline_path",
             "_render_delta_table",
             "_render_report_table",
+            "_render_verify_table",
+            "_run_verify",
             "_write_pair",
             "import_splink_cmd"
           ],
           "imports": [
             "goldenmatch.config.from_splink",
-            "goldenmatch.config.splink_upgrade"
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_verify"
           ]
         },
         {
@@ -934,15 +937,19 @@
             "RecognizedLevel",
             "SplinkConversion",
             "SplinkConversionError",
+            "SplinkLinkerLike",
             "_BlockConjunct",
             "_agree_index_for",
             "_convert_one_blocking_rule",
+            "_extract_linker_settings",
             "_findings_preview",
+            "_fmt_band",
             "_load_settings",
             "_looks_like_date_diff",
             "_looks_like_haversine",
             "_patch_field_placeholders",
             "_recognize_blocking_conjunct",
+            "_recognize_forename_surname",
             "_strip_outer_parens",
             "convert_blocking",
             "convert_comparison",
@@ -1121,6 +1128,27 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.config.splink_upgrade"
+          ]
+        },
+        {
+          "module": "goldenmatch.config.splink_verify",
+          "file": "packages/python/goldenmatch/goldenmatch/config/splink_verify.py",
+          "purpose": "Auto-verify a Splink -> GoldenMatch conversion against a locally-installed Splink.",
+          "defines": [
+            "SplinkVerification",
+            "_multi_cluster_count",
+            "_run_goldenmatch",
+            "_run_splink",
+            "_splink_available",
+            "verify_against_splink"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_upgrade_measure",
+            "goldenmatch.core.probabilistic"
           ]
         },
         {
@@ -4068,6 +4096,7 @@
             "_audio_fp_score_single",
             "_build_null_mask",
             "_concat_pair_frames",
+            "_cosine_similarity_py",
             "_cross_source_filter_df",
             "_date_diff_band",
             "_date_diff_similarity_py",
@@ -4105,6 +4134,7 @@
             "_parse_latlong",
             "_parse_numeric_diff_spec",
             "_parse_token_set",
+            "_parse_vector",
             "_phash_score_matrix",
             "_phash_score_single",
             "_qgram_score_matrix",
@@ -11438,9 +11468,14 @@
         {
           "module": "infermap.assignment",
           "file": "packages/python/infermap/infermap/assignment.py",
-          "purpose": "Optimal assignment via the Hungarian algorithm.",
+          "purpose": "Optimal 1:1 assignment via the Hungarian algorithm.",
           "defines": [
+            "_linear_sum_assignment",
+            "_lsa_pure",
             "optimal_assign"
+          ],
+          "imports": [
+            "infermap._native_loader"
           ]
         },
         {

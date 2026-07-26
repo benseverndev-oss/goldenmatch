@@ -63,10 +63,13 @@ def test_date_diff_recognized_both_dialects(sql, expected_band):
     assert r.approx is True
 
 
-def test_non_date_abs_expression_not_recognized():
-    # An ABS() numeric difference with no EPOCH/UNIX_TIMESTAMP date parse is
-    # NOT a date_diff level -- must fall through to None (dropped + warned).
-    assert recognize_level('ABS("age_l" - "age_r") <= 5') is None
+def test_non_date_abs_expression_is_numeric_not_date():
+    # An ABS() numeric difference with no EPOCH/UNIX_TIMESTAMP date parse is NOT a
+    # date_diff level -- it is recognized as `numeric_diff` (the bare-ABS numeric
+    # recognizer; see test_from_splink_numeric.py). The date_diff gate correctly
+    # declines it (no epoch/unix_timestamp), which is what this asserts.
+    r = recognize_level('ABS("age_l" - "age_r") <= 5')
+    assert r is not None and r.kind == "numeric_diff"
 
 
 def test_date_diff_mismatched_columns_dropped():

@@ -51,6 +51,13 @@ VALID_SCORERS = frozenset({
     # = Jaccard; `array_intersect:overlap` = overlap coefficient (min denominator).
     # The suffixed forms validate via _ARRAY_INTERSECT_RE below. FS path.
     "array_intersect",
+    # Vector cosine over two PRECOMPUTED embedding columns (spec 2026-07-25, Splink
+    # CosineSimilarity conversion): parses a delimited float vector per side
+    # ("0.1,0.2,0.3") and returns the cosine, clamped to [0,1]. UNLIKE `embedding`
+    # (which embeds text via a model at score time), this compares vectors the data
+    # already carries -- so a converted Splink `array_cosine_similarity >= t` keeps
+    # its exact threshold. Unparseable / length-mismatched input degrades to exact.
+    "cosine",
     # Hamming similarity over a hex perceptual hash (image pHash) -- the
     # multimodal-ER crawl-tier media-as-evidence comparator (ADR 0022).
     "phash",

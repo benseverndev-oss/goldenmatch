@@ -123,6 +123,8 @@ def phone_e164(series: pl.Series) -> pl.Series:
 
 All transform modules are imported in `goldenflow/__init__.py` at package load time -- that is the only registration mechanism. If you add a new module, add an import there.
 
+**Cross-language `transforms` parity surface (`parity/goldenflow.yaml`, 2026-07-25):** the registered transform names are now an `api_parity` surface — emitted from `goldenflow.transforms.list_transforms` (Python; `import goldenflow` registers all) ↔ `core/transforms/registry.ts listTransforms()` (TS), partitioned shared/python_only/ts_only. It's a partition-only surface (no kernel floor — goldenflow-core kernel-backing is separately guarded by the `native_symbols` `literal` idiom gate). 113 transforms are shared 1:1; the sole delta is TS-only `category_llm_correct` (edge-side LLM corrector, model-backed). **Adding/removing a transform on ONE language now FAILS the api_parity lane** — add it to both surfaces (or declare the delta in `parity/goldenflow.yaml` with a reason). The gate's path filter watches `transforms/**` on both sides + `core/llm/corrector.ts`.
+
 ## Hybrid expr / series / dataframe Mode System
 
 The `mode` field on `TransformInfo` controls how the engine applies a transform:

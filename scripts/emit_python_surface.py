@@ -84,6 +84,43 @@ def _scorer_kernels() -> list[str]:
     return sorted(_NATIVE_SCORER_IDS)
 
 
+def _infermap_scorers() -> list[str]:
+    # infermap's built-in scorer identities (each scorer class's `.name`). Mirrors
+    # TS `SCORER_NAMES` (core/scorers/registry.ts); the api_parity `scorers` surface.
+    from infermap.scorers import SCORER_NAMES
+    return sorted(SCORER_NAMES)
+
+
+def _infermap_scorer_kernels() -> list[str]:
+    # infermap scorers backed by an `infermap-core` Rust kernel (native + wasm).
+    # STATIC (does not require the wheel to be built). Mirrors TS `SCORER_KERNELS`;
+    # every scorer NOT here is classified in parity/infermap.yaml
+    # scorer_kernels_deferred (the check_scorer_coverage floor).
+    from infermap.scorers import SCORER_KERNELS
+    return sorted(SCORER_KERNELS)
+
+
+def _goldenflow_transforms() -> list[str]:
+    # goldenflow's registered transform identities. `import goldenflow` triggers
+    # every transform submodule's registration side-effect (goldenflow/__init__.py
+    # imports address/names/email/... ), so list_transforms() sees the full set.
+    # Mirrors TS `listTransforms()` (core/transforms/registry.ts); the api_parity
+    # `transforms` surface. Intended cross-language deltas (e.g. the TS-only
+    # LLM corrector) are declared in parity/goldenflow.yaml.
+    import goldenflow  # noqa: F401  (registration side-effects)
+    from goldenflow.transforms import list_transforms
+    return sorted({t.name for t in list_transforms()})
+
+
+def _goldenanalysis_analyzers() -> list[str]:
+    # goldenanalysis's discoverable analyzer identities (entry-points + fallback).
+    # Mirrors TS `availableAnalyzers()` (core/registry.ts); the api_parity
+    # `analyzers` surface. Intended cross-language deltas live in
+    # parity/goldenanalysis.yaml.
+    from goldenanalysis.registry import available_analyzers
+    return sorted(available_analyzers())
+
+
 # The only per-package variance on the Python side is the CLI module path.
 _CLI_MODULE = {
     "goldenmatch": "goldenmatch.cli.main",
@@ -98,13 +135,30 @@ _CLI_MODULE = {
 REGISTRY = {
     pkg: {"mcp_tools": (_mcp(pkg), "mcp"), "cli_commands": (_cli(mod), None),
           **({"a2a_skills": (_a2a(pkg), "a2a")} if pkg in _A2A_PACKAGES else {}),
-          # Scorer/transform config surfaces are goldenmatch-only (no extra needed:
-          # config.schemas imports without the mcp/a2a stacks). Other packages
-          # never declare these surfaces, so they're skipped for them.
+          # goldenmatch config surfaces (scorers/transforms/blocking/kernels).
           **({"scorers": (_scorers, None), "transforms": (_transforms, None),
               "blocking_strategies": (_blocking_strategies, None),
               "scorer_kernels": (_scorer_kernels, None)}
-             if pkg == "goldenmatch" else {})}
+             if pkg == "goldenmatch" else {}),
+          # infermap's M:N scorer surface + its infermap-core kernel coverage.
+          # Declaring both activates check_scorer_coverage for infermap (the same
+          # floor that gates goldenmatch), so a new/regressed infermap scorer can't
+          # sit un-kernelized or un-declared. Other packages don't yet model a
+          # compute surface, so they're skipped.
+          **({"scorers": (_infermap_scorers, None),
+              "scorer_kernels": (_infermap_scorer_kernels, None)}
+             if pkg == "infermap" else {}),
+          # goldenflow's transform vocabulary -- the cross-language `transforms`
+          # parity surface (mirrors goldenmatch's transforms surface: partition
+          # only, no kernel floor). Catches a transform available on one language
+          # but not the other; intended deltas live in parity/goldenflow.yaml.
+          **({"transforms": (_goldenflow_transforms, None)}
+             if pkg == "goldenflow" else {}),
+          # goldenanalysis's analyzer registry -- the cross-language `analyzers`
+          # parity surface (partition only). Catches an analyzer available on one
+          # language but not the other; deltas live in parity/goldenanalysis.yaml.
+          **({"analyzers": (_goldenanalysis_analyzers, None)}
+             if pkg == "goldenanalysis" else {})}
     for pkg, mod in _CLI_MODULE.items()
 }
 

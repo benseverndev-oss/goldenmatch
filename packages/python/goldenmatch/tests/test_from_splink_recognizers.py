@@ -109,9 +109,23 @@ def test_else_level():
     assert result_lower == RecognizedLevel("else", None, None)
 
 
-def test_cross_column_returns_none():
-    result = recognize_level('"first_name_l" = "surname_r" AND "surname_l" = "first_name_r"')
+def test_single_cross_column_equality_returns_none():
+    # A lone cross-column equality (not the two-part ForenameSurname AND shape)
+    # is still unrecognized.
+    result = recognize_level('"first_name_l" = "surname_r"')
     assert result is None
+
+
+def test_forename_surname_transposition_recognized():
+    # The A_l=B_r AND A_r=B_l transposition is the ForenameSurname cross-column
+    # shape: now recognized as a token_sort on the synthesized combined field
+    # (previously returned None).
+    result = recognize_level('"first_name_l" = "surname_r" AND "surname_l" = "first_name_r"')
+    assert result is not None
+    assert result.kind == "token_sort"
+    assert result.column == "first_name__surname"
+    assert result.sim_threshold == 1.0
+    assert result.derive_from == ["first_name", "surname"]
 
 
 def test_mismatched_columns_in_function_returns_none():

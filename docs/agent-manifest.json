@@ -3196,6 +3196,27 @@
               "required": false,
               "default": "None",
               "help": "Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id)"
+            },
+            {
+              "name": "--verify",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "Prove the conversion preserved behaviour: run BOTH the original Splink settings (needs `pip install splink`) AND the converted config on a sample of this dataset (parquet/csv) and report pairwise cluster agreement. Best-effort -- skipped with a notice if splink is absent or the settings can't run under DuckDB."
+            },
+            {
+              "name": "--verify-sample",
+              "type": "integer",
+              "required": false,
+              "default": "5000",
+              "help": "Rows to run through both engines for --verify (seeded subsample above it)"
+            },
+            {
+              "name": "--verify-threshold",
+              "type": "float",
+              "required": false,
+              "default": "0.5",
+              "help": "Splink match-probability cut for --verify clustering"
             }
           ]
         },
@@ -4767,6 +4788,12 @@
               "value": "audio_fp",
               "meaning": "Audio-fingerprint similarity.",
               "best_for": "Audio clips",
+              "range": "0.0-1.0"
+            },
+            {
+              "value": "cosine",
+              "meaning": "Cosine similarity of two PRECOMPUTED float-vector columns (parsed from a delimited/bracketed string); direct, not model-embedded like 'embedding'.",
+              "best_for": "Precomputed embedding columns",
               "range": "0.0-1.0"
             },
             {
