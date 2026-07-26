@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 412,
+      "module_count": 413,
       "modules": [
         {
           "module": "goldenmatch",
@@ -5747,6 +5747,26 @@
           ],
           "imports": [
             "goldenmatch.identity.model",
+            "goldenmatch.identity.store"
+          ]
+        },
+        {
+          "module": "goldenmatch.identity.block_index",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/block_index.py",
+          "purpose": "Block-key computation + population for the persisted blocking index (C2).",
+          "defines": [
+            "_pass_signature",
+            "_passes_of",
+            "backfill_block_index",
+            "compute_frame_block_keys",
+            "compute_record_block_keys"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core.blocker",
+            "goldenmatch.core.frame",
+            "goldenmatch.identity.resolve",
             "goldenmatch.identity.store"
           ]
         },
