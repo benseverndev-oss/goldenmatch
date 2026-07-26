@@ -794,6 +794,15 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `memory show` | `id_b` | integer | **required** | Second record ID |
 | `memory show` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
 | `memory stats` | `--path` | text | `'.goldenmatch/memory.db'` | Memory DB path |
+| `migrate-splink` | `input_path` | text | **required** | Splink settings or trained-model JSON file |
+| `migrate-splink` | `data` | text | **required** | Data to deduplicate (parquet/csv) |
+| `migrate-splink` | `--output` | text | `'clusters.parquet'` | Where to write the deduplicated (golden) records (parquet/csv) |
+| `migrate-splink` | `--config-out` | text | `None` | Also write the converted GoldenMatch YAML config here |
+| `migrate-splink` | `--verify` | boolean | `True` | Verify the conversion against a locally-installed Splink on a sample (default on; skipped with a notice if splink is absent) |
+| `migrate-splink` | `--verify-sample` | integer | `5000` | Rows to run through both engines for --verify |
+| `migrate-splink` | `--verify-threshold` | float | `0.5` | Splink match-probability cut for --verify |
+| `migrate-splink` | `--strict` | boolean | `False` | Fail on any lossy mapping (warnings), not just errors |
+| `migrate-splink` | `--id-column` | text | `None` | Column holding each row's id (default: auto-detect unique_id/id/record_id) |
 | `pprl auto-config` | `file` | path | **required** | Data file to analyze (CSV) |
 | `pprl auto-config` | `--security` | text | `'high'` | Security level: standard, high, paranoid |
 | `pprl auto-config` | `--llm` | boolean | `False` | Use LLM for enhanced recommendations |
