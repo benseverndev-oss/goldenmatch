@@ -175,6 +175,7 @@ cli_commands:
   - unmerge
   python_only:
   - ingest-docs
+  - migrate-splink
   - serve-ui
   - setup
   - sync

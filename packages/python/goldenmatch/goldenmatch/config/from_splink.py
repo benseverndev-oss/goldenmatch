@@ -1382,6 +1382,57 @@ _MATCHKEY_NAME = "splink_import"
 
 
 @dataclass
+class CoverageSummary:
+    """A scannable one-line scorecard for a conversion.
+
+    Lets a caller judge how faithful the conversion was at a glance, without
+    reading every finding: how many Splink comparisons + blocking rules were
+    converted, how many converted fields carry an *approximate* mapping (a
+    lossy distance/count/date snap), and how many comparisons were dropped
+    entirely. ``is_complete`` is the headline: every comparison and blocking
+    rule converted.
+    """
+
+    total_comparisons: int
+    converted_comparisons: int
+    approximate_fields: int
+    total_blocking_rules: int
+    converted_blocking_rules: int
+
+    @property
+    def dropped_comparisons(self) -> int:
+        return self.total_comparisons - self.converted_comparisons
+
+    @property
+    def dropped_blocking_rules(self) -> int:
+        return self.total_blocking_rules - self.converted_blocking_rules
+
+    @property
+    def is_complete(self) -> bool:
+        """True when every comparison AND blocking rule converted."""
+        return (
+            self.converted_comparisons == self.total_comparisons
+            and self.converted_blocking_rules == self.total_blocking_rules
+            and self.total_comparisons > 0
+        )
+
+    def line(self) -> str:
+        """One-line human summary."""
+        exact = self.converted_comparisons - self.approximate_fields
+        parts = [
+            f"{self.converted_comparisons}/{self.total_comparisons} comparisons "
+            f"({exact} exact, {self.approximate_fields} approximate)",
+            f"{self.converted_blocking_rules}/{self.total_blocking_rules} blocking rules",
+        ]
+        if self.dropped_comparisons:
+            parts.append(f"{self.dropped_comparisons} comparison(s) dropped")
+        if self.dropped_blocking_rules:
+            parts.append(f"{self.dropped_blocking_rules} blocking rule(s) dropped")
+        coverage = "100% coverage" if self.is_complete else "partial coverage"
+        return " -- ".join(parts) + f" -- {coverage}"
+
+
+@dataclass
 class SplinkConversion:
     """Result of :func:`from_splink`.
 
@@ -1392,53 +1443,81 @@ class SplinkConversion:
     does this via ``--model-out``; the MCP surface deliberately does NOT
     persist -- it returns ``em_model`` inline instead (the remote surface is
     filesystem-free), leaving persistence to the caller.
+
+    ``coverage`` is a :class:`CoverageSummary` scorecard (comparisons /
+    blocking rules converted, approximate fields, drops).
     """
 
     config: GoldenMatchConfig
     report: ConversionReport
     em_model: EMResult | None
+    coverage: CoverageSummary | None = None
+
+
+# Splink's default SQL dialect for ``SettingsCreator.create_settings_dict`` --
+# the comparison SQL our recognizers understand is DuckDB/Spark-shaped, and
+# DuckDB is Splink's default engine, so we materialize a SettingsCreator against
+# it. (A live Linker already carries a concrete dialect, so this only applies to
+# the not-yet-fitted SettingsCreator path.)
+_SETTINGS_CREATOR_DIALECT = "duckdb"
 
 
 @runtime_checkable
 class SplinkLinkerLike(Protocol):
-    """Duck-typed shape of a live Splink ``Linker``.
+    """Duck-typed shape of a live Splink ``Linker`` or ``SettingsCreator``.
 
-    A Linker holds its settings in memory; ``from_splink`` extracts them so a
-    caller can pass the Linker directly instead of first exporting a JSON file.
-    We match on the presence of the settings-serialization entry point rather
-    than importing splink (keeping ``from_splink`` import-light + polars-free).
+    Both hold their settings in memory; ``from_splink`` extracts them so a
+    caller can pass either object directly instead of first exporting a JSON
+    file. We match on the presence of a settings-serialization entry point
+    rather than importing splink (keeping ``from_splink`` import-light +
+    polars-free).
     """
 
     misc: object
 
 
 def _extract_linker_settings(obj: object) -> dict | None:
-    """Return the in-memory settings dict of a live Splink Linker, or None.
+    """Return the in-memory settings dict of a live Splink object, or None.
 
-    Splink 4 exposes it via ``linker.misc.save_model_to_json(out_path=None)``
-    (returns the dict, writes nothing when the path is None); some shapes put
-    ``save_model_to_json`` directly on the linker. Duck-typed on purpose -- no
-    splink import -- so a non-Linker object simply returns None and the caller
-    raises the normal "unsupported source" error.
+    Two duck-typed shapes are handled, no splink import required:
+
+    - a **Linker**: ``linker.misc.save_model_to_json(out_path=None)`` (splink 4;
+      returns the dict, writes nothing when the path is None), or a
+      ``save_model_to_json`` directly on the object;
+    - a **SettingsCreator** (a model authored but not yet fitted to a Linker):
+      ``creator.create_settings_dict(sql_dialect_str)``.
+
+    A non-Splink object returns None and the caller raises the normal
+    "unsupported source" error.
     """
     saver = getattr(getattr(obj, "misc", None), "save_model_to_json", None)
     if not callable(saver):
         saver = getattr(obj, "save_model_to_json", None)
-    if not callable(saver):
-        return None
-    try:
-        # out_path=None -> return the dict, write nothing. Try the keyword
-        # first (clearest intent), fall back to positional / no-arg shapes.
+    if callable(saver):
         try:
-            result = saver(out_path=None)
-        except TypeError:
+            # out_path=None -> return the dict, write nothing. Try the keyword
+            # first (clearest intent), fall back to positional / no-arg shapes.
             try:
-                result = saver(None)
+                result = saver(out_path=None)
             except TypeError:
-                result = saver()
-    except Exception:  # noqa: BLE001 -- any serialization failure -> not usable
-        return None
-    return result if isinstance(result, dict) else None
+                try:
+                    result = saver(None)
+                except TypeError:
+                    result = saver()
+        except Exception:  # noqa: BLE001 -- any serialization failure -> not usable
+            return None
+        return result if isinstance(result, dict) else None
+
+    # SettingsCreator: materialize its settings against the default dialect.
+    creator = getattr(obj, "create_settings_dict", None)
+    if callable(creator):
+        try:
+            result = creator(_SETTINGS_CREATOR_DIALECT)
+        except Exception:  # noqa: BLE001 -- best-effort, else fall through to None
+            return None
+        return result if isinstance(result, dict) else None
+
+    return None
 
 
 def _load_settings(source: dict | str | Path | SplinkLinkerLike) -> dict:
@@ -1465,14 +1544,15 @@ def _load_settings(source: dict | str | Path | SplinkLinkerLike) -> dict:
             )
         return data
 
-    # A live Splink Linker (or any object that can serialize its settings).
+    # A live Splink Linker / SettingsCreator (or any object that can serialize
+    # its settings).
     linker_settings = _extract_linker_settings(source)
     if linker_settings is not None:
         return dict(linker_settings)
 
     raise SplinkConversionError(
-        f"from_splink() source must be a dict, str, Path, or a Splink Linker, "
-        f"got {type(source).__name__}"
+        f"from_splink() source must be a dict, str, Path, or a Splink Linker / "
+        f"SettingsCreator, got {type(source).__name__}"
     )
 
 
@@ -1601,4 +1681,28 @@ def from_splink(
             f"from_splink(): conversion error -- {report.summary()}. {preview}"
         )
 
-    return SplinkConversion(config=config, report=report, em_model=em_model)
+    # Coverage scorecard. `approximate_fields` counts converted comparisons
+    # whose conversion emitted an "approximate mapping" warning (a lossy
+    # distance/count/date/token snap) -- keyed by comp_path so it's robust to
+    # the exact message text. converted_blocking_rules = keys in the config.
+    approx_comp_paths = {
+        f.splink_path.split(".comparison_levels", 1)[0]
+        for f in report.findings
+        if f.severity == "warning" and f.message.startswith("approximate mapping")
+    }
+    approximate_fields = sum(
+        1 for _c, idx, _f in survivors if f"comparisons[{idx}]" in approx_comp_paths
+    )
+    coverage = CoverageSummary(
+        total_comparisons=len(settings.get("comparisons", [])),
+        converted_comparisons=len(survivors),
+        approximate_fields=approximate_fields,
+        total_blocking_rules=len(
+            settings.get("blocking_rules_to_generate_predictions", [])
+        ),
+        converted_blocking_rules=len(blocking.keys),
+    )
+
+    return SplinkConversion(
+        config=config, report=report, em_model=em_model, coverage=coverage
+    )
