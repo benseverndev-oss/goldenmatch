@@ -715,6 +715,9 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `import-splink` | `--sample-cap` | integer | `100000` | Row cap for --upgrade lever computation and measurement (seeded subsample above it) |
 | `import-splink` | `--no-measure` | boolean | `False` | Skip the baseline-vs-upgraded measurement pass |
 | `import-splink` | `--id-column` | text | `None` | Column holding each row's id for --upgrade measurement/reference joins (default: auto-detect unique_id/id/record_id) |
+| `import-splink` | `--verify` | text | `None` | Prove the conversion preserved behaviour: run BOTH the original Splink settings (needs `pip install splink`) AND the converted config on a sample of this dataset (parquet/csv) and report pairwise cluster agreement. Best-effort -- skipped with a notice if splink is absent or the settings can't run under DuckDB. |
+| `import-splink` | `--verify-sample` | integer | `5000` | Rows to run through both engines for --verify (seeded subsample above it) |
+| `import-splink` | `--verify-threshold` | float | `0.5` | Splink match-probability cut for --verify clustering |
 | `incremental` | `base_file` | text | **required** | Base dataset file path |
 | `incremental` | `--new-records` | path | **required** | New records CSV to match |
 | `incremental` | `--config` | path | **required** | Config YAML path |

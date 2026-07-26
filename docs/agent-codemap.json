@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 405,
+      "module_count": 406,
       "modules": [
         {
           "module": "goldenmatch",
@@ -598,12 +598,15 @@
             "_baseline_path",
             "_render_delta_table",
             "_render_report_table",
+            "_render_verify_table",
+            "_run_verify",
             "_write_pair",
             "import_splink_cmd"
           ],
           "imports": [
             "goldenmatch.config.from_splink",
-            "goldenmatch.config.splink_upgrade"
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_verify"
           ]
         },
         {
@@ -1123,6 +1126,27 @@
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
             "goldenmatch.config.splink_upgrade"
+          ]
+        },
+        {
+          "module": "goldenmatch.config.splink_verify",
+          "file": "packages/python/goldenmatch/goldenmatch/config/splink_verify.py",
+          "purpose": "Auto-verify a Splink -> GoldenMatch conversion against a locally-installed Splink.",
+          "defines": [
+            "SplinkVerification",
+            "_multi_cluster_count",
+            "_run_goldenmatch",
+            "_run_splink",
+            "_splink_available",
+            "verify_against_splink"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_upgrade_measure",
+            "goldenmatch.core.probabilistic"
           ]
         },
         {
