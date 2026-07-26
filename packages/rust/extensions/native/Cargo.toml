@@ -49,6 +49,10 @@ goldenmatch-fs-core = { path = "../fs-core" }
 # The #[pyfunction] graph shims below delegate here so DuckDB/DataFusion and
 # this extension module share one behavior-exact path.
 goldenmatch-graph-core = { path = "../graph-core" }
+# Pyo3-free MST-split + confidence clustering kernels (mst_split_components /
+# severe_bridge_count / cluster_confidence / find). The cluster.rs shims delegate
+# here so a future cluster-wasm surface shares one behavior-exact path.
+goldenmatch-cluster-core = { path = "../cluster-core" }
 # Pyo3-free MinHash/LSH sketch kernels (#1081). The sketch.rs shims delegate
 # here; byte-identical with core/sketch.py and the TS port (shared golden vectors).
 goldenmatch-sketch-core = { path = "../sketch-core" }

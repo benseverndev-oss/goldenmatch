@@ -1,0 +1,23 @@
+# Standalone workspace so this pyo3-free core can be a path dependency of the
+# `native` crate (its own workspace, extension-module) without that workspace
+# claiming it — and so a future `cluster-wasm` surface can share it too (step A1
+# of the kernel-sharing effort; NO wasm here yet). Same isolation rationale as
+# the sibling `score-core` / `graph-core` crates. NO rust-toolchain.toml here on
+# purpose: the crate inherits each parent crate's toolchain when built as a path
+# dep.
+[workspace]
+
+[package]
+name = "goldenmatch-cluster-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "Canonical MST-split + confidence clustering kernels (no pyo3, no arrow) shared across the native ext and a future wasm surface"
+
+[lib]
+name = "goldenmatch_cluster_core"
+
+[dependencies]
+# std only — no arrow, no pyo3. The kernels operate on plain Vec/HashMap so they
+# stay byte-parity with core/cluster.py and the TS port.
