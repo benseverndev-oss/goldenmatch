@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 409,
+      "module_count": 412,
       "modules": [
         {
           "module": "goldenmatch",
@@ -591,6 +591,22 @@
           ]
         },
         {
+          "module": "goldenmatch.cli.import_dbt",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/import_dbt.py",
+          "purpose": "CLI command: distill a hand-rolled dbt project's ER logic into a config.",
+          "defines": [
+            "_render_report_table",
+            "_render_verify_table",
+            "_run_verify",
+            "import_dbt_cmd"
+          ],
+          "imports": [
+            "goldenmatch.config.dbt_verify",
+            "goldenmatch.config.from_dbt",
+            "goldenmatch.config.from_splink"
+          ]
+        },
+        {
           "module": "goldenmatch.cli.import_splink",
           "file": "packages/python/goldenmatch/goldenmatch/cli/import_splink.py",
           "purpose": "CLI command: convert a Splink settings or trained-model JSON file into a",
@@ -698,6 +714,7 @@
             "goldenmatch.cli.evaluate",
             "goldenmatch.cli.explain",
             "goldenmatch.cli.identity",
+            "goldenmatch.cli.import_dbt",
             "goldenmatch.cli.import_splink",
             "goldenmatch.cli.incremental",
             "goldenmatch.cli.ingest_docs",
@@ -943,6 +960,59 @@
         {
           "module": "goldenmatch.config",
           "file": "packages/python/goldenmatch/goldenmatch/config/__init__.py"
+        },
+        {
+          "module": "goldenmatch.config.dbt_verify",
+          "file": "packages/python/goldenmatch/goldenmatch/config/dbt_verify.py",
+          "purpose": "Auto-verify a dbt -> GoldenMatch conversion against the pipeline's own output.",
+          "defines": [
+            "DbtVerification",
+            "_load_output_mapping",
+            "_multi_cluster_count",
+            "verify_against_dbt"
+          ],
+          "imports": [
+            "goldenmatch._polars_lazy",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.config.splink_upgrade",
+            "goldenmatch.config.splink_upgrade_measure"
+          ]
+        },
+        {
+          "module": "goldenmatch.config.from_dbt",
+          "file": "packages/python/goldenmatch/goldenmatch/config/from_dbt.py",
+          "purpose": "Hand-rolled dbt -> GoldenMatch config converter (distill + verify).",
+          "defines": [
+            "DbtConversion",
+            "DbtConversionCoverage",
+            "DbtConversionError",
+            "ErModel",
+            "RecognizedSignal",
+            "_balanced_args",
+            "_blocking_signal_from_cols",
+            "_build_coverage",
+            "_col_field",
+            "_emit_config",
+            "_fuzzy_from_match",
+            "_fuzzy_predicate_re",
+            "_load_manifest",
+            "_manifest_dialect",
+            "_name_signal",
+            "_order_by_survivorship",
+            "_shape_signal",
+            "_split_top_level",
+            "_unique_test_columns",
+            "_unwrap_column",
+            "extract_signals",
+            "from_dbt",
+            "identify_er_models"
+          ],
+          "imports": [
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.schemas",
+            "goldenmatch.core._paths"
+          ]
         },
         {
           "module": "goldenmatch.config.from_splink",
