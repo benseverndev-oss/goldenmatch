@@ -1,0 +1,116 @@
+[
+ {
+  "input": "  John.Doe+tag@Example.COM ",
+  "email_normalize": "john.doe@example.com",
+  "url_normalize": "https://john.doe+tag@example.com",
+  "address_standardize": "  John.Doe+tag@Example.COM "
+ },
+ {
+  "input": "a.b.c@gmail.com",
+  "email_normalize": "abc@gmail.com",
+  "url_normalize": "https://a.b.c@gmail.com",
+  "address_standardize": "a.b.c@gmail.com"
+ },
+ {
+  "input": "x+y@googlemail.com",
+  "email_normalize": "x@googlemail.com",
+  "url_normalize": "https://x+y@googlemail.com",
+  "address_standardize": "x+y@googlemail.com"
+ },
+ {
+  "input": "NoAt",
+  "email_normalize": "NoAt",
+  "url_normalize": "https://noat",
+  "address_standardize": "NoAt"
+ },
+ {
+  "input": "",
+  "email_normalize": "",
+  "url_normalize": null,
+  "address_standardize": ""
+ },
+ {
+  "input": "   ",
+  "email_normalize": "   ",
+  "url_normalize": null,
+  "address_standardize": "   "
+ },
+ {
+  "input": "UPPER@DOMAIN.ORG",
+  "email_normalize": "upper@domain.org",
+  "url_normalize": "https://upper@domain.org",
+  "address_standardize": "UPPER@DOMAIN.ORG"
+ },
+ {
+  "input": "user@GMAIL.COM",
+  "email_normalize": "user@gmail.com",
+  "url_normalize": "https://user@gmail.com",
+  "address_standardize": "user@GMAIL.COM"
+ },
+ {
+  "input": "plain@host.io",
+  "email_normalize": "plain@host.io",
+  "url_normalize": "https://plain@host.io",
+  "address_standardize": "plain@host.io"
+ },
+ {
+  "input": "HTTP://Example.com/Path/",
+  "email_normalize": "HTTP://Example.com/Path/",
+  "url_normalize": "http://example.com/Path",
+  "address_standardize": "HTTP://Example.com/Path/"
+ },
+ {
+  "input": "example.com",
+  "email_normalize": "example.com",
+  "url_normalize": "https://example.com",
+  "address_standardize": "example.com"
+ },
+ {
+  "input": "https://a.com/x?utm_source=z&id=1",
+  "email_normalize": "https://a.com/x?utm_source=z&id=1",
+  "url_normalize": "https://a.com/x?utm_source=z&id=1",
+  "address_standardize": "https://a.com/x?utm_source=z&id=1"
+ },
+ {
+  "input": "www.Site.COM/",
+  "email_normalize": "www.Site.COM/",
+  "url_normalize": "https://www.site.com",
+  "address_standardize": "www.Site.COM/"
+ },
+ {
+  "input": "ftp://Host.net/p",
+  "email_normalize": "ftp://Host.net/p",
+  "url_normalize": "https://ftp://Host.net/p",
+  "address_standardize": "ftp://Host.net/p"
+ },
+ {
+  "input": "nodots",
+  "email_normalize": "nodots",
+  "url_normalize": "https://nodots",
+  "address_standardize": "nodots"
+ },
+ {
+  "input": "123 main st. apt 4",
+  "email_normalize": "123 main st. apt 4",
+  "url_normalize": "https://123 main st. apt 4",
+  "address_standardize": "123 main st. apt 4"
+ },
+ {
+  "input": "456 OAK AVENUE",
+  "email_normalize": "456 OAK AVENUE",
+  "url_normalize": "https://456 oak avenue",
+  "address_standardize": "456 OAK Ave"
+ },
+ {
+  "input": "po box 7",
+  "email_normalize": "po box 7",
+  "url_normalize": "https://po box 7",
+  "address_standardize": "po box 7"
+ },
+ {
+  "input": "789 elm street suite 100",
+  "email_normalize": "789 elm street suite 100",
+  "url_normalize": "https://789 elm street suite 100",
+  "address_standardize": "789 elm St suite 100"
+ }
+]

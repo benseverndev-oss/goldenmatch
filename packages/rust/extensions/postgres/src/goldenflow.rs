@@ -5,21 +5,28 @@
 //! Postgres and DuckDB SQL surfaces expose the same goldenflow transforms with
 //! identical semantics -- closing the last DuckDB <-> Postgres parity gap.
 //!
-//! Each function is a scalar `text -> text` wrapper over the single generic
-//! bridge fn `goldenmatch_bridge::api::goldenflow_transform`, passing its fixed
-//! goldenflow registry key (e.g. `email_normalize`). The mapping of pg_extern
-//! name -> transform key matches the DuckDB `_UDF_REGISTRY` exactly:
+//! Each function corresponds to a goldenflow transform (the pg_extern -> key
+//! mapping matches the DuckDB `_UDF_REGISTRY` exactly). Two dispatch modes:
+//! **native-direct** functions run a `goldenflow-core` kernel (no per-row embedded
+//! CPython), byte-parity-proven against the polars transform by a golden corpus;
+//! **bridged** functions still call the generic
+//! `goldenmatch_bridge::api::goldenflow_transform` because their kernel is absent
+//! or deliberately not native.
 //!
-//! | pg_extern                          | goldenflow transform   |
-//! |------------------------------------|------------------------|
-//! | `goldenflow_normalize_email`       | `email_normalize`      |
-//! | `goldenflow_normalize_phone`       | `phone_e164`           |
-//! | `goldenflow_normalize_date`        | `date_iso8601`         |
-//! | `goldenflow_normalize_name_proper` | `name_proper`          |
-//! | `goldenflow_canonicalize_url`      | `url_normalize`        |
-//! | `goldenflow_canonicalize_address`  | `address_standardize`  |
-//! | `goldenflow_strip`                 | `strip`                |
-//! | `goldenflow_whitespace_normalize`  | `collapse_whitespace`  |
+//! | pg_extern                          | goldenflow transform   | dispatch     |
+//! |------------------------------------|------------------------|--------------|
+//! | `goldenflow_normalize_email`       | `email_normalize`      | native (P9)  |
+//! | `goldenflow_canonicalize_url`      | `url_normalize`        | native (P9)  |
+//! | `goldenflow_canonicalize_address`  | `address_standardize`  | native (P9)  |
+//! | `goldenflow_strip`                 | `strip`                | native (P9)  |
+//! | `goldenflow_whitespace_normalize`  | `collapse_whitespace`  | native (P9)  |
+//! | `goldenflow_normalize_phone`       | `phone_e164`           | bridged*     |
+//! | `goldenflow_normalize_date`        | `date_iso8601`         | bridged*     |
+//! | `goldenflow_normalize_name_proper` | `name_proper`          | bridged*     |
+//!
+//! *bridged rationale: `phone`'s core kernel is NANP-only (not a drop-in),
+//! `date` is deliberately not native (polars vectorizes it), and `name_proper`
+//! has no `goldenflow-core` kernel yet (parity roadmap P9 follow-up).
 //!
 //! ## Fail-open contract
 //! The bridge fn passes the input through unchanged when goldenflow isn't
@@ -39,15 +46,21 @@ fn apply(transform_name: &str, value: String) -> String {
     }
 }
 
-/// Normalize an email address (lowercase, trim, provider canonicalisation).
-/// Wraps the goldenflow `email_normalize` transform.
+/// Normalize an email address (lowercase, trim, +tag strip, gmail-dot strip).
+/// **De-bridged (P9):** runs native-direct over `goldenflow-core::email::
+/// email_normalize` (no embedded CPython per row), byte-identical to the
+/// goldenflow polars `email_normalize` transform — proven against a corpus in
+/// `goldenflow-core/tests/email_url_address_golden.rs`. The reference returns a
+/// string on every non-NULL input (invalid values are preserved verbatim), and
+/// the extern is `STRICT`, so there is no null-boundary. Same signature + output,
+/// so no SQL/version change.
 ///
 /// ```sql
 /// SELECT goldenflow_normalize_email('  John.Doe@Example.COM ');
 /// ```
 #[pg_extern]
 pub fn goldenflow_normalize_email(value: String) -> String {
-    apply("email_normalize", value)
+    goldenflow_core::email::email_normalize(&value)
 }
 
 /// Normalize a phone number to E.164 form.
@@ -83,26 +96,37 @@ pub fn goldenflow_normalize_name_proper(value: String) -> String {
     apply("name_proper", value)
 }
 
-/// Canonicalize a URL (scheme/host lowercasing, tracking-param stripping).
-/// Wraps the goldenflow `url_normalize` transform.
+/// Canonicalize a URL (ensure scheme, lowercase domain, strip trailing slash).
+/// **De-bridged (P9):** runs native-direct over `goldenflow-core::url::
+/// url_normalize` (no embedded CPython per row), byte-identical to the goldenflow
+/// polars `url_normalize` transform — proven against a corpus in
+/// `goldenflow-core/tests/email_url_address_golden.rs`. That kernel returns
+/// `Option<String>` (empty/whitespace input -> `None`); the reference transform
+/// maps `None` to a NULL cell, which the bridge turned back into input-passthrough
+/// (`unwrap_or(value)`) — replicated here so the SQL output is unchanged.
 ///
 /// ```sql
 /// SELECT goldenflow_canonicalize_url('HTTP://Example.com/Path/');
 /// ```
 #[pg_extern]
 pub fn goldenflow_canonicalize_url(value: String) -> String {
-    apply("url_normalize", value)
+    goldenflow_core::url::url_normalize(&value).unwrap_or(value)
 }
 
 /// Standardize a postal address.
-/// Wraps the goldenflow `address_standardize` transform.
+/// **De-bridged (P9):** runs native-direct over `goldenflow-core::address::
+/// address_standardize` (no embedded CPython per row), byte-identical to the
+/// goldenflow polars `address_standardize` transform — proven against a corpus in
+/// `goldenflow-core/tests/email_url_address_golden.rs`. Returns a string on every
+/// non-NULL input (the extern is `STRICT`), so no null-boundary. Same signature +
+/// output, so no SQL/version change.
 ///
 /// ```sql
 /// SELECT goldenflow_canonicalize_address('123 main st. apt 4');
 /// ```
 #[pg_extern]
 pub fn goldenflow_canonicalize_address(value: String) -> String {
-    apply("address_standardize", value)
+    goldenflow_core::address::address_standardize(&value)
 }
 
 /// Strip leading/trailing whitespace. **De-bridged (P9):** runs native-direct
