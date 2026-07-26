@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies", "scorer_kernels")
+SURFACES = ("mcp_tools", "cli_commands", "a2a_skills", "scorers", "transforms", "blocking_strategies", "scorer_kernels", "analyzers")
 
 # ADVISORY (non-gating) SQL surfaces: the Postgres (pgrx) + DuckDB function
 # inventories. These give VISIBILITY into whether the SQL surfaces track the

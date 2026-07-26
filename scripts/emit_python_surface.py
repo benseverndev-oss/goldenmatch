@@ -112,6 +112,15 @@ def _goldenflow_transforms() -> list[str]:
     return sorted({t.name for t in list_transforms()})
 
 
+def _goldenanalysis_analyzers() -> list[str]:
+    # goldenanalysis's discoverable analyzer identities (entry-points + fallback).
+    # Mirrors TS `availableAnalyzers()` (core/registry.ts); the api_parity
+    # `analyzers` surface. Intended cross-language deltas live in
+    # parity/goldenanalysis.yaml.
+    from goldenanalysis.registry import available_analyzers
+    return sorted(available_analyzers())
+
+
 # The only per-package variance on the Python side is the CLI module path.
 _CLI_MODULE = {
     "goldenmatch": "goldenmatch.cli.main",
@@ -144,7 +153,12 @@ REGISTRY = {
           # only, no kernel floor). Catches a transform available on one language
           # but not the other; intended deltas live in parity/goldenflow.yaml.
           **({"transforms": (_goldenflow_transforms, None)}
-             if pkg == "goldenflow" else {})}
+             if pkg == "goldenflow" else {}),
+          # goldenanalysis's analyzer registry -- the cross-language `analyzers`
+          # parity surface (partition only). Catches an analyzer available on one
+          # language but not the other; deltas live in parity/goldenanalysis.yaml.
+          **({"analyzers": (_goldenanalysis_analyzers, None)}
+             if pkg == "goldenanalysis" else {})}
     for pkg, mod in _CLI_MODULE.items()
 }
 
