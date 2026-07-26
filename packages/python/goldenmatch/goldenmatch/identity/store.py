@@ -48,7 +48,7 @@ def _write_pipeline_enabled() -> bool:
     ).strip() != "0"
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -148,6 +148,23 @@ CREATE TABLE IF NOT EXISTS identity_aliases (
     PRIMARY KEY (alias, kind, dataset)
 );
 CREATE INDEX IF NOT EXISTS idx_aliases_entity ON identity_aliases(entity_id);
+
+-- Persisted blocking index (control-plane manifesto C2 / decision 0047 §9.1):
+-- one row per (record, blocking pass) -> the block key that record fell in, so a
+-- NEW record can find candidate persisted records that share a block key WITHOUT
+-- re-blocking the whole corpus in RAM. entity_id is the identity the record
+-- currently belongs to (nullable until resolved). pass_sig identifies which
+-- blocking pass produced the key (a record can sit in several passes' blocks).
+CREATE TABLE IF NOT EXISTS identity_record_block_keys (
+    record_id  TEXT NOT NULL,
+    entity_id  TEXT,
+    block_key  TEXT NOT NULL,
+    pass_sig   TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (record_id, pass_sig, block_key)
+);
+CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
+CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
+CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
 """
 
 
@@ -352,6 +369,11 @@ class IdentityStore:
             # log. PRAGMA-guarded ADD COLUMN, idempotent on fresh (already carry
             # them from ``_SCHEMA``) and migrated DBs. Old rows read back None.
             self._ensure_claim_columns()
+        if version < 6:
+            # v5 -> v6: persisted blocking index (C2). CREATE TABLE IF NOT EXISTS
+            # + indexes, idempotent on fresh (already carries it from ``_SCHEMA``)
+            # and migrated DBs.
+            self._ensure_block_index_table()
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -415,6 +437,24 @@ class IdentityStore:
             self._conn.execute(
                 "ALTER TABLE identity_events ADD COLUMN previous_claim_id INTEGER"
             )
+
+    def _ensure_block_index_table(self) -> None:
+        """Create the persisted blocking-index table + indexes if absent (C2).
+        Idempotent CREATE ... IF NOT EXISTS, safe on fresh and migrated DBs."""
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS identity_record_block_keys (
+                record_id  TEXT NOT NULL,
+                entity_id  TEXT,
+                block_key  TEXT NOT NULL,
+                pass_sig   TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (record_id, pass_sig, block_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
+            CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
+            """
+        )
 
     def _pg_init_schema(self) -> None:
         ddl = """
@@ -514,6 +554,18 @@ class IdentityStore:
             PRIMARY KEY (alias, kind, dataset)
         );
         CREATE INDEX IF NOT EXISTS idx_aliases_entity ON identity_aliases(entity_id);
+        -- Persisted blocking index (C2): candidate generation for incremental
+        -- resolution against persisted identities without re-blocking the corpus.
+        CREATE TABLE IF NOT EXISTS identity_record_block_keys (
+            record_id  TEXT NOT NULL,
+            entity_id  TEXT,
+            block_key  TEXT NOT NULL,
+            pass_sig   TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (record_id, pass_sig, block_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
+        CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
+        CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
         """
         with self._conn.cursor() as cur:
             cur.execute(ddl)
@@ -1187,6 +1239,100 @@ class IdentityStore:
             )
             for r in rows:
                 out[r["record_id"]] = r["entity_id"]
+        return out
+
+    # ----- Persisted blocking index (C2, control-plane manifesto §4(ii)) -----
+    #
+    # The bidirectional-seam foundation: the control plane persists the block
+    # keys each record fell in, so incremental resolution (compute) can ask the
+    # store (control) for candidate records sharing a block key WITHOUT
+    # re-blocking the whole corpus in RAM. Slice 1 = the store index + its
+    # write/query API; wiring population-on-write + the incremental candidate
+    # query is the next slice.
+
+    def index_record_block_keys(
+        self,
+        record_id: str,
+        entity_id: str | None,
+        keys: Iterable[tuple[str, str]],
+    ) -> None:
+        """Persist the ``(pass_sig, block_key)`` pairs a record falls in.
+
+        Idempotent per (record_id, pass_sig, block_key): re-indexing refreshes
+        ``entity_id`` (so a record reassigned to a new entity on a later resolve
+        has its index rows re-pointed) without duplicating. ``keys`` is an
+        iterable of ``(pass_sig, block_key)``; null block keys are skipped.
+        """
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "block-key index is not supported on the mongo backend"
+            )
+        rows = [
+            (record_id, entity_id, str(bk), str(ps))
+            for ps, bk in keys
+            if bk is not None
+        ]
+        if not rows:
+            return
+        if self._backend == "sqlite":
+            self._conn.executemany(
+                "INSERT INTO identity_record_block_keys "
+                "(record_id, entity_id, block_key, pass_sig) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(record_id, pass_sig, block_key) "
+                "DO UPDATE SET entity_id=excluded.entity_id",
+                rows,
+            )
+            # Bounded-WAL chunk commit inside ``bulk_writes`` (mirrors ``_exec``).
+            if self._sqlite_batch:
+                self._sqlite_pending += len(rows)
+                if self._sqlite_pending >= self._sqlite_batch:
+                    self._conn.execute("COMMIT")
+                    self._conn.execute("BEGIN")
+                    self._sqlite_pending = 0
+            return
+        with self._conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO identity_record_block_keys "
+                "(record_id, entity_id, block_key, pass_sig) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (record_id, pass_sig, block_key) "
+                "DO UPDATE SET entity_id = EXCLUDED.entity_id",
+                rows,
+            )
+
+    def candidates_by_block_keys(
+        self, keys: Iterable[tuple[str, str]]
+    ) -> set[str]:
+        """Record ids sharing ANY ``(pass_sig, block_key)`` with ``keys``.
+
+        The persisted-index candidate set for an incoming record: the records a
+        blocking pass would co-locate it with, read from the durable index
+        instead of a full-corpus re-block. Excludes the query record only if the
+        caller filters it out (this returns raw block-mates). ``keys`` is an
+        iterable of ``(pass_sig, block_key)``."""
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "block-key index is not supported on the mongo backend"
+            )
+        pairs = [(str(ps), str(bk)) for ps, bk in keys if bk is not None]
+        if not pairs:
+            return set()
+        out: set[str] = set()
+        # Two host params per pair; chunk to stay under SQLite's ~999 cap.
+        _CHUNK = 450
+        for i in range(0, len(pairs), _CHUNK):
+            chunk = pairs[i:i + _CHUNK]
+            clause = " OR ".join(
+                "(pass_sig = ? AND block_key = ?)" for _ in chunk
+            )
+            flat = [v for pair in chunk for v in pair]
+            rows = self._fetchall(
+                "SELECT DISTINCT record_id FROM identity_record_block_keys "
+                f"WHERE {clause}",
+                tuple(flat),
+            )
+            for r in rows:
+                out.add(r["record_id"])
         return out
 
     def add_edge(self, edge: EvidenceEdge, *, return_id: bool = True) -> int | None:
