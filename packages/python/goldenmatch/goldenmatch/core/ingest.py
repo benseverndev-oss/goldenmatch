@@ -259,7 +259,7 @@ def suggest_column_mapping(
     Returns:
         Dict of {file_column: target_column} for suggested matches.
     """
-    from rapidfuzz.distance import JaroWinkler
+    from goldenmatch.core import strsim
 
     suggestions: dict[str, str] = {}
     remaining_targets = set(target_columns)
@@ -285,7 +285,7 @@ def suggest_column_mapping(
         for fc in file_columns:
             if fc in suggestions or fc == tc:
                 continue
-            score = JaroWinkler.similarity(fc.lower(), tc.lower())
+            score = strsim.jaro_winkler_similarity(fc.lower(), tc.lower())
             if score > best_score and score >= threshold:
                 best_score = score
                 best_fc = fc

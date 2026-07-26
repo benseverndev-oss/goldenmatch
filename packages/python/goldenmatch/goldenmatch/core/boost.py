@@ -11,10 +11,9 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from rapidfuzz.distance import JaroWinkler, Levenshtein
-from rapidfuzz.fuzz import token_sort_ratio
 
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core import strsim
 from goldenmatch.core.llm_labeler import (
     detect_context,
     detect_provider,
@@ -34,9 +33,9 @@ def _compute_pair_features(val_a: str, val_b: str) -> list[float]:
     """Compute features for a single pair of string values."""
     a = val_a or ""
     b = val_b or ""
-    jw = JaroWinkler.similarity(a, b) if a and b else 0.0
-    ts = token_sort_ratio(a, b) / 100.0 if a and b else 0.0
-    lev = Levenshtein.normalized_similarity(a, b) if a and b else 0.0
+    jw = strsim.jaro_winkler_similarity(a, b) if a and b else 0.0
+    ts = strsim.token_sort_ratio(a, b) / 100.0 if a and b else 0.0
+    lev = strsim.levenshtein_normalized_similarity(a, b) if a and b else 0.0
     exact = 1.0 if a == b else 0.0
     len_a, len_b = len(a), len(b)
     length_ratio = min(len_a, len_b) / max(len_a, len_b) if max(len_a, len_b) > 0 else 0.0
