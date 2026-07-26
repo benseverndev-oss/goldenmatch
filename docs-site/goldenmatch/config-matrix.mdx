@@ -707,6 +707,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `identity split` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
 | `import-dbt` | `manifest` | text | **required** | dbt manifest.json (from `dbt compile` / `dbt parse`) |
 | `import-dbt` | `--output` | text | `'goldenmatch.yaml'` | Output YAML config path |
+| `import-dbt` | `--catalog` | text | `None` | dbt catalog.json (from `dbt docs generate`); supplies model column lists so recognized most-recent survivorship is emitted as golden_rules (otherwise it is only reported) |
 | `import-dbt` | `--strict` | boolean | `False` | Fail on any lossy finding (warnings), not just errors |
 | `import-dbt` | `--min-confidence` | float | `0.5` | ER-model identification confidence floor for signal extraction |
 | `import-dbt` | `--verify` | text | `None` | Prove the distillation reproduces your dbt pipeline: run the converted config on a sample of --source and report pairwise cluster agreement against this output table (parquet/csv; first two columns = id, cluster_id). Needs --source. |

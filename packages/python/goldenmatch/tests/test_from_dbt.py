@@ -314,11 +314,28 @@ def test_from_dbt_unknown_dialect_warns():
             "dim_x",
             compiled="select * from s qualify row_number() over (partition by k) = 1",
         ),
-    }, adapter="redshift")
+    }, adapter="oracle")
     conv = from_dbt(m)
     assert any(
-        f.severity == "warning" and "redshift" in f.message for f in conv.report.findings
+        f.severity == "warning" and "oracle" in f.message for f in conv.report.findings
     )
+
+
+def test_from_dbt_phase2_dialects_not_warned():
+    # Phase 2 broadened the supported set beyond the DuckDB/Snowflake/BigQuery
+    # trio to the ANSI window-dedup + levenshtein/soundex warehouses.
+    for adapter in ("postgres", "redshift", "spark", "databricks", "trino", "athena"):
+        m = _manifest({
+            "model.p.dim_x": _model(
+                "dim_x",
+                compiled="select * from s qualify row_number() over (partition by k) = 1",
+            ),
+        }, adapter=adapter)
+        conv = from_dbt(m)
+        assert not any(
+            f.severity == "warning" and "outside the supported" in f.message
+            for f in conv.report.findings
+        ), adapter
 
 
 def test_from_dbt_min_confidence_gates_analysis():
@@ -370,6 +387,112 @@ def test_couldnt_extract_surfaces_case_partition():
     assert any(
         "couldn't extract" in f.message for f in conv.report.findings if f.severity == "warning"
     )
+
+
+def _dim_with_columns(cols, adapter="duckdb"):
+    node = _model(
+        "dim_customers",
+        compiled="select * from s qualify row_number() over "
+        "(partition by email order by updated_at desc) = 1",
+        uid="model.s.dim_customers",
+    )
+    node["columns"] = {
+        c: {"name": c, "index": i} for i, c in enumerate(cols)
+    }
+    return _manifest({"model.s.dim_customers": node}, adapter=adapter)
+
+
+def test_survivorship_emitted_from_manifest_columns():
+    m = _dim_with_columns(["email", "full_name", "phone", "updated_at"])
+    conv = from_dbt(m)
+    gr = conv.config.golden_rules
+    assert gr is not None
+    assert gr.default_strategy == "most_complete"
+    # email (blocking key) and updated_at (date column) excluded; rest get rules
+    assert set(gr.field_rules) == {"full_name", "phone"}
+    rule = gr.field_rules["full_name"]
+    assert rule.strategy == "most_recent"
+    assert rule.date_column == "updated_at"
+
+
+def test_survivorship_emitted_from_catalog_columns():
+    # manifest carries no columns; catalog.json supplies them.
+    node = _model(
+        "dim_customers",
+        compiled="select * from s qualify row_number() over "
+        "(partition by email order by updated_at desc) = 1",
+        uid="model.s.dim_customers",
+    )
+    m = _manifest({"model.s.dim_customers": node})
+    catalog = {"nodes": {"model.s.dim_customers": {"columns": {
+        "email": {"name": "email", "index": 0},
+        "city": {"name": "city", "index": 1},
+        "updated_at": {"name": "updated_at", "index": 2},
+    }}}}
+    conv = from_dbt(m, catalog_path=catalog)
+    gr = conv.config.golden_rules
+    assert gr is not None
+    assert set(gr.field_rules) == {"city"}
+
+
+def test_survivorship_report_only_without_columns():
+    node = _model(
+        "dim_customers",
+        compiled="select * from s qualify row_number() over "
+        "(partition by email order by updated_at desc) = 1",
+    )
+    conv = from_dbt(_manifest({"model.s.dim_customers": node}))
+    assert conv.config.golden_rules is None
+    assert any(
+        "not auto-wired" in f.message and "survivorship" in f.message
+        for f in conv.report.findings
+    )
+
+
+def test_survivorship_conflicting_recency_columns_report_only():
+    m = _manifest({
+        "model.s.dim_a": {
+            "resource_type": "model", "name": "dim_a", "unique_id": "model.s.dim_a",
+            "compiled_code": "select * from s qualify row_number() over "
+            "(partition by email order by updated_at desc) = 1",
+            "raw_code": "",
+            "columns": {"email": {"name": "email", "index": 0},
+                        "x": {"name": "x", "index": 1},
+                        "updated_at": {"name": "updated_at", "index": 2}},
+        },
+        "model.s.dim_b": {
+            "resource_type": "model", "name": "dim_b", "unique_id": "model.s.dim_b",
+            "compiled_code": "select * from s qualify row_number() over "
+            "(partition by phone order by loaded_at desc) = 1",
+            "raw_code": "",
+            "columns": {"phone": {"name": "phone", "index": 0},
+                        "y": {"name": "y", "index": 1},
+                        "loaded_at": {"name": "loaded_at", "index": 2}},
+        },
+    })
+    conv = from_dbt(m)
+    assert conv.config.golden_rules is None
+    assert any(
+        f.severity == "warning" and "recency columns" in f.message
+        for f in conv.report.findings
+    )
+
+
+def test_emitted_survivorship_config_runs():
+    # The emitted golden_rules must be runnable end to end (not just valid).
+    import goldenmatch as gm
+    import polars as pl
+
+    m = _dim_with_columns(["email", "full_name", "updated_at"])
+    conv = from_dbt(m)
+    df = pl.DataFrame({
+        "email": ["a@x.com", "a@x.com"],
+        "full_name": ["Al B", "Alan B"],
+        "updated_at": ["2020-01-01", "2021-06-01"],
+    })
+    res = gm.dedupe_df(df, config=conv.config)
+    golden = res.golden.to_pylist() if res.golden is not None else []
+    assert golden and golden[0]["full_name"] == "Alan B"  # most-recent row wins
 
 
 def test_signals_are_recognized_signal_instances():

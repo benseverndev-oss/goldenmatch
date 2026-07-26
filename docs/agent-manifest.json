@@ -3142,6 +3142,13 @@
               "help": "Output YAML config path"
             },
             {
+              "name": "--catalog",
+              "type": "text",
+              "required": false,
+              "default": "None",
+              "help": "dbt catalog.json (from `dbt docs generate`); supplies model column lists so recognized most-recent survivorship is emitted as golden_rules (otherwise it is only reported)"
+            },
+            {
               "name": "--strict",
               "type": "boolean",
               "required": false,
