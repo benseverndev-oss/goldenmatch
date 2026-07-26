@@ -198,6 +198,7 @@ _A matchkey: rule for declaring two records 'the same' on a field/field-set._
 | `rerank_model` | str | `'cross-encoder/ms-marco-MiniLM-L-6-v2'` | Cross-encoder model used to rerank borderline pairs when rerank is on. |
 | `rerank_band` | float | `0.1` | Half-width of the score band around the threshold within which pairs are reranked. |
 | `negative_evidence` | list[NegativeEvidenceField] \| None | `None` | [`NegativeEvidenceField`](#negativeevidencefield) -- Fields whose disagreement penalizes the match score, catching false positives that agree on other fields. |
+| `guard` | str \| None | `None` | Pair predicate (over a_&lt;col>/b_&lt;col>) gating whether this whole matchkey fires on a pair. |
 | `em_iterations` | int | `20` | Maximum EM iterations when training probabilistic weights. |
 | `convergence_threshold` | float | `0.001` | EM stops early once parameter change between iterations falls below this value. |
 | `link_threshold` | float \| None | `None` | Probabilistic match probability at or above which a pair is auto-linked. |
@@ -415,6 +416,7 @@ _Identity Graph configuration._
 | `level_thresholds` | list[float] \| None | `None` | Descending similarity cutoffs defining each custom probabilistic band; must hold levels-1 entries. |
 | `derive_from` | list[str] \| None | `None` | Source columns joined with derive_separator to synthesize the compared field when it is not present in the raw frame. |
 | `derive_separator` | str | `' '` | Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long). |
+| `guard` | str \| None | `None` | Pair predicate (over a_&lt;col>/b_&lt;col>) gating whether this field contributes; weighted matchkeys only. |
 
 ### `NegativeEvidenceField`
 _v1.11: a field whose disagreement subtracts from a weighted matchkey's_

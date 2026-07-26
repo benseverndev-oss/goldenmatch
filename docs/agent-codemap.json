@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 413,
+      "module_count": 414,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1117,6 +1117,7 @@
           ],
           "imports": [
             "goldenmatch.core.autoconfig_verify",
+            "goldenmatch.core.guard",
             "goldenmatch.plugins.registry"
           ]
         },
@@ -3205,6 +3206,21 @@
           ]
         },
         {
+          "module": "goldenmatch.core.guard",
+          "file": "packages/python/goldenmatch/goldenmatch/core/guard.py",
+          "purpose": "Guarded / conditional matchkeys — pair-predicate evaluation.",
+          "defines": [
+            "GuardError",
+            "guard_columns",
+            "guard_passes",
+            "pair_resolved",
+            "validate_guard"
+          ],
+          "imports": [
+            "goldenmatch.core.survivorship.conditions"
+          ]
+        },
+        {
           "module": "goldenmatch.core.incremental",
           "file": "packages/python/goldenmatch/goldenmatch/core/incremental.py",
           "purpose": "Incremental matching: match new records against an existing base dataset.",
@@ -3685,6 +3701,7 @@
             "_as_polars_df",
             "_build_em_blocks",
             "_cast_user_cols_to_str",
+            "_collect_guard_columns",
             "_columnar_pipeline_enabled",
             "_default_distributed_partitions",
             "_derive_review_queue_path",
@@ -3768,6 +3785,7 @@
             "goldenmatch.core.golden",
             "goldenmatch.core.golden_fused",
             "goldenmatch.core.golden_rules_refiner",
+            "goldenmatch.core.guard",
             "goldenmatch.core.ingest",
             "goldenmatch.core.lineage",
             "goldenmatch.core.llm_budget",
@@ -4181,6 +4199,7 @@
             "__getattr__",
             "_alias_match_single",
             "_alias_score_matrix",
+            "_apply_guard_to_exact_pairs",
             "_apply_negative_evidence",
             "_apply_negative_evidence_to_exact_pairs",
             "_array_intersect_similarity_py",
@@ -4261,6 +4280,7 @@
             "goldenmatch.core.cross_encoder",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
+            "goldenmatch.core.guard",
             "goldenmatch.core.matchkey",
             "goldenmatch.core.perceptual",
             "goldenmatch.core.profile_emitter",

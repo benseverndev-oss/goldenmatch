@@ -674,6 +674,55 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
     return filtered
 
 
+def _apply_guard_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # called from core/pipeline.py (outside slice)
+    pairs: list[tuple[int, int, float]],
+    matchkey: MatchkeyConfig,
+    full_df: pl.DataFrame,
+    raw_values: dict[str, dict[int, Any]] | None = None,
+) -> list[tuple[int, int, float]]:
+    """Filter exact-matchkey pairs by the matchkey-level guard predicate.
+
+    Drops any pair whose guard (a pair predicate over ``a_<col>``/``b_<col>``)
+    is False — the matchkey does not fire on that pair. Pairs pass through
+    unchanged when the matchkey has no guard.
+
+    ``raw_values`` (``{col: {row_id: raw_value}}``) supplies the RAW (pre-prep)
+    column values the pipeline captured at entry, so guard literals match the
+    config author's un-standardized data; a column absent from it falls back to
+    the prepared frame value. Mirrors ``_apply_negative_evidence_to_exact_pairs``.
+    """
+    if not matchkey.guard:
+        return pairs
+    from goldenmatch.core.guard import guard_columns, guard_passes
+
+    raw_values = raw_values or {}
+    cols = guard_columns(matchkey.guard)
+    row_id_to_idx: dict[int, int] = dict(
+        zip(full_df["__row_id__"].to_list(), range(full_df.height))
+    )
+    # Prepared-frame fallback for columns without a raw snapshot.
+    prepared = {c: full_df[c].to_list() for c in cols if c in full_df.columns}
+
+    def _val(col: str, row_id: int, idx: int):
+        raw = raw_values.get(col)
+        if raw is not None and row_id in raw:
+            return raw[row_id]
+        vals = prepared.get(col)
+        return vals[idx] if vals is not None else None
+
+    filtered: list[tuple[int, int, float]] = []
+    for row_a, row_b, score in pairs:
+        idx_a = row_id_to_idx.get(row_a)
+        idx_b = row_id_to_idx.get(row_b)
+        if idx_a is None or idx_b is None:
+            continue
+        rec_a = {c: _val(c, row_a, idx_a) for c in cols}
+        rec_b = {c: _val(c, row_b, idx_b) for c in cols}
+        if guard_passes(matchkey.guard, cols, rec_a, rec_b):
+            filtered.append((row_a, row_b, score))
+    return filtered
+
+
 def find_exact_matches(
     lf: Any, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:
