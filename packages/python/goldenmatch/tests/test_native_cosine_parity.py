@@ -39,10 +39,19 @@ def _corpus() -> list[str]:
 
 @pytest.mark.skipif(not _HAVE_COSINE, reason="native cosine not built / stale wheel")
 def test_native_cosine_matches_pure():
+    # cosine is a CONTINUOUS float reduction (dot / (||a|| ||b||) via sqrt), so
+    # native (Rust f64) vs pure-Python can differ by ~1 ULP -- the same tolerance
+    # class as jaro_winkler/ensemble, NOT the byte-exact discrete-band comparators
+    # (date_diff / numeric_diff). The cross-surface fixture rounds to 6dp and the
+    # TS test asserts 4dp; here abs=1e-12 catches any REAL divergence while
+    # tolerating the last-bit rounding. (A 1-ULP gap can only flip a `>= t`
+    # decision for a pair sitting within an ULP of the threshold.)
     corpus = _corpus()
     for a in corpus:
         for b in corpus[:50]:
-            assert _n.cosine_similarity(a, b) == _cosine_similarity_py(a, b), (a, b)
+            assert _n.cosine_similarity(a, b) == pytest.approx(
+                _cosine_similarity_py(a, b), abs=1e-12
+            ), (a, b)
 
 
 @pytest.mark.skipif(
@@ -57,4 +66,4 @@ def test_score_block_pairs_dispatches_cosine_id23():
     for i in range(len(vals)):
         for j in range(i + 1, len(vals)):
             expect = _cosine_similarity_py(vals[i], vals[j])
-            assert got[(i, j)] == expect, (vals[i], vals[j])
+            assert got[(i, j)] == pytest.approx(expect, abs=1e-12), (vals[i], vals[j])

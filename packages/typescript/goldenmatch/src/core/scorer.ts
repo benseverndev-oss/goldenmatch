@@ -584,8 +584,21 @@ export function numericDiffSimilarity(a: string, b: string, scorer: string): num
 /** Parse a delimited float vector, mirroring Python `_parse_vector`: strip outer
  *  brackets/braces, split on `,` if present else whitespace, drop empty tokens;
  *  null on empty result or any non-finite component. */
+const _COSINE_BRACKETS = "[](){}";
+
+/** Strip any leading/trailing bracket/brace chars — a linear char-scan (NOT a
+ *  regex, to avoid a polynomial-regex ReDoS finding), matching Python
+ *  `str.strip("[](){}")` and Rust `trim_matches`. */
+function stripCosineBrackets(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && _COSINE_BRACKETS.includes(s[start]!)) start++;
+  while (end > start && _COSINE_BRACKETS.includes(s[end - 1]!)) end--;
+  return s.slice(start, end);
+}
+
 function parseCosineVector(s: string): number[] | null {
-  const inner = s.trim().replace(/^[[\](){}]+/, "").replace(/[[\](){}]+$/, "").trim();
+  const inner = stripCosineBrackets(s.trim()).trim();
   if (inner === "") return null;
   const parts = inner.includes(",") ? inner.split(",") : inner.split(/\s+/);
   const v: number[] = [];
