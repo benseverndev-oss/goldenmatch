@@ -70,18 +70,19 @@ weaknesses:
 
   - id: fs-default-ts-path-unwired-second-source
     tenet: T1
-    severity: high
-    declared: false  # masked by verdict-table "when WASM enabled" phrasing
+    severity: medium   # was high (undeclared+masked); DECLARED now, wiring remains
+    declared: true   # Wave A: declared in the 0046 amendment (2026-07-26)
     title: "TS Fellegi-Sunter default scoring path is a hand-written second source of truth, not the fs-wasm kernel"
     detail: >-
-      goldenmatch-fs-core / fs-wasm exists and is parity-gated, but the reroute wiring
-      the default TS probabilistic scorer to it is a deferred follow-up. So the DEFAULT
-      TS FS path is a hand-written reimplementation whose conformance to Python is
-      neither the fs-wasm parity nor listed in any verdict table -- the 0046 string-scoring
-      row ("byte-identical when WASM enabled") masks that the default FS path is not even
-      the covered kernel. Most consequential under-declared boundary.
+      Verified on main: pipeline.ts scores probabilistic matchkeys via pure-TS
+      probabilistic.ts::scoreProbabilistic; fs-wasm (goldenmatch-fs-core, fsWasm.ts)
+      ships + passes fs-wasm.parity.test.ts but has NO pipeline caller. DECLARED
+      (Wave A) in the 0046 amendment + docs-site (the prior "byte-identical when WASM
+      enabled" phrasing over-claimed). REMAINING (Wave D): wire the pipeline to
+      fs-wasm to retire the second source of truth for a core scorer.
     evidence:
-      - packages/typescript/goldenmatch/src/core/wasm/backend.ts
+      - packages/typescript/goldenmatch/src/core/probabilistic.ts
+      - packages/typescript/goldenmatch/src/core/fsWasm.ts
       - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
 
   - id: standardize-dates-no-conformance-test
@@ -102,9 +103,9 @@ weaknesses:
 
   - id: undeclared-cross-surface-divergences
     tenet: T2
-    severity: high
-    declared: false
-    title: "A cluster of real cross-surface divergences are absent from the 0046 verdict table"
+    severity: low   # was high (undeclared); DECLARED now in 0046 amendment + docs-site
+    declared: true   # Wave A (2026-07-26)
+    title: "Cross-surface scorer/package divergences are now declared in the 0046 verdict table"
     detail: >-
       Divergences that differ across surfaces but are not in the cross-language verdict
       table (some buried in package CLAUDE.md, so under-declared rather than fully
