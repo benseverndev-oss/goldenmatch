@@ -126,6 +126,10 @@ export const SCORER_ID: Readonly<Record<string, number>> = {
   // `numeric_diff:abs|pct:<band>` forms ride the scorer string (fixed-id
   // score_matrix can't carry the band) and stay pure-TS. (ids 20/21 = name scorers.)
   numeric_diff: 22,
+  // Vector cosine over two precomputed float-vector columns -> score_one id 23.
+  // No mode/param, so the fixed id covers it fully (the score-wasm score_matrix
+  // catch-all dispatches score_one(23) with zero Rust change).
+  cosine: 23,
   given_name_aliased_jw: 20,
   name_freq_weighted_jw: 21,
 };

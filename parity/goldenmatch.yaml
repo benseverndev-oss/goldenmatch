@@ -264,6 +264,7 @@ scorers:
   - alias_match
   - array_intersect
   - audio_fp
+  - cosine
   - date
   - date_diff
   - dice
@@ -284,14 +285,12 @@ scorers:
   - record_embedding
   - soundex_match
   - token_sort
-  python_only:
   # FS domain comparators (specs 2026-07-23-fs-domain-comparators + 2026-07-25-
   # splink-domain-comparator-conversion): date_diff, geo_haversine, array_intersect,
-  # and numeric_diff (Part D) are now shared (score-core kernel + TS port). Only
-  # `cosine` remains python-only: vector cosine over two precomputed embedding
-  # columns (Splink CosineSimilarity conversion); pure-Python vector reduction, no
-  # TS/WASM port yet. Kept sorted (parity gate).
-  - cosine
+  # numeric_diff (Part D), and now `cosine` (vector cosine over two precomputed
+  # float-vector columns, score-core score_one id 23 + TS/WASM port) are ALL shared.
+  # Every string/numeric scorer is kernel-single-sourced; python_only is empty.
+  python_only: []
   ts_only: []
 # transforms surface (config.schemas.VALID_SIMPLE_TRANSFORMS <-> types.ts
 # VALID_TRANSFORMS). Currently in exact parity -- no declared deltas.
@@ -376,6 +375,7 @@ scorer_kernels:
   - alias_match
   - array_intersect
   - audio_fp
+  - cosine
   - date
   - date_diff
   - dice
@@ -418,11 +418,9 @@ scorer_kernels:
 scorer_kernels_deferred:
   embedding: "n/a -- model-backed (sentence-transformers / Vertex); belongs to goldenembed, not a string kernel"
   record_embedding: "n/a -- model-backed multi-field embedding"
-  # numeric_diff was kernelized 2026-07-25 (Part D): score_one id 22 default +
-  # spec-carrying kernel for the parameterized forms -> moved to scorer_kernels.
-  # cosine is the one string/numeric scorer that stays deferred (below); every
-  # OTHER string/numeric scorer is now kernel-backed.
-  cosine: "deferred -- vector cosine over two parsed float-vector columns (Splink CosineSimilarity conversion, 2026-07-25); pure-Python reduction, kernelizable but not a string kernel; no TS/WASM port yet"
+  # numeric_diff was kernelized 2026-07-25 (Part D) and cosine 2026-07-26 (score_one
+  # id 23 + TS/WASM port) -> both moved to scorer_kernels. Every string/numeric
+  # scorer is now kernel-backed; only the two model-backed embedding scorers remain.
 # blocking_kernels_deferred: the COVERAGE FLOOR for the `blocking_strategies` surface
 # (check_blocking_coverage). Every strategy NOT in `blocking_strategies.shared` (i.e.
 # python_only / ts_only) MUST appear here with a reason, so a non-shared blocking
