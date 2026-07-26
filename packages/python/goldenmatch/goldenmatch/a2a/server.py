@@ -268,6 +268,27 @@ _SKILLS = [
         "outputModes": ["application/json"],
     },
     {
+        "id": "identity_profile",
+        "name": "Identity Profile",
+        "description": "MDM profile of one entity: record/source breakdown, golden record, confidence, conflict count, structural version, first/last activity.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_stats",
+        "name": "Identity Stats",
+        "description": "Graph-level identity summary: status counts, records-per-entity distribution, source mix, largest entities.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
+        "id": "identity_worklist",
+        "name": "Identity Worklist",
+        "description": "Prioritized steward worklist: active entities with conflicts and/or weak confidence, most-urgent first.",
+        "inputModes": ["application/json"],
+        "outputModes": ["application/json"],
+    },
+    {
         "id": "list_runs",
         "name": "List Runs",
         "description": "List previous dedupe/match runs from the run log (for rollback).",

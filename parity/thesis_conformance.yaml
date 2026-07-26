@@ -185,18 +185,31 @@ weaknesses:
 
   - id: a2a-skills-bidirectional-fracture
     tenet: T1
-    severity: medium
+    severity: low   # was medium; the one genuine surface INCONSISTENCY (the MDM
+                    # trio, shared on MCP but ts_only on A2A) is now reconciled;
+                    # the remaining two-sided gap is ALL verified-intentional
+                    # divergence, not a conform gap
     declared: true   # gate-enforced partition
-    title: "goldenmatch a2a_skills surface is bidirectionally fractured (14 python_only vs 13 ts_only)"
+    title: "goldenmatch a2a_skills two-sided gap is now all intentional divergence (MDM trio reconciled)"
     detail: >-
-      The only surface in the repo with genuine two-sided divergence: 14 python_only vs
-      13 ts_only a2a skills. Some is naming/granularity (PY quality vs TS scan_quality+
-      fix_quality; identity trio ts_only on the A2A card but shared on MCP), but it is
-      the widest single-surface gap and a "shared capabilities must conform"
-      (commitment 3) hotspot. Gate-enforced as declared, so it is intentional-but-large,
-      not drift.
+      Was the widest single-surface gap (14 python_only vs 13 ts_only). RECONCILED
+      2026-07-26: the one case that was a genuine "shared capability that doesn't conform"
+      (commitment 3) -- the #1114 MDM read-side trio identity_profile / identity_stats /
+      identity_worklist, which is SHARED on the MCP surface but was ts_only on the A2A card
+      -- is fixed by advertising it on Python's A2A card too (the capability already existed
+      via entity_profile/identity_summary_stats/steward_worklist + the MCP tools). Gap is now
+      14 python_only vs 10 ts_only, and every remaining divergence is VERIFIED-DIFFERENT, NOT
+      drift: PY's richer file-lifecycle/routing skills (configure/list_runs/rollback/review/
+      incremental/sensitivity/schema_match/compare_clusters/analyze_blocking/retrieve_similar/
+      documents_*) which the edge-safe TS surface intentionally omits; PY `quality` vs TS
+      `scan_quality`+`fix_quality` (1:2 granularity); PY `pprl` RUNS linkage vs TS `suggest_pprl`
+      SUGGESTS params; and TS's edge agent_* variants + score/memory_import primitives. Two
+      surfaces exposing genuinely different capabilities is what commitment 3 ALLOWS -- the
+      conform requirement applied to the one shared-but-unadvertised case, now closed.
     evidence:
       - parity/goldenmatch.yaml
+      - packages/python/goldenmatch/goldenmatch/a2a/server.py   # identity_profile/stats/worklist skill defs
+      - packages/python/goldenmatch/goldenmatch/a2a/skills.py   # trio delegates to mcp.identity_tools._dispatch
 
   - id: frame-residency-coupling-not-contractual
     tenet: T4

@@ -35,7 +35,7 @@ def test_agent_card_has_required_fields():
     assert card["authentication"]["schemes"] == ["bearer"]
 
 
-def test_agent_card_has_47_skills():
+def test_agent_card_has_50_skills():
     """v1.7-v1.12 added autoconfig+controller_telemetry (10->12); v2.0 added
     six identity_* skills (12->18); v1.19.x Phase 3 added add_correction
     (18->19); the MCP tool-coverage parity pass added 12 (19->31); #1089 added
@@ -46,17 +46,20 @@ def test_agent_card_has_47_skills():
     documents_ingest (38->40); the registry-introspection parity pass added
     list_scorers / list_transforms / list_strategies (40->43); the
     capability-gap parity pass added profile / suggest_config / memory_export /
-    suggest_pprl (43->47)."""
+    suggest_pprl (43->47); the a2a-fracture reconciliation advertised the #1114
+    MDM read-side trio identity_profile / identity_stats / identity_worklist
+    (shared on MCP, previously ts_only on the A2A card) here too (47->50)."""
     from goldenmatch.a2a.server import build_agent_card
 
     card = build_agent_card("http://localhost:8080")
-    assert len(card["skills"]) == 47
+    assert len(card["skills"]) == 50
     ids = {s["id"] for s in card["skills"]}
     assert "autoconfig" in ids
     assert "retrieve_similar" in ids
     assert "review_config" in ids
     assert {"list_scorers", "list_transforms", "list_strategies"} <= ids
     assert {"profile", "suggest_config", "memory_export", "suggest_pprl"} <= ids
+    assert {"identity_profile", "identity_stats", "identity_worklist"} <= ids
     assert {"identity_claim", "identity_resolve_conflict", "identity_audit"} <= ids
     assert {"identity_audit_seal", "identity_audit_verify"} <= ids
     assert "controller_telemetry" in ids
