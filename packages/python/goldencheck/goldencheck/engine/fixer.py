@@ -41,6 +41,10 @@ _SMART_QUOTES = {
     "\u2013": "-", "\u2014": "-",
     "\u2026": "...",
 }
+# List forms for the vectorized `Series.str.replace_many` fast path in
+# `_fix_smart_quotes` (one native pass vs a per-cell Python `map_elements`).
+_SMART_QUOTES_KEYS = list(_SMART_QUOTES.keys())
+_SMART_QUOTES_VALS = list(_SMART_QUOTES.values())
 
 # Vectorized short-circuit guards for the per-cell fixes below. Each is a Rust-
 # regex char class built from the ACTUAL characters (not Python `\uXXXX` escapes,
@@ -99,14 +103,12 @@ def _fix_smart_quotes(s: pl.Series) -> pl.Series:
     if not _has_match(s, _SMART_QUOTES_CONTAINS):
         return s
 
-    def _replace(v):
-        if not isinstance(v, str):
-            return v
-        for old, new in _SMART_QUOTES.items():
-            v = v.replace(old, new)
-        return v
-
-    return s.map_elements(_replace, return_dtype=pl.String)
+    # Vectorized native multi-literal replace (one pass, GIL-releasing) instead of
+    # a per-element Python loop. `replace_many` is SIMULTANEOUS but byte-identical
+    # to the old sequential per-char replace here: the smart-quote keys are
+    # distinct and no replacement produces another smart-quote char, so order is
+    # immaterial. Profiled at ~197k `str.replace` calls / 0.4s on a 50k-row scan.
+    return s.str.replace_many(_SMART_QUOTES_KEYS, _SMART_QUOTES_VALS)
 
 
 def _standardize_case(s: pl.Series, findings: list[Finding], column: str) -> pl.Series:
