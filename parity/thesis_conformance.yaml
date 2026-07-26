@@ -167,32 +167,34 @@ weaknesses:
 
   - id: standalone-ts-algorithms-no-shared-kernel
     tenet: T1
-    severity: medium
+    severity: low   # was medium; RESOLVED -- Family A now shares a kernel
+                    # (cluster-wasm), Family B is a declared fixture-locked boundary
     declared: true   # declared in TS CLAUDE.md / wave1b spec + parity manifests
-    title: "Clustering and goldenanalysis frame kernels are standalone TS, byte-safety rests on fixtures not a shared kernel"
+    title: "Clustering + goldenanalysis frame kernels: Family A shares a kernel (cluster-wasm); Family B declared fixture-locked"
     detail: >-
-      TWO families. (A) TS clustering: buildClusters' connected-components step is ALREADY
-      shared to WASM (graph-wasm, the same kernel as the Python native path), but the MST
-      oversized-split + confidence half (buildMst/splitOversizedCluster/
-      computeClusterConfidence) is pure-TS vs a pyo3-only Rust mirror (native/src/cluster.rs
-      mst_split_components/cluster_confidence) with no pyo3-free -core / no wasm -- locked
-      only by the cluster-conformance/split-run parity harness over two independent impls.
+      TWO families, both resolved. (A) TS clustering: connected-components was already shared
+      to WASM (graph-wasm); the MST oversized-split + confidence half is NOW shared too.
+      RESOLVED across three slices: the kernels were extracted from the pyo3-only native crate
+      into a pyo3-free `cluster-core` (A1), given a wasm-bindgen `cluster-wasm` surface, and TS
+      `splitOversizedCluster`/`computeClusterConfidence` reroute to it behind the opt-in
+      `cluster-wasm` backend registry (A2) -- exactly the graph-wasm pattern; pure-TS stays the
+      byte-identical default fallback, and the split partition is deterministic so wasm ==
+      pure-TS components exactly (parity-tested + the Python cluster-handoff oracle). So the
+      MST-split kernel is one source of truth across Python-native + TS, not two impls.
       (B) goldenanalysis frame kernels (distinct_count/null_ratio/duplicate_row_ratio): the
-      counting is in the pyo3-free analysis-core, but the load-bearing Arrow-value interning
-      has no clean WASM boundary (Wave 1b consciously deferred), locked by an adversarial
-      fixture -- which itself caught a real NaN/null bug.
-      DECLARED-AT-SURFACE 2026-07-26 (Family B): the deferral is now asserted in
-      parity/goldenanalysis.yaml as a `frame_kernels_deferred` classification map (same idiom
-      as blocking_kernels_deferred/scorer_kernels_deferred), not only in the spec + this file.
-      REMAINING (Family A): extract mst_split_components + cluster_confidence to a pyo3-free
-      -core + a *-wasm surface and reroute splitOversizedCluster behind the backend registry
-      (mirroring the existing graph-wasm wiring) -- the one genuine shared-kernel gap.
+      Arrow-value interning has no clean WASM boundary (Wave 1b consciously deferred), so this
+      is an ACCEPTED fixture-locked boundary -- declared at the surface as
+      `frame_kernels_deferred` in parity/goldenanalysis.yaml (same idiom as
+      blocking_kernels_deferred/scorer_kernels_deferred) and locked by the adversarial
+      cross-surface fixture. Stays low: revisit only on a real in-browser frame-dedup workload
+      (then arrow-in-wasm is the thesis-pure path).
     evidence:
+      - packages/rust/extensions/cluster-core/src/lib.rs
+      - packages/rust/extensions/cluster-wasm/src/lib.rs
       - packages/typescript/goldenmatch/src/core/cluster.ts
-      - packages/rust/extensions/native/src/cluster.rs
+      - packages/typescript/goldenmatch/tests/parity/cluster-wasm.parity.test.ts
       - parity/goldenanalysis.yaml
       - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
-      - packages/python/goldenanalysis/tests/test_frame_kernels_parity.py
 
   - id: a2a-skills-bidirectional-fracture
     tenet: T1
