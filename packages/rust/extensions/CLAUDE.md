@@ -161,17 +161,20 @@ bridge (`goldenmatch_bridge::api::goldenflow_transform`). `goldenflow_strip` +
 `goldenflow-core::text` (`strip`/`collapse_whitespace`), byte-identical to the
 polars transforms — proven against a polars-generated Unicode corpus in
 `goldenflow-core/tests/text_golden.rs`. Same signatures ⇒ **no SQL/version
-change** (the P1 `goldenmatch_score` pattern). The other 6 stay bridged, but the
-reason has narrowed: `phone`'s core kernel is deliberately NANP-only (not a
-drop-in), and `date` is deliberately not native (Polars vectorizes it; per-row
-chrono is slower + a 2-digit-year hazard). **`email`/`url`/`address` DO now have
-`goldenflow-core` kernels (Wave D — `email_normalize`/`email_canonical`,
-`url_normalize`/`url_canonical`, `address_standardize`/`address_expand`), so
-their externs are a SURFACE-COVERAGE de-bridge (kernel exists; the PG extern
-just hasn't been cut over yet), not a "no kernel" blocker** — `name_proper` is
-the only remaining true no-core-kernel case. Each de-bridge still needs a
-byte-parity corpus before its extern flips (tracked in the parity roadmap P9). DuckDB's `goldenflow_*` UDFs run in-process
-polars (the reference), not the embedded-CPython bridge, so they're unchanged.
+change** (the P1 `goldenmatch_score` pattern). **De-bridge complete for every
+transform with a drop-in kernel (P9, 2026-07-26):** `email`/`url`/`address`
+(Part J #2151) + `name_proper` now run native-direct over their `goldenflow-core`
+kernels (`email::email_normalize`, `url::url_normalize` [Option → `unwrap_or(value)`
+matching the bridge's null→passthrough], `address::address_standardize`,
+`names::name_proper` [pins Python `str.title()` quirks]), each byte-parity-proven
+against the polars reference by `goldenflow-core/tests/email_url_address_golden.rs`.
+**Only `phone` + `date` remain bridged:** `phone`'s core kernel is deliberately
+NANP-only (not a drop-in), and `date` is deliberately not native (Polars
+vectorizes it; per-row chrono is slower + a 2-digit-year hazard). A de-bridge
+still needs a byte-parity corpus before its extern flips (roadmap P9). DuckDB's
+`goldenflow_*` UDFs run in-process polars (the reference), not the embedded-CPython
+bridge, so they're unchanged (and consistent with the native PG side by the same
+byte-parity proof).
 
 A sizeable slice of the Python `goldenmatch.__all__` is **intentionally not**
 exposed in SQL. These are deferred by design, not gaps -- the rationale:
