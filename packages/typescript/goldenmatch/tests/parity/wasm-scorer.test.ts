@@ -641,6 +641,43 @@ d("WASM numeric_diff matches the pure-TS scoreField reference (exact)", () => {
   }
 });
 
+// cosine (score_one id 23): vector cosine over two precomputed float-vector
+// columns. Both the WASM kernel and the pure-TS `vectorCosineSimilarity` parse
+// the same way and do identical dot/norm arithmetic; sqrt is IEEE-754
+// correctly-rounded on both surfaces, so the matrix matches the pure-TS fallback
+// to full double precision. No mode/param — the fixed id covers it fully.
+type CosineCase = readonly [a: string, b: string, note: string];
+const COSINE_CASES: readonly CosineCase[] = [
+  ["1,0,0", "1,0,0", "identical -> 1.0"],
+  ["1,0", "0,1", "orthogonal -> 0.0"],
+  ["1,0", "-1,0", "opposite -> clamped 0.0"],
+  ["1,0", "1,1", "45 deg -> ~0.7071"],
+  ["2,0,0", "1,0,0", "magnitude-invariant -> 1.0"],
+  ["1 0 0", "[1, 0, 0]", "whitespace + bracketed -> 1.0"],
+  ["1,0", "1,0,0", "length mismatch -> exact fallback 0.0"],
+  ["0,0", "0,0", "zero-norm equal strings -> 1.0"],
+  ["x,y", "x,y", "unparseable equal -> 1.0"],
+  ["x,y", "a,b", "unparseable unequal -> 0.0"],
+];
+
+d("WASM cosine matches the pure-TS scoreField reference (12dp)", () => {
+  beforeAll(async () => {
+    const ok = await enableWasm();
+    if (!ok) throw new Error("artifact present but enableWasm() failed");
+  });
+  afterAll(() => disableWasm());
+
+  for (const [a, b, note] of COSINE_CASES) {
+    it(`cosine("${a}","${b}") ${note}`, () => {
+      const ref = scoreField(a, b, "cosine");
+      expect(ref).not.toBeNull();
+      const m = scoreMatrix([a, b], "cosine");
+      // Correctly-rounded sqrt + identical accumulation order -> full precision.
+      expect(m[0]![1]!).toBeCloseTo(ref!, 12);
+    });
+  }
+});
+
 d("WASM ensemble matches the pure-TS scoreField reference (4dp)", () => {
   beforeAll(async () => {
     const ok = await enableWasm();

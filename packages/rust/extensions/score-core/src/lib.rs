@@ -493,6 +493,75 @@ pub fn numeric_diff_similarity(a: &str, b: &str, spec: &str) -> f64 {
     }
 }
 
+// --- cosine: vector cosine similarity over two precomputed embedding cols ---
+// The reference for `goldenmatch.core.scorer._cosine_similarity_py` (the Splink
+// `array_cosine_similarity` analogue over columns that ALREADY hold vectors --
+// unlike the `embedding` scorer, which embeds text at score time via a model).
+// Each side is a delimited float vector ("0.1,0.2,0.3", whitespace-separated, or
+// a "[...]"/"(...)"/"{...}"-bracketed list). Unparseable / length-mismatched /
+// zero-norm input -> exact-string equality (never None for non-null input), so
+// scalar == vectorized by construction like the other domain comparators. cosine
+// has NO mode/param, so score_one id 23 covers it fully (contrast array_intersect
+// / numeric_diff, whose modes ride the scorer string). Negative cosines clamp to
+// 0.0 -- GoldenMatch similarities live in [0,1] and clamping a negative to 0
+// changes no `>= t` decision for the t in (0,1] any real threshold uses.
+
+/// Parse a delimited float vector, mirroring Python `_parse_vector`: strip outer
+/// brackets/braces, split on `,` if present else whitespace, parse floats and
+/// drop empty tokens; None on empty result or any non-finite component.
+fn parse_cosine_vector(s: &str) -> Option<Vec<f64>> {
+    let inner = s.trim().trim_matches(|c| "[](){}".contains(c)).trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = if inner.contains(',') {
+        inner.split(',').collect()
+    } else {
+        inner.split_whitespace().collect()
+    };
+    let mut v = Vec::with_capacity(parts.len());
+    for p in parts {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let x: f64 = p.parse().ok()?;
+        if !x.is_finite() {
+            return None;
+        }
+        v.push(x);
+    }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// Cosine similarity of two parsed float vectors, clamped to [0, 1] (score_one
+/// id 23); exact-string fallback when either side won't parse, the lengths
+/// differ, or a side has zero norm. Byte-parity with `_cosine_similarity_py`.
+pub fn cosine_similarity(a: &str, b: &str) -> f64 {
+    match (parse_cosine_vector(a), parse_cosine_vector(b)) {
+        (Some(va), Some(vb)) if va.len() == vb.len() => {
+            let dot: f64 = va.iter().zip(&vb).map(|(x, y)| x * y).sum();
+            let na: f64 = va.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let nb: f64 = vb.iter().map(|y| y * y).sum::<f64>().sqrt();
+            if na == 0.0 || nb == 0.0 {
+                return if a == b { 1.0 } else { 0.0 };
+            }
+            (dot / (na * nb)).clamp(0.0, 1.0)
+        }
+        _ => {
+            if a == b {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 /// Character-trigram (q-gram) Jaccard similarity on two raw strings, the
 /// reference for `goldenmatch.core.scorer._qgram_score_single` (n=3):
 /// `|A ∩ B| / |A ∪ B|` over the padded q-gram sets. Identical strings (incl.
@@ -1309,6 +1378,11 @@ pub fn score_one(scorer_id: u8, a: &str, b: &str) -> f64 {
         // the spec on the per-pair path via numeric_diff_similarity(a,b,spec).
         // (ids 20/21 are the score-wasm name scorers, not score_one arms here.)
         22 => numeric_diff_similarity(a, b, "numeric_diff"),
+        // id 23 = cosine (vector cosine over two precomputed float-vector
+        // columns). No mode/param, so this arm covers it fully; the Python guard
+        // gates it on the `cosine_similarity` capability symbol so a stale wheel
+        // declines to the per-pair mirror instead of silently zeroing here.
+        23 => cosine_similarity(a, b),
         _ => 0.0,
     }
 }
@@ -1454,6 +1528,52 @@ mod tests {
         assert_eq!(
             score_one(22, "100", "105"),
             numeric_diff_similarity("100", "105", "numeric_diff"),
+        );
+    }
+
+    #[test]
+    fn cosine_basic_and_formats() {
+        // identical vectors -> 1.0
+        assert_eq!(cosine_similarity("1,0,0", "1,0,0"), 1.0);
+        // orthogonal -> 0.0
+        assert_eq!(cosine_similarity("1,0", "0,1"), 0.0);
+        // opposite -> clamped to 0.0 (negative cosine)
+        assert_eq!(cosine_similarity("1,0", "-1,0"), 0.0);
+        // 45 degrees: cos = 1/sqrt(2)
+        let s = cosine_similarity("1,0", "1,1");
+        assert!((s - (1.0 / 2.0_f64.sqrt())).abs() < 1e-12, "got {s}");
+        // whitespace-separated + bracketed forms parse the same as comma form
+        assert_eq!(cosine_similarity("1 0 0", "[1, 0, 0]"), 1.0);
+        // parallel non-unit vectors: cosine is ~1.0 (fp: 0.99999…, same value the
+        // Python reference yields -- so approx, not exact-eq)
+        assert!((cosine_similarity("(0.5 0.5)", "0.5,0.5") - 1.0).abs() < 1e-12);
+        // magnitude-invariant (cosine ignores scale)
+        assert!((cosine_similarity("2,0,0", "1,0,0") - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cosine_fallbacks() {
+        // length mismatch -> exact-string fallback
+        assert_eq!(cosine_similarity("1,0", "1,0,0"), 0.0);
+        assert_eq!(cosine_similarity("1,0,0", "1,0,0 "), 1.0); // trailing space trimmed -> parses equal
+        // unparseable -> exact-string fallback (equal strings -> 1.0, else 0.0)
+        assert_eq!(cosine_similarity("x,y", "x,y"), 1.0);
+        assert_eq!(cosine_similarity("x,y", "a,b"), 0.0);
+        // zero-norm -> exact-string fallback
+        assert_eq!(cosine_similarity("0,0", "1,0"), 0.0);
+        assert_eq!(cosine_similarity("0,0", "0,0"), 1.0); // equal strings
+        // non-finite component -> unparseable -> exact fallback
+        assert_eq!(cosine_similarity("inf,0", "inf,0"), 1.0);
+        assert_eq!(cosine_similarity("inf,0", "1,0"), 0.0);
+    }
+
+    #[test]
+    fn score_one_id23_is_cosine() {
+        assert_eq!(score_one(23, "1,0,0", "1,0,0"), 1.0);
+        assert_eq!(score_one(23, "1,0", "0,1"), 0.0);
+        assert_eq!(
+            score_one(23, "1,0", "1,1"),
+            cosine_similarity("1,0", "1,1"),
         );
     }
 
