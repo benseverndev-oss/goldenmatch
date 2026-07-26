@@ -112,3 +112,6 @@ HANDOFF-*.md
 # a package-lock.json is drift that confuses both tooling and agents.
 package-lock.json
 **/package-lock.json
+
+# ER-matcher synthetic training data (regenerated from scripts/er_matcher/gen_pairs.py)
+data/er_matcher/

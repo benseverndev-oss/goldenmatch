@@ -5524,6 +5524,9 @@
         "ENSEMBLE": [
           "GOLDENMATCH_ENSEMBLE_KERNEL"
         ],
+        "ER": [
+          "GOLDENMATCH_ER_MODEL_DIR"
+        ],
         "FACILITY": [
           "GOLDENMATCH_FACILITY_NAME_NE"
         ],
