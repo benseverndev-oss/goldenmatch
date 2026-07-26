@@ -44,7 +44,7 @@ weaknesses:
       - packages/python/goldenmatch/goldenmatch/core/streaming.py:129
       - packages/python/goldenmatch/goldenmatch/core/streaming.py:149
       - packages/python/goldenmatch/goldenmatch/identity/store.py:79
-    owner_next: "context-network Tier-5 control-plane manifesto"
+    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4, milestone C2 -- needs the incremental-resolution fork decision)"
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
