@@ -33,6 +33,10 @@ exclude = [
     # above); goldengraph-core is its pyo3-free path dependency (and carries its
     # own empty [workspace], so it self-isolates). Neither belongs in `bridge`.
     "goldengraph-native",
+    # cluster-core is native's pyo3-free path dependency (MST-split + confidence
+    # clustering kernels; standalone workspace, like score-core/analysis-core).
+    # Not a bridge member.
+    "cluster-core",
     # graph-layout is a standalone demo binary (Barnes-Hut + multilevel force
     # layout → frames). Heavy/optional; its own workspace, kept out of the
     # default rust build.

@@ -1,6 +1,14 @@
 //! Clustering kernels — behavior-exact replacements for the pure-Python loops
 //! in `goldenmatch/core/cluster.py`.
-use std::collections::{HashMap, HashSet};
+//!
+//! The MST-split + confidence kernels (`find`, `mst_split_components`,
+//! `severe_bridge_count`, `cluster_confidence`, and the `ConfidenceResult`
+//! alias) now live in the pyo3-free `goldenmatch-cluster-core` crate (step A1
+//! of the kernel-sharing effort; they can later get a wasm surface). The three
+//! that were `#[pyfunction]`s keep thin shims here so the pymodule exports the
+//! same symbols; the Arrow/native orchestrators call the imported core fns
+//! directly.
+use std::collections::HashMap;
 
 use arrow::array::{Array, ArrayData, BooleanArray, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
@@ -8,30 +16,15 @@ use arrow::pyarrow::PyArrowType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-/// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)` — mirrors
-/// the dict `compute_cluster_confidence` returns.
-type ConfidenceResult = (Option<f64>, Option<f64>, f64, Option<(i64, i64)>, f64);
-
-/// Iterative find with path compression over a `HashMap` parent table.
-fn find(parent: &mut HashMap<i64, i64>, x: i64) -> i64 {
-    let mut root = x;
-    while let Some(&p) = parent.get(&root) {
-        if p == root {
-            break;
-        }
-        root = p;
-    }
-    // Path-compress x..root.
-    let mut cur = x;
-    while let Some(&p) = parent.get(&cur) {
-        if p == root {
-            break;
-        }
-        parent.insert(cur, root);
-        cur = p;
-    }
-    root
-}
+// Moved to the pyo3-free core; the `#[pyfunction]` shims below delegate, and the
+// build_clusters_* orchestrators call these directly (find, cluster_confidence).
+// The three shimmed fns are imported under `core_*` aliases so the shims can
+// keep the original names (which the pymodule exports to Python).
+use goldenmatch_cluster_core::{
+    cluster_confidence as core_cluster_confidence, find,
+    mst_split_components as core_mst_split_components,
+    severe_bridge_count as core_severe_bridge_count, ConfidenceResult,
+};
 
 /// Connected components over `all_ids` ∪ edge endpoints. Mirrors
 /// `UnionFind.add_many` + `union` loop + `get_clusters` in cluster.py:323-328.
@@ -45,160 +38,32 @@ pub fn connected_components(edges: Vec<(i64, i64, f64)>, all_ids: Vec<i64>) -> V
 }
 
 /// Max-weight spanning tree (Kruskal), then drop the single weakest MST edge
-/// and return the resulting components. Behavior-exact mirror of `_build_mst`
-/// + weakest-edge removal + re-union + `get_clusters` in cluster.py's
-/// `split_oversized_cluster`.
-///
-/// `edges` MUST arrive in `pair_scores` iteration order: the stable
-/// score-descending sort then reproduces Python's Kruskal edge selection, and
-/// the first-minimum scan reproduces `min(mst, key=score)`'s tie-break
-/// (Python `min` keeps the first element achieving the minimum). Component
-/// membership is independent of union strategy, so naive union here matches
-/// the Python union-by-rank grouping. Returns `[]` when the MST is empty
-/// (caller treats that as "unsplittable", same as Python's `if not mst`).
+/// and return the resulting components. Thin shim over
+/// `goldenmatch_cluster_core::mst_split_components` (behavior-exact mirror of
+/// `split_oversized_cluster` in cluster.py — see the core crate for the
+/// byte-parity notes on Kruskal edge selection and the first-minimum tie-break).
 #[pyfunction]
 pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> Vec<Vec<i64>> {
-    // Kruskal over a max-weight ordering. Vec::sort_by is stable, so equal
-    // scores keep pair_scores insertion order -- matching Python's stable sort.
-    let mut sorted = edges;
-    sorted.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-
-    let need = members.len().saturating_sub(1);
-    let mut parent: HashMap<i64, i64> = HashMap::with_capacity(members.len());
-    for &m in &members {
-        parent.entry(m).or_insert(m);
-    }
-    let mut mst: Vec<(i64, i64, f64)> = Vec::with_capacity(need);
-    for &(a, b, s) in &sorted {
-        let ra = find(&mut parent, a);
-        let rb = find(&mut parent, b);
-        if ra != rb {
-            parent.insert(ra, rb);
-            mst.push((a, b, s));
-            if mst.len() == need {
-                break;
-            }
-        }
-    }
-    if mst.is_empty() {
-        return Vec::new();
-    }
-
-    // weakest = first MST edge achieving the minimum score (strict `<` keeps
-    // the first on ties, mirroring Python `min`).
-    let mut weakest = 0usize;
-    for i in 1..mst.len() {
-        if mst[i].2 < mst[weakest].2 {
-            weakest = i;
-        }
-    }
-
-    // Re-union every MST edge except the weakest, over the full member set, so
-    // isolated members surface as singleton components (mirrors add_many).
-    let mut parent2: HashMap<i64, i64> = HashMap::with_capacity(members.len());
-    for &m in &members {
-        parent2.entry(m).or_insert(m);
-    }
-    for (i, &(a, b, _s)) in mst.iter().enumerate() {
-        if i == weakest {
-            continue;
-        }
-        let ra = find(&mut parent2, a);
-        let rb = find(&mut parent2, b);
-        if ra != rb {
-            parent2.insert(ra, rb);
-        }
-    }
-    let keys: Vec<i64> = parent2.keys().copied().collect();
-    let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
-    for k in keys {
-        let r = find(&mut parent2, k);
-        groups.entry(r).or_default().push(k);
-    }
-    groups.into_values().collect()
+    core_mst_split_components(members, edges)
 }
 
 /// Count edges whose removal splits the cluster into two >= 2-node components
-/// (the "merged by one weak link" pathology). Behavior-exact mirror of
-/// `_severe_bridge_count` in cluster.py:168-200. `edges` are the cluster's
-/// `pair_scores` keys as `(a, b, score)` (score unused).
+/// (the "merged by one weak link" pathology). Thin shim over
+/// `goldenmatch_cluster_core::severe_bridge_count` (behavior-exact mirror of
+/// `_severe_bridge_count` in cluster.py:168-200).
 #[pyfunction]
 pub fn severe_bridge_count(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> usize {
-    let mut adj: HashMap<i64, Vec<i64>> = members.iter().map(|&m| (m, Vec::new())).collect();
-    let mut edge_list: Vec<(i64, i64)> = Vec::with_capacity(edges.len());
-    for (a, b, _s) in &edges {
-        if adj.contains_key(a) && adj.contains_key(b) {
-            adj.get_mut(a).unwrap().push(*b);
-            adj.get_mut(b).unwrap().push(*a);
-            edge_list.push((*a, *b));
-        }
-    }
-    let n = members.len();
-    let mut count = 0usize;
-    for &(a, b) in &edge_list {
-        // BFS/DFS from a with the a-b edge removed; unreachable b => bridge.
-        let mut seen: HashSet<i64> = HashSet::new();
-        seen.insert(a);
-        let mut stack = vec![a];
-        while let Some(u) = stack.pop() {
-            if let Some(neigh) = adj.get(&u) {
-                for &w in neigh {
-                    if (u == a && w == b) || (u == b && w == a) {
-                        continue;
-                    }
-                    if seen.insert(w) {
-                        stack.push(w);
-                    }
-                }
-            }
-        }
-        if !seen.contains(&b) {
-            let side_a = seen.len();
-            if side_a >= 2 && (n - side_a) >= 2 {
-                count += 1;
-            }
-        }
-    }
-    count
+    core_severe_bridge_count(members, edges)
 }
 
-/// Confidence metrics for one cluster. Behavior-exact mirror of
-/// `compute_cluster_confidence` (cluster.py:413-455). `edges` MUST be passed in
-/// `pair_scores` iteration order so the bottleneck-pair tie-break and the
-/// average's float-summation order match Python bit-for-bit. Returns
-/// `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)`.
+/// Confidence metrics for one cluster. Thin shim over
+/// `goldenmatch_cluster_core::cluster_confidence` (behavior-exact mirror of
+/// `compute_cluster_confidence` — see the core crate for the byte-parity notes
+/// on the bottleneck-pair tie-break and the average's float-summation order).
+/// Returns `(min_edge, avg_edge, connectivity, bottleneck_pair, confidence)`.
 #[pyfunction]
 pub fn cluster_confidence(edges: Vec<(i64, i64, f64)>, size: usize) -> ConfidenceResult {
-    if size <= 1 || edges.is_empty() {
-        let c = if size <= 1 { 1.0 } else { 0.0 };
-        return (None, None, c, None, c);
-    }
-    let mut min_edge = f64::INFINITY;
-    let mut sum = 0.0_f64;
-    let mut bottleneck: Option<(i64, i64)> = None;
-    for (a, b, s) in &edges {
-        sum += *s; // same order as Python sum(scores) -> identical avg
-        if *s < min_edge {
-            min_edge = *s; // strict < keeps the FIRST min, matching Python min()
-            bottleneck = Some((*a, *b));
-        }
-    }
-    let n = edges.len();
-    let avg_edge = sum / n as f64;
-    let max_possible = (size * (size - 1)) as f64 / 2.0;
-    let connectivity = if max_possible > 0.0 {
-        n as f64 / max_possible
-    } else {
-        0.0
-    };
-    let confidence = 0.4 * min_edge + 0.3 * avg_edge + 0.3 * connectivity;
-    (
-        Some(min_edge),
-        Some(avg_edge),
-        connectivity,
-        bottleneck,
-        confidence,
-    )
+    core_cluster_confidence(edges, size)
 }
 
 // =============================================================================
@@ -319,7 +184,7 @@ pub fn build_clusters_native<'py>(
         sub.set_item("pair_scores", pair_scores)?;
 
         // confidence + bottleneck_pair via the existing helper.
-        let (_min_e, _avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
+        let (_min_e, _avg_e, _conn, bn, conf) = core_cluster_confidence(edges.clone(), size);
         sub.set_item("confidence", conf)?;
         match bn {
             Some((a, b)) => sub.set_item("bottleneck_pair", PyTuple::new(py, [a, b])?)?,
@@ -503,7 +368,7 @@ pub fn build_clusters_arrow(
         // min_e/avg_e were previously discarded; SP4 emits them on metadata so the
         // Python weak-quality test (avg_edge - min_edge > threshold) stays
         // byte-identical without per-cluster pair_scores dicts.
-        let (min_e, avg_e, _conn, bn, conf) = cluster_confidence(edges.clone(), size);
+        let (min_e, avg_e, _conn, bn, conf) = core_cluster_confidence(edges.clone(), size);
         m_cid.push(cid);
         m_size.push(size as i64);
         m_conf.push(conf);
