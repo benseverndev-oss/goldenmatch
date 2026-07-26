@@ -87,19 +87,22 @@ weaknesses:
 
   - id: standardize-dates-no-conformance-test
     tenet: T2
-    severity: high
-    declared: true   # declared divergent in 0046
-    title: "Standardize/dates -- the most-emphasized declared divergence -- has no runnable conformance test"
+    severity: low   # was high; CLOSED -- now has a runnable dual-pinned characterization
+    declared: true
+    title: "Standardize divergence now has a runnable characterization test (was prose-only)"
     detail: >-
-      standardize/dates is declared "Divergent (not byte-portable)" (dateutil vs chrono)
-      but is the ONLY non-exact boundary with no runnable cross-language conformance
-      test -- asserted in prose only. The ADR itself lists a standardize/date emitter as
-      a future "next extension." A declared divergence with no executable guard can drift
-      further silently.
+      RESOLVED (Wave A cont.). standardize was the only non-exact boundary with no
+      runnable test. Two corrections: goldenmatch ships no date standardizer (dates are
+      GoldenFlow's transform, separately fixtured), and the real goldenmatch divergence
+      is the standardizer SET. Now pinned by a dual-sided characterization (54/150 cells
+      diverge): tests/test_standardizer_conformance.py (Python oracle) +
+      standardizer-conformance.parity.test.ts (TS), fixture standardizer-conformance.json,
+      emitter scripts/emit_standardizer_conformance_fixture.py. Surfaced + declared the
+      dominant previously-undeclared divergence: Python None vs TS "" for invalid input.
     evidence:
       - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
-      - docs/design/2026-07-24-cross-language-phase-conformance.md
-    parity_test: null   # <-- absence is the finding
+      - scripts/emit_standardizer_conformance_fixture.py
+    parity_test: packages/typescript/goldenmatch/tests/parity/standardizer-conformance.parity.test.ts
 
   - id: undeclared-cross-surface-divergences
     tenet: T2
