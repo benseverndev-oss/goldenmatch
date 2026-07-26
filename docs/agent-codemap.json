@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 409,
+      "module_count": 410,
       "modules": [
         {
           "module": "goldenmatch",
@@ -2230,6 +2230,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.core.blocker"
           ]
         },
@@ -2270,6 +2271,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.cross_encoder",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
@@ -2857,6 +2859,7 @@
           ],
           "imports": [
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.utils.transforms"
           ]
         },
@@ -3189,6 +3192,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core._paths",
             "goldenmatch.core.frame",
             "goldenmatch.core.io_arrow",
@@ -4361,6 +4365,23 @@
             "goldenmatch.core.cluster",
             "goldenmatch.core.match_one",
             "goldenmatch.identity.resolve"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.strsim",
+          "file": "packages/python/goldenmatch/goldenmatch/core/strsim.py",
+          "purpose": "Vendored pure-Python string-similarity primitives — GoldenMatch's own",
+          "defines": [
+            "_jaro_winkler_raw",
+            "_lcs_length",
+            "damerau_levenshtein_distance",
+            "indel_normalized_similarity",
+            "jaro_similarity",
+            "jaro_winkler_normalized_similarity",
+            "jaro_winkler_similarity",
+            "levenshtein_distance",
+            "levenshtein_normalized_similarity",
+            "token_sort_ratio"
           ]
         },
         {
@@ -6836,6 +6857,9 @@
             "save_model",
             "train",
             "train_default"
+          ],
+          "imports": [
+            "goldenmatch.core"
           ]
         },
         {
