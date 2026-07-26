@@ -84,19 +84,38 @@ weaknesses:
 
   - id: fs-default-ts-path-unwired-second-source
     tenet: T1
-    severity: medium   # was high (undeclared+masked); DECLARED now, wiring remains
+    severity: low   # was medium; RESOLVED-as-wired -- pipeline now routes to the
+                    # shared fs-core kernel (opt-in, edge-bundle-consistent),
+                    # parity-proven == Python; bundle-default-on flip is a declared
+                    # owner-gated follow-up, not a silent-drift gap
     declared: true   # Wave A: declared in the 0046 amendment (2026-07-26)
-    title: "TS Fellegi-Sunter default scoring path is a hand-written second source of truth, not the fs-wasm kernel"
+    title: "TS Fellegi-Sunter scoring is now wired to the shared fs-core kernel (opt-in); pure-TS is the classified fallback"
     detail: >-
-      Verified on main: pipeline.ts scores probabilistic matchkeys via pure-TS
-      probabilistic.ts::scoreProbabilistic; fs-wasm (goldenmatch-fs-core, fsWasm.ts)
-      ships + passes fs-wasm.parity.test.ts but has NO pipeline caller. DECLARED
-      (Wave A) in the 0046 amendment + docs-site (the prior "byte-identical when WASM
-      enabled" phrasing over-claimed). REMAINING (Wave D): wire the pipeline to
-      fs-wasm to retire the second source of truth for a core scorer.
+      RESOLVED-as-wired. The pipeline (scoreProbabilisticBlocks) now routes FS block
+      scoring through the shared fs_core kernel via fs-wasm when enabled, so the kernel
+      -- the SAME fs_core::score_fs_pair Python-native runs -- is the authoritative
+      source of truth; pure-TS scoreProbabilistic remains as the classified,
+      conformance-tested FALLBACK (and for configs the kernel can't express: embedding
+      / TF fields). Landed in two PRs: the fs-wasm/TS marshaling was widened to carry
+      negative-evidence + custom level-banding (fs-core already implemented both;
+      Python-native already drove them), then pipeline.ts was rerouted with a
+      cross-language GATE proving TS == Python-native to 6dp on a block with custom
+      banding + a missing cell + a firing NE field. This also aligns TS onto Python's
+      operating point (the #1854 FIXED full-field weight range vs the old pure-TS
+      per-pair shrinking range).
+      The reroute is OPT-IN / default-preferring (enableFsWasmScoring), NOT statically
+      bundle-default-on -- the edge-safe `core` bundle keeps its documented "no wasm
+      bytes" discipline that EVERY sibling wasm reroute (cluster/graph/fingerprint/
+      hnsw/suggest) respects. Flipping it on for every dedupe() caller out of the box
+      would need a batteries-included non-edge entry (keeping goldenmatch/core lean)
+      and would change TS default F1 for all callers -- a DECLARED owner-gated
+      follow-up (the F1 direction is the #1854 alignment, i.e. toward Python), not a
+      silent second-source-of-truth gap. Stays low on that residual.
     evidence:
-      - packages/typescript/goldenmatch/src/core/probabilistic.ts
-      - packages/typescript/goldenmatch/src/core/fsWasm.ts
+      - packages/typescript/goldenmatch/src/core/pipeline.ts
+      - packages/typescript/goldenmatch/src/core/fsScore.ts
+      - packages/typescript/goldenmatch/src/core/fsScoreBackend.ts
+      - packages/typescript/goldenmatch/tests/parity/fixtures/fs/fs_block_scoring_ne_banding.json
       - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
 
   - id: standardize-dates-no-conformance-test
