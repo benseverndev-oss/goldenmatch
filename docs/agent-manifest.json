@@ -443,6 +443,13 @@
               "description": "Fields whose disagreement penalizes the match score, catching false positives that agree on other fields."
             },
             {
+              "name": "guard",
+              "type": "str | None",
+              "required": false,
+              "default": "None",
+              "description": "Pair predicate (over a_<col>/b_<col>) gating whether this whole matchkey fires on a pair."
+            },
+            {
               "name": "em_iterations",
               "type": "int",
               "required": false,
@@ -1579,6 +1586,13 @@
               "required": false,
               "default": "' '",
               "description": "Separator used to join derive_from source columns (space for names, ',' for geo_haversine lat,long)."
+            },
+            {
+              "name": "guard",
+              "type": "str | None",
+              "required": false,
+              "default": "None",
+              "description": "Pair predicate (over a_<col>/b_<col>) gating whether this field contributes; weighted matchkeys only."
             }
           ]
         },
