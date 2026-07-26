@@ -236,7 +236,7 @@ Root CLAUDE.md owns: branch/merge SOP, GitHub auth dance, Rust + pgrx, PostgreSQ
 - **Postgres surface**: `goldenmatch/db/migrations/identity_v1.sql` is the canonical schema + analytical views (`v_identities`, `v_identity_pairs`, `v_identity_timeline`). `IdentityStore(backend="postgres", connection=...)` creates the same schema on first connect.
 - **DuckDB / extensions contract**: `docs/superpowers/specs/2026-05-12-identity-graph-duckdb-contract.md` — UDF signatures `packages/rust/extensions/` (Postgres pgrx + DuckDB) must expose.
 - **Test count discipline**: Identity adds 47 Python tests (4 modules under `tests/identity/` + `tests/test_mcp_identity_tools.py` + `tests/web/test_router_identity.py`) and 13 TS tests (`tests/identity/`).
-- **A2A skill count is 38** (`_SKILLS` in `a2a/server.py`). Update `test_agent_card_has_38_skills` in `tests/test_a2a.py` if you add a skill.
+- **A2A skill count is 50** (`_SKILLS` in `a2a/server.py`). Update `test_agent_card_has_50_skills` in `tests/test_a2a.py` if you add a skill.
 - **`pipeline.run_dedupe_df` result** now has `identity_summary: dict | None` (None when identity disabled).
 
 ### CDP/MDM epic (#1108)

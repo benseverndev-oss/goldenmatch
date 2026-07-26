@@ -32,14 +32,20 @@
 # compare_strategies/agent_compare_strategies, transform/run_transforms were verified same-op
 # and aliased to Python's canonical id (TS card advertises the canonical, legacy tool id still
 # dispatches) — now shared.
+# RECONCILED 2026-07-26 (a2a-fracture): the #1114 MDM read-side trio identity_profile /
+# identity_stats / identity_worklist were ts_only on the A2A card yet already SHARED on the MCP
+# surface (Python has entity_profile/identity_summary_stats/steward_worklist + the MCP tools) —
+# a surface inconsistency, not a real divergence. Python's A2A card now advertises them
+# (a2a/server.py _SKILLS + skills.py delegates to mcp.identity_tools._dispatch), moving all three
+# ts_only -> shared.
 # Remaining a2a_skills divergences are VERIFIED-DIFFERENT ops, NOT drift: PY `quality` is one
 # scan+fix skill vs TS's `scan_quality` + `fix_quality` (1:2 granularity); PY `pprl` RUNS
 # linkage (`pprl_link`, two files) while TS `suggest_pprl` SUGGESTS params (`profileForAgent`,
 # "recommend") — TS suggest_pprl is the A2A analogue of Python's own suggest_pprl, not pprl.
 # TS also exposes the agent_* skill variants
 # (agent_deduplicate/agent_match_sources/agent_explain_pair/agent_explain_cluster/
-# agent_review_queue/agent_approve_reject) and edge primitives (score, profile, suggest_config,
-# memory_export); Python ships the richer identity-audit trio + routing/lifecycle skills. The
+# agent_review_queue/agent_approve_reject) and edge primitives (score, memory_import); Python
+# ships the richer identity-audit trio + routing/lifecycle skills. The
 # TS set is the deduped union of BASE_SKILLS + AGENT_SKILLS + MEMORY_TOOLS + IDENTITY_TOOLS
 # (src/node/a2a/server.ts). The registry-introspection trio
 # (list_scorers/list_transforms/list_strategies) is now SHARED — Python exposes them on both
@@ -200,10 +206,13 @@ a2a_skills:
   - identity_history
   - identity_list
   - identity_merge
+  - identity_profile
   - identity_resolve
   - identity_resolve_conflict
   - identity_show
   - identity_split
+  - identity_stats
+  - identity_worklist
   - learn_thresholds
   - list_corrections
   - list_scorers
@@ -241,9 +250,6 @@ a2a_skills:
   - agent_match_sources
   - agent_review_queue
   - fix_quality
-  - identity_profile
-  - identity_stats
-  - identity_worklist
   - memory_import
   - scan_quality
   - score
