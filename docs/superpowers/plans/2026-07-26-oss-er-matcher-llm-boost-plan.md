@@ -58,17 +58,42 @@ Shared by data-gen, training, and inference (one source of truth).
 - **Tests [here]:** serializer stability (golden), parser robustness (truncated/garbage
   → abstain), rubric versioning (a serializer change = a new model revision).
 
-## Phase 3 — Training script (Modal-ready) **[here to write, [gpu] to run]**
+## Phase 3 — Training script (Modal-ready), PERF-GATED **[here to write, [gpu] to run]**
+
+**Hard rule: no multi-hour run is launched cold. It is gated behind a measured smoke run
+(P3a). Build the trainer optimized + instrumented from the start** (repo lesson: measure
+wall-clock on the real workload before scaling).
 
 - **`scripts/er_matcher/train.py`** — LoRA fine-tune Qwen2.5-3B via `transformers`+`peft`+`trl`
-  (SFT on the P2 chat format). Reads `config.yaml` (base model + pinned revision, LoRA
-  rank/alpha, LR, epochs, seed). Output: LoRA adapter → merged fp16.
-- **`scripts/er_matcher/modal_train.py`** — a Modal app wrapping `train.py`: `@app.function`
-  on an A10G/A100, `modal.Secret` for the HF token, mounts the data manifest, runs the SFT,
-  pushes the adapter to HF. **Run with a rotated Modal token as a Modal secret** (see spec §1).
-- **`scripts/er_matcher/config.yaml`** — the reproducible run config (committed).
-- Determinism: fixed seed + pinned base revision + committed config + data manifest fully
-  specify the run.
+  (SFT on the P2 chat format). Reads `config.yaml`. Output: LoRA adapter → merged fp16.
+  **Optimizations baked in (short-sequence ER SFT):**
+  - **Sequence packing** (pack short pairs; no per-example pad-to-max) — the top lever.
+  - **`max_seq_len` = measured P95** of serialized pairs (~256–384), NOT a 2k/4k default.
+  - **bf16 + FlashAttention-2**; QLoRA-4bit only if memory-bound (bf16-LoRA preferred — 4-bit
+    adds compute).
+  - **Pre-tokenize + cache once**; length-grouped batching; enough dataloader workers →
+    GPU-bound (>90% util), not data-bound.
+  - Max per-step batch + grad-accumulation to the effective batch; eval-based early stop;
+    adapter checkpointing (Modal preemption-safe).
+  - **Instrumentation:** log tokens/s, samples/s, GPU util, step time, peak mem.
+- **`scripts/er_matcher/config.yaml`** — reproducible run config (base + pinned revision, LoRA
+  rank/alpha, LR, epochs, seq_len, packing, seed). Committed.
+- **`scripts/er_matcher/modal_train.py`** — Modal app wrapping `train.py`; `modal.Secret` for
+  HF/Modal creds (rotated — spec §1); mounts the data manifest.
+
+### Phase 3a — Perf calibration + smoke run (GO/NO-GO before the full run) **[gpu, cheap]**
+- **Smoke run:** few-hundred steps on a small data slice on the **cheapest adequate GPU
+  (A10G first)**. Emits: measured tokens/s + GPU util, **extrapolated full-run wall-clock + $**,
+  peak mem (→ confirm GPU tier), and a **mini learning curve** (10/25/50% data slices) to
+  right-size data volume + epochs so the full run trains no more than helps.
+- **Gate:** GPU util >~90% (else fix the data/pack path before spending on the full run),
+  extrapolated cost within budget, learning curve still climbing at the chosen data size.
+  Only on PASS do we launch the full run (P3b).
+- **`scripts/er_matcher/perf_report.py`** — turns the smoke logs into the go/no-go scorecard.
+
+### Phase 3b — Full training run **[gpu]**
+- Launch only after P3a passes. Right-sized (GPU tier, batch, seq_len, data volume, epochs)
+  from the smoke measurements. Checkpointed; determinism via fixed seed + pinned base + config.
 
 ## Phase 4 — Quantize + publish **[gpu]/[here]**
 
