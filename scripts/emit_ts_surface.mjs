@@ -97,6 +97,16 @@ async function emit(pkg) {
     descriptor.transforms = t.listTransforms().map((x) => x.name).sort();
   }
 
+  // goldenanalysis analyzer registry -- the `analyzers` parity surface. Mirrors
+  // the Python emitter (goldenanalysis.registry.available_analyzers); deltas live
+  // in parity/goldenanalysis.yaml.
+  if (pkg === "goldenanalysis") {
+    const t = await load("dist/core/index.js");
+    if (typeof t.availableAnalyzers !== "function")
+      throw new Error(`${pkg}: expected availableAnalyzers() in dist/core/index.js`);
+    descriptor.analyzers = [...t.availableAnalyzers()].sort();
+  }
+
   return descriptor;
 }
 

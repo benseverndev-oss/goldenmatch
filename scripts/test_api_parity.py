@@ -393,6 +393,41 @@ def test_goldenflow_manifest_transforms_partition_is_clean():
     assert m["transforms"]["ts_only"] == ["category_llm_correct"]
 
 
+def test_analyzers_is_a_known_surface():
+    """`analyzers` must be a recognized SURFACE so goldenanalysis's manifest passes
+    check_structure (not flagged unknown_surface)."""
+    assert "analyzers" in gate.SURFACES
+    m = {"analyzers": {"shared": ["frame.summary"], "python_only": [], "ts_only": []}}
+    assert not any(f.kind == "unknown_surface" for f in gate.check_structure(m))
+
+
+def test_python_emitter_goldenanalysis_analyzers_surface():
+    """goldenanalysis models a cross-language `analyzers` parity surface. Its
+    emitter must produce a non-empty, sorted `analyzers` list. Box-safe (needs
+    goldenanalysis[mcp] in the venv)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = {**os.environ, "POLARS_SKIP_CPU_CHECK": "1", "GOLDENANALYSIS_NATIVE": "0",
+           "PYTHONPATH": str(root / "packages" / "python" / "goldenanalysis")}
+    proc = subprocess.run([sys.executable, str(root / "scripts" / "emit_python_surface.py"), "goldenanalysis"],
+                          capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    desc = json.loads(proc.stdout)
+    assert "analyzers" in desc, "goldenanalysis must emit an analyzers surface"
+    assert desc["analyzers"] == sorted(desc["analyzers"]) and desc["analyzers"], "analyzers empty/unsorted"
+    assert "frame.summary" in desc["analyzers"]
+
+
+def test_goldenanalysis_manifest_analyzers_partition_is_clean():
+    """The committed parity/goldenanalysis.yaml analyzers surface is structurally
+    valid and in full parity (no python_only/ts_only deltas)."""
+    import yaml
+    root = pathlib.Path(__file__).resolve().parent.parent
+    m = yaml.safe_load((root / "parity" / "goldenanalysis.yaml").read_text())
+    assert "analyzers" in m, "goldenanalysis manifest must model the analyzers surface"
+    assert not gate.check_structure(m)
+    assert m["analyzers"]["python_only"] == [] and m["analyzers"]["ts_only"] == []
+
+
 # ── Advisory SQL surfaces (postgres / duckdb) — visibility, non-gating ────────
 
 def test_structure_skips_advisory_sql_surfaces():

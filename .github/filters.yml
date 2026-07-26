@@ -397,6 +397,13 @@ api_parity:
   - 'packages/python/*/*/transforms/**'
   - 'packages/typescript/*/src/core/transforms/**'
   - 'packages/typescript/*/src/core/llm/corrector.ts'
+  # goldenanalysis declares its analyzer registry (entry-points + fallback map on
+  # Python, the registry module on TS) -- the gate can't see an analyzer add/remove
+  # on one language without these.
+  - 'packages/python/*/*/registry.py'
+  - 'packages/python/*/*/analyzers/**'
+  - 'packages/typescript/*/src/core/registry.ts'
+  - 'packages/typescript/*/src/core/analyzers/**'
   - 'parity/**'
   - 'scripts/emit_python_surface.py'
   - 'scripts/emit_ts_surface.mjs'
