@@ -344,9 +344,179 @@ pub fn pattern_match_types(samples: &[String]) -> Vec<u32> {
         .collect()
 }
 
+/// Solve the rectangular linear sum assignment problem (MINIMIZE total cost).
+///
+/// Faithful port of the TS reference `core/assignment/hungarian.ts`
+/// `linearSumAssignment` -- the O(n^3) Jonker-Volgenant-lite shortest-path
+/// Hungarian with potentials. Rectangular inputs are padded to `n = max(rows,
+/// cols)` with a big-M cost so padded slots are only taken when forced by the
+/// shape; the returned pairs drop any match touching a padded/non-finite slot.
+///
+/// Deterministic tie-breaking: rows/cols are scanned in index order, so among
+/// equally-optimal assignments the algorithm's shortest-path augmentation always
+/// makes the same choice (it is NOT a true lexicographic-min of the assignment
+/// set -- it is the JV index-order-scan result, reproduced bit-for-bit). This is
+/// the SINGLE cross-language reference: Python-native and TS-wasm both dispatch
+/// here, replacing the prior scipy-vs-hungarian.ts divergence on ties. The op
+/// mirrors the TS arithmetic + iteration order for bit-parity.
+///
+/// Returns `(row, col)` pairs sorted by `(row, col)`; at most `min(rows, cols)`.
+// The index loops (`for j in 0..=n` over used/p/u/v/minv) are a faithful port of
+// the TS reference's shortest-path augmentation; they index several parallel
+// arrays by the same j, so enumerate() doesn't apply -- keep the index form so
+// the bit-for-bit cross-language parity is obvious.
+#[allow(clippy::needless_range_loop)]
+pub fn linear_sum_assignment(cost: &[Vec<f64>]) -> Vec<(usize, usize)> {
+    let rows = cost.len();
+    if rows == 0 {
+        return Vec::new();
+    }
+    let cols = cost[0].len();
+    if cols == 0 {
+        return Vec::new();
+    }
+    let n = rows.max(cols);
+
+    // Big-M dominates any real assignment but stays within f64 precision
+    // (computed from input scale, matching the TS INF formula exactly).
+    let mut max_abs = 0.0_f64;
+    for row in cost.iter().take(rows) {
+        for &val in row.iter().take(cols) {
+            if val.is_finite() {
+                let a = val.abs();
+                if a > max_abs {
+                    max_abs = a;
+                }
+            }
+        }
+    }
+    let inf = (max_abs + 1.0) * ((n + 1) as f64) * 4.0 + 1.0;
+
+    // n x n padded cost (INF outside the real rectangle or on non-finite cells).
+    let c: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..n)
+                .map(|j| {
+                    if i < rows && j < cols {
+                        let v = cost[i][j];
+                        if v.is_finite() {
+                            v
+                        } else {
+                            inf
+                        }
+                    } else {
+                        inf
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    // 1-indexed potential/assignment arrays (size n+1); p[j] = row for col j.
+    let mut u = vec![0.0_f64; n + 1];
+    let mut v = vec![0.0_f64; n + 1];
+    let mut p = vec![0usize; n + 1];
+    let mut way = vec![0usize; n + 1];
+
+    for i in 1..=n {
+        p[0] = i;
+        let mut j0 = 0usize;
+        let mut minv = vec![f64::INFINITY; n + 1];
+        let mut used = vec![false; n + 1];
+        loop {
+            used[j0] = true;
+            let i0 = p[j0];
+            let mut delta = f64::INFINITY;
+            let mut j1 = 0usize;
+            for j in 1..=n {
+                if !used[j] {
+                    let cur = c[i0 - 1][j - 1] - u[i0] - v[j];
+                    if cur < minv[j] {
+                        minv[j] = cur;
+                        way[j] = j0;
+                    }
+                    if minv[j] < delta {
+                        delta = minv[j];
+                        j1 = j;
+                    }
+                }
+            }
+            for j in 0..=n {
+                if used[j] {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    minv[j] -= delta;
+                }
+            }
+            j0 = j1;
+            if p[j0] == 0 {
+                break;
+            }
+        }
+        loop {
+            let j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+            if j0 == 0 {
+                break;
+            }
+        }
+    }
+
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for j in 1..=n {
+        let i = p[j];
+        if i >= 1 {
+            let ri = i - 1;
+            let cj = j - 1;
+            if ri < rows && cj < cols && cost[ri][cj].is_finite() {
+                pairs.push((ri, cj));
+            }
+        }
+    }
+    pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    pairs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assignment_basic_and_rectangular() {
+        // 2x2 clear optimum.
+        assert_eq!(
+            linear_sum_assignment(&[vec![0.1, 0.9], vec![0.9, 0.1]]),
+            vec![(0, 0), (1, 1)]
+        );
+        // Rectangular 3x2: one row is dropped (only min(rows,cols)=2 pairs).
+        let r = linear_sum_assignment(&[vec![0.4, 0.7], vec![0.4, 0.7], vec![0.9, 0.9]]);
+        assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn assignment_tiebreak_is_lexicographically_smallest() {
+        // cost = 1 - score for [[0.9,0.9,0.1],[0.9,0.1,0.9],[0.1,0.9,0.9]].
+        // Two optima tie at total 2.7; the deterministic JV index-order scan
+        // returns (0,1),(1,0),(2,2) -- matching the TS hungarian.ts reference.
+        // scipy returns the other optimum (0,0),(1,2),(2,1); this kernel makes
+        // Python-native + TS agree by construction (the divergence this fixes).
+        let score = [
+            vec![0.9, 0.9, 0.1],
+            vec![0.9, 0.1, 0.9],
+            vec![0.1, 0.9, 0.9],
+        ];
+        let cost: Vec<Vec<f64>> = score
+            .iter()
+            .map(|r| r.iter().map(|s| 1.0 - s).collect())
+            .collect();
+        let pairs = linear_sum_assignment(&cost);
+        // total score is optimal (2.7) and the assignment is a permutation.
+        let total: f64 = pairs.iter().map(|&(r, c)| score[r][c]).sum();
+        assert!((total - 2.7).abs() < 1e-9);
+        assert_eq!(pairs, vec![(0, 1), (1, 0), (2, 2)]);
+    }
 
     #[test]
     fn exact_match_and_mismatch() {

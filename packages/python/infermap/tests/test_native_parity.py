@@ -180,3 +180,45 @@ def test_pattern_type_unicode_edge_recorded():
         verdict = "AGREE" if native == pure else "DIVERGE"
         print(f"[pattern_type edge] {verdict} native={native:#010b} "
               f"pure={pure:#010b} {s!r}")
+
+
+# ---------------------------------------------------------------------------
+# linear_sum_assignment parity (the assignment single-source, replaces scipy)
+# ---------------------------------------------------------------------------
+
+import random  # noqa: E402
+
+from infermap.assignment import _lsa_pure  # noqa: E402
+
+# Cost matrices covering: clear optimum, symmetric TIE (the scipy-vs-TS divergence
+# case, in cost form), rectangular tall/wide, single row/col, and a duplicate-cost
+# tie. The native kernel must equal the pure-Python port exactly on all of them.
+_ASSIGN_CASES = [
+    [[0.1, 0.9], [0.9, 0.1]],
+    [[0.1, 0.1, 0.9], [0.1, 0.9, 0.1], [0.9, 0.1, 0.1]],  # tie (cost of 0.9/0.9/0.1 scores)
+    [[0.3, 0.6], [0.6, 0.3], [0.5, 0.5]],  # tall (3x2)
+    [[0.3, 0.6, 0.5], [0.6, 0.3, 0.5]],    # wide (2x3)
+    [[0.5]],                                # 1x1
+    [[0.4, 0.4, 0.4], [0.4, 0.4, 0.4], [0.4, 0.4, 0.4]],  # all-equal tie
+]
+
+
+@native_only
+@pytest.mark.parametrize("cost", _ASSIGN_CASES)
+def test_linear_sum_assignment_parity(cost):
+    native = [tuple(p) for p in native_module().linear_sum_assignment(cost)]
+    assert native == _lsa_pure(cost)
+
+
+@native_only
+def test_linear_sum_assignment_parity_random():
+    """Randomized native==pure sweep over mixed continuous/coarse matrices (coarse
+    values induce the ties where scipy used to diverge)."""
+    rng = random.Random(20260726)
+    for _ in range(500):
+        r = rng.randint(1, 7)
+        c = rng.randint(1, 7)
+        cost = [[rng.choice([0.1, 0.5, 0.9, round(rng.uniform(0, 1), 2)]) for _ in range(c)]
+                for _ in range(r)]
+        native = [tuple(p) for p in native_module().linear_sum_assignment(cost)]
+        assert native == _lsa_pure(cost), cost
