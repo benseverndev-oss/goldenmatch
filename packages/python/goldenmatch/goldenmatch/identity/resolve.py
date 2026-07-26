@@ -244,9 +244,14 @@ def _golden_record_from_members(
 ) -> dict[str, Any]:
     """Roll up cluster members into a single representative row (most-complete).
 
-    A5: seam-driven both lanes (column reads + Python folds).
+    A5: seam-driven both lanes (column reads + Python folds). The per-column
+    rollup rule (longest non-null string, ties by input order) is
+    single-sourced through ``core.golden.most_complete_value`` -- the same
+    ``most_complete`` implementation the config-driven pipeline + the
+    survivorship provenance layer use -- instead of a hand-rolled loop (T1).
     """
     from goldenmatch.core.frame import to_frame
+    from goldenmatch.core.golden import most_complete_value
 
     members = to_frame(df).filter_in("__row_id__", row_ids)
     if members.height == 0:
@@ -255,31 +260,32 @@ def _golden_record_from_members(
     for col in members.columns:
         if col.startswith("__"):
             continue
-        non_null = [v for v in members.column(col).to_list() if v is not None]
-        if not non_null:
+        col_values = members.column(col).to_list()
+        if all(v is None for v in col_values):
             continue
-        # Pick the longest non-null string representation (most-complete)
-        values = [(str(v), v) for v in non_null]
-        values.sort(key=lambda x: len(x[0]), reverse=True)
-        out[col] = values[0][1]
+        out[col] = most_complete_value(col_values)
     return out
 
 
 def _golden_record_from_payloads(
     payload_by_row_id: dict[int, dict[str, Any]], row_ids: list[int]
 ) -> dict[str, Any]:
-    """Roll up pre-indexed member payloads without re-scanning the frame."""
+    """Roll up pre-indexed member payloads without re-scanning the frame.
+
+    Same ``most_complete`` rule as ``_golden_record_from_members``, single-
+    sourced through ``core.golden.most_complete_value`` (T1).
+    """
+    from goldenmatch.core.golden import most_complete_value
+
     members = [payload_by_row_id[row_id] for row_id in row_ids if row_id in payload_by_row_id]
     if not members:
         return {}
     out: dict[str, Any] = {}
     for col in members[0]:
-        non_null = [member[col] for member in members if member.get(col) is not None]
-        if not non_null:
+        col_values = [member.get(col) for member in members]
+        if all(v is None for v in col_values):
             continue
-        values = [(str(value), value) for value in non_null]
-        values.sort(key=lambda item: len(item[0]), reverse=True)
-        out[col] = values[0][1]
+        out[col] = most_complete_value(col_values)
     return out
 
 

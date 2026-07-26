@@ -2955,7 +2955,8 @@
             "build_golden_records_df",
             "build_golden_records_from_frames",
             "golden_records_to_provenance",
-            "merge_field"
+            "merge_field",
+            "most_complete_value"
           ],
           "imports": [
             "goldenmatch._polars_lazy",
@@ -5851,6 +5852,7 @@
             "goldenmatch.core.cluster",
             "goldenmatch.core.cluster_pairscores",
             "goldenmatch.core.frame",
+            "goldenmatch.core.golden",
             "goldenmatch.core.match_one",
             "goldenmatch.identity.fingerprint_batch",
             "goldenmatch.identity.model",
