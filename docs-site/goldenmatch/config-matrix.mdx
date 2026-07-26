@@ -705,6 +705,14 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `identity split` | `record_ids` | text | **required** | record_ids to move to a new identity |
 | `identity split` | `--reason` | text | `None` | Optional reason recorded in the event log. |
 | `identity split` | `--path` | text | `'.goldenmatch/identity.db'` | Path to the identity graph database. |
+| `import-dbt` | `manifest` | text | **required** | dbt manifest.json (from `dbt compile` / `dbt parse`) |
+| `import-dbt` | `--output` | text | `'goldenmatch.yaml'` | Output YAML config path |
+| `import-dbt` | `--strict` | boolean | `False` | Fail on any lossy finding (warnings), not just errors |
+| `import-dbt` | `--min-confidence` | float | `0.5` | ER-model identification confidence floor for signal extraction |
+| `import-dbt` | `--verify` | text | `None` | Prove the distillation reproduces your dbt pipeline: run the converted config on a sample of --source and report pairwise cluster agreement against this output table (parquet/csv; first two columns = id, cluster_id). Needs --source. |
+| `import-dbt` | `--source` | text | `None` | Source rows the dbt ER model consumed (parquet/csv), for --verify |
+| `import-dbt` | `--verify-sample` | integer | `5000` | Rows of --source to run through GoldenMatch for --verify |
+| `import-dbt` | `--id-column` | text | `None` | Column holding each source row's id (default: auto-detect unique_id/id/record_id) |
 | `import-splink` | `input_path` | text | **required** | Splink settings or trained-model JSON file |
 | `import-splink` | `--output` | text | `'goldenmatch.yaml'` | Output YAML config path |
 | `import-splink` | `--model-out` | text | `None` | Persist imported trained m/u as an FS model JSON; sets model_path in the config |

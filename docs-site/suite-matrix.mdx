@@ -14,7 +14,7 @@ Live counts (introspected from each package) side by side. `MCP` / `Exports` / `
 
 | Package | MCP tools | Exports | A2A skills | CLI commands | Recipes | TS port |
 |---|---|---|---|---|---|---|
-| `goldenmatch` | 90 | 201 | 47 | 38 | Yes | Yes |
+| `goldenmatch` | 90 | 201 | 47 | 39 | Yes | Yes |
 | `goldencheck` | 19 | 43 | 9 | 22 | Yes | Yes |
 | `goldenflow` | 10 | 36 | 6 | 16 | Yes | Yes |
 | `goldenpipe` | 4 | 20 | 4 | 8 | Yes | Yes |
@@ -42,7 +42,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 | Package | Surface | Shared | Python-only | TS-only |
 |---|---|---|---|---|
 | `goldenmatch` | mcp_tools | 83 | 7 | 0 |
-| `goldenmatch` | cli_commands | 32 | 6 | 0 |
+| `goldenmatch` | cli_commands | 32 | 7 | 0 |
 | `goldenmatch` | a2a_skills | 33 | 14 | 13 |
 | `goldenmatch` | scorers | 23 | 1 | 0 |
 | `goldenmatch` | transforms | 13 | 0 | 0 |
@@ -67,7 +67,7 @@ Per surface: values shared by both languages vs each language's exclusives. A no
 
 - **No A2A skills surface:** `goldenanalysis`, `infermap`.
 - `goldenmatch` **mcp_tools** — Python-only: `documents_ingest`, `documents_suggest_schema`, `explain_routing`, `lint_routing`, `list_plugins`, `plan_routing`, `pprl_auto_config`.
-- `goldenmatch` **cli_commands** — Python-only: `ingest-docs`, `migrate-splink`, `serve-ui`, `setup`, `sync`, `watch`.
+- `goldenmatch` **cli_commands** — Python-only: `import-dbt`, `ingest-docs`, `migrate-splink`, `serve-ui`, `setup`, `sync`, `watch`.
 - `goldenmatch` **a2a_skills** — Python-only: `analyze_blocking`, `compare_clusters`, `configure`, `documents_ingest`, `documents_suggest_schema`, `incremental`, `list_runs`, `pprl`, `quality`, `retrieve_similar`, `review`, `rollback`, `schema_match`, `sensitivity`.
 - `goldenmatch` **a2a_skills** — TS-only: `agent_approve_reject`, `agent_deduplicate`, `agent_explain_cluster`, `agent_explain_pair`, `agent_match_sources`, `agent_review_queue`, `fix_quality`, `identity_profile`, `identity_stats`, `identity_worklist`, `memory_import`, `scan_quality`, `score`.
 - `goldenmatch` **scorers** — Python-only: `cosine`.

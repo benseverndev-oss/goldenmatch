@@ -117,8 +117,12 @@ incremental code below.
 > the persisted `identity_record_block_keys` index in the store (SQLite `_SCHEMA` +
 > Postgres `_pg_init_schema` + Alembic `0005` + schema v6) with the
 > `index_record_block_keys` / `candidates_by_block_keys` write/query API — additive,
-> nothing reads it yet. Next slices: block-key computation + population on write; the
-> bidirectional candidate query in `resolve_record_incremental`; the exact-matchkey fix.
+> nothing reads it yet. **Slice 2 (landed):** `identity/block_index.py` — the stateless
+> block-key compute (`compute_record_block_keys` / `compute_frame_block_keys`, reusing
+> the pipeline `_build_block_key_expr` + the multi_pass pass signature) + population
+> (`backfill_block_index`, keyed by the identity `derive_record_id`). Next slice: wire
+> the candidate QUERY into `resolve_record_incremental` (stop materializing the corpus)
+> + the exact-matchkey fix. Then C4: the bounded-RSS scale proof.
 
 ## 5. Transaction-native semantics to specify (Tier-5 scope)
 
