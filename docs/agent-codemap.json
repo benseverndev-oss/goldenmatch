@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 407,
+      "module_count": 408,
       "modules": [
         {
           "module": "goldenmatch",
@@ -706,6 +706,7 @@
             "goldenmatch.cli.match",
             "goldenmatch.cli.mcp_serve",
             "goldenmatch.cli.memory",
+            "goldenmatch.cli.migrate_splink",
             "goldenmatch.cli.pprl",
             "goldenmatch.cli.review",
             "goldenmatch.cli.rollback",
@@ -773,6 +774,22 @@
           "imports": [
             "goldenmatch",
             "goldenmatch.core.memory.store"
+          ]
+        },
+        {
+          "module": "goldenmatch.cli.migrate_splink",
+          "file": "packages/python/goldenmatch/goldenmatch/cli/migrate_splink.py",
+          "purpose": "CLI command: one-shot Splink migration -- convert, verify, and run.",
+          "defines": [
+            "_run_and_write",
+            "_write_output",
+            "migrate_splink_cmd"
+          ],
+          "imports": [
+            "goldenmatch._api",
+            "goldenmatch.cli.import_splink",
+            "goldenmatch.config.from_splink",
+            "goldenmatch.config.splink_upgrade"
           ]
         },
         {
@@ -934,6 +951,7 @@
           "defines": [
             "ConversionFinding",
             "ConversionReport",
+            "CoverageSummary",
             "RecognizedLevel",
             "SplinkConversion",
             "SplinkConversionError",
