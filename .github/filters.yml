@@ -463,6 +463,15 @@ config_matrix:
   - 'parity/*.yaml'
   - '.github/workflows/ci.yml'
   - '.github/filters.yml'
+# OSS ER-matcher box-safe tests (plan 2026-07-26 §Testing): the repo-root
+# scripts/er_matcher/ suite (data-gen, eval/ship-gate, P3a perf gate, P3 trainer
+# pure helpers). The shared prompt contract lives in the goldenmatch package, so a
+# change there can move the serializer/parse contract the scripts depend on.
+er_matcher:
+  - 'scripts/er_matcher/**'
+  - 'packages/python/goldenmatch/goldenmatch/core/er_matcher/**'
+  - '.github/workflows/ci.yml'
+  - '.github/filters.yml'
 # Native-symbol reconciliation gate: the goldenmatch host's
 # native-kernel references must not drift from the kernel's exports.
 # Re-run the gate when the kernel crate, the host package, the

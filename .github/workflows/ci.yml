@@ -121,6 +121,7 @@ jobs:
       api_parity: ${{ steps.filter.outputs.api_parity }}
       native_symbols: ${{ steps.filter.outputs.native_symbols }}
       config_matrix: ${{ steps.filter.outputs.config_matrix }}
+      er_matcher: ${{ steps.filter.outputs.er_matcher }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -3865,6 +3866,33 @@ jobs:
       - name: Build loadable cdylib
         run: cargo build --release
 
+  er_matcher:
+    # Box-safe tests for the OSS ER-matcher scripts (plan 2026-07-26 §Testing):
+    # data-gen determinism/no-leakage, prompt/serializer contract via eval, the P5
+    # ship-gate logic, the P3a perf GO/NO-GO gate, and the P3 trainer's PURE
+    # helpers (config/seq-len/chat-target). The heavy GPU train + real-model eval
+    # run out-of-band (Modal); this lane gates everything runnable on CPU. The P2/P6
+    # tests live under packages/python/goldenmatch/tests and already run in the
+    # python_goldenmatch lane; this covers the repo-root scripts/er_matcher/ suite,
+    # which no other lane collects.
+    needs: changes
+    if: needs.changes.outputs.er_matcher == 'true' || needs.changes.outputs.force_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync workspace (goldenmatch importable + dev tools)
+        run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
+      - name: ER-matcher box-safe tests
+        run: uv run pytest scripts/er_matcher/ -q
+        env:
+          GOLDENMATCH_NATIVE: "0"
+          POLARS_SKIP_CPU_CHECK: "1"
+
   ci-required:
     needs:
       - changes
@@ -3926,6 +3954,7 @@ jobs:
       - api_parity
       - native_symbols
       - config_matrix
+      - er_matcher
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1

@@ -1,7 +1,10 @@
 # Implementation Plan: OSS fine-tuned ER-matcher (local LLM boost)
 
 - **Date:** 2026-07-26
-- **Status:** PLAN (ready to execute; the GPU training run is an out-of-band Modal job)
+- **Status:** P1/P2/P5/P6 merged; **P3 (trainer + P3a perf gate + Modal app + config) + P4
+  (publish workflow + runbook) built** (this PR) — all `[here]` work done. Remaining is
+  `[gpu]`-only: run the Modal smoke → gate → full train, then the publish workflow +
+  fill the registry pins. Runbook: `docs/superpowers/notes/2026-07-26-er-matcher-gpu-runbook.md`.
 - **Spec:** `docs/superpowers/specs/2026-07-26-oss-er-matcher-llm-boost-design.md`
 
 ## Decisions locked (from spec review)
