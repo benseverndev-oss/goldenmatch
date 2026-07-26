@@ -18,7 +18,7 @@
 ## Architecture
 - Weighted scorer pipeline: ExactScorer → AliasScorer → PatternTypeScorer → ProfileScorer → FuzzyNameScorer
 - Score combination: weighted average, None = abstain, 0.0 = real negative, min 2 contributors
-- Optimal 1:1 assignment via `scipy.optimize.linear_sum_assignment` (Hungarian algorithm)
+- Optimal 1:1 assignment via `infermap-core::linear_sum_assignment` (Hungarian/LAP; single-sourced 2026-07-26). Python dispatches native→`_lsa_pure` (byte-identical); TS uses `core/assignment/hungarian.ts` (the reference the Rust kernel was ported from). This REPLACED `scipy.optimize.linear_sum_assignment` on the assignment path (scipy remains only for `calibration`) — the old scipy path disagreed with TS on ties (both optimal, different pick). Cross-language locked by `tests/fixtures/assignment_parity.json` (read directly by `test_assignment.py` + TS `assignment-parity.test.ts`). `linear_sum_assignment` is gated in `_native_loader._GATED_ON`/`_COMPONENT_SYMBOLS`; native==pure in `test_native_parity.py`.
 - Providers: FileProvider, InMemoryProvider, SchemaFileProvider, DBProvider (SQLite/Postgres/DuckDB)
 - Config: `infermap.yaml` for scorer weights + alias extensions, schema definition files for target metadata
 - CLI: `infermap map`, `apply`, `inspect`, `validate` via Typer

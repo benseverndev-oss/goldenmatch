@@ -11428,9 +11428,14 @@
         {
           "module": "infermap.assignment",
           "file": "packages/python/infermap/infermap/assignment.py",
-          "purpose": "Optimal assignment via the Hungarian algorithm.",
+          "purpose": "Optimal 1:1 assignment via the Hungarian algorithm.",
           "defines": [
+            "_linear_sum_assignment",
+            "_lsa_pure",
             "optimal_assign"
+          ],
+          "imports": [
+            "infermap._native_loader"
           ]
         },
         {
