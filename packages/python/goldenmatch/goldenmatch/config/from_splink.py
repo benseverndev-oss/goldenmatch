@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from goldenmatch.config.schemas import (
     BlockingConfig,
@@ -1399,7 +1399,49 @@ class SplinkConversion:
     em_model: EMResult | None
 
 
-def _load_settings(source: dict | str | Path) -> dict:
+@runtime_checkable
+class SplinkLinkerLike(Protocol):
+    """Duck-typed shape of a live Splink ``Linker``.
+
+    A Linker holds its settings in memory; ``from_splink`` extracts them so a
+    caller can pass the Linker directly instead of first exporting a JSON file.
+    We match on the presence of the settings-serialization entry point rather
+    than importing splink (keeping ``from_splink`` import-light + polars-free).
+    """
+
+    misc: object
+
+
+def _extract_linker_settings(obj: object) -> dict | None:
+    """Return the in-memory settings dict of a live Splink Linker, or None.
+
+    Splink 4 exposes it via ``linker.misc.save_model_to_json(out_path=None)``
+    (returns the dict, writes nothing when the path is None); some shapes put
+    ``save_model_to_json`` directly on the linker. Duck-typed on purpose -- no
+    splink import -- so a non-Linker object simply returns None and the caller
+    raises the normal "unsupported source" error.
+    """
+    saver = getattr(getattr(obj, "misc", None), "save_model_to_json", None)
+    if not callable(saver):
+        saver = getattr(obj, "save_model_to_json", None)
+    if not callable(saver):
+        return None
+    try:
+        # out_path=None -> return the dict, write nothing. Try the keyword
+        # first (clearest intent), fall back to positional / no-arg shapes.
+        try:
+            result = saver(out_path=None)
+        except TypeError:
+            try:
+                result = saver(None)
+            except TypeError:
+                result = saver()
+    except Exception:  # noqa: BLE001 -- any serialization failure -> not usable
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _load_settings(source: dict | str | Path | SplinkLinkerLike) -> dict:
     if isinstance(source, dict):
         return dict(source)  # shallow copy: never mutate the caller's dict
 
@@ -1423,8 +1465,14 @@ def _load_settings(source: dict | str | Path) -> dict:
             )
         return data
 
+    # A live Splink Linker (or any object that can serialize its settings).
+    linker_settings = _extract_linker_settings(source)
+    if linker_settings is not None:
+        return dict(linker_settings)
+
     raise SplinkConversionError(
-        f"from_splink() source must be a dict, str, or Path, got {type(source).__name__}"
+        f"from_splink() source must be a dict, str, Path, or a Splink Linker, "
+        f"got {type(source).__name__}"
     )
 
 
@@ -1458,13 +1506,18 @@ def _patch_field_placeholders(report: ConversionReport, comp_path: str, field_id
             f.mapped_to = resolved + f.mapped_to[len(_PLACEHOLDER_PREFIX):]
 
 
-def from_splink(source: dict | str | Path, *, strict: bool = False) -> SplinkConversion:
-    """Convert a Splink settings dict / JSON file into a GoldenMatch config.
+def from_splink(
+    source: dict | str | Path | SplinkLinkerLike, *, strict: bool = False
+) -> SplinkConversion:
+    """Convert a Splink settings dict / JSON file / live Linker into a config.
 
     Args:
-        source: A Splink settings dict, or a path (``str``/``Path``) to a
-            JSON file containing one. Bare (untrained) or trained (carrying
-            ``m_probability``/``u_probability``) settings are both accepted.
+        source: One of -- a Splink settings **dict**; a **path**
+            (``str``/``Path``) to a JSON settings file; or a live Splink
+            **Linker** object (its in-memory settings are extracted via
+            ``linker.misc.save_model_to_json``, so no export step is needed).
+            Bare (untrained) or trained (carrying
+            ``m_probability``/``u_probability``) settings are all accepted.
         strict: When True, ANY warning or error finding raises
             :class:`SplinkConversionError` (a fully lossless conversion is
             required). When False (default), only error-severity findings
