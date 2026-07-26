@@ -3,114 +3,203 @@
   "input": "  John.Doe+tag@Example.COM ",
   "email_normalize": "john.doe@example.com",
   "url_normalize": "https://john.doe+tag@example.com",
-  "address_standardize": "  John.Doe+tag@Example.COM "
+  "address_standardize": "  John.Doe+tag@Example.COM ",
+  "name_proper": "  John.Doe+Tag@Example.Com "
  },
  {
   "input": "a.b.c@gmail.com",
   "email_normalize": "abc@gmail.com",
   "url_normalize": "https://a.b.c@gmail.com",
-  "address_standardize": "a.b.c@gmail.com"
+  "address_standardize": "a.b.c@gmail.com",
+  "name_proper": "A.B.C@Gmail.Com"
  },
  {
   "input": "x+y@googlemail.com",
   "email_normalize": "x@googlemail.com",
   "url_normalize": "https://x+y@googlemail.com",
-  "address_standardize": "x+y@googlemail.com"
+  "address_standardize": "x+y@googlemail.com",
+  "name_proper": "X+Y@Googlemail.Com"
  },
  {
   "input": "NoAt",
   "email_normalize": "NoAt",
   "url_normalize": "https://noat",
-  "address_standardize": "NoAt"
+  "address_standardize": "NoAt",
+  "name_proper": "Noat"
  },
  {
   "input": "",
   "email_normalize": "",
   "url_normalize": null,
-  "address_standardize": ""
+  "address_standardize": "",
+  "name_proper": ""
  },
  {
   "input": "   ",
   "email_normalize": "   ",
   "url_normalize": null,
-  "address_standardize": "   "
+  "address_standardize": "   ",
+  "name_proper": "   "
  },
  {
   "input": "UPPER@DOMAIN.ORG",
   "email_normalize": "upper@domain.org",
   "url_normalize": "https://upper@domain.org",
-  "address_standardize": "UPPER@DOMAIN.ORG"
+  "address_standardize": "UPPER@DOMAIN.ORG",
+  "name_proper": "Upper@Domain.Org"
  },
  {
   "input": "user@GMAIL.COM",
   "email_normalize": "user@gmail.com",
   "url_normalize": "https://user@gmail.com",
-  "address_standardize": "user@GMAIL.COM"
+  "address_standardize": "user@GMAIL.COM",
+  "name_proper": "User@Gmail.Com"
  },
  {
   "input": "plain@host.io",
   "email_normalize": "plain@host.io",
   "url_normalize": "https://plain@host.io",
-  "address_standardize": "plain@host.io"
+  "address_standardize": "plain@host.io",
+  "name_proper": "Plain@Host.Io"
  },
  {
   "input": "HTTP://Example.com/Path/",
   "email_normalize": "HTTP://Example.com/Path/",
   "url_normalize": "http://example.com/Path",
-  "address_standardize": "HTTP://Example.com/Path/"
+  "address_standardize": "HTTP://Example.com/Path/",
+  "name_proper": "Http://Example.Com/Path/"
  },
  {
   "input": "example.com",
   "email_normalize": "example.com",
   "url_normalize": "https://example.com",
-  "address_standardize": "example.com"
+  "address_standardize": "example.com",
+  "name_proper": "Example.Com"
  },
  {
   "input": "https://a.com/x?utm_source=z&id=1",
   "email_normalize": "https://a.com/x?utm_source=z&id=1",
   "url_normalize": "https://a.com/x?utm_source=z&id=1",
-  "address_standardize": "https://a.com/x?utm_source=z&id=1"
+  "address_standardize": "https://a.com/x?utm_source=z&id=1",
+  "name_proper": "Https://A.Com/X?Utm_Source=Z&Id=1"
  },
  {
   "input": "www.Site.COM/",
   "email_normalize": "www.Site.COM/",
   "url_normalize": "https://www.site.com",
-  "address_standardize": "www.Site.COM/"
+  "address_standardize": "www.Site.COM/",
+  "name_proper": "Www.Site.Com/"
  },
  {
   "input": "ftp://Host.net/p",
   "email_normalize": "ftp://Host.net/p",
   "url_normalize": "https://ftp://Host.net/p",
-  "address_standardize": "ftp://Host.net/p"
+  "address_standardize": "ftp://Host.net/p",
+  "name_proper": "Ftp://Host.Net/P"
  },
  {
   "input": "nodots",
   "email_normalize": "nodots",
   "url_normalize": "https://nodots",
-  "address_standardize": "nodots"
+  "address_standardize": "nodots",
+  "name_proper": "Nodots"
  },
  {
   "input": "123 main st. apt 4",
   "email_normalize": "123 main st. apt 4",
   "url_normalize": "https://123 main st. apt 4",
-  "address_standardize": "123 main st. apt 4"
+  "address_standardize": "123 main st. apt 4",
+  "name_proper": "123 Main St. Apt 4"
  },
  {
   "input": "456 OAK AVENUE",
   "email_normalize": "456 OAK AVENUE",
   "url_normalize": "https://456 oak avenue",
-  "address_standardize": "456 OAK Ave"
+  "address_standardize": "456 OAK Ave",
+  "name_proper": "456 Oak Avenue"
  },
  {
   "input": "po box 7",
   "email_normalize": "po box 7",
   "url_normalize": "https://po box 7",
-  "address_standardize": "po box 7"
+  "address_standardize": "po box 7",
+  "name_proper": "Po Box 7"
  },
  {
   "input": "789 elm street suite 100",
   "email_normalize": "789 elm street suite 100",
   "url_normalize": "https://789 elm street suite 100",
-  "address_standardize": "789 elm St suite 100"
+  "address_standardize": "789 elm St suite 100",
+  "name_proper": "789 Elm Street Suite 100"
+ },
+ {
+  "input": "JOHN MCDONALD",
+  "email_normalize": "JOHN MCDONALD",
+  "url_normalize": "https://john mcdonald",
+  "address_standardize": "JOHN MCDONALD",
+  "name_proper": "John McDonald"
+ },
+ {
+  "input": "mary o'brien",
+  "email_normalize": "mary o'brien",
+  "url_normalize": "https://mary o'brien",
+  "address_standardize": "mary o'brien",
+  "name_proper": "Mary O'Brien"
+ },
+ {
+  "input": "jean-luc picard",
+  "email_normalize": "jean-luc picard",
+  "url_normalize": "https://jean-luc picard",
+  "address_standardize": "jean-luc picard",
+  "name_proper": "Jean-Luc Picard"
+ },
+ {
+  "input": "don't shout",
+  "email_normalize": "don't shout",
+  "url_normalize": "https://don't shout",
+  "address_standardize": "don't shout",
+  "name_proper": "Don'T Shout"
+ },
+ {
+  "input": "mcdowell",
+  "email_normalize": "mcdowell",
+  "url_normalize": "https://mcdowell",
+  "address_standardize": "mcdowell",
+  "name_proper": "McDowell"
+ },
+ {
+  "input": "o'CONNOR",
+  "email_normalize": "o'CONNOR",
+  "url_normalize": "https://o'connor",
+  "address_standardize": "o'CONNOR",
+  "name_proper": "O'Connor"
+ },
+ {
+  "input": "ABC123 def",
+  "email_normalize": "ABC123 def",
+  "url_normalize": "https://abc123 def",
+  "address_standardize": "ABC123 def",
+  "name_proper": "Abc123 Def"
+ },
+ {
+  "input": "VAN DER BERG",
+  "email_normalize": "VAN DER BERG",
+  "url_normalize": "https://van der berg",
+  "address_standardize": "VAN DER BERG",
+  "name_proper": "Van Der Berg"
+ },
+ {
+  "input": "  spaced  name  ",
+  "email_normalize": "  spaced  name  ",
+  "url_normalize": "https://spaced  name",
+  "address_standardize": "  spaced  name  ",
+  "name_proper": "  Spaced  Name  "
+ },
+ {
+  "input": "e.e. cummings",
+  "email_normalize": "e.e. cummings",
+  "url_normalize": "https://e.e. cummings",
+  "address_standardize": "e.e. cummings",
+  "name_proper": "E.E. Cummings"
  }
 ]

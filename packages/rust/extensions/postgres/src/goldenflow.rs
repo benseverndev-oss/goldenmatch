@@ -18,15 +18,17 @@
 //! | `goldenflow_normalize_email`       | `email_normalize`      | native (P9)  |
 //! | `goldenflow_canonicalize_url`      | `url_normalize`        | native (P9)  |
 //! | `goldenflow_canonicalize_address`  | `address_standardize`  | native (P9)  |
+//! | `goldenflow_normalize_name_proper` | `name_proper`          | native (P9)  |
 //! | `goldenflow_strip`                 | `strip`                | native (P9)  |
 //! | `goldenflow_whitespace_normalize`  | `collapse_whitespace`  | native (P9)  |
 //! | `goldenflow_normalize_phone`       | `phone_e164`           | bridged*     |
 //! | `goldenflow_normalize_date`        | `date_iso8601`         | bridged*     |
-//! | `goldenflow_normalize_name_proper` | `name_proper`          | bridged*     |
 //!
-//! *bridged rationale: `phone`'s core kernel is NANP-only (not a drop-in),
-//! `date` is deliberately not native (polars vectorizes it), and `name_proper`
-//! has no `goldenflow-core` kernel yet (parity roadmap P9 follow-up).
+//! *bridged rationale: `phone`'s core kernel is NANP-only (not a drop-in) and
+//! `date` is deliberately not native (polars vectorizes it; per-row chrono is
+//! slower + a 2-digit-year hazard). These are the only two goldenflow SQL
+//! externs still on the CPython bridge; every transform with a drop-in
+//! `goldenflow-core` kernel is now native-direct.
 //!
 //! ## Fail-open contract
 //! The bridge fn passes the input through unchanged when goldenflow isn't
@@ -85,15 +87,21 @@ pub fn goldenflow_normalize_date(value: String) -> String {
     apply("date_iso8601", value)
 }
 
-/// Proper-case a personal name.
-/// Wraps the goldenflow `name_proper` transform.
+/// Proper-case a personal name (title-case + Mc/O' fixups).
+/// **De-bridged (P9):** runs native-direct over `goldenflow-core::names::
+/// name_proper` (no embedded CPython per row), byte-identical to the goldenflow
+/// polars `name_proper` transform — including Python `str.title()`'s quirks (e.g.
+/// `don't -> Don'T`) — proven against a corpus in
+/// `goldenflow-core/tests/email_url_address_golden.rs`. Returns a string on every
+/// non-NULL input (the extern is `STRICT`), so no null-boundary. Same signature +
+/// output, so no SQL/version change.
 ///
 /// ```sql
 /// SELECT goldenflow_normalize_name_proper('JOHN MCDONALD');
 /// ```
 #[pg_extern]
 pub fn goldenflow_normalize_name_proper(value: String) -> String {
-    apply("name_proper", value)
+    goldenflow_core::names::name_proper(&value)
 }
 
 /// Canonicalize a URL (ensure scheme, lowercase domain, strip trailing slash).
