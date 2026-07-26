@@ -1693,7 +1693,6 @@ dependencies = [
 name = "goldenmatch-score-core"
 version = "0.1.0"
 dependencies = [
- "rapidfuzz",
  "regex",
  "rustc-hash",
  "unicode-normalization",
@@ -2468,12 +2467,6 @@ checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
 ]
-
-[[package]]
-name = "rapidfuzz"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "270e04e5ea61d40841942bb15e451c29ee1618637bcf97fc7ede5dd4a9b1601b"
 
 [[package]]
 name = "redb"
