@@ -113,16 +113,24 @@ engine owns as drawn. Three ways to home it:
 **Decision needed from the owner:** confirm (ii), or pick (i)/(iii). This gates all
 incremental code below.
 
-> **DECIDED 2026-07-26 — owner confirmed (ii).** C2 is unblocked. **Slice 1 (landed):**
+> **DECIDED 2026-07-26 — owner confirmed (ii). C2 + C4 DELIVERED.** **Slice 1 (landed):**
 > the persisted `identity_record_block_keys` index in the store (SQLite `_SCHEMA` +
 > Postgres `_pg_init_schema` + Alembic `0005` + schema v6) with the
-> `index_record_block_keys` / `candidates_by_block_keys` write/query API — additive,
-> nothing reads it yet. **Slice 2 (landed):** `identity/block_index.py` — the stateless
-> block-key compute (`compute_record_block_keys` / `compute_frame_block_keys`, reusing
-> the pipeline `_build_block_key_expr` + the multi_pass pass signature) + population
-> (`backfill_block_index`, keyed by the identity `derive_record_id`). Next slice: wire
-> the candidate QUERY into `resolve_record_incremental` (stop materializing the corpus)
-> + the exact-matchkey fix. Then C4: the bounded-RSS scale proof.
+> `index_record_block_keys` / `candidates_by_block_keys` write/query API. **Slice 2
+> (landed):** `identity/block_index.py` — the stateless block-key compute
+> (`compute_record_block_keys` / `compute_frame_block_keys`, reusing the pipeline
+> `_build_block_key_expr` + the multi_pass pass signature) + population
+> (`backfill_block_index`, keyed by the identity `derive_record_id`). **Slice 3
+> (landed):** `_resolve_via_index` wires the bidirectional seam into
+> `resolve_record_incremental` — compute keys → query the index → gather ONLY the
+> block-mate payloads → resolve → self-populate the index; the full-`df` path stays
+> byte-identical when `blocking` is None. **Slice 3b (landed):** `_exact_match_rows`
+> closes the exact-matchkey gap (`match_one` returned `[]`), so exact-only incremental
+> resolve works across every caller. **C4 (landed):** a CI-stable bounded-work proof
+> (`test_incremental_scale.py`) — the candidate gather is exactly the block-mates and
+> the resolve's store-read work is invariant in corpus size M (M=100 vs M=1000), plus a
+> tracemalloc ceiling. Remaining (non-blocking): no-PK content-hash record ids
+> (index path is PK-scoped) + a large-corpus RSS benchmark beyond the CI proof.
 
 ## 5. Transaction-native semantics to specify (Tier-5 scope)
 
@@ -142,14 +150,15 @@ sources of truth — the survivorship spec entry picks one authoritative owner.
 
 - **C1 (contract):** `ResolutionBatch v1` + `apply_batch`; `resolve_clusters` becomes its
   adapter (no behavior change); residency budget as a contract term. Closes the medium + low.
-- **C2 (persisted index) — IN PROGRESS (§4 decided (ii) 2026-07-26; slice 1 store index landed):**
-  store block-key/fingerprint index + population on write; the
-  §4(ii) bidirectional seam; exact-matchkey incremental. Closes the critical. *Needs the §4
-  decision first.*
+- **C2 (persisted index) — LANDED (§4 (ii) 2026-07-26):** store block-key index + population
+  on write (slices 1–2); the §4(ii) bidirectional seam wired into `resolve_record_incremental`
+  (slice 3); exact-matchkey incremental (slice 3b). Closes the critical.
 - **C3 (conformance layer):** spec entries + fixtures for the §5 semantics; single-source the
   golden-record rollup. Closes `three-golden-record-implementations`.
-- **C4 (scale proof):** incremental resolve of N new records against an M-identity store with
-  bounded RSS (no full-corpus materialization) — the measured kill criterion.
+- **C4 (scale proof) — LANDED:** incremental resolve of N new records against an M-identity
+  store does bounded work — the candidate gather is exactly the block-mates and store-read work
+  is invariant in M (measured M=100 vs M=1000), no full-corpus materialization. Delivered as a
+  deterministic, CI-stable proof (`test_incremental_scale.py`) rather than a flaky RSS threshold.
 
 ## What this is not
 
