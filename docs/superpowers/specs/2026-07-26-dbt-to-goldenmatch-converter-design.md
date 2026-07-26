@@ -166,6 +166,37 @@ Same posture the Splink converter shipped with: high fidelity on the recognized 
 
 ## Phasing
 
-- **Phase 1 (MVP):** manifest reader + ER identification + exact/common-fuzzy extraction + verify + report + CLI + docs (DuckDB/Snowflake/BigQuery).
-- **Phase 2:** survivorship-rule extraction depth, more dialects, incremental-merge recognition, multi-entity families.
-- **Phase 3:** an LLM-assisted extraction fallback for the `couldn't_extract` tail (opt-in, same posture as the auto-config LLM tier) — propose a config for a model the heuristics couldn't parse, still gated by the verify agreement number so it can't hallucinate unchecked.
+- **Phase 1 (MVP) — SHIPPED (PR #2157):** manifest reader + ER identification + exact/common-fuzzy extraction + verify + report + CLI + docs (DuckDB/Snowflake/BigQuery). `from_dbt` / `verify_against_dbt` / `import-dbt`.
+- **Phase 2:** deepen coverage of the `couldn't_extract` tail — see the scoped section below.
+- **Phase 3:** an LLM-assisted extraction fallback for the residual `couldn't_extract` tail (opt-in, same posture as the auto-config LLM tier) — propose a config for a model the heuristics couldn't parse, still gated by the verify agreement number so it can't hallucinate unchecked.
+
+## Phase 2 scope
+
+The MVP's "partial coverage" is a *starting* recognizer set, not a claim that the rest is uncoverable. Most of what lands in `couldn't_extract` today is coverable — but the items split into three buckets with very different cost and very different implications for GoldenMatch itself. The governing rule for Phase 2 is **recognizer-first, capability-second, and let the measured agreement number decide the order.**
+
+### The taxonomy (how to classify every `couldn't_extract` item)
+
+**Bucket A — recognizer gaps (GoldenMatch already has the primitive; we just don't parse the dbt shape yet).** These are the bulk of Phase 2: cheap, no GM change, no new source of truth.
+- **More dialects.** Postgres (`levenshtein` via `fuzzystrmatch`), Redshift, Spark, Athena/Trino. Pure per-adapter table extension — the recognizers are already dialect-registered.
+- **Priority-hierarchy / conditional survivorship.** "Prefer CRM over web, unless the CRM row is older than 90 days." GoldenMatch **already** has `source_priority`, `most_recent`, and conditional `field_rules` (the list-form ending in a `when`-less default clause) + `GoldenGroupRule`. The MVP only *reports* these because `from_dbt` doesn't read the column list at convert time; Phase 2 reads `manifest.nodes[*].columns` (and `catalog.json` when present) so it can emit the per-field rules GM already accepts. This is an **extraction-depth** change, not a capability change.
+- **CASE-ladder matching → multi-matchkey disjunction.** `CASE WHEN tax_id_valid THEN tax_id ELSE name+dob` maps onto GM's existing "a pair matches if ANY matchkey fires" semantics as two alternative matchkeys. Parse the top-level `CASE` arms in a join/where matching predicate into alternative matchkeys. (The *guarded* form — "use this arm ONLY when the guard holds" — is bucket B; the disjunctive form is bucket A.)
+- **GoldenFlow-backed normalizations.** `REGEXP_REPLACE`/`REPLACE`/`translate` cleanups that correspond to an existing GoldenFlow transform (113 of them — `phone_e164`, address/name normalizers, …). Map the recognized ones to a GoldenFlow transform on the field; only the genuinely-arbitrary regex falls through to bucket B.
+- **More dedup macros.** `dbt_utils.deduplicate` is covered; add the other popular package macros (`dbt_utils.star`-wrapped dedups, `dbt_expectations`/`re_data` ER helpers) as per-macro recognizers over `raw_code`.
+
+**Bucket B — small GoldenMatch capability adds (justified ON THEIR OWN MERITS, never solely to feed a recognizer).** Do these only when they're independently valuable to hand-config authors, so we don't grow converter-shaped special cases that violate the "one authoritative owner per capability" frame.
+- **Guarded / conditional matchkeys.** A first-class "apply this matchkey only when `<predicate over the pair>` holds" — the missing primitive behind guarded CASE ladders and per-source override rules. Independently useful: anyone writing configs by hand hits "match on SSN, but only when it's not the `000-00-0000` placeholder." This is the one capability add Phase 2 should carry; it belongs to the config schema + scorer path, owned there, with the converter as just one consumer.
+- **A parameterized `regexp_replace` transform.** Closes the truly-arbitrary normalization tail that no existing GoldenFlow transform covers. Small, self-contained, and generally useful — but check GoldenFlow first (it may already have a general regex transform to wire rather than adding one to GM).
+
+**Bucket C — genuinely hard (defer to Phase 3, not Phase 2).** Matching logic encoded in the *shape* of a multi-CTE / nested-subquery query rather than a recognizable predicate. There is no clean heuristic extraction; this is exactly what the verify-gated LLM fallback (Phase 3) is for. Phase 2 should make these produce a *precise* `couldn't_extract` finding (model + the specific CTE/excerpt), not attempt them.
+
+### Also in Phase 2 (already listed as open questions)
+- **Incremental-merge recognition** — dbt `is_incremental()` merge blocks → GoldenMatch's incremental / identity path (`match_one` + `add_to_cluster` / the identity graph), not the batch dedupe path. A distinct target surface, so it's its own recognizer + emission mode.
+- **Multi-entity families** — a project resolving customers *and* products *and* suppliers should emit one config per ER family (grouped by the entity's source table via the DAG), not one over-merged config.
+
+### Prioritization discipline (the load-bearing part)
+
+**Don't cover idioms speculatively — let the agreement number rank the work.** The whole reason the converter measures agreement is that it tells us *whether a given gap is load-bearing*:
+- If the MVP's partial config already reproduces ~98% of a real project's clusters, the uncovered CASE ladder was effectively dead code — covering it spends effort for no behavioral gain.
+- If it reproduces ~60%, that unextracted logic mattered, and the specific `couldn't_extract` items dragging the number down name exactly which recognizer/capability to build next.
+
+So the Phase 2 sequencing is: **run the MVP against a corpus of real (or realistic) dbt ER projects, bucket every `couldn't_extract` item, and weight each bucket-A/B candidate by how much it would move the measured agreement across that corpus.** Build the top movers; leave the non-movers reported. This keeps Phase 2 evidence-driven rather than a speculative recognizer land-grab, and it keeps GoldenMatch capability adds (bucket B) honest — a capability only earns its place if a real project's agreement number demonstrably needs it AND it stands on its own as a config primitive.
