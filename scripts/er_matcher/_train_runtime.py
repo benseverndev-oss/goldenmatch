@@ -56,8 +56,12 @@ class _ThroughputCallback(TrainerCallback):
         if torch.cuda.is_available():
             try:
                 self.util_samples.append(torch.cuda.utilization() / 100.0)
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError):
+                # GPU utilization is OPTIONAL telemetry (needs NVML/pynvml, absent
+                # on some drivers/older torch). A sampling failure must never
+                # interrupt training -- skip this step's sample; the mean is over
+                # whatever samples we did collect (0 -> gate reads it as data-bound).
+                return
 
     def wall_s(self) -> float:
         return (time.perf_counter() - self.t0) if self.t0 else 0.0
