@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 405,
+      "module_count": 406,
       "modules": [
         {
           "module": "goldenmatch",
@@ -5777,6 +5777,19 @@
           ]
         },
         {
+          "module": "goldenmatch.identity.resolution_batch",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py",
+          "purpose": "The versioned compute->control seam contract (Wave C, milestone C1).",
+          "defines": [
+            "ResolutionBatch",
+            "_default_flush_rows",
+            "bulk_fast_path_enabled"
+          ],
+          "imports": [
+            "goldenmatch.identity.resolve"
+          ]
+        },
+        {
           "module": "goldenmatch.identity.resolve",
           "file": "packages/python/goldenmatch/goldenmatch/identity/resolve.py",
           "purpose": "Identity resolution -- map run-local clusters to durable identity_ids.",
@@ -5811,6 +5824,7 @@
             "goldenmatch.core.match_one",
             "goldenmatch.identity.fingerprint_batch",
             "goldenmatch.identity.model",
+            "goldenmatch.identity.resolution_batch",
             "goldenmatch.identity.store"
           ]
         },
