@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 407,
+      "module_count": 409,
       "modules": [
         {
           "module": "goldenmatch",
@@ -2788,6 +2788,26 @@
             "evaluate_canonicalization",
             "select_field_model",
             "select_field_models"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/__init__.py",
+          "purpose": "OSS ER-matcher LLM boost (spec/plan 2026-07-26).",
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.prompt",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/prompt.py",
+          "purpose": "Prompt / serializer / verdict-parser for the OSS ER-matcher LLM boost.",
+          "defines": [
+            "_norm_cell",
+            "build_chat",
+            "parse_verdict",
+            "render_target",
+            "serialize_pair_v1"
           ]
         },
         {
