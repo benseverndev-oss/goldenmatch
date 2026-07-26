@@ -35,7 +35,9 @@ from goldenmatch.config.from_splink import (
 from goldenmatch.config.schemas import (
     BlockingConfig,
     BlockingKeyConfig,
+    GoldenFieldRule,
     GoldenMatchConfig,
+    GoldenRulesConfig,
     MatchkeyConfig,
     MatchkeyField,
 )
@@ -57,10 +59,18 @@ _ER_NAME_SUBSTRINGS: tuple[str, ...] = (
     "crosswalk", "survivor",
 )
 
-# The MVP dialect trio (dbt ``metadata.adapter_type``). Others fall through to a
-# dialect-agnostic core (window-dedup + GROUP BY + the ANSI string funcs) and
-# are flagged so the user knows recognition was partial.
-_MVP_DIALECTS: frozenset[str] = frozenset({"duckdb", "snowflake", "bigquery"})
+# Dialects whose ER idioms the recognizers cover (dbt ``metadata.adapter_type``).
+# The DuckDB/Snowflake/BigQuery trio was the MVP; Phase 2 adds the warehouses
+# that share the ANSI window-dedup + GROUP BY + `levenshtein`/`soundex` core
+# (Snowflake's `editdistance`/`jarowinkler_similarity` and BigQuery's
+# `edit_distance` are the only warehouse-specific fuzzy names, and both are in
+# the func tables above). Any OTHER adapter still runs -- it just falls through
+# to that same shared core and is flagged so the user knows a warehouse-specific
+# idiom (if any) may have been missed.
+_SUPPORTED_DIALECTS: frozenset[str] = frozenset({
+    "duckdb", "snowflake", "bigquery",
+    "postgres", "redshift", "spark", "databricks", "trino", "athena",
+})
 
 # Fuzzy similarity funcs -> (GoldenMatch scorer, scale). The literal threshold in
 # the SQL is divided by ``scale`` (Snowflake's JAROWINKLER_SIMILARITY returns
@@ -701,17 +711,67 @@ def _load_manifest(source: dict | str | Path) -> dict:
     return data
 
 
+def _load_catalog(source: dict | str | Path) -> dict:
+    if isinstance(source, dict):
+        return source
+    path = safe_path(source)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DbtConversionError(f"could not read dbt catalog {path}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DbtConversionError(f"malformed JSON in dbt catalog {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise DbtConversionError(
+            f"dbt catalog {path} must contain a JSON object at the top level, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
+def _model_columns(manifest: dict, catalog: dict | None) -> dict[str, list[str]]:
+    """Map model NAME -> its output column names.
+
+    Survivorship emission needs each ER model's column list to write a per-field
+    rule. ``catalog.json`` (``dbt docs generate``) carries the FULL, warehouse-
+    verified column set per node; the manifest's own ``columns`` only holds
+    columns described in ``schema.yml``. Prefer the catalog, fall back to the
+    manifest, keyed by model NAME (what ``RecognizedSignal.source_model`` uses).
+    Column order follows the source's declared ``index`` when present so the
+    emitted rules read in table order.
+    """
+    out: dict[str, list[str]] = {}
+    manifest_nodes = manifest.get("nodes", {})
+    catalog_nodes = (catalog or {}).get("nodes", {})
+    for uid, node in manifest_nodes.items():
+        if node.get("resource_type") != "model":
+            continue
+        name = node.get("name", uid)
+        cols_meta = (catalog_nodes.get(uid) or {}).get("columns") or node.get("columns") or {}
+        if not isinstance(cols_meta, dict) or not cols_meta:
+            continue
+        ordered = sorted(
+            cols_meta.items(),
+            key=lambda kv: kv[1].get("index", 1 << 30) if isinstance(kv[1], dict) else 1 << 30,
+        )
+        names = [c.get("name", key) if isinstance(c, dict) else key for key, c in ordered]
+        out[name] = [n for n in names if isinstance(n, str) and not n.startswith("__")]
+    return out
+
+
 def _manifest_dialect(manifest: dict, report: ConversionReport) -> str:
     adapter = str((manifest.get("metadata") or {}).get("adapter_type") or "").lower()
     if not adapter:
         report.info("metadata", "manifest declares no adapter_type; using the "
                     "dialect-agnostic recognizer core", mapped_to=None)
         return "unknown"
-    if adapter not in _MVP_DIALECTS:
+    if adapter not in _SUPPORTED_DIALECTS:
         report.warn(
             "metadata",
-            f"adapter '{adapter}' is outside the MVP dialect trio "
-            f"{sorted(_MVP_DIALECTS)}; recognition falls through to the "
+            f"adapter '{adapter}' is outside the supported set "
+            f"{sorted(_SUPPORTED_DIALECTS)}; recognition falls through to the "
             "dialect-agnostic core (window-dedup + GROUP BY + ANSI string funcs) "
             "and warehouse-specific idioms may be missed",
             mapped_to=None,
@@ -722,6 +782,7 @@ def _manifest_dialect(manifest: dict, report: ConversionReport) -> str:
 def from_dbt(
     source: dict | str | Path,
     *,
+    catalog_path: dict | str | Path | None = None,
     strict: bool = False,
     min_confidence: float = 0.5,
 ) -> DbtConversion:
@@ -731,6 +792,12 @@ def from_dbt(
         source: a dbt ``manifest.json`` path (``str``/``Path``) or an
             already-parsed manifest dict (produced by ``dbt compile`` /
             ``dbt parse`` / ``dbt docs generate``).
+        catalog_path: an optional dbt ``catalog.json`` (path or dict, from
+            ``dbt docs generate``). It supplies each model's FULL output column
+            list, which lets the converter EMIT recognized most-recent
+            survivorship as per-field ``golden_rules`` (without it, or without
+            columns in the manifest, survivorship is recognized but only
+            reported with the remediation).
         strict: when True, ANY warning or error finding raises
             :class:`DbtConversionError`. When False (default), only a malformed
             manifest raises -- a partial extraction is the expected outcome.
@@ -744,8 +811,10 @@ def from_dbt(
         every recognized signal.
     """
     manifest = _load_manifest(source)
+    catalog = _load_catalog(catalog_path) if catalog_path is not None else None
     report = ConversionReport()
     dialect = _manifest_dialect(manifest, report)
+    columns_by_model = _model_columns(manifest, catalog)
 
     total_models = sum(
         1 for n in manifest.get("nodes", {}).values()
@@ -775,7 +844,7 @@ def from_dbt(
         node = nodes.get(m.unique_id, {})
         all_signals.extend(extract_signals(node, dialect, is_er=True))
 
-    config = _emit_config(all_signals, report)
+    config = _emit_config(all_signals, report, columns_by_model)
 
     coverage = _build_coverage(total_models, len(analyzed), all_signals, config)
 
@@ -812,9 +881,12 @@ def from_dbt(
 
 
 def _emit_config(
-    signals: list[RecognizedSignal], report: ConversionReport,
+    signals: list[RecognizedSignal],
+    report: ConversionReport,
+    columns_by_model: dict[str, list[str]] | None = None,
 ) -> GoldenMatchConfig | None:
     """Aggregate recognized signals across ER models into ONE config."""
+    columns_by_model = columns_by_model or {}
     # Blocking keys: de-duplicate by (fields tuple), union field_transforms.
     blocking_keys: list[BlockingKeyConfig] = []
     seen_block: set[tuple[str, ...]] = set()
@@ -913,30 +985,90 @@ def _emit_config(
             )
 
     # Survivorship. A window-dedup's `ORDER BY <date> DESC` is a most-recent
-    # rule, but GoldenMatch applies `most_recent` PER FIELD (each needs its
+    # rule. GoldenMatch applies `most_recent` PER FIELD (each needs its
     # date_column) -- there is no runnable global-default form (the golden-record
     # builder constructs the default rule from `default_strategy` alone, dropping
-    # the date_column). We don't read the column list at convert time, so we
-    # REPORT the recognized rule + the exact remediation instead of emitting an
-    # un-runnable `golden_rules.default`. It still counts toward the coverage
-    # scorecard (a distilled decision), just isn't auto-wired into the config.
-    surv = next((s for s in signals if s.kind == "survivorship"), None)
-    if surv is not None and surv.params.get("strategy") == "most_recent":
-        date_col = surv.params["date_column"]
+    # the date_column). So we EMIT a per-field `golden_rules.field_rules` entry
+    # for each of the model's output columns when we know them (from catalog.json
+    # or the manifest); when the column list is unavailable we fall back to
+    # REPORTING the rule + the exact remediation. Either way it counts toward the
+    # coverage scorecard as a distilled decision.
+    golden_rules = _emit_survivorship(signals, report, columns_by_model, exact_fields)
+
+    return GoldenMatchConfig(
+        matchkeys=matchkeys or None,
+        blocking=blocking,
+        golden_rules=golden_rules,
+    )
+
+
+def _emit_survivorship(
+    signals: list[RecognizedSignal],
+    report: ConversionReport,
+    columns_by_model: dict[str, list[str]],
+    key_fields: list[str],
+) -> GoldenRulesConfig | None:
+    """Emit a most-recent ``GoldenRulesConfig`` (or report-only when we can't).
+
+    Emits per-field ``most_recent`` rules for the survivorship model's output
+    columns (excluding the date column and the blocking/identity key columns,
+    on which most_recent is a no-op). ``default_strategy`` is set to GoldenMatch's
+    own default ``most_complete`` so the golden-record builder's unconditional
+    default-rule construction stays valid for any column without a field rule.
+    """
+    surv_signals = [
+        s for s in signals
+        if s.kind == "survivorship" and s.params.get("strategy") == "most_recent"
+    ]
+    if not surv_signals:
+        return None
+
+    date_cols = {s.params["date_column"] for s in surv_signals}
+    if len(date_cols) > 1:
+        # Conflicting recency columns across models -- picking one would silently
+        # misattribute survivorship. Report all and emit nothing (safe).
+        report.warn(
+            "golden_rules",
+            f"multiple most-recent survivorship recency columns {sorted(date_cols)} "
+            "across models; survivorship not auto-wired (ambiguous) -- add "
+            "golden_rules.field_rules manually for the intended entity",
+            mapped_to="golden_rules.field_rules",
+        )
+        return None
+
+    surv = surv_signals[0]
+    date_col = surv.params["date_column"]
+    columns = columns_by_model.get(surv.source_model, [])
+    survivor_cols = [
+        c for c in columns if c != date_col and c not in set(key_fields)
+    ]
+
+    if not survivor_cols:
+        # No column list (no catalog + manifest carries no columns for this model).
         report.info(
             f"model:{surv.source_model}",
             f"recognized most-recent survivorship (keep the latest row by "
             f"'{date_col}'). GoldenMatch applies most_recent per field, so add a "
             f"golden_rules.field_rules entry for each surviving column: "
             f"{{strategy: most_recent, date_column: {date_col}}} "
-            "(not auto-wired -- the converter doesn't read the column list).",
+            "(not auto-wired -- no column list; pass catalog_path=/--catalog to "
+            "emit it, or add the model's columns to schema.yml).",
             mapped_to="golden_rules.field_rules",
         )
+        return None
 
-    return GoldenMatchConfig(
-        matchkeys=matchkeys or None,
-        blocking=blocking,
+    field_rules: dict[str, GoldenFieldRule | list[GoldenFieldRule]] = {
+        col: GoldenFieldRule(strategy="most_recent", date_column=date_col)
+        for col in survivor_cols
+    }
+    report.info(
+        f"model:{surv.source_model}",
+        f"emitted most-recent survivorship (date_column '{date_col}') as "
+        f"golden_rules.field_rules for {len(survivor_cols)} column(s): "
+        f"{survivor_cols}",
+        mapped_to="golden_rules.field_rules",
     )
+    return GoldenRulesConfig(default_strategy="most_complete", field_rules=field_rules)
 
 
 def _build_coverage(

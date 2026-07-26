@@ -84,6 +84,24 @@ def test_import_dbt_verify_reports_agreement(tmp_path):
     assert "agreement" in result.output.lower()
 
 
+def test_import_dbt_catalog_emits_survivorship(tmp_path):
+    manifest = _write_manifest(tmp_path, _DIM)
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"nodes": {"model.s.dim_customers": {"columns": {
+        "email": {"name": "email", "index": 0},
+        "full_name": {"name": "full_name", "index": 1},
+        "updated_at": {"name": "updated_at", "index": 2},
+    }}}}))
+    out = tmp_path / "gm.yaml"
+    result = runner.invoke(
+        app, ["import-dbt", str(manifest), "-o", str(out), "--catalog", str(catalog)]
+    )
+    assert result.exit_code == 0, result.output
+    cfg = yaml.safe_load(out.read_text())
+    assert cfg["golden_rules"]["field_rules"]["full_name"]["strategy"] == "most_recent"
+    assert cfg["golden_rules"]["field_rules"]["full_name"]["date_column"] == "updated_at"
+
+
 def test_import_dbt_strict_fails_on_lossy(tmp_path):
     nodes = {
         "model.p.dim_x": {"resource_type": "model", "name": "dim_x",

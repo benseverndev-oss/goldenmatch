@@ -114,6 +114,15 @@ def import_dbt_cmd(
     output: str = typer.Option(
         "goldenmatch.yaml", "--output", "-o", help="Output YAML config path"
     ),
+    catalog: str | None = typer.Option(
+        None,
+        "--catalog",
+        help=(
+            "dbt catalog.json (from `dbt docs generate`); supplies model column "
+            "lists so recognized most-recent survivorship is emitted as "
+            "golden_rules (otherwise it is only reported)"
+        ),
+    ),
     strict: bool = typer.Option(
         False, "--strict", help="Fail on any lossy finding (warnings), not just errors"
     ),
@@ -152,7 +161,9 @@ def import_dbt_cmd(
     from goldenmatch.config.from_dbt import DbtConversionError, from_dbt
 
     try:
-        conversion = from_dbt(manifest, strict=strict, min_confidence=min_confidence)
+        conversion = from_dbt(
+            manifest, catalog_path=catalog, strict=strict, min_confidence=min_confidence,
+        )
     except DbtConversionError as exc:
         err_console.print(f"[red]dbt conversion failed:[/red] {exc}")
         raise typer.Exit(code=1) from None
