@@ -113,6 +113,13 @@ engine owns as drawn. Three ways to home it:
 **Decision needed from the owner:** confirm (ii), or pick (i)/(iii). This gates all
 incremental code below.
 
+> **DECIDED 2026-07-26 — owner confirmed (ii).** C2 is unblocked. **Slice 1 (landed):**
+> the persisted `identity_record_block_keys` index in the store (SQLite `_SCHEMA` +
+> Postgres `_pg_init_schema` + Alembic `0005` + schema v6) with the
+> `index_record_block_keys` / `candidates_by_block_keys` write/query API — additive,
+> nothing reads it yet. Next slices: block-key computation + population on write; the
+> bidirectional candidate query in `resolve_record_incremental`; the exact-matchkey fix.
+
 ## 5. Transaction-native semantics to specify (Tier-5 scope)
 
 Each gets a spec entry + conformance fixtures (the frame's spec+conformance contract), not
@@ -131,7 +138,8 @@ sources of truth — the survivorship spec entry picks one authoritative owner.
 
 - **C1 (contract):** `ResolutionBatch v1` + `apply_batch`; `resolve_clusters` becomes its
   adapter (no behavior change); residency budget as a contract term. Closes the medium + low.
-- **C2 (persisted index):** store block-key/fingerprint index + population on write; the
+- **C2 (persisted index) — IN PROGRESS (§4 decided (ii) 2026-07-26; slice 1 store index landed):**
+  store block-key/fingerprint index + population on write; the
   §4(ii) bidirectional seam; exact-matchkey incremental. Closes the critical. *Needs the §4
   decision first.*
 - **C3 (conformance layer):** spec entries + fixtures for the §5 semantics; single-source the

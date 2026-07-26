@@ -58,6 +58,30 @@ def _is_internal(col: str) -> bool:
     return any(col.startswith(p) for p in _INTERNAL_PREFIXES) or col == "__mk_"
 
 
+def most_complete_value(values: list) -> object:
+    """The ``most_complete`` survivor for a column's candidate values.
+
+    Picks the longest non-null string representation, ties broken by input
+    order; returns ``None`` when every candidate is null. This is the SINGLE
+    authoritative implementation of the "most complete" rollup rule (T1: one
+    authoritative semantic owner). The Identity Graph golden-record helpers
+    (``identity/resolve.py::_golden_record_from_members`` /
+    ``_from_payloads``) delegate here instead of hand-rolling the same
+    longest-non-null loop, so the rule cannot drift from the config-driven
+    pipeline path (``build_golden_record*``) or the provenance layer
+    (``identity/survivorship.py``, which already routes through
+    ``merge_field``).
+
+    Only the winning VALUE is returned; ``merge_field``'s confidence + source
+    index are dropped (the identity rollup tracks neither). Behaviourally
+    identical to ``merge_field(values, GoldenFieldRule("most_complete"))[0]``.
+    """
+    value, _confidence, _idx = merge_field(
+        values, GoldenFieldRule(strategy="most_complete")
+    )
+    return value
+
+
 def merge_field(
     values: list,
     rule: GoldenFieldRule,

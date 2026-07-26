@@ -65,6 +65,18 @@ class _FakeDirectLinker:
         return dict(self._settings)
 
 
+class _FakeSettingsCreator:
+    """Mimics splink 4's ``SettingsCreator`` (settings via create_settings_dict)."""
+
+    def __init__(self, settings: dict) -> None:
+        self._settings = settings
+        self.dialects: list[str] = []
+
+    def create_settings_dict(self, sql_dialect_str: str) -> dict:
+        self.dialects.append(sql_dialect_str)
+        return dict(self._settings)
+
+
 # ── extraction ───────────────────────────────────────────────────────────────
 
 
@@ -81,6 +93,15 @@ def test_extract_from_direct_method_shape() -> None:
     extracted = _extract_linker_settings(_FakeDirectLinker(_SETTINGS))
     assert extracted is not None
     assert "comparisons" in extracted
+
+
+def test_extract_from_settings_creator_shape() -> None:
+    creator = _FakeSettingsCreator(_SETTINGS)
+    extracted = _extract_linker_settings(creator)
+    assert extracted is not None
+    assert "comparisons" in extracted
+    # materialized against the default DuckDB dialect
+    assert creator.dialects == ["duckdb"]
 
 
 @pytest.mark.parametrize("obj", [42, "not a linker", object(), {"comparisons": []}])
@@ -119,6 +140,30 @@ def test_from_splink_accepts_fake_linker() -> None:
 def test_from_splink_accepts_direct_method_linker() -> None:
     conv = from_splink(_FakeDirectLinker(_SETTINGS))
     assert conv.config.matchkeys[0].fields[0].field == "first_name"
+
+
+def test_from_splink_accepts_settings_creator() -> None:
+    conv = from_splink(_FakeSettingsCreator(_SETTINGS))
+    assert conv.config.matchkeys[0].fields[0].field == "first_name"
+
+
+def test_from_splink_accepts_real_settings_creator() -> None:
+    pytest.importorskip("splink")
+    from splink import SettingsCreator
+    from splink import comparison_library as cl
+
+    creator = SettingsCreator(
+        link_type="dedupe_only",
+        unique_id_column_name="unique_id",
+        comparisons=[
+            cl.ExactMatch("first_name"),
+            cl.JaroWinklerAtThresholds("surname", [0.9]),
+        ],
+        blocking_rules_to_generate_predictions=["l.surname = r.surname"],
+    )
+    conv = from_splink(creator)
+    fields = {f.field for f in conv.config.matchkeys[0].fields}
+    assert {"first_name", "surname"} <= fields
 
 
 def test_from_splink_does_not_mutate_extracted_settings() -> None:

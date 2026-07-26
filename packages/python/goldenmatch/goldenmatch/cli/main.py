@@ -28,6 +28,7 @@ from goldenmatch.cli.lineage import lineage_cmd
 from goldenmatch.cli.match import match_cmd
 from goldenmatch.cli.mcp_serve import mcp_serve_cmd
 from goldenmatch.cli.memory import memory_app
+from goldenmatch.cli.migrate_splink import migrate_splink_cmd
 from goldenmatch.cli.pprl import pprl_app
 from goldenmatch.cli.review import review_cmd
 from goldenmatch.cli.rollback import rollback_cmd, runs_cmd, unmerge_cmd
@@ -125,6 +126,7 @@ app.command("unmerge", help="Remove a record from its cluster (per-entity unmerg
 app.command("schedule", help="Run deduplication on a schedule.")(schedule_cmd)
 app.command("evaluate", help="Evaluate matching quality against ground truth pairs.")(evaluate_cmd)
 app.command("import-splink", help="Convert a Splink settings or trained-model JSON to a GoldenMatch config.")(import_splink_cmd)
+app.command("migrate-splink", help="One-shot Splink migration: convert a model, verify it against Splink, and run the dedupe.")(migrate_splink_cmd)
 app.add_typer(pprl_app, name="pprl")
 app.add_typer(memory_app, name="memory")
 app.add_typer(identity_app, name="identity")
