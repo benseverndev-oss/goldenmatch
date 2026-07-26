@@ -153,15 +153,18 @@ def _run_goldenmatch(
         return mapping
 
     config = gm_config.model_copy(deep=True)
+    # get_matchkeys() returns the matchkey list (top-level or match_settings),
+    # never None -- mutating an element mutates the config dedupe_df reads.
+    matchkeys = config.get_matchkeys()
     covered = set(em_model.match_weights)
-    fully_covered = all(
-        f.field in covered for f in config.matchkeys[0].fields if f.field
+    fully_covered = bool(matchkeys) and all(
+        f.field in covered for f in matchkeys[0].fields if f.field
     )
     with tempfile.TemporaryDirectory() as tmp:
         if fully_covered:
             model_path = str(Path(tmp) / "em.json")
             em_model.save_json(model_path)
-            config.matchkeys[0].model_path = model_path
+            matchkeys[0].model_path = model_path
         mapping, _wall = _run_once(sample, config, ids)
     return mapping
 
