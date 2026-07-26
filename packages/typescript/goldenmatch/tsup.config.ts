@@ -33,6 +33,11 @@ export default defineConfig({
     // separate subpath (`goldenmatch/core/graph-wasm`), out of the default core
     // bundle.
     "core/graphWasm": "src/core/graphWasm.ts",
+    // Opt-in entry: the cluster-core MST-split + confidence kernels compiled to
+    // wasm, so `splitOversizedCluster` / `computeClusterConfidence` run the
+    // shared core. ~40 KB inlined base64 as a separate subpath
+    // (`goldenmatch/core/cluster-wasm`), out of the default core bundle.
+    "core/clusterWasm": "src/core/clusterWasm.ts",
     // Opt-in entry: the fingerprint-core canonical record-hash kernel compiled
     // to wasm, so `recordFingerprint` runs the shared core. ~155 KB inlined
     // base64 as a separate subpath (`goldenmatch/core/fingerprint-wasm`), out of

@@ -37,6 +37,10 @@ exclude = [
     # clustering kernels; standalone workspace, like score-core/analysis-core).
     # Not a bridge member.
     "cluster-core",
+    # cluster-wasm is a cdylib wasm-bindgen wrapper over cluster-core (the JS/TS
+    # MST-split + confidence surface, mirror of graph-wasm). Its own [workspace]
+    # self-isolates it; excluded here too so the default rust build skips it.
+    "cluster-wasm",
     # graph-layout is a standalone demo binary (Barnes-Hut + multilevel force
     # layout → frames). Heavy/optional; its own workspace, kept out of the
     # default rust build.
