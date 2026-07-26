@@ -283,6 +283,13 @@ _NATIVE_SCORER_IDS: dict[str, int] = {
     # _resolve_score_pair_callable). Guarded on the `numeric_diff_similarity`
     # capability symbol below.
     "numeric_diff": 22,
+    # id 23 = cosine (vector cosine over two precomputed float-vector columns,
+    # score-core score_one). No mode/param, so the fixed id covers it fully
+    # (contrast array_intersect/numeric_diff). Guarded on the `cosine_similarity`
+    # capability symbol at the gating site below, so a stale wheel (pre-cosine,
+    # whose score_one catch-all scores id 23 as 0.0) declines to the pure-Python
+    # per-pair mirror (`_cosine_similarity_py`) instead of silently zeroing.
+    "cosine": 23,
     # id 5 = qgram (char-trigram Jaccard, score-core score_one). Same wheel-skew
     # story as date: routing is GUARDED on the `qgram_similarity` capability
     # symbol at the gating site below, so a stale wheel (pre-qgram, whose
@@ -652,6 +659,14 @@ def _resolve_score_pair_callable(
             return lambda a, b: _mod.numeric_diff_similarity(a, b, scorer_name)
         from goldenmatch.core.scorer import _numeric_diff_similarity_py
         return lambda a, b: _numeric_diff_similarity_py(a, b, scorer_name)
+    if scorer_name == "cosine":
+        # Vector cosine over two precomputed float-vector columns. Per-pair mirror
+        # of score-core::cosine_similarity (native id 23); no mode/param, so the
+        # batch path uses native id 23 (wheel-guarded on the `cosine_similarity`
+        # symbol) and this is the fast-path fallback. Parity-asserted in
+        # tests/test_native_cosine_parity.py.
+        from goldenmatch.core.scorer import _cosine_similarity_py
+        return _cosine_similarity_py
     if scorer_name == "qgram":
         # Character-trigram Jaccard (n=3). Per-pair mirror of the matrix path
         # (_qgram_score_matrix) AND of score-core::qgram_similarity (native
@@ -1491,6 +1506,7 @@ def score_buckets(
             _geo_ok = _mod is not None and hasattr(_mod, "geo_haversine_similarity")
             _array_intersect_ok = _mod is not None and hasattr(_mod, "array_intersect_similarity")
             _numeric_diff_ok = _mod is not None and hasattr(_mod, "numeric_diff_similarity")
+            _cosine_ok = _mod is not None and hasattr(_mod, "cosine_similarity")
             _qgram_ok = _mod is not None and hasattr(_mod, "qgram_similarity")
             _soundex_ok = _mod is not None and hasattr(_mod, "soundex_similarity")
             _dice_ok = _mod is not None and hasattr(_mod, "dice_similarity")
@@ -1512,6 +1528,8 @@ def score_buckets(
                 spec[3] == "numeric_diff" or spec[3].startswith("numeric_diff:")
                 for spec in _field_specs
             )
+            # cosine (id 23) has no mode, so the bare form is the only key.
+            has_cosine = any(spec[3] == "cosine" for spec in _field_specs)
             has_qgram = any(spec[3] == "qgram" for spec in _field_specs)
             has_soundex = any(spec[3] == "soundex_match" for spec in _field_specs)
             has_dice = any(spec[3] == "dice" for spec in _field_specs)
@@ -1558,6 +1576,7 @@ def score_buckets(
                 or (has_geo and not _geo_ok)
                 or (has_array_intersect and not _array_intersect_ok)
                 or (has_numeric_diff and not _numeric_diff_ok)
+                or (has_cosine and not _cosine_ok)
                 or (has_qgram and not _qgram_ok)
                 or (has_soundex and not _soundex_ok)
                 or (has_initialism and not _initialism_ok)
