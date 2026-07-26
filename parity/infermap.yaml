@@ -60,8 +60,8 @@ scorer_kernels:
 # COVERAGE FLOOR (check_scorer_coverage). Every scorer in `scorers` NOT in
 # `scorer_kernels` MUST appear here with a reason -- the gate FAILS otherwise, so a
 # new/regressed infermap scorer can't sit un-kernelized or un-declared (the same
-# floor that gates goldenmatch). `deferred --` = will kernelize; `n/a --` = not a
-# deterministic string kernel.
+# floor that gates goldenmatch). `deferred --` = will kernelize; `declined --` =
+# won't (with why); `n/a --` = not a deterministic string kernel.
 scorer_kernels_deferred:
-  AliasScorer: "deferred -- dictionary-lookup scorer; the ALIASES table is runtime DATA not logic (cf. goldenflow category_standardize). The name-canonicalization key-derivation is kernelizable; the lookup itself is data. Wave: infermap alias-core."
+  AliasScorer: "declined -- dictionary-lookup scorer: the whole computation is `name.strip().lower()` then an ALIASES-table lookup (runtime DATA) + a fixed 0.95/0.0 decision. The key-derivation is trivial `strip().lower()` -- kernelizing it would pay Arrow/FFI on a two-op string call for no gain (the 'Arrow at bulk boundaries, not trivial ops' decision test), and the lookup is data not logic (the goldenflow category_standardize precedent, which declines the lookup). No meaningful string kernel to single-source."
   LLMScorer: "n/a -- model/network-backed (LLM adjudication); not a deterministic string kernel, stays host like goldenmatch embedding/record_embedding."
