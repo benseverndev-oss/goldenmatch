@@ -21,6 +21,13 @@ name = "goldenmatch_score_core"
 # Same pin the `native` crate uses, so the scorers are byte-identical across the
 # native ext and the FFI UDFs (parity by construction — one source of truth).
 rapidfuzz = "0.5.0"
+# Fast, deterministic (non-DoS-resistant) hasher for the set-based scorers'
+# tiny fixed-size keys (`[char; 3]` q-grams, `&str` tokens). The default
+# SipHash is ~5-10x slower on such keys and buys nothing here: the sets are
+# per-call, never exposed to adversarial input, and set-membership is by key
+# equality so results are byte-identical to a SipHash set. Same crate the
+# `native` crate already depends on.
+rustc-hash = "2"
 # `soundex` replicates `jellyfish.soundex` byte-for-byte, incl. its Unicode step
 # `unicodedata.normalize("NFKD", s).upper()`; this provides the NFKD normalizer.
 unicode-normalization = "0.1"

@@ -358,7 +358,7 @@ pub fn geo_haversine_similarity(a: &str, b: &str) -> f64 {
 /// Padding means even the empty string yields the all-`#` gram, so the set is
 /// never empty for n>=2 (the Python `if not union` branch is unreachable, but
 /// `qgram_similarity` guards it anyway).
-fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
+fn qgram_set(s: &str) -> rustc_hash::FxHashSet<[char; 3]> {
     const N: usize = 3;
     // Build the padded codepoint sequence directly into one Vec -- (N-1) `#`
     // sentinels, the lowercased chars, then (N-1) `#` -- with no intermediate
@@ -370,14 +370,19 @@ fn qgram_set(s: &str) -> std::collections::HashSet<[char; 3]> {
     chars.extend(lower.chars());
     chars.extend(std::iter::repeat_n('#', N - 1));
     if chars.len() < N {
-        return std::collections::HashSet::new();
+        return rustc_hash::FxHashSet::default();
     }
     // The gram count is known (chars.len() - N + 1), so pre-size the set to avoid
     // rehashing while inserting. Grams are stored as a fixed `[char; N]` (N=3)
     // rather than an allocated `String`, so scoring many pairs doesn't
     // heap-allocate per trigram; set membership semantics are identical
-    // (codepoint-wise equality).
-    let mut set = std::collections::HashSet::with_capacity(chars.len() - N + 1);
+    // (codepoint-wise equality). FxHash (not the default SipHash) hashes the
+    // 12-byte key in a couple of multiplies -- byte-identical results, much less
+    // per-gram hashing overhead in the score_one(5) hot path.
+    let mut set = rustc_hash::FxHashSet::with_capacity_and_hasher(
+        chars.len() - N + 1,
+        rustc_hash::FxBuildHasher,
+    );
     for i in 0..=(chars.len() - N) {
         set.insert([chars[i], chars[i + 1], chars[i + 2]]);
     }
@@ -396,13 +401,15 @@ const ARRAY_INTERSECT_SEPARATORS: [char; 3] = ['|', ';', ','];
 /// first separator present (in `|`, `;`, `,` order) is used; a value with no
 /// separator is a single-element set; empty/whitespace-only -> empty set.
 /// Mirrors Python `_parse_token_set`.
-fn array_intersect_token_set(s: &str) -> std::collections::HashSet<&str> {
+fn array_intersect_token_set(s: &str) -> rustc_hash::FxHashSet<&str> {
+    // FxHash (not SipHash) for the per-call token set -- same equality-based
+    // membership, byte-identical result, cheaper hashing (see `qgram_set`).
     let sep = ARRAY_INTERSECT_SEPARATORS.iter().find(|c| s.contains(**c));
     match sep {
         None => {
             let tok = s.trim();
             if tok.is_empty() {
-                std::collections::HashSet::new()
+                rustc_hash::FxHashSet::default()
             } else {
                 std::iter::once(tok).collect()
             }

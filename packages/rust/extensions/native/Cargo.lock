@@ -604,6 +604,7 @@ version = "0.1.0"
 dependencies = [
  "rapidfuzz",
  "regex",
+ "rustc-hash",
  "unicode-normalization",
 ]
 
