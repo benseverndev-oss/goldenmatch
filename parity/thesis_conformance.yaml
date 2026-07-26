@@ -1,0 +1,208 @@
+# Thesis-conformance weakness inventory
+#
+# Scores the codebase against the governing architecture frame
+# (context-network/architecture/one-product-two-engines.md, decision 0047):
+# "one product, two engines, many surfaces."
+#
+# This is the CURATED half of the audit. The LIVE half (surface-gap counts,
+# _FALLBACK_ONLY kernels, deferred scorers) is harvested directly from
+# parity/*.yaml and the per-package _native_loader.py by
+# scripts/check_thesis_conformance.py, so drift shows up without editing this file.
+#
+# Each weakness maps to one of the five decision tests. `declared: false` marks the
+# DANGEROUS class -- a real cross-surface/architectural divergence with no
+# conformance level or contract covering it. Keep this file in sync when a
+# weakness is closed or a new one is found; the script's --check mode fails when a
+# live signal (a new _FALLBACK_ONLY kernel, an uncovered scorer, a declared-divergent
+# boundary with no parity test) has no matching inventory entry.
+
+tenets:
+  T1: "One authoritative semantic owner per capability (no second source of truth)."
+  T2: "Conformance defines correctness (every divergence has a declared level + a test)."
+  T3: "Kernelize on measurement (deferrals classified; no silent regress to fallback)."
+  T4: "Compute vs control stay architecturally distinct (explicit, versioned seam)."
+  T5: "Arrow at bulk boundaries, not the universal calling convention."
+
+# Severity: critical > high > medium > low
+weaknesses:
+  - id: incremental-resolution-no-persisted-index
+    tenet: T4
+    severity: critical
+    declared: true   # named as OPEN 9.1 in the frame
+    title: "Incremental resolution against a persisted identity index is absent"
+    detail: >-
+      No path scores/blocks NEW records against a PERSISTED index of prior identities.
+      Both incremental entry points require the entire prior corpus in-memory and
+      re-block it per record; StreamProcessor grows the corpus in RAM every record.
+      The store has no block-key/fingerprint index (source_records indexed only on
+      entity_id/source/record_hash), so fuzzy candidate generation against persisted
+      identities is impossible. This is the frame's own OPEN 9.1 -- compute that reads
+      durable state, which neither engine homes -- and it caps the product exactly
+      where the thesis says it becomes most valuable.
+    evidence:
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py:1270
+      - packages/python/goldenmatch/goldenmatch/core/streaming.py:129
+      - packages/python/goldenmatch/goldenmatch/core/streaming.py:149
+      - packages/python/goldenmatch/goldenmatch/identity/store.py:79
+    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4, milestone C2 -- needs the incremental-resolution fork decision)"
+
+  - id: no-versioned-resolution-batch-contract
+    tenet: T4
+    severity: low   # Wave B fixed the acute bug; Wave C/C1 landed the versioned
+                    # contract object; only refactor completeness remains
+    declared: true   # named as the 9 seam in the frame
+    title: "Compute->control handoff is now a versioned ResolutionBatch (payload-drop fixed; data-array fold remains)"
+    detail: >-
+      FIXED (Wave B): the #2132 payload-drop trap that was LIVE on all three Postgres
+      bulk paths now carries provenance, locked by test_postgres_bulk_payload_parity.py.
+      LANDED (Wave C / C1): identity/resolution_batch.py::ResolutionBatch -- a versioned
+      (CONTRACT_VERSION=1), immutable contract bundling the metadata/config half of the
+      seam (was loose args: controller_snapshot/run_id/matchkey/actor/emit_singletons/
+      weak_confidence_threshold) + the frame-residency budget (flush_rows) as a CONTRACT
+      TERM, not a bare env read. resolve_clusters consumes it (additive `batch` param;
+      byte-identical when absent -- test_resolution_batch_c1.py proves same store
+      dispatch). REMAINING (C1 follow-on): fold the bulk DATA arrays (records/clusters/
+      pair-evidence) into the batch + extract an apply_batch(store, batch) body.
+    evidence:
+      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py
+      - packages/python/goldenmatch/tests/identity/test_resolution_batch_c1.py
+      - packages/python/goldenmatch/tests/identity/test_postgres_bulk_payload_parity.py
+
+  - id: fs-default-ts-path-unwired-second-source
+    tenet: T1
+    severity: medium   # was high (undeclared+masked); DECLARED now, wiring remains
+    declared: true   # Wave A: declared in the 0046 amendment (2026-07-26)
+    title: "TS Fellegi-Sunter default scoring path is a hand-written second source of truth, not the fs-wasm kernel"
+    detail: >-
+      Verified on main: pipeline.ts scores probabilistic matchkeys via pure-TS
+      probabilistic.ts::scoreProbabilistic; fs-wasm (goldenmatch-fs-core, fsWasm.ts)
+      ships + passes fs-wasm.parity.test.ts but has NO pipeline caller. DECLARED
+      (Wave A) in the 0046 amendment + docs-site (the prior "byte-identical when WASM
+      enabled" phrasing over-claimed). REMAINING (Wave D): wire the pipeline to
+      fs-wasm to retire the second source of truth for a core scorer.
+    evidence:
+      - packages/typescript/goldenmatch/src/core/probabilistic.ts
+      - packages/typescript/goldenmatch/src/core/fsWasm.ts
+      - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
+
+  - id: standardize-dates-no-conformance-test
+    tenet: T2
+    severity: low   # was high; CLOSED -- now has a runnable dual-pinned characterization
+    declared: true
+    title: "Standardize divergence now has a runnable characterization test (was prose-only)"
+    detail: >-
+      RESOLVED (Wave A cont.). standardize was the only non-exact boundary with no
+      runnable test. Two corrections: goldenmatch ships no date standardizer (dates are
+      GoldenFlow's transform, separately fixtured), and the real goldenmatch divergence
+      is the standardizer SET. Now pinned by a dual-sided characterization (54/150 cells
+      diverge): tests/test_standardizer_conformance.py (Python oracle) +
+      standardizer-conformance.parity.test.ts (TS), fixture standardizer-conformance.json,
+      emitter scripts/emit_standardizer_conformance_fixture.py. Surfaced + declared the
+      dominant previously-undeclared divergence: Python None vs TS "" for invalid input.
+    evidence:
+      - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
+      - scripts/emit_standardizer_conformance_fixture.py
+    parity_test: packages/typescript/goldenmatch/tests/parity/standardizer-conformance.parity.test.ts
+
+  - id: undeclared-cross-surface-divergences
+    tenet: T2
+    severity: low   # was high (undeclared); DECLARED now in 0046 amendment + docs-site
+    declared: true   # Wave A (2026-07-26)
+    title: "Cross-surface scorer/package divergences are now declared in the 0046 verdict table"
+    detail: >-
+      Divergences that differ across surfaces but are not in the cross-language verdict
+      table (some buried in package CLAUDE.md, so under-declared rather than fully
+      undeclared): (a) array_intersect:overlap MODE pure-TS-only (fixed-id score_matrix
+      can't carry the mode; the base scorer is kernel-backed); (b) PPRL float-field CLK
+      byte-divergence str(5.0)="5.0" vs String(5.0)="5"; (c) radial + ensemble scorers
+      ~4dp even under WASM (reduction/recomposition order), contradicting the table's
+      "byte-identical with WASM" claim; (d) goldenanalysis frame-kernel parity outside
+      0046 scope entirely. The verdict table should enumerate scorer-level and
+      package-level divergences, not just distributed/VLM/routing.
+      (Note: numeric_diff was Python-only when this audit began; it is now kernel-backed
+      on main -- an example of the live harvest catching curated drift.)
+    evidence:
+      - packages/typescript/goldenmatch/CLAUDE.md
+      - packages/typescript/goldenmatch/src/core/wasm/backend.ts
+      - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
+
+  - id: three-golden-record-implementations
+    tenet: T1
+    severity: medium
+    declared: false
+    title: "Three golden-record/survivorship implementations in Python"
+    detail: >-
+      resolve.py rolls cluster members via a "longest non-null string" rule
+      (_golden_record_from_members / _from_payloads), which is a DIFFERENT rollup from
+      both core.golden.merge_field and identity/survivorship.py::build_golden_with_provenance.
+      Three sources of truth for the same capability -- a live drift surface and a
+      compute-into-control leak.
+    evidence:
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py:241
+      - packages/python/goldenmatch/goldenmatch/identity/survivorship.py
+      - packages/python/goldenmatch/goldenmatch/core/golden.py
+
+  - id: standalone-ts-algorithms-no-shared-kernel
+    tenet: T1
+    severity: medium
+    declared: true   # declared in TS CLAUDE.md / wave1b spec
+    title: "Clustering and goldenanalysis frame kernels are standalone TS, byte-safety rests on fixtures not a shared kernel"
+    detail: >-
+      TS clustering (buildClusters + MST oversized-split) is a pure-TS reimplementation
+      of the Python clustering; its cross-language correctness rests entirely on the
+      cluster-conformance/split-run parity harness over two independent impls, not a
+      shared kernel. goldenanalysis frame kernels (distinct_count/null_ratio/
+      duplicate_row_ratio) have no WASM (Wave 1b consciously deferred) and are locked
+      only by a hand-authored fixture -- which itself caught a real NaN/null bug,
+      evidence the boundary was genuinely divergent before the fixture.
+    evidence:
+      - packages/typescript/goldenmatch/src/core/cluster
+      - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
+      - packages/python/goldenanalysis/tests/test_frame_kernels_parity.py
+
+  - id: a2a-skills-bidirectional-fracture
+    tenet: T1
+    severity: medium
+    declared: true   # gate-enforced partition
+    title: "goldenmatch a2a_skills surface is bidirectionally fractured (14 python_only vs 13 ts_only)"
+    detail: >-
+      The only surface in the repo with genuine two-sided divergence: 14 python_only vs
+      13 ts_only a2a skills. Some is naming/granularity (PY quality vs TS scan_quality+
+      fix_quality; identity trio ts_only on the A2A card but shared on MCP), but it is
+      the widest single-surface gap and a "shared capabilities must conform"
+      (commitment 3) hotspot. Gate-enforced as declared, so it is intentional-but-large,
+      not drift.
+    evidence:
+      - parity/goldenmatch.yaml
+
+  - id: frame-residency-coupling-not-contractual
+    tenet: T4
+    severity: low
+    declared: true
+    title: "Compute/control shared frame-residency budget: now a contract field (was env-only)"
+    detail: >-
+      Control-plane write memory stacks on the compute prep floor (emit_singletons
+      materializes every referenced row; ~35 GB on a 14M frame), bounded by flushing
+      every flush_rows records. ADDRESSED-IN-PART (Wave C / C1): flush_rows is now a
+      field on ResolutionBatch (a contract term), and emit_singletons rides the same
+      contract, instead of the budget living only in inline comments + the
+      GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS env var. REMAINING: the prep-floor half of
+      the budget (the compute side) is still implicit; the full shared-budget accounting
+      lands with the C1 data-array fold.
+    evidence:
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py:71
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py:453
+
+  - id: deferrals-lack-measurement-provenance
+    tenet: T3
+    severity: low
+    declared: true
+    title: "Kernel deferrals state a reason but not measured wall-clock provenance"
+    detail: >-
+      scorer_kernels_deferred / blocking_kernels_deferred entries carry a prose reason
+      (deferred/declined/n-a) but no measured evidence (the frame's tenet is 'kernelize
+      on measurement'). Low risk today (the coverage floor is satisfied: 20 backed + 3
+      classified), but the deferral rationale should cite a measurement when the reason
+      is perf/shape rather than model-backed.
+    evidence:
+      - parity/goldenmatch.yaml

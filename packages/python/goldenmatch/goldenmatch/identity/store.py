@@ -774,9 +774,13 @@ class IdentityStore:
             )
         if df.height == 0:
             return
+        # Carry ``payload`` (JSONB) like the SQLite bulk path and the per-row
+        # ``upsert_record`` -- source_records has the column, so the Postgres bulk
+        # path must populate it or routing brand-new clusters here silently drops
+        # record payloads (the payload-drop trap, closed for edges/events too).
         cols = [
             "record_id", "source", "source_pk", "record_hash",
-            "entity_id", "dataset", "first_seen_at", "last_seen_at",
+            "entity_id", "payload", "dataset", "first_seen_at", "last_seen_at",
         ]
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
@@ -787,7 +791,7 @@ class IdentityStore:
             with cur.copy(
                 "COPY _stage_source_records "
                 "(record_id, source, source_pk, record_hash, entity_id, "
-                "dataset, first_seen_at, last_seen_at) FROM STDIN"
+                "payload, dataset, first_seen_at, last_seen_at) FROM STDIN"
             ) as copy:
                 for row in df.select(cols).iter_rows():
                     copy.write_row(row)
@@ -795,13 +799,14 @@ class IdentityStore:
                 """
                 INSERT INTO source_records
                     (record_id, source, source_pk, record_hash, entity_id,
-                     dataset, first_seen_at, last_seen_at)
+                     payload, dataset, first_seen_at, last_seen_at)
                 SELECT record_id, source, source_pk, record_hash, entity_id,
-                       dataset, first_seen_at, last_seen_at
+                       payload, dataset, first_seen_at, last_seen_at
                 FROM _stage_source_records
                 ON CONFLICT (record_id) DO UPDATE SET
                     record_hash = EXCLUDED.record_hash,
                     entity_id = EXCLUDED.entity_id,
+                    payload = EXCLUDED.payload,
                     last_seen_at = EXCLUDED.last_seen_at
                 """
             )
@@ -844,9 +849,14 @@ class IdentityStore:
             )
         if df.height == 0:
             return
+        # Carry controller_snapshot (JSONB) / actor / trust like the SQLite bulk
+        # path and the per-row ``add_edge`` -- evidence_edges has these columns
+        # and the per-row Postgres path writes them, so the bulk path must too or
+        # edge provenance is silently lost on the brand-new-cluster route.
         cols = [
             "entity_id", "record_a_id", "record_b_id", "kind", "score",
-            "matchkey_name", "run_name", "dataset", "recorded_at",
+            "matchkey_name", "controller_snapshot", "run_name", "dataset",
+            "actor", "trust", "recorded_at",
         ]
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
@@ -859,8 +869,11 @@ class IdentityStore:
                     kind TEXT,
                     score DOUBLE PRECISION,
                     matchkey_name TEXT,
+                    controller_snapshot JSONB,
                     run_name TEXT,
                     dataset TEXT,
+                    actor TEXT,
+                    trust DOUBLE PRECISION,
                     recorded_at TIMESTAMPTZ
                 ) ON COMMIT DROP
                 """
@@ -868,7 +881,8 @@ class IdentityStore:
             with cur.copy(
                 "COPY _stage_evidence_edges "
                 "(entity_id, record_a_id, record_b_id, kind, score, "
-                "matchkey_name, run_name, dataset, recorded_at) FROM STDIN"
+                "matchkey_name, controller_snapshot, run_name, dataset, "
+                "actor, trust, recorded_at) FROM STDIN"
             ) as copy:
                 for row in df.select(cols).iter_rows():
                     copy.write_row(row)
@@ -876,9 +890,11 @@ class IdentityStore:
                 """
                 INSERT INTO evidence_edges
                     (entity_id, record_a_id, record_b_id, kind, score,
-                     matchkey_name, run_name, dataset, recorded_at)
+                     matchkey_name, controller_snapshot, run_name, dataset,
+                     actor, trust, recorded_at)
                 SELECT entity_id, record_a_id, record_b_id, kind, score,
-                       matchkey_name, run_name, dataset, recorded_at
+                       matchkey_name, controller_snapshot, run_name, dataset,
+                       actor, trust, recorded_at
                 FROM _stage_evidence_edges
                 ON CONFLICT (entity_id, record_a_id, record_b_id, kind,
                              run_name) DO NOTHING
@@ -891,8 +907,8 @@ class IdentityStore:
             if df.height == 0:
                 return
             # Carries payload / actor / trust -- the audit spine the per-row
-            # ``emit_event`` records and which the leaner Postgres COPY path
-            # drops. ``entry_hash`` is left NULL: the seal / verify path already
+            # ``emit_event`` records (the Postgres bulk path below now carries
+            # them too). ``entry_hash`` is left NULL: the seal / verify path already
             # hashes NULL-entry_hash rows on the fly (pre-#1078 rows do the
             # same), so the tamper-evidence guarantee holds without
             # reconstructing an IdentityEvent per row on the flush hot path.
@@ -919,8 +935,15 @@ class IdentityStore:
             )
         if df.height == 0:
             return
+        # Carry payload (JSONB) / actor / trust like the SQLite bulk path and the
+        # per-row ``emit_event`` -- identity_events has these columns and the
+        # per-row Postgres path writes them, so the bulk path must too or the
+        # audit spine (who/why/trust) is silently lost on the bulk route.
+        # ``entry_hash`` is left NULL: the seal/verify path hashes NULL-entry_hash
+        # rows on the fly (matching the SQLite bulk branch above).
         cols = [
-            "entity_id", "kind", "run_name", "dataset", "recorded_at",
+            "entity_id", "kind", "payload", "run_name", "dataset",
+            "actor", "trust", "recorded_at",
         ]
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
@@ -929,23 +952,29 @@ class IdentityStore:
                 CREATE TEMP TABLE _stage_identity_events (
                     entity_id TEXT,
                     kind TEXT,
+                    payload JSONB,
                     run_name TEXT,
                     dataset TEXT,
+                    actor TEXT,
+                    trust DOUBLE PRECISION,
                     recorded_at TIMESTAMPTZ
                 ) ON COMMIT DROP
                 """
             )
             with cur.copy(
                 "COPY _stage_identity_events "
-                "(entity_id, kind, run_name, dataset, recorded_at) FROM STDIN"
+                "(entity_id, kind, payload, run_name, dataset, "
+                "actor, trust, recorded_at) FROM STDIN"
             ) as copy:
                 for row in df.select(cols).iter_rows():
                     copy.write_row(row)
             cur.execute(
                 """
                 INSERT INTO identity_events
-                    (entity_id, kind, run_name, dataset, recorded_at)
-                SELECT entity_id, kind, run_name, dataset, recorded_at
+                    (entity_id, kind, payload, run_name, dataset,
+                     actor, trust, recorded_at)
+                SELECT entity_id, kind, payload, run_name, dataset,
+                       actor, trust, recorded_at
                 FROM _stage_identity_events
                 """
             )
