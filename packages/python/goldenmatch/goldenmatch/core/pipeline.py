@@ -3349,8 +3349,7 @@ def _run_dedupe_pipeline(
                         # Guarded matchkey: drop pairs failing the pair predicate.
                         from goldenmatch.core.scorer import _apply_guard_to_exact_pairs
                         pairs = _apply_guard_to_exact_pairs(
-                            pairs, mk, _as_polars_df(collected_df),
-                            raw_values=_raw_guard_values,
+                            pairs, mk, raw_values=_raw_guard_values,
                         )
                     if across_files_only:
                         pairs = [
@@ -3411,8 +3410,7 @@ def _run_dedupe_pipeline(
                     if mk.guard:
                         from goldenmatch.core.scorer import _apply_guard_to_exact_pairs
                         pairs = _apply_guard_to_exact_pairs(
-                            pairs, mk, _as_polars_df(collected_df),
-                            raw_values=_raw_guard_values,
+                            pairs, mk, raw_values=_raw_guard_values,
                         )
                     all_pairs.extend(pairs)
                     fuzzy_pair_count += len(pairs)
@@ -3577,8 +3575,7 @@ def _run_dedupe_pipeline(
                 if mk.guard:
                     from goldenmatch.core.scorer import _apply_guard_to_exact_pairs
                     pairs = _apply_guard_to_exact_pairs(
-                        pairs, mk, _as_polars_df(collected_df),
-                        raw_values=_raw_guard_values,
+                        pairs, mk, raw_values=_raw_guard_values,
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
