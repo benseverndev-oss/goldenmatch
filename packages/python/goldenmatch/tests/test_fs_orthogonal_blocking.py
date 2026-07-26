@@ -9,11 +9,13 @@ candidate set stays gated on the corrupted name keys (blocking_recall caps ~0.78
 `_diversify_unused_orthogonal_blocking` selects by DATA SHAPE (coverage +
 cardinality band), not col_type, and marks its passes `additive=True` so the field
 stays EM-trained (co-locate WITHOUT demoting the discriminator -- demoting it costs
-F1, demoting a strong name field collapses recall). Default OFF => byte-identical.
+F1, demoting a strong name field collapses recall).
 
-Measured (scripts/bench_er_headtohead out-of-panel harness, flag OFF->ON):
-historical_50k F1 0.826->0.847, febrl3 0.987->0.994, febrl4 (holdout) 0.989->0.995
--- recall-driven, no holdout regression.
+**Gated `GOLDENMATCH_FS_ORTHOGONAL_BLOCKING=auto` (default):** fires ONLY on
+person-shaped data (a `name` + a `date` col_type) -- the regime where the lever
+generalises out-of-panel (historical_50k B3 0.808->0.873, febrl4 holdout +0.006) --
+and is a NO-OP on bibliographic/product data (dblp_scholar -0.24, no name+date).
+`=1` forces everywhere, `=0` disables.
 """
 
 from __future__ import annotations
@@ -23,7 +25,9 @@ import pytest
 from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig
 from goldenmatch.core.autoconfig import (
     ColumnProfile,
+    _dataset_is_person_shaped,
     _diversify_unused_orthogonal_blocking,
+    _fs_orthogonal_blocking_mode,
     auto_configure_probabilistic_df,
 )
 from goldenmatch.core.blocker import collect_blocking_fields
@@ -56,6 +60,7 @@ def _name_blocking():
 
 
 def _person_profiles():
+    """historical_50k shape: name fields + a `date` (dob) -> person-shaped."""
     return [
         _p("record_id", "identifier", card=1.0),      # near-unique surrogate
         _p("full_name", "name", card=0.96),            # primary block key
@@ -63,39 +68,84 @@ def _person_profiles():
         _p("first_name", "name", card=0.42),           # moderate, unused
         _p("surname", "name", card=0.74, null=0.10),   # moderate, unused
         _p("birth_place", "name", card=0.48, null=0.13),  # THE orthogonal anchor
+        _p("dob", "date", card=0.58, null=0.22),       # the person temporal anchor
         _p("gender", "name", card=0.002),              # near-constant
         _p("occupation", "name", card=0.14, null=0.49),  # too sparse
     ]
 
 
-# ── selection logic ─────────────────────────────────────────────────────────
+def _biblio_profiles():
+    """dblp_scholar shape: NO `name`, NO `date` col_type -> not person-shaped."""
+    return [
+        _p("record_id", "identifier", card=1.0),
+        _p("title", "description", card=0.99),
+        _p("authors", "string", card=0.93),
+        _p("venue", "string", card=0.43),   # moderate-card, but a TOPIC bucket
+        _p("year", "year", card=0.04),
+    ]
 
 
-def test_default_off_is_byte_identical(monkeypatch):
-    blocking = _name_blocking()
-    out = _diversify_unused_orthogonal_blocking(blocking, _person_profiles(), None)
-    assert out is blocking  # unchanged object, no passes added
+# ── person-shape detector + mode resolver ────────────────────────────────────
 
 
-def test_on_discovers_orthogonal_anchor_by_shape(monkeypatch):
-    monkeypatch.setenv(FLAG, "1")
+def test_person_shape_detector():
+    assert _dataset_is_person_shaped(_person_profiles()) is True
+    assert _dataset_is_person_shaped(_biblio_profiles()) is False
+    # name WITHOUT a date is not enough (conservative — errs toward not firing)
+    assert _dataset_is_person_shaped([_p("full_name", "name"), _p("zip", "zip")]) is False
+    # date WITHOUT a name is not enough
+    assert _dataset_is_person_shaped([_p("dob", "date"), _p("amount", "numeric")]) is False
+    # multi_name composite counts as a name field
+    assert _dataset_is_person_shaped([_p("full", "multi_name"), _p("dob", "date")]) is True
+
+
+def test_mode_resolver(monkeypatch):
+    monkeypatch.delenv(FLAG, raising=False)
+    assert _fs_orthogonal_blocking_mode() == "auto"
+    for v in ("1", "true", "on", "yes", "enabled"):
+        monkeypatch.setenv(FLAG, v)
+        assert _fs_orthogonal_blocking_mode() == "on"
+    for v in ("0", "false", "off", "no", "disabled"):
+        monkeypatch.setenv(FLAG, v)
+        assert _fs_orthogonal_blocking_mode() == "off"
+    monkeypatch.setenv(FLAG, "garbage")
+    assert _fs_orthogonal_blocking_mode() == "auto"
+
+
+# ── gate behavior (auto / on / off) ──────────────────────────────────────────
+
+
+def test_auto_fires_on_person(monkeypatch):
+    # default (auto), no flag: a person-shaped profile set fires.
     out = _diversify_unused_orthogonal_blocking(_name_blocking(), _person_profiles(), None)
-    added = {f for p in out.passes for f in p.fields} - {
-        "full_name", "first_and_surname"
-    }
-    # birth_place (the win) is discovered WITHOUT being named -- purely by shape,
-    # alongside the other moderate-card well-populated unused fields.
-    assert "birth_place" in added
-    assert "first_name" in added
-    assert "surname" in added
-    # near-unique / near-constant / too-sparse are excluded.
-    assert "record_id" not in added   # card 1.0
-    assert "gender" not in added      # card 0.002
-    assert "occupation" not in added  # null 0.49
+    added = {f for p in out.passes for f in p.fields} - {"full_name", "first_and_surname"}
+    assert "birth_place" in added  # discovered by shape, never named
+    assert "first_name" in added and "surname" in added
+    assert "record_id" not in added and "gender" not in added and "occupation" not in added
+
+
+def test_auto_is_noop_on_nonperson(monkeypatch):
+    # default (auto): bibliographic shape (no name+date) -> unchanged, byte-identical.
+    blocking = _name_blocking()
+    out = _diversify_unused_orthogonal_blocking(blocking, _biblio_profiles(), None)
+    assert out is blocking
+
+
+def test_off_never_fires(monkeypatch):
+    monkeypatch.setenv(FLAG, "0")
+    blocking = _name_blocking()
+    assert _diversify_unused_orthogonal_blocking(blocking, _person_profiles(), None) is blocking
+
+
+def test_on_forces_even_on_nonperson(monkeypatch):
+    # force on: fires regardless of shape (a person dataset a classifier misjudged).
+    monkeypatch.setenv(FLAG, "1")
+    out = _diversify_unused_orthogonal_blocking(_name_blocking(), _biblio_profiles(), None)
+    added = {f for p in out.passes for f in p.fields} - {"full_name", "first_and_surname"}
+    assert "venue" in added  # forced despite being a topic bucket
 
 
 def test_added_passes_are_additive(monkeypatch):
-    monkeypatch.setenv(FLAG, "1")
     out = _diversify_unused_orthogonal_blocking(_name_blocking(), _person_profiles(), None)
     for p in out.passes:
         if p.fields[0] in ("full_name", "first_and_surname"):
@@ -105,7 +155,6 @@ def test_added_passes_are_additive(monkeypatch):
 
 
 def test_already_covered_field_not_readded(monkeypatch):
-    monkeypatch.setenv(FLAG, "1")
     # birth_place is ALREADY a blocking pass -> the rule must not duplicate it.
     blocking = BlockingConfig(
         strategy="multi_pass",
@@ -187,25 +236,46 @@ def _person_table(n=200):
     return pa.table(cols)
 
 
-def test_end_to_end_off_has_no_additive_passes(monkeypatch):
+def _product_table(n=200):
+    """No name, no date -> not person-shaped."""
+    import random
+
+    rng = random.Random(3)
+    brands = ["acme", "globex", "initech", "umbrella", "hooli"]
+    cols = {"record_id": [], "title": [], "manufacturer": [], "price": []}
+    for i in range(n):
+        cols["record_id"].append(f"p{i:05d}")
+        cols["title"].append(f"widget {rng.randint(1, 999)} {rng.choice(brands)}")
+        cols["manufacturer"].append(rng.choice(brands))
+        cols["price"].append(f"{rng.randint(1, 500)}.99")
+    return pa.table(cols)
+
+
+def test_end_to_end_auto_person_adds_additive(monkeypatch):
+    # default (auto), no flag: a person table auto-enables the lever.
+    cfg = auto_configure_probabilistic_df(_person_table())
+    passes = list(cfg.blocking.passes or []) or list(cfg.blocking.keys or [])
+    additive = [p for p in passes if getattr(p, "additive", False)]
+    assert additive, "auto gate should fire on person-shaped data"
+    em_fields = set(collect_blocking_fields(cfg.blocking, for_em=True))
+    for p in additive:
+        assert len(p.fields) == 1
+        if not any(
+            (not getattr(q, "additive", False)) and p.fields[0] in q.fields
+            for q in passes
+        ):
+            assert p.fields[0] not in em_fields  # purely-additive field stays EM-trained
+
+
+def test_end_to_end_off_disables_on_person(monkeypatch):
+    monkeypatch.setenv(FLAG, "0")
     cfg = auto_configure_probabilistic_df(_person_table())
     passes = list(cfg.blocking.passes or []) or list(cfg.blocking.keys or [])
     assert all(not getattr(p, "additive", False) for p in passes)
 
 
-def test_end_to_end_on_adds_additive_orthogonal_pass(monkeypatch):
-    monkeypatch.setenv(FLAG, "1")
-    cfg = auto_configure_probabilistic_df(_person_table())
+def test_end_to_end_auto_noop_on_product(monkeypatch):
+    # default (auto): a product table (no name+date) gets no additive passes.
+    cfg = auto_configure_probabilistic_df(_product_table())
     passes = list(cfg.blocking.passes or []) or list(cfg.blocking.keys or [])
-    additive = [p for p in passes if getattr(p, "additive", False)]
-    assert additive, "orthogonal rule should add >=1 additive pass on the person shape"
-    # every additive pass is single-field and stays out of the EM demotion set
-    em_fields = set(collect_blocking_fields(cfg.blocking, for_em=True))
-    for p in additive:
-        assert len(p.fields) == 1
-        # a purely-additive field is not demoted
-        if not any(
-            (not getattr(q, "additive", False)) and p.fields[0] in q.fields
-            for q in passes
-        ):
-            assert p.fields[0] not in em_fields
+    assert all(not getattr(p, "additive", False) for p in passes)

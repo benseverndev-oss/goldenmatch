@@ -894,41 +894,50 @@ _ORTHO_BLOCK_CARD_FLOOR = 0.02
 _ORTHO_BLOCK_CARD_CEILING = 0.9
 
 
-def _fs_orthogonal_blocking_enabled() -> bool:
-    """Field-agnostic orthogonal-anchor blocking for the FS path.
+# Col_types that mark a NAME field for the person-shape gate. A person identity
+# table pairs name fields with a strong temporal anchor (date of birth); that
+# anchor is exactly what keeps the enlarged orthogonal blocks SAFE -- within a
+# birth_place/dob block, name+dob still discriminate, so the topic-bucket
+# over-merge that sinks bibliographic/product data (dblp_scholar/amazon_google:
+# no `name`, no `date` -- title=description, authors=string, year=year) can't
+# happen. Composite first+last fields classify `multi_name`.
+_PERSON_NAME_COLTYPES = frozenset({"name", "multi_name"})
 
-    **Default OFF.** When ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`` is truthy,
-    ``_diversify_unused_orthogonal_blocking`` adds an additive single-field
-    blocking pass on every well-populated, moderate-cardinality field the existing
-    name/date/zip passes don't already cover. Where the v2 diversify lever
-    (``_diversify_probabilistic_blocking``) only diversifies onto ``date`` +
-    ``zip``/``identifier``/``phone`` col_types, this selects by DATA SHAPE (coverage
-    + cardinality band) rather than col_type, so it catches an orthogonal anchor a
-    dataset's classifier happened to miss -- e.g. historical_50k's ``birth_place``,
-    which profiles as ``name`` (null 0.13, card 0.48) and slips past the v2
-    whitelist, leaving the FS candidate set gated entirely on the corrupted name
-    keys (blocking_recall caps ~0.78). Passes are marked ``additive`` so the anchor
-    stays EM-trained (co-locate WITHOUT demoting the discriminator);
-    ``_bound_probabilistic_blocking_pairs`` runs after to bound/drop any pass too
-    large at full N.
 
-    **Out-of-panel result (`validate_fs_holdout.py`, OFF->ON) — a PERSON/PII-regime
-    lever, NOT a safe blanket default, which is why it stays OFF:**
-      control historical_50k F1 0.826->0.847, febrl3 0.987->0.994, dblp_acm/synth flat
-      HOLDOUT febrl4 0.989->0.995 (+0.006, recall-driven — GENERALISES on PII)
-      HOLDOUT dblp_scholar 0.329->0.086 (-0.24), amazon_google ~flat
-    On bibliographic/product data the "orthogonal anchor" (venue/year) is a TOPIC
-    bucket, not an identity anchor: it co-blocks + adds match weight while the only
-    real discriminator (a noisy title) can't reject the false pairs, so precision
-    collapses (a SCORING over-merge, not a block-size blowup — venue's blocks are
-    tiny). No blocking-side guard separates the regimes; the honest scoping is
-    person-data. Flip on ONLY behind dataset-type detection (person-like: name +
-    date + geo present), never globally, per the ``GOLDENMATCH_FS_AUTOCONFIG_V2``
-    precedent. Default-off is byte-identical (helper returns ``blocking`` unchanged).
+def _dataset_is_person_shaped(profiles: list[ColumnProfile]) -> bool:
+    """True when the profile set looks like a PERSON identity table -- a name field
+    AND a date field both present.
+
+    This is the AUTO-enable condition for orthogonal-anchor blocking. Person data is
+    where the lever generalises (historical_50k / febrl / synthetic_person all carry
+    name+date and win out-of-panel); bibliographic/product data carries neither a
+    ``name`` nor a ``date`` col_type and is where the lever regresses, so the ``name
+    AND date`` signature cleanly separates the two validated regimes. Conservative by
+    design -- a false negative merely forgoes the gain, a false positive risks the
+    dblp_scholar-style precision collapse, so the gate errs toward NOT firing.
     """
-    return os.environ.get("GOLDENMATCH_FS_ORTHOGONAL_BLOCKING", "0").lower() in (
-        "1", "true", "on", "yes", "enabled",
-    )
+    types = {p.col_type for p in profiles}
+    return bool(types & _PERSON_NAME_COLTYPES) and "date" in types
+
+
+def _fs_orthogonal_blocking_mode() -> str:
+    """Resolve ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING`` to ``auto`` | ``on`` | ``off``.
+
+    - ``auto`` (**default**): fire ONLY on person-shaped data
+      (``_dataset_is_person_shaped``) -- the dataset-type gate.
+    - ``on`` (``1``/``true``/``yes``/``enabled``): force everywhere (the pre-gate
+      behavior; useful to force it onto a person dataset a classifier misjudged).
+    - ``off`` (``0``/``false``/``no``/``disabled``): never fire (byte-identical to
+      the pre-lever field set).
+
+    Mirrors the ``GOLDENMATCH_NATIVE=auto/0/1`` tri-state idiom.
+    """
+    v = os.environ.get("GOLDENMATCH_FS_ORTHOGONAL_BLOCKING", "auto").lower()
+    if v in ("1", "true", "on", "yes", "enabled"):
+        return "on"
+    if v in ("0", "false", "off", "no", "disabled"):
+        return "off"
+    return "auto"
 
 
 # Fraction of a column's non-null sample values that must parse as valid
@@ -5484,10 +5493,20 @@ def _diversify_unused_orthogonal_blocking(
     ``_bound_probabilistic_blocking_pairs``, which runs after this over the whole
     pass list.
 
-    **Default OFF** (``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING``); out-of-panel validated
-    separately from v2. Off => byte-identical (returns ``blocking`` unchanged).
+    **Gated ``GOLDENMATCH_FS_ORTHOGONAL_BLOCKING=auto`` (default).** ``auto`` fires
+    ONLY on person-shaped data (``_dataset_is_person_shaped``: a ``name`` + a
+    ``date`` col_type) -- the regime where the lever generalises out-of-panel
+    (historical_50k B3 0.808->0.873, febrl4 holdout +0.006) -- and is a NO-OP
+    (byte-identical) on bibliographic/product data, where a topic-bucket anchor
+    (venue/year) drives a scoring over-merge (dblp_scholar -0.24). ``=1`` forces it
+    everywhere, ``=0`` disables it. See ``_fs_orthogonal_blocking_mode``.
     """
-    if blocking is None or not _fs_orthogonal_blocking_enabled():
+    if blocking is None:
+        return blocking
+    _mode = _fs_orthogonal_blocking_mode()
+    if _mode == "off":
+        return blocking
+    if _mode == "auto" and not _dataset_is_person_shaped(profiles):
         return blocking
 
     # Fields ALREADY keyed by some pass (any transform) -- don't re-add a field the
