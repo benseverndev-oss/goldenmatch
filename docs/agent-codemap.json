@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 413,
+      "module_count": 418,
       "modules": [
         {
           "module": "goldenmatch",
@@ -2879,6 +2879,67 @@
             "evaluate_canonicalization",
             "select_field_model",
             "select_field_models"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/__init__.py",
+          "purpose": "OSS ER-matcher LLM boost (spec/plan 2026-07-26).",
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.client",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/client.py",
+          "purpose": "Local ER-matcher client (P6, Path A).",
+          "defines": [
+            "LocalMatcherClient",
+            "_extract_text",
+            "_urllib_post"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.prompt",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/prompt.py",
+          "purpose": "Prompt / serializer / verdict-parser for the OSS ER-matcher LLM boost.",
+          "defines": [
+            "_norm_cell",
+            "build_chat",
+            "parse_verdict",
+            "render_target",
+            "serialize_pair_v1"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.registry",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/registry.py",
+          "purpose": "Pinned model registry for the OSS ER-matcher (P6).",
+          "defines": [
+            "ModelSpec",
+            "cache_dir",
+            "resolve_model",
+            "sha256_file",
+            "verify"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.prompt"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.er_matcher.serve_local",
+          "file": "packages/python/goldenmatch/goldenmatch/core/er_matcher/serve_local.py",
+          "purpose": "Launch a local OpenAI-compatible ER-matcher server (P6, Path A).",
+          "defines": [
+            "_have_server",
+            "build_server_argv",
+            "main"
+          ],
+          "imports": [
+            "goldenmatch.core.er_matcher.registry"
           ]
         },
         {
