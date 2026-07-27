@@ -46,8 +46,16 @@ _image = (
         "bitsandbytes==0.43.3",
         "pyyaml",
         "huggingface_hub",
+        "rich",  # trl 0.9.6's SFTTrainer imports rich.console but doesn't pin it as a hard dep
     )
-    .pip_install("flash-attn==2.6.3", extra_options="--no-build-isolation")
+    # flash-attn: install the PREBUILT wheel matching the pinned stack
+    # (torch 2.4 / cu12x / cp311 / cxx11abiFALSE -- PyPI torch wheels are abiFALSE).
+    # The sdist build is avoided on purpose: its setup.py runs `git submodule ...`
+    # (no git in debian_slim) and would then need the full CUDA toolkit to compile.
+    .pip_install(
+        "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/"
+        "v2.6.3/flash_attn-2.6.3+cu123torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+    )
     # the shared prompt contract + the trainer live in the repo; add the two dirs
     .add_local_dir(
         "packages/python/goldenmatch/goldenmatch/core/er_matcher",
