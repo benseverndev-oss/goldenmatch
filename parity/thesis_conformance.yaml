@@ -49,8 +49,14 @@ weaknesses:
       StreamProcessor). C4 -- a CI-stable bounded-work proof: the candidate gather is EXACTLY the
       block-mates and the resolve's store-read work is INVARIANT in corpus size M (test at M=100 vs
       M=1000), plus a tracemalloc ceiling -- the measured kill criterion in deterministic form.
-      REMAINING (non-blocking): no-PK content-hash record ids (the index path is PK-scoped) and a
-      large-corpus RSS benchmark beyond the CI proof.
+      NO-PK IDS DONE 2026-07-27: the index-backed path was documented PK-only (its all-string
+      candidate frame is dtype-safe for PK ids); it in fact also resolves no-PK CONTENT-HASH
+      records to the same entity as the full-df path (the fingerprint the hash covers is
+      string-canonical, so stringifying the candidate payload doesn't shift its id). Proven +
+      parity-locked (test_index_path_no_pk_content_hash_absorbs_like_full_df); docstrings
+      relaxed. Numeric fields inherit the general str() canonicalization note.
+      REMAINING (non-blocking, optional): a large-corpus RSS benchmark beyond the CI bounded-work
+      proof -- a measurement nice-to-have, not a correctness gap.
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/store.py   # identity_record_block_keys + index API
       - packages/python/goldenmatch/goldenmatch/identity/block_index.py   # stateless compute + backfill
@@ -58,7 +64,7 @@ weaknesses:
       - packages/python/goldenmatch/tests/identity/test_incremental_index.py   # index==full-df parity
       - packages/python/goldenmatch/tests/identity/test_incremental_exact.py   # exact-matchkey path
       - packages/python/goldenmatch/tests/identity/test_incremental_scale.py   # C4 bounded-work proof
-    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 (ii) delivered; C2 + C4 landed; optional: no-PK ids + large-corpus RSS bench)"
+    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 (ii) delivered; C2 + C4 + no-PK ids landed; optional: large-corpus RSS bench)"
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4

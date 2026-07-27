@@ -1345,8 +1345,15 @@ def _resolve_via_index(
       5. indexes the new record's block keys (self-population, so the next
          record finds it).
 
-    No full-corpus materialization. Record ids are PK-based (``source_pk_col``),
-    so the candidate frame can be all-string without shifting any record id.
+    No full-corpus materialization. The candidate frame is all-string; that is
+    record-id-safe for PK ids by construction AND for no-PK CONTENT-HASH ids on
+    string-valued records -- the canonical fingerprint the hash covers is itself
+    string-canonical, so stringifying the candidate payload does not shift its id
+    (parity-locked by ``test_index_path_no_pk_content_hash_absorbs_like_full_df``:
+    an incoming no-PK record absorbs into the same persisted entity as on the
+    full-``df`` path). Numeric fields inherit the general ``str()`` canonicalization
+    boundary -- cast to string up front if a no-PK id must be byte-stable across a
+    numeric dtype.
     Covers both exact matchkeys (via ``_exact_match_rows``) and the
     threshold-bearing types (via ``match_one``). Falls back to a create-only
     path when there are no candidates.
@@ -1482,8 +1489,10 @@ def resolve_record_incremental(
             persisted block-key index (manifesto §4(ii) bidirectional seam)
             instead of ``df`` -- the record's block-mates are gathered from the
             store, scored, and resolved without materializing the whole corpus.
-            The record must use PK-based ids (``source_pk_col``). ``None``
-            (default) keeps the byte-identical full-``df`` path.
+            Works with PK-based ids AND no-PK content-hash ids (parity-locked for
+            string-valued records; numeric fields inherit the general ``str()``
+            canonicalization note). ``None`` (default) keeps the byte-identical
+            full-``df`` path.
 
     Returns:
         The ``entity_id`` the record resolved to (existing or newly created), or
