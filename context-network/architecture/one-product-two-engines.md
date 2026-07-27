@@ -137,6 +137,33 @@ not by calling the same library.**
 
 This makes compatibility explicit rather than rhetorical.
 
+### 3.4 Conformance v2 — behavioral, default-routing, deferral re-validation
+
+Once structural single-sourcing has largely landed (an owner exists; a fixture test
+exists), the frontier moves to *behavioral* and *temporal* conformance. Decision 0047's
+2026-07-27 amendment sharpens three tests (the tenets' wording is unchanged):
+
+- **Default-routing (T1).** One authoritative owner **and the default caller path routes
+  to it**. A correct-but-unwired kernel — the shared owner exists but a second
+  implementation is the default — is a *latent second source of truth*, not a resolved
+  item. Recorded per weakness as `default_routed:` (`true` = owner is the default;
+  `opt-in` = a deliberate fallback-default, e.g. edge-bundle discipline; `false` = flagged
+  by `check_thesis_conformance.py`).
+- **Behavioral equivalence (T2).** A conformance test for a two-engine capability must
+  check the operating point / decision output on a *representative* workload (e.g. dedupe
+  F1-neutrality), not only byte/tolerance parity on canned inputs. Fixture parity is
+  necessary, not sufficient — it is what missed the fs-default operating-point shift; and
+  the behavioral check itself must run on a non-degenerate workload to mean anything.
+- **Deferral re-validation (T3).** Every deferral names the explicit condition that would
+  *un-defer* it (recorded as `un_defer:`) and that premise is re-checked, not assumed
+  permanent; a deferral whose premise has already lifted is an OPEN divergence. The
+  scorecard renders these under "RE-VALIDATE" so they are re-examined each audit.
+
+The static harvest + gates stay as the floor; this behavioral/temporal layer augments them
+(it leans on measurement and adversarial review, which are advisory by nature). See ADR
+`context-network/decisions/0047-one-product-two-engines-architecture.md` (2026-07-27
+amendment).
+
 ## 4. Arrow: bulk contract, not universal calling convention
 
 Arrow is the preferred **data-plane** boundary for bulk/columnar work. Anything that

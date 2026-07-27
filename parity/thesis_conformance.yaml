@@ -89,6 +89,9 @@ weaknesses:
                     # stays lean + opt-in. The owner-gated default flip landed and was
                     # measured F1-neutral (see below). No open follow-up remains.
     declared: true   # Wave A: declared in the 0046 amendment (2026-07-26)
+    default_routed: true   # conformance v2 (0047 amendment): the batteries `goldenmatch`
+                           # import auto-enables the shared kernel, so the DEFAULT caller
+                           # routes to the owner -- not a correct-but-unwired latent 2nd source
     title: "TS Fellegi-Sunter scoring runs the shared fs-core kernel by default (batteries entry); pure-TS is the classified fallback"
     detail: >-
       RESOLVED-as-wired. The pipeline (scoreProbabilisticBlocks) now routes FS block
@@ -211,6 +214,9 @@ weaknesses:
                     # Family B (goldenanalysis frame kernels) NOW shares one too
                     # (analysis-wasm intern reroute; Wave 1b un-deferred via #1788)
     declared: true   # declared in TS CLAUDE.md / wave1b spec + parity manifests
+    default_routed: opt-in   # conformance v2: both kernels are SHARED but reached via opt-in
+                             # enable (cluster-wasm / enableAnalysisWasm), pure-TS is the default
+                             # fallback -- an intentional edge-bundle choice, not a latent gap
     title: "Clustering + goldenanalysis frame kernels: both families now share a kernel (cluster-wasm + analysis-wasm)"
     detail: >-
       TWO families, both resolved. (A) TS clustering: connected-components was already shared
@@ -296,6 +302,12 @@ weaknesses:
     tenet: T3
     severity: low
     declared: true
+    un_defer: >-
+      RE-VALIDATE (conformance v2, 0047 amendment): re-fires the moment a scorer/blocking
+      deferral is added whose reason is PERF/SHAPE rather than model-backed -- that entry then
+      owes a MEASURED wall-clock (kernelize on measurement). Currently vacuous: every deferral
+      (embedding / record_embedding / simhash) is model-backed. Re-check on any new
+      scorer_kernels_deferred / blocking_kernels_deferred entry.
     title: "Kernel deferrals state a reason but not measured wall-clock provenance"
     detail: >-
       scorer_kernels_deferred / blocking_kernels_deferred entries carry a prose reason
