@@ -1337,7 +1337,7 @@
               "nested": [
                 "RelationshipRule"
               ],
-              "description": "Rules deriving entity<->entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged."
+              "description": "Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged."
             },
             {
               "name": "stitching",
@@ -2104,7 +2104,7 @@
               "description": "Skip values shared by more than this many distinct entities (hub values like a switchboard line are not pairwise relationships)."
             }
           ],
-          "doc": "One rule for deriving entity<->entity relationship edges from a shared,"
+          "doc": "One rule for deriving entity-to-entity relationship edges from a shared,"
         },
         {
           "name": "ChannelStitchConfig",

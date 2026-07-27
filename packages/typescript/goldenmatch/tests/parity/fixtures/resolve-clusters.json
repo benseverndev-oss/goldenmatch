@@ -66,7 +66,8 @@
         "edges_added": 1,
         "events_emitted": 3,
         "records_upserted": 4,
-        "conflicts_flagged": 0
+        "conflicts_flagged": 0,
+        "relationships_added": 0
       }
     },
     {
@@ -112,7 +113,8 @@
         "edges_added": 1,
         "events_emitted": 1,
         "records_upserted": 2,
-        "conflicts_flagged": 0
+        "conflicts_flagged": 0,
+        "relationships_added": 0
       }
     },
     {
@@ -158,7 +160,8 @@
         "edges_added": 1,
         "events_emitted": 2,
         "records_upserted": 2,
-        "conflicts_flagged": 0
+        "conflicts_flagged": 0,
+        "relationships_added": 0
       }
     }
   ],

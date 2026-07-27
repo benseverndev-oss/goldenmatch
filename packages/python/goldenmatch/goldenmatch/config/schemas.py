@@ -1916,7 +1916,7 @@ class MediationConfig(BaseModel):
 
 
 class RelationshipRule(BaseModel):
-    """One rule for deriving entity<->entity relationship edges from a shared,
+    """One rule for deriving entity-to-entity relationship edges from a shared,
     NON-identity attribute (#semantic-graph).
 
     Identity resolution collapses records that are the SAME entity. The same
@@ -1983,12 +1983,12 @@ class IdentityConfig(BaseModel):
         default=0.6,
         description="Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it.",
     )
-    # semantic-graph: derive entity<->entity relationship edges from shared
+    # semantic-graph: derive entity-to-entity relationship edges from shared
     # non-identity attributes, in the same resolve pass. Empty (default) = no
     # relationships emitted; identity resolution is unchanged.
     relationships: list[RelationshipRule] = Field(
         default_factory=list,
-        description="Rules deriving entity<->entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged.",
+        description="Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged.",
     )
     # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
     # stitching is not configured (the default; identity resolution is
