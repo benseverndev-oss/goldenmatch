@@ -159,8 +159,6 @@ fn jaro_calculate_similarity(p_len: usize, t_len: usize, common: usize, mut tran
     sim / 3.0
 }
 
-/// Jaro similarity on `[0, 1]`, matching `rapidfuzz::distance::jaro` at
-/// `score_cutoff = 0.0`. `s1`/`s2` are codepoint slices.
 // ---------------------------------------------------------------------------
 // Single-word fast path (patterns <= 64 codepoints, Latin-1)
 // ---------------------------------------------------------------------------
@@ -317,6 +315,8 @@ fn jaro_similarity_sw<T: Copy + PartialEq>(s1: &[T], s2: &[T], get: impl Fn(T) -
     jaro_calculate_similarity(len1, len2, common, transposition)
 }
 
+/// Jaro similarity on `[0, 1]`, matching `rapidfuzz::distance::jaro` at
+/// `score_cutoff = 0.0`. `s1`/`s2` are codepoint slices.
 fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
     let len1 = s1.len();
     let len2 = s2.len();
