@@ -66,15 +66,15 @@ def check_structure(manifest: dict) -> list[ParityFailure]:
         # `scorer_kernels_deferred` is a classification MAP (scorer -> reason),
         # not a shared/python_only/ts_only partition surface; its shape is
         # validated by check_scorer_coverage, so skip the partition checks here.
-        # `frame_kernels_deferred` is the same idiom for the goldenanalysis frame
-        # kernels (distinct/null_ratio/duplicate_row_ratio): the counting is in
-        # analysis-core but the Arrow-bound interning has no clean WASM boundary
-        # (Wave 1b deferred), so the TS<->Python boundary is locked by an
-        # adversarial fixture, not a shared kernel -- declared here at the surface.
+        # `frame_kernels` is the same idiom for the goldenanalysis frame kernels
+        # (distinct/null_ratio/duplicate_row_ratio): a classification MAP, not a
+        # partition. Wave 1b un-deferred (#1788): distinct/duplicate_row now share
+        # the analysis-wasm kernel (opt-in), null_ratio stays pure-TS (no canon);
+        # the TS<->Python boundary is locked by the adversarial fixture.
         if surface in (
             "scorer_kernels_deferred",
             "blocking_kernels_deferred",
-            "frame_kernels_deferred",
+            "frame_kernels",
         ):
             continue
         # Advisory SQL inventory surfaces are `{functions: [...]}`, not
