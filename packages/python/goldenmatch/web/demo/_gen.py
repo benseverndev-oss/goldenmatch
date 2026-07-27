@@ -1,7 +1,9 @@
-"""One-shot: build the demo lineage.json + clusters.csv from data.csv.
+"""One-shot: build the demo lineage.json + clusters.csv + identity.db from data.csv.
 
 Produces realistic field-level scores so the workbench gold-graduation
-(≥0.95 brightest, ≥0.85 standard, ≥0.7 ink, <0.7 muted) actually surfaces.
+(≥0.95 brightest, ≥0.85 standard, ≥0.7 ink, <0.7 muted) actually surfaces,
+and seeds `.goldenmatch/identity.db` so the web UI's Identities page (list +
+force-graph) has data out of the box.
 
 Usage (run once, commit the outputs):
     cd packages/python/goldenmatch/web/demo
@@ -129,6 +131,67 @@ def main() -> None:
             w.writerow([rid, row_to_cluster[rid]])
 
     print(f"wrote {len(pairs)} pairs, {len(row_to_cluster)} cluster assignments")
+
+    seed_identity(pairs)
+
+
+def seed_identity(pairs: list[dict]) -> None:
+    """Seed ``.goldenmatch/identity.db`` from the curated clusters so the web
+    UI's Identities page (list + graph) has data out of the box.
+
+    Driven by the curated CLUSTERS, NOT a live dedupe: the demo's
+    ``goldenmatch.yml`` is a curated placeholder that doesn't parse into
+    working matchkeys, so a real run finds no duplicates. This mirrors the
+    rest of the demo's committed artifacts (lineage / saved runs), which are
+    also generated here rather than by a live pipeline. Requires goldenmatch
+    installed; skipped with a note otherwise.
+    """
+    try:
+        import polars as pl
+        from goldenmatch.core.cluster import build_clusters
+        from goldenmatch.identity import IdentityStore, resolve_clusters
+    except ImportError as exc:  # pragma: no cover - dev regen convenience
+        print(
+            f"[skip] identity seed needs goldenmatch installed ({exc}); "
+            "install with `uv pip install -e packages/python/goldenmatch[web]` "
+            "and re-run _gen.py to populate the Identities graph."
+        )
+        return
+
+    # Reuse the curated per-pair composite scores as the scored pairs, so the
+    # evidence edges carry realistic weights; union them into clusters.
+    scored = [(p["row_id_a"], p["row_id_b"], p["score"]) for p in pairs]
+    clusters = build_clusters(scored)
+    next_id = (max(clusters) if clusters else 0) + 1
+    for s in SINGLETONS:  # standalone records get their own entity
+        clusters[next_id] = {
+            "members": [s], "size": 1, "oversized": False, "pair_scores": {},
+            "confidence": 1.0, "bottleneck_pair": None, "cluster_quality": "strong",
+        }
+        next_id += 1
+
+    df = (
+        pl.read_csv(HERE / "data.csv")
+        .with_row_index("__row_id__")
+        .with_columns(pl.lit("demo").alias("__source__"))
+    )
+
+    db_dir = HERE / ".goldenmatch"
+    db_dir.mkdir(exist_ok=True)
+    db_path = db_dir / "identity.db"
+    if db_path.exists():
+        db_path.unlink()
+    with IdentityStore(path=str(db_path)) as store:
+        resolve_clusters(
+            clusters, df, scored, "demo_match", store,
+            run_name="demo-seed", dataset="demo",
+            source_pk_col="id", emit_singletons=True,
+        )
+    n_multi = sum(1 for c in clusters.values() if c["size"] > 1)
+    print(
+        f"seeded identity graph: {len(clusters)} entities "
+        f"({n_multi} multi-record) -> {db_path}"
+    )
 
 
 if __name__ == "__main__":
