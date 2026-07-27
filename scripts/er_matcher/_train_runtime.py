@@ -153,7 +153,9 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
     cb = _ThroughputCallback(seq_len)
     trainer = SFTTrainer(
         model=model, args=sft, train_dataset=train_ds,
-        eval_dataset=val_ds, processing_class=tok, peft_config=peft_cfg,
+        # trl 0.9.6 (pinned in modal_train.py) takes `tokenizer=`; `processing_class=`
+        # is the newer trl/transformers rename and is not accepted here.
+        eval_dataset=val_ds, tokenizer=tok, peft_config=peft_cfg,
         callbacks=[cb],
     )
     trainer.train()
