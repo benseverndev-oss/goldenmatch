@@ -491,7 +491,9 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     clusters = batch.clusters
     cluster_frames = batch.cluster_frames
     df = batch.df
-    scored_pairs = batch.scored_pairs if batch.scored_pairs is not None else []
+    # scored_pairs is carried on the batch for signature compatibility but not read
+    # here (evidence edges come from per-cluster pair_scores / pair_score_view), so
+    # it is intentionally not rebound -- see the note at the scored_pairs comment below.
     pair_score_view = batch.pair_score_view
     run_name = batch.run_id
     dataset = batch.dataset

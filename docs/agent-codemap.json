@@ -6044,6 +6044,8 @@
             "_referenced_row_ids",
             "_resolve_via_index",
             "_row_to_payload",
+            "_survivor_value",
+            "apply_batch",
             "derive_record_id",
             "match_record_to_entity",
             "resolve_clusters",

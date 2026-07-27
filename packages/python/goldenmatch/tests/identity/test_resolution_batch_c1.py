@@ -11,7 +11,7 @@ import dataclasses
 
 import pytest
 from goldenmatch.identity.resolution_batch import ResolutionBatch
-from goldenmatch.identity.resolve import resolve_clusters, apply_batch
+from goldenmatch.identity.resolve import apply_batch, resolve_clusters
 
 from .test_resolve_bulk_writes_1886 import (
     _singleton_clusters,
