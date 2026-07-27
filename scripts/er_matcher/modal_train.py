@@ -46,7 +46,8 @@ _image = (
         "bitsandbytes==0.43.3",
         "pyyaml",
         "huggingface_hub",
-        "rich",  # trl 0.9.6's SFTTrainer imports rich.console but doesn't pin it as a hard dep
+        "rich",   # trl 0.9.6's SFTTrainer imports rich.console but doesn't pin it as a hard dep
+        "pynvml",  # torch.cuda.utilization() needs it -> the P3a gate's GPU-util signal
     )
     # flash-attn: install the PREBUILT wheel matching the pinned stack
     # (torch 2.4 / cu12x / cp311 / cxx11abiFALSE -- PyPI torch wheels are abiFALSE).

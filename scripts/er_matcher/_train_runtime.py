@@ -56,11 +56,15 @@ class _ThroughputCallback(TrainerCallback):
         if torch.cuda.is_available():
             try:
                 self.util_samples.append(torch.cuda.utilization() / 100.0)
-            except (RuntimeError, AttributeError):
-                # GPU utilization is OPTIONAL telemetry (needs NVML/pynvml, absent
-                # on some drivers/older torch). A sampling failure must never
+            except (RuntimeError, AttributeError, ImportError):
+                # GPU utilization is OPTIONAL telemetry. torch.cuda.utilization()
+                # needs pynvml/NVML: it raises ModuleNotFoundError (a subclass of
+                # ImportError) when pynvml is absent, and RuntimeError/AttributeError
+                # on some drivers/older torch. A sampling failure must never
                 # interrupt training -- skip this step's sample; the mean is over
                 # whatever samples we did collect (0 -> gate reads it as data-bound).
+                # (pynvml is installed in the training image, so this is the
+                # graceful-degradation path, not the expected one.)
                 return
 
     def wall_s(self) -> float:
