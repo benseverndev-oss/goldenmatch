@@ -142,10 +142,11 @@ State the highest fully reviewed PR, any still-tracked open PRs, and whether the
 
 ## 6. Advance the checkpoint only after completion
 
-After the report is complete and every scan item has been accounted for, advance through the highest fully reviewed newly created PR. When the scan contains only tracked updates, pass the existing checkpoint number again so their snapshots are refreshed:
+After the report is complete and every scan item has been accounted for, advance through the highest fully reviewed newly created PR. When the scan contains only tracked updates, pass the existing checkpoint number again so their snapshots are refreshed. On the first run, pass the same lookback value that `scan` used:
 
 ```bash
-python3 .claude/skills/thesis-progress-review/scripts/pr_checkpoint.py checkpoint --through <PR_NUMBER>
+python3 .claude/skills/thesis-progress-review/scripts/pr_checkpoint.py \
+  checkpoint --through <PR_NUMBER> --lookback-days <N>
 ```
 
 Include the resulting PR number and tracked-open list in the report. If any review item was incomplete, do not run this command.
