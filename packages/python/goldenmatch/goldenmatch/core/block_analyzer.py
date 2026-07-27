@@ -285,8 +285,7 @@ def estimate_recall(
     highest-cardinality matchkey column, then checks what fraction would land
     in the same block under this candidate.
     """
-    from rapidfuzz.distance import JaroWinkler
-    from rapidfuzz.process import cdist
+    from goldenmatch.core import strsim
 
     n = len(df)
     if n < 2:
@@ -314,7 +313,7 @@ def estimate_recall(
     values = [str(v).lower().strip() for v in values]
 
     # Compute pairwise JaroWinkler scores
-    scores = cdist(values, values, scorer=JaroWinkler.similarity, workers=1)
+    scores = strsim.pure_field_matrix(values, "jaro_winkler")
 
     # Find pairs above threshold (upper triangle only)
     threshold = 0.7

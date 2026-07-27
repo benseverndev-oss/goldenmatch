@@ -227,16 +227,21 @@ _MATRIX_SCORERS = {
 }
 
 
-def pure_field_matrix(values: list, scorer_name: str):
+def pure_field_matrix(values: list, scorer_name: str, dtype: str = "float32"):
     """Dependency-free NxN field-score matrix, the fallback for the vectorized
     ``rapidfuzz.process.cdist`` path when the native kernel is absent.
 
-    BYTE-IDENTICAL to ``cdist(values, values, scorer=<matching rapidfuzz scorer>)``
-    cast to float32 (the vendored primitive == the rapidfuzz scalar, proven in
+    BYTE-IDENTICAL to ``cdist(values, values, scorer=<matching rapidfuzz scorer>,
+    dtype=<dtype>)`` (the vendored primitive == the rapidfuzz scalar, proven in
     ``tests/test_strsim_parity.py``). Distinct values are scored once and
     gathered, so the cost is O(distinct^2), not O(N^2) — but this is the SLOW
     path (a plain ``pip install goldenmatch`` with no native wheel); the fast
     path stays the native ``score_field_matrix`` kernel.
+
+    ``dtype`` mirrors cdist's: the bucket vec-lane needs ``"float64"`` (bit-exact
+    ``>= threshold`` decisions); ``find_fuzzy_matches`` uses the default float32.
+    The scorer computes in Python float (f64) and is stored at ``dtype``, exactly
+    as cdist casts its f64 scalar result.
     """
     import numpy as np
 
@@ -253,7 +258,7 @@ def pure_field_matrix(values: list, scorer_name: str):
             vals.append(v)
         codes[i] = c
     u = len(vals)
-    sub = np.empty((u, u), dtype=np.float32)
+    sub = np.empty((u, u), dtype=dtype)
     for a in range(u):
         sub[a, a] = fn(vals[a], vals[a])
         for b in range(a + 1, u):
