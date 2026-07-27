@@ -93,14 +93,14 @@ numpy = ">=0.28, <0.29"
 
 [profile.release]
 opt-level = 3
-# Fat (cross-crate) LTO + a single codegen unit for the shipped wheel: this
-# crate links ~15 pyo3-free `*-core` crates (score/fs/graph/sketch/perceptual/…),
-# so whole-program LTO can inline across those boundaries that thin LTO leaves
-# as calls, and one codegen unit lets LLVM optimize the kernel as a whole. It's
-# release-only (build-time cost, not runtime), output-identical, and standard
-# for a numeric extension. (The score-path microbench couldn't isolate the win —
-# that hot path is single-crate — so this is a codegen-quality setting for the
-# full cdylib, not a measured-in-isolation change; the measured win in this
-# change set is the FxHash scorer optimization in score-core.)
-lto = "fat"
-codegen-units = 1
+# Thin LTO (main's proven profile). Fat LTO + codegen-units=1 was tried in this
+# change set as a speculative codegen-quality tweak (its win "couldn't be
+# isolated" — single-crate hot path), but on `ubuntu-latest` it made the native
+# cdylib segfault xdist workers whenever it shared a process with torch/
+# onnxruntime (tests/test_metrics_harness.py: accuracy/semantic-blocking/
+# trained-embedder probes). Whole-program LTO + one codegen unit changes symbol
+# visibility/inlining across the ~15 linked `*-core` crates in ways that collide
+# with another loaded native runtime's symbols/allocator; thin LTO (what main
+# ships) does not. The measured win in this change set is the FxHash scorer
+# optimization in score-core, which is unaffected. See PR #2159 CI history.
+lto = "thin"
