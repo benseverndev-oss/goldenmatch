@@ -591,6 +591,7 @@ def build_cluster_frames(
             _PAIR_SPEC,
             backend=backend,
         ).native
+    assert all_ids is not None  # set in both branches above; narrow for pyright
 
     def _pairs_list() -> list:
         """The (id_a, id_b, score) list, materialized on demand: free when the

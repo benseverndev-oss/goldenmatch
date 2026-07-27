@@ -820,11 +820,13 @@ def _score_probabilistic_matchkey(
             # O(pairs) driver list B2c drops); the bounded review band
             # materializes to review_pairs (matching the list path's split).
             if _pair_table.num_rows:
-                _link_mask = _pc_b2c.greater_equal(
+                _link_mask = _pc_b2c.greater_equal(  # pyright: ignore[reportAttributeAccessIssue]
                     _pair_table.column("score"), link_threshold
                 )
                 _linked_tbl = _pair_table.filter(_link_mask)
-                _review_tbl = _pair_table.filter(_pc_b2c.invert(_link_mask))
+                _review_tbl = _pair_table.filter(
+                    _pc_b2c.invert(_link_mask)  # pyright: ignore[reportAttributeAccessIssue]
+                )
                 if _review_tbl.num_rows:
                     _rd = _review_tbl.to_pydict()
                     review_pairs.extend(
