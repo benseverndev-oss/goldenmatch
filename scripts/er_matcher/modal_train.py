@@ -31,6 +31,11 @@ import modal  # noqa: I001 -- only ever run via `modal run`, never imported else
 
 APP_NAME = "goldenmatch-er-matcher-train"
 GPU_SMOKE = "A10G"     # cheapest adequate; the smoke run confirms/updates the tier
+GPU_SWEEP = "A100-40GB"  # the benchmark sweep runs here: a 3B model is slow on A10G
+                         # (~7.2 s/step); A100 is ~2.5x faster AND ~same cost (per-second
+                         # billing), so the ~40-min benchmark is faster + cheaper than A10G.
+                         # Full run also uses A100-40GB so step-time extrapolation is
+                         # consistent; the cheapest-tier-that-fits is reported as advisory.
 GPU_FULL = "A100-40GB"  # right-sized from the P3a peak-mem measurement
 
 # Pin the training stack; flash-attn built against the torch/CUDA in the image.
@@ -87,8 +92,8 @@ def train_smoke(smoke_steps: int = 200, smoke_rows: int = 4000) -> None:
 
 @app.function(
     image=_image,
-    gpu=GPU_SMOKE,
-    timeout=60 * 60,
+    gpu=GPU_SWEEP,
+    timeout=2 * 60 * 60,
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
