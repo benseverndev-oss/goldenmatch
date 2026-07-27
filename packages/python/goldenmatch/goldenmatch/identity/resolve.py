@@ -894,6 +894,8 @@ def resolve_clusters(
                         ))
                         summary.events_emitted += 1
                     summary.created += 1
+                    structural_change = True
+                    changed_records = set(record_ids)
                 elif len(unique_entities) == 1:
                     # Absorb new records into existing identity.
                     entity_id = unique_entities[0]
@@ -920,6 +922,11 @@ def resolve_clusters(
                         ))
                         summary.events_emitted += 1
                         summary.absorbed_records += 1
+                    # Edges/conflicts are re-emitted below ONLY for the records
+                    # this run actually added; a pure re-observation (nothing new)
+                    # writes nothing (#2197).
+                    structural_change = bool(newly_added)
+                    changed_records = set(newly_added)
                 else:
                     # Multi-entity overlap -> merge into the one with most members
                     # (tie-break: oldest created_at).
@@ -966,6 +973,8 @@ def resolve_clusters(
                         summary.events_emitted += 1
                     entity_id = winner
                     summary.merged += 1
+                    structural_change = True
+                    changed_records = set(record_ids)
 
                 # 3b. Reassign losers' records to winner BEFORE upserting cluster records,
                 # so an absorb branch on the next iteration sees them already migrated.
@@ -998,11 +1007,20 @@ def resolve_clusters(
                     ))
                     summary.records_upserted += 1
 
-                # 3d. Record evidence edges for every scored within-cluster pair.
+                # 3d. Record evidence edges for the scored within-cluster pairs
+                # THIS RUN CHANGED. ``run_name`` is part of the edge's unique key
+                # (audit spine), so re-emitting an unchanged cluster's edges every
+                # run appends a duplicate set under the new run_name and grows the
+                # store / conflict counts without bound (#2197). ``changed_records``
+                # is the whole cluster for a new/merged entity (so new clusters are
+                # byte-identical to before) and only the newly absorbed records for
+                # an absorb -- so a no-op re-resolve writes nothing, mirroring the
+                # event layer, which already skips via has_run_event / newly_added.
                 pair_scores = (
-                    pair_score_view.for_cluster(cluster_id)
-                    if pair_score_view is not None
-                    else (info.get("pair_scores") or {})
+                    (pair_score_view.for_cluster(cluster_id)
+                     if pair_score_view is not None
+                     else (info.get("pair_scores") or {}))
+                    if structural_change else {}
                 )
                 for pair_key, score in pair_scores.items():
                     if isinstance(pair_key, tuple) and len(pair_key) == 2:
@@ -1012,6 +1030,8 @@ def resolve_clusters(
                     ra = rowid_to_recid.get(int(a))
                     rb = rowid_to_recid.get(int(b))
                     if not ra or not rb:
+                        continue
+                    if ra not in changed_records and rb not in changed_records:
                         continue
                     _add_edge(EvidenceEdge(
                         entity_id=entity_id,
@@ -1036,7 +1056,8 @@ def resolve_clusters(
                 cluster_conf = _cluster_confidence(info)
                 bottleneck = info.get("bottleneck_pair")
                 if (
-                    weak_confidence_threshold > 0
+                    structural_change
+                    and weak_confidence_threshold > 0
                     and cluster_conf is not None
                     and cluster_conf < weak_confidence_threshold
                     and bottleneck is not None
