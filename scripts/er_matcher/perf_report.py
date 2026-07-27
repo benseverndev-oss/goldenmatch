@@ -102,6 +102,62 @@ def learning_curve_slope(curve: list[dict[str, float]]) -> float:
     return float(pts[-2]["eval_loss"] - pts[-1]["eval_loss"])
 
 
+# --- A/B scorecard (pure, SP2 Task 3) ----------------------------------------
+def build_ab_scorecard(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build a bf16-vs-QLoRA (or any N-way) cost/quality scorecard row per entry.
+
+    Each ``entries`` item is ``{"config_name", "metrics", "total_steps"}``, where
+    ``metrics`` is a smoke-run metrics dict (same shape as ``evaluate_perf_gate``
+    consumes: ``peak_mem_gb``, ``smoke_steps``, ``smoke_wall_s``, optionally
+    ``learning_curve``/``gpu_util``). Composes Task 2's ``extrapolate_cheapest``
+    (tier fit + cost/wall extrapolation) with ``learning_curve_slope`` (still
+    improving vs plateaued).
+
+    Returns ONE row per entry, in order -- no winner is picked. The scorecard
+    is data for a human decision, not a recommendation; ranking/selecting a
+    "best" config is deliberately out of scope here."""
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        metrics = entry["metrics"]
+        total_steps = entry["total_steps"]
+        ext = extrapolate_cheapest(metrics, total_steps)
+        curve = metrics.get("learning_curve", [])
+        rows.append({
+            "config": entry["config_name"],
+            "fits_tier": ext["tier"],
+            "full_cost_usd": ext["full_cost_usd"],
+            "full_wall_h": ext["full_wall_h"],
+            "curve_slope": learning_curve_slope(curve),
+            "final_eval_loss": curve[-1]["eval_loss"] if curve else None,
+            "gpu_util": metrics.get("gpu_util"),
+            "peak_mem_gb": metrics.get("peak_mem_gb"),
+        })
+    return rows
+
+
+# --- benchmark-cost guard (pure, SP2 Task 3) ---------------------------------
+def estimate_benchmark_cost(
+    *,
+    smoke_step_s: float,
+    n_configs: int,
+    n_slices: int,
+    steps_per_slice: int,
+    tier_usd_per_hour: float,
+) -> float:
+    """Estimate the $ cost of running the A/B smoke benchmark itself (NOT the
+    full run) -- ``n_configs`` configs, each running ``n_slices`` learning-curve
+    slices of ``steps_per_slice`` steps, at ``smoke_step_s`` measured seconds
+    per step, priced at ``tier_usd_per_hour``. Guards against the smoke
+    benchmark quietly becoming expensive as configs/slices grow."""
+    total_steps = n_configs * n_slices * steps_per_slice
+    return smoke_step_s * total_steps / 3600.0 * tier_usd_per_hour
+
+
+def within_ceiling(cost: float, ceiling: float) -> bool:
+    """True if ``cost`` is at or under ``ceiling`` (the benchmark-cost guard)."""
+    return cost <= ceiling
+
+
 # --- gate (pure) -------------------------------------------------------------
 @dataclass
 class PerfGateResult:

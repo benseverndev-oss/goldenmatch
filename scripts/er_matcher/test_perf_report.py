@@ -128,6 +128,79 @@ def test_extrapolate_cheapest_picks_a100_40gb_when_needed():
     assert abs(ext["full_cost_usd"] - ext["full_wall_h"] * 2.10) < 1e-9
 
 
+def test_build_ab_scorecard_two_configs_no_winner():
+    entries = [
+        {
+            "config_name": "bf16-lora",
+            "metrics": {
+                "peak_mem_gb": 30.0,
+                "smoke_steps": 100,
+                "smoke_wall_s": 200.0,
+                "gpu_util": 0.95,
+                "learning_curve": [{"frac": 0.5, "eval_loss": 0.5}, {"frac": 1.0, "eval_loss": 0.4}],
+            },
+            "total_steps": 5000,
+        },
+        {
+            "config_name": "qlora-4bit",
+            "metrics": {
+                "peak_mem_gb": 19.5,
+                "smoke_steps": 100,
+                "smoke_wall_s": 200.0,
+                "gpu_util": 0.90,
+                "learning_curve": [{"frac": 0.5, "eval_loss": 0.5}, {"frac": 1.0, "eval_loss": 0.4}],
+            },
+            "total_steps": 5000,
+        },
+    ]
+    rows = pr.build_ab_scorecard(entries)
+    assert len(rows) == 2
+
+    by_config = {r["config"]: r for r in rows}
+    assert by_config["bf16-lora"]["fits_tier"] == "A100-40GB"
+    assert by_config["qlora-4bit"]["fits_tier"] == "L4"
+
+    for row in rows:
+        assert abs(row["curve_slope"] - 0.1) < 1e-9
+        assert row["final_eval_loss"] == 0.4
+        assert "winner" not in row
+        assert "pick" not in row
+        assert row["gpu_util"] is not None
+        assert row["peak_mem_gb"] is not None
+        assert row["full_cost_usd"] > 0
+        assert row["full_wall_h"] > 0
+
+
+def test_build_ab_scorecard_empty_curve():
+    entries = [
+        {
+            "config_name": "no-curve",
+            "metrics": {"peak_mem_gb": 19.5, "smoke_steps": 100, "smoke_wall_s": 200.0},
+            "total_steps": 5000,
+        },
+    ]
+    rows = pr.build_ab_scorecard(entries)
+    assert len(rows) == 1
+    assert rows[0]["final_eval_loss"] is None
+    assert rows[0]["curve_slope"] == 0.0
+
+
+def test_estimate_benchmark_cost_arithmetic():
+    cost = pr.estimate_benchmark_cost(
+        smoke_step_s=2.0, n_configs=2, n_slices=4, steps_per_slice=50,
+        tier_usd_per_hour=1.10,
+    )
+    expected = 2.0 * 2 * 4 * 50 / 3600.0 * 1.10
+    assert abs(cost - expected) < 1e-9
+    assert abs(cost - 0.24444444444444446) < 1e-9
+
+
+def test_within_ceiling_below_and_above():
+    assert pr.within_ceiling(5.0, 8.0) is True
+    assert pr.within_ceiling(8.0, 8.0) is True
+    assert pr.within_ceiling(9.0, 8.0) is False
+
+
 def test_cli_flags_override_metrics(tmp_path):
     import json
     m = _good_metrics()
