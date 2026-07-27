@@ -164,8 +164,15 @@ weaknesses:
       byte-divergence str(5.0)="5.0" vs String(5.0)="5"; (c) radial + ensemble scorers
       ~4dp even under WASM (reduction/recomposition order), contradicting the table's
       "byte-identical with WASM" claim; (d) goldenanalysis frame-kernel parity outside
-      0046 scope entirely. The verdict table should enumerate scorer-level and
-      package-level divergences, not just distributed/VLM/routing.
+      0046 scope entirely.
+      CLOSED 2026-07-27: the 0046 amendment now enumerates the scorer/package-level
+      divergences, not just distributed/VLM/routing -- (c) radial/ensemble ~4dp under
+      WASM, (b) PPRL float-field CLK, and (a) array_intersect `overlap` MODE pure-TS-only
+      are all named there; (d) the goldenanalysis frame-kernel is a goldenanalysis
+      boundary and is now SHARED (see standalone-ts-algorithms / analysis-wasm reroute),
+      not just fixture-locked. The amendment's prior FS bullet ("default TS FS is pure-TS,
+      not the shared kernel") was itself corrected in the same pass -- FS now runs the
+      shared kernel by default on the batteries entry (see fs-default-ts-path).
       (Note: numeric_diff was Python-only when this audit began; it is now kernel-backed
       on main -- an example of the live harvest catching curated drift.)
     evidence:
@@ -293,8 +300,16 @@ weaknesses:
     detail: >-
       scorer_kernels_deferred / blocking_kernels_deferred entries carry a prose reason
       (deferred/declined/n-a) but no measured evidence (the frame's tenet is 'kernelize
-      on measurement'). Low risk today (the coverage floor is satisfied: 20 backed + 3
-      classified), but the deferral rationale should cite a measurement when the reason
-      is perf/shape rather than model-backed.
+      on measurement'). The deferral rationale should cite a measurement WHEN THE REASON
+      IS PERF/SHAPE rather than model-backed.
+      REASSESSED 2026-07-27: the trigger is currently vacuous -- EVERY remaining deferral
+      is MODEL-BACKED, not perf/shape, so none needs a wall-clock citation. Scorers: 24
+      total, 22 kernel-backed, only `embedding` + `record_embedding` deferred ("n/a --
+      model-backed"; numeric_diff + cosine were kernelized 2026-07-25/26). Blocking:
+      `simhash` alone ("declined -- model-backed": needs a bundled edge model TS doesn't
+      ship). A model-backed scorer/blocker is NOT a kernel-perf decision, so "kernelize on
+      measurement" doesn't apply to it. The invariant stands as a tripwire for any FUTURE
+      perf/shape deferral -- which would then owe a measured wall-clock -- but there is
+      nothing to measure in the current set.
     evidence:
       - parity/goldenmatch.yaml
