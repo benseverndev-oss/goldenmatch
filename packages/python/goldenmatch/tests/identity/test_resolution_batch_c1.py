@@ -21,9 +21,10 @@ from .test_resolve_bulk_writes_1886 import (
 
 
 def test_batch_is_versioned():
-    assert ResolutionBatch.CONTRACT_VERSION == 1
+    # v2 added the field_strategies survivorship-config term.
+    assert ResolutionBatch.CONTRACT_VERSION == 2
     b = ResolutionBatch.from_args(run_id="r1")
-    assert b.contract_version == 1
+    assert b.contract_version == 2
 
 
 def test_batch_is_immutable():

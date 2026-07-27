@@ -42,7 +42,7 @@ class ResolutionBatch:
     ``evidence_edges`` UNIQUE) -- ``run_id`` is the caller-facing half of that key.
     """
 
-    CONTRACT_VERSION: ClassVar[int] = 1
+    CONTRACT_VERSION: ClassVar[int] = 2
 
     run_id: str = ""
     dataset: str | None = None
@@ -52,6 +52,10 @@ class ResolutionBatch:
     actor: str = "pipeline"
     emit_singletons: bool = True
     weak_confidence_threshold: float = 0.6
+    # v2: per-field survivorship config (col -> GoldenFieldRule). When set, the
+    # identity golden record honors the configured strategy per column instead of
+    # most_complete-only; None keeps the most_complete default (byte-identical).
+    field_strategies: dict[str, Any] | None = None
     # Frame-residency budget: the write side flushes every ``flush_rows`` records so
     # it never stacks a second O(N) term on the compute prep floor (manifesto §3).
     # A contract term now, not just ``GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS``.
@@ -113,6 +117,7 @@ class ResolutionBatch:
         emit_singletons: bool = True,
         weak_confidence_threshold: float = 0.6,
         flush_rows: int | None = None,
+        field_strategies: dict[str, Any] | None = None,
     ) -> ResolutionBatch:
         """Build a batch from the loose resolve args, filling the residency budget
         from the env default when unspecified. This is the adapter seam:
@@ -127,6 +132,7 @@ class ResolutionBatch:
             emit_singletons=emit_singletons,
             weak_confidence_threshold=weak_confidence_threshold,
             flush_rows=_default_flush_rows() if flush_rows is None else flush_rows,
+            field_strategies=field_strategies,
         )
 
 

@@ -208,13 +208,23 @@ weaknesses:
       to the retired inline loop -- ties by input order, all-null columns omitted --
       locked by tests/identity/test_golden_record_single_source.py), so the rollup rule
       cannot drift from the config-driven pipeline path or the provenance layer. ONE
-      owner (core.golden) for the capability. REMAINING (doc follow-on, not a divergence):
-      the identity golden path is most_complete-ONLY (ignores field_strategies / config),
-      unlike the config-driven builders -- a conscious scope, threading a survivorship
-      config through resolve_clusters is a separate feature, not a second source of truth.
+      owner (core.golden) for the capability.
+      CONFIG-AWARE DONE 2026-07-27: the identity golden path is no longer most_complete-ONLY.
+      A `field_strategies` (col -> GoldenFieldRule) survivorship config threads through the
+      seam (ResolutionBatch v2 field -> resolve_clusters/apply_batch -> the golden helpers),
+      and `_survivor_value` dispatches each column through core.golden.merge_field with the
+      configured strategy (else most_complete) -- so the identity golden record honors
+      per-field survivorship config exactly like the config-driven builders, still ONE owner
+      (core.golden), no second rule. Additive: no config => most_complete, byte-identical
+      (locked by test_golden_record_single_source.py's config-override test + the retired-rule
+      parity cases; 311 identity tests green). Strategies needing per-member sources/dates
+      (source_priority / most_recent) degrade via merge_field's fallback -- the rollup does
+      not thread those inputs (documented on `_survivor_value`).
     evidence:
       - packages/python/goldenmatch/goldenmatch/core/golden.py
-      - packages/python/goldenmatch/goldenmatch/identity/resolve.py
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py   # _survivor_value + field_strategies threading
+      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py   # v2 field_strategies contract term
+      - packages/python/goldenmatch/tests/identity/test_golden_record_single_source.py
       - packages/python/goldenmatch/tests/identity/test_golden_record_single_source.py
 
   - id: standalone-ts-algorithms-no-shared-kernel
