@@ -87,13 +87,36 @@ def train_smoke(smoke_steps: int = 200, smoke_rows: int = 4000) -> None:
 
 @app.function(
     image=_image,
+    gpu=GPU_SMOKE,
+    timeout=60 * 60,
+    volumes={"/out": _out_vol},
+    secrets=[modal.Secret.from_name("er-matcher-hf")],
+)
+def train_sweep(qlora: bool) -> None:
+    """Smoke-scale sweep for one quantization variant (config-matrix benchmark)."""
+    name = "qlora-4bit" if qlora else "bf16-lora"
+    _run([
+        "--sweep",
+        "--qlora-4bit" if qlora else "--no-qlora-4bit",
+        "--smoke-steps", "200",
+        "--smoke-rows", "4000",
+        "--metrics-out", f"/out/sweep_metrics_{name}.json",
+        "--out-dir", "/out/sweep",
+    ])
+
+
+@app.function(
+    image=_image,
     gpu=GPU_FULL,
     timeout=6 * 60 * 60,
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
-def train_full() -> None:
-    _run(["--out-dir", "/out/model"])
+def train_full(qlora: bool = False) -> None:
+    _run([
+        "--qlora-4bit" if qlora else "--no-qlora-4bit",
+        "--out-dir", "/out/model",
+    ])
 
 
 def _run(extra_argv: list[str]) -> None:
@@ -125,3 +148,39 @@ def main(smoke: bool = False, smoke_steps: int = 200, smoke_rows: int = 4000) ->
         train_full.remote()
         print("full run done -> `modal volume get er-matcher-out model/merged` "
               "(quantize + publish per plan §Phase 4)")
+
+
+@app.local_entrypoint()
+def benchmark() -> None:
+    """Run the bf16-lora vs qlora-4bit smoke sweep for both config-matrix variants.
+
+    `config_matrix` runs locally (this entrypoint executes on the laptop, not
+    in the container), so put the script dir on sys.path before importing it.
+    """
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(__file__))
+    import config_matrix
+
+    for name, cfg in config_matrix.expand_configs({"qlora_4bit": False}):
+        print(f"launching sweep: {name}")
+        train_sweep.remote(qlora=cfg["qlora_4bit"])
+
+    print("sweep done -> `modal volume get er-matcher-out "
+          "sweep_metrics_bf16-lora.json sweep_metrics_qlora-4bit.json`, "
+          "then feed both to scripts/er_matcher/perf_report.py")
+
+
+@app.local_entrypoint()
+def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
+    """Full training run, targeting a human-picked GPU tier for the chosen config.
+
+    `gpu=...` is fixed at `@app.function` decoration time, so retargeting the
+    tier at run time goes through `.with_options(gpu=...)` instead of a
+    function argument.
+    """
+    qlora = config_name == "qlora-4bit"
+    train_full.with_options(gpu=gpu).remote(qlora=qlora)
+    print("full run done -> `modal volume get er-matcher-out model/merged` "
+          "(quantize + publish per plan §Phase 4)")
