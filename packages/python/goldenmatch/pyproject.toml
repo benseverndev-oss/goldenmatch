@@ -30,7 +30,6 @@ dependencies = [
     "rich>=13.0",
     "pyyaml>=6.0",
     "pydantic>=2.7",
-    "rapidfuzz>=3.0",
     "jellyfish>=1.0",
     "numpy>=1.26",
     "openpyxl>=3.1",
@@ -61,6 +60,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
     "hypothesis>=6.0",
+    # rapidfuzz is NO LONGER a runtime dependency — GoldenMatch owns its scorer
+    # math (vendored Rust `score-core::strsim` + pure-Python `core/strsim.py`,
+    # byte-identical). It stays here ONLY as the parity oracle for
+    # `tests/test_strsim_parity.py` (+ the synonym scorer oracle tests). A plain
+    # `pip install goldenmatch` no longer pulls it; the runtime is rapidfuzz-free.
+    "rapidfuzz>=3.0",
 ]
 embeddings = [
     "sentence-transformers>=2.2",

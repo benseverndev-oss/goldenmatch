@@ -376,6 +376,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.core._hashing",
             "goldenmatch.core._native_loader",
             "goldenmatch.core.bench",
@@ -2217,6 +2218,7 @@
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.frame"
           ]
         },
@@ -4253,7 +4255,8 @@
             "auto_map_columns"
           ],
           "imports": [
-            "goldenmatch._polars_lazy"
+            "goldenmatch._polars_lazy",
+            "goldenmatch.core"
           ]
         },
         {
@@ -4338,6 +4341,7 @@
           "imports": [
             "goldenmatch._polars_lazy",
             "goldenmatch.config.schemas",
+            "goldenmatch.core",
             "goldenmatch.core._native_loader",
             "goldenmatch.core._profile_helpers",
             "goldenmatch.core.acronym",
@@ -4535,6 +4539,9 @@
             "jaro_winkler_similarity",
             "levenshtein_distance",
             "levenshtein_normalized_similarity",
+            "partial_ratio",
+            "pure_field_matrix",
+            "ratio",
             "token_sort_ratio"
           ]
         },
@@ -6416,6 +6423,7 @@
             "string_similarity"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.core._native_loader",
             "goldenmatch.core.pairs"
           ]
@@ -6760,6 +6768,7 @@
             "register_scorers"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.plugins.base",
             "goldenmatch.plugins.registry",
             "goldenmatch.refdata.given_names",
@@ -6878,6 +6887,7 @@
             "score_batch"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.core._native_loader"
           ]
         },
@@ -7006,6 +7016,7 @@
             "SynonymScorer"
           ],
           "imports": [
+            "goldenmatch.core",
             "goldenmatch.synonym.model",
             "goldenmatch.synonym.providers",
             "goldenmatch.synonym.table"
