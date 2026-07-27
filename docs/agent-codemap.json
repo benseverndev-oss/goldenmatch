@@ -5973,6 +5973,8 @@
             "IdentitySummary",
             "WorklistItem",
             "_iter_entities",
+            "_summary_from_counts",
+            "_summary_stats_scan",
             "entity_profile",
             "identity_summary_stats",
             "steward_worklist",
