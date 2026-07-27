@@ -183,39 +183,24 @@ class IdentitySummary:
         }
 
 
-def identity_summary_stats(
-    store: IdentityStore, dataset: str | None = None,
+def _summary_from_counts(
+    store: IdentityStore,
+    dataset: str | None,
+    by_status: dict[str, int],
+    per_entity: dict[str, int],
+    source_breakdown: dict[str, int],
 ) -> IdentitySummary:
-    """Graph-level health summary. Records live on active entities (merges
-    reassign them), so per-entity record stats are computed over active
-    entities; status counts cover every status."""
-    by_status: dict[str, int] = {}
-    total_entities = 0
-    for node in _iter_entities(store, dataset, None):
-        total_entities += 1
-        by_status[node.status] = by_status.get(node.status, 0) + 1
-
-    record_counts: list[int] = []
-    source_breakdown: dict[str, int] = {}
-    largest: list[tuple[str, int]] = []
-    for node in _iter_entities(store, dataset, IdentityStatus.ACTIVE.value):
-        recs = store.get_records_for_entity(node.entity_id)
-        record_counts.append(len(recs))
-        for rec in recs:
-            source_breakdown[rec.source] = source_breakdown.get(rec.source, 0) + 1
-        largest.append((node.entity_id, len(recs)))
-
+    record_counts = list(per_entity.values())
     total_records = sum(record_counts)
     singleton = sum(1 for c in record_counts if c == 1)
     multi = sum(1 for c in record_counts if c > 1)
     avg = (total_records / len(record_counts)) if record_counts else 0.0
     p50 = float(statistics.median(record_counts)) if record_counts else 0.0
     mx = max(record_counts) if record_counts else 0
-    largest.sort(key=lambda kv: (-kv[1], kv[0]))
-
+    largest = sorted(per_entity.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     return IdentitySummary(
         dataset=dataset,
-        total_entities=total_entities,
+        total_entities=sum(by_status.values()),
         by_status=by_status,
         total_records=total_records,
         records_per_entity_avg=round(avg, 4),
@@ -226,9 +211,47 @@ def identity_summary_stats(
         total_conflicts=len(store.find_conflicts(dataset=dataset)),
         source_breakdown=source_breakdown,
         largest_entities=[
-            {"entity_id": eid, "record_count": n} for eid, n in largest[:10]
+            {"entity_id": eid, "record_count": n} for eid, n in largest
         ],
     )
+
+
+def _summary_stats_scan(
+    store: IdentityStore, dataset: str | None,
+) -> IdentitySummary:
+    """Per-entity fallback for stores without the grouped aggregates (mongo)."""
+    by_status: dict[str, int] = {}
+    for node in _iter_entities(store, dataset, None):
+        by_status[node.status] = by_status.get(node.status, 0) + 1
+
+    per_entity: dict[str, int] = {}
+    source_breakdown: dict[str, int] = {}
+    for node in _iter_entities(store, dataset, IdentityStatus.ACTIVE.value):
+        recs = store.get_records_for_entity(node.entity_id)
+        per_entity[node.entity_id] = len(recs)
+        for rec in recs:
+            source_breakdown[rec.source] = source_breakdown.get(rec.source, 0) + 1
+    return _summary_from_counts(store, dataset, by_status, per_entity, source_breakdown)
+
+
+def identity_summary_stats(
+    store: IdentityStore, dataset: str | None = None,
+) -> IdentitySummary:
+    """Graph-level health summary. Records live on active entities (merges
+    reassign them), so per-entity record stats are computed over active
+    entities; status counts cover every status.
+
+    On SQL backends this is a handful of grouped queries (#2198). It used to
+    call ``get_records_for_entity`` once per entity -- O(entities) round-trips
+    that dominated wall-clock at scale -- so it now asks the store for the same
+    tallies in two ``GROUP BY`` queries, falling back to the per-entity scan for
+    backends that don't implement them."""
+    try:
+        by_status = store.status_counts(dataset)
+        per_entity, source_breakdown = store.active_record_stats(dataset)
+    except (AttributeError, NotImplementedError):
+        return _summary_stats_scan(store, dataset)
+    return _summary_from_counts(store, dataset, by_status, per_entity, source_breakdown)
 
 
 # ── Stewardship worklist ────────────────────────────────────────────────────
@@ -267,6 +290,13 @@ def steward_worklist(
     for e in store.find_conflicts(dataset=dataset):
         conflicts_by_entity[e.entity_id] = conflicts_by_entity.get(e.entity_id, 0) + 1
 
+    # Record counts for every active entity in one grouped query, so the loop
+    # below doesn't issue a get_records_for_entity per flagged entity (#2198).
+    try:
+        record_counts, _ = store.active_record_stats(dataset)
+    except (AttributeError, NotImplementedError):
+        record_counts = None
+
     items: list[WorklistItem] = []
     for node in _iter_entities(store, dataset, IdentityStatus.ACTIVE.value):
         cc = conflicts_by_entity.get(node.entity_id, 0)
@@ -278,12 +308,14 @@ def steward_worklist(
             reasons.append("has_conflicts")
         if low_conf:
             reasons.append("low_confidence")
+        rc = (record_counts.get(node.entity_id, 0) if record_counts is not None
+              else len(store.get_records_for_entity(node.entity_id)))
         items.append(WorklistItem(
             entity_id=node.entity_id,
             reasons=reasons,
             conflict_count=cc,
             confidence=node.confidence,
-            record_count=len(store.get_records_for_entity(node.entity_id)),
+            record_count=rc,
         ))
 
     items.sort(key=lambda it: (
