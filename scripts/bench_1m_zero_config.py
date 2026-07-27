@@ -181,11 +181,24 @@ def main() -> None:
     if not args.skip_stages:
         print("\n[stages run] starting (bench_capture)...")
         stage_wall, stage_dict = run_with_bench_capture(df)
-        timings = stage_dict.get("timings", {})
+        # BenchmarkRecorder.to_dict() emits `stage_timings_seconds` +
+        # `stage_peak_rss_kb` (NOT `timings`); the old `.get("timings")` here and
+        # in the workflow summary silently rendered an EMPTY breakdown and never
+        # surfaced peak RSS -- the whole point of the per-stage attribution.
+        timings = stage_dict.get("stage_timings_seconds", {})
+        peaks_kb = stage_dict.get("stage_peak_rss_kb", {})
         print(f"  wall={stage_wall:.2f}s  ({len(timings)} stages recorded)")
-        for name, secs in sorted(timings.items(), key=lambda kv: -kv[1]):
-            pct = 100.0 * secs / stage_wall if stage_wall else 0.0
-            print(f"  {name:<40s} {secs:>8.2f}s  ({pct:5.1f}%)")
+        # Sort by peak RSS when available (the memory bottleneck), else by wall.
+        order = sorted(
+            set(timings) | set(peaks_kb),
+            key=lambda k: -(peaks_kb.get(k, 0) or (timings.get(k, 0.0) * 1e6)),
+        )
+        for name in order:
+            secs = timings.get(name)
+            pct = 100.0 * secs / stage_wall if (secs and stage_wall) else 0.0
+            peak_mb = peaks_kb.get(name, 0) / 1024.0
+            ws = f"{secs:>8.2f}s ({pct:4.1f}%)" if secs is not None else f"{'-':>8s}        "
+            print(f"  {name:<40s} {ws}  peak_rss={peak_mb:>8.0f} MB")
         metrics = stage_dict.get("metrics", {})
         if metrics:
             print("  metrics:")
