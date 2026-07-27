@@ -1,12 +1,19 @@
 """Tier 7: budget tests for negative-evidence scoring.
 
-Tests that _apply_negative_evidence completes within its wall-clock
-budget on 50K-row inputs.
+Tests that the batch NE path (_apply_negative_evidence_batch, the vectorized
+core the pipeline runs via _apply_negative_evidence_to_exact_pairs) completes
+within its wall-clock budget on 50K-row inputs.
 """
 
 
 def test_negative_evidence_scoring_overhead_under_budget():
-    """NE scoring on 50K candidate pairs completes within 2s."""
+    """NE scoring on 50K candidate pairs completes within 2s.
+
+    Exercises the batch path the pipeline actually runs
+    (_apply_negative_evidence_to_exact_pairs -> _apply_negative_evidence_batch),
+    which fans the hot string scorers out through the native pairwise kernel in
+    one FFI crossing rather than a per-pair pure-Python strsim loop.
+    """
     import time
 
     from goldenmatch.config.schemas import (
@@ -14,7 +21,7 @@ def test_negative_evidence_scoring_overhead_under_budget():
         MatchkeyField,
         NegativeEvidenceField,
     )
-    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.core.scorer import _apply_negative_evidence_batch
 
     mk = MatchkeyConfig(
         name="t", type="weighted", threshold=0.8,
@@ -33,8 +40,7 @@ def test_negative_evidence_scoring_overhead_under_budget():
         for _ in range(50_000)
     ]
     start = time.time()
-    for pair in pairs:
-        _apply_negative_evidence(mk, pair)
+    _apply_negative_evidence_batch(mk, pairs)
     elapsed = time.time() - start
     assert elapsed < 2.0, f"NE scoring took {elapsed:.2f}s on 50K pairs (budget 2s)"
 
@@ -48,7 +54,7 @@ def test_exact_matchkey_ne_scoring_overhead_under_budget():
         MatchkeyField,
         NegativeEvidenceField,
     )
-    from goldenmatch.core.scorer import _apply_negative_evidence
+    from goldenmatch.core.scorer import _apply_negative_evidence_batch
 
     mk = MatchkeyConfig(
         name="exact_email",
@@ -84,8 +90,7 @@ def test_exact_matchkey_ne_scoring_overhead_under_budget():
         for _ in range(50_000)
     ]
     start = time.time()
-    for pair in pairs:
-        _apply_negative_evidence(mk, pair)
+    _apply_negative_evidence_batch(mk, pairs)
     elapsed = time.time() - start
     assert elapsed < 2.0, (
         f"exact-matchkey NE scoring took {elapsed:.2f}s on 50K pairs (budget 2s)"

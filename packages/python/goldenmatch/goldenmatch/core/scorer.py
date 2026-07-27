@@ -619,6 +619,95 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
     return total_penalty
 
 
+def _apply_negative_evidence_batch(
+    matchkey: MatchkeyConfig, pairs: list[dict]
+) -> list[float]:
+    """Vectorized twin of ``_apply_negative_evidence`` over many pairs at once.
+
+    Returns one penalty per pair, byte-identical to
+    ``[_apply_negative_evidence(matchkey, p) for p in pairs]`` -- the scalar
+    path is the source of truth (see tests/test_ne_batch_parity.py).
+
+    The win: each NE field is scored across ALL pairs in a single native
+    ``score_field_pairwise`` FFI crossing (scorer ids 0..3 -- jaro_winkler /
+    levenshtein / token_sort / exact) instead of a per-pair pure-Python
+    ``strsim`` call. Non-pairwise scorers (soundex, numeric, geo, ...) and the
+    native-off path fall back to the same scalar ``score_field`` the source of
+    truth uses, so parity holds unconditionally; only the hot string scorers
+    accelerate.
+
+    Parity is preserved exactly for the common shapes: NE fields are iterated
+    in config order, per-pair penalties accumulate in that order (float sum is
+    order-stable per pair), None/missing values skip with no penalty, and
+    ``_NE_BROKEN`` short-circuits a known-broken (scorer, field). The one
+    theoretical divergence from the scalar loop is a scorer that raises on some
+    pairs but not others (transforms are pure functions of config, so in
+    practice a field is all-or-nothing): the scalar path penalizes the pairs it
+    processed before the raise, whereas this path drops the whole field. NE
+    fields come from homogeneous DataFrame columns, so this case does not arise.
+    """
+    n = len(pairs)
+    if not matchkey.negative_evidence or n == 0:
+        return [0.0] * n
+
+    totals = [0.0] * n
+    for ne in matchkey.negative_evidence:
+        ne_key = (ne.scorer, ne.field)
+        if ne_key in _NE_BROKEN:
+            continue
+        # Gather transformed, non-null (a, b) values with their pair indices --
+        # mirrors the scalar path's per-pair transform + None-skip.
+        idxs: list[int] = []
+        a_vals: list[str] = []
+        b_vals: list[str] = []
+        try:
+            for i, pair in enumerate(pairs):
+                if ne.field not in pair:
+                    continue
+                val_a, val_b = pair[ne.field]
+                val_a = apply_transforms(val_a, ne.transforms)
+                val_b = apply_transforms(val_b, ne.transforms)
+                if val_a is None or val_b is None:
+                    continue
+                idxs.append(i)
+                a_vals.append(val_a)
+                b_vals.append(val_b)
+            if not idxs:
+                continue
+            # Native pairwise for eligible scorers; scalar per-element otherwise.
+            sims = _native_field_pairwise(a_vals, b_vals, ne.scorer)
+            if sims is None:
+                sims = [score_field(a, b, ne.scorer) for a, b in zip(a_vals, b_vals)]
+        except (ValueError, KeyError) as exc:
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
+            logger.warning(
+                "auto-config: NE scorer '%s' for field '%s' not registered or failed: %s; "
+                "skipping (further pairs with this NE entry will be silently skipped)",
+                ne.scorer, ne.field, exc,
+            )
+            continue
+        except Exception as exc:
+            with _NE_BROKEN_LOCK:
+                _NE_BROKEN.add(ne_key)
+            logger.warning(
+                "auto-config: NE scoring of field '%s' raised %s; "
+                "skipping (further pairs with this NE entry will be silently skipped)",
+                ne.field, type(exc).__name__,
+            )
+            continue
+
+        threshold = ne.threshold
+        penalty = ne.flat_penalty
+        for k, i in enumerate(idxs):
+            sim = sims[k]
+            if sim is None:
+                continue
+            if sim < threshold:
+                totals[i] += penalty
+    return totals
+
+
 def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # called from core/pipeline.py (outside slice)
     pairs: list[tuple[int, int, float]],
     matchkey: MatchkeyConfig,
@@ -648,7 +737,12 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
         zip(full_df["__row_id__"].to_list(), range(full_df.height))
     )
 
-    filtered: list[tuple[int, int, float]] = []
+    # Materialize the per-pair NE value dicts, then score them all in one
+    # vectorized pass (_apply_negative_evidence_batch -> native pairwise). The
+    # scalar per-pair loop this replaced re-entered pure-Python strsim per pair;
+    # the batch penalties are byte-identical (tests/test_ne_batch_parity.py).
+    valid_pairs: list[tuple[int, int]] = []
+    pair_dicts: list[dict] = []
     for row_a, row_b, _initial_score in pairs:
         idx_a = row_id_to_idx.get(row_a)
         idx_b = row_id_to_idx.get(row_b)
@@ -665,7 +759,12 @@ def _apply_negative_evidence_to_exact_pairs(  # pyright: ignore[reportUnusedFunc
                 pair_dict[ne.field] = (val_a, val_b)
             except Exception:
                 pair_dict[ne.field] = (None, None)
-        penalty = _apply_negative_evidence(matchkey, pair_dict)
+        valid_pairs.append((row_a, row_b))
+        pair_dicts.append(pair_dict)
+
+    penalties = _apply_negative_evidence_batch(matchkey, pair_dicts)
+    filtered: list[tuple[int, int, float]] = []
+    for (row_a, row_b), penalty in zip(valid_pairs, penalties):
         final_score = max(0.0, 1.0 - penalty)
         if final_score >= threshold:
             filtered.append((row_a, row_b, final_score))
@@ -855,6 +954,46 @@ def _native_field_matrix(values: list, scorer_name: str) -> np.ndarray | None:
         clean = [v if v is not None else "" for v in values]
         arr = pa.array(clean, type=pa.large_string())
         return native.score_field_matrix(arr, arr, scorer_id, True)
+    except Exception:
+        # Any FFI / pyarrow / numpy hiccup falls through to pure-Python strsim.
+        return None
+
+
+# Pairwise-eligible native scorer ids. score_field_pairwise handles ids 0..3
+# (jaro_winkler / levenshtein / token_sort / exact); soundex (id 4) is
+# matrix-only (no per-pair precompute amortization), so it stays scalar.
+_PAIRWISE_FIELD_SCORER_IDS: dict[str, int] = {
+    name: sid for name, sid in _NATIVE_FIELD_SCORER_IDS.items() if sid <= 3
+}
+
+
+def _native_field_pairwise(
+    a_vals: list[str], b_vals: list[str], scorer_name: str
+) -> np.ndarray | None:
+    """Elementwise native pairwise scores (``out[i] = score(a[i], b[i])``), or
+    None when the kernel isn't loaded / the scorer isn't pairwise-eligible --
+    caller falls back to the scalar ``score_field`` path.
+
+    Honors the same ``GOLDENMATCH_NATIVE`` gate as ``_native_field_matrix``;
+    the pairwise and matrix kernels share ``score_one``, so token_sort/exact/
+    jaro_winkler/levenshtein are byte-parity with the pure-Python ``strsim``
+    scalars (asserted in tests/test_ne_batch_parity.py under the native lane).
+    """
+    scorer_id = _PAIRWISE_FIELD_SCORER_IDS.get(scorer_name)
+    if scorer_id is None:
+        return None
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    if not native_enabled("field_scoring"):
+        return None
+    native = native_module()
+    if native is None or not hasattr(native, "score_field_pairwise"):
+        return None
+    try:
+        import pyarrow as pa
+        aa = pa.array(a_vals, type=pa.large_string())
+        bb = pa.array(b_vals, type=pa.large_string())
+        return native.score_field_pairwise(aa, bb, scorer_id)
     except Exception:
         # Any FFI / pyarrow / numpy hiccup falls through to pure-Python strsim.
         return None
