@@ -49,6 +49,11 @@ on:
         description: "GOLDENMATCH_FS_COLUMNAR_CLUSTER (B2c): blank = code default, '1'/'0' to A/B the flag"
         required: false
         default: ""
+      skip_cprofile:
+        description: "Skip the cProfile pass (set true at multi-M scale: its per-call overhead is prohibitive and distorts wall)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -60,7 +65,7 @@ jobs:
     # 64-core variant (gm-bench-64c) provisions but jobs never receive a VM,
     # suspected quota cap on the very large size for newly-created orgs.
     runs-on: large-new-64GB
-    timeout-minutes: 180  # 3 hours; 500K typical ~30 min, 1M ~90 min
+    timeout-minutes: 350  # ~6h ceiling; 5M fixture-gen (~13m) + 5M dedupe passes
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
       # Pin the autoconfig backend threshold so 500K stays on polars-direct
@@ -124,6 +129,7 @@ jobs:
             --runs ${{ inputs.runs }} \
             --output .profile_tmp/bench_${{ inputs.label }}.json \
             --cprofile-output .profile_tmp/bench_${{ inputs.label }}.prof \
+            ${{ inputs.skip_cprofile && '--skip-cprofile' || '' }} \
             --ref "${{ github.sha }}"
 
       - name: Post headline to step summary
