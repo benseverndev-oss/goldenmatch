@@ -179,6 +179,21 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
     // rapidfuzz bound = max(len1, len2) / 2 - 1 (both >= 1 here, so >= 0).
     let bound = std::cmp::max(len1, len2) / 2 - 1;
 
+    // ASCII single-block fast path (the ~universal case for names). When the
+    // PATTERN fits one 64-bit block AND every char in BOTH strings is ASCII, the
+    // per-comparison `HashMap<&char, Vec<u64>>` peq + the `vec![0u64; nw]`
+    // scratch allocations are pure overhead: profiling (flamegraph) put peq_map's
+    // hashing + allocation at ~2x the actual jaro math. Use a stack `[u64; 128]`
+    // array peq indexed by byte and single-u64 bitvectors -- zero hashing, zero
+    // heap allocation. Byte-identical to the generic path (same algorithm, same
+    // bit ops, same order); parity is asserted in the tests below.
+    if len1 <= 64
+        && s1.iter().all(|c| (*c as u32) < 128)
+        && s2.iter().all(|c| (*c as u32) < 128)
+    {
+        return jaro_similarity_ascii(s1, s2, bound);
+    }
+
     // Bit-parallel FlaggedChars: bind each TEXT (s2) position to the LOWEST
     // unflagged PATTERN (s1) position within [j-bound, j+bound] via a masked
     // pattern-match bitvector + lowest-set-bit (rapidfuzz's `blsi` order),
@@ -225,6 +240,70 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
             transposition += 1;
         }
         tmp[bit / 64] &= !(1u64 << (bit % 64));
+        k += 1;
+    }
+
+    jaro_calculate_similarity(len1, len2, common, transposition)
+}
+
+/// Allocation-free, hash-free Jaro for the ASCII single-block case
+/// (`s1.len() <= 64`, every char in both strings `< 128`). Byte-identical to
+/// `jaro_similarity`'s generic path -- the ONLY differences are representation:
+/// a stack `[u64; 128]` peq indexed by byte instead of `HashMap<&char, Vec<u64>>`,
+/// and single-`u64` bitvectors instead of `Vec<u64>` (nw == 1). Callers guarantee
+/// the preconditions, so `c as usize` never indexes out of `[0, 128)`.
+#[inline]
+fn jaro_similarity_ascii(s1: &[char], s2: &[char], bound: usize) -> f64 {
+    let len1 = s1.len();
+    let len2 = s2.len();
+
+    // Peq[c] = bitmask of positions where byte c occurs in s1 (one 64-bit block).
+    let mut peq = [0u64; 128];
+    for (i, &c) in s1.iter().enumerate() {
+        peq[c as usize] |= 1u64 << i;
+    }
+
+    let mut p_flag: u64 = 0; // matched pattern positions
+    let mut t_flag_pos = [0u32; 64]; // matched text positions, ascending
+    let mut t_cnt = 0usize;
+    let hi_max = len1 - 1;
+    for (j, &cj) in s2.iter().enumerate() {
+        let lo = j.saturating_sub(bound);
+        let hi = std::cmp::min(j + bound, hi_max);
+        if lo > hi {
+            continue;
+        }
+        let mut cand = peq[cj as usize] & !p_flag;
+        if lo > 0 {
+            cand &= !((1u64 << lo) - 1); // clear bits below lo
+        }
+        if hi < 63 {
+            cand &= (1u64 << (hi + 1)) - 1; // clear bits above hi
+        }
+        if cand != 0 {
+            let bit = cand.trailing_zeros(); // lowest set bit == rapidfuzz blsi order
+            p_flag |= 1u64 << bit;
+            t_flag_pos[t_cnt] = j as u32;
+            t_cnt += 1;
+        }
+    }
+
+    let common = p_flag.count_ones() as usize;
+    if common == 0 {
+        return 0.0;
+    }
+
+    // Transpositions: pair the k-th flagged pattern char with the k-th flagged
+    // text char (both ascending); count positional disagreements.
+    let mut transposition = 0usize;
+    let mut tmp = p_flag;
+    let mut k = 0usize;
+    while tmp != 0 {
+        let bit = tmp.trailing_zeros() as usize;
+        if s1[bit] != s2[t_flag_pos[k] as usize] {
+            transposition += 1;
+        }
+        tmp &= tmp - 1; // clear lowest set bit
         k += 1;
     }
 
@@ -534,6 +613,26 @@ mod tests {
             let ml = [40usize, 64, 65, 100, 128, 130, 200][(next(&mut rng) as usize) % 7];
             let a = gen(&mut rng, ml);
             let b = gen(&mut rng, ml);
+            check_pair(&a, &b);
+        }
+    }
+
+    #[test]
+    fn ascii_fast_path_parity_vs_rapidfuzz() {
+        // Hammer the ASCII single-block fast path (all chars < 128, len1 <= 64)
+        // directly vs rapidfuzz. The generic HashMap path is proven vs rapidfuzz
+        // above, so fast==rapidfuzz + generic==rapidfuzz => fast==generic. An
+        // ASCII-only alphabet (no 'é') guarantees every pair takes the fast path.
+        const ASCII: &[char] = &['a', 'b', 'c', 'd', 'e', 'f', '1', '2', ' ', '\'', '-'];
+        let mut rng: u64 = 0xDEAD_BEEF_0BAD_F00D;
+        let geni = |rng: &mut u64, max: usize| -> String {
+            let len = (next(rng) as usize) % (max + 1);
+            (0..len).map(|_| ASCII[(next(rng) as usize) % ASCII.len()]).collect()
+        };
+        for _ in 0..60_000 {
+            let ml = [1usize, 2, 3, 6, 12, 24, 40, 64][(next(&mut rng) as usize) % 8];
+            let a = geni(&mut rng, ml);
+            let b = geni(&mut rng, ml);
             check_pair(&a, &b);
         }
     }
