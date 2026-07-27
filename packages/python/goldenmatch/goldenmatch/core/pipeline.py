@@ -4079,8 +4079,21 @@ def _run_dedupe_pipeline(
             return None
         if not _pair_score_view_cache:
             from goldenmatch.core.cluster_pairscores import ClusterPairScores
+            _raw_pairs = all_pairs
+            if not _raw_pairs and _use_fs_columnar and _columnar_pairs_df is not None:
+                # B2c: the raw scored pairs live in the Arrow table, not
+                # all_pairs (which B2c never builds). Materialize (a, b, score)
+                # from it HERE -- only reached when a pair-score consumer
+                # (confidence_majority survivorship / lineage provenance) actually
+                # needs them; the fast-eligible golden path never calls this, so
+                # the O(pairs) list is NOT built on the hot path. Without this the
+                # frames-out B2c golden would silently degrade confidence_majority
+                # to count-majority (regression vs the old dict-path B2c, which
+                # carried pair_scores).
+                _d = _columnar_pairs_df.to_pydict()
+                _raw_pairs = list(zip(_d["id_a"], _d["id_b"], _d["score"]))
             _pair_score_view_cache.append(
-                ClusterPairScores.from_frames(cluster_frames.assignments, all_pairs)
+                ClusterPairScores.from_frames(cluster_frames.assignments, _raw_pairs)
             )
         return _pair_score_view_cache[0]
 

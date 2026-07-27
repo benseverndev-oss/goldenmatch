@@ -149,5 +149,46 @@ def test_columnar_path_carries_review_band(monkeypatch):
     assert res.review_pairs, "columnar path must still attach the review band"
 
 
+def test_columnar_threads_pair_scores_into_confidence_majority(monkeypatch):
+    """B2c empties `all_pairs`, so confidence_majority survivorship must source
+    per-pair edge scores from the Arrow table -- else golden silently degrades to
+    count-majority (regression vs the old dict-path B2c). Assert the columnar
+    (default) golden EQUALS the list-path (=0) golden for a confidence_majority
+    config, AND that the list path actually exercised confidence-weighting (the
+    fixture diverges from count-majority), so the equality is meaningful."""
+    import goldenmatch as gm
+    from goldenmatch.config.schemas import GoldenRulesConfig
+
+    monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
+    monkeypatch.setenv("GOLDENMATCH_FS_WORKERS", "1")
+    df = pl.DataFrame({
+        "block": ["B", "B", "B", "B"],
+        "link": ["globex international", "globex intl group",
+                 "globex international co", "globex international co"],
+        "name": ["Alpha", "Alpha", "Bravo", "Bravo"],
+    })
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(name="link", type="probabilistic", fields=[
+            MatchkeyField(field="link", scorer="jaro_winkler", levels=3, partial_threshold=0.8),
+        ])],
+        blocking=BlockingConfig(keys=[BlockingKeyConfig(fields=["block"])], strategy="static"),
+        golden_rules=GoldenRulesConfig(default_strategy="confidence_majority"),
+        backend="bucket",
+    )
+
+    def _golden_names(flag):
+        if flag is None:
+            monkeypatch.delenv("GOLDENMATCH_FS_COLUMNAR_CLUSTER", raising=False)
+        else:
+            monkeypatch.setenv("GOLDENMATCH_FS_COLUMNAR_CLUSTER", flag)
+        res = gm.dedupe_df(df, config=cfg, confidence_required=False)
+        assert res.golden is not None
+        return sorted(res.golden.column("name")[i].as_py() for i in range(res.golden.num_rows))
+
+    off = _golden_names("0")      # list path (threads pair scores from all_pairs)
+    on = _golden_names(None)      # B2c default-on (must thread from the Arrow table)
+    assert on == off, f"B2c golden {on} != list-path golden {off} -- pair scores lost on B2c"
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
