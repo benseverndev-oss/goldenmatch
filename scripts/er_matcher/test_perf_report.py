@@ -9,6 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import gpu_tiers  # noqa: E402,I001
 import perf_report as pr  # noqa: E402,I001
 
 
@@ -89,6 +90,42 @@ def test_gate_nogo_on_oom():
     g = pr.evaluate_perf_gate(m)
     assert g.go is False
     assert any(c["check"] == "memory" and not c["passed"] for c in g.checks)
+
+
+def test_extrapolate_on_tier_prices_at_tier_rate():
+    tier = gpu_tiers.Tier("L4", 24.0, 0.80)
+    ext = pr.extrapolate_on_tier(
+        smoke_steps=100, smoke_wall_s=200.0, total_steps=5000, tier=tier,
+    )
+    assert ext["tier"] == "L4"
+    assert ext["s_per_step"] == 2.0
+    assert abs(ext["full_cost_usd"] - ext["full_wall_h"] * tier.usd_per_hour) < 1e-9
+
+    # consistent with extrapolate_full_run given the same rate
+    full = pr.extrapolate_full_run(
+        smoke_steps=100, smoke_wall_s=200.0, total_steps=5000,
+        gpu_cost_per_hour_usd=tier.usd_per_hour,
+    )
+    assert ext["s_per_step"] == full["s_per_step"]
+    assert ext["full_wall_s"] == full["full_wall_s"]
+    assert ext["full_wall_h"] == full["full_wall_h"]
+    assert ext["full_cost_usd"] == full["full_cost_usd"]
+
+
+def test_extrapolate_cheapest_picks_l4_when_it_fits():
+    metrics = {"peak_mem_gb": 19.5, "smoke_steps": 100, "smoke_wall_s": 200.0}
+    ext = pr.extrapolate_cheapest(metrics, total_steps=5000)
+    assert ext["tier"] == "L4"
+    assert ext["usd_per_hour"] == 0.80
+    assert abs(ext["full_cost_usd"] - ext["full_wall_h"] * 0.80) < 1e-9
+
+
+def test_extrapolate_cheapest_picks_a100_40gb_when_needed():
+    metrics = {"peak_mem_gb": 30.0, "smoke_steps": 100, "smoke_wall_s": 200.0}
+    ext = pr.extrapolate_cheapest(metrics, total_steps=5000)
+    assert ext["tier"] == "A100-40GB"
+    assert ext["usd_per_hour"] == 2.10
+    assert abs(ext["full_cost_usd"] - ext["full_wall_h"] * 2.10) < 1e-9
 
 
 def test_cli_flags_override_metrics(tmp_path):

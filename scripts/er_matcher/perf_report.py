@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import gpu_tiers
+
 
 # --- extrapolation (pure) ----------------------------------------------------
 def extrapolate_full_run(
@@ -52,6 +54,40 @@ def extrapolate_full_run(
         "full_wall_h": full_wall_h,
         "full_cost_usd": full_wall_h * gpu_cost_per_hour_usd,
     }
+
+
+def extrapolate_on_tier(
+    *,
+    smoke_steps: int,
+    smoke_wall_s: float,
+    total_steps: int,
+    tier: gpu_tiers.Tier,
+) -> dict[str, float | str]:
+    """Same projection as ``extrapolate_full_run`` but priced at ``tier``'s
+    ``usd_per_hour``. Reuses ``extrapolate_full_run`` for the step-rate math
+    (one source of truth) and tags the result with the tier name."""
+    ext = extrapolate_full_run(
+        smoke_steps=smoke_steps,
+        smoke_wall_s=smoke_wall_s,
+        total_steps=total_steps,
+        gpu_cost_per_hour_usd=tier.usd_per_hour,
+    )
+    return {**ext, "tier": tier.name}
+
+
+def extrapolate_cheapest(metrics: dict[str, Any], total_steps: int) -> dict[str, float | str]:
+    """Pick the cheapest GPU tier that fits ``metrics["peak_mem_gb"]`` (via
+    ``gpu_tiers.select_cheapest_tier``) and extrapolate the full-run cost on
+    it. Returns the ``extrapolate_on_tier`` dict, including the chosen
+    ``tier`` name and its ``usd_per_hour``."""
+    tier = gpu_tiers.select_cheapest_tier(metrics["peak_mem_gb"])
+    ext = extrapolate_on_tier(
+        smoke_steps=metrics["smoke_steps"],
+        smoke_wall_s=metrics["smoke_wall_s"],
+        total_steps=total_steps,
+        tier=tier,
+    )
+    return {**ext, "usd_per_hour": tier.usd_per_hour}
 
 
 def learning_curve_slope(curve: list[dict[str, float]]) -> float:
