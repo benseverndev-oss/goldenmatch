@@ -27,7 +27,7 @@ sources:
     weight: 1.0
     kwargs:
       root: data/er_matcher/raw/leipzig/abt_buy
-      block_fields: [title]
+      block_fields: [name]
 
   amazon_google:
     loader: leipzig
@@ -38,7 +38,7 @@ sources:
     weight: 1.0
     kwargs:
       root: data/er_matcher/raw/leipzig/amazon_google
-      block_fields: [title]
+      block_fields: [name]
 
   dblp_acm:
     loader: leipzig
