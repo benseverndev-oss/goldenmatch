@@ -16,6 +16,7 @@ import warnings
 from pathlib import Path
 
 from sources.base import Row
+from sources.csv_tables import read_id_table
 from sources.negatives import synth_negatives
 from sources.splits import split_of
 
@@ -62,18 +63,6 @@ class LeipzigSource:
         self.test_frac = test_frac
         self.hard_frac = hard_frac
 
-    def _read_table(self, filename: str, prefix: str) -> dict[str, dict]:
-        """Read one Leipzig record table, namespacing every id with `prefix`
-        (`"A:"`/`"B:"`) so A-side and B-side ids never collide when merged
-        into one `entities` dict for blocking/negative-sampling."""
-        entities: dict[str, dict] = {}
-        with open(self.root / filename, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                native_id = row["id"]
-                fields = {k: v for k, v in row.items() if k != "id"}
-                entities[f"{prefix}:{native_id}"] = fields
-        return entities
-
     def _read_gold_pairs(self) -> list[tuple[str, str]]:
         pairs: list[tuple[str, str]] = []
         with open(self.root / "mapping.csv", newline="", encoding="utf-8") as f:
@@ -95,8 +84,8 @@ class LeipzigSource:
 
     def splits(self) -> dict[str, list[Row]]:
         entities: dict[str, dict] = {
-            **self._read_table("tableA.csv", "A"),
-            **self._read_table("tableB.csv", "B"),
+            **read_id_table(self.root, "tableA.csv", "A"),
+            **read_id_table(self.root, "tableB.csv", "B"),
         }
         gold_pairs = self._read_gold_pairs()
         # Order-normalized so a sampled negative is caught regardless of

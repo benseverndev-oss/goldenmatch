@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from pathlib import Path
 
+import pytest
 from sources.magellan import MagellanSource
 
 FIX = Path(__file__).parent / "tests" / "fixtures" / "magellan_mini"
@@ -93,10 +94,5 @@ def test_load_from_dir_no_network_on_local_fixture(monkeypatch):
 def test_fetch_guard_raises_without_env_var(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_ALLOW_FETCH", raising=False)
     src = MagellanSource(name="mini_products", root=Path("/nonexistent"), domain="product")
-    try:
+    with pytest.raises(RuntimeError, match="GOLDENMATCH_ALLOW_FETCH"):
         src.fetch()
-        raised = False
-    except RuntimeError as e:
-        raised = True
-        assert "GOLDENMATCH_ALLOW_FETCH" in str(e)
-    assert raised

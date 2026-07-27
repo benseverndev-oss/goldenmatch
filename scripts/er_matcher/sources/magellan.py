@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 
 from sources.base import Row
+from sources.csv_tables import read_id_table
 
 # Split file name -> canonical split key. DeepMatcher's on-disk name for the
 # validation split is `valid.csv`, but the rest of the pipeline (and Row's
@@ -51,30 +52,19 @@ class MagellanSource:
         self.root = Path(root)
         self.domain = domain
 
-    def _read_table(self, filename: str, prefix: str) -> dict[str, dict]:
-        """Read one Magellan record table, namespacing every id with `prefix`
-        (`"A"`/`"B"`) so A-side and B-side ids never collide."""
-        records: dict[str, dict] = {}
-        with open(self.root / filename, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                native_id = row["id"]
-                fields = {k: v for k, v in row.items() if k != "id"}
-                records[f"{prefix}:{native_id}"] = fields
-        return records
-
     def _read_split(self, filename: str, table_a: dict, table_b: dict) -> list[Row]:
         rows: list[Row] = []
         with open(self.root / filename, newline="", encoding="utf-8") as f:
-            for line in csv.DictReader(f):
-                ltable_id = line["ltable_id"]
-                rtable_id = line["rtable_id"]
+            for row in csv.DictReader(f):
+                ltable_id = row["ltable_id"]
+                rtable_id = row["rtable_id"]
                 eid_a = f"A:{ltable_id}"
                 eid_b = f"B:{rtable_id}"
                 rows.append(
                     {
                         "a": table_a[eid_a],
                         "b": table_b[eid_b],
-                        "label": "match" if int(line["label"]) == 1 else "no_match",
+                        "label": "match" if int(row["label"]) == 1 else "no_match",
                         "domain": self.domain,
                         "source": "magellan",
                         "dataset": self.name,
@@ -91,8 +81,8 @@ class MagellanSource:
     def load_from_dir(self) -> dict[str, list[Row]]:
         """PURE, no network: parse an already-fetched Magellan dataset
         directory into the three canonical splits."""
-        table_a = self._read_table("tableA.csv", "A")
-        table_b = self._read_table("tableB.csv", "B")
+        table_a = read_id_table(self.root, "tableA.csv", "A")
+        table_b = read_id_table(self.root, "tableB.csv", "B")
         return {
             split: self._read_split(fname, table_a, table_b)
             for split, fname in _SPLIT_FILES.items()
