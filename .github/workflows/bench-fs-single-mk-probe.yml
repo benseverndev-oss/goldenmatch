@@ -33,7 +33,7 @@ on:
         default: "single-mk"
 
 permissions:
-  contents: read
+  contents: write  # fetch_or_gen_fixture.sh caches the fixture as a release asset
 
 jobs:
   probe:
@@ -54,13 +54,13 @@ jobs:
         run: uv pip install -e packages/python/goldenmatch
       - name: Build native extension (FS native path measurable)
         run: uv run python scripts/build_native.py
-      - name: Generate ${{ inputs.n_records }}-row fixture
+      - name: Fetch-or-generate fixture (cached as a bench-fixtures release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p .profile_tmp/scale_fixtures
-          .venv/bin/python scripts/scale_audit_5m_generate.py \
-            --n-records ${{ inputs.n_records }} \
-            --dupe-rate ${{ inputs.dupe_rate }} \
-            --output .profile_tmp/scale_fixtures/synthetic_bench.csv
+          bash scripts/fetch_or_gen_fixture.sh \
+            "${{ inputs.n_records }}" "${{ inputs.dupe_rate }}" \
+            .profile_tmp/scale_fixtures/synthetic_bench.csv
       - name: Apply FS columnar-cluster (B2c) override (if set)
         if: ${{ inputs.columnar != '' }}
         run: echo "GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}" >> $GITHUB_ENV
