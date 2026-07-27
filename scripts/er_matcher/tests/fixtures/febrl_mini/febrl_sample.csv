@@ -1,0 +1,14 @@
+rec_id,given_name,surname,street,suburb,postcode,phone,soc_sec_id
+rec-0-org,john,smith,12 high st,sydney,2000,0298765432,1234567
+rec-0-dup-0,jon,smith,12 high street,sydney,2000,0298765432,1234567
+rec-1-org,mary,jones,45 park rd,melbourne,3000,0387654321,2345678
+rec-1-dup-0,mary,jones,45 park road,melbourne,3000,0387654321,2345678
+rec-1-dup-1,mari,jones,45 park rd,melbourne,3000,0387654322,2345678
+rec-2-org,peter,smith,78 queen st,brisbane,4000,0734567890,3456789
+rec-2-dup-0,pete,smith,78 queen street,brisbane,4000,0734567890,3456789
+rec-3-org,susan,brown,23 king st,perth,6000,0812345678,4567890
+rec-4-org,david,jones,56 elm st,adelaide,5000,0823456789,5678901
+rec-5-org,linda,taylor,89 oak ave,hobart,7000,0362345678,6789012
+rec-5-dup-0,lynda,taylor,89 oak avenue,hobart,7000,0362345678,6789012
+rec-6-dup-0,karen,wilson,10 river rd,darwin,800,0889876543,7890123
+rec-6-dup-1,caren,wilson,10 river road,darwin,800,0889876543,7890123
