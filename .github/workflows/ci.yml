@@ -3749,7 +3749,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      GOLDENMATCH_NATIVE: "0"
+      # Native-on. The throughput tier's PROFILING pass (the autoconfig
+      # controller sample) scores a full NxN fuzzy field matrix over the text
+      # column; on document-length text only the bit-parallel Rust kernel
+      # (score-core::strsim) is fast enough -- naive DP / pure-Python hang the
+      # profiling past run_goldenmatch's watchdog at this 1500-doc workload
+      # (rapidfuzz's bit-parallel cdist used to hide that cost before #2159).
+      # The gate's verdict metrics (candidate_pairs / reduction_ratio /
+      # measured_recall) are byte-identical native-vs-pure-Python, so the
+      # committed baseline stays valid; native only changes SPEED. build_native.py
+      # drops goldenmatch._native below (mirrors the autoconfig quality lane).
       POLARS_SKIP_CPU_CHECK: "1"
       # Clean, reproducible CI runs (no cross-run memory db).
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
@@ -3771,6 +3780,16 @@ jobs:
       - run: uv sync --all-packages --no-install-package goldenmatch-native --no-install-package goldenflow-native
       - run: uv pip install -e packages/python/goldenmatch
       - run: uv pip install duckdb
+      # Build the native bit-parallel kernel so the controller's fuzzy profiling
+      # pass runs on it (see the job env comment). build_native.py drops
+      # goldenmatch._native into the package, exactly as the autoconfig quality
+      # lane does.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          workspaces: packages/rust/extensions/native
+      - name: Build native ext (throughput profiling runs on the bit-parallel kernel)
+        run: uv run python scripts/build_native.py
       - name: Bench harness unit tests
         # --timeout converts any hang into a per-test traceback (the bench tests
         # spawn tier subprocesses; a network/model stall must fail actionably).
