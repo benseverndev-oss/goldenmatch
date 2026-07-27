@@ -53,13 +53,22 @@ jobs:
       - name: Install profilers
         run: |
           set +e
-          .venv/bin/python -m pip install py-spy
+          # py-spy: prebuilt static musl binary (uv venvs ship no pip, so
+          # `.venv/bin/python -m pip install` fails). Bulletproof, no build.
+          PYSPY_VER=v0.4.0
+          curl -fsSL "https://github.com/benfred/py-spy/releases/download/${PYSPY_VER}/py-spy-${PYSPY_VER}-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/pyspy.tgz \
+            && tar -xzf /tmp/pyspy.tgz -C /usr/local/bin py-spy \
+            && sudo chmod +x /usr/local/bin/py-spy
+          echo "py-spy: $(py-spy --version 2>&1 || echo MISSING)"
           cargo install flamegraph inferno --quiet
+          echo "flamegraph bin: $(ls -la ~/.cargo/bin/flamegraph 2>&1 || echo MISSING)"
+          echo "inferno bin: $(ls ~/.cargo/bin/inferno-flamegraph 2>&1 || echo MISSING)"
           sudo apt-get update -y
           sudo apt-get install -y linux-tools-common linux-tools-generic
           sudo apt-get install -y "linux-tools-$(uname -r)" || echo "kernel-matched perf tools unavailable (perf may be limited)"
           sudo sysctl -w kernel.perf_event_paranoid=-1 || true
           sudo sysctl -w kernel.kptr_restrict=0 || true
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
           echo "perf: $(which perf || echo MISSING)"; perf --version || true
       - name: Fetch-or-generate fixture
         env:
@@ -73,7 +82,7 @@ jobs:
           set +e
           export GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}
           export GOLDENMATCH_NATIVE=1 GOLDENMATCH_FS_NATIVE=1
-          .venv/bin/py-spy record --native --rate 250 --format raw \
+          py-spy record --native --rate 250 --format raw \
             -o folded_pyspy.txt -- \
             .venv/bin/python scripts/bench_fs_single_mk_probe.py \
             .profile_tmp/fx/fixture.csv --block "${{ inputs.block }}"
