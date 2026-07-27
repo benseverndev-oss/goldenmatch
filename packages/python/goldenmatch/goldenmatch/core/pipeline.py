@@ -113,22 +113,31 @@ def _fs_arrow_stream_enabled() -> bool:
 
 
 def _fs_columnar_cluster_enabled() -> bool:
-    """``GOLDENMATCH_FS_COLUMNAR_CLUSTER`` (default OFF) opts the eligible FS
-    bucket dedupe path onto B2c (#1811): the Arrow pair stream is threaded
-    STRAIGHT to the columnar cluster path (``build_clusters_columnar`` +
-    ``_columnar_pairs_df``), so the driver-resident ``all_pairs`` Python
-    ``list[tuple]`` is NEVER built. At 14M on tight-blocking/dup-dense data the
-    above-threshold pair set runs to hundreds of millions of tuples (~150 B
-    each) held on the driver through scoring -> clustering -- the late-stage OOM
-    of #1811. Superset of ``GOLDENMATCH_FS_ARROW_STREAM`` (B2b, which only drops
-    the ``matched_pairs`` exclude set): B2c uses the Arrow emit unconditionally
-    when active and reuses the shipped, parity-gated columnar cluster/dedup
-    downstream. Clusters are NOT byte-identical to the list path (the FS bucket
-    pipeline is ~0.1%-nondeterministic run-to-run regardless); parity is a
-    pair-set-overlap gate, not byte equality."""
-    return os.environ.get(
-        "GOLDENMATCH_FS_COLUMNAR_CLUSTER", "0"
-    ).strip().lower() in ("1", "true", "yes")
+    """``GOLDENMATCH_FS_COLUMNAR_CLUSTER`` (**DEFAULT ON**; ``0``/``false``/``no``/
+    ``off`` forces the legacy list path) opts the eligible FS bucket dedupe path
+    onto B2c (#1811): the Arrow pair stream is threaded STRAIGHT to the columnar
+    cluster path (``build_clusters_columnar`` + ``_columnar_pairs_df``), so the
+    driver-resident ``all_pairs`` Python ``list[tuple]`` is NEVER built. At 14M
+    on tight-blocking/dup-dense data the above-threshold pair set runs to
+    hundreds of millions of tuples (~150 B each) held on the driver through
+    scoring -> clustering -- the late-stage OOM of #1811. Superset of
+    ``GOLDENMATCH_FS_ARROW_STREAM`` (B2b, which only drops the ``matched_pairs``
+    exclude set): B2c uses the Arrow emit unconditionally when active and reuses
+    the shipped, parity-gated columnar cluster/dedup downstream.
+
+    Default flipped ON (#2006): the eligibility gate (``_use_fs_columnar``, single
+    probabilistic matchkey, bucket route, no across-files/llm/boost/semantic)
+    already fences it to the exact scale route where the driver-resident pair
+    list is the peak; ineligible configs fall back to the list path unchanged.
+    Clusters are NOT byte-identical to the list path (the FS bucket pipeline is
+    ~0.1%-nondeterministic run-to-run regardless); parity is a pair-set-overlap
+    gate, not byte equality, so the flip changes the default output within that
+    run-to-run band only. ``GOLDENMATCH_FS_COLUMNAR_CLUSTER=0`` is the escape
+    hatch back to the exact legacy list path (the byte-parity oracle)."""
+    v = os.environ.get("GOLDENMATCH_FS_COLUMNAR_CLUSTER")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
 
 
 def _fs_scored_pairs_cap() -> int:
@@ -809,13 +818,27 @@ def _score_probabilistic_matchkey(
             # from_arrow of a pa.Table yields a DataFrame; narrow for pyright.
             assert isinstance(_cdf, _pl_b2c.DataFrame)
             if _cdf.height:
-                # Keep only the linked (>= link_threshold) pairs; the review band
-                # is not clustered (matches _split_pair_stream's `pairs`).
-                _cdf = _cdf.filter(_pl_b2c.col("score") >= link_threshold)
+                # Split link/review the same way _split_pair_stream (B2b) does, so
+                # the review queue survives on the columnar path. The Arrow table
+                # score_buckets_arrow emits is already floored at the review cut,
+                # so `score < link_threshold` is exactly the review band -- the
+                # linked set (>= link_threshold) stays columnar for clustering
+                # (the O(pairs) driver list B2c drops), while the comparatively
+                # bounded review band materializes to review_pairs as list[tuple],
+                # matching the list path's _split_probabilistic_pairs output.
+                _linked = _cdf.filter(_pl_b2c.col("score") >= link_threshold)
+                _review = _cdf.filter(_pl_b2c.col("score") < link_threshold)
+                if _review.height:
+                    _rd = _review.to_dict(as_series=False)
+                    review_pairs.extend(
+                        zip(_rd["id_a"], _rd["id_b"], _rd["score"])
+                    )
+            else:
+                _linked = _cdf
             if columnar_out is not None:
-                columnar_out.append(_cdf)
-            # matched_pairs intentionally NOT populated (single matchkey) and
-            # review_pairs left empty (no review queue on the columnar scale path).
+                columnar_out.append(_linked)
+            # matched_pairs intentionally NOT populated (single matchkey); the
+            # review band is carried above so the columnar path is review-complete.
             return
         _use_arrow_stream = (
             target_ids is None
@@ -3266,6 +3289,10 @@ def _run_dedupe_pipeline(
         and getattr(config, "semantic_blocking", None) is None
         and _mk0 is not None
         and getattr(_mk0, "type", None) == "probabilistic"
+        # Bench-dump needs the per-block candidate/emitted accounting the Arrow
+        # emit doesn't expose (same exclusion _fs_arrow_stream_eligible makes for
+        # B2b) -- fall back to the per-block loop when dumping pairs.
+        and os.environ.get("GOLDENMATCH_BENCH_DUMP_PAIRS") is None
         # _fs_use_bucket_route already excludes the true scale backends
         # (ray/duckdb/datafusion/chunked) while allowing backend "bucket"/None --
         # the routes B2c's Arrow emit + columnar cluster are valid for.

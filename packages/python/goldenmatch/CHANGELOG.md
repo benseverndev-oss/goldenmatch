@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Changed
+- **FS dedupe: columnar-cluster path (B2c) is now default-on (#1811/#2006).**
+  `GOLDENMATCH_FS_COLUMNAR_CLUSTER` flips from opt-in to **default-on**: an eligible
+  single-probabilistic-matchkey in-memory bucket dedupe threads the Arrow pair stream
+  straight to `build_clusters_columnar`, so the driver-resident `all_pairs`
+  `list[tuple]` is never built during scoring -> clustering (the late-stage OOM of
+  #1811; at 14M on tight-blocking data that list runs to hundreds of millions of
+  tuples). Confirmed at 14M on a 64 GB runner: completes at ~30 GB peak RSS where the
+  list path OOM-killed, F1 held (0.9422). The eligibility gate fences it to exactly
+  that scale route -- ineligible configs (multi-matchkey, `across_files_only`,
+  semantic blocking, bench-dump, non-bucket scale backends) fall back to the list
+  path unchanged. The columnar path now attaches the **review band** to
+  `review_pairs` (previously dropped when the flag was opt-in), so the review queue
+  survives the default flip. Clusters are not byte-identical to the list path (the FS
+  bucket pipeline is ~0.1%-nondeterministic run-to-run regardless), so the flip moves
+  the default output within that run-to-run band only. `GOLDENMATCH_FS_COLUMNAR_CLUSTER=0`
+  forces the legacy list path (the byte-parity oracle). `scored_pairs` above
+  `GOLDENMATCH_FS_SCORED_PAIRS_MAX` (default 50M) is shed with a `scored_pairs_shed=True`
+  marker, never silently.
 - **Identity resolve: SQLite bulk write fast-path.** `resolve_clusters` now routes
   brand-new clusters through a staging-table bulk write on the SQLite backend (not
   just Postgres): a per-connection TEMP staging table + `executemany` +
