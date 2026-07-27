@@ -1,0 +1,136 @@
+# Flamegraph the FS bucket dedupe path (Python + native Rust frames) to find
+# where bucket_score / golden actually spend time. workflow_dispatch only.
+#
+# Profiles the single-FS-matchkey probe (backend=bucket, the B2c path) with:
+#   - py-spy --native (reliable on cloud runners; folded stacks for analysis)
+#   - flamegraph-rs (perf-based; the SVG, best-effort -- perf/linux-tools can be
+#     absent on Azure-kernel runners)
+# Native built with CARGO_PROFILE_RELEASE_DEBUG=true so Rust frames resolve.
+name: flamegraph-fs-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_records:
+        description: "Fixture rows (2M gives plenty of samples in ~1min dedupe)"
+        default: "2000000"
+      dupe_rate:
+        default: "0.12"
+      block:
+        default: "last_name"
+      columnar:
+        description: "GOLDENMATCH_FS_COLUMNAR_CLUSTER (1 = B2c arrow frames-out)"
+        default: "1"
+
+permissions:
+  contents: write  # fetch_or_gen_fixture caches the fixture as a release asset
+
+jobs:
+  flame:
+    runs-on: large-new-64GB
+    timeout-minutes: 60
+    env:
+      GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "true"  # keep debuginfo in the release native .so
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Editable-install goldenmatch
+        run: uv pip install -e packages/python/goldenmatch
+      - name: Build native (with debug symbols)
+        run: uv run python scripts/build_native.py
+      - name: Assert native FS kernel loaded
+        run: |
+          .venv/bin/python -c "from goldenmatch.core._native_loader import native_enabled; \
+            assert native_enabled('block_scoring'), 'native NOT loaded'; print('native ON')"
+      - name: Install profilers
+        run: |
+          set +e
+          .venv/bin/python -m pip install py-spy
+          cargo install flamegraph inferno --quiet
+          sudo apt-get update -y
+          sudo apt-get install -y linux-tools-common linux-tools-generic
+          sudo apt-get install -y "linux-tools-$(uname -r)" || echo "kernel-matched perf tools unavailable (perf may be limited)"
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          sudo sysctl -w kernel.kptr_restrict=0 || true
+          echo "perf: $(which perf || echo MISSING)"; perf --version || true
+      - name: Fetch-or-generate fixture
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/fetch_or_gen_fixture.sh \
+            "${{ inputs.n_records }}" "${{ inputs.dupe_rate }}" \
+            .profile_tmp/fx/fixture.csv
+      - name: Profile with py-spy --native (folded stacks)
+        run: |
+          set +e
+          export GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}
+          export GOLDENMATCH_NATIVE=1 GOLDENMATCH_FS_NATIVE=1
+          .venv/bin/py-spy record --native --rate 250 --format raw \
+            -o folded_pyspy.txt -- \
+            .venv/bin/python scripts/bench_fs_single_mk_probe.py \
+            .profile_tmp/fx/fixture.csv --block "${{ inputs.block }}"
+          echo "py-spy exit: $?  lines: $(wc -l < folded_pyspy.txt 2>/dev/null || echo 0)"
+          ~/.cargo/bin/inferno-flamegraph folded_pyspy.txt > flame_pyspy.svg 2>/dev/null || true
+      - name: Profile with flamegraph-rs (perf, best-effort)
+        run: |
+          set +e
+          export GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}
+          export GOLDENMATCH_NATIVE=1 GOLDENMATCH_FS_NATIVE=1
+          ~/.cargo/bin/flamegraph --perfdata perf.data -o flame_perf.svg -- \
+            .venv/bin/python scripts/bench_fs_single_mk_probe.py \
+            .profile_tmp/fx/fixture.csv --block "${{ inputs.block }}"
+          echo "flamegraph exit: $?"
+          perf script -i perf.data 2>/dev/null | ~/.cargo/bin/inferno-collapse-perf > folded_perf.txt 2>/dev/null || true
+      - name: Top hot frames (self + total) to summary
+        run: |
+          .venv/bin/python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import collections, os
+          def load(p):
+              self_c=collections.Counter(); tot_c=collections.Counter(); total=0
+              if not os.path.exists(p): return self_c,tot_c,0
+              for line in open(p):
+                  line=line.rstrip("\n")
+                  if not line: continue
+                  try: stack,cnt=line.rsplit(" ",1); cnt=int(cnt)
+                  except ValueError: continue
+                  frames=stack.split(";")
+                  if not frames: continue
+                  total+=cnt
+                  self_c[frames[-1]]+=cnt
+                  for f in set(frames): tot_c[f]+=cnt
+              return self_c,tot_c,total
+          for label,p in [("py-spy (native)","folded_pyspy.txt"),("perf/flamegraph","folded_perf.txt")]:
+              s,t,total=load(p)
+              if not total:
+                  print(f"## {label}\n\n(no samples)\n"); continue
+              print(f"## {label} — {total:,} samples\n")
+              print("### Top 30 by SELF time\n\n| self% | samples | frame |\n|--:|--:|:--|")
+              for fr,c in s.most_common(30):
+                  print(f"| {100*c/total:4.1f}% | {c} | `{fr[:90]}` |")
+              print("\n### Frames matching score/bucket/golden/cluster (TOTAL time)\n\n| tot% | frame |\n|--:|:--|")
+              import re
+              pat=re.compile(r"score|bucket|golden|cluster|dedup|fs_|comparison|jaro|survivor",re.I)
+              rows=sorted(((c,fr) for fr,c in t.items() if pat.search(fr)),reverse=True)[:30]
+              for c,fr in rows:
+                  print(f"| {100*c/total:4.1f}% | `{fr[:90]}` |")
+              print()
+          PY
+      - name: Upload profiles
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: flamegraph-fs-probe
+          path: |
+            folded_pyspy.txt
+            folded_perf.txt
+            flame_pyspy.svg
+            flame_perf.svg
+          retention-days: 90
