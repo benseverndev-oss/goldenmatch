@@ -1643,6 +1643,27 @@ class IdentityStore:
         row = self._fetchone("SELECT COUNT(*) AS n FROM identity_relationships", ())
         return int(row["n"]) if row else 0
 
+    def list_relationships(
+        self, dataset: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """All relationship edges as ``{entity_a_id, entity_b_id, kind, field,
+        shared_value}`` (optionally dataset-scoped). Used by the GoldenGraph
+        export."""
+        if self._backend == "mongo":
+            raise NotImplementedError("list_relationships: not supported on mongo")
+        where = "" if dataset is None else " WHERE dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
+            f"FROM identity_relationships{where}",
+            params,
+        )
+        return [
+            {"entity_a_id": r["entity_a_id"], "entity_b_id": r["entity_b_id"],
+             "kind": r["kind"], "field": r["field"], "shared_value": r["shared_value"]}
+            for r in rows
+        ]
+
     def emit_event(
         self, event: IdentityEvent, *, return_id: bool = True
     ) -> int | None:

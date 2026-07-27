@@ -6,10 +6,12 @@ same resolve pass, idempotent across runs, and fan-out-capped.
 """
 from __future__ import annotations
 
+import json
+
 import polars as pl
 import pytest
 from goldenmatch.config.schemas import RelationshipRule
-from goldenmatch.identity import IdentityStore, resolve_clusters
+from goldenmatch.identity import IdentityStore, resolve_clusters, to_graph_batch
 
 
 @pytest.fixture()
@@ -119,3 +121,63 @@ def test_multiple_rules(store):
     kinds = {r["kind"] for r in store.get_relationships(
         store.find_entity_by_record("src:1"))}
     assert kinds == {"shares_phone", "same_area"}
+
+
+# ── GoldenGraph export ──────────────────────────────────────────────────────
+
+def test_to_graph_batch_shape(store):
+    df = _df([{"id": "1", "name": "Al", "phone": "555"},
+              {"id": "2", "name": "Bo", "phone": "555"}])
+    _resolve(store, df, _singletons(2), PHONE)
+    a = store.find_entity_by_record("src:1")
+    b = store.find_entity_by_record("src:2")
+
+    batch = to_graph_batch(store, "d", name_field="name")
+
+    # GoldenGraph StoreBatch shape + JSON-serializable (the append contract).
+    assert set(batch) == {"entities", "edges"}
+    json.dumps(batch)  # must not raise
+    assert len(batch["entities"]) == 2
+    assert len(batch["edges"]) == 1
+
+    # each entity carries its stable entity_id as the reconciliation record_key
+    by_key = {e["record_keys"][0]: e for e in batch["entities"]}
+    assert set(by_key) == {a, b}
+    assert {e["canonical_name"] for e in batch["entities"]} == {"Al", "Bo"}
+    for e in batch["entities"]:
+        assert e["typ"] == "entity"
+        assert isinstance(e["local_id"], int)
+
+    # the edge is the (subj_local, predicate, obj_local) triple over local ids
+    edge = batch["edges"][0]
+    assert edge["predicate"] == "shares_phone"
+    locals_ = {e["local_id"]: e["record_keys"][0] for e in batch["entities"]}
+    assert {locals_[edge["subj_local"]], locals_[edge["obj_local"]]} == {a, b}
+    assert edge["source_refs"] == ["555"]
+
+
+def test_to_graph_batch_empty(store):
+    df = _df([{"id": "1", "name": "Al", "phone": "555"},
+              {"id": "2", "name": "Bo", "phone": "999"}])
+    _resolve(store, df, _singletons(2), PHONE)  # no shared phone -> no edges
+    batch = to_graph_batch(store, "d")
+    assert batch == {"entities": [], "edges": []}
+
+
+def test_to_graph_batch_roundtrips_into_goldengraph(store):
+    """If goldengraph is installed, the exported batch appends into its PyStore
+    and the edge is queryable -- i.e. it feeds the path-retrieval layer."""
+    gg_store = pytest.importorskip("goldengraph.core")
+    PyStore = getattr(gg_store, "PyStore", None)
+    if PyStore is None:
+        pytest.skip("goldengraph PyStore unavailable")
+    df = _df([{"id": "1", "name": "Al", "phone": "555"},
+              {"id": "2", "name": "Bo", "phone": "555"}])
+    _resolve(store, df, _singletons(2), PHONE)
+    batch = to_graph_batch(store, "d", name_field="name")
+
+    ps = PyStore()
+    ps.append(json.dumps(batch))
+    dump = json.loads(ps.query())
+    preds = {e["predicate"] for e in dump.get("edges", [])}
+    assert "shares_phone" in preds

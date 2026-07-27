@@ -6049,7 +6049,9 @@
           "file": "packages/python/goldenmatch/goldenmatch/identity/relationships.py",
           "purpose": "Semantic-graph: entity<->entity relationship edges (#semantic-graph).",
           "defines": [
-            "build_relationships"
+            "_entity_name",
+            "build_relationships",
+            "to_graph_batch"
           ],
           "imports": [
             "goldenmatch.config.schemas",
