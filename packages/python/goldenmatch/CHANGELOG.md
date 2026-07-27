@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 ## [Unreleased]
 
 ### Changed
+- **FS dedupe: Arrow-native columnar-cluster path (B2c), default-on (#1811/#2006).**
+  A measure-first 5M profile pinned the FS scale wall at **clustering** (`cluster`
+  100.8s / 41%), not the native scoring kernel (`bucket_score` 70.8s / 28%). Root
+  cause: B2c's "columnar" cluster path rebuilt the full 16M-tuple Python list and
+  ran the legacy dict build (`build_clusters_columnar`) — per-cluster dicts + a
+  16M-key `pair_scores` dict — while the non-B2c list path already avoided all of
+  that via the frames-out `build_cluster_frames`. This routes B2c through the
+  frames-out path and makes it **Arrow end-to-end (no polars)**: the
+  `score_buckets_arrow` `pa.Table` is threaded straight into `build_cluster_frames`
+  (native arrow kernel → assignments/metadata); `build_cluster_frames` now accepts
+  a `pa.Table` first-class with a lazy pair-list (materialized only off-native or
+  for the rare oversized-split minority); `scored_pairs` is deduped via a new
+  Arrow-table kernel. `GOLDENMATCH_FS_COLUMNAR_CLUSTER` is flipped **default-on**
+  (`0`/`false` forces the legacy list path); bench-dump is excluded from B2c
+  eligibility; the review band still attaches to `review_pairs`. Weighted columnar
+  lane untouched. Clusters are overlap-parity to the list path (the FS bucket
+  pipeline is ~0.1%-nondeterministic run-to-run regardless).
 - **Identity resolve: SQLite bulk write fast-path.** `resolve_clusters` now routes
   brand-new clusters through a staging-table bulk write on the SQLite backend (not
   just Postgres): a per-connection TEMP staging table + `executemany` +
