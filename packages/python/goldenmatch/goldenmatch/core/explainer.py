@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rapidfuzz.distance import JaroWinkler, Levenshtein
-from rapidfuzz.fuzz import token_sort_ratio
-
 from goldenmatch.config.schemas import MatchkeyField
+from goldenmatch.core import strsim
 from goldenmatch.utils.transforms import apply_transforms, canonical_soundex
 
 
@@ -143,17 +141,17 @@ def _score_field(val_a: str | None, val_b: str | None, scorer: str) -> float | N
     if scorer == "exact":
         return 1.0 if val_a == val_b else 0.0
     elif scorer == "jaro_winkler":
-        return JaroWinkler.similarity(val_a, val_b)
+        return strsim.jaro_winkler_similarity(val_a, val_b)
     elif scorer == "levenshtein":
-        return Levenshtein.normalized_similarity(val_a, val_b)
+        return strsim.levenshtein_normalized_similarity(val_a, val_b)
     elif scorer == "token_sort":
-        return token_sort_ratio(val_a, val_b) / 100.0
+        return strsim.token_sort_ratio(val_a, val_b) / 100.0
     elif scorer == "soundex_match":
         ca = canonical_soundex(val_a)
         return 1.0 if ca and ca == canonical_soundex(val_b) else 0.0
     elif scorer == "ensemble":
-        jw = JaroWinkler.similarity(val_a, val_b)
-        ts = token_sort_ratio(val_a, val_b) / 100.0
+        jw = strsim.jaro_winkler_similarity(val_a, val_b)
+        ts = strsim.token_sort_ratio(val_a, val_b) / 100.0
         ca = canonical_soundex(val_a)
         sx = 0.8 if ca and ca == canonical_soundex(val_b) else 0.0
         return max(jw, ts, sx)

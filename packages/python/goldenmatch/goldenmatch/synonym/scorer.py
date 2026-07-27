@@ -11,8 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from rapidfuzz.distance import JaroWinkler
-from rapidfuzz.process import cdist
+
+from goldenmatch.core import strsim
 
 from .model import SynonymModel
 from .providers import resolve_synonym_model
@@ -54,14 +54,14 @@ class SynonymScorer:
         m = self._get_model().score(val_a, val_b)
         if m is not None:
             return float(m)
-        return float(JaroWinkler.similarity(val_a, val_b))
+        return float(strsim.jaro_winkler_similarity(val_a, val_b))
 
     def score_matrix(self, values: list[str | None]) -> np.ndarray:
         n = len(values)
         clean = [v if v is not None else "" for v in values]
         # Vectorized JW base (float32), mirroring refdata/scorer.py's cdist path.
         mat = np.asarray(
-            cdist(clean, clean, scorer=JaroWinkler.similarity), dtype=np.float32
+            strsim.pure_field_matrix(clean, "jaro_winkler"), dtype=np.float32
         )
         model = self._get_model()
         for i in range(n):

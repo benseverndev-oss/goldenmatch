@@ -18,9 +18,13 @@ description = "Canonical string scorers (jaro_winkler / levenshtein / token_sort
 name = "goldenmatch_score_core"
 
 [dependencies]
-# Same pin the `native` crate uses, so the scorers are byte-identical across the
-# native ext and the FFI UDFs (parity by construction — one source of truth).
-rapidfuzz = "0.5.0"
+# Fast, deterministic (non-DoS-resistant) hasher for the set-based scorers'
+# tiny fixed-size keys (`[char; 3]` q-grams, `&str` tokens). The default
+# SipHash is ~5-10x slower on such keys and buys nothing here: the sets are
+# per-call, never exposed to adversarial input, and set-membership is by key
+# equality so results are byte-identical to a SipHash set. Same crate the
+# `native` crate already depends on.
+rustc-hash = "2"
 # `soundex` replicates `jellyfish.soundex` byte-for-byte, incl. its Unicode step
 # `unicodedata.normalize("NFKD", s).upper()`; this provides the NFKD normalizer.
 unicode-normalization = "0.1"
@@ -38,3 +42,12 @@ regex = { version = "1", optional = true }
 default = ["alias"]
 # `alias` pulls in `regex` and compiles the alias_match (score_one id 8) subsystem.
 alias = ["dep:regex"]
+
+[dev-dependencies]
+# rapidfuzz is NO LONGER a shipped dependency — the scoring math is vendored in
+# `src/strsim.rs` (GoldenMatch owns its scorer primitives). It stays here ONLY
+# as the parity oracle: `strsim::tests::parity_vs_rapidfuzz_crate` proves the
+# vendored fns are byte-for-byte identical to the crate over a large corpus, so
+# the swap carries zero output drift. Drop this dev-dep once the vendored path
+# has soaked (the parity thesis is then locked by the cross-surface fixtures).
+rapidfuzz = "0.5.0"

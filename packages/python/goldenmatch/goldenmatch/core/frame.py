@@ -16,7 +16,6 @@ parity test.
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -1944,27 +1943,21 @@ class ArrowFrame:
 
 
 def is_polars_lazyframe(obj: Any) -> bool:
-    """Import-free type guard (D6 zero-polars gate): a pl.LazyFrame can only
-    exist if polars is already imported, so an unloaded polars means False
-    without triggering the lazy proxy."""
-    import sys
-
-    if "polars" not in sys.modules:
-        return False
-    import polars as _pl
-
-    return isinstance(obj, _pl.LazyFrame)
+    """Import-free type guard (D6 zero-polars gate). Detects a polars LazyFrame
+    STRUCTURALLY, by its own class module + name, so it never triggers the lazy
+    proxy AND stays correct when a co-located test transiently drops polars from
+    ``sys.modules`` (the arrow/no-polars lanes do this) or drops-then-reimports it
+    (which would split ``isinstance`` on class identity across the two module
+    objects). A non-polars obj is never matched, so the polars-free guarantee
+    holds."""
+    t = type(obj)
+    return t.__module__.partition(".")[0] == "polars" and t.__name__ == "LazyFrame"
 
 
 def is_polars_dataframe(obj: Any) -> bool:
     """Import-free type guard (see is_polars_lazyframe)."""
-    import sys
-
-    if "polars" not in sys.modules:
-        return False
-    import polars as _pl
-
-    return isinstance(obj, _pl.DataFrame)
+    t = type(obj)
+    return t.__module__.partition(".")[0] == "polars" and t.__name__ == "DataFrame"
 
 
 def to_frame(obj: Any) -> Frame:
@@ -1986,7 +1979,11 @@ def to_frame(obj: Any) -> Frame:
         return ArrowFrame(obj)
     if isinstance(obj, dict):
         return ArrowFrame(pa.table(obj))
-    if "polars" in sys.modules and isinstance(obj, pl.DataFrame):
+    # Structural polars detection (see is_polars_dataframe): robust to a
+    # co-located test transiently dropping polars from sys.modules and to the
+    # class-identity split if it drops-then-reimports, and never imports polars
+    # just to reject a non-polars input (arrow-lane polars-free guarantee).
+    if is_polars_dataframe(obj):
         return PolarsFrame(obj)
     raise TypeError(
         f"to_frame expects a polars DataFrame, pyarrow Table, dict of arrow "

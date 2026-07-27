@@ -47,6 +47,13 @@ throughput:
   - 'packages/python/goldenmatch/goldenmatch/core/autoconfig_planner.py'
   - 'packages/python/goldenmatch/goldenmatch/config/schemas.py'
   - 'scripts/bench_corpus_dedup/**'
+  # The gate now builds + runs the native bit-parallel scoring kernel for the
+  # controller's fuzzy profiling pass, so a change to the scoring cores (or the
+  # pyo3 wrapper) must re-run it -- a kernel regression there is exactly what
+  # would re-slow (or drift) the profiling.
+  - 'packages/rust/extensions/score-core/**'
+  - 'packages/rust/extensions/native/**'
+  - 'packages/python/goldenmatch/goldenmatch/core/strsim.py'
   - '.github/workflows/ci.yml'
 python_goldencheck:
   - 'packages/python/goldencheck/**'

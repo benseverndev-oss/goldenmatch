@@ -150,9 +150,8 @@ def _vec_field_matrix(values: list, scorer_name: str):
     scorers in ``_VEC_SUPPORTED`` reach here.
     """
     import numpy as np
-    from rapidfuzz.distance import JaroWinkler, Levenshtein
-    from rapidfuzz.fuzz import token_sort_ratio
-    from rapidfuzz.process import cdist
+
+    from goldenmatch.core import strsim
 
     if scorer_name == "soundex_match":
         from goldenmatch.core.scorer import _soundex_score_matrix
@@ -172,18 +171,18 @@ def _vec_field_matrix(values: list, scorer_name: str):
         # ensemble vec form agrees with `_ensemble_score_single`'s canonical
         # soundex empty-code-guard semantics (garbage/empty never matches).
         from goldenmatch.core.scorer import _soundex_score_matrix
-        jw = np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
-        ts = np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+        jw = np.asarray(strsim.pure_field_matrix(values, "jaro_winkler", "float64"))
+        ts = np.asarray(strsim.pure_field_matrix(values, "token_sort", "float64")) / 100.0
         sx = _soundex_score_matrix(values).astype(np.float64) * 0.8
         return np.maximum(np.maximum(jw, ts), sx)
     if scorer_name == "jaro_winkler":
-        return np.asarray(cdist(values, values, scorer=JaroWinkler.similarity, dtype=np.float64))
+        return np.asarray(strsim.pure_field_matrix(values, "jaro_winkler", "float64"))
     if scorer_name == "levenshtein":
         return np.asarray(
-            cdist(values, values, scorer=Levenshtein.normalized_similarity, dtype=np.float64)
+            strsim.pure_field_matrix(values, "levenshtein", "float64")
         )
     # token_sort: rapidfuzz returns 0-100; per-pair divides by 100.0 (same op order).
-    return np.asarray(cdist(values, values, scorer=token_sort_ratio, dtype=np.float64)) / 100.0
+    return np.asarray(strsim.pure_field_matrix(values, "token_sort", "float64")) / 100.0
 
 
 def _score_block_vec(
@@ -601,14 +600,14 @@ def _resolve_score_pair_callable(
     the final dedupe output was byte-identical with it OFF.
     """
     if scorer_name == "jaro_winkler":
-        from rapidfuzz.distance import JaroWinkler
-        return JaroWinkler.similarity
+        from goldenmatch.core import strsim
+        return strsim.jaro_winkler_similarity
     if scorer_name == "levenshtein":
-        from rapidfuzz.distance import Levenshtein
-        return Levenshtein.normalized_similarity
+        from goldenmatch.core import strsim
+        return strsim.levenshtein_normalized_similarity
     if scorer_name == "token_sort":
-        from rapidfuzz.fuzz import token_sort_ratio
-        return lambda a, b: token_sort_ratio(a, b) / 100.0
+        from goldenmatch.core import strsim
+        return lambda a, b: strsim.token_sort_ratio(a, b) / 100.0
     if scorer_name == "exact":
         return lambda a, b: 1.0 if a == b else 0.0
     if scorer_name == "soundex_match":
