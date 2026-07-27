@@ -18,7 +18,20 @@ from rapidfuzz.distance import (  # noqa: E402
     JaroWinkler,
     Levenshtein,
 )
+from rapidfuzz.fuzz import partial_ratio as rf_partial_ratio  # noqa: E402
+from rapidfuzz.fuzz import ratio as rf_ratio  # noqa: E402
 from rapidfuzz.fuzz import token_sort_ratio as rf_token_sort_ratio  # noqa: E402
+
+# Realistic column-name corpus for partial_ratio (the only consumer,
+# core/schema_match.py, sees column names — not adversarial strings).
+_COLUMN_NAMES = [
+    "first_name", "last_name", "surname", "fname", "lname", "full_name", "name",
+    "customer_id", "cust_id", "id", "email", "email_address", "phone",
+    "phone_number", "telephone", "addr", "address", "street", "city", "zip",
+    "zipcode", "postal_code", "dob", "date_of_birth", "birth_date", "birthdate",
+    "ssn", "company", "company_name", "org", "organization", "account_number",
+    "acct_no", "created_at", "updated_at", "user_id", "uid",
+]
 
 # Small alphabet forces frequent matches / transpositions / repeats -- the exact
 # regime where jaro transposition order and DL transposition edges bite.
@@ -81,6 +94,31 @@ def test_damerau_levenshtein_distance_identical():
         assert strsim.damerau_levenshtein_distance(a, b) == DamerauLevenshtein.distance(
             a, b
         ), (a, b)
+
+
+def test_ratio_byte_identical():
+    for a, b in _pairs():
+        assert _bits(strsim.ratio(a, b)) == _bits(rf_ratio(a, b)), (a, b)
+
+
+def test_partial_ratio_exact_on_containment_and_faithful_elsewhere():
+    # partial_ratio is a FAITHFUL approximation of rapidfuzz's local-alignment
+    # partial_ratio (see strsim docstring). Its consumer (schema_match) keys on
+    # substring containment, where it must be EXACT; elsewhere it stays close.
+    total_err = 0.0
+    n = 0
+    for a in _COLUMN_NAMES:
+        for b in _COLUMN_NAMES:
+            got = strsim.partial_ratio(a, b)
+            ref = rf_partial_ratio(a, b)
+            if a in b or b in a:  # containment -> exact 100, byte-identical
+                assert _bits(got) == _bits(ref), ("containment", a, b)
+            total_err += abs(got - ref)
+            n += 1
+    assert total_err / n < 0.5, f"mean abs error {total_err / n} too high"
+    # empty-string edges (rapidfuzz: "","" -> 100; one empty -> 0)
+    assert strsim.partial_ratio("", "") == rf_partial_ratio("", "")
+    assert strsim.partial_ratio("x", "") == rf_partial_ratio("x", "")
 
 
 def test_token_sort_ratio_byte_identical():

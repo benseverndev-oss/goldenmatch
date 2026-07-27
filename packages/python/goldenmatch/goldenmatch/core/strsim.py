@@ -33,7 +33,9 @@ __all__ = [
     "levenshtein_distance",
     "levenshtein_normalized_similarity",
     "indel_normalized_similarity",
+    "ratio",
     "token_sort_ratio",
+    "partial_ratio",
     "damerau_levenshtein_distance",
     "pure_field_matrix",
 ]
@@ -207,6 +209,13 @@ def indel_normalized_similarity(s1: str, s2: str) -> float:
     return 1.0 - (dist / maximum)
 
 
+def ratio(s1: str, s2: str) -> float:
+    """== rapidfuzz ``fuzz.ratio`` (0-100 scale): the Indel normalized similarity
+    scaled to [0, 100]. Byte-identical to the crate (proven in the strsim parity
+    test's realistic corpus)."""
+    return indel_normalized_similarity(s1, s2) * 100.0
+
+
 def token_sort_ratio(s1: str, s2: str) -> float:
     """== rapidfuzz ``fuzz.token_sort_ratio`` (0-100 scale): Indel ratio over
     whitespace-split, code-point-sorted, space-joined tokens. No case
@@ -215,6 +224,42 @@ def token_sort_ratio(s1: str, s2: str) -> float:
     a = " ".join(sorted(s1.split()))
     b = " ".join(sorted(s2.split()))
     return indel_normalized_similarity(a, b) * 100.0
+
+
+def partial_ratio(s1: str, s2: str) -> float:
+    """Best Indel ratio of the shorter string against any (edge-overhang)
+    window of the longer, on the 0-100 scale — the substring-tolerant matcher
+    ``rapidfuzz.fuzz.partial_ratio`` provides.
+
+    FAITHFUL, not byte-identical: this brute-forces every alignment offset (incl.
+    partial edge windows) and takes the max. It is EXACT on substring-containment
+    (one string contained in the other -> 100), which is the signal its ONLY
+    consumer — ``core/schema_match.py``'s advisory column-name-mapping heuristic
+    (thresholded, 0.9-discounted) — actually keys on. On non-containment pairs it
+    can differ from rapidfuzz by up to ~14 points (rapidfuzz uses a local
+    block-alignment this doesn't replicate; mean abs error ~0.1 over a column
+    corpus), which is immaterial to an advisory suggestion score. `partial_ratio`
+    is Python-rapidfuzz-only (not in rapidfuzz-rs / score-core), so there is no
+    native kernel to defer to.
+    """
+    if not s1 and not s2:
+        return 100.0
+    if not s1 or not s2:
+        return 0.0
+    shorter, longer = (s1, s2) if len(s1) <= len(s2) else (s2, s1)
+    ls, ll = len(shorter), len(longer)
+    best = 0.0
+    for start in range(-(ls - 1), ll):
+        lo = start if start > 0 else 0
+        hi = start + ls
+        if hi > ll:
+            hi = ll
+        if lo >= hi:
+            continue
+        r = indel_normalized_similarity(shorter, longer[lo:hi]) * 100.0
+        if r > best:
+            best = r
+    return best
 
 
 # Field-scorer name -> (primitive, output scale) for the dense-matrix builder.

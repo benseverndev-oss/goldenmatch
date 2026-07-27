@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import logging
 
-from rapidfuzz.fuzz import partial_ratio, ratio
-
 from goldenmatch._polars_lazy import pl
+from goldenmatch.core import strsim
 
 logger = logging.getLogger(__name__)
 
@@ -114,13 +113,13 @@ def _score_column_pair(
         return 0.95, "synonym"
 
     # 3. Fuzzy name similarity
-    name_sim = ratio(col_a.lower(), col_b.lower()) / 100.0
+    name_sim = strsim.ratio(col_a.lower(), col_b.lower()) / 100.0
     if name_sim > best_score:
         best_score = name_sim
         best_method = "name_sim"
 
     # 4. Partial name match (one name contains the other)
-    partial = partial_ratio(col_a.lower(), col_b.lower()) / 100.0
+    partial = strsim.partial_ratio(col_a.lower(), col_b.lower()) / 100.0
     if partial > best_score:
         best_score = partial * 0.9  # slight discount
         best_method = "partial_name"
