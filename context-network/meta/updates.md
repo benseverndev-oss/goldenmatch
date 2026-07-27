@@ -2,6 +2,20 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-07-27 -- ADR 0047 amended: conformance v2 (behavioral + temporal)
+- Amended **[ADR 0047](../decisions/0047-one-product-two-engines-architecture.md)** after the
+  thesis-conformance board hit its floor (10 low, 0 undeclared, T5 silent). The five tenets'
+  WORDING is unchanged; two decision TESTS + the audit process are sharpened:
+  T1 -> default-routing (a correct-but-unwired kernel is a *latent* second source; the shared
+  owner must be the DEFAULT); T2 -> behavioral equivalence on the workload (dedupe F1-neutrality),
+  not byte-parity on a fixture -- fixture parity is necessary, not sufficient; T3 -> deferrals
+  carry an explicit un-defer trigger and are re-validated (a lifted premise is an OPEN divergence,
+  not a low). Process: the audit hunts emergent/behavioral drift + retires vacuous items.
+- Grounded in this session's work: the fs-default kernel was byte-parity-proven yet opt-in
+  (latent second source, since fixed by the batteries default); the goldenanalysis frame-kernel
+  deferral's Arrow premise had silently rotted (#1788); the deferral-provenance weakness went
+  vacuous (all deferrals model-backed) yet stayed live.
+
 ## 2026-07-24 -- Cross-language phase-handoff conformance harness + published limits
 - Added **[ADR 0046](../decisions/0046-cross-language-phase-handoff-conformance.md)**:
   cross-language (Python↔TS) phase-handoff is a MEASURED property, not assumed
