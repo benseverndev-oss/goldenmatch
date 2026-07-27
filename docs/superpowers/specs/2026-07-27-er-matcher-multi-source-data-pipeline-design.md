@@ -37,6 +37,24 @@ Non-goals (separate sub-projects):
   comparable to published DeepMatcher/Ditto numbers).
 - Sub-project 4 — release (quantize, publish, model card).
 
+### Plan structure (decided)
+
+Sub-project 1 is **one spec, two sequential phases** under a single implementation
+plan, landing as two PRs:
+
+- **Phase 1a — benchmark ingestion:** the loader interface, febrl/leipzig loaders,
+  negative synthesis, fetch-at-build eval loaders, and `sources.yaml`/blend/splits/
+  manifest (Architecture §1, §2, §4). This is the foundation and unblocks a first
+  larger run on real+existing-synthetic data.
+- **Phase 1b — Rich synthetic generator:** the `gen_pairs.py` rewrite
+  (Architecture §3). Depends on nothing in 1a and can be developed in parallel, but
+  is sequenced *after* 1a so the first scaled run isn't blocked on the generator
+  rewrite.
+
+The 1a/1b boundary is fixed here (not left to the planner): both are in scope for
+this spec; the planner produces one plan with the two phases as distinct,
+independently-mergeable stages.
+
 ## Data slate (license-vetted)
 
 Verified against primary sources. The shipped model must be publishable
@@ -63,9 +81,14 @@ no license).
 
 ### 1. Unified row contract & loader interface
 
-Every source emits the row the trainer already consumes:
+Every source emits the trainer's existing row contract, **extended with one
+`dataset` provenance field** (the trainer ignores unknown keys — `read_jsonl` does
+no key validation and `example_to_messages` reads only `a`/`b`/`label` — so the
+added field is safe and requires no trainer change):
 
 ```
+# existing contract: {a, b, label, domain, source, eid_a, eid_b}
+# this pipeline adds:  dataset  (provenance; ignored by the trainer)
 {a: {..fields}, b: {..fields}, label: "match"|"no_match",
  domain: str, source: str, dataset: str, eid_a, eid_b}
 ```
@@ -80,12 +103,14 @@ A minimal pluggable interface (each loader is one focused, testable unit):
 
 ```python
 class PairSource(Protocol):
-    name: str
-    def splits(self) -> dict[str, Iterable[Row]]:  # {"train","val","test"}
+    name: str                                       # == the `dataset` provenance value + registry key
+    def splits(self) -> dict[str, Iterable[Row]]:   # {"train","val","test"}
         ...
 ```
 
-A registry maps `dataset -> loader`. Four loader families:
+`PairSource.name` is the single identifier used three ways: the registry key, the
+`dataset` field written on every row it emits, and the `sources.yaml` key — one
+string, no aliasing. A registry maps `dataset -> loader`. Four loader families:
 - `febrl` — synthetic person; match status ships with the data.
 - `leipzig` — one loader parametrized per CC-BY dataset (two source tables + a
   perfect-mapping gold file).
@@ -120,7 +145,11 @@ deps; byte-identical output per seed):
   phonetic, transliteration, field-swap, token drop/add, formatting variants —
   each with an independent, tunable rate, **calibrated to FEBRL's `dsgen`** so
   synthetic corruption matches an established person-matching benchmark rather
-  than being ad-hoc.
+  than being ad-hoc. *Calibration target (concrete):* match `dsgen`'s per-field
+  corruption **probabilities** and its **error-type mix** (the relative share of
+  typo / OCR / phonetic / swap / drop), verified by comparing the corruption-type
+  histogram of our generated pairs against a `dsgen`-generated reference set — not
+  merely "looks similar."
 - Deterministic in `--seed`; a `--profile` flag selects corruption intensity.
 
 This is the heaviest component; it may be split into its own spec/plan (1b) from
@@ -129,7 +158,8 @@ benchmark ingestion (1a) if independent landing is preferred.
 ### 4. `sources.yaml`, blend, splits, manifest
 
 One config is the single source of truth for **both the pipeline and the model
-card**:
+card**. The block below is **illustrative shape, not a literal schema** — the
+`weight` values are placeholders (blend ratios are deferred; see below):
 
 ```yaml
 sources:
@@ -142,7 +172,10 @@ sources:
 
 - **Splits**: preserve each benchmark's canonical train/val/test; for Leipzig
   (no fixed split) generate deterministic entity-level splits (reuse the current
-  `_split_of` hashing so no entity leaks across splits).
+  `_split_of` hashing so no entity leaks across splits). Note: `_split_of` today
+  takes an **int** `eid` (`f"{seed}:{eid}"`); benchmark entity IDs are strings, so
+  the reused helper must key on `str(eid)` — a required generalization, not an
+  optional one, or non-int IDs silently break the hash.
 - **Blend**: cap oversized sources (bundle MusicBrainz-**20K**; fetch larger
   variants only if ever needed) and **upweight person data** for the PII emphasis.
 - **Output**: unified `data/er_matcher/{train,val,test}.jsonl` + `manifest.json`
