@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 420,
+      "module_count": 421,
       "modules": [
         {
           "module": "goldenmatch",
@@ -1103,6 +1103,7 @@
             "OutputConfig",
             "PerceptualKeyConfig",
             "QualityConfig",
+            "RelationshipRule",
             "RulesPayload",
             "SemanticBlockingConfig",
             "SimHashKeyConfig",
@@ -5839,6 +5840,7 @@
             "goldenmatch.identity.model",
             "goldenmatch.identity.profile",
             "goldenmatch.identity.query",
+            "goldenmatch.identity.relationships",
             "goldenmatch.identity.resolve",
             "goldenmatch.identity.stabilize",
             "goldenmatch.identity.stitching",
@@ -6043,6 +6045,18 @@
           ]
         },
         {
+          "module": "goldenmatch.identity.relationships",
+          "file": "packages/python/goldenmatch/goldenmatch/identity/relationships.py",
+          "purpose": "Semantic-graph: entity<->entity relationship edges (#semantic-graph).",
+          "defines": [
+            "build_relationships"
+          ],
+          "imports": [
+            "goldenmatch.config.schemas",
+            "goldenmatch.identity.store"
+          ]
+        },
+        {
           "module": "goldenmatch.identity.resolution_batch",
           "file": "packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py",
           "purpose": "The versioned compute->control seam contract (Wave C, milestone C1).",
@@ -6097,6 +6111,7 @@
             "goldenmatch.identity.block_index",
             "goldenmatch.identity.fingerprint_batch",
             "goldenmatch.identity.model",
+            "goldenmatch.identity.relationships",
             "goldenmatch.identity.resolution_batch",
             "goldenmatch.identity.store"
           ]

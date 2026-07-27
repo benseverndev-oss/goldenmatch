@@ -1915,6 +1915,33 @@ class MediationConfig(BaseModel):
     )
 
 
+class RelationshipRule(BaseModel):
+    """One rule for deriving entity<->entity relationship edges from a shared,
+    NON-identity attribute (#semantic-graph).
+
+    Identity resolution collapses records that are the SAME entity. The same
+    blocking data also surfaces DIFFERENT entities that share a non-identity
+    attribute -- two prescribers on one clinic phone, two people at one address --
+    which is a relationship, not a merge. This rule emits those as edges keyed on
+    the stable ``entity_id``s, turning the identity graph into a semantic graph
+    maintained in the same pass.
+    """
+    field: str = Field(
+        description="Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer').",
+    )
+    kind: str = Field(
+        description="Relationship label for the emitted edge (e.g. 'shares_phone', 'same_address').",
+    )
+    min_entities: int = Field(
+        default=2,
+        description="A shared value must be held by at least this many distinct entities to emit edges.",
+    )
+    max_fanout: int = Field(
+        default=50,
+        description="Skip values shared by more than this many distinct entities (hub values like a switchboard line are not pairwise relationships).",
+    )
+
+
 class IdentityConfig(BaseModel):
     """Identity Graph configuration.
 
@@ -1955,6 +1982,13 @@ class IdentityConfig(BaseModel):
     weak_confidence_threshold: float = Field(
         default=0.6,
         description="Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it.",
+    )
+    # semantic-graph: derive entity<->entity relationship edges from shared
+    # non-identity attributes, in the same resolve pass. Empty (default) = no
+    # relationships emitted; identity resolution is unchanged.
+    relationships: list[RelationshipRule] = Field(
+        default_factory=list,
+        description="Rules deriving entity<->entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged.",
     )
     # #1110: cross-device / channel stitching (CDP/MDM epic #1108). None ->
     # stitching is not configured (the default; identity resolution is

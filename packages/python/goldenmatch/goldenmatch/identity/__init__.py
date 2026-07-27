@@ -59,6 +59,7 @@ from goldenmatch.identity.query import (
     promote_claim,
     revoke_claim,
 )
+from goldenmatch.identity.relationships import build_relationships
 from goldenmatch.identity.resolve import (
     ResolveSummary,
     match_record_to_entity,
@@ -125,6 +126,7 @@ __all__ = [
     "revoke_claim",
     "match_record_to_entity",
     "migrate_record_ids",
+    "build_relationships",
     "resolve_clusters",
     "resolve_record_incremental",
     "DEFAULT_CHANNEL_TRUST",

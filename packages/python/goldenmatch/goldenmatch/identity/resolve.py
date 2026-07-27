@@ -136,6 +136,8 @@ class ResolveSummary:
     # v2.1: count of ``conflicts_with`` edges emitted automatically by the
     # resolver (weak bottlenecks + merges with prior conflicts).
     conflicts_flagged: int = 0
+    # semantic-graph: entity<->entity relationship edges written this run.
+    relationships_added: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -147,6 +149,7 @@ class ResolveSummary:
             "events_emitted": self.events_emitted,
             "records_upserted": self.records_upserted,
             "conflicts_flagged": self.conflicts_flagged,
+            "relationships_added": self.relationships_added,
         }
 
 
@@ -420,6 +423,7 @@ def resolve_clusters(
     controller_snapshot: dict[str, Any] | None = None,
     emit_singletons: bool = True,
     weak_confidence_threshold: float = 0.6,
+    relationships: list | None = None,
     pair_score_view: ClusterPairScores | None = None,
     cluster_frames: ClusterFrames | None = None,
     actor: str = "pipeline",
@@ -469,6 +473,7 @@ def resolve_clusters(
             actor=actor, emit_singletons=emit_singletons,
             weak_confidence_threshold=weak_confidence_threshold,
             field_strategies=field_strategies,
+            relationships=relationships,
         )
     # C1 follow-on: fold the bulk DATA parts (cluster partition / record frame /
     # scored-pair stream / pair-score view) into the batch, so the whole
@@ -504,6 +509,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     emit_singletons = batch.emit_singletons
     weak_confidence_threshold = batch.weak_confidence_threshold
     field_strategies = batch.field_strategies
+    relationships = batch.relationships
 
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
@@ -1197,6 +1203,19 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                     bulk_totals["records"], bulk_totals["edges"],
                     bulk_totals["events"],
                 )
+
+    # 3r. Semantic-graph: derive entity<->entity relationship edges from shared
+    # non-identity attributes, keyed on the entity_ids just written. A post-pass
+    # (cross-entity, so it can't run inside the per-cluster loop); idempotent, so
+    # a warm re-resolve does not duplicate. Opt-in via config.identity.relationships.
+    if relationships:
+        from goldenmatch.identity.relationships import build_relationships
+        try:
+            summary.relationships_added = build_relationships(
+                store, relationships, dataset,
+            )
+        except Exception as e:  # never fail resolution over the relationship pass
+            log.warning("relationship derivation failed: %s", e)
 
     # 4. Split detection: records that previously had an entity_id but did
     # NOT appear in any cluster this run should not be retired here -- they
