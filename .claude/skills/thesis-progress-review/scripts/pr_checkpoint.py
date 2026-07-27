@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Incremental pull-request checkpoint helper for the GoldenMatch thesis review skill.
+"""Checkpointed pull-request scanner for the thesis-progress-review skill.
 
-The script intentionally keeps state under Git metadata by default so a review
-checkpoint is local to the clone/worktree and never appears as a repository
-change. It only mutates state through the explicit ``checkpoint`` command.
+The checkpoint is intentionally local to the clone/worktree. By default it lives
+under Git metadata (``git rev-parse --git-path``), so it cannot be committed by
+accident.
 """
 
 from __future__ import annotations
@@ -14,380 +14,369 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
-from urllib.parse import urlparse
+from typing import Any, Callable, Iterable
 
-STATE_VERSION = 1
-STATE_FILENAME = "goldenmatch-thesis-progress-review.json"
-PAGE_SIZE = 100
-MAX_PAGES = 1_000
-REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SCHEMA_VERSION = 2
+DEFAULT_STATE_NAME = "goldenmatch-thesis-progress-review.json"
+PER_PAGE = 100
 
 
-class ReviewStateError(RuntimeError):
-    """Raised when repository discovery, GitHub access, or state is invalid."""
+class CheckpointError(RuntimeError):
+    """A user-facing scanner/checkpoint error."""
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def isoformat_z(value: datetime) -> str:
-    value = value.astimezone(timezone.utc).replace(microsecond=0)
-    return value.isoformat().replace("+00:00", "Z")
+def iso_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def parse_github_timestamp(value: str) -> datetime:
+def parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def run_command(args: list[str]) -> str:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (TypeError, ValueError) as exc:
-        raise ReviewStateError(f"Invalid GitHub timestamp: {value!r}") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def normalize_repo(value: str) -> str:
-    normalized = value.strip().removesuffix(".git").strip("/")
-    if not REPO_PATTERN.fullmatch(normalized):
-        raise ReviewStateError(
-            f"Repository must be in owner/name form, got {value!r}."
+        proc = subprocess.run(
+            args,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
-    return normalized
+    except FileNotFoundError as exc:
+        raise CheckpointError(f"required command not found: {args[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+        raise CheckpointError(f"{' '.join(args)} failed: {detail}") from exc
+    return proc.stdout.strip()
 
 
 def parse_repo_from_remote(remote: str) -> str:
-    """Extract owner/name from common GitHub HTTPS and SSH remote forms."""
+    """Return ``owner/repo`` from common Git remote URL forms."""
+    value = remote.strip().rstrip("/")
+    patterns = (
+        r"^(?:https?://|ssh://git@)[^/]+/(?P<repo>[^/]+/[^/]+?)(?:\.git)?$",
+        r"^[^@]+@[^:]+:(?P<repo>[^/]+/[^/]+?)(?:\.git)?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, value)
+        if match:
+            return match.group("repo")
+    raise CheckpointError(f"cannot infer owner/repo from origin URL: {remote!r}")
 
-    value = remote.strip()
-    if not value:
-        raise ReviewStateError("The origin remote is empty.")
 
-    if value.startswith("git@github.com:"):
-        return normalize_repo(value.split(":", 1)[1])
-
-    parsed = urlparse(value)
-    if parsed.scheme in {"http", "https", "ssh", "git"}:
-        host = (parsed.hostname or "").lower()
-        if host != "github.com":
-            raise ReviewStateError(
-                f"Origin must point to github.com, got host {host or '<none>'!r}."
+def detect_repo() -> str:
+    try:
+        remote = run_command(["git", "remote", "get-url", "origin"])
+        return parse_repo_from_remote(remote)
+    except CheckpointError:
+        try:
+            repo = run_command(
+                ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
             )
-        return normalize_repo(parsed.path)
+        except CheckpointError as exc:
+            raise CheckpointError(
+                "cannot determine repository; pass --repo owner/name or configure origin"
+            ) from exc
+        if "/" not in repo:
+            raise CheckpointError(f"unexpected repository name from gh: {repo!r}")
+        return repo
 
-    if value.startswith("github.com/"):
-        return normalize_repo(value.removeprefix("github.com/"))
 
-    raise ReviewStateError(f"Unsupported GitHub remote format: {remote!r}")
-
-
-def run_text(command: Sequence[str], *, cwd: Path | None = None) -> str:
-    env = os.environ.copy()
-    env.setdefault("GH_PAGER", "cat")
-    env.setdefault("PAGER", "cat")
-    env.setdefault("NO_COLOR", "1")
+def default_state_path() -> Path:
     try:
-        completed = subprocess.run(
-            list(command),
-            cwd=str(cwd) if cwd else None,
-            env=env,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise ReviewStateError(f"Required command not found: {command[0]}") from exc
-
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
-        rendered = " ".join(command)
-        raise ReviewStateError(f"Command failed ({rendered}): {detail}")
-    return completed.stdout.strip()
-
-
-def infer_repo(explicit: str | None = None) -> str:
-    if explicit:
-        return normalize_repo(explicit)
-
-    github_repository = os.environ.get("GITHUB_REPOSITORY")
-    if github_repository:
-        return normalize_repo(github_repository)
-
-    remote = run_text(["git", "remote", "get-url", "origin"])
-    return parse_repo_from_remote(remote)
-
-
-def resolve_state_path(explicit: str | None = None) -> Path:
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-
-    git_path = run_text(["git", "rev-parse", "--git-path", STATE_FILENAME])
-    return Path(git_path).expanduser().resolve()
-
-
-def load_state(path: Path, repo: str) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ReviewStateError(f"Cannot read checkpoint state at {path}: {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise ReviewStateError(f"Checkpoint state at {path} must be a JSON object.")
-    if payload.get("version") != STATE_VERSION:
-        raise ReviewStateError(
-            f"Unsupported checkpoint version at {path}: {payload.get('version')!r}."
-        )
-    if payload.get("repository") != repo:
-        raise ReviewStateError(
-            "Checkpoint repository mismatch: "
-            f"state is for {payload.get('repository')!r}, current repository is {repo!r}."
-        )
-
-    number = payload.get("last_reviewed_pr_number")
-    if not isinstance(number, int) or number <= 0:
-        raise ReviewStateError(
-            f"Checkpoint at {path} has an invalid last_reviewed_pr_number."
-        )
-    return payload
-
-
-def gh_api_json(repo: str, endpoint: str, fields: Mapping[str, Any] | None = None) -> Any:
-    command = ["gh", "api", "--method", "GET", endpoint]
-    if fields:
-        for key, value in fields.items():
-            command.extend(["-f", f"{key}={value}"])
-    output = run_text(command)
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise ReviewStateError(
-            f"GitHub CLI returned invalid JSON for {repo} endpoint {endpoint}: {exc}"
+        raw = run_command(["git", "rev-parse", "--git-path", DEFAULT_STATE_NAME])
+    except CheckpointError as exc:
+        raise CheckpointError(
+            "not inside a Git worktree; pass --state-file explicitly"
         ) from exc
+    return Path(raw)
 
 
-def compact_pr(raw: Mapping[str, Any]) -> dict[str, Any]:
-    user = raw.get("user") or {}
-    base = raw.get("base") or {}
-    head = raw.get("head") or {}
-    labels = raw.get("labels") or []
+def load_state(path: Path, repo: str) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "repo": repo,
+            "last_reviewed_pr": None,
+            "tracked_open_prs": {},
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CheckpointError(f"cannot read checkpoint {path}: {exc}") from exc
+    if data.get("repo") != repo:
+        raise CheckpointError(
+            f"checkpoint belongs to {data.get('repo')!r}, not requested repo {repo!r}"
+        )
+    version = int(data.get("schema_version", 1))
+    if version not in (1, SCHEMA_VERSION):
+        raise CheckpointError(
+            f"unsupported checkpoint schema {version}; expected 1 or {SCHEMA_VERSION}"
+        )
+    data.setdefault("tracked_open_prs", {})
+    return data
+
+
+def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
+def gh_api_json(endpoint: str) -> Any:
+    raw = run_command(
+        [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            endpoint,
+        ]
+    )
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CheckpointError(f"gh api returned invalid JSON for {endpoint}") from exc
+
+
+def normalize_pr(pr: dict[str, Any]) -> dict[str, Any]:
+    merged_at = pr.get("merged_at")
+    state = "merged" if merged_at else str(pr.get("state", "open")).lower()
     return {
-        "number": int(raw["number"]),
-        "title": raw.get("title") or "",
-        "author": user.get("login"),
-        "state": raw.get("state"),
-        "draft": bool(raw.get("draft", False)),
-        "created_at": raw.get("created_at"),
-        "updated_at": raw.get("updated_at"),
-        "merged_at": raw.get("merged_at"),
-        "closed_at": raw.get("closed_at"),
-        "base_ref": base.get("ref"),
-        "head_ref": head.get("ref"),
-        "labels": [label.get("name") for label in labels if label.get("name")],
-        "url": raw.get("html_url"),
-        "body": raw.get("body") or "",
+        "number": int(pr["number"]),
+        "title": str(pr.get("title") or ""),
+        "url": str(pr.get("html_url") or ""),
+        "state": state,
+        "draft": bool(pr.get("draft", False)),
+        "created_at": pr.get("created_at"),
+        "updated_at": pr.get("updated_at"),
+        "merged_at": merged_at,
+        "closed_at": pr.get("closed_at"),
+        "base": (pr.get("base") or {}).get("ref"),
+        "head": (pr.get("head") or {}).get("ref"),
+        "head_sha": (pr.get("head") or {}).get("sha"),
+        "author": (pr.get("user") or {}).get("login"),
     }
 
 
-def collect_new_prs(
-    fetch_page: Callable[[int], Sequence[Mapping[str, Any]]],
-    *,
-    checkpoint_number: int | None,
-    cutoff: datetime,
-) -> list[dict[str, Any]]:
-    """Collect PRs in reverse API order, returning a chronological unique list."""
+def tracked_signature(pr: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "head_sha": pr.get("head_sha"),
+        "state": pr.get("state"),
+        "draft": bool(pr.get("draft", False)),
+        "title": pr.get("title"),
+        "base": pr.get("base"),
+    }
 
-    selected: list[dict[str, Any]] = []
-    seen: set[int] = set()
 
-    for page in range(1, MAX_PAGES + 1):
-        raw_page = fetch_page(page)
-        if not isinstance(raw_page, Sequence) or isinstance(raw_page, (str, bytes)):
-            raise ReviewStateError(f"GitHub pull request page {page} is not a JSON array.")
-        if not raw_page:
-            break
-
-        reached_boundary = False
-        for raw in raw_page:
-            if not isinstance(raw, Mapping):
-                raise ReviewStateError(
-                    f"GitHub pull request page {page} contains a non-object item."
-                )
-            number = int(raw["number"])
-            if number in seen:
-                continue
-            seen.add(number)
-
-            if checkpoint_number is not None:
-                if number <= checkpoint_number:
-                    reached_boundary = True
-                    break
-            else:
-                created_at = parse_github_timestamp(str(raw.get("created_at")))
-                if created_at < cutoff:
-                    reached_boundary = True
-                    break
-
-            selected.append(compact_pr(raw))
-
-        if reached_boundary or len(raw_page) < PAGE_SIZE:
-            break
-    else:
-        raise ReviewStateError(
-            f"Stopped after {MAX_PAGES} GitHub API pages without finding a review boundary."
-        )
-
-    selected.sort(key=lambda pr: (parse_github_timestamp(pr["created_at"]), pr["number"]))
-    return selected
+def fetch_pr(repo: str, number: int) -> dict[str, Any]:
+    return normalize_pr(gh_api_json(f"repos/{repo}/pulls/{number}"))
 
 
 def fetch_new_prs(
     repo: str,
-    state: Mapping[str, Any] | None,
     *,
-    lookback_days: int,
-    now: datetime | None = None,
-) -> tuple[list[dict[str, Any]], datetime]:
-    if lookback_days <= 0:
-        raise ReviewStateError("--lookback-days must be greater than zero.")
-
-    current_time = (now or utc_now()).astimezone(timezone.utc)
-    cutoff = current_time - timedelta(days=lookback_days)
-    checkpoint_number = (
-        int(state["last_reviewed_pr_number"]) if state is not None else None
-    )
-
-    def fetch_page(page: int) -> Sequence[Mapping[str, Any]]:
-        payload = gh_api_json(
-            repo,
-            f"repos/{repo}/pulls",
-            {
-                "state": "all",
-                "sort": "created",
-                "direction": "desc",
-                "per_page": PAGE_SIZE,
-                "page": page,
-            },
+    previous_checkpoint: int | None,
+    cutoff: datetime | None,
+    api: Callable[[str], Any] = gh_api_json,
+) -> list[dict[str, Any]]:
+    """Fetch newly created PRs, newest-first from GitHub, then return oldest-first."""
+    selected: list[dict[str, Any]] = []
+    page = 1
+    done = False
+    while not done:
+        endpoint = (
+            f"repos/{repo}/pulls?state=all&sort=created&direction=desc"
+            f"&per_page={PER_PAGE}&page={page}"
         )
-        if not isinstance(payload, list):
-            raise ReviewStateError(
-                f"GitHub pull request endpoint returned {type(payload).__name__}, expected list."
-            )
-        return payload
+        batch = api(endpoint)
+        if not isinstance(batch, list):
+            raise CheckpointError(f"unexpected pulls response for page {page}")
+        if not batch:
+            break
+        for raw in batch:
+            number = int(raw["number"])
+            created_at = parse_timestamp(raw.get("created_at"))
+            if previous_checkpoint is not None and number <= previous_checkpoint:
+                done = True
+                break
+            if cutoff is not None and created_at is not None and created_at < cutoff:
+                done = True
+                break
+            selected.append(normalize_pr(raw))
+        if len(batch) < PER_PAGE:
+            break
+        page += 1
+    selected.sort(key=lambda item: (item.get("created_at") or "", item["number"]))
+    return selected
 
-    return (
-        collect_new_prs(
-            fetch_page,
-            checkpoint_number=checkpoint_number,
-            cutoff=cutoff,
-        ),
-        cutoff,
-    )
 
-
-def build_checkpoint(
+def changed_tracked_prs(
     repo: str,
-    raw_pr: Mapping[str, Any],
-    existing: Mapping[str, Any] | None,
+    tracked: dict[str, Any],
     *,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    number = int(raw_pr["number"])
-    if number <= 0:
-        raise ReviewStateError("Checkpoint pull request number must be positive.")
-
-    if existing is not None:
-        previous = int(existing["last_reviewed_pr_number"])
-        if number < previous:
-            raise ReviewStateError(
-                f"Refusing to move checkpoint backward from PR #{previous} to PR #{number}."
-            )
-
-    return {
-        "version": STATE_VERSION,
-        "repository": repo,
-        "last_reviewed_pr_number": number,
-        "last_reviewed_pr_created_at": raw_pr.get("created_at"),
-        "last_reviewed_pr_title": raw_pr.get("title") or "",
-        "last_reviewed_pr_url": raw_pr.get("html_url"),
-        "last_reviewed_pr_state": raw_pr.get("state"),
-        "last_reviewed_pr_merged_at": raw_pr.get("merged_at"),
-        "last_run_at": isoformat_z(now or utc_now()),
-    }
+    fetch: Callable[[str, int], dict[str, Any]] = fetch_pr,
+) -> list[dict[str, Any]]:
+    changed: list[dict[str, Any]] = []
+    for key, prior in sorted(tracked.items(), key=lambda item: int(item[0])):
+        number = int(key)
+        current = fetch(repo, number)
+        if tracked_signature(current) != {
+            "head_sha": prior.get("head_sha"),
+            "state": prior.get("state"),
+            "draft": bool(prior.get("draft", False)),
+            "title": prior.get("title"),
+            "base": prior.get("base"),
+        }:
+            current["previous_snapshot"] = prior
+            changed.append(current)
+    return changed
 
 
-def write_state_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        try:
-            temporary.chmod(0o600)
-        except OSError:
-            pass
-        os.replace(temporary, path)
-    except OSError as exc:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise ReviewStateError(f"Cannot write checkpoint state at {path}: {exc}") from exc
-
-
-def checkpoint_candidate(prs: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    if not prs:
-        return None
-    last = prs[-1]
-    return {
-        "number": last["number"],
-        "title": last["title"],
-        "created_at": last["created_at"],
-        "url": last["url"],
-    }
-
-
-def command_scan(args: argparse.Namespace) -> int:
-    repo = infer_repo(args.repo)
-    state_path = resolve_state_path(args.state_file)
+def scan_command(args: argparse.Namespace) -> int:
+    repo = args.repo or detect_repo()
+    state_path = Path(args.state_file) if args.state_file else default_state_path()
     state = load_state(state_path, repo)
-    prs, cutoff = fetch_new_prs(
-        repo,
-        state,
-        lookback_days=args.lookback_days,
+    previous = state.get("last_reviewed_pr")
+    if previous is not None:
+        previous = int(previous)
+        cutoff = None
+        mode = "checkpoint"
+    else:
+        if args.lookback_days <= 0:
+            raise CheckpointError("--lookback-days must be positive")
+        cutoff = utc_now() - timedelta(days=args.lookback_days)
+        mode = "lookback"
+
+    new_prs = fetch_new_prs(
+        repo, previous_checkpoint=previous, cutoff=cutoff
     )
-    result = {
-        "repository": repo,
-        "mode": "incremental" if state else "first-run-lookback",
-        "lookback_days": args.lookback_days,
-        "first_run_cutoff": isoformat_z(cutoff) if state is None else None,
+    tracked_updates = changed_tracked_prs(
+        repo, state.get("tracked_open_prs") or {}
+    )
+    candidate = new_prs[-1]["number"] if new_prs else previous
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "repo": repo,
         "state_file": str(state_path),
-        "previous_checkpoint": state,
-        "new_pr_count": len(prs),
-        "checkpoint_candidate": checkpoint_candidate(prs),
-        "pull_requests": prs,
+        "mode": mode,
+        "generated_at": iso_utc(utc_now()),
+        "lookback_days": args.lookback_days if mode == "lookback" else None,
+        "cutoff": iso_utc(cutoff) if cutoff else None,
+        "previous_checkpoint": previous,
+        "checkpoint_candidate": candidate,
+        "new_pr_count": len(new_prs),
+        "tracked_update_count": len(tracked_updates),
+        "review_item_count": len(new_prs) + len(tracked_updates),
+        "pull_requests": new_prs,
+        "tracked_updates": tracked_updates,
     }
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
-def command_show_state(args: argparse.Namespace) -> int:
-    repo = infer_repo(args.repo)
-    state_path = resolve_state_path(args.state_file)
+def refresh_tracked_open_prs(
+    repo: str,
+    existing: dict[str, Any],
+    reviewed_new_prs: Iterable[dict[str, Any]],
+    *,
+    fetch: Callable[[str, int], dict[str, Any]] = fetch_pr,
+) -> dict[str, Any]:
+    tracked: dict[str, Any] = {}
+    candidates = {int(number) for number in existing}
+    candidates.update(int(pr["number"]) for pr in reviewed_new_prs)
+    for number in sorted(candidates):
+        current = fetch(repo, number)
+        if current.get("state") == "open":
+            tracked[str(number)] = tracked_signature(current)
+    return tracked
+
+
+def checkpoint_command(args: argparse.Namespace) -> int:
+    repo = args.repo or detect_repo()
+    state_path = Path(args.state_file) if args.state_file else default_state_path()
     state = load_state(state_path, repo)
+    previous = state.get("last_reviewed_pr")
+    previous_int = int(previous) if previous is not None else None
+    through = int(args.through)
+    if previous_int is not None and through < previous_int:
+        raise CheckpointError(
+            f"refusing to move checkpoint backwards: {through} < {previous_int}"
+        )
+
+    if previous_int is None:
+        if args.lookback_days <= 0:
+            raise CheckpointError("--lookback-days must be positive")
+        checkpoint_cutoff = utc_now() - timedelta(days=args.lookback_days)
+    else:
+        checkpoint_cutoff = None
+
+    reviewed_new_prs = fetch_new_prs(
+        repo,
+        previous_checkpoint=previous_int,
+        cutoff=checkpoint_cutoff,
+    )
+    reviewed_new_prs = [pr for pr in reviewed_new_prs if pr["number"] <= through]
+    if through != previous_int and through not in {pr["number"] for pr in reviewed_new_prs}:
+        boundary = (
+            f"the first-run {args.lookback_days}-day window"
+            if previous_int is None
+            else f"PRs after checkpoint #{previous_int}"
+        )
+        raise CheckpointError(
+            f"PR #{through} is not inside {boundary}; run scan again and use its candidate"
+        )
+    target = fetch_pr(repo, through)
+    if target["number"] != through:
+        raise CheckpointError(f"GitHub returned the wrong PR for #{through}")
+
+    tracked = refresh_tracked_open_prs(
+        repo,
+        state.get("tracked_open_prs") or {},
+        reviewed_new_prs,
+    )
+    updated = {
+        "schema_version": SCHEMA_VERSION,
+        "repo": repo,
+        "last_reviewed_pr": through,
+        "last_reviewed_created_at": target.get("created_at"),
+        "last_reviewed_url": target.get("url"),
+        "last_reviewed_at": iso_utc(utc_now()),
+        "tracked_open_prs": tracked,
+    }
+    write_json_atomic(state_path, updated)
     print(
         json.dumps(
             {
-                "repository": repo,
+                "repo": repo,
                 "state_file": str(state_path),
-                "checkpoint": state,
+                "previous_checkpoint": previous_int,
+                "last_reviewed_pr": through,
+                "tracked_open_prs": sorted(int(n) for n in tracked),
             },
             indent=2,
             sort_keys=True,
@@ -396,87 +385,52 @@ def command_show_state(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_checkpoint(args: argparse.Namespace) -> int:
-    repo = infer_repo(args.repo)
-    state_path = resolve_state_path(args.state_file)
-    existing = load_state(state_path, repo)
-    raw_pr = gh_api_json(repo, f"repos/{repo}/pulls/{args.through}")
-    if not isinstance(raw_pr, Mapping):
-        raise ReviewStateError(
-            f"GitHub returned {type(raw_pr).__name__} for PR #{args.through}, expected object."
-        )
-    payload = build_checkpoint(repo, raw_pr, existing)
-    write_state_atomic(state_path, payload)
-    print(json.dumps({"state_file": str(state_path), "checkpoint": payload}, indent=2))
-    return 0
-
-
-def add_common_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--repo",
-        help="GitHub repository in owner/name form. Defaults to GITHUB_REPOSITORY or origin.",
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Scan or advance the local thesis-progress PR checkpoint."
     )
+    parser.add_argument("--repo", help="GitHub repository in owner/name form")
     parser.add_argument(
         "--state-file",
         help=(
-            "Override the checkpoint path. Defaults to a file under Git metadata "
-            f"({STATE_FILENAME})."
+            "override checkpoint path; default is Git metadata via "
+            f"`git rev-parse --git-path {DEFAULT_STATE_NAME}`"
         ),
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Find pull requests not yet included in a GoldenMatch thesis-progress review "
-            "and explicitly checkpoint the highest fully reviewed PR."
-        )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    scan = subparsers.add_parser(
-        "scan",
-        help="Print new PR metadata without modifying the checkpoint.",
-    )
-    add_common_arguments(scan)
+    scan = subparsers.add_parser("scan", help="list PRs needing review")
     scan.add_argument(
         "--lookback-days",
         type=int,
         default=4,
-        help="Rolling UTC lookback used only when no checkpoint exists (default: 4).",
+        help="first-run lookback window; ignored after a checkpoint exists (default: 4)",
     )
-    scan.set_defaults(handler=command_scan)
+    scan.set_defaults(func=scan_command)
 
     checkpoint = subparsers.add_parser(
-        "checkpoint",
-        help="Advance state through the highest PR that was fully reviewed.",
+        "checkpoint", help="advance after every reported PR has been reviewed"
     )
-    add_common_arguments(checkpoint)
+    checkpoint.add_argument("--through", type=int, required=True, metavar="PR_NUMBER")
     checkpoint.add_argument(
-        "--through",
+        "--lookback-days",
         type=int,
-        required=True,
-        metavar="PR_NUMBER",
-        help="Highest fully reviewed pull request number.",
+        default=4,
+        help=(
+            "first-run review window; pass the same value used by scan "
+            "(ignored after a checkpoint exists; default: 4)"
+        ),
     )
-    checkpoint.set_defaults(handler=command_checkpoint)
-
-    show_state = subparsers.add_parser(
-        "show-state",
-        help="Print the current local checkpoint without changing it.",
-    )
-    add_common_arguments(show_state)
-    show_state.set_defaults(handler=command_show_state)
-
+    checkpoint.set_defaults(func=checkpoint_command)
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.handler(args))
-    except ReviewStateError as exc:
+        return int(args.func(args))
+    except CheckpointError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
