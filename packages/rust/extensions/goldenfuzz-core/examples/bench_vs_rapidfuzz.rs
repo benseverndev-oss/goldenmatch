@@ -7,7 +7,7 @@
 // is characterised in the design doc, not here.
 use std::time::Instant;
 
-use goldenmatch_score_core::strsim;
+use goldenfuzz_core as strsim;
 use rapidfuzz::distance::{jaro_winkler as rf_jw, levenshtein as rf_lev};
 use rapidfuzz::fuzz as rf_fuzz;
 

@@ -11,12 +11,14 @@
 //! rapidfuzz.
 //!
 //! The four string-sim primitives (jaro_winkler / levenshtein / indel-ratio /
-//! damerau_levenshtein) are GoldenMatch's OWN vendored implementations in
-//! [`strsim`] — the scoring math is not a black box we don't control. They are
-//! byte-for-byte ports of rapidfuzz-rs 0.5.0, proven identical by
-//! `strsim::tests::parity_vs_rapidfuzz_crate` (rapidfuzz is now a dev-dep-only
-//! parity oracle, not a shipped dependency).
-pub mod strsim;
+//! damerau_levenshtein) are GoldenMatch's OWN vendored implementations, now
+//! living in the standalone [`goldenfuzz_core`] crate and re-exported here AS
+//! `strsim` so every `goldenmatch_score_core::strsim::*` caller is unchanged.
+//! They are byte-for-byte ports of rapidfuzz-rs 0.5.0, proven identical by
+//! `goldenfuzz_core`'s parity oracle (rapidfuzz is a dev-dep-only oracle there,
+//! not a shipped dependency), plus a single-word fast path that beats rapidfuzz
+//! on short strings. See docs/design/2026-07-27-goldenfuzz.md.
+pub use goldenfuzz_core as strsim;
 use unicode_normalization::UnicodeNormalization;
 // `alias_match` (score_one id 8) + its `regex`-backed strip_legal_form live behind
 // the default `alias` feature; `pub use` re-exports the public fns at the crate
