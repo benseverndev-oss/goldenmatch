@@ -18,6 +18,12 @@ description = "Canonical string scorers (jaro_winkler / levenshtein / token_sort
 name = "goldenmatch_score_core"
 
 [dependencies]
+# The extracted fuzzy-string kernel (jaro-winkler / levenshtein / indel /
+# damerau). Lives in its own crate so it can be published / consumed standalone
+# ("goldenfuzz"); score-core re-exports it AS the `strsim` module path so every
+# existing `goldenmatch_score_core::strsim::*` caller is unchanged. Zero-dep,
+# pyo3-free, same-workspace-isolation pattern as this crate.
+goldenfuzz-core = { path = "../goldenfuzz-core" }
 # Fast, deterministic (non-DoS-resistant) hasher for the set-based scorers'
 # tiny fixed-size keys (`[char; 3]` q-grams, `&str` tokens). The default
 # SipHash is ~5-10x slower on such keys and buys nothing here: the sets are
@@ -43,11 +49,6 @@ default = ["alias"]
 # `alias` pulls in `regex` and compiles the alias_match (score_one id 8) subsystem.
 alias = ["dep:regex"]
 
-[dev-dependencies]
-# rapidfuzz is NO LONGER a shipped dependency — the scoring math is vendored in
-# `src/strsim.rs` (GoldenMatch owns its scorer primitives). It stays here ONLY
-# as the parity oracle: `strsim::tests::parity_vs_rapidfuzz_crate` proves the
-# vendored fns are byte-for-byte identical to the crate over a large corpus, so
-# the swap carries zero output drift. Drop this dev-dep once the vendored path
-# has soaked (the parity thesis is then locked by the cross-surface fixtures).
-rapidfuzz = "0.5.0"
+# The strsim primitives + their rapidfuzz parity oracle moved to the
+# `goldenfuzz-core` crate (see [dependencies]); the rapidfuzz dev-dep went with
+# them. score-core no longer references rapidfuzz at all.

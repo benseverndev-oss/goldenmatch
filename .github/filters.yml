@@ -51,6 +51,7 @@ throughput:
   # controller's fuzzy profiling pass, so a change to the scoring cores (or the
   # pyo3 wrapper) must re-run it -- a kernel regression there is exactly what
   # would re-slow (or drift) the profiling.
+  - 'packages/rust/extensions/goldenfuzz-core/**'
   - 'packages/rust/extensions/score-core/**'
   - 'packages/rust/extensions/native/**'
   - 'packages/python/goldenmatch/goldenmatch/core/strsim.py'
