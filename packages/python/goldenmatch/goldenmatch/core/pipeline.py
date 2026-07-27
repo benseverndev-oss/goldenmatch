@@ -2779,16 +2779,23 @@ def _run_dedupe_pipeline(
     # column breaks the quality scanner). No-op when no matchkey carries a guard.
     _raw_guard_values: dict[str, dict[int, Any]] = {}
     _guard_cols = _collect_guard_columns(matchkeys)
-    if _guard_cols and hasattr(combined_lf, "collect_schema"):
+    if _guard_cols:
+        # Read through the arrow-native seam (to_frame + Column protocol), NOT
+        # polars-specific ``collect_schema`` / ``.select`` / ``[c]`` indexing:
+        # goldenmatch ships polars-free and combined_lf is a seam frame on the
+        # arrow path. ``.collect()`` is the standard lazy->eager (safe on both
+        # reps); an already-materialized seam frame has no ``collect``.
         try:
-            _schema_names = set(combined_lf.collect_schema().names())
-            _want = [c for c in sorted(_guard_cols) if c in _schema_names]
-            if _want and "__row_id__" in _schema_names:
-                _snap = combined_lf.select(["__row_id__", *_want]).collect()
-                _rids = _snap["__row_id__"].to_list()
+            from goldenmatch.core.frame import to_frame as _to_frame_guard
+            _src = combined_lf.collect() if hasattr(combined_lf, "collect") else combined_lf
+            _gf = _to_frame_guard(_src)
+            _names = set(_gf.columns)
+            _want = [c for c in sorted(_guard_cols) if c in _names]
+            if _want and "__row_id__" in _names:
+                _rids = _gf.column("__row_id__").to_list()
                 for c in _want:
-                    _raw_guard_values[c] = dict(zip(_rids, _snap[c].to_list()))
-        except Exception:  # noqa: BLE001 -- best-effort; guard falls back to prepared col
+                    _raw_guard_values[c] = dict(zip(_rids, _gf.column(c).to_list()))
+        except Exception:  # noqa: BLE001 -- best-effort; guarded pairs fail closed
             _raw_guard_values = {}
 
     # ── Attack C cache lookup (map_elements spec Tier 2): quality + transform
@@ -3377,6 +3384,13 @@ def _run_dedupe_pipeline(
     _weighted_mks = [m for m in matchkeys if m.type == "weighted"]
     _last_weighted_mk = _weighted_mks[-1] if _weighted_mks else None
     _has_probabilistic_pass = any(m.type == "probabilistic" for m in matchkeys)
+    # Publish the raw guard-value snapshot so find_fuzzy_matches can build a
+    # field-level guard's per-pair mask off pre-prep values (module global; the
+    # block-scorer thread pool shares it). Every dedupe call overwrites this
+    # here, so a value never leaks meaningfully across runs; reset to {} right
+    # after the fuzzy stage below.
+    from goldenmatch.core import scorer as _scorer_mod
+    _scorer_mod._active_raw_guard_values = _raw_guard_values
     with stage("fuzzy_scoring"):
         for mk in matchkeys:
             if mk.type == "weighted":
@@ -3396,7 +3410,11 @@ def _run_dedupe_pipeline(
                 # memory on Linux runners (7 consecutive 5M bench runs
                 # hung at 62.99 GB RSS plateau before reaching real
                 # scoring).
-                if _use_bucket_scorer(config, collected_df):
+                # A field-level guard drops a field from the weighted average
+                # per pair -- implemented in find_fuzzy_matches (the slow path),
+                # so route such matchkeys off the vectorized bucket scorer.
+                _mk_field_guarded = any(f.guard for f in mk.fields)
+                if _use_bucket_scorer(config, collected_df) and not _mk_field_guarded:
                     from goldenmatch.backends.score_buckets import score_buckets
                     pairs = score_buckets(
                         collected_df,
@@ -3579,6 +3597,10 @@ def _run_dedupe_pipeline(
                     )
                 all_pairs.extend(pairs)
                 fuzzy_pair_count += len(pairs)
+
+    # Field-level guards consumed the raw snapshot above; clear the module global
+    # so it never lingers past this run.
+    _scorer_mod._active_raw_guard_values = {}
 
     record_metrics({
         "fuzzy_pair_count": fuzzy_pair_count,

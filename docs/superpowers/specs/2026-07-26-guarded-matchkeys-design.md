@@ -66,9 +66,14 @@ tested carefully, and rejected loudly meanwhile so nothing is silently ignored).
   post-filter on the emitted pairs (uniform across the exact / bucket-fast / slow scoring paths). This is the
   headline SSN-placeholder case. A guard on a **probabilistic** matchkey raises a clear "planned follow-up" config
   error (the FS pair stream needs its own post-filter seam).
-- **Field-level** (`MatchkeyField.guard`) — DEFERRED. Well-defined only on **weighted** matchkeys (a guard-failing
-  field drops out of the weighted average, remaining weights renormalize); exact/probabilistic have no per-field
-  weight to renormalize. Raises a clear "planned follow-up" config error in v1.
+- **Field-level** (`MatchkeyField.guard`) — SHIPPED for **weighted** matchkeys. A guard-failing field drops out of
+  the weighted average and the remaining weights renormalize; if every field's guard fails, the pair is not
+  emitted. Implemented as a per-pair mask folded into each field's `valid` weighting term in `find_fuzzy_matches`
+  (a dropped field contributes 0 to BOTH the numerator and the denominator, so renormalization is automatic);
+  weighted matchkeys carrying a field guard route off the vectorized bucket path onto that slow path. Field-level
+  guards on **exact / probabilistic** matchkeys raise a clear config error (no per-field weight to renormalize).
+  Guards should be SYMMETRIC in a/b; the per-pair mask is `O(block²)` in guard evaluations, acceptable because
+  blocks are bounded (a columnar lowering is the future lever).
 
 ### Implementation seam (no kernel; uniform pair post-filter)
 
@@ -122,9 +127,9 @@ future optimization if a measured at-scale workload needs it.
 
 ## Boundaries (stated honestly)
 
-- **v1 = matchkey-level guards on exact + weighted matchkeys.** Field-level guards and probabilistic-matchkey
-  guards raise a clear "planned follow-up" config error — they are defined in the schema but not yet applied, so
-  a guard is never silently ignored.
+- **Shipped:** matchkey-level guards on exact + weighted matchkeys; field-level guards on weighted matchkeys.
+  Probabilistic-matchkey guards and field-level guards on exact/probabilistic raise a clear config error —
+  defined in the schema, not yet applied, so a guard is never silently ignored.
 - The guard is a per-pair post-filter over the guard's referenced columns; it's cheap but not vectorized (same
   cost profile as negative evidence). Columnar lowering is the future lever if an at-scale workload needs it.
 - TypeScript parity is a declared follow-up gap (config-schema fields are not an `api_parity`-gated surface).
