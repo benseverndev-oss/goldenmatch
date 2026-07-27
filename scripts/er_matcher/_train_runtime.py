@@ -14,6 +14,7 @@ test_train_helpers.py. Reviewer note: keep behavior-bearing decisions in train.p
 """
 from __future__ import annotations
 
+import copy
 import json
 import time
 from pathlib import Path
@@ -21,11 +22,19 @@ from typing import Any
 
 # Imported at module load, but the MODULE itself is only imported inside
 # train.main() -- so a CPU box importing train.py never pulls these in.
+import sweep  # sibling module (script dir on sys.path) -- SP2 Task 5/6
 import torch  # type: ignore[import-not-found]
 from datasets import Dataset  # type: ignore[import-not-found]
-from peft import LoraConfig  # type: ignore[import-not-found]
+from peft import (  # type: ignore[import-not-found]
+    LoraConfig,
+    get_peft_model,
+    get_peft_model_state_dict,
+    prepare_model_for_kbit_training,
+    set_peft_model_state_dict,
+)
 from train import (  # sibling module (script dir on sys.path)
     TrainConfig,
+    estimate_total_steps,
     example_to_messages,
     measured_max_seq_len,
     read_jsonl,
@@ -79,11 +88,35 @@ def _load_split(data_dir: Path, name: str) -> list[dict[str, Any]]:
     return read_jsonl(p) if p.exists() else []
 
 
-def run_training(cfg: TrainConfig, args: Any) -> int:
-    torch.manual_seed(cfg.seed)
+def _build_model_and_tokenizer(cfg: TrainConfig) -> tuple[Any, Any]:
+    """Load the tokenizer + base model per ``cfg`` (bf16/fp16, optional
+    FlashAttention-2, optional QLoRA-4bit quantization). Shared by the
+    single-run path (``run_training``) and the learning-curve sweep
+    (``run_sweep``) so the (expensive) base-model load + the precision/
+    quantization branch have exactly one source of truth."""
     tok = AutoTokenizer.from_pretrained(cfg.base_model, revision=cfg.base_revision)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+
+    model_kwargs: dict[str, Any] = {
+        "torch_dtype": torch.bfloat16 if cfg.bf16 else torch.float16,
+        "revision": cfg.base_revision,
+    }
+    if cfg.flash_attention_2:
+        model_kwargs["attn_implementation"] = "flash_attention_2"
+    if cfg.qlora_4bit:
+        from transformers import BitsAndBytesConfig  # type: ignore[import-not-found]
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
+        )
+    model = AutoModelForCausalLM.from_pretrained(cfg.base_model, **model_kwargs)
+    return model, tok
+
+
+def run_training(cfg: TrainConfig, args: Any) -> int:
+    torch.manual_seed(cfg.seed)
+    model, tok = _build_model_and_tokenizer(cfg)
 
     train_rows = _load_split(args.data_dir, "train")
     val_rows = _load_split(args.data_dir, "val")
@@ -103,25 +136,22 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
     print(f"[train] measured max_seq_len={seq_len} (P{cfg.seq_len_percentile} of "
           f"{len(lengths)} pairs, cap {cfg.seq_len_cap})")
 
+    # Measured (packing-aware) total-step estimate for cfg.epochs over THESE
+    # rows' token lengths -- NOT rows/batch (packing makes that wrong) and NOT
+    # len(trainer.get_train_dataloader()) (packing=True builds a lengthless
+    # IterableDataset -- that raises TypeError). In --smoke mode this reflects
+    # the smoke-sliced rows (a coarser calibration figure); the sweep's 100%
+    # slice (run_sweep) measures it over the full, unsliced corpus.
+    total_steps = estimate_total_steps(
+        lengths, seq_len=seq_len, per_device_batch=cfg.per_device_batch,
+        grad_accum=cfg.grad_accum, epochs=cfg.epochs,
+    )
+
     def to_text(rows: list[dict[str, Any]]) -> Dataset:
         recs = [{"messages": example_to_messages(r, cfg)} for r in rows]
         return Dataset.from_list(recs)
 
     train_ds, val_ds = to_text(train_rows), to_text(val_rows) if val_rows else None
-
-    model_kwargs: dict[str, Any] = {
-        "torch_dtype": torch.bfloat16 if cfg.bf16 else torch.float16,
-        "revision": cfg.base_revision,
-    }
-    if cfg.flash_attention_2:
-        model_kwargs["attn_implementation"] = "flash_attention_2"
-    if cfg.qlora_4bit:
-        from transformers import BitsAndBytesConfig  # type: ignore[import-not-found]
-        model_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
-        )
-    model = AutoModelForCausalLM.from_pretrained(cfg.base_model, **model_kwargs)
 
     peft_cfg = LoraConfig(
         r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=cfg.lora_dropout,
@@ -167,10 +197,20 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
         eval_dataset=val_ds, tokenizer=tok, peft_config=peft_cfg,
         callbacks=[cb],
     )
-    trainer.train()
+
+    # Resume support: if a prior checkpoint exists under args.out_dir (e.g. the
+    # full run was interrupted and re-launched against the same output volume),
+    # continue from it instead of restarting -- guarded so a fresh out_dir with
+    # no checkpoints behaves exactly as before (resume_from_checkpoint=None).
+    resume_from_checkpoint = None
+    if not args.smoke and any(Path(args.out_dir).glob("checkpoint-*")):
+        resume_from_checkpoint = True
+        print(f"[train] found checkpoint(s) under {args.out_dir} -- resuming")
+
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     if args.smoke:
-        _emit_smoke_metrics(cfg, args, cb, seq_len, train_ds)
+        _emit_smoke_metrics(cfg, args, cb, seq_len, total_steps)
         return 0
 
     # full run: save the merged fp16 model (registry ships the quantized GGUF of this)
@@ -182,7 +222,7 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
 
 
 def _emit_smoke_metrics(cfg: TrainConfig, args: Any, cb: _ThroughputCallback,
-                        seq_len: int, train_ds: Any) -> None:
+                        seq_len: int, total_steps: int) -> None:
     wall = cb.wall_s()
     toks = cb.steps * cfg.per_device_batch * cfg.grad_accum * seq_len
     peak_gb = (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else None
@@ -196,12 +236,177 @@ def _emit_smoke_metrics(cfg: TrainConfig, args: Any, cb: _ThroughputCallback,
         "smoke_wall_s": wall,
         "tokens_per_s": (toks / wall) if wall else 0.0,
         "seq_len": seq_len,
+        # NOTE: key is "total_steps" -- perf_report.evaluate_perf_gate reads
+        # metrics.get("total_steps", ...) directly (and the CLI's --total-steps
+        # overrides it); this is the MEASURED (estimate_total_steps) count, so
+        # the gate no longer needs --total-steps passed by hand.
+        "total_steps": total_steps,
         # learning_curve is filled by the sweep driver (10/25/50/100% slices);
         # a single smoke run reports one point -- the driver aggregates.
         "learning_curve": [],
-        "note": "feed to perf_report.py with --total-steps/--gpu-cost-per-hour-usd for the go/no-go gate",
+        "note": "total_steps is auto-supplied (measured); feed to perf_report.py with "
+                "--gpu-cost-per-hour-usd for the go/no-go gate",
     }
     out = args.metrics_out or (args.out_dir / "smoke_metrics.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(json.dumps(metrics, indent=2))
     print(f"[train] smoke metrics -> {out}\n{json.dumps(metrics, indent=2)}")
+
+
+def run_sweep(cfg: TrainConfig, args: Any) -> int:
+    """SP2 Task 6: the GPU-side learning-curve sweep.
+
+    Loads the base model + tokenizer ONCE (the expensive part, shared via
+    ``_build_model_and_tokenizer``), wraps it in a single LoRA adapter, then
+    for each ``sweep.data_fractions()`` slice:
+      1. resets the adapter to its just-initialized state (cheap -- only the
+         small LoRA tensors, via ``get/set_peft_model_state_dict``) so every
+         fraction trains from the SAME starting point -- isolating the effect
+         of data volume rather than warm-starting each slice off the last;
+      2. builds a fresh ``SFTTrainer`` against that slice's row prefix
+         (``peft_config=None`` -- the model is already a ``PeftModel``, trl's
+         documented "bring your own PEFT model" path, so it is used as-is and
+         never re-wrapped);
+      3. trains ``args.smoke_steps`` max steps and captures
+         ``trainer.evaluate()["eval_loss"]``.
+
+    The largest (100%) slice's throughput/memory telemetry and a MEASURED
+    ``total_steps`` (the true full-corpus step count, from the SAME
+    packing-aware ``estimate_total_steps`` used by ``run_training`` -- see its
+    note) are emitted alongside the aggregated ``learning_curve`` -- same
+    metrics shape as ``_emit_smoke_metrics`` so ``perf_report.py`` consumes
+    either.
+    """
+    torch.manual_seed(cfg.seed)
+    model, tok = _build_model_and_tokenizer(cfg)
+
+    train_rows = _load_split(args.data_dir, "train")
+    val_rows = _load_split(args.data_dir, "val")
+    if not train_rows:
+        raise SystemExit(f"no train.jsonl under {args.data_dir} (run gen_pairs.py first)")
+    if not val_rows:
+        raise SystemExit("--sweep needs val.jsonl (per-slice eval_loss) -- "
+                          "run gen_pairs.py's split first")
+
+    lengths = serialized_token_lengths(train_rows, lambda t: tok(t)["input_ids"])
+    seq_len = measured_max_seq_len(
+        lengths, percentile=cfg.seq_len_percentile,
+        cap=cfg.seq_len_cap, multiple_of=cfg.seq_len_multiple_of,
+    )
+    print(f"[sweep] measured max_seq_len={seq_len} (P{cfg.seq_len_percentile} of "
+          f"{len(lengths)} pairs, cap {cfg.seq_len_cap})")
+
+    # Measured over the FULL, unsliced train_rows (the 100% slice) -- see the
+    # note on run_training's own estimate_total_steps call.
+    total_steps = estimate_total_steps(
+        lengths, seq_len=seq_len, per_device_batch=cfg.per_device_batch,
+        grad_accum=cfg.grad_accum, epochs=cfg.epochs,
+    )
+
+    def to_text(rows: list[dict[str, Any]]) -> Dataset:
+        recs = [{"messages": example_to_messages(r, cfg)} for r in rows]
+        return Dataset.from_list(recs)
+
+    val_ds = to_text(val_rows)
+
+    # Mirror what trl's own peft_config= path does in run_training (bypassed
+    # here since the model is wrapped ourselves so the adapter can be reset
+    # per-slice): enable_input_require_grads so grads flow through the frozen
+    # base model's embeddings into the LoRA adapter under gradient
+    # checkpointing, and (QLoRA only) cast/prep the quantized base for
+    # k-bit training. Skipping either is silent -- training "succeeds" but
+    # the adapter never learns (a flat learning curve, not a crash).
+    model.enable_input_require_grads()
+    if cfg.qlora_4bit:
+        model = prepare_model_for_kbit_training(model)
+
+    peft_cfg = LoraConfig(
+        r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=cfg.lora_dropout,
+        target_modules=cfg.lora_target_modules, bias="none", task_type="CAUSAL_LM",
+    )
+    peft_model = get_peft_model(model, peft_cfg)
+    # snapshot the FRESH (just-initialized, untrained) adapter weights once --
+    # reset to this before each slice.
+    initial_adapter_state = copy.deepcopy(get_peft_model_state_dict(peft_model))
+
+    points: list[tuple[float, float]] = []
+    last_cb: _ThroughputCallback | None = None
+    for frac in sweep.data_fractions():
+        set_peft_model_state_dict(peft_model, initial_adapter_state)
+
+        n = sweep.slice_len(len(train_rows), frac)
+        train_ds = to_text(train_rows[:n])
+
+        sft = SFTConfig(
+            output_dir=str(Path(args.out_dir) / f"sweep_{frac}"),
+            num_train_epochs=cfg.epochs,
+            max_steps=args.smoke_steps,
+            per_device_train_batch_size=cfg.per_device_batch,
+            gradient_accumulation_steps=cfg.grad_accum,
+            learning_rate=cfg.learning_rate,
+            lr_scheduler_type=cfg.lr_scheduler,
+            warmup_ratio=cfg.warmup_ratio,
+            weight_decay=cfg.weight_decay,
+            bf16=cfg.bf16,
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+            packing=cfg.packing,
+            max_seq_length=seq_len,
+            group_by_length=cfg.group_by_length,
+            dataloader_num_workers=cfg.dataloader_workers,
+            dataloader_pin_memory=True,
+            logging_steps=10,
+            save_strategy="no",
+            # evaluated explicitly (below) after the short slice run rather than
+            # on a step cadence -- each slice run is itself only smoke_steps long.
+            eval_strategy="no",
+            report_to=[],
+            seed=cfg.seed,
+        )
+        cb = _ThroughputCallback(seq_len)
+        trainer = SFTTrainer(
+            model=peft_model, args=sft, train_dataset=train_ds,
+            eval_dataset=val_ds, tokenizer=tok, peft_config=None,
+            callbacks=[cb],
+        )
+        trainer.train()
+        eval_loss = trainer.evaluate()["eval_loss"]
+        points.append((frac, eval_loss))
+        # per-fraction visibility: a spurious plateau (e.g. grads not flowing
+        # through a mis-prepped QLoRA base) is diagnosable straight from logs.
+        print(f"[sweep] frac={frac} rows={n} eval_loss={eval_loss:.4f}")
+        last_cb = cb
+
+    _emit_sweep_metrics(cfg, args, points, last_cb, seq_len, total_steps)
+    return 0
+
+
+def _emit_sweep_metrics(cfg: TrainConfig, args: Any, points: list[tuple[float, float]],
+                        cb: _ThroughputCallback, seq_len: int, total_steps: int) -> None:
+    wall = cb.wall_s()
+    toks = cb.steps * cfg.per_device_batch * cfg.grad_accum * seq_len
+    peak_gb = (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else None
+    cap_gb = (torch.cuda.get_device_properties(0).total_memory / 1e9
+              if torch.cuda.is_available() else None)
+    metrics = {
+        # gpu_util/peak_mem/tokens_per_s measured on the LARGEST (100%) slice.
+        "gpu_util": cb.mean_util(),
+        "peak_mem_gb": peak_gb,
+        "gpu_capacity_gb": cap_gb,
+        "smoke_steps": cb.steps,
+        "smoke_wall_s": wall,
+        "tokens_per_s": (toks / wall) if wall else 0.0,
+        "seq_len": seq_len,
+        # see the "total_steps" key note on _emit_smoke_metrics -- same
+        # contract, auto-supplied to perf_report.evaluate_perf_gate.
+        "total_steps": total_steps,
+        "learning_curve": sweep.build_learning_curve(points),
+        "note": "learning-curve sweep (10/25/50/100% slices); gpu_util/peak_mem_gb/"
+                "tokens_per_s measured on the LARGEST (100%) slice; total_steps is "
+                "auto-supplied (measured) -- feed to perf_report.py with "
+                "--gpu-cost-per-hour-usd for the go/no-go gate",
+    }
+    out = args.metrics_out or (Path(args.out_dir) / "sweep_metrics.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(json.dumps(metrics, indent=2))
+    print(f"[sweep] metrics -> {out}\n{json.dumps(metrics, indent=2)}")
