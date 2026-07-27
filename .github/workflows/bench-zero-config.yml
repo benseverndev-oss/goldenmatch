@@ -99,6 +99,18 @@ jobs:
               f'goldenmatch resolves to {goldenmatch.__file__} — not the worktree'; \
             print('worktree install OK:', goldenmatch.__file__)"
 
+      - name: Build native extension (so FS scoring isn't pure-Python)
+        # Without this the FS path falls back to pure-Python scoring (~100x
+        # slower), so any wall/RSS number off this bench is meaningless at scale.
+        run: uv run python scripts/build_native.py
+
+      - name: Assert native FS kernel is loaded (fail loud, don't measure Python)
+        run: |
+          .venv/bin/python -c "from goldenmatch.core._native_loader import native_enabled; \
+            assert native_enabled('block_scoring'), \
+              'native block_scoring NOT loaded — this bench would measure the pure-Python fallback'; \
+            print('native block_scoring: ON')"
+
       - name: Generate ${{ inputs.n_records }}-row fixture
         run: |
           mkdir -p .profile_tmp/scale_fixtures
