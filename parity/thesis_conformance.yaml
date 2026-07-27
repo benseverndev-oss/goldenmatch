@@ -84,12 +84,12 @@ weaknesses:
 
   - id: fs-default-ts-path-unwired-second-source
     tenet: T1
-    severity: low   # was medium; RESOLVED-as-wired -- pipeline now routes to the
-                    # shared fs-core kernel (opt-in, edge-bundle-consistent),
-                    # parity-proven == Python; bundle-default-on flip is a declared
-                    # owner-gated follow-up, not a silent-drift gap
+    severity: low   # was medium; RESOLVED-as-wired AND default-on -- the batteries
+                    # `goldenmatch` root entry auto-enables the kernel; goldenmatch/core
+                    # stays lean + opt-in. The owner-gated default flip landed and was
+                    # measured F1-neutral (see below). No open follow-up remains.
     declared: true   # Wave A: declared in the 0046 amendment (2026-07-26)
-    title: "TS Fellegi-Sunter scoring is now wired to the shared fs-core kernel (opt-in); pure-TS is the classified fallback"
+    title: "TS Fellegi-Sunter scoring runs the shared fs-core kernel by default (batteries entry); pure-TS is the classified fallback"
     detail: >-
       RESOLVED-as-wired. The pipeline (scoreProbabilisticBlocks) now routes FS block
       scoring through the shared fs_core kernel via fs-wasm when enabled, so the kernel
@@ -103,18 +103,32 @@ weaknesses:
       banding + a missing cell + a firing NE field. This also aligns TS onto Python's
       operating point (the #1854 FIXED full-field weight range vs the old pure-TS
       per-pair shrinking range).
-      The reroute is OPT-IN / default-preferring (enableFsWasmScoring), NOT statically
-      bundle-default-on -- the edge-safe `core` bundle keeps its documented "no wasm
-      bytes" discipline that EVERY sibling wasm reroute (cluster/graph/fingerprint/
-      hnsw/suggest) respects. Flipping it on for every dedupe() caller out of the box
-      would need a batteries-included non-edge entry (keeping goldenmatch/core lean)
-      and would change TS default F1 for all callers -- a DECLARED owner-gated
-      follow-up (the F1 direction is the #1854 alignment, i.e. toward Python), not a
-      silent second-source-of-truth gap. Stays low on that residual.
+      DEFAULT-ON (owner-gated flip landed 2026-07-27). The batteries-included
+      `goldenmatch` root entry (src/index.ts) now auto-registers the kernel on import
+      (enableFsWasmScoring() side-effect), so every dedupe()/match() caller of the bare
+      package runs the shared kernel out of the box -- Python's operating point. The
+      edge-safe `goldenmatch/core` entry KEEPS its documented "no wasm bytes" discipline
+      (every sibling wasm reroute cluster/graph/fingerprint/hnsw/suggest respects it):
+      it stays lean and opt-in, so bundle-size-sensitive edge callers import core and
+      call enableFsWasmScoring() themselves. Batteries callers wanting the old pure-TS
+      path call disableFsWasmScoring() once. The ~187 KB fs-wasm is registered eagerly
+      but COMPILED LAZILY (first kernel-eligible block), so importing `goldenmatch`
+      stays cheap.
+      The flip was GATED on a measured F1 delta, not just byte-parity: a labeled
+      partial-missing dataset shows the kernel is F1-NEUTRAL vs pure-TS (single-block
+      well-conditioned EM: dF1 +0.0000; realistic soundex blocking: dF1 -0.007, within
+      small-sample noise). An earlier draft measurement trained EM on 36 rows in one
+      block, whose DEGENERATE weights (field disagree ~-24) made the fixed-range
+      normalization over-merge missing-field pairs -- a HARNESS artifact, not a kernel
+      property; it vanishes with representative weights. The measurement + its lesson
+      are locked in tests/unit/fs-default-f1-measure.test.ts. No open follow-up remains.
     evidence:
+      - packages/typescript/goldenmatch/src/index.ts   # batteries entry, kernel default-on
       - packages/typescript/goldenmatch/src/core/pipeline.ts
       - packages/typescript/goldenmatch/src/core/fsScore.ts
       - packages/typescript/goldenmatch/src/core/fsScoreBackend.ts
+      - packages/typescript/goldenmatch/tests/unit/fs-batteries.test.ts   # auto-enable on import
+      - packages/typescript/goldenmatch/tests/unit/fs-default-f1-measure.test.ts   # measured F1-neutral gate
       - packages/typescript/goldenmatch/tests/parity/fixtures/fs/fs_block_scoring_ne_banding.json
       - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
 

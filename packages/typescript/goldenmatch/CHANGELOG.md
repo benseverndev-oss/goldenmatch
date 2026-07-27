@@ -4,6 +4,30 @@ All notable changes to goldenmatch-js are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/) (strict after v1.0.0).
 
+## [1.26.0] - 2026-07-27
+
+### Changed (default behavior — read before upgrading)
+- **The bare `goldenmatch` import is now batteries-included: Fellegi-Sunter probabilistic
+  scoring runs the shared `fs-core` wasm kernel BY DEFAULT** (the same kernel the Python
+  `goldenmatch-native` wheel runs — Python's #1854 fixed-full-field operating point), with
+  no `enableFsWasmScoring()` call. `src/index.ts` auto-registers the kernel on import. This
+  closes the `fs-default-ts-path` thesis-conformance item: the kernel is now the wired,
+  parity-proven source of truth for the default caller, not just an opt-in.
+  - **Measured F1-neutral, not just byte-parity.** The flip was gated on a measured F1 delta
+    on a labeled partial-missing dataset, not only the TS==Python-native byte-parity gate:
+    single-block (well-conditioned EM) dF1 **+0.0000**; realistic soundex blocking dF1
+    **−0.007** (within small-sample noise). Pure-TS `scoreProbabilistic` stays the classified
+    fallback for configs the kernel can't express (embedding / name-refdata / TF-adjusted).
+  - **Cost:** the bare `goldenmatch` bundle now carries the inlined ~187 KB fs-wasm. It is
+    registered eagerly but **compiled lazily** (first kernel-eligible FS block), so importing
+    the package stays cheap.
+  - **Migration — want the lean, wasm-free bundle** (Cloudflare Workers / bundle-size-sensitive
+    edge)? Import from **`goldenmatch/core`** instead — identical API, pure-TS FS scoring, and
+    you opt in to the kernel yourself with `enableFsWasmScoring()`. The edge-safe `core` bundle
+    keeps its documented "no wasm bytes" discipline. Already on `goldenmatch` and want the old
+    pure-TS behavior? Call **`disableFsWasmScoring()`** once at startup (both controls are
+    re-exported from the root).
+
 ## [1.25.0] - 2026-07-24
 
 ### Added
