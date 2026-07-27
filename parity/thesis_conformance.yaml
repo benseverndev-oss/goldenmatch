@@ -200,10 +200,11 @@ weaknesses:
 
   - id: standalone-ts-algorithms-no-shared-kernel
     tenet: T1
-    severity: low   # was medium; RESOLVED -- Family A now shares a kernel
-                    # (cluster-wasm), Family B is a declared fixture-locked boundary
+    severity: low   # was medium; RESOLVED -- Family A shares a kernel (cluster-wasm),
+                    # Family B (goldenanalysis frame kernels) NOW shares one too
+                    # (analysis-wasm intern reroute; Wave 1b un-deferred via #1788)
     declared: true   # declared in TS CLAUDE.md / wave1b spec + parity manifests
-    title: "Clustering + goldenanalysis frame kernels: Family A shares a kernel (cluster-wasm); Family B declared fixture-locked"
+    title: "Clustering + goldenanalysis frame kernels: both families now share a kernel (cluster-wasm + analysis-wasm)"
     detail: >-
       TWO families, both resolved. (A) TS clustering: connected-components was already shared
       to WASM (graph-wasm); the MST oversized-split + confidence half is NOW shared too.
@@ -214,18 +215,27 @@ weaknesses:
       byte-identical default fallback, and the split partition is deterministic so wasm ==
       pure-TS components exactly (parity-tested + the Python cluster-handoff oracle). So the
       MST-split kernel is one source of truth across Python-native + TS, not two impls.
-      (B) goldenanalysis frame kernels (distinct_count/null_ratio/duplicate_row_ratio): the
-      Arrow-value interning has no clean WASM boundary (Wave 1b consciously deferred), so this
-      is an ACCEPTED fixture-locked boundary -- declared at the surface as
-      `frame_kernels_deferred` in parity/goldenanalysis.yaml (same idiom as
-      blocking_kernels_deferred/scorer_kernels_deferred) and locked by the adversarial
-      cross-surface fixture. Stays low: revisit only on a real in-browser frame-dedup workload
-      (then arrow-in-wasm is the thesis-pure path).
+      (B) goldenanalysis frame kernels (distinct_count/duplicate_row_ratio) NOW SHARE a kernel
+      too (Wave 1b un-deferred 2026-07-27). The deferral rested on the interning being
+      Arrow-specific; #1788 had already moved it OUT of Arrow into analysis-core's plain-buffer
+      `intern_f64`/`intern_str` (canon_f64_bits NaN/-0.0 fold), so the SAME canon crosses to WASM
+      with no arrow-rs bloat. analysis-wasm now exports intern_f64/intern_str +
+      distinct_count_ids/duplicate_row_ratio_ids; TS `nUnique`/`duplicateRowRatio` route
+      homogeneously-typed number/string columns through that shared kernel (opt-in
+      enableAnalysisWasm; pure-TS is the classified fallback for bool/mixed columns, which JS's
+      untyped per-cell model can't express as one typed buffer). null_ratio stays pure-TS (pure
+      null-counting, no interning canon to share). Declared at the surface as `frame_kernels` in
+      parity/goldenanalysis.yaml; the kernel path reproduces the Python-locked
+      frame_kernels_adversarial.json EXACTLY (wasm-frame-kernels.parity.test.ts) alongside the
+      pure-TS lock. So both families are one source of truth, not two impls.
     evidence:
       - packages/rust/extensions/cluster-core/src/lib.rs
       - packages/rust/extensions/cluster-wasm/src/lib.rs
       - packages/typescript/goldenmatch/src/core/cluster.ts
       - packages/typescript/goldenmatch/tests/parity/cluster-wasm.parity.test.ts
+      - packages/rust/extensions/analysis-wasm/src/lib.rs   # frame-kernel wasm exports
+      - packages/typescript/goldenanalysis/src/core/aggregate.ts   # nUnique/duplicateRowRatio reroute
+      - packages/typescript/goldenanalysis/tests/parity/wasm-frame-kernels.parity.test.ts   # kernel == fixture
       - parity/goldenanalysis.yaml
       - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
 

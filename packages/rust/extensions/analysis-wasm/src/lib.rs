@@ -7,7 +7,10 @@
 //! `[edge0, count0, edge1, count1, ...]` (wasm-bindgen marshals `Vec<f64>` ↔
 //! `Float64Array`; counts are exact integers well within 2^53).
 
-use analysis_core::{cluster_size_histogram, histogram, max, mean, min, quantile};
+use analysis_core::{
+    cluster_size_histogram, distinct_count, duplicate_row_ratio, histogram, intern_f64, intern_str,
+    max, mean, min, quantile,
+};
 
 /// Flatten analysis-core's `Vec<(f64, i64)>` histogram to `[edge, count, ...]`.
 /// `bins` is `i32` (a JS `number` may be 0/negative; keep it SIGNED so
@@ -42,7 +45,57 @@ pub fn max_impl(values: &[f64]) -> f64 {
 /// Cluster-size histogram flattened as a Float64Array of 4 counts `[n1, n2, n3, n4plus]`
 /// (counts are exact integers well within 2^53).
 pub fn cluster_size_histogram_impl(sizes: &[f64]) -> Vec<f64> {
-    cluster_size_histogram(sizes).into_iter().map(|c| c as f64).collect()
+    cluster_size_histogram(sizes)
+        .into_iter()
+        .map(|c| c as f64)
+        .collect()
+}
+
+// ── Frame kernels (distinct_count / duplicate_row_ratio) via shared interning ──
+//
+// Wave 1b, un-deferred: #1788 moved interning OUT of Arrow into analysis-core's
+// plain-buffer `intern_f64`/`intern_str`, so the SAME equality canon (canon_f64_bits
+// NaN/-0.0 fold; byte string equality; null == validity 0) crosses to WASM with no
+// arrow-rs bloat. Dense value-ids cross as f64 (exact ints well within 2^53, the same
+// convention histogram counts use). The TS surface routes numeric columns through
+// `intern_f64` (JS has one number type) + string columns through `intern_str`, and
+// falls back to pure-TS for bool/mixed columns.
+
+/// Intern a numeric column to dense value-ids (as f64). `validity[i]==0` => null (id 0).
+pub fn intern_f64_impl(values: &[f64], validity: &[u8]) -> Vec<f64> {
+    intern_f64(values, validity)
+        .into_iter()
+        .map(|id| id as f64)
+        .collect()
+}
+
+/// Intern a UTF-8 column (Arrow utf8 layout `offsets[n+1]` + `bytes`) to dense value-ids
+/// (as f64). `validity[i]==0` => null (id 0); an empty slice is a valid empty string.
+pub fn intern_str_impl(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> Vec<f64> {
+    intern_str(offsets, bytes, validity)
+        .into_iter()
+        .map(|id| id as f64)
+        .collect()
+}
+
+/// Distinct-value count over interned ids (null id counts as a value), as f64.
+pub fn distinct_count_ids_impl(ids: &[f64]) -> f64 {
+    let u: Vec<u64> = ids.iter().map(|&x| x as u64).collect();
+    distinct_count(&u) as f64
+}
+
+/// Exact-duplicate row ratio over `n_cols` interned id-columns laid out COLUMN-MAJOR
+/// in `ids_flat` (col 0's `n_rows` ids, then col 1's, ...).
+pub fn duplicate_row_ratio_ids_impl(ids_flat: &[f64], n_cols: usize, n_rows: usize) -> f64 {
+    if n_rows == 0 || n_cols == 0 {
+        return 0.0;
+    }
+    let cols: Vec<Vec<u64>> = ids_flat
+        .chunks(n_rows)
+        .take(n_cols)
+        .map(|chunk| chunk.iter().map(|&x| x as u64).collect())
+        .collect();
+    duplicate_row_ratio(&cols, n_rows)
 }
 
 #[cfg(test)]
@@ -51,7 +104,10 @@ mod tests {
 
     #[test]
     fn cluster_size_histogram_impl_matches_core() {
-        assert_eq!(cluster_size_histogram_impl(&[1.0, 1.0, 2.0, 5.0]), vec![2.0, 1.0, 0.0, 1.0]);
+        assert_eq!(
+            cluster_size_histogram_impl(&[1.0, 1.0, 2.0, 5.0]),
+            vec![2.0, 1.0, 0.0, 1.0]
+        );
         assert_eq!(cluster_size_histogram_impl(&[]), vec![0.0, 0.0, 0.0, 0.0]);
     }
 
@@ -101,12 +157,54 @@ mod tests {
     fn quantile_empty_is_zero() {
         assert_eq!(quantile_impl(&[], 0.5), 0.0);
     }
+
+    // Frame kernels: assert the wasm impls reproduce frame_kernels_adversarial.json
+    // (the same fixture the pure-TS + Python paths lock), so the reroute is byte-faithful.
+
+    #[test]
+    fn frame_float_nan_null_matches_fixture() {
+        // f = [-0.0, 0.0, NaN, NaN, null, 1.0, 1.0]  (fixture: distinct 4, dup 6/7)
+        let ids = intern_f64_impl(
+            &[-0.0, 0.0, f64::NAN, f64::NAN, 0.0, 1.0, 1.0],
+            &[1, 1, 1, 1, 0, 1, 1],
+        );
+        assert_eq!(distinct_count_ids_impl(&ids), 4.0);
+        assert!((duplicate_row_ratio_ids_impl(&ids, 1, 7) - 6.0 / 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn frame_string_empty_null_matches_fixture() {
+        // s = ["a","a","",null,"a","b",null]  (fixture: distinct 4, dup 5/7)
+        let ids = intern_str_impl(&[0, 1, 2, 2, 2, 3, 4, 4], b"aaab", &[1, 1, 1, 0, 1, 1, 0]);
+        assert_eq!(distinct_count_ids_impl(&ids), 4.0);
+        assert!((duplicate_row_ratio_ids_impl(&ids, 1, 7) - 5.0 / 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn frame_mixed_multicolumn_matches_fixture() {
+        // mixed f/i/s (fixture: distinct 4/3/4, dup 2/7 over the 3-col rows)
+        let f = intern_f64_impl(
+            &[-0.0, 0.0, f64::NAN, f64::NAN, 0.0, 1.0, 1.0],
+            &[1, 1, 1, 1, 0, 1, 1],
+        );
+        let i = intern_f64_impl(&[5.0, 5.0, 3.0, 3.0, 0.0, 5.0, 5.0], &[1, 1, 1, 1, 0, 1, 1]);
+        let s = intern_str_impl(&[0, 1, 2, 2, 2, 3, 4, 4], b"aaab", &[1, 1, 1, 0, 1, 1, 0]);
+        assert_eq!(distinct_count_ids_impl(&f), 4.0);
+        assert_eq!(distinct_count_ids_impl(&i), 3.0);
+        assert_eq!(distinct_count_ids_impl(&s), 4.0);
+        let mut flat = Vec::new();
+        flat.extend_from_slice(&f);
+        flat.extend_from_slice(&i);
+        flat.extend_from_slice(&s);
+        assert!((duplicate_row_ratio_ids_impl(&flat, 3, 7) - 2.0 / 7.0).abs() < 1e-12);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::{
-        cluster_size_histogram_impl, histogram_flat_impl, max_impl, mean_impl, min_impl,
+        cluster_size_histogram_impl, distinct_count_ids_impl, duplicate_row_ratio_ids_impl,
+        histogram_flat_impl, intern_f64_impl, intern_str_impl, max_impl, mean_impl, min_impl,
         quantile_impl,
     };
     use wasm_bindgen::prelude::*;
@@ -146,5 +244,32 @@ mod wasm {
     #[wasm_bindgen]
     pub fn cluster_size_histogram(sizes: &[f64]) -> Vec<f64> {
         cluster_size_histogram_impl(sizes)
+    }
+
+    /// JS entry: intern a numeric column to dense value-ids (Float64Array). `validity`
+    /// is one byte per row (0 = null).
+    #[wasm_bindgen]
+    pub fn intern_f64(values: &[f64], validity: &[u8]) -> Vec<f64> {
+        intern_f64_impl(values, validity)
+    }
+
+    /// JS entry: intern a UTF-8 column (`offsets`[n+1] + `bytes`, Arrow utf8 layout) to
+    /// dense value-ids (Float64Array). `validity` is one byte per row (0 = null).
+    #[wasm_bindgen]
+    pub fn intern_str(offsets: &[u32], bytes: &[u8], validity: &[u8]) -> Vec<f64> {
+        intern_str_impl(offsets, bytes, validity)
+    }
+
+    /// JS entry: distinct-value count over interned `ids`.
+    #[wasm_bindgen]
+    pub fn distinct_count_ids(ids: &[f64]) -> f64 {
+        distinct_count_ids_impl(ids)
+    }
+
+    /// JS entry: exact-duplicate row ratio over `n_cols` COLUMN-MAJOR interned id-columns
+    /// in `ids_flat` (col 0's `n_rows` ids, then col 1's, ...).
+    #[wasm_bindgen]
+    pub fn duplicate_row_ratio_ids(ids_flat: &[f64], n_cols: u32, n_rows: u32) -> f64 {
+        duplicate_row_ratio_ids_impl(ids_flat, n_cols as usize, n_rows as usize)
     }
 }
