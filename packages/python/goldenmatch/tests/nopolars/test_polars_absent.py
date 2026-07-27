@@ -146,3 +146,40 @@ def test_blocking_risk_arrow_is_polars_free() -> None:
     assert risk is not None and "state" in risk
     assert abs(risk["state"] - 0.25) < 1e-9
     assert "polars" not in sys.modules
+
+
+def test_guarded_matchkey_arrow_is_polars_free() -> None:
+    """A guarded matchkey runs on a ``pa.Table`` polars-free. The pipeline's
+    raw-value capture (for the guard's ``a_``/``b_`` predicate) reads through the
+    arrow-native ``to_frame`` + Column seam, NOT polars ``collect_schema`` /
+    ``.select`` / ``[c]`` indexing -- so a guard evaluates correctly with polars
+    absent. Guarded configs are never exercised by the zero-config cases above,
+    so this is the only lane that covers the guard capture path polars-free."""
+    import goldenmatch as gm
+    import pyarrow as pa
+    from goldenmatch.config.schemas import (
+        BlockingConfig,
+        BlockingKeyConfig,
+        GoldenMatchConfig,
+        MatchkeyConfig,
+        MatchkeyField,
+    )
+
+    # rows 0,1 share the placeholder ssn (guard must suppress); 2,3 share a real
+    # ssn (guard holds -> merge).
+    df = pa.table({
+        "ssn": ["000-00-0000", "000-00-0000", "111-22-3333", "111-22-3333"],
+        "name": ["A", "B", "C", "D"],
+    })
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="ssn", type="exact", fields=[MatchkeyField(field="ssn")],
+            guard="a_ssn != '000-00-0000' and b_ssn != '000-00-0000'",
+        )],
+        blocking=BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["ssn"])]),
+    )
+    result = gm.dedupe_df(df, config=cfg)
+    # placeholder pair NOT merged; real-ssn pair merged
+    assert _cluster_of(result.clusters, 0) != _cluster_of(result.clusters, 1)
+    assert _cluster_of(result.clusters, 2) == _cluster_of(result.clusters, 3)
+    assert "polars" not in sys.modules

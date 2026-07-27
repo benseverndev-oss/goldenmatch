@@ -704,11 +704,12 @@ class MatchkeyConfig(BaseModel):
                         "EM-learned NE weights; set penalty_bits to override."
                     )
         # Guards: parse + require a_/b_ prefixes at config time (column existence
-        # is checked later, where the frame's columns are known). v1 wires
-        # matchkey-level guards on exact + weighted matchkeys. Probabilistic
-        # matchkey guards and field-level guards (weighted-average
-        # drop-and-renormalize) are a planned follow-up -- reject them here so a
-        # guard is never SILENTLY ignored. Spec:
+        # is checked later, where the frame's columns are known). Matchkey-level
+        # guards are wired on exact + weighted; field-level guards are wired on
+        # weighted matchkeys (a guard-failing field drops out of the weighted
+        # average). Probabilistic matchkey guards and field-level guards on
+        # exact/probabilistic are a planned follow-up -- rejected here so a guard
+        # is never SILENTLY ignored. Spec:
         # docs/superpowers/specs/2026-07-26-guarded-matchkeys-design.md.
         from goldenmatch.core.guard import GuardError, guard_columns
 
@@ -734,12 +735,13 @@ class MatchkeyConfig(BaseModel):
                 raise ValueError(
                     f"Matchkey '{self.name}' field '{f.field}': {exc}"
                 ) from None
-            raise ValueError(
-                f"Matchkey '{self.name}' field '{f.field}': field-level guards "
-                "(dropping a field from the weighted average when its guard fails) "
-                "are a planned follow-up and not yet applied. Use the matchkey-level "
-                "'guard' to gate the whole matchkey for now."
-            )
+            if self.type != "weighted":
+                raise ValueError(
+                    f"Matchkey '{self.name}' (type={self.type!r}): field-level guards "
+                    f"(field '{f.field}') are only valid on weighted matchkeys (they "
+                    "drop a field from the weighted average). Use the matchkey-level "
+                    "'guard' to gate an exact/probabilistic matchkey."
+                )
         return self
 
     # ── Typed accessors ──
