@@ -136,6 +136,11 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
         warmup_ratio=cfg.warmup_ratio,
         weight_decay=cfg.weight_decay,
         bf16=cfg.bf16,
+        # Gradient checkpointing is the memory lever that makes a 3B LoRA SFT fit
+        # (batch x seq activations dominate; the A10G smoke OOM'd without it).
+        # use_reentrant=False is required for PEFT + checkpointing.
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         packing=cfg.packing,
         max_seq_length=seq_len,
         group_by_length=cfg.group_by_length,

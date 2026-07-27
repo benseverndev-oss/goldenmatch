@@ -56,6 +56,9 @@ _image = (
         "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/"
         "v2.6.3/flash_attn-2.6.3+cu123torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
     )
+    # reduce CUDA allocator fragmentation (recommended by the OOM error itself).
+    # MUST precede add_local_* -- Modal forbids build steps after local-file adds.
+    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     # the shared prompt contract + the trainer live in the repo; add the two dirs
     .add_local_dir(
         "packages/python/goldenmatch/goldenmatch/core/er_matcher",
