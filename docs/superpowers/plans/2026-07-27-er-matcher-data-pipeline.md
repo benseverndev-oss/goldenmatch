@@ -314,11 +314,46 @@ def test_leipzig_deterministic():
 - Create: `scripts/er_matcher/sources_config.py`
 - Test: `scripts/er_matcher/test_sources_config.py`
 
-- [ ] **Step 1: Write the failing test** — `load_sources(path)` returns validated entries; rejects unknown keys (mirror `train.load_config`'s strictness); every entry has `mechanism ∈ {bundle,generate,fetch}`, `license`, and (for CC-BY) `attribution`; `eval_only` sources are flagged.
+Each yaml entry must carry enough to **construct** its loader, not just describe it
+(the flagged gap: build_corpus needs a factory, and the 5 Leipzig datasets are 5
+entries → 5 `LeipzigSource` instances). Entry schema:
+
+```yaml
+sources:
+  abt_buy:
+    loader: leipzig                 # -> which PairSource class
+    mechanism: bundle
+    license: CC-BY
+    attribution: "Leipzig DB Group; VLDB2010"
+    domain: product
+    weight: 1.0                      # illustrative; blend deferred
+    kwargs: {root: data/er_matcher/raw/leipzig/abt_buy, block_fields: [title]}
+  febrl:
+    loader: febrl
+    mechanism: bundle
+    license: MPL-1.1
+    domain: person
+    weight: 2.0                      # person upweight (illustrative)
+    kwargs: {root: data/er_matcher/raw/febrl}
+  magellan_dblp_acm:
+    loader: magellan
+    mechanism: fetch
+    license: cite-only
+    eval_only: true
+    kwargs: {name: dblp_acm}
+  ncvr:                              # deferred to sub-project 3; present for model-card completeness
+    loader: ncvr
+    mechanism: fetch
+    license: public-record
+    eval_only: true
+    kwargs: {}
+```
+
+- [ ] **Step 1: Write the failing test** — `load_sources(path)` returns validated entries; rejects unknown keys (mirror `train.load_config`'s strictness); every entry has `loader`, `mechanism ∈ {bundle,generate,fetch}`, `license`, and (for CC-BY) `attribution`; `eval_only` sources are flagged; `kwargs` is a dict. Add `build_source(entry)` (the factory) that maps `loader` → class and constructs it with `**kwargs` + `seed`; test it returns a registered `PairSource` whose `.name` == the yaml key.
 - [ ] **Step 2: Run to verify it fails.**
-- [ ] **Step 3: Author `sources.yaml`** (weights illustrative; blend deferred) and implement `sources_config.py` (PyYAML load + dataclass validate).
+- [ ] **Step 3: Author `sources.yaml`** (schema above; weights illustrative; blend deferred) and implement `sources_config.py` (PyYAML load + dataclass validate + `build_source` factory keyed on `loader`). The `ncvr` loader may be a thin fetch/`eval_only` stub (raises `NotImplementedError` until sub-project 3) so its entry validates for the model card without implementing the fetch now.
 - [ ] **Step 4: Run to verify pass.**
-- [ ] **Step 5: Commit** — `feat(er-matcher): sources.yaml + validated loader`
+- [ ] **Step 5: Commit** — `feat(er-matcher): sources.yaml + validated loader + build_source factory`
 
 ---
 
@@ -335,7 +370,7 @@ def test_leipzig_deterministic():
   - re-run with same seed → byte-identical output (determinism test).
 
 - [ ] **Step 2: Run to verify it fails.**
-- [ ] **Step 3: Implement `build_corpus.py`** — iterate bundled sources from `sources.yaml`, pull `splits()`, apply per-source blend cap/weight, concat per split, write JSONL (`json.dumps(sort_keys=True)` like `gen_pairs._write`), emit `manifest.json` with provenance + licenses. `fetch`/`eval_only` sources are skipped in the training corpus (they're for the eval harness, sub-project 3).
+- [ ] **Step 3: Implement `build_corpus.py`** — for each `sources.yaml` entry, construct+register the loader via `sources_config.build_source` (Task 7 factory), then for bundled/generate sources pull `splits()`, apply per-source blend cap/weight, concat per split, write JSONL (`json.dumps(sort_keys=True)` like `gen_pairs._write`), emit `manifest.json` with provenance + licenses. `fetch`/`eval_only` sources are constructed but skipped in the training corpus (they're for the eval harness, sub-project 3) — their license/attribution still flows into the manifest for the model card.
 - [ ] **Step 4: Run to verify pass.**
 - [ ] **Step 5: Commit** — `feat(er-matcher): build_corpus blends sources -> unified JSONL + license manifest`
 
@@ -392,6 +427,7 @@ def test_leipzig_deterministic():
 
 - **Box-safe only:** no test imports torch/transformers or hits the network. Fetch is guarded by `GOLDENMATCH_ALLOW_FETCH`; unit tests read committed fixtures.
 - **Fixture paths anchored to `__file__`** (CWD differs local vs CI — see repo CLAUDE.md).
+- **Each new test file opens with** `import os, sys; sys.path.insert(0, os.path.dirname(__file__))` (matches `test_gen_pairs.py:12`) so `import sources...` resolves under a direct `python test_x.py` run and survives a future `--import-mode=importlib` switch, not just pytest's default prepend mode.
 - **xdist isolation:** register sources *inside* the test that asserts them (no cross-test registry leakage).
 - **Determinism:** every source + `build_corpus` has a same-seed → byte-identical test (mirrors `test_gen_pairs.py`).
 - **Commits:** one per task step-group; PR per phase (1a, then 1b).
