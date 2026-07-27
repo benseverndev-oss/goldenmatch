@@ -440,6 +440,29 @@ def resolve_clusters(
             actor=actor, emit_singletons=emit_singletons,
             weak_confidence_threshold=weak_confidence_threshold,
         )
+    # C1 follow-on: fold the bulk DATA parts (cluster partition / record frame /
+    # scored-pair stream / pair-score view) into the batch, so the whole
+    # compute->control handoff is ONE object and apply_batch takes no side args.
+    batch = batch.with_data(
+        clusters=clusters, cluster_frames=cluster_frames, df=df,
+        scored_pairs=scored_pairs, pair_score_view=pair_score_view,
+    )
+    return apply_batch(store, batch)
+
+
+def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
+    """Apply a fully-specified ``ResolutionBatch`` to the store.
+
+    The single compute->control WRITE entry the manifesto (§3) calls for:
+    ``resolve_clusters`` is the thin adapter that validates its args + builds the
+    batch, and this consumes it. BYTE-IDENTICAL to the prior inline body -- the data
+    + metadata are rebound from the batch here and the resolution logic below is
+    unchanged (locked by test_resolution_batch_c1)."""
+    clusters = batch.clusters
+    cluster_frames = batch.cluster_frames
+    df = batch.df
+    scored_pairs = batch.scored_pairs if batch.scored_pairs is not None else []
+    pair_score_view = batch.pair_score_view
     run_name = batch.run_id
     dataset = batch.dataset
     matchkey_name = batch.matchkey_name

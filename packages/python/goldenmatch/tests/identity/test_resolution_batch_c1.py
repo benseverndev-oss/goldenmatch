@@ -11,7 +11,7 @@ import dataclasses
 
 import pytest
 from goldenmatch.identity.resolution_batch import ResolutionBatch
-from goldenmatch.identity.resolve import resolve_clusters
+from goldenmatch.identity.resolve import resolve_clusters, apply_batch
 
 from .test_resolve_bulk_writes_1886 import (
     _singleton_clusters,
@@ -82,3 +82,37 @@ def test_explicit_batch_overrides_loose_kwargs():
     # The run executed the per-record path inside one transaction (no crash from
     # the override), i.e. the batch drove resolution.
     assert "ENTER" in store.events and "EXIT" in store.events
+
+
+def test_with_data_carries_bulk_parts():
+    """C1 follow-on: ``with_data`` folds the bulk parts onto a metadata batch as a
+    frozen copy (metadata unchanged, original untouched)."""
+    b = ResolutionBatch.from_args(run_id="r1", dataset="crm")
+    assert b.clusters is None and b.df is None and b.scored_pairs is None
+    clusters, df = _singleton_clusters(2), _singleton_df(2)
+    b2 = b.with_data(clusters=clusters, df=df, scored_pairs=[])
+    assert b2.clusters is clusters and b2.df is df and b2.scored_pairs == []
+    assert b2.run_id == "r1" and b2.dataset == "crm"  # metadata carried through
+    assert b.clusters is None  # original batch untouched (frozen copy)
+
+
+def test_apply_batch_matches_resolve_clusters_adapter():
+    """``apply_batch(store, batch-with-data)`` is the real write entry; the
+    ``resolve_clusters`` adapter that builds that batch dispatches the same writes."""
+    n = 5
+    adapter_store = _TxnRecordingStore()
+    resolve_clusters(
+        clusters=_singleton_clusters(n), df=_singleton_df(n), scored_pairs=[],
+        store=adapter_store, run_name="run1", dataset="crm", source_pk_col="raw_id",
+    )
+
+    direct_store = _TxnRecordingStore()
+    batch = ResolutionBatch.from_args(
+        run_id="run1", dataset="crm", source_pk_col="raw_id",
+    ).with_data(
+        clusters=_singleton_clusters(n), df=_singleton_df(n), scored_pairs=[],
+    )
+    apply_batch(direct_store, batch)
+
+    assert direct_store.events == adapter_store.events
+    assert any(e in {"bulk_upsert_records", "bulk_add_edges"} for e in direct_store.events)

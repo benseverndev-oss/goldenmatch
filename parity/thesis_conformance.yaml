@@ -62,10 +62,10 @@ weaknesses:
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
-    severity: low   # Wave B fixed the acute bug; Wave C/C1 landed the versioned
-                    # contract object; only refactor completeness remains
+    severity: low   # RESOLVED -- Wave B fixed the acute bug; Wave C/C1 landed the
+                    # versioned contract; the C1 data-array fold + apply_batch now done
     declared: true   # named as the 9 seam in the frame
-    title: "Compute->control handoff is now a versioned ResolutionBatch (payload-drop fixed; data-array fold remains)"
+    title: "Compute->control handoff is a versioned ResolutionBatch consumed by apply_batch(store, batch)"
     detail: >-
       FIXED (Wave B): the #2132 payload-drop trap that was LIVE on all three Postgres
       bulk paths now carries provenance, locked by test_postgres_bulk_payload_parity.py.
@@ -73,13 +73,19 @@ weaknesses:
       (CONTRACT_VERSION=1), immutable contract bundling the metadata/config half of the
       seam (was loose args: controller_snapshot/run_id/matchkey/actor/emit_singletons/
       weak_confidence_threshold) + the frame-residency budget (flush_rows) as a CONTRACT
-      TERM, not a bare env read. resolve_clusters consumes it (additive `batch` param;
-      byte-identical when absent -- test_resolution_batch_c1.py proves same store
-      dispatch). REMAINING (C1 follow-on): fold the bulk DATA arrays (records/clusters/
-      pair-evidence) into the batch + extract an apply_batch(store, batch) body.
+      TERM, not a bare env read.
+      C1 FOLLOW-ON DONE 2026-07-27: the bulk DATA parts (cluster partition / record frame /
+      scored-pair stream / pair-score view) are now folded onto the batch (ResolutionBatch
+      data fields + `with_data`), and the write body is extracted as `apply_batch(store,
+      batch)` -- the single compute->control write entry the manifesto (§3) calls for.
+      resolve_clusters is now the thin adapter (validate args -> build batch -> apply_batch),
+      byte-identical (the 400-line resolution body is unchanged; 307 identity tests +
+      test_resolution_batch_c1's apply_batch==adapter + with_data locks pass). So the whole
+      handoff is ONE versioned object with no side args. No open follow-on.
     evidence:
-      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py
-      - packages/python/goldenmatch/tests/identity/test_resolution_batch_c1.py
+      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py   # data fields + with_data
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py   # apply_batch(store, batch) + adapter
+      - packages/python/goldenmatch/tests/identity/test_resolution_batch_c1.py   # apply_batch==adapter, with_data
       - packages/python/goldenmatch/tests/identity/test_postgres_bulk_payload_parity.py
 
   - id: fs-default-ts-path-unwired-second-source
@@ -282,12 +288,17 @@ weaknesses:
     detail: >-
       Control-plane write memory stacks on the compute prep floor (emit_singletons
       materializes every referenced row; ~35 GB on a 14M frame), bounded by flushing
-      every flush_rows records. ADDRESSED-IN-PART (Wave C / C1): flush_rows is now a
+      every flush_rows records. ADDRESSED (Wave C / C1): flush_rows is now a
       field on ResolutionBatch (a contract term), and emit_singletons rides the same
       contract, instead of the budget living only in inline comments + the
-      GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS env var. REMAINING: the prep-floor half of
-      the budget (the compute side) is still implicit; the full shared-budget accounting
-      lands with the C1 data-array fold.
+      GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS env var.
+      ADVANCED 2026-07-27: with the C1 data-array fold done, the compute-side payload
+      (the record `df` + cluster partition) and the control-side write budget (flush_rows /
+      emit_singletons) now live on the SAME ResolutionBatch contract consumed by
+      apply_batch -- both halves of the shared-residency budget are co-located in one
+      versioned object, not split across an env var and loose frames. REMAINING (minor):
+      the prep-floor MAGNITUDE is still not a computed contract field (an estimate from
+      row count x ~2.5 KB); surfacing it as a number is a nice-to-have, not a coupling gap.
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:71
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:453

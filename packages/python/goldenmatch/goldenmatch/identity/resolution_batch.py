@@ -58,6 +58,48 @@ class ResolutionBatch:
     flush_rows: int = 250_000
     contract_version: int = field(default=CONTRACT_VERSION)
 
+    # --- bulk DATA parts (C1 follow-on) ---------------------------------------
+    # The compute-side payload the control plane applies: the cluster partition
+    # (dict OR SP-A frames), the record frame, the scored-pair stream, and the
+    # per-cluster pair-score view. These are NOT part of the VERSIONED metadata
+    # contract above (the manifesto's "Arrow may be one representation of its bulk
+    # parts" -- they are the payload, not the config), so adding them does not bump
+    # CONTRACT_VERSION; they are carried so the whole compute->control handoff is
+    # ONE object and ``apply_batch(store, batch)`` takes no side args. ``None`` on a
+    # metadata-only batch (``from_args``); ``resolve_clusters`` folds them in via
+    # ``with_data`` before calling ``apply_batch``. Typed ``Any`` to keep this module
+    # dependency-free (the data shapes live in resolve.py / core.frame).
+    clusters: Any = None
+    cluster_frames: Any = None
+    df: Any = None
+    scored_pairs: Any = None
+    pair_score_view: Any = None
+
+    def with_data(
+        self,
+        *,
+        clusters: Any = None,
+        cluster_frames: Any = None,
+        df: Any = None,
+        scored_pairs: Any = None,
+        pair_score_view: Any = None,
+    ) -> ResolutionBatch:
+        """Return a copy carrying the bulk DATA parts (the compute payload).
+
+        ``resolve_clusters`` calls this to fold its data args into the batch before
+        ``apply_batch``; the metadata/config fields are unchanged. Frozen-safe
+        (``dataclasses.replace``)."""
+        import dataclasses
+
+        return dataclasses.replace(
+            self,
+            clusters=clusters,
+            cluster_frames=cluster_frames,
+            df=df,
+            scored_pairs=scored_pairs,
+            pair_score_view=pair_score_view,
+        )
+
     @classmethod
     def from_args(
         cls,
