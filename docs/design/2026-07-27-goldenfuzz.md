@@ -36,8 +36,17 @@ rapidfuzz 0.5, scalar per-pair, corrupted-pair corpus:
 | documents (~600)    | 2.4x         | 2.4x        | 4.0x  |
 
 `< 1.0` = goldenfuzz faster. **We win the ER-common case (short fields) by
-~1.1-2x; rapidfuzz wins long strings** (its SIMD-batch `cdist`; a 13-char jaro is
-146ns for us vs 214ns for them, a 600-char jaro is 50us vs 21us).
+~1.1-2x; rapidfuzz wins long strings** (a 13-char jaro is 146ns for us vs 214ns
+for them; a 600-char jaro is 50us vs 21us).
+
+The long-string gap is NOT (mostly) SIMD — it is the **multiword HashMap peq**:
+building the position bitmap for a 600-char pattern costs **16.4us** on the
+HashMap path (600 SipHash char-hashes + ~27 small `Vec` allocs), a third of our
+50us and more than the entire scan. A byte-indexed *flat* multiword peq builds
+the same thing in **1.5us (11x)**. So the long-string fix is the same
+allocation-elimination as the short path, extended to the multiword tier — far
+more tractable than SIMD, and it should make us competitive/faster than rapidfuzz
+on documents too. SIMD-batch `cdist` is a *separate* axis (one-vs-many).
 
 How we got here:
 - #2159: naive DP -> multiword bit-parallel. Big win on long strings, but
@@ -80,10 +89,14 @@ array-jaccard / cosine.
 | no-native-dep fallback            | **yes**    | no        |
 | domain comparators (date/geo/...) | **yes**    | no        |
 
-Two gaps matter for an external "beats rapidfuzz everywhere" claim:
-1. **SIMD-batch `cdist`** — the only place rapidfuzz still wins (long strings,
-   one-vs-many). Needs a batch API that amortises the pattern build + SIMD lanes.
+Gaps for an external "beats rapidfuzz everywhere" claim, in priority order:
+1. **Multiword allocation-free peq** (measured lever) — the per-pair long-string
+   gap is the HashMap peq (16.4us of 50us). Extend the byte/Latin-1 flat peq to
+   the multiword tier (no HashMap, no `Vec<char>`). Tractable; likely closes the
+   scalar document gap outright.
 2. **`process.extract` / top-k** — the ergonomic one-vs-many entry everyone uses.
+3. **SIMD-batch `cdist`** — a *separate* one-vs-many amortisation + SIMD-lane
+   axis. Hardest; only needed to beat rapidfuzz's batch path, not its scalar one.
 
 ## 5. Roadmap + decision gates
 
@@ -92,11 +105,15 @@ Two gaps matter for an external "beats rapidfuzz everywhere" claim:
   own named crate; `score-core` depends on and re-exports it (zero behaviour
   change, zero fixture churn — byte-identical). Establishes the boundary and the
   name without committing to publish.
-- **Gate to publish externally** (PyPI + npm + crates.io): only after
-  (a) SIMD-batch `cdist` closes the long-string gap, and (b) a `process.extract`
-  API exists. Until then a public "rapidfuzz alternative" that's slower on long
-  strings and lacks top-k is not compelling. The pitch when we do publish is
-  *portability + provable identity + domain-awareness*, not "faster."
+- **Then (measured, tractable): multiword allocation-free peq.** Closes the
+  per-pair long-string gap (the 16.4us HashMap peq). Same technique as the short
+  path. After this we expect to match/beat rapidfuzz on documents too, per-pair.
+- **Gate to publish externally** (PyPI + npm + crates.io): only after the
+  multiword peq lands AND a `process.extract` / top-k API exists (SIMD-batch
+  `cdist` is optional — needed only to beat rapidfuzz's *batch* path). Until then
+  a public "rapidfuzz alternative" lacking top-k is not compelling. The pitch is
+  *portability + provable identity + domain-awareness* (and now speed), not just
+  "faster."
 - **Not now:** a Python `goldenfuzz` wheel is a separate packaging/publish/triage
   burden on top of the 7-package suite. The internal crate keeps the option open
   at ~zero cost.
@@ -104,9 +121,11 @@ Two gaps matter for an external "beats rapidfuzz everywhere" claim:
 ## 6. Effort / risk
 
 - Crate extraction: ~1 focused PR, mechanical, low risk (pure move + re-export).
-- SIMD-batch `cdist`: real work (block-based bit-parallel across lanes), the
-  hardest item; needed only for the external "win everywhere" claim.
+- Multiword allocation-free peq: ~1 PR, same technique as the short path,
+  byte-identical; measured to remove the dominant long-string cost.
 - `process.extract`: moderate; mostly API + `score_cutoff` plumbing.
+- SIMD-batch `cdist`: real work (block-based bit-parallel across lanes), the
+  hardest item; needed only for the external "beat the batch path too" claim.
 - Publishing: not a code problem — semver, docs, benchmarks, issue triage.
 
 The honest summary: goldenfuzz is already a *better fit* than rapidfuzz for the
