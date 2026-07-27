@@ -35,6 +35,7 @@ __all__ = [
     "indel_normalized_similarity",
     "token_sort_ratio",
     "damerau_levenshtein_distance",
+    "pure_field_matrix",
 ]
 
 
@@ -214,6 +215,52 @@ def token_sort_ratio(s1: str, s2: str) -> float:
     a = " ".join(sorted(s1.split()))
     b = " ".join(sorted(s2.split()))
     return indel_normalized_similarity(a, b) * 100.0
+
+
+# Field-scorer name -> (primitive, output scale) for the dense-matrix builder.
+# jaro_winkler/levenshtein are on [0,1]; token_sort is on [0,100] (callers
+# divide by 100, exactly as with the old rapidfuzz cdist).
+_MATRIX_SCORERS = {
+    "jaro_winkler": jaro_winkler_similarity,
+    "levenshtein": levenshtein_normalized_similarity,
+    "token_sort": token_sort_ratio,
+}
+
+
+def pure_field_matrix(values: list, scorer_name: str):
+    """Dependency-free NxN field-score matrix, the fallback for the vectorized
+    ``rapidfuzz.process.cdist`` path when the native kernel is absent.
+
+    BYTE-IDENTICAL to ``cdist(values, values, scorer=<matching rapidfuzz scorer>)``
+    cast to float32 (the vendored primitive == the rapidfuzz scalar, proven in
+    ``tests/test_strsim_parity.py``). Distinct values are scored once and
+    gathered, so the cost is O(distinct^2), not O(N^2) — but this is the SLOW
+    path (a plain ``pip install goldenmatch`` with no native wheel); the fast
+    path stays the native ``score_field_matrix`` kernel.
+    """
+    import numpy as np
+
+    fn = _MATRIX_SCORERS[scorer_name]
+    n = len(values)
+    uniq: dict[str, int] = {}
+    codes = np.empty(n, dtype=np.intp)
+    vals: list[str] = []
+    for i, v in enumerate(values):
+        c = uniq.get(v)
+        if c is None:
+            c = len(vals)
+            uniq[v] = c
+            vals.append(v)
+        codes[i] = c
+    u = len(vals)
+    sub = np.empty((u, u), dtype=np.float32)
+    for a in range(u):
+        sub[a, a] = fn(vals[a], vals[a])
+        for b in range(a + 1, u):
+            s = fn(vals[a], vals[b])
+            sub[a, b] = s
+            sub[b, a] = s
+    return sub[np.ix_(codes, codes)]
 
 
 # ---------------------------------------------------------------------------
