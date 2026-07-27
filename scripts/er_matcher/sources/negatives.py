@@ -10,7 +10,7 @@ at the ~64k-row scale some loaders (e.g. DBLP-Scholar) feed in."""
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 
 _ATTEMPT_MULTIPLIER = 50
 _MIN_ATTEMPTS = 100
@@ -55,6 +55,7 @@ def synth_negatives(
     hard_frac: float,
     seed: int,
     n: int,
+    partition_of: Callable[[str], Hashable] | None = None,
 ) -> list[tuple[str, str, str]]:
     """Synthesize up to `n` negative pairs (eid_a, eid_b, tag) from
     `entities` (eid -> field dict). "hard" pairs share a blocking key
@@ -62,6 +63,12 @@ def synth_negatives(
     blocks. Deterministic given `seed`. No self-pairs, no duplicate pairs.
     Falls back to filling the remainder from the other pool when one pool
     is short rather than erroring.
+
+    `partition_of`, if given, maps an eid to a partition value; both hard
+    and easy candidates reject any pair whose two eids share a partition
+    (e.g. a Leipzig loader passes the "A"/"B" table-namespace prefix so
+    negatives are strictly cross-table). Default `None` preserves prior
+    behavior exactly -- no cross-partition constraint.
 
     Sampling is rejection-based and bounded to O(n) memory/attempts -- it
     never enumerates the full within-block or cross-block pair product."""
@@ -75,11 +82,16 @@ def synth_negatives(
 
     non_singleton_blocks = [blocks[k] for k in sorted(blocks) if len(blocks[k]) >= 2]
 
+    def same_partition(a: str, b: str) -> bool:
+        return partition_of is not None and partition_of(a) == partition_of(b)
+
     def hard_candidate() -> tuple[str, str] | None:
         if not non_singleton_blocks:
             return None
         members = rng.choice(non_singleton_blocks)
         a, b = rng.sample(members, 2)
+        if same_partition(a, b):
+            return None
         return (a, b)
 
     def easy_candidate() -> tuple[str, str] | None:
@@ -87,6 +99,8 @@ def synth_negatives(
             return None
         a, b = rng.sample(eids, 2)
         if blocking_key(entities[a], block_keys) == blocking_key(entities[b], block_keys):
+            return None
+        if same_partition(a, b):
             return None
         return (a, b)
 

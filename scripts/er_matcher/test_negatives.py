@@ -31,3 +31,18 @@ def test_synth_negatives_balance_and_determinism():
                for a, b, _ in hard)                        # hard = same block
     assert all(blocking_key(ents[a], ["name"]) != blocking_key(ents[b], ["name"])
                for a, b, _ in easy)                        # easy = different block
+
+
+def test_synth_negatives_partition_of_forces_cross_partition():
+    # eids like "A:1", "B:2" -- partition_of picks off the "A"/"B" prefix.
+    names = ["Alice", "Bob", "Carol", "Dave", "Eve"]
+    ents = {}
+    for i in range(10):
+        prefix = "A" if i % 2 == 0 else "B"
+        ents[f"{prefix}:{i}"] = {"name": names[i % 5], "phone": str(i)}
+    negs = synth_negatives(
+        ents, block_keys=["name"], hard_frac=0.5, seed=3, n=10,
+        partition_of=lambda eid: eid[0],
+    )
+    assert negs  # sanity: the constraint didn't starve sampling to empty
+    assert all(a[0] != b[0] for a, b, _ in negs)
