@@ -152,8 +152,8 @@ deps; byte-identical output per seed):
   merely "looks similar."
 - Deterministic in `--seed`; a `--profile` flag selects corruption intensity.
 
-This is the heaviest component; it may be split into its own spec/plan (1b) from
-benchmark ingestion (1a) if independent landing is preferred.
+This is the heaviest component and is Phase 1b (see "Plan structure (decided)"):
+sequenced after benchmark ingestion (1a) and landed as its own PR.
 
 ### 4. `sources.yaml`, blend, splits, manifest
 
