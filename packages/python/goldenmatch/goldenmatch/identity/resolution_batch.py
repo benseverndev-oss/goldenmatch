@@ -42,7 +42,7 @@ class ResolutionBatch:
     ``evidence_edges`` UNIQUE) -- ``run_id`` is the caller-facing half of that key.
     """
 
-    CONTRACT_VERSION: ClassVar[int] = 1
+    CONTRACT_VERSION: ClassVar[int] = 2
 
     run_id: str = ""
     dataset: str | None = None
@@ -52,11 +52,57 @@ class ResolutionBatch:
     actor: str = "pipeline"
     emit_singletons: bool = True
     weak_confidence_threshold: float = 0.6
+    # v2: per-field survivorship config (col -> GoldenFieldRule). When set, the
+    # identity golden record honors the configured strategy per column instead of
+    # most_complete-only; None keeps the most_complete default (byte-identical).
+    field_strategies: dict[str, Any] | None = None
     # Frame-residency budget: the write side flushes every ``flush_rows`` records so
     # it never stacks a second O(N) term on the compute prep floor (manifesto §3).
     # A contract term now, not just ``GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS``.
     flush_rows: int = 250_000
     contract_version: int = field(default=CONTRACT_VERSION)
+
+    # --- bulk DATA parts (C1 follow-on) ---------------------------------------
+    # The compute-side payload the control plane applies: the cluster partition
+    # (dict OR SP-A frames), the record frame, the scored-pair stream, and the
+    # per-cluster pair-score view. These are NOT part of the VERSIONED metadata
+    # contract above (the manifesto's "Arrow may be one representation of its bulk
+    # parts" -- they are the payload, not the config), so adding them does not bump
+    # CONTRACT_VERSION; they are carried so the whole compute->control handoff is
+    # ONE object and ``apply_batch(store, batch)`` takes no side args. ``None`` on a
+    # metadata-only batch (``from_args``); ``resolve_clusters`` folds them in via
+    # ``with_data`` before calling ``apply_batch``. Typed ``Any`` to keep this module
+    # dependency-free (the data shapes live in resolve.py / core.frame).
+    clusters: Any = None
+    cluster_frames: Any = None
+    df: Any = None
+    scored_pairs: Any = None
+    pair_score_view: Any = None
+
+    def with_data(
+        self,
+        *,
+        clusters: Any = None,
+        cluster_frames: Any = None,
+        df: Any = None,
+        scored_pairs: Any = None,
+        pair_score_view: Any = None,
+    ) -> ResolutionBatch:
+        """Return a copy carrying the bulk DATA parts (the compute payload).
+
+        ``resolve_clusters`` calls this to fold its data args into the batch before
+        ``apply_batch``; the metadata/config fields are unchanged. Frozen-safe
+        (``dataclasses.replace``)."""
+        import dataclasses
+
+        return dataclasses.replace(
+            self,
+            clusters=clusters,
+            cluster_frames=cluster_frames,
+            df=df,
+            scored_pairs=scored_pairs,
+            pair_score_view=pair_score_view,
+        )
 
     @classmethod
     def from_args(
@@ -71,6 +117,7 @@ class ResolutionBatch:
         emit_singletons: bool = True,
         weak_confidence_threshold: float = 0.6,
         flush_rows: int | None = None,
+        field_strategies: dict[str, Any] | None = None,
     ) -> ResolutionBatch:
         """Build a batch from the loose resolve args, filling the residency budget
         from the env default when unspecified. This is the adapter seam:
@@ -85,6 +132,7 @@ class ResolutionBatch:
             emit_singletons=emit_singletons,
             weak_confidence_threshold=weak_confidence_threshold,
             flush_rows=_default_flush_rows() if flush_rows is None else flush_rows,
+            field_strategies=field_strategies,
         )
 
 

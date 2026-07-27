@@ -95,3 +95,37 @@ def test_all_null_column_is_omitted():
 def test_empty_inputs():
     assert _golden_record_from_payloads({}, []) == {}
     assert _golden_record_from_payloads({0: {"a": "x"}}, [99]) == {}
+
+
+def test_field_strategies_config_overrides_most_complete():
+    """Config-aware survivorship (thesis low item): when a field_strategies config
+    names a column, the identity golden path honors that GoldenFieldRule strategy
+    via core.golden.merge_field instead of most_complete; unconfigured columns keep
+    most_complete. Still ONE owner (core.golden), just config-driven per field."""
+    from goldenmatch.config.schemas import GoldenFieldRule
+
+    payloads = {
+        0: {"name": "Bob", "city": "NYC"},
+        1: {"name": "Robert", "city": "NYC"},
+        2: {"name": "Bo", "city": None},
+    }
+    row_ids = [0, 1, 2]
+
+    # No config -> most_complete: the LONGEST name wins.
+    assert _golden_record_from_payloads(payloads, row_ids)["name"] == "Robert"
+
+    # first_non_null config on `name` -> the FIRST member's name wins instead.
+    fs = {"name": GoldenFieldRule(strategy="first_non_null")}
+    got = _golden_record_from_payloads(payloads, row_ids, fs)
+    assert got["name"] == "Bob"
+    # An unconfigured column still uses the most_complete default.
+    assert got["city"] == "NYC"
+
+    # The frame path honors config identically.
+    df = pl.DataFrame({
+        "__row_id__": row_ids,
+        "__source__": ["s", "s", "s"],
+        "name": ["Bob", "Robert", "Bo"],
+        "city": ["NYC", "NYC", None],
+    })
+    assert _golden_record_from_members(df, row_ids, fs)["name"] == "Bob"

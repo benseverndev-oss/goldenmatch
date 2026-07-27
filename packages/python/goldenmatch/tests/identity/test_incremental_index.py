@@ -149,6 +149,63 @@ def test_index_self_populates(tmp_path, base_rows):
     store.close()
 
 
+# No-PK config: block on `zip` (shared), match on `name` (fuzzy). Two records with
+# the same zip but slightly different names are block-mates that fuzzy-match AND
+# have DIFFERENT content-hash record ids (no source_pk_col) -- so this exercises the
+# no-PK path where stringifying the candidate frame must NOT shift a record id.
+BLOCKING_ZIP = BlockingConfig(
+    strategy="static", keys=[BlockingKeyConfig(fields=["zip"], transforms=[])]
+)
+
+
+def _seed_base_nopk(store, df):
+    clusters = {
+        i: {"members": [i], "size": 1, "pair_scores": {}, "confidence": 1.0}
+        for i in range(df.height)
+    }
+    resolve_clusters(
+        clusters, df, [], "mk", store, run_name="batch", source_pk_col=None,
+    )
+
+
+def test_index_path_no_pk_content_hash_absorbs_like_full_df(tmp_path):
+    """No-PK (content-hash id) records resolve to the SAME entity via the index
+    path as via the full-df path -- the index path is not PK-only. The candidate a
+    stringified index frame carries must keep its content-hash record id so the
+    incoming record absorbs into the persisted entity, not a phantom new one."""
+    base = [
+        {"zip": "10001", "name": "Alice Smith"},
+        {"zip": "20002", "name": "Bob Jones"},
+    ]
+    df = _df(base)
+    incoming = {"zip": "10001", "name": "Alice Smyth", "__source__": "src"}
+
+    # Reference: full-corpus path, no source_pk_col -> content-hash ids.
+    full = IdentityStore(path=str(tmp_path / "full.db"))
+    _seed_base_nopk(full, df)
+    eid_full = resolve_record_incremental(
+        incoming, df, [MK], full, run_name="stream", source_pk_col=None,
+    )
+    members_full = _member_ids(full, eid_full)
+    full.close()
+
+    # Index-backed path: candidates from the persisted index, no df.
+    idx = IdentityStore(path=str(tmp_path / "idx.db"))
+    _seed_base_nopk(idx, df)
+    backfill_block_index(idx, df, BLOCKING_ZIP, source="src", source_pk_col=None)
+    eid_idx = resolve_record_incremental(
+        incoming, None, [MK], idx, run_name="stream", source_pk_col=None,
+        blocking=BLOCKING_ZIP,
+    )
+    members_idx = _member_ids(idx, eid_idx)
+    idx.close()
+
+    # Incoming "Alice Smyth" fuzzy-matches persisted "Alice Smith": one entity, two
+    # DISTINCT content-hash records -- identical grouping on both paths.
+    assert len(members_full) == 2
+    assert members_idx == members_full
+
+
 def test_missing_df_and_blocking_raises(tmp_path):
     """Neither df nor blocking is a programming error, not a silent no-op."""
     store = IdentityStore(path=str(tmp_path / "s.db"))
