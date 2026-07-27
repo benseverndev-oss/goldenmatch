@@ -10,10 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
-from goldenmatch.core import strsim
 
 from goldenmatch._polars_lazy import pl
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.core import strsim
 from goldenmatch.core._profile_helpers import (
     hartigan_dip,
     histogram_20,
