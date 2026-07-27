@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from pathlib import Path
 
+import pytest
 from build_corpus import build_corpus, main
 
 FIX = Path(__file__).parent / "tests" / "fixtures"
@@ -196,6 +197,64 @@ def test_cap_limits_rows_per_source_per_split(tmp_path):
         for r in rows:
             by_source[r["dataset"]] = by_source.get(r["dataset"], 0) + 1
         assert all(n <= 1 for n in by_source.values())
+
+
+def test_cap_preserves_class_balance(tmp_path):
+    """`--cap` must not silently produce an all-`match` (or all-`no_match`)
+    slice: both bundled loaders emit all positives before any negatives, so
+    a naive `rows[:cap]` would be label-degenerate. `abt_buy`/train has both
+    a match and a no_match row uncapped (2 rows total) -- with cap=2 both
+    labels must survive."""
+    yaml_path = _write_yaml(tmp_path)
+    out_dir = tmp_path / "capped_balance"
+    build_corpus(yaml_path, out_dir, seed=1, cap=2)
+
+    train_rows = _read_jsonl(out_dir / "train.jsonl")
+    abt_buy_train = [r for r in train_rows if r["dataset"] == "abt_buy"]
+    assert len(abt_buy_train) == 2
+    assert {r["label"] for r in abt_buy_train} == {"match", "no_match"}
+
+    test_rows = _read_jsonl(out_dir / "test.jsonl")
+    febrl_test = [r for r in test_rows if r["dataset"] == "febrl"]
+    assert len(febrl_test) == 2
+    assert {r["label"] for r in febrl_test} == {"match", "no_match"}
+
+
+def test_eval_only_class_attr_mismatch_raises(tmp_path):
+    """If a `bundle`/`generate` sources.yaml entry forgets to set
+    `eval_only: true` for a loader whose CLASS is eval_only (e.g. Magellan),
+    `build_corpus` must refuse to fold its (cite-only, eval-only-by-design)
+    rows into the training corpus rather than silently doing so."""
+    p = tmp_path / "sources.yaml"
+    p.write_text(
+        f"""
+sources:
+  magellan_x:
+    loader: magellan
+    mechanism: bundle
+    license: cite-only
+    eval_only: false
+    domain: product
+    kwargs:
+      root: {MAGELLAN_FIX.as_posix()!r}
+"""
+    )
+    with pytest.raises(ValueError, match="eval_only"):
+        build_corpus(p, tmp_path / "out", seed=1)
+
+
+def test_manifest_label_totals_present_and_correct(tmp_path):
+    yaml_path = _write_yaml(tmp_path)
+    out_dir = tmp_path / "out"
+    manifest = build_corpus(yaml_path, out_dir, seed=1)
+
+    assert set(manifest["label_totals"]) == {"train", "val", "test"}
+    for split in ("train", "val", "test"):
+        rows = _read_jsonl(out_dir / f"{split}.jsonl")
+        expected = {"match": 0, "no_match": 0}
+        for r in rows:
+            expected[r["label"]] += 1
+        assert manifest["label_totals"][split] == expected
 
 
 def test_cli_main_writes_corpus(tmp_path):

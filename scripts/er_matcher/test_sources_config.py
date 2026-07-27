@@ -152,6 +152,54 @@ sources:
         load_sources(p)
 
 
+def test_eval_only_non_bool_raises(tmp_path):
+    p = _write_yaml(
+        tmp_path,
+        """
+sources:
+  febrl:
+    loader: febrl
+    mechanism: bundle
+    license: MPL-1.1
+    eval_only: flase
+""",
+    )
+    with pytest.raises(ValueError, match="eval_only"):
+        load_sources(p)
+
+
+def test_weight_non_numeric_raises(tmp_path):
+    p = _write_yaml(
+        tmp_path,
+        """
+sources:
+  febrl:
+    loader: febrl
+    mechanism: bundle
+    license: MPL-1.1
+    weight: heavy
+""",
+    )
+    with pytest.raises(ValueError, match="weight"):
+        load_sources(p)
+
+
+def test_weight_bool_raises(tmp_path):
+    p = _write_yaml(
+        tmp_path,
+        """
+sources:
+  febrl:
+    loader: febrl
+    mechanism: bundle
+    license: MPL-1.1
+    weight: true
+""",
+    )
+    with pytest.raises(ValueError, match="weight"):
+        load_sources(p)
+
+
 def test_missing_sources_key_raises(tmp_path):
     p = _write_yaml(tmp_path, "not_sources: {}\n")
     with pytest.raises(ValueError, match="sources"):

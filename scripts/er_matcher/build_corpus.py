@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,27 @@ _SPLITS = ("train", "val", "test")
 _ROW_MECHANISMS = {"bundle", "generate"}
 
 
+def _cap_preserving_balance(rows: list[dict[str, Any]], cap: int) -> list[dict[str, Any]]:
+    """Truncate `rows` to at most `cap`, preserving BOTH labels instead of
+    `rows[:cap]` -- which would silently produce an all-`match` (or
+    all-`no_match`) slice whenever a loader emits every positive before any
+    negative (both bundled loaders do). Splits `rows` into `match`/`no_match`
+    (stable order preserved within each group), then interleaves the two
+    groups round-robin (match, no_match, match, no_match, ...) before
+    truncating -- deterministic given `rows`' own deterministic order, so
+    same seed + cap -> byte-identical output still holds."""
+    matches = [r for r in rows if r["label"] == "match"]
+    non_matches = [r for r in rows if r["label"] != "match"]
+    interleaved: list[dict[str, Any]] = []
+    for a, b in zip(matches, non_matches):
+        interleaved.append(a)
+        interleaved.append(b)
+    # Leftover tail from whichever group is longer.
+    interleaved.extend(matches[len(non_matches):])
+    interleaved.extend(non_matches[len(matches):])
+    return interleaved[:cap]
+
+
 def build_corpus(
     sources_yaml: Path, out_dir: Path, *, seed: int, cap: int | None = None
 ) -> dict[str, Any]:
@@ -45,9 +67,9 @@ def build_corpus(
     manifest dict that was written.
 
     `cap`, if given, limits EACH contributing source to at most `cap` rows
-    per split -- taken as the first `cap` rows after the source's own
-    deterministic `splits()` ordering (no re-shuffling), so results stay
-    reproducible. This is the "cap oversized sources" lever; proportional
+    per split -- via `_cap_preserving_balance` (interleaves match/no_match
+    before truncating, see its docstring), so results stay reproducible AND
+    class-balanced. This is the "cap oversized sources" lever; proportional
     weight-blending (`SourceEntry.weight`) is deferred to a later task.
     """
     entries = load_sources(sources_yaml)
@@ -61,6 +83,12 @@ def build_corpus(
         # source ends up contributing rows.
         src = build_source(entry, seed=seed)
 
+        if getattr(src, "eval_only", False) and not entry.eval_only:
+            raise ValueError(
+                f"{entry.name}: loader class is eval_only but sources.yaml entry isn't -- "
+                "refusing to fold eval-only data into the training corpus"
+            )
+
         contributes = entry.mechanism in _ROW_MECHANISMS and not entry.eval_only
         counts = {s: 0 for s in _SPLITS}
 
@@ -69,7 +97,7 @@ def build_corpus(
             for split in _SPLITS:
                 rows = list(splits.get(split, []))
                 if cap is not None:
-                    rows = rows[:cap]
+                    rows = _cap_preserving_balance(rows, cap)
                 corpus[split].extend(rows)
                 counts[split] = len(rows)
 
@@ -91,9 +119,35 @@ def build_corpus(
     _write_jsonl(corpus, out_dir)
 
     totals = {s: sum(v["counts"][s] for v in manifest_sources.values()) for s in _SPLITS}
-    manifest = {"seed": seed, "sources": manifest_sources, "totals": totals}
+    label_totals = _label_totals(corpus)
+    manifest = {
+        "seed": seed,
+        "sources": manifest_sources,
+        "totals": totals,
+        "label_totals": label_totals,
+    }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    for split, labels in label_totals.items():
+        nonzero = [label for label, n in labels.items() if n > 0]
+        if len(nonzero) == 1:
+            warnings.warn(
+                f"build_corpus: split {split!r} is single-class ({nonzero[0]} only) "
+                "-- check blend/cap",
+                stacklevel=2,
+            )
+
     return manifest
+
+
+def _label_totals(corpus: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, int]]:
+    totals: dict[str, dict[str, int]] = {}
+    for split in _SPLITS:
+        labels = {"match": 0, "no_match": 0}
+        for row in corpus[split]:
+            labels[row["label"]] = labels.get(row["label"], 0) + 1
+        totals[split] = labels
+    return totals
 
 
 def _write_jsonl(corpus: dict[str, list[dict[str, Any]]], out_dir: Path) -> None:

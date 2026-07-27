@@ -67,6 +67,10 @@ python scripts/er_matcher/build_corpus.py \
 fails loudly), but only **bundle/generate, non-`eval_only`** sources contribute
 rows. `--cap N` limits each source to N rows per split (the "cap oversized
 sources" lever; ratio-blending by `weight` is deferred to a later sub-project).
+The cap preserves class balance: it interleaves each source's `match` and
+`no_match` rows round-robin before truncating, so a capped split still
+contains both labels (in roughly the source's original ratio) instead of
+degenerating into all-match rows.
 
 ### Data acquisition (not committed)
 

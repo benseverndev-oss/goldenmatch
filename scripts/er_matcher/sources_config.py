@@ -52,6 +52,8 @@ def load_sources(path: Path) -> list[SourceEntry]:
       - a missing `loader` / `mechanism` / `license`,
       - a `mechanism` outside {bundle, generate, fetch},
       - `license == "CC-BY"` without a non-empty `attribution`,
+      - a non-bool `eval_only`,
+      - a non-numeric (or bool) `weight`,
       - a non-dict `kwargs`.
     """
     import yaml  # PyYAML; same light always-present dep as train.load_config
@@ -89,6 +91,22 @@ def load_sources(path: Path) -> list[SourceEntry]:
         if license_ == "CC-BY" and not attribution:
             raise ValueError(f"source {name!r}: license CC-BY requires a non-empty attribution")
 
+        eval_only = body.get("eval_only", False)
+        if not isinstance(eval_only, bool):
+            raise ValueError(
+                f"source {name!r}: eval_only must be a bool, got {type(eval_only).__name__} "
+                f"({eval_only!r}) -- a yaml typo like `flase` silently becomes truthy otherwise"
+            )
+
+        weight = body.get("weight", 1.0)
+        # bool is an int subclass in Python; reject it explicitly so a typo'd
+        # `weight: true` doesn't silently pass as weight=1.
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            raise ValueError(
+                f"source {name!r}: weight must be an int or float, got {type(weight).__name__} "
+                f"({weight!r})"
+            )
+
         kwargs = body.get("kwargs", {})
         if not isinstance(kwargs, dict):
             raise ValueError(
@@ -103,8 +121,8 @@ def load_sources(path: Path) -> list[SourceEntry]:
                 license=license_,
                 domain=body.get("domain", "generic"),
                 attribution=attribution,
-                weight=body.get("weight", 1.0),
-                eval_only=body.get("eval_only", False),
+                weight=weight,
+                eval_only=eval_only,
                 kwargs=kwargs,
             )
         )
