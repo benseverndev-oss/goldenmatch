@@ -231,3 +231,31 @@ def dedup_pairs_max_score_arrow(pairs_df):  # pl.DataFrame -> pl.DataFrame
         "id_b": _pl.from_arrow(b_out),
         "score": _pl.from_arrow(s_out),
     })
+
+
+def dedup_pairs_max_score_arrow_table(table):  # pa.Table -> pa.Table
+    """Arrow-native max-score dedup, pa.Table in / pa.Table out -- NO polars.
+
+    The B2c FS pair stream is a ``pa.Table`` end-to-end (out of
+    ``score_buckets_arrow``); this feeds the SAME Rust ``dedup_pairs_arrow``
+    kernel ``dedup_pairs_max_score_arrow`` uses, but reads the columns straight
+    off the table instead of round-tripping through a Polars frame. Same
+    canonical ``(min, max)`` + max-score contract. Falls back to the Polars
+    columnar path (materializing one arrow<->polars hop) only when the native
+    ``pairs`` kernel is unavailable."""
+    import pyarrow as _pa
+
+    if table.num_rows == 0:
+        return table
+    if not native_enabled("pairs") or not hasattr(native_module(), "dedup_pairs_arrow"):
+        import polars as _pl
+        return dedup_pairs_max_score_columnar(
+            _pl.from_arrow(table)  # type: ignore[arg-type]
+        ).to_arrow()
+    _t = table.combine_chunks()
+    a_out, b_out, s_out = native_module().dedup_pairs_arrow(
+        _t.column("id_a").chunk(0),
+        _t.column("id_b").chunk(0),
+        _t.column("score").chunk(0),
+    )
+    return _pa.table({"id_a": a_out, "id_b": b_out, "score": s_out})
