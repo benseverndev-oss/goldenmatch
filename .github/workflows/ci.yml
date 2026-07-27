@@ -418,6 +418,7 @@ jobs:
             --ignore=packages/python/goldenmatch/tests/test_reconcile.py \
             --ignore=packages/python/goldenmatch/tests/test_mcp_and_watch.py \
             --ignore=packages/python/goldenmatch/tests/test_embedder.py \
+            --ignore=packages/python/goldenmatch/tests/test_metrics_harness.py \
             --ignore=packages/python/goldenmatch/tests/test_llm_boost.py \
             --ignore=packages/python/goldenmatch/tests/test_autoconfig_benchmarks.py \
             --ignore=packages/python/goldenmatch/tests/test_qis_harness.py \
@@ -473,6 +474,7 @@ jobs:
           uv run pytest \
             packages/python/goldenmatch/tests/test_controller_adaptive_e2e.py \
             packages/python/goldenmatch/tests/test_memory_e2e.py \
+            packages/python/goldenmatch/tests/test_metrics_harness.py \
             --timeout=300 --timeout-method=thread --durations=20 \
             --cov=goldenmatch --cov-report=
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v4

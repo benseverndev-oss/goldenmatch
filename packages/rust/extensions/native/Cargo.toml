@@ -94,13 +94,15 @@ numpy = ">=0.28, <0.29"
 [profile.release]
 opt-level = 3
 # Thin LTO (main's proven profile). Fat LTO + codegen-units=1 was tried in this
-# change set as a speculative codegen-quality tweak (its win "couldn't be
-# isolated" — single-crate hot path), but on `ubuntu-latest` it made the native
-# cdylib segfault xdist workers whenever it shared a process with torch/
-# onnxruntime (tests/test_metrics_harness.py: accuracy/semantic-blocking/
-# trained-embedder probes). Whole-program LTO + one codegen unit changes symbol
-# visibility/inlining across the ~15 linked `*-core` crates in ways that collide
-# with another loaded native runtime's symbols/allocator; thin LTO (what main
-# ships) does not. The measured win in this change set is the FxHash scorer
-# optimization in score-core, which is unaffected. See PR #2159 CI history.
+# change set as a speculative codegen-quality tweak but its win "couldn't be
+# isolated" (single-crate hot path), so it isn't worth deviating from main's
+# profile -- kept thin. NOTE: fat LTO was earlier BLAMED for the
+# tests/test_metrics_harness.py xdist "worker crashed" deaths, but that was a
+# misdiagnosis -- reverting to thin LTO did NOT fix them. The real cause was OOM:
+# those torch/onnxruntime trained-embedder probes are memory-heavy and were
+# running under `-n auto` in the sharded lane; #2159's new test files (absent from
+# .test_durations) shifted the pytest-split groups so shard 3 packed more of them
+# concurrently -> OOM (silent SIGKILL, no faulthandler trace). Fixed by routing
+# test_metrics_harness.py to the serial python_goldenmatch_heavy lane, where
+# test_embedder.py already lives. The real measured win here is the FxHash scorer.
 lto = "thin"
