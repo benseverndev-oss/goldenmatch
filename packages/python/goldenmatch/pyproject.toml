@@ -145,7 +145,7 @@ pgvector = [
     "pgvector>=0.3",
 ]
 ray = [
-    "ray>=2.0",
+    "ray>=2.56.0",
 ]
 # Experimental DataFusion backend (spike: docs/superpowers/specs/
 # 2026-05-30-datafusion-backend-spike-design.md). Opt-in via
