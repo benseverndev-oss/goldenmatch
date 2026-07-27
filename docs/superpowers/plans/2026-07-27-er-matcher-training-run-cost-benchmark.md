@@ -80,14 +80,16 @@ def test_raises_when_nothing_fits():
 
 - [ ] **Step 1: failing test** — `build_ab_scorecard(entries)` where each entry is `{config_name, metrics, total_steps}` returns, per config: `{config, fits_tier, full_cost_usd, full_wall_h, curve_slope, final_eval_loss, gpu_util, peak_mem_gb}`. Assert both configs present, cost/tier computed via Task 2, `curve_slope` via existing `learning_curve_slope`, `final_eval_loss` = last point of the learning_curve. NO auto-pick (human decides) — assert it returns data, not a winner.
 - [ ] **Step 2-4:** implement (pure, composes Task 2 + `learning_curve_slope`); green.
-- [ ] **Step 5:** commit `feat(er-matcher): A/B cost-vs-quality scorecard (pure)`.
+- [ ] **Step 6 (benchmark-cost guard, pure + tested):** add `estimate_benchmark_cost(*, smoke_step_s, n_configs, n_slices, steps_per_slice, tier_usd_per_hour) -> float` = `smoke_step_s * n_configs * n_slices * steps_per_slice / 3600 * tier_usd_per_hour`, and a `within_ceiling(cost, ceiling)` check. Test the arithmetic + a below/above-ceiling case. Task 9's $8 guard calls this instead of an ad-hoc calc.
+- [ ] **Step 5:** commit `feat(er-matcher): A/B scorecard + benchmark-cost guard (pure)`.
 
 ### Task 4: config-matrix expansion
 
 **Files:** Create `config_matrix.py`, `test_config_matrix.py`
 
-- [ ] **Step 1: failing test** — `expand_configs(base_cfg_dict) -> list[(name, cfg_dict)]` yields exactly `[("bf16-lora", {..., qlora_4bit: False}), ("qlora-4bit", {..., qlora_4bit: True})]`, each a full copy of base with only `qlora_4bit` (and its dependent `bf16`) toggled; base unchanged (no mutation). Assert names, the qlora flag per variant, and that base isn't mutated.
+- [ ] **Step 1: failing test** — `expand_configs(base_cfg_dict) -> list[(name, cfg_dict)]` yields exactly `[("bf16-lora", {..., qlora_4bit: False}), ("qlora-4bit", {..., qlora_4bit: True})]`, each a full copy of base with ONLY `qlora_4bit` toggled. **`bf16` stays `True` in BOTH variants** — the 4-bit path uses `bnb_4bit_compute_dtype=torch.bfloat16` and passes `bf16=cfg.bf16` to `SFTConfig`; flipping `bf16` off would wrongly route to the fp16 branch. base unchanged (no mutation). Assert names, `qlora_4bit` per variant, `bf16 is True` in both, and base not mutated.
 - [ ] **Step 2-4:** implement (pure dict copies); green.
+- [ ] **Note (connects to Task 7):** the Modal container loads `config.yaml` via `load_config` — it does NOT receive these dicts. So the matrix's job is to define the variant NAMES + the `qlora_4bit` value; Task 6 adds a `--qlora-4bit` CLI override so the driver can push each variant's flag into the container. `expand_configs` may return the `(name, qlora_bool)` the driver needs directly.
 - [ ] **Step 5:** commit `feat(er-matcher): config-matrix expansion (bf16 vs qlora)`.
 
 ### Task 5: sweep aggregation (pure)
@@ -102,31 +104,34 @@ def test_raises_when_nothing_fits():
 
 ## Phase B — GPU code paths (exercised by real runs, not CI)
 
-### Task 6: sweep loop + resume in _train_runtime
+### Task 6: sweep loop + resume + config-override + measured total_steps
 
-**Files:** Modify `_train_runtime.py`
+**Files:** Modify `_train_runtime.py`, **`train.py`** (argparse + dispatch)
 
-- [ ] Add `--sweep` handling to the trainer args (train.py argparse: `--sweep`, reuse `--smoke-steps` for per-slice cap) and a `run_sweep(cfg, args)` path that, in ONE process (single base-model + tokenizer load), loops `sweep.data_fractions()`: for each frac, take the first `slice_len(len(train_rows), frac)` train rows, train `--smoke-steps` steps with eval enabled, capture `trainer.evaluate()["eval_loss"]`, and accumulate `(frac, eval_loss)`. Emit metrics with `learning_curve = sweep.build_learning_curve(points)` (plus the existing gpu_util/peak_mem/tokens_per_s from the last/ largest slice).
-- [ ] Wire `resume_from_checkpoint`: in the full-run path, if a checkpoint exists under the out-dir on the volume, pass `resume_from_checkpoint=True` to `trainer.train()`.
-- [ ] Keep the QLoRA branch (`cfg.qlora_4bit`) working — it already exists; ensure the sweep + full paths both honor it.
-- [ ] Self-check: pure helpers (`sweep`, `config_matrix`) are imported, not reimplemented. No box-safe test here (GPU path); verified by Task 9's real run.
-- [ ] Commit `feat(er-matcher): learning-curve sweep loop + checkpoint resume`.
+- [ ] **`train.py` argparse/dispatch:** add `--sweep` (store_true) and `--qlora-4bit` as an override (`argparse.BooleanOptionalAction` → `--qlora-4bit` / `--no-qlora-4bit`, default `None` = use config.yaml). In `main`, after `load_config`, if `args.qlora_4bit is not None` set `cfg.qlora_4bit = args.qlora_4bit` then re-`validate()`. Dispatch: `run_sweep(cfg, args)` if `args.sweep` else `run_training(cfg, args)` (currently an unconditional `run_training` call). This override is the ONLY way the container gets the bf16-vs-qlora variant (the container loads config.yaml; it never sees Task 4's dicts).
+- [ ] **`run_sweep(cfg, args)` in `_train_runtime.py`:** in ONE process (single base-model + tokenizer load), loop `sweep.data_fractions()`: for each frac, take the first `sweep.slice_len(len(train_rows), frac)` train rows, train `args.smoke_steps` steps with eval enabled, capture `trainer.evaluate()["eval_loss"]`, accumulate `(frac, eval_loss)`. Emit metrics with `learning_curve = sweep.build_learning_curve(points)` + the existing gpu_util/peak_mem/tokens_per_s (from the largest slice) + `full_total_steps` (see below).
+- [ ] **Measured `full_total_steps` (fixes the packing problem):** do NOT compute steps as `rows/batch` — packing makes the step count depend on packed-sequence count, unknown until packing runs. After the trainer builds the packed dataset, derive the FULL-run step count from the packed dataloader: `full_total_steps = ceil(len(trainer.get_train_dataloader()) ) * cfg.epochs` (the dataloader length already reflects packing + effective batch for the FULL 100% slice; for sub-slices scale accordingly, but emit the 100%-slice-derived full-run count). Emit it in both smoke and sweep metrics so `run_benchmark`/`perf_report` extrapolate on a MEASURED step count, not a guess.
+- [ ] **Resume:** in the full-run path, if a checkpoint exists under the out-dir on the volume, pass `resume_from_checkpoint=True` to `trainer.train()`.
+- [ ] Keep the QLoRA branch (`if cfg.qlora_4bit:`) working in both sweep + full paths (it already exists at `_train_runtime.py:118`).
+- [ ] Self-check: pure helpers (`sweep`) imported, not reimplemented. No box-safe test here (GPU path); verified by Task 9's real run.
+- [ ] Commit `feat(er-matcher): sweep loop + resume + --qlora-4bit override + measured total_steps`.
 
 ### Task 7: modal_train sweep entrypoint + matrix driver + tier param
 
 **Files:** Modify `modal_train.py`
 
-- [ ] Parametrize the GPU: accept a `gpu` arg on the functions (default keep A10G for sweep/smoke) so the full run can target the tier the human picked.
-- [ ] Add `train_sweep(config_name, qlora)` (A10G) that runs the trainer `--sweep` for one config (bf16 or qlora), writing `sweep_metrics_<config>.json` to the volume.
-- [ ] Add a `local_entrypoint` `benchmark` that invokes `train_sweep` for BOTH configs (from `config_matrix.expand_configs`), and a `full(config_name, gpu)` entrypoint for the chosen-config full run.
-- [ ] Commit `feat(er-matcher): modal sweep entrypoint + bf16/qlora matrix + tier param`.
+- [ ] **GPU tier at RUN time (not decoration):** `@app.function(gpu=...)` is fixed at definition. To target the human-picked tier for the full run, use Modal's `.with_options(gpu=tier).remote(...)` on the full-run function (do NOT try to "pass a gpu arg" into a fixed-gpu function). The sweep/smoke stay on A10G (cheapest adequate for the benchmark).
+- [ ] Add `train_sweep(qlora: bool)` (A10G) that runs the trainer with `--sweep` and `--qlora-4bit`/`--no-qlora-4bit` (per the Task 6 override), writing `sweep_metrics_{bf16-lora|qlora-4bit}.json` to the volume.
+- [ ] Add a `local_entrypoint` `benchmark` that invokes `train_sweep` for BOTH variants from `config_matrix.expand_configs` (each variant's `qlora_4bit` → the `--qlora-4bit` flag).
+- [ ] Add a `full(config_name, gpu)` local_entrypoint that runs the chosen-config full run via `train_full.with_options(gpu=gpu).remote(qlora=<from config_name>)`.
+- [ ] Commit `feat(er-matcher): modal sweep entrypoint + bf16/qlora matrix + with_options tier`.
 
 ### Task 8: config right-size + local orchestrator
 
 **Files:** Modify `config.yaml`; Create `run_benchmark.py`
 
 - [ ] `config.yaml`: keep `seq_len` MEASURED (unchanged policy); confirm `epochs: 2`, effective batch, dataloader workers are sane for 17,690 rows (document the reasoning in a comment). No blind changes.
-- [ ] `run_benchmark.py` (local): trigger the Modal `benchmark` (both configs), pull `sweep_metrics_*.json` via `modal volume get`, compute `total_steps` from the real corpus + config, run `perf_report.build_ab_scorecard`, and PRINT the scorecard (per config: fits-tier, full-run $/wall, curve slope, final eval-loss). Its pure flow bits (total_steps calc, scorecard assembly) reuse the tested modules; the Modal trigger/pull is the execute step. Add a small test for the pure total_steps calc if not already covered.
+- [ ] `run_benchmark.py` (local): trigger the Modal `benchmark` (both configs), pull `sweep_metrics_*.json` via `modal volume get`, then run `perf_report.build_ab_scorecard` and PRINT the scorecard (per config: fits-tier, full-run $/wall, curve slope, final eval-loss). **Use the MEASURED `full_total_steps` emitted in each config's metrics (Task 6)** — do NOT recompute `rows/effective_batch` (wrong under packing). The scorecard assembly reuses the Phase A tested modules; the Modal trigger/pull is the execute step.
 - [ ] Commit `feat(er-matcher): config right-size + benchmark orchestrator`.
 
 ---
@@ -137,7 +142,7 @@ def test_raises_when_nothing_fits():
 
 > This is the execute step (real Modal GPU, on-disk `benzsevern` token). NOT CI.
 
-- [ ] Estimate the benchmark-phase cost up front (smoke step-time x planned sweep steps x tier rate); if > ~$8 soft ceiling, STOP and surface to the human before launching.
+- [ ] Estimate the benchmark-phase cost up front via `perf_report.estimate_benchmark_cost(...)` (Task 3): smoke step-time x 2 configs x 4 slices x steps-per-slice x A10G rate. If `not within_ceiling(cost, 8.0)`, STOP and surface to the human before launching.
 - [ ] Run `modal run modal_train.py::benchmark` (both configs, A10G) -> `sweep_metrics_bf16.json`, `sweep_metrics_qlora.json` on the volume.
 - [ ] Run `run_benchmark.py` -> the A/B scorecard. **Bring it to the human; the human picks the config** (spec §6 — the full-run spend always has a human in the loop).
 - [ ] On the human's pick: `modal run modal_train.py::full --config-name <pick> --gpu <selected tier>` -> merged LoRA model on the volume.
