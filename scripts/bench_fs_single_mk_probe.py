@@ -44,15 +44,15 @@ class Sampler(threading.Thread):
         super().__init__(daemon=True)
         self.interval = interval
         self.peak = 0.0
-        self._stop = threading.Event()
+        self._stopev = threading.Event()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stopev.is_set():
             self.peak = max(self.peak, _vmrss_mb())
             time.sleep(self.interval)
 
     def halt(self) -> None:
-        self._stop.set()
+        self._stopev.set()
         self.join(timeout=1)
 
 
