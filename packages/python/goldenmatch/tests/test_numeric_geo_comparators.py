@@ -38,8 +38,8 @@ def test_numeric_parse_rejects_non_finite():
 
 def test_numeric_string_similarity_is_meaningless_lever():
     # The whole point: "100" vs "900" are very different amounts but string-close.
-    from goldenmatch.core.scorer import Levenshtein
-    ed = Levenshtein.normalized_similarity("100", "900")
+    from goldenmatch.core.strsim import levenshtein_normalized_similarity
+    ed = levenshtein_normalized_similarity("100", "900")
     nd = _numeric_diff_similarity_py("100", "900", "numeric_diff:abs:100")
     assert ed >= 0.6           # documents the string-blindness
     assert nd == 0.0           # 800 apart, band 100 -> disagree
