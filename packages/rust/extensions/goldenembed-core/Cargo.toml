@@ -26,5 +26,5 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 # The project parity golden fixture stores raw-f32 arrays as base64 + JSON.
-base64 = "0.22"
+base64 = "0.23"
 serde_json = "1"
