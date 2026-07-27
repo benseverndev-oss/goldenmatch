@@ -12,6 +12,10 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<AnalysisBac
     histogram: (values: Float64Array, bins: number) => Float64Array;
     quantile: (values: Float64Array, q: number) => number;
     cluster_size_histogram: (sizes: Float64Array) => Float64Array;
+    intern_f64: (values: Float64Array, validity: Uint8Array) => Float64Array;
+    intern_str: (offsets: Uint32Array, bytes: Uint8Array, validity: Uint8Array) => Float64Array;
+    distinct_count_ids: (ids: Float64Array) => number;
+    duplicate_row_ratio_ids: (idsFlat: Float64Array, nCols: number, nRows: number) => number;
   };
   await glue.default({ module_or_path: bytes });
   return {
@@ -30,6 +34,18 @@ export async function instantiateBackend(bytes: Uint8Array): Promise<AnalysisBac
     clusterSizeHistogram(sizes) {
       // analysis-wasm returns the 4 counts as a Float64Array [n1,n2,n3,n4plus].
       return Array.from(glue.cluster_size_histogram(sizes));
+    },
+    internNumeric(values, validity) {
+      return glue.intern_f64(values, validity);
+    },
+    internString(offsets, bytes, validity) {
+      return glue.intern_str(offsets, bytes, validity);
+    },
+    distinctCountIds(ids) {
+      return glue.distinct_count_ids(ids);
+    },
+    duplicateRowRatioIds(idsFlat, nCols, nRows) {
+      return glue.duplicate_row_ratio_ids(idsFlat, nCols, nRows);
     },
   };
 }

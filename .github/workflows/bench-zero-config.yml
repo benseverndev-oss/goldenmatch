@@ -45,6 +45,15 @@ on:
         description: "Tag for the output filename (e.g. 'post-pr239', 'post-attack-a')"
         required: false
         default: "ad-hoc"
+      columnar:
+        description: "GOLDENMATCH_FS_COLUMNAR_CLUSTER (B2c): blank = code default, '1'/'0' to A/B the flag"
+        required: false
+        default: ""
+      skip_cprofile:
+        description: "Skip the cProfile pass (set true at multi-M scale: its per-call overhead is prohibitive and distorts wall)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -56,7 +65,7 @@ jobs:
     # 64-core variant (gm-bench-64c) provisions but jobs never receive a VM,
     # suspected quota cap on the very large size for newly-created orgs.
     runs-on: large-new-64GB
-    timeout-minutes: 180  # 3 hours; 500K typical ~30 min, 1M ~90 min
+    timeout-minutes: 350  # ~6h ceiling; 5M fixture-gen (~13m) + 5M dedupe passes
     env:
       GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
       # Pin the autoconfig backend threshold so 500K stays on polars-direct
@@ -90,6 +99,18 @@ jobs:
               f'goldenmatch resolves to {goldenmatch.__file__} — not the worktree'; \
             print('worktree install OK:', goldenmatch.__file__)"
 
+      - name: Build native extension (so FS scoring isn't pure-Python)
+        # Without this the FS path falls back to pure-Python scoring (~100x
+        # slower), so any wall/RSS number off this bench is meaningless at scale.
+        run: uv run python scripts/build_native.py
+
+      - name: Assert native FS kernel is loaded (fail loud, don't measure Python)
+        run: |
+          .venv/bin/python -c "from goldenmatch.core._native_loader import native_enabled; \
+            assert native_enabled('block_scoring'), \
+              'native block_scoring NOT loaded — this bench would measure the pure-Python fallback'; \
+            print('native block_scoring: ON')"
+
       - name: Generate ${{ inputs.n_records }}-row fixture
         run: |
           mkdir -p .profile_tmp/scale_fixtures
@@ -109,6 +130,10 @@ jobs:
         if: ${{ inputs.frame != '' }}
         run: echo "GOLDENMATCH_FRAME=${{ inputs.frame }}" >> $GITHUB_ENV
 
+      - name: Apply FS columnar-cluster (B2c) override (if set)
+        if: ${{ inputs.columnar != '' }}
+        run: echo "GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}" >> $GITHUB_ENV
+
       - name: Run bench
         run: |
           .venv/bin/python scripts/bench_1m_zero_config.py \
@@ -116,6 +141,7 @@ jobs:
             --runs ${{ inputs.runs }} \
             --output .profile_tmp/bench_${{ inputs.label }}.json \
             --cprofile-output .profile_tmp/bench_${{ inputs.label }}.prof \
+            ${{ inputs.skip_cprofile && '--skip-cprofile' || '' }} \
             --ref "${{ github.sha }}"
 
       - name: Post headline to step summary
@@ -140,14 +166,23 @@ jobs:
           print()
           print(f"**{d['wall_seconds_median']:.1f}s** ({d['wall_seconds_min']:.1f}–{d['wall_seconds_max']:.1f}s)")
           print()
-          timings = (d.get("stage_breakdown") or {}).get("timings", {})
-          if timings:
-              print("## bench_capture stage breakdown")
+          sb = d.get("stage_breakdown") or {}
+          # BenchmarkRecorder.to_dict() emits stage_timings_seconds +
+          # stage_peak_rss_kb (the old `.get("timings")` here rendered empty).
+          timings = sb.get("stage_timings_seconds", {})
+          peaks_kb = sb.get("stage_peak_rss_kb", {})
+          if timings or peaks_kb:
+              print("## bench_capture stage breakdown (sorted by peak RSS)")
               print()
-              print("| stage | seconds |")
-              print("|---|---|")
-              for name, secs in sorted(timings.items(), key=lambda kv: -kv[1]):
-                  print(f"| `{name}` | {secs:.2f} |")
+              print("| stage | seconds | peak RSS (MB) |")
+              print("|---|---|---|")
+              order = sorted(set(timings) | set(peaks_kb),
+                             key=lambda k: -(peaks_kb.get(k, 0) or timings.get(k, 0.0) * 1e6))
+              for name in order:
+                  secs = timings.get(name)
+                  ss = f"{secs:.2f}" if secs is not None else "-"
+                  mb = peaks_kb.get(name, 0) / 1024.0
+                  print(f"| `{name}` | {ss} | {mb:.0f} |")
               print()
           top = d.get("cprofile_top") or []
           if top:

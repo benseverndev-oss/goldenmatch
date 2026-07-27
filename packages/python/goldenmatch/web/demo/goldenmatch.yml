@@ -18,3 +18,12 @@ matchkey:
   weight: 1.0
   levels: 2
   partial_threshold: 0.8
+# Durable identity graph — populates .goldenmatch/identity.db so the web UI's
+# Identities page (list + graph) has data out of the box. Seeded by _gen.py;
+# regenerate with: cd web/demo && python _gen.py (or run a dedupe with this cfg).
+identity:
+  enabled: true
+  backend: sqlite
+  path: .goldenmatch/identity.db
+  dataset: demo
+  source_pk_column: id

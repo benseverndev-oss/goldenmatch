@@ -3,6 +3,8 @@
 **Status:** Accepted. **Adopted:** 2026-07-25 (frame:
 `context-network/architecture/one-product-two-engines.md`; wired into the always-loaded root
 `CLAUDE.md` and the foundation "governing arc"; amends North Star commitment 3).
+**Amended:** 2026-07-27 — conformance v2 (behavioral-equivalence + default-routing tests,
+deferral re-validation); see the amendment at the end of this decision.
 
 ## Context
 
@@ -69,3 +71,77 @@ make it actually govern:
 - **Known limit:** the frame is a direction with real OPEN items (the two seams, the
   TypeScript-WASM migration, the Python fallback deprecation contract). Accepted means "this
   governs new architectural work," not "the codebase already conforms everywhere."
+
+## Amendment (2026-07-27): conformance v2 — behavioral, default-routing, deferral re-validation
+
+**Status:** Accepted. **Trigger:** the thesis-conformance scorecard reached its floor — 10
+low, 0 critical/medium, 0 undeclared, and T5 records no weakness at all. A frame whose audit
+only ever reports "all low" has finished catching the class it was built for (structural
+single-sourcing) and is now under-instrumenting the next class (behavioral + temporal
+conformance). This amendment sharpens the conformance INSTRUMENTATION and two decision tests.
+It does **not** rewrite the tenets — the "one product, two engines, many surfaces" spine and
+the five tenets' wording stand.
+
+### What the closing work exposed
+
+- **A correct owner the default path doesn't use is a *latent* second source.** The TS
+  Fellegi-Sunter kernel (`fs-core`) was byte-parity-proven yet wired opt-in, with pure-TS as
+  the default — two correct implementations coexisting, the wrong one shipping. T1 ("no second
+  source of truth") was satisfied the moment an owner existed; it never inspected the routing.
+- **Byte-parity on a fixture ≠ behavioral equivalence on the workload.** That same kernel
+  passed 6dp parity *and* would have shipped a changed default dedupe F1 (a shifted operating
+  point). "Has a test" satisfied T2 while the test measured the wrong axis. (The first F1
+  measurement was itself a degenerate-EM harness artifact — a false divergence — underscoring
+  that the behavioral check must run on representative inputs to mean anything.)
+- **Deferral premises rot silently.** The goldenanalysis frame-kernel deferral sat "correctly
+  low" for weeks after #1788 had already obsoleted its Arrow-coupling premise. T3 classifies a
+  deferral's reason once; it never re-checks whether the reason still holds.
+- **Resolved items go vacuous but stay live.** The deferral-provenance weakness emptied out
+  (every remaining deferral is model-backed, so "kernelize on measurement" has nothing to
+  measure) yet remained a permanent "low." Ten permanent lows dilute the signal.
+
+### Decision (conformance v2) — tenet WORDING unchanged, decision TESTS sharpened
+
+1. **T1 → default-routing.** One authoritative owner AND the default caller path routes to it.
+   A correct-but-unwired kernel (opt-in while a second implementation is the default) is a
+   *latent second source of truth*, not a resolved item. Conformance requires the shared owner
+   to be the default, with an escape hatch for the classified fallback — not the reverse.
+2. **T2 → behavioral equivalence, not fixture parity.** A conformance test for a two-engine
+   capability must check behavioral equivalence on the workload of interest (operating point /
+   decision output — e.g. dedupe F1-neutrality), not only byte/tolerance parity on canned
+   inputs. Fixture parity is necessary, not sufficient; the behavioral check is what catches a
+   shifted default, and it must run on a representative, non-degenerate workload.
+3. **T3 → deferrals carry a re-validation trigger.** Every deferral states not just its reason
+   but the explicit condition that would UN-defer it (the blocker that must lift), and that
+   premise is periodically re-checked, not assumed permanent. A deferral whose premise has
+   already lifted is an OPEN divergence, not a low.
+4. **Process → the audit hunts the frontier, and prunes.** With the structural board at its
+   floor, the audit's job shifts to surfacing emergent/behavioral drift the deterministic
+   static harvest cannot see (the adversarial multi-agent re-audit), and to RETIRING
+   resolved-and-stable / vacuous items so the live list is the actual risk surface, not a
+   museum of closed wins.
+5. **Two housekeeping calls.** (a) T5 (Arrow-at-bulk-boundaries) has never recorded a weakness
+   — declare it *won* (and stop scoring it) or *instrument* it; a silent tenet is a measurement
+   gap, not a solved problem, until proven. (b) Promote "many surfaces" **intentional
+   asymmetry** to a first-class principle: the edge-safe TS subset deliberately omits heavy
+   Python surfaces (distributed / Ray / GPU / full REST+web UI), so those surface gaps are
+   declared-by-design, not weaknesses to re-litigate every audit.
+
+### Consequence
+
+- Conformance graduates from *structural* (an owner exists; a fixture test exists) to
+  *behavioral + temporal* (the owner is the default; the test is workload-equivalent; deferrals
+  are re-validated). This is the natural next phase now that single-sourcing has largely landed.
+- **Counter-held:** a governance frame's value is its stability. This amendment deliberately
+  leaves the five tenets' wording intact and changes only their tests plus the audit process;
+  churning the spine would cost more than it buys.
+- **Known limit:** behavioral equivalence and frontier-finding are harder to make deterministic
+  than the static harvest — they lean on measurement and adversarial review, which are advisory
+  by nature. The static gates stay as the floor; the behavioral layer augments them, it does not
+  replace them.
+- **Propagation (follow-on, same amendment):** the paired instrumentation lands in
+  `context-network/architecture/one-product-two-engines.md` (the decision-tests section),
+  `parity/thesis_conformance.yaml` (per-weakness `un_defer:` triggers + a `default_routed`
+  check for T1), and `scripts/check_thesis_conformance.py` (retire vacuous items; flag a
+  deferral whose named blocker has lifted). This ADR amendment is the governing statement;
+  those are its mechanical wiring.

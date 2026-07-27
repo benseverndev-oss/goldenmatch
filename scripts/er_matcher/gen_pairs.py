@@ -24,12 +24,13 @@ Pure stdlib. Reuses the corruption ideas from tests/generate_synthetic.py.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 import string
 from pathlib import Path
 from typing import Any
+
+from sources.splits import split_of
 
 # --- vendored compact reference data (stdlib-only; no faker) ----------------
 FIRST = [
@@ -173,16 +174,10 @@ def _split_of(eid: int, domain: str, seed: int, val_frac: float, test_frac: floa
               holdout_domain: str | None) -> str:
     """Deterministic entity-level split. The holdout domain is fully reserved to
     `test` (cross-domain generalization); all other entities hash into
-    train/val/test by a stable digest of (seed, eid)."""
-    if holdout_domain and domain == holdout_domain:
-        return "test"
-    h = hashlib.sha256(f"{seed}:{eid}".encode()).hexdigest()
-    frac = int(h[:8], 16) / 0xFFFFFFFF
-    if frac < test_frac:
-        return "test"
-    if frac < test_frac + val_frac:
-        return "val"
-    return "train"
+    train/val/test by a stable digest of (seed, eid). Thin wrapper: delegates to
+    the shared `sources.splits.split_of` helper (DRY) without changing behavior."""
+    return split_of(eid, seed=seed, val_frac=val_frac, test_frac=test_frac,
+                     holdout_domain=holdout_domain, domain=domain)
 
 
 def generate_dataset(

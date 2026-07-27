@@ -49,8 +49,14 @@ weaknesses:
       StreamProcessor). C4 -- a CI-stable bounded-work proof: the candidate gather is EXACTLY the
       block-mates and the resolve's store-read work is INVARIANT in corpus size M (test at M=100 vs
       M=1000), plus a tracemalloc ceiling -- the measured kill criterion in deterministic form.
-      REMAINING (non-blocking): no-PK content-hash record ids (the index path is PK-scoped) and a
-      large-corpus RSS benchmark beyond the CI proof.
+      NO-PK IDS DONE 2026-07-27: the index-backed path was documented PK-only (its all-string
+      candidate frame is dtype-safe for PK ids); it in fact also resolves no-PK CONTENT-HASH
+      records to the same entity as the full-df path (the fingerprint the hash covers is
+      string-canonical, so stringifying the candidate payload doesn't shift its id). Proven +
+      parity-locked (test_index_path_no_pk_content_hash_absorbs_like_full_df); docstrings
+      relaxed. Numeric fields inherit the general str() canonicalization note.
+      REMAINING (non-blocking, optional): a large-corpus RSS benchmark beyond the CI bounded-work
+      proof -- a measurement nice-to-have, not a correctness gap.
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/store.py   # identity_record_block_keys + index API
       - packages/python/goldenmatch/goldenmatch/identity/block_index.py   # stateless compute + backfill
@@ -58,14 +64,14 @@ weaknesses:
       - packages/python/goldenmatch/tests/identity/test_incremental_index.py   # index==full-df parity
       - packages/python/goldenmatch/tests/identity/test_incremental_exact.py   # exact-matchkey path
       - packages/python/goldenmatch/tests/identity/test_incremental_scale.py   # C4 bounded-work proof
-    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 (ii) delivered; C2 + C4 landed; optional: no-PK ids + large-corpus RSS bench)"
+    owner_next: "context-network/architecture/identity-control-plane-manifesto.md (§4 (ii) delivered; C2 + C4 + no-PK ids landed; optional: large-corpus RSS bench)"
 
   - id: no-versioned-resolution-batch-contract
     tenet: T4
-    severity: low   # Wave B fixed the acute bug; Wave C/C1 landed the versioned
-                    # contract object; only refactor completeness remains
+    severity: low   # RESOLVED -- Wave B fixed the acute bug; Wave C/C1 landed the
+                    # versioned contract; the C1 data-array fold + apply_batch now done
     declared: true   # named as the 9 seam in the frame
-    title: "Compute->control handoff is now a versioned ResolutionBatch (payload-drop fixed; data-array fold remains)"
+    title: "Compute->control handoff is a versioned ResolutionBatch consumed by apply_batch(store, batch)"
     detail: >-
       FIXED (Wave B): the #2132 payload-drop trap that was LIVE on all three Postgres
       bulk paths now carries provenance, locked by test_postgres_bulk_payload_parity.py.
@@ -73,30 +79,72 @@ weaknesses:
       (CONTRACT_VERSION=1), immutable contract bundling the metadata/config half of the
       seam (was loose args: controller_snapshot/run_id/matchkey/actor/emit_singletons/
       weak_confidence_threshold) + the frame-residency budget (flush_rows) as a CONTRACT
-      TERM, not a bare env read. resolve_clusters consumes it (additive `batch` param;
-      byte-identical when absent -- test_resolution_batch_c1.py proves same store
-      dispatch). REMAINING (C1 follow-on): fold the bulk DATA arrays (records/clusters/
-      pair-evidence) into the batch + extract an apply_batch(store, batch) body.
+      TERM, not a bare env read.
+      C1 FOLLOW-ON DONE 2026-07-27: the bulk DATA parts (cluster partition / record frame /
+      scored-pair stream / pair-score view) are now folded onto the batch (ResolutionBatch
+      data fields + `with_data`), and the write body is extracted as `apply_batch(store,
+      batch)` -- the single compute->control write entry the manifesto (§3) calls for.
+      resolve_clusters is now the thin adapter (validate args -> build batch -> apply_batch),
+      byte-identical (the 400-line resolution body is unchanged; 307 identity tests +
+      test_resolution_batch_c1's apply_batch==adapter + with_data locks pass). So the whole
+      handoff is ONE versioned object with no side args. No open follow-on.
     evidence:
-      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py
-      - packages/python/goldenmatch/tests/identity/test_resolution_batch_c1.py
+      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py   # data fields + with_data
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py   # apply_batch(store, batch) + adapter
+      - packages/python/goldenmatch/tests/identity/test_resolution_batch_c1.py   # apply_batch==adapter, with_data
       - packages/python/goldenmatch/tests/identity/test_postgres_bulk_payload_parity.py
 
   - id: fs-default-ts-path-unwired-second-source
     tenet: T1
-    severity: medium   # was high (undeclared+masked); DECLARED now, wiring remains
+    severity: low   # was medium; RESOLVED-as-wired AND default-on -- the batteries
+                    # `goldenmatch` root entry auto-enables the kernel; goldenmatch/core
+                    # stays lean + opt-in. The owner-gated default flip landed and was
+                    # measured F1-neutral (see below). No open follow-up remains.
     declared: true   # Wave A: declared in the 0046 amendment (2026-07-26)
-    title: "TS Fellegi-Sunter default scoring path is a hand-written second source of truth, not the fs-wasm kernel"
+    default_routed: true   # conformance v2 (0047 amendment): the batteries `goldenmatch`
+                           # import auto-enables the shared kernel, so the DEFAULT caller
+                           # routes to the owner -- not a correct-but-unwired latent 2nd source
+    title: "TS Fellegi-Sunter scoring runs the shared fs-core kernel by default (batteries entry); pure-TS is the classified fallback"
     detail: >-
-      Verified on main: pipeline.ts scores probabilistic matchkeys via pure-TS
-      probabilistic.ts::scoreProbabilistic; fs-wasm (goldenmatch-fs-core, fsWasm.ts)
-      ships + passes fs-wasm.parity.test.ts but has NO pipeline caller. DECLARED
-      (Wave A) in the 0046 amendment + docs-site (the prior "byte-identical when WASM
-      enabled" phrasing over-claimed). REMAINING (Wave D): wire the pipeline to
-      fs-wasm to retire the second source of truth for a core scorer.
+      RESOLVED-as-wired. The pipeline (scoreProbabilisticBlocks) now routes FS block
+      scoring through the shared fs_core kernel via fs-wasm when enabled, so the kernel
+      -- the SAME fs_core::score_fs_pair Python-native runs -- is the authoritative
+      source of truth; pure-TS scoreProbabilistic remains as the classified,
+      conformance-tested FALLBACK (and for configs the kernel can't express: embedding
+      / TF fields). Landed in two PRs: the fs-wasm/TS marshaling was widened to carry
+      negative-evidence + custom level-banding (fs-core already implemented both;
+      Python-native already drove them), then pipeline.ts was rerouted with a
+      cross-language GATE proving TS == Python-native to 6dp on a block with custom
+      banding + a missing cell + a firing NE field. This also aligns TS onto Python's
+      operating point (the #1854 FIXED full-field weight range vs the old pure-TS
+      per-pair shrinking range).
+      DEFAULT-ON (owner-gated flip landed 2026-07-27). The batteries-included
+      `goldenmatch` root entry (src/index.ts) now auto-registers the kernel on import
+      (enableFsWasmScoring() side-effect), so every dedupe()/match() caller of the bare
+      package runs the shared kernel out of the box -- Python's operating point. The
+      edge-safe `goldenmatch/core` entry KEEPS its documented "no wasm bytes" discipline
+      (every sibling wasm reroute cluster/graph/fingerprint/hnsw/suggest respects it):
+      it stays lean and opt-in, so bundle-size-sensitive edge callers import core and
+      call enableFsWasmScoring() themselves. Batteries callers wanting the old pure-TS
+      path call disableFsWasmScoring() once. The ~187 KB fs-wasm is registered eagerly
+      but COMPILED LAZILY (first kernel-eligible block), so importing `goldenmatch`
+      stays cheap.
+      The flip was GATED on a measured F1 delta, not just byte-parity: a labeled
+      partial-missing dataset shows the kernel is F1-NEUTRAL vs pure-TS (single-block
+      well-conditioned EM: dF1 +0.0000; realistic soundex blocking: dF1 -0.007, within
+      small-sample noise). An earlier draft measurement trained EM on 36 rows in one
+      block, whose DEGENERATE weights (field disagree ~-24) made the fixed-range
+      normalization over-merge missing-field pairs -- a HARNESS artifact, not a kernel
+      property; it vanishes with representative weights. The measurement + its lesson
+      are locked in tests/unit/fs-default-f1-measure.test.ts. No open follow-up remains.
     evidence:
-      - packages/typescript/goldenmatch/src/core/probabilistic.ts
-      - packages/typescript/goldenmatch/src/core/fsWasm.ts
+      - packages/typescript/goldenmatch/src/index.ts   # batteries entry, kernel default-on
+      - packages/typescript/goldenmatch/src/core/pipeline.ts
+      - packages/typescript/goldenmatch/src/core/fsScore.ts
+      - packages/typescript/goldenmatch/src/core/fsScoreBackend.ts
+      - packages/typescript/goldenmatch/tests/unit/fs-batteries.test.ts   # auto-enable on import
+      - packages/typescript/goldenmatch/tests/unit/fs-default-f1-measure.test.ts   # measured F1-neutral gate
+      - packages/typescript/goldenmatch/tests/parity/fixtures/fs/fs_block_scoring_ne_banding.json
       - context-network/decisions/0046-cross-language-phase-handoff-conformance.md
 
   - id: standardize-dates-no-conformance-test
@@ -131,8 +179,15 @@ weaknesses:
       byte-divergence str(5.0)="5.0" vs String(5.0)="5"; (c) radial + ensemble scorers
       ~4dp even under WASM (reduction/recomposition order), contradicting the table's
       "byte-identical with WASM" claim; (d) goldenanalysis frame-kernel parity outside
-      0046 scope entirely. The verdict table should enumerate scorer-level and
-      package-level divergences, not just distributed/VLM/routing.
+      0046 scope entirely.
+      CLOSED 2026-07-27: the 0046 amendment now enumerates the scorer/package-level
+      divergences, not just distributed/VLM/routing -- (c) radial/ensemble ~4dp under
+      WASM, (b) PPRL float-field CLK, and (a) array_intersect `overlap` MODE pure-TS-only
+      are all named there; (d) the goldenanalysis frame-kernel is a goldenanalysis
+      boundary and is now SHARED (see standalone-ts-algorithms / analysis-wasm reroute),
+      not just fixture-locked. The amendment's prior FS bullet ("default TS FS is pure-TS,
+      not the shared kernel") was itself corrected in the same pass -- FS now runs the
+      shared kernel by default on the batteries entry (see fs-default-ts-path).
       (Note: numeric_diff was Python-only when this audit began; it is now kernel-backed
       on main -- an example of the live harvest catching curated drift.)
     evidence:
@@ -156,21 +211,35 @@ weaknesses:
       to the retired inline loop -- ties by input order, all-null columns omitted --
       locked by tests/identity/test_golden_record_single_source.py), so the rollup rule
       cannot drift from the config-driven pipeline path or the provenance layer. ONE
-      owner (core.golden) for the capability. REMAINING (doc follow-on, not a divergence):
-      the identity golden path is most_complete-ONLY (ignores field_strategies / config),
-      unlike the config-driven builders -- a conscious scope, threading a survivorship
-      config through resolve_clusters is a separate feature, not a second source of truth.
+      owner (core.golden) for the capability.
+      CONFIG-AWARE DONE 2026-07-27: the identity golden path is no longer most_complete-ONLY.
+      A `field_strategies` (col -> GoldenFieldRule) survivorship config threads through the
+      seam (ResolutionBatch v2 field -> resolve_clusters/apply_batch -> the golden helpers),
+      and `_survivor_value` dispatches each column through core.golden.merge_field with the
+      configured strategy (else most_complete) -- so the identity golden record honors
+      per-field survivorship config exactly like the config-driven builders, still ONE owner
+      (core.golden), no second rule. Additive: no config => most_complete, byte-identical
+      (locked by test_golden_record_single_source.py's config-override test + the retired-rule
+      parity cases; 311 identity tests green). Strategies needing per-member sources/dates
+      (source_priority / most_recent) degrade via merge_field's fallback -- the rollup does
+      not thread those inputs (documented on `_survivor_value`).
     evidence:
       - packages/python/goldenmatch/goldenmatch/core/golden.py
-      - packages/python/goldenmatch/goldenmatch/identity/resolve.py
+      - packages/python/goldenmatch/goldenmatch/identity/resolve.py   # _survivor_value + field_strategies threading
+      - packages/python/goldenmatch/goldenmatch/identity/resolution_batch.py   # v2 field_strategies contract term
+      - packages/python/goldenmatch/tests/identity/test_golden_record_single_source.py
       - packages/python/goldenmatch/tests/identity/test_golden_record_single_source.py
 
   - id: standalone-ts-algorithms-no-shared-kernel
     tenet: T1
-    severity: low   # was medium; RESOLVED -- Family A now shares a kernel
-                    # (cluster-wasm), Family B is a declared fixture-locked boundary
+    severity: low   # was medium; RESOLVED -- Family A shares a kernel (cluster-wasm),
+                    # Family B (goldenanalysis frame kernels) NOW shares one too
+                    # (analysis-wasm intern reroute; Wave 1b un-deferred via #1788)
     declared: true   # declared in TS CLAUDE.md / wave1b spec + parity manifests
-    title: "Clustering + goldenanalysis frame kernels: Family A shares a kernel (cluster-wasm); Family B declared fixture-locked"
+    default_routed: opt-in   # conformance v2: both kernels are SHARED but reached via opt-in
+                             # enable (cluster-wasm / enableAnalysisWasm), pure-TS is the default
+                             # fallback -- an intentional edge-bundle choice, not a latent gap
+    title: "Clustering + goldenanalysis frame kernels: both families now share a kernel (cluster-wasm + analysis-wasm)"
     detail: >-
       TWO families, both resolved. (A) TS clustering: connected-components was already shared
       to WASM (graph-wasm); the MST oversized-split + confidence half is NOW shared too.
@@ -181,18 +250,27 @@ weaknesses:
       byte-identical default fallback, and the split partition is deterministic so wasm ==
       pure-TS components exactly (parity-tested + the Python cluster-handoff oracle). So the
       MST-split kernel is one source of truth across Python-native + TS, not two impls.
-      (B) goldenanalysis frame kernels (distinct_count/null_ratio/duplicate_row_ratio): the
-      Arrow-value interning has no clean WASM boundary (Wave 1b consciously deferred), so this
-      is an ACCEPTED fixture-locked boundary -- declared at the surface as
-      `frame_kernels_deferred` in parity/goldenanalysis.yaml (same idiom as
-      blocking_kernels_deferred/scorer_kernels_deferred) and locked by the adversarial
-      cross-surface fixture. Stays low: revisit only on a real in-browser frame-dedup workload
-      (then arrow-in-wasm is the thesis-pure path).
+      (B) goldenanalysis frame kernels (distinct_count/duplicate_row_ratio) NOW SHARE a kernel
+      too (Wave 1b un-deferred 2026-07-27). The deferral rested on the interning being
+      Arrow-specific; #1788 had already moved it OUT of Arrow into analysis-core's plain-buffer
+      `intern_f64`/`intern_str` (canon_f64_bits NaN/-0.0 fold), so the SAME canon crosses to WASM
+      with no arrow-rs bloat. analysis-wasm now exports intern_f64/intern_str +
+      distinct_count_ids/duplicate_row_ratio_ids; TS `nUnique`/`duplicateRowRatio` route
+      homogeneously-typed number/string columns through that shared kernel (opt-in
+      enableAnalysisWasm; pure-TS is the classified fallback for bool/mixed columns, which JS's
+      untyped per-cell model can't express as one typed buffer). null_ratio stays pure-TS (pure
+      null-counting, no interning canon to share). Declared at the surface as `frame_kernels` in
+      parity/goldenanalysis.yaml; the kernel path reproduces the Python-locked
+      frame_kernels_adversarial.json EXACTLY (wasm-frame-kernels.parity.test.ts) alongside the
+      pure-TS lock. So both families are one source of truth, not two impls.
     evidence:
       - packages/rust/extensions/cluster-core/src/lib.rs
       - packages/rust/extensions/cluster-wasm/src/lib.rs
       - packages/typescript/goldenmatch/src/core/cluster.ts
       - packages/typescript/goldenmatch/tests/parity/cluster-wasm.parity.test.ts
+      - packages/rust/extensions/analysis-wasm/src/lib.rs   # frame-kernel wasm exports
+      - packages/typescript/goldenanalysis/src/core/aggregate.ts   # nUnique/duplicateRowRatio reroute
+      - packages/typescript/goldenanalysis/tests/parity/wasm-frame-kernels.parity.test.ts   # kernel == fixture
       - parity/goldenanalysis.yaml
       - docs/superpowers/specs/2026-07-06-goldenanalysis-wave1b-deferred.md
 
@@ -232,12 +310,17 @@ weaknesses:
     detail: >-
       Control-plane write memory stacks on the compute prep floor (emit_singletons
       materializes every referenced row; ~35 GB on a 14M frame), bounded by flushing
-      every flush_rows records. ADDRESSED-IN-PART (Wave C / C1): flush_rows is now a
+      every flush_rows records. ADDRESSED (Wave C / C1): flush_rows is now a
       field on ResolutionBatch (a contract term), and emit_singletons rides the same
       contract, instead of the budget living only in inline comments + the
-      GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS env var. REMAINING: the prep-floor half of
-      the budget (the compute side) is still implicit; the full shared-budget accounting
-      lands with the C1 data-array fold.
+      GOLDENMATCH_IDENTITY_BULK_FLUSH_ROWS env var.
+      ADVANCED 2026-07-27: with the C1 data-array fold done, the compute-side payload
+      (the record `df` + cluster partition) and the control-side write budget (flush_rows /
+      emit_singletons) now live on the SAME ResolutionBatch contract consumed by
+      apply_batch -- both halves of the shared-residency budget are co-located in one
+      versioned object, not split across an env var and loose frames. REMAINING (minor):
+      the prep-floor MAGNITUDE is still not a computed contract field (an estimate from
+      row count x ~2.5 KB); surfacing it as a number is a nice-to-have, not a coupling gap.
     evidence:
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:71
       - packages/python/goldenmatch/goldenmatch/identity/resolve.py:453
@@ -246,12 +329,26 @@ weaknesses:
     tenet: T3
     severity: low
     declared: true
+    un_defer: >-
+      RE-VALIDATE (conformance v2, 0047 amendment): re-fires the moment a scorer/blocking
+      deferral is added whose reason is PERF/SHAPE rather than model-backed -- that entry then
+      owes a MEASURED wall-clock (kernelize on measurement). Currently vacuous: every deferral
+      (embedding / record_embedding / simhash) is model-backed. Re-check on any new
+      scorer_kernels_deferred / blocking_kernels_deferred entry.
     title: "Kernel deferrals state a reason but not measured wall-clock provenance"
     detail: >-
       scorer_kernels_deferred / blocking_kernels_deferred entries carry a prose reason
       (deferred/declined/n-a) but no measured evidence (the frame's tenet is 'kernelize
-      on measurement'). Low risk today (the coverage floor is satisfied: 20 backed + 3
-      classified), but the deferral rationale should cite a measurement when the reason
-      is perf/shape rather than model-backed.
+      on measurement'). The deferral rationale should cite a measurement WHEN THE REASON
+      IS PERF/SHAPE rather than model-backed.
+      REASSESSED 2026-07-27: the trigger is currently vacuous -- EVERY remaining deferral
+      is MODEL-BACKED, not perf/shape, so none needs a wall-clock citation. Scorers: 24
+      total, 22 kernel-backed, only `embedding` + `record_embedding` deferred ("n/a --
+      model-backed"; numeric_diff + cosine were kernelized 2026-07-25/26). Blocking:
+      `simhash` alone ("declined -- model-backed": needs a bundled edge model TS doesn't
+      ship). A model-backed scorer/blocker is NOT a kernel-perf decision, so "kernelize on
+      measurement" doesn't apply to it. The invariant stands as a tripwire for any FUTURE
+      perf/shape deferral -- which would then owe a measured wall-clock -- but there is
+      nothing to measure in the current set.
     evidence:
       - parity/goldenmatch.yaml

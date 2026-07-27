@@ -56,11 +56,15 @@ class _ThroughputCallback(TrainerCallback):
         if torch.cuda.is_available():
             try:
                 self.util_samples.append(torch.cuda.utilization() / 100.0)
-            except (RuntimeError, AttributeError):
-                # GPU utilization is OPTIONAL telemetry (needs NVML/pynvml, absent
-                # on some drivers/older torch). A sampling failure must never
+            except (RuntimeError, AttributeError, ImportError):
+                # GPU utilization is OPTIONAL telemetry. torch.cuda.utilization()
+                # needs pynvml/NVML: it raises ModuleNotFoundError (a subclass of
+                # ImportError) when pynvml is absent, and RuntimeError/AttributeError
+                # on some drivers/older torch. A sampling failure must never
                 # interrupt training -- skip this step's sample; the mean is over
                 # whatever samples we did collect (0 -> gate reads it as data-bound).
+                # (pynvml is installed in the training image, so this is the
+                # graceful-degradation path, not the expected one.)
                 return
 
     def wall_s(self) -> float:
@@ -136,6 +140,11 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
         warmup_ratio=cfg.warmup_ratio,
         weight_decay=cfg.weight_decay,
         bf16=cfg.bf16,
+        # Gradient checkpointing is the memory lever that makes a 3B LoRA SFT fit
+        # (batch x seq activations dominate; the A10G smoke OOM'd without it).
+        # use_reentrant=False is required for PEFT + checkpointing.
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         packing=cfg.packing,
         max_seq_length=seq_len,
         group_by_length=cfg.group_by_length,
@@ -153,7 +162,9 @@ def run_training(cfg: TrainConfig, args: Any) -> int:
     cb = _ThroughputCallback(seq_len)
     trainer = SFTTrainer(
         model=model, args=sft, train_dataset=train_ds,
-        eval_dataset=val_ds, processing_class=tok, peft_config=peft_cfg,
+        # trl 0.9.6 (pinned in modal_train.py) takes `tokenizer=`; `processing_class=`
+        # is the newer trl/transformers rename and is not accepted here.
+        eval_dataset=val_ds, tokenizer=tok, peft_config=peft_cfg,
         callbacks=[cb],
     )
     trainer.train()

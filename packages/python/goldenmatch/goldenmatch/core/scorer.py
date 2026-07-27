@@ -812,6 +812,59 @@ def _apply_guard_to_exact_pairs(  # pyright: ignore[reportUnusedFunction]  # cal
     return filtered
 
 
+# Set by core/pipeline before scoring a weighted matchkey that carries
+# field-level guards, so find_fuzzy_matches can read RAW (pre-prep) values by
+# __row_id__ when building a field's guard mask. ThreadPoolExecutor workers
+# share this module global; matchkeys are scored sequentially in the pipeline
+# loop, so there is no cross-matchkey contamination.
+_active_raw_guard_values: dict[str, dict[int, Any]] = {}
+
+
+def _field_guard_mask(
+    guard_expr: str, row_ids: list, block_df: Any,
+) -> np.ndarray:
+    """Per-pair boolean mask (n x n) for a field-level guard.
+
+    ``mask[i, j]`` is True when the guard holds for the (row i, row j) pair.
+    Values come from the RAW snapshot (``_active_raw_guard_values``, by
+    ``__row_id__``) when available, else the prepared block column read through
+    the arrow-native ``to_frame`` + Column seam (NOT polars ``[c]`` indexing --
+    goldenmatch is polars-free). The guard should be SYMMETRIC in a/b (the a/b
+    assignment within an emitted pair is not canonically ordered).
+    """
+    import numpy as _np
+
+    from goldenmatch.core.frame import to_frame as _to_frame_guard
+    from goldenmatch.core.guard import guard_columns, guard_passes
+
+    cols = guard_columns(guard_expr)
+    n = len(row_ids)
+    _bf = _to_frame_guard(block_df)
+    _bf_names = set(_bf.columns)
+    prepared = {c: _bf.column(c).to_list() for c in cols if c in _bf_names}
+
+    def _rec(i: int) -> dict:
+        rid = row_ids[i]
+        rec: dict = {}
+        for c in cols:
+            raw = _active_raw_guard_values.get(c)
+            if raw is not None and rid in raw:
+                rec[c] = raw[rid]
+            elif c in prepared:
+                rec[c] = prepared[c][i]
+        return rec
+
+    recs = [_rec(i) for i in range(n)]
+    mask = _np.zeros((n, n), dtype=bool)
+    for i in range(n):
+        ri = recs[i]
+        for j in range(i + 1, n):
+            if guard_passes(guard_expr, cols, ri, recs[j]):
+                mask[i, j] = True
+                mask[j, i] = True
+    return mask
+
+
 def find_exact_matches(
     lf: Any, mk: MatchkeyConfig
 ) -> list[tuple[int, int, float]]:
@@ -1792,6 +1845,12 @@ def find_fuzzy_matches(
         else:  # alias_match
             scores = _alias_score_matrix(values)
 
+        # Field-level guard: drop this field for pairs whose guard fails (it
+        # contributes 0 to BOTH numerator and denominator, so the weighted
+        # average renormalizes over the surviving fields automatically).
+        if f.guard:
+            valid = valid & _field_guard_mask(f.guard, row_ids, block_df)
+
         cheap_numerator += scores * _w(f) * valid
         cheap_denominator += _w(f) * valid
 
@@ -1865,6 +1924,8 @@ def find_fuzzy_matches(
                     )
                     emb_row_null &= np.array([v is None for v in col_vals])
                 emb_valid = ~(emb_row_null[:, None] | emb_row_null[None, :])
+                if f.guard:
+                    emb_valid = emb_valid & _field_guard_mask(f.guard, row_ids, block_df)
                 fuzzy_numerator += scores * _w(f) * emb_valid
                 fuzzy_denominator += _w(f) * emb_valid
             else:
@@ -1877,6 +1938,10 @@ def find_fuzzy_matches(
                     values, f.scorer, model_name=f.model or "all-MiniLM-L6-v2",
                     tf_freqs=getattr(f, "tf_freqs", None),
                 )
+
+                # Field-level guard: drop this field for guard-failing pairs.
+                if f.guard:
+                    valid = valid & _field_guard_mask(f.guard, row_ids, block_df)
 
                 fuzzy_numerator += scores * _w(f) * valid
                 fuzzy_denominator += _w(f) * valid

@@ -1,6 +1,21 @@
 # GoldenAnalysis Wave 1b (WASM surface for the frame kernels) — consciously deferred
 
-**Status:** DEFERRED (decision 2026-07-06). Not a backlog item to pick up by default —
+**Status:** SUPERSEDED — SHIPPED 2026-07-27. This deferral rested on the interning being
+Arrow-specific with "no clean WASM boundary" (below). That premise was obsoleted by #1788,
+which moved interning OUT of Arrow into `analysis-core`'s plain-buffer `intern_f64`/`intern_str`
+(the exact same `canon_f64_bits` canon). With Arrow out of the boundary, none of the three
+"heavy/drift-y" options below apply: the interner crosses as plain typed buffers (Float64Array +
+validity, Arrow-utf8 offsets+bytes) — the SAME idiom the numeric kernels already use — with no
+arrow-rs bloat and no second interner. `analysis-wasm` now exports `intern_f64`/`intern_str` +
+`distinct_count_ids`/`duplicate_row_ratio_ids`; TS `nUnique`/`duplicateRowRatio` route
+homogeneously-typed number/string columns through the shared kernel (opt-in `enableAnalysisWasm`),
+pure-TS staying the classified fallback for bool/mixed columns. Locked by
+`wasm-frame-kernels.parity.test.ts` (kernel == the same `frame_kernels_adversarial.json` fixture).
+The original deferral reasoning below is retained for the record.
+
+---
+
+**Original status:** DEFERRED (decision 2026-07-06). Not a backlog item to pick up by default —
 revisit only if the trigger below fires.
 
 ## What Wave 1b would have been

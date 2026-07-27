@@ -61,10 +61,13 @@ concrete:
 - If you must hand off at the **`score`** boundary, enable the shared WASM scorer
   on the TypeScript side (byte-identical only for the byte-exact covered scorers:
   `jaro_winkler` / `levenshtein` / `token_sort` / `exact`) and **avoid
-  re-thresholding** across the boundary. Note: the default TS Fellegi–Sunter path
-  is pure-TS `probabilistic.ts`, **not** `fs-wasm` (that kernel ships and is
-  parity-gated but has no pipeline caller yet), so FS scoring is at the 4-dp
-  tolerance, not byte-identical.
+  re-thresholding** across the boundary. Note on Fellegi–Sunter: the batteries
+  `goldenmatch` import now runs FS block scoring through the shared `fs-wasm`
+  kernel **by default** (byte-aligned with Python-native — the #1854 fixed
+  full-field operating point), so hand off at `score` from the bare `goldenmatch`
+  entry for byte-safe FS. The lean `goldenmatch/core` entry keeps the pure-TS
+  `probabilistic.ts` path (4-dp tolerance) unless you opt in with
+  `enableFsWasmScoring()`.
 - **Do not** split a pipeline across `standardize` / dates, embeddings, or the
   auto-config controller and expect bit-exact reproduction. Run those phases in a
   single language, then hand off the durable artifact.

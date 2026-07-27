@@ -239,19 +239,46 @@ def derive_record_id(
     return primary, pk
 
 
+def _survivor_value(
+    col: str, col_values: list, field_strategies: dict[str, Any] | None
+) -> Any:
+    """Pick the survivor for one column's candidate values.
+
+    The configured ``GoldenFieldRule`` strategy when ``field_strategies`` names the
+    column, else the ``most_complete`` default. Both routes are single-sourced
+    through ``core.golden`` (``merge_field`` / ``most_complete_value``), so the
+    identity golden path honors survivorship config WITHOUT a second rollup rule
+    (T1) -- the config-aware upgrade of the former most_complete-only path.
+
+    NOTE: strategies that need per-member sources/dates (``source_priority`` /
+    ``most_recent``) are passed values-only here (the identity rollup does not
+    thread those inputs), so they degrade via ``merge_field``'s own fallback;
+    value-only strategies (most_complete / majority_vote / first_non_null /
+    longest_value / unanimous_or_null) apply exactly.
+    """
+    if field_strategies is not None:
+        rule = field_strategies.get(col)
+        if rule is not None:
+            from goldenmatch.core.golden import merge_field
+
+            return merge_field(col_values, rule)[0]
+    from goldenmatch.core.golden import most_complete_value
+
+    return most_complete_value(col_values)
+
+
 def _golden_record_from_members(
-    df, row_ids: list[int]
+    df, row_ids: list[int], field_strategies: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Roll up cluster members into a single representative row (most-complete).
+    """Roll up cluster members into a single representative row.
 
     A5: seam-driven both lanes (column reads + Python folds). The per-column
-    rollup rule (longest non-null string, ties by input order) is
-    single-sourced through ``core.golden.most_complete_value`` -- the same
-    ``most_complete`` implementation the config-driven pipeline + the
-    survivorship provenance layer use -- instead of a hand-rolled loop (T1).
+    survivor rule is single-sourced through ``core.golden`` -- ``most_complete``
+    by default, or the configured ``GoldenFieldRule`` strategy when
+    ``field_strategies`` names the column (see ``_survivor_value``) -- instead of a
+    hand-rolled loop (T1).
     """
     from goldenmatch.core.frame import to_frame
-    from goldenmatch.core.golden import most_complete_value
 
     members = to_frame(df).filter_in("__row_id__", row_ids)
     if members.height == 0:
@@ -263,20 +290,21 @@ def _golden_record_from_members(
         col_values = members.column(col).to_list()
         if all(v is None for v in col_values):
             continue
-        out[col] = most_complete_value(col_values)
+        out[col] = _survivor_value(col, col_values, field_strategies)
     return out
 
 
 def _golden_record_from_payloads(
-    payload_by_row_id: dict[int, dict[str, Any]], row_ids: list[int]
+    payload_by_row_id: dict[int, dict[str, Any]],
+    row_ids: list[int],
+    field_strategies: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Roll up pre-indexed member payloads without re-scanning the frame.
 
-    Same ``most_complete`` rule as ``_golden_record_from_members``, single-
-    sourced through ``core.golden.most_complete_value`` (T1).
+    Same survivor rule as ``_golden_record_from_members`` -- ``most_complete`` by
+    default, or the configured ``GoldenFieldRule`` per column (``_survivor_value``,
+    T1).
     """
-    from goldenmatch.core.golden import most_complete_value
-
     members = [payload_by_row_id[row_id] for row_id in row_ids if row_id in payload_by_row_id]
     if not members:
         return {}
@@ -285,7 +313,7 @@ def _golden_record_from_payloads(
         col_values = [member.get(col) for member in members]
         if all(v is None for v in col_values):
             continue
-        out[col] = most_complete_value(col_values)
+        out[col] = _survivor_value(col, col_values, field_strategies)
     return out
 
 
@@ -395,6 +423,7 @@ def resolve_clusters(
     pair_score_view: ClusterPairScores | None = None,
     cluster_frames: ClusterFrames | None = None,
     actor: str = "pipeline",
+    field_strategies: dict[str, Any] | None = None,
     batch: ResolutionBatch | None = None,
 ) -> ResolveSummary:
     """Resolve run-local clusters to durable identities.
@@ -439,7 +468,33 @@ def resolve_clusters(
             source_pk_col=source_pk_col, controller_snapshot=controller_snapshot,
             actor=actor, emit_singletons=emit_singletons,
             weak_confidence_threshold=weak_confidence_threshold,
+            field_strategies=field_strategies,
         )
+    # C1 follow-on: fold the bulk DATA parts (cluster partition / record frame /
+    # scored-pair stream / pair-score view) into the batch, so the whole
+    # compute->control handoff is ONE object and apply_batch takes no side args.
+    batch = batch.with_data(
+        clusters=clusters, cluster_frames=cluster_frames, df=df,
+        scored_pairs=scored_pairs, pair_score_view=pair_score_view,
+    )
+    return apply_batch(store, batch)
+
+
+def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
+    """Apply a fully-specified ``ResolutionBatch`` to the store.
+
+    The single compute->control WRITE entry the manifesto (§3) calls for:
+    ``resolve_clusters`` is the thin adapter that validates its args + builds the
+    batch, and this consumes it. BYTE-IDENTICAL to the prior inline body -- the data
+    + metadata are rebound from the batch here and the resolution logic below is
+    unchanged (locked by test_resolution_batch_c1)."""
+    clusters = batch.clusters
+    cluster_frames = batch.cluster_frames
+    df = batch.df
+    # scored_pairs is carried on the batch for signature compatibility but not read
+    # here (evidence edges come from per-cluster pair_scores / pair_score_view), so
+    # it is intentionally not rebound -- see the note at the scored_pairs comment below.
+    pair_score_view = batch.pair_score_view
     run_name = batch.run_id
     dataset = batch.dataset
     matchkey_name = batch.matchkey_name
@@ -448,6 +503,7 @@ def resolve_clusters(
     actor = batch.actor
     emit_singletons = batch.emit_singletons
     weak_confidence_threshold = batch.weak_confidence_threshold
+    field_strategies = batch.field_strategies
 
     summary = ResolveSummary()
     from goldenmatch.core.frame import to_frame as _tf_a5e
@@ -763,7 +819,7 @@ def resolve_clusters(
                 ):
                     entity_id = new_entity_id()
                     now = datetime.now()
-                    golden = _golden_record_from_payloads(rowid_to_payload, members)
+                    golden = _golden_record_from_payloads(rowid_to_payload, members, field_strategies)
                     bulk_node_rows.append({
                         "entity_id": entity_id,
                         "status": IdentityStatus.ACTIVE.value,
@@ -874,7 +930,7 @@ def resolve_clusters(
                     store.upsert_identity(IdentityNode(
                         entity_id=entity_id,
                         status=IdentityStatus.ACTIVE.value,
-                        golden_record=_golden_record_from_payloads(rowid_to_payload, members),
+                        golden_record=_golden_record_from_payloads(rowid_to_payload, members, field_strategies),
                         confidence=_cluster_confidence(info),
                         dataset=dataset,
                         created_at=now,
@@ -894,6 +950,8 @@ def resolve_clusters(
                         ))
                         summary.events_emitted += 1
                     summary.created += 1
+                    structural_change = True
+                    changed_records = set(record_ids)
                 elif len(unique_entities) == 1:
                     # Absorb new records into existing identity.
                     entity_id = unique_entities[0]
@@ -903,7 +961,7 @@ def resolve_clusters(
                         entity_id=entity_id,
                         status=existing_node.status if existing_node else IdentityStatus.ACTIVE.value,
                         merged_into=existing_node.merged_into if existing_node else None,
-                        golden_record=_golden_record_from_payloads(rowid_to_payload, members),
+                        golden_record=_golden_record_from_payloads(rowid_to_payload, members, field_strategies),
                         confidence=_cluster_confidence(info),
                         dataset=dataset,
                         created_at=existing_node.created_at if existing_node else now,
@@ -920,6 +978,11 @@ def resolve_clusters(
                         ))
                         summary.events_emitted += 1
                         summary.absorbed_records += 1
+                    # Edges/conflicts are re-emitted below ONLY for the records
+                    # this run actually added; a pure re-observation (nothing new)
+                    # writes nothing (#2197).
+                    structural_change = bool(newly_added)
+                    changed_records = set(newly_added)
                 else:
                     # Multi-entity overlap -> merge into the one with most members
                     # (tie-break: oldest created_at).
@@ -936,7 +999,7 @@ def resolve_clusters(
                         entity_id=winner,
                         status=IdentityStatus.ACTIVE.value,
                         merged_into=None,
-                        golden_record=_golden_record_from_payloads(rowid_to_payload, members),
+                        golden_record=_golden_record_from_payloads(rowid_to_payload, members, field_strategies),
                         confidence=_cluster_confidence(info),
                         dataset=dataset,
                         created_at=winner_node.created_at if winner_node else now,
@@ -966,6 +1029,8 @@ def resolve_clusters(
                         summary.events_emitted += 1
                     entity_id = winner
                     summary.merged += 1
+                    structural_change = True
+                    changed_records = set(record_ids)
 
                 # 3b. Reassign losers' records to winner BEFORE upserting cluster records,
                 # so an absorb branch on the next iteration sees them already migrated.
@@ -998,11 +1063,20 @@ def resolve_clusters(
                     ))
                     summary.records_upserted += 1
 
-                # 3d. Record evidence edges for every scored within-cluster pair.
+                # 3d. Record evidence edges for the scored within-cluster pairs
+                # THIS RUN CHANGED. ``run_name`` is part of the edge's unique key
+                # (audit spine), so re-emitting an unchanged cluster's edges every
+                # run appends a duplicate set under the new run_name and grows the
+                # store / conflict counts without bound (#2197). ``changed_records``
+                # is the whole cluster for a new/merged entity (so new clusters are
+                # byte-identical to before) and only the newly absorbed records for
+                # an absorb -- so a no-op re-resolve writes nothing, mirroring the
+                # event layer, which already skips via has_run_event / newly_added.
                 pair_scores = (
-                    pair_score_view.for_cluster(cluster_id)
-                    if pair_score_view is not None
-                    else (info.get("pair_scores") or {})
+                    (pair_score_view.for_cluster(cluster_id)
+                     if pair_score_view is not None
+                     else (info.get("pair_scores") or {}))
+                    if structural_change else {}
                 )
                 for pair_key, score in pair_scores.items():
                     if isinstance(pair_key, tuple) and len(pair_key) == 2:
@@ -1012,6 +1086,8 @@ def resolve_clusters(
                     ra = rowid_to_recid.get(int(a))
                     rb = rowid_to_recid.get(int(b))
                     if not ra or not rb:
+                        continue
+                    if ra not in changed_records and rb not in changed_records:
                         continue
                     _add_edge(EvidenceEdge(
                         entity_id=entity_id,
@@ -1036,7 +1112,8 @@ def resolve_clusters(
                 cluster_conf = _cluster_confidence(info)
                 bottleneck = info.get("bottleneck_pair")
                 if (
-                    weak_confidence_threshold > 0
+                    structural_change
+                    and weak_confidence_threshold > 0
                     and cluster_conf is not None
                     and cluster_conf < weak_confidence_threshold
                     and bottleneck is not None
@@ -1322,8 +1399,15 @@ def _resolve_via_index(
       5. indexes the new record's block keys (self-population, so the next
          record finds it).
 
-    No full-corpus materialization. Record ids are PK-based (``source_pk_col``),
-    so the candidate frame can be all-string without shifting any record id.
+    No full-corpus materialization. The candidate frame is all-string; that is
+    record-id-safe for PK ids by construction AND for no-PK CONTENT-HASH ids on
+    string-valued records -- the canonical fingerprint the hash covers is itself
+    string-canonical, so stringifying the candidate payload does not shift its id
+    (parity-locked by ``test_index_path_no_pk_content_hash_absorbs_like_full_df``:
+    an incoming no-PK record absorbs into the same persisted entity as on the
+    full-``df`` path). Numeric fields inherit the general ``str()`` canonicalization
+    boundary -- cast to string up front if a no-PK id must be byte-stable across a
+    numeric dtype.
     Covers both exact matchkeys (via ``_exact_match_rows``) and the
     threshold-bearing types (via ``match_one``). Falls back to a create-only
     path when there are no candidates.
@@ -1459,8 +1543,10 @@ def resolve_record_incremental(
             persisted block-key index (manifesto §4(ii) bidirectional seam)
             instead of ``df`` -- the record's block-mates are gathered from the
             store, scored, and resolved without materializing the whole corpus.
-            The record must use PK-based ids (``source_pk_col``). ``None``
-            (default) keeps the byte-identical full-``df`` path.
+            Works with PK-based ids AND no-PK content-hash ids (parity-locked for
+            string-valued records; numeric fields inherit the general ``str()``
+            canonicalization note). ``None`` (default) keeps the byte-identical
+            full-``df`` path.
 
     Returns:
         The ``entity_id`` the record resolved to (existing or newly created), or

@@ -31,6 +31,11 @@ service-account*.json
 .goldenmatch_cross_encoder/
 .goldenmatch_faiss/
 .goldenmatch/
+# ...but ship the demo's seeded identity graph so the web UI Identities page
+# works out of the box (its memory.db + any other runtime artifacts stay ignored).
+!web/demo/.goldenmatch/
+web/demo/.goldenmatch/*
+!web/demo/.goldenmatch/identity.db
 .superpowers/
 tests/benchmarks/datasets/NCVR/
 

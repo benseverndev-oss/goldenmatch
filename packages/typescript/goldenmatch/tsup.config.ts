@@ -53,6 +53,13 @@ export default defineConfig({
     // wheel. ~187 KB inlined base64 as a separate subpath
     // (`goldenmatch/core/fs-wasm`), out of the default core bundle.
     "core/fsWasm": "src/core/fsWasm.ts",
+    // Opt-in entry: the FS block-scoring REROUTE adapter — builds the kernel
+    // inputs from (rows, matchkey, EMResult) and registers the fs-wasm backend
+    // (`enableFsWasmScoring()`), so the probabilistic pipeline runs the shared
+    // fs-core kernel. Imports `fsWasm` (the inlined ~187 KB wasm), so it stays a
+    // separate subpath (`goldenmatch/core/fs-scoring`), out of the default core
+    // bundle.
+    "core/fsScore": "src/core/fsScore.ts",
     "node/index": "src/node/index.ts",
     "node/mcp/server": "src/node/mcp/server.ts",
     "node/a2a/server": "src/node/a2a/server.ts",

@@ -1434,6 +1434,61 @@ class IdentityStore:
             )
         return [self._row_to_edge(r) for r in rows]
 
+    def status_counts(self, dataset: str | None = None) -> dict[str, int]:
+        """Entity count per status in one grouped query.
+
+        Lets ``identity_summary_stats`` tally statuses without paging every node
+        (#2198). Raises on mongo so the caller keeps its paged fallback."""
+        if self._backend == "mongo":
+            raise NotImplementedError("status_counts: mongo uses the paged fallback")
+        if dataset is None:
+            rows = self._fetchall(
+                "SELECT status, COUNT(*) AS n FROM identity_nodes GROUP BY status", (),
+            )
+        else:
+            rows = self._fetchall(
+                "SELECT status, COUNT(*) AS n FROM identity_nodes "
+                "WHERE dataset = ? GROUP BY status", (dataset,),
+            )
+        return {r["status"]: int(r["n"]) for r in rows}
+
+    def active_record_stats(
+        self, dataset: str | None = None,
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """``(records_per_active_entity, records_per_source)`` in two grouped
+        queries instead of one ``get_records_for_entity`` per entity (#2198).
+
+        Records live on active entities (a merge reassigns them), matching
+        ``identity_summary_stats``' per-active-entity accounting. The entity map
+        LEFT JOINs so an active entity with zero records still appears (count 0),
+        preserving the prior ``len()``-based semantics. Raises on mongo so the
+        caller keeps its paged fallback."""
+        if self._backend == "mongo":
+            raise NotImplementedError(
+                "active_record_stats: mongo uses the paged fallback"
+            )
+        ds = "" if dataset is None else " AND n.dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        per_entity_rows = self._fetchall(
+            "SELECT n.entity_id AS eid, COUNT(sr.record_id) AS n "
+            "FROM identity_nodes n "
+            "LEFT JOIN source_records sr ON sr.entity_id = n.entity_id "
+            f"WHERE n.status = 'active'{ds} "
+            "GROUP BY n.entity_id",
+            params,
+        )
+        source_rows = self._fetchall(
+            "SELECT sr.source AS source, COUNT(*) AS n "
+            "FROM source_records sr "
+            "JOIN identity_nodes n ON sr.entity_id = n.entity_id "
+            f"WHERE n.status = 'active'{ds} "
+            "GROUP BY sr.source",
+            params,
+        )
+        per_entity = {r["eid"]: int(r["n"]) for r in per_entity_rows}
+        source_breakdown = {r["source"]: int(r["n"]) for r in source_rows}
+        return per_entity, source_breakdown
+
     def emit_event(
         self, event: IdentityEvent, *, return_id: bool = True
     ) -> int | None:

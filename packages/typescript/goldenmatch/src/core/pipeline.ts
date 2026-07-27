@@ -28,6 +28,7 @@ import {
 } from "./scorer.js";
 import { applyNegativeEvidenceToExactPairs } from "./autoconfigNegativeEvidence.js";
 import { scoreProbabilistic, trainEM } from "./probabilistic.js";
+import { getFsScoreBackend } from "./fsScoreBackend.js";
 import { buildClusters, pairKey } from "./cluster.js";
 import { buildGoldenRecord } from "./golden.js";
 import { postflight } from "./autoconfigVerify.js";
@@ -113,6 +114,17 @@ function scoreProbabilisticBlocks(
   const linked: ScoredPair[] = [];
   const review: ScoredPair[] = [];
 
+  // FS-wasm reroute (fs-default-ts-path PR2): when the shared `fs_core` kernel is
+  // registered (via `enableFsWasmScoring()`) AND the matchkey is kernel-
+  // expressible, score each block through it — the SAME kernel Python-native
+  // runs, so TS FS scoring lands on Python's operating point (FIXED full-field
+  // weight range, the #1854 alignment). Otherwise the pure-TS `scoreProbabilistic`
+  // (per-pair shrinking-range normalization) is the classified fallback. The
+  // kernel path takes no exclude set — the loop's `matchedPairs.has(key)` guard
+  // (matchedPairs IS the exclude set) drops already-matched pairs identically.
+  const fsBackend = getFsScoreBackend();
+  const useKernel = fsBackend !== null && fsBackend.eligible(mk);
+
   for (const block of blocks) {
     if (options.acrossFilesOnly) {
       const sources = new Set(
@@ -124,10 +136,12 @@ function scoreProbabilisticBlocks(
       if (sources.size < 2) continue;
     }
 
-    let pairs = scoreProbabilistic(block.rows, mk, em, {
-      excludePairs: matchedPairs,
-      threshold: reviewThreshold,
-    });
+    let pairs = useKernel
+      ? fsBackend!.scoreBlock(block.rows, mk, em, reviewThreshold)
+      : scoreProbabilistic(block.rows, mk, em, {
+          excludePairs: matchedPairs,
+          threshold: reviewThreshold,
+        });
     if (options.acrossFilesOnly) {
       pairs = pairs.filter(
         (pair) =>

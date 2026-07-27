@@ -1,6 +1,6 @@
 {
   "name": "goldenmatch",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "description": "Entity resolution toolkit — deduplicate, match, and create golden records",
   "type": "module",
   "exports": {
@@ -17,6 +17,7 @@
     "./core/fingerprint-wasm": { "types": "./dist/core/fingerprintWasm.d.ts", "import": "./dist/core/fingerprintWasm.js", "require": "./dist/core/fingerprintWasm.cjs" },
     "./core/goldenembed-wasm": { "types": "./dist/core/goldenembedWasm.d.ts", "import": "./dist/core/goldenembedWasm.js", "require": "./dist/core/goldenembedWasm.cjs" },
     "./core/fs-wasm": { "types": "./dist/core/fsWasm.d.ts", "import": "./dist/core/fsWasm.js", "require": "./dist/core/fsWasm.cjs" },
+    "./core/fs-scoring": { "types": "./dist/core/fsScore.d.ts", "import": "./dist/core/fsScore.js", "require": "./dist/core/fsScore.cjs" },
     "./node": { "types": "./dist/node/index.d.ts", "import": "./dist/node/index.js", "require": "./dist/node/index.cjs" }
   },
   "bin": { "goldenmatch-js": "./dist/cli.cjs", "goldenmatch-mcp": "./dist/node/mcp/server.cjs" },

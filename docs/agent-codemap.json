@@ -3673,6 +3673,7 @@
             "connected_components",
             "dedup_pairs_max_score",
             "dedup_pairs_max_score_arrow",
+            "dedup_pairs_max_score_arrow_table",
             "dedup_pairs_max_score_columnar"
           ],
           "imports": [
@@ -4290,6 +4291,7 @@
             "_ensemble_score_single",
             "_ensemble_score_single_f32",
             "_exact_score_matrix",
+            "_field_guard_mask",
             "_filter_target_ids_df",
             "_find_exact_match_ids",
             "_fuzzy_score_matrix",
@@ -6002,6 +6004,8 @@
             "IdentitySummary",
             "WorklistItem",
             "_iter_entities",
+            "_summary_from_counts",
+            "_summary_stats_scan",
             "entity_profile",
             "identity_summary_stats",
             "steward_worklist",
@@ -6073,6 +6077,8 @@
             "_referenced_row_ids",
             "_resolve_via_index",
             "_row_to_payload",
+            "_survivor_value",
+            "apply_batch",
             "derive_record_id",
             "match_record_to_entity",
             "resolve_clusters",
