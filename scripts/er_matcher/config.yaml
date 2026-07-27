@@ -5,6 +5,20 @@
 #
 # The seq_len is MEASURED at train time (P95 of serialized-pair tokens, capped),
 # not fixed here -- seq_len_percentile/cap/multiple_of are the policy.
+#
+# SP2 Task 8 right-sizing check: validated for the REAL multi-source corpus
+# (build_corpus.py blend of febrl + Phase 1b synthetic + Magellan/Leipzig,
+# ~25k rows total -> ~17,690 train pairs after gen_pairs.py), not the old
+# ~2,844-row synthetic-only default this repo started with. At the real
+# scale: eval_fraction 0.1 -> ~1,769 held-out eval pairs, which is a usable
+# val slice for the P5 reliability curve (plenty of points, not so large it
+# starves training). effective batch = per_device_batch(16) * grad_accum(2)
+# = 32 -> ~498 steps/epoch, ~995 total steps over epochs: 2 -- reviewed and
+# left as-is; none of epochs/per_device_batch/grad_accum needed changing for
+# this corpus size. If a future corpus size changes these steps-per-epoch
+# numbers enough to matter (e.g. a much smaller ad-hoc corpus), re-derive
+# from scripts/er_matcher/_train_runtime.py::estimate_total_steps rather
+# than eyeballing it here.
 
 base_model: "Qwen/Qwen2.5-3B-Instruct"   # Apache-2.0, redistribution-clean
 base_revision: null                       # pin to a base commit sha before the full run
