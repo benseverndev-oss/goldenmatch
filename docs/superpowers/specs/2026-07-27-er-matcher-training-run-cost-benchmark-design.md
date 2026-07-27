@@ -16,7 +16,10 @@ exists but has never run the full training end-to-end on real data, and has gaps
 - `learning_curve` is always `[]` — the "sweep driver" `perf_report` references
   does not exist, so the gate's "would more data help?" check is uninformed.
 - The config (`config.yaml`) is sized for the old ~2,844-row synthetic default.
-- No checkpoint/resume — a preempted/failed paid run restarts from scratch.
+- Checkpoints already save to the volume (`save_strategy="steps"`, `save_steps`),
+  but there is no `resume_from_checkpoint` wiring — a preempted/failed paid run
+  restarts from scratch instead of resuming. (The missing piece is resume, not
+  checkpointing.)
 - The perf gate reports a single config; it can't compare cost/quality across
   training configs or pick the cheapest adequate GPU tier.
 
@@ -101,8 +104,12 @@ that trade is worth it rather than assuming it.
 
 ### 6. Guardrails, auth, autonomy
 
-- The benchmark phase runs **autonomously** under a soft **~$8** ceiling (surface to
-  the human if a run's extrapolation would exceed it before launching).
+- The benchmark phase runs **autonomously** under a soft **~$8** ceiling. This is
+  measured against the benchmark phase's OWN cost — the ~8 short sub-trainings
+  (2 configs x 4 data slices, each config in one container) — NOT the projected
+  full-run cost. I estimate that benchmark cost up front (from smoke step-time x
+  planned sweep steps x tier rate) and surface to the human before launching if it
+  would exceed the ceiling.
 - The **full-run** config is the human's explicit pick at the A/B scorecard — so the
   larger spend always has a human in the loop; no hard autonomous full-run cap
   needed.
