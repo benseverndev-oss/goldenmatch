@@ -168,13 +168,18 @@ def benchmark() -> None:
     sys.path.insert(0, os.path.dirname(__file__))
     import config_matrix
 
+    # spawn() (non-blocking) so BOTH variants run in PARALLEL and both survive
+    # `--detach` after the local orchestrator disconnects -- unlike blocking
+    # remote() calls, which run sequentially and leave the not-yet-triggered
+    # variant unlaunched if the parent process dies mid-sweep.
+    handles = []
     for name, cfg in config_matrix.expand_configs({"qlora_4bit": False}):
-        print(f"launching sweep: {name}")
-        train_sweep.remote(qlora=cfg["qlora_4bit"])
+        print(f"spawning sweep: {name}")
+        handles.append(train_sweep.spawn(qlora=cfg["qlora_4bit"]))
 
-    print("sweep done -> `modal volume get er-matcher-out "
-          "sweep_metrics_bf16-lora.json sweep_metrics_qlora-4bit.json`, "
-          "then feed both to scripts/er_matcher/perf_report.py")
+    print(f"both sweeps spawned (parallel, detached): {[h.object_id for h in handles]}")
+    print("when both finish -> `modal volume get er-matcher-out 'sweep_metrics_*.json' <dir>`"
+          " -> `python scripts/er_matcher/run_benchmark.py --sweep-dir <dir>`")
 
 
 @app.local_entrypoint()
