@@ -53,16 +53,14 @@ jobs:
       - name: Install profilers
         run: |
           set +e
-          # py-spy: prebuilt static musl binary (uv venvs ship no pip, so
-          # `.venv/bin/python -m pip install` fails). Bulletproof, no build.
-          PYSPY_VER=v0.4.0
-          curl -fsSL "https://github.com/benfred/py-spy/releases/download/${PYSPY_VER}/py-spy-${PYSPY_VER}-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/pyspy.tgz \
-            && tar -xzf /tmp/pyspy.tgz -C /usr/local/bin py-spy \
-            && sudo chmod +x /usr/local/bin/py-spy
-          echo "py-spy: $(py-spy --version 2>&1 || echo MISSING)"
-          cargo install flamegraph inferno --quiet
-          echo "flamegraph bin: $(ls -la ~/.cargo/bin/flamegraph 2>&1 || echo MISSING)"
-          echo "inferno bin: $(ls ~/.cargo/bin/inferno-flamegraph 2>&1 || echo MISSING)"
+          # py-spy via `uv pip` (uv provides pip; the uv-created venv's python
+          # does NOT ship pip -- that was the earlier "No module named pip").
+          uv pip install py-spy
+          echo "py-spy: $(.venv/bin/py-spy --version 2>&1 || echo MISSING)"
+          # inferno = folded-stack collapse + svg (Rust). No flamegraph-rs wrapper
+          # -- we drive perf directly (its --perfdata flag broke the wrapper).
+          cargo install inferno --quiet
+          echo "inferno: $(ls ~/.cargo/bin/inferno-flamegraph 2>&1 || echo MISSING)"
           sudo apt-get update -y
           sudo apt-get install -y linux-tools-common linux-tools-generic
           sudo apt-get install -y "linux-tools-$(uname -r)" || echo "kernel-matched perf tools unavailable (perf may be limited)"
@@ -82,22 +80,24 @@ jobs:
           set +e
           export GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}
           export GOLDENMATCH_NATIVE=1 GOLDENMATCH_FS_NATIVE=1
-          py-spy record --native --rate 250 --format raw \
+          .venv/bin/py-spy record --native --rate 250 --format raw \
             -o folded_pyspy.txt -- \
             .venv/bin/python scripts/bench_fs_single_mk_probe.py \
             .profile_tmp/fx/fixture.csv --block "${{ inputs.block }}"
           echo "py-spy exit: $?  lines: $(wc -l < folded_pyspy.txt 2>/dev/null || echo 0)"
-          ~/.cargo/bin/inferno-flamegraph folded_pyspy.txt > flame_pyspy.svg 2>/dev/null || true
-      - name: Profile with flamegraph-rs (perf, best-effort)
+          [ -s folded_pyspy.txt ] && ~/.cargo/bin/inferno-flamegraph folded_pyspy.txt > flame_pyspy.svg 2>/dev/null || true
+      - name: Profile with perf + inferno (dwarf call-graph)
         run: |
           set +e
           export GOLDENMATCH_FS_COLUMNAR_CLUSTER=${{ inputs.columnar }}
           export GOLDENMATCH_NATIVE=1 GOLDENMATCH_FS_NATIVE=1
-          ~/.cargo/bin/flamegraph --perfdata perf.data -o flame_perf.svg -- \
+          perf record -F 250 -g --call-graph dwarf,16384 -o perf.data -- \
             .venv/bin/python scripts/bench_fs_single_mk_probe.py \
             .profile_tmp/fx/fixture.csv --block "${{ inputs.block }}"
-          echo "flamegraph exit: $?"
-          perf script -i perf.data 2>/dev/null | ~/.cargo/bin/inferno-collapse-perf > folded_perf.txt 2>/dev/null || true
+          echo "perf record exit: $?  perf.data: $(ls -la perf.data 2>/dev/null | awk '{print $5}' || echo MISSING)"
+          perf script -i perf.data 2>/dev/null | ~/.cargo/bin/inferno-collapse-perf > folded_perf.txt 2>/dev/null
+          echo "folded_perf lines: $(wc -l < folded_perf.txt 2>/dev/null || echo 0)"
+          [ -s folded_perf.txt ] && ~/.cargo/bin/inferno-flamegraph folded_perf.txt > flame_perf.svg 2>/dev/null || true
       - name: Top hot frames (self + total) to summary
         run: |
           .venv/bin/python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
