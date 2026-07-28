@@ -10,6 +10,7 @@ network.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -20,6 +21,20 @@ from sources.febrl import FebrlSource
 from sources.leipzig import LeipzigSource
 from sources.magellan import MagellanSource
 from sources.ncvr import NcvrSource
+
+# `synthetic/generate.py` uses FLAT imports (`from corruption import ...`,
+# `from schemas import ...`, `from vocab import Vocab`) rather than
+# package-relative ones, so the `synthetic/` directory itself must be on
+# `sys.path` -- not just `er_matcher/` -- before `synthetic.generate` is
+# imported (mirrors what `synthetic/test_generate.py` does for its own
+# tests). Without this, `from synthetic.generate import SyntheticSource`
+# resolves `generate.py` fine but then dies on its own `from corruption
+# import ...` with `ModuleNotFoundError: No module named 'corruption'`.
+_SYNTHETIC_DIR = str(Path(__file__).parent / "synthetic")
+if _SYNTHETIC_DIR not in sys.path:
+    sys.path.insert(0, _SYNTHETIC_DIR)
+
+from synthetic.generate import SyntheticSource  # noqa: E402
 
 _VALID_MECHANISMS = {"bundle", "generate", "fetch"}
 
@@ -139,6 +154,10 @@ _BUILDERS: dict[str, Callable[[SourceEntry, int], PairSource]] = {
     "febrl": lambda e, seed: FebrlSource(name=e.name, domain=e.domain, seed=seed, **e.kwargs),
     "magellan": lambda e, seed: MagellanSource(name=e.name, domain=e.domain, **e.kwargs),
     "ncvr": lambda e, seed: NcvrSource(name=e.name, **e.kwargs),
+    # SyntheticSource is multi-domain internally (round-robin across
+    # crm_contact/organization/business) -- it has no `domain` constructor
+    # param, so `entry.domain` (yaml's `domain: multi`) is NOT forwarded.
+    "synthetic": lambda e, seed: SyntheticSource(name=e.name, seed=seed, **e.kwargs),
 }
 
 
