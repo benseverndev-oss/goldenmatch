@@ -2,6 +2,7 @@
 mining. Pure and box-testable; the FS matcher is injected as scorer(a,b)->float."""
 
 import hashlib
+from collections.abc import Callable
 
 
 def soft_confidence(
@@ -65,8 +66,8 @@ def enrich(
     pairs: list[dict],
     *,
     records: list[dict],
-    scorer,
-    candidates_fn,
+    scorer: Callable[[dict, dict], float],
+    candidates_fn: Callable[[list[dict]], list[dict]],
     tau: float = 0.5,
     delta: float = 0.1,
     mine_cap: int,
@@ -74,7 +75,12 @@ def enrich(
     """Attach FS-score-driven soft confidence to every pair, and append near-threshold
     gold non-matches mined from candidates_fn(records). Pure given injected scorer +
     candidates_fn. Records must already be within a single split (leakage-free
-    ordering)."""
+    ordering).
+
+    Output schema is asymmetric: original pairs keep all their input fields plus
+    `confidence`/`fs_score`, and have NO `negative_kind` key. Mined rows are rebuilt
+    from a fixed key set and DO carry `negative_kind="fs_mined"`. Downstream
+    consumers should use `.get("negative_kind")`, not assume the key is present."""
     enriched = []
     for p in pairs:
         s = scorer(p["a"], p["b"])
@@ -85,6 +91,8 @@ def enrich(
         {
             **c,
             "score": scorer(c["a"], c["b"]),
+            # select_hard_negatives expects a_id/b_id (Task 3 contract); candidates
+            # carry eid_a/eid_b -- bridge the two so the KeyError doesn't come back.
             "a_id": c["eid_a"],
             "b_id": c["eid_b"],
         }
