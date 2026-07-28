@@ -2027,7 +2027,7 @@ class LazyClusterDict(dict):
         return {k: _copy.deepcopy(v, memo) for k, v in dict.items(self)}
 
 
-def _try_native_group_members(assignments) -> tuple[list[int], list[list[int]]] | None:
+def _try_native_group_members(assignments: Any) -> tuple[list[int], list[list[int]]] | None:
     """Native arrow grouping of the assignments frame (``cluster_id`` ->
     per-cluster ``member_id`` lists), or ``None`` to fall back to the Python loop
     (kernel absent / stale wheel without the symbol). Feeds the cluster-dict
