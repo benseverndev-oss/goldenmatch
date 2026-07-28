@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 
-from rapidfuzz import fuzz
+import goldenfuzz
 
 from goldenflow._polars_lazy import pl
 from goldenflow.transforms import register_transform
@@ -74,7 +74,7 @@ def _build_canonical_map(
         best_score = 0.0
         best_match = ""
         for canon_low in canonical_list:
-            score = fuzz.ratio(low, canon_low)
+            score = goldenfuzz.ratio(low, canon_low)
             if score > best_score:
                 best_score = score
                 best_match = canon_low
@@ -113,8 +113,8 @@ def category_auto_correct(
     # value_counts returns a 2-column DataFrame: [<series.name>, "count"].
     # Native-first (goldenflow-core's ``autocorrect::build_canonical_map`` owns
     # the whole frequency->canonical->fuzzy algorithm); the pure-Python
-    # ``_build_canonical_map`` (rapidfuzz) is the byte-exact reference the kernel
-    # replicates. Feed the kernel the value_counts in order so its insertion-
+    # ``_build_canonical_map`` (goldenfuzz.ratio) is the byte-exact reference the
+    # kernel replicates. Feed the kernel the value_counts in order so its insertion-
     # ordered tie-breaking matches Python's Counter/dict.
     native = build_canonical_map_native(frequency_threshold, match_threshold)
     if native is not None:
@@ -146,7 +146,7 @@ def category_auto_correct_columnar(
     byte-identical to the Polars engine above (``value_counts`` -> ``build_canonical_map``
     -> apply). The Polars ``value_counts(sort=True)`` ORDER is reproduced by
     ``Counter.most_common()`` (count desc, ties first-seen) and the pure-Python
-    ``_build_canonical_map`` (rapidfuzz — a base dep, no Polars) builds the correction
+    ``_build_canonical_map`` (goldenfuzz.ratio — a base dep, no Polars) builds the correction
     map; both are validated equal to the native engine over a 600-case randomized parity
     stress. Empty map -> identity (no strip), exactly like ``if not corrections: return
     series``."""
