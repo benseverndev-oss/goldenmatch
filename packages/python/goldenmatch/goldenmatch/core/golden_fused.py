@@ -708,13 +708,19 @@ def run_golden_fused_arrow(
     # predicate lowering's `code_of` so a `when:` literal resolves to the SAME
     # code space as the referenced column's factorized winner value.
     col_maps: dict[str, dict] = {}
-    for c in user_cols:
-        values = sdf.column(c).to_list()
-        text = [None if v is None else str(v) for v in values]
-        codes, vmap = _factorize_with_map(values)
-        col_maps[c] = vmap
-        text_cols.append(pa.array(text, type=pa.string()))
-        code_cols.append(pa.array(codes, type=pa.int64()))
+    # Bench diagnostic: this is the Stage-1 driver-side factorization -- per user
+    # column, a 5M .to_list() + a 5M str() list-comp + a 5M Python-dict factorize.
+    # At 5M x user_cols that is ~N*cols str() + dict ops in Python; suspected
+    # bulk of the golden stage. Timed to confirm before an arrow-native rewrite.
+    from goldenmatch.core.bench import stage as _bench_stage
+    with _bench_stage("golden_fused_factorize"):
+        for c in user_cols:
+            values = sdf.column(c).to_list()
+            text = [None if v is None else str(v) for v in values]
+            codes, vmap = _factorize_with_map(values)
+            col_maps[c] = vmap
+            text_cols.append(pa.array(text, type=pa.string()))
+            code_cols.append(pa.array(codes, type=pa.int64()))
 
     # ── Stage 2: source_priority + most_recent extra keys ────────────────────
     empty_i64 = pa.array([], type=pa.int64())
@@ -953,15 +959,16 @@ def run_golden_fused_arrow(
             overrides=override_specs,
         ),
     )
-    winner_idx, field_conf, group_conf, cluster_ids_out = fn(
-        row_ids_arr,
-        cluster_ids_arr,
-        len(user_cols),
-        strategy_ids,
-        text_cols,
-        code_cols,
-        side,
-    )
+    with _bench_stage("golden_fused_kernel"):
+        winner_idx, field_conf, group_conf, cluster_ids_out = fn(
+            row_ids_arr,
+            cluster_ids_arr,
+            len(user_cols),
+            strategy_ids,
+            text_cols,
+            code_cols,
+            side,
+        )
 
     # __golden_confidence__ = mean of per-UNIT confidences. A resolution unit is a
     # scalar column OR a whole group (resolve.py:100/149) -- so the denominator is
@@ -974,41 +981,44 @@ def run_golden_fused_arrow(
     denom = len(scalar_col_indices) + n_groups
     # denom >= 1: user_cols is non-empty (early return), and every user column is
     # either a scalar unit or owned by one of the >=1 groups.
-    gconf = [
-        (
-            sum(field_conf[ci][k] for ci in scalar_col_indices)
-            + sum(group_conf[g][k] for g in range(n_groups))
-        )
-        / denom
-        for k in range(n_clusters)
-    ]
-
-    if _is_pl:
-        out: dict[str, pl.Series] = {}
-        for ci, c in enumerate(user_cols):
-            out[c] = _gather_with_nulls(sdf.native.get_column(c), list(winner_idx[ci]))
-        result: Any = pl.DataFrame(out)
-        result = result.with_columns(
-            pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
-        )
-        result = result.with_columns(
-            pl.Series("__golden_confidence__", gconf, dtype=pl.Float64)
-        )
-    else:
-        # Arrow gather twin (probed): take() with null indices yields nulls --
-        # the -1 sentinel maps to None, preserving the source dtype exactly.
-        _tbl = sdf.native
-        _arrays = []
-        for ci, c in enumerate(user_cols):
-            _idx = pa.array(
-                [int(i) if i >= 0 else None for i in winner_idx[ci]], type=pa.int64()
+    # Bench diagnostic: per-cluster confidence mean (2.6M * scalar_cols Python
+    # sums) + per-column winner gather. Timed to separate it from factorize/kernel.
+    with _bench_stage("golden_fused_gather"):
+        gconf = [
+            (
+                sum(field_conf[ci][k] for ci in scalar_col_indices)
+                + sum(group_conf[g][k] for g in range(n_groups))
             )
-            _arrays.append(_tbl.column(c).combine_chunks().take(_idx))
-        _arrays.append(pa.array([int(x) for x in cluster_ids_out], type=pa.int64()))
-        _arrays.append(pa.array(gconf, type=pa.float64()))
-        result = pa.Table.from_arrays(
-            _arrays, names=[*user_cols, "__cluster_id__", "__golden_confidence__"]
-        )
+            / denom
+            for k in range(n_clusters)
+        ]
+
+        if _is_pl:
+            out: dict[str, pl.Series] = {}
+            for ci, c in enumerate(user_cols):
+                out[c] = _gather_with_nulls(sdf.native.get_column(c), list(winner_idx[ci]))
+            result: Any = pl.DataFrame(out)
+            result = result.with_columns(
+                pl.Series("__cluster_id__", list(cluster_ids_out), dtype=pl.Int64)
+            )
+            result = result.with_columns(
+                pl.Series("__golden_confidence__", gconf, dtype=pl.Float64)
+            )
+        else:
+            # Arrow gather twin (probed): take() with null indices yields nulls --
+            # the -1 sentinel maps to None, preserving the source dtype exactly.
+            _tbl = sdf.native
+            _arrays = []
+            for ci, c in enumerate(user_cols):
+                _idx = pa.array(
+                    [int(i) if i >= 0 else None for i in winner_idx[ci]], type=pa.int64()
+                )
+                _arrays.append(_tbl.column(c).combine_chunks().take(_idx))
+            _arrays.append(pa.array([int(x) for x in cluster_ids_out], type=pa.int64()))
+            _arrays.append(pa.array(gconf, type=pa.float64()))
+            result = pa.Table.from_arrays(
+                _arrays, names=[*user_cols, "__cluster_id__", "__golden_confidence__"]
+            )
 
     if not provenance:
         return result

@@ -4368,7 +4368,10 @@ def _run_dedupe_pipeline(
             _fused_golden_df = None
             if not _frames_fast_eligible:
                 from goldenmatch.core.golden import _multi_df_from_frames
-                _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
+                # Bench diagnostic: the assignments->source join that assembles
+                # multi_df, timed apart from the fused kernel it feeds.
+                with stage("golden_multi_df_join"):
+                    _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
                 _fused_golden_df = _try_fused_golden(
                     _fused_multi_df,
                     golden_rules,
