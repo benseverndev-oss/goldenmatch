@@ -1285,9 +1285,30 @@ pub fn score_block_pairs_fs_arrow(
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors
     // score_block_pairs_arrow's score_span).
+    // Factorized-comparison prototype (GOLDENMATCH_FS_FACTORIZE=1): compute the
+    // string-similarity level on DISTINCT value-pairs per (block, field) instead
+    // of per record pair. Byte-identical; declines (returns false) for
+    // embedding/NE/TF configs, then the per-pair loop below runs. Off by default.
+    let factorize_on = std::env::var("GOLDENMATCH_FS_FACTORIZE")
+        .map(|v| !matches!(v.as_str(), "" | "0" | "false" | "False" | "no" | "off"))
+        .unwrap_or(false);
     let score_span = |offset: usize, size: usize| -> Vec<(i64, i64, f64)> {
         let mut local: Vec<(i64, i64, f64)> = Vec::new();
         if size >= 2 {
+            if factorize_on
+                && goldenmatch_fs_core::score_fs_block_factorized(
+                    offset,
+                    size,
+                    &fs_params,
+                    |f, row| fields[f].get(row),
+                    |row| row_ids.value(row),
+                    |a, b| exclude_ref.contains(&(a, b)),
+                    threshold,
+                    &mut local,
+                )
+            {
+                return local;
+            }
             let end = offset + size;
             for i in offset..end - 1 {
                 let ri = row_ids.value(i);

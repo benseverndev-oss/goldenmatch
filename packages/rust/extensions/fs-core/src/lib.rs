@@ -668,6 +668,167 @@ where
     }
 }
 
+/// Factorized-comparison variant of the within-block per-pair loop. Byte-identical
+/// to calling [`score_fs_pair`] over every pair, but string-similarity is computed
+/// on DISTINCT value-pairs once per (block, field) instead of per record pair:
+/// within a block the string VALUES repeat (a common-surname block has few
+/// distinct given names, a constant blocking-key field, ...), so a `V*V` level
+/// matrix (`V` = distinct values <= block size) replaces `size*size`
+/// `field_similarity` calls. Correct because `field_similarity` is symmetric for
+/// every covered scorer and the diagonal (value vs itself) is computed
+/// explicitly; the null / missing-mode / normalize / require-positive-evidence
+/// logic is copied verbatim from [`score_fs_pair`].
+///
+/// Returns `false` (caller falls back to the per-pair loop) when NOT eligible: any
+/// embedding field (similarity lives in row vectors, not the string value), any
+/// negative-evidence field, or any TF-adjustment field. Per-field gate: a field
+/// gets a matrix only when its distinct-value count beats per-pair
+/// (`2 * V <= size`, avg >= 2 rows/value); high-cardinality fields (email, ...)
+/// stay on the per-pair path so the matrix never costs more comparisons than it
+/// saves.
+#[allow(clippy::too_many_arguments)]
+pub fn score_fs_block_factorized<'d, F, R, X>(
+    offset: usize,
+    size: usize,
+    p: &FsPairParams<'_>,
+    get_field: F,
+    row_id: R,
+    excluded: X,
+    threshold: f64,
+    out: &mut Vec<(i64, i64, f64)>,
+) -> bool
+where
+    F: Fn(usize, usize) -> Option<&'d str>,
+    R: Fn(usize) -> i64,
+    X: Fn(i64, i64) -> bool,
+{
+    let n_fields = p.scorer_ids.len();
+    if !p.ne_scorer_ids.is_empty() {
+        return false;
+    }
+    for f in 0..n_fields {
+        if p.scorer_ids[f] == FS_SCORER_EMBEDDING_COSINE
+            || matches!(p.tf_tables.get(f), Some(Some(_)))
+        {
+            return false;
+        }
+    }
+    if size < 2 {
+        return true;
+    }
+
+    // Per-field: factorize block values -> codes (-1 null, else 0..V) + an
+    // optional V*V level matrix (built only when values repeat enough to pay).
+    let mut codes: Vec<Vec<i32>> = Vec::with_capacity(n_fields);
+    let mut matrices: Vec<Option<(usize, Vec<u8>)>> = Vec::with_capacity(n_fields);
+    for f in 0..n_fields {
+        let mut code_of: HashMap<&str, i32> = HashMap::new();
+        let mut distinct: Vec<&str> = Vec::new();
+        let mut col: Vec<i32> = Vec::with_capacity(size);
+        for l in 0..size {
+            match get_field(f, offset + l) {
+                Some(v) => {
+                    let c = *code_of.entry(v).or_insert_with(|| {
+                        distinct.push(v);
+                        (distinct.len() - 1) as i32
+                    });
+                    col.push(c);
+                }
+                None => col.push(-1),
+            }
+        }
+        let vlen = distinct.len();
+        if vlen >= 2 && 2 * vlen <= size {
+            let mut mat = vec![0u8; vlen * vlen];
+            for a in 0..vlen {
+                for b in a..vlen {
+                    let sim = field_similarity(
+                        p.scorer_ids[f],
+                        distinct[a],
+                        distinct[b],
+                        p.surname_freq,
+                        p.name_aliases,
+                    );
+                    let lvl = fs_level_from_sim(
+                        sim,
+                        p.levels[f],
+                        p.partial_thresholds[f],
+                        p.field_thresholds[f],
+                    ) as u8;
+                    mat[a * vlen + b] = lvl;
+                    mat[b * vlen + a] = lvl;
+                }
+            }
+            matrices.push(Some((vlen, mat)));
+        } else {
+            matrices.push(None);
+        }
+        codes.push(col);
+    }
+
+    // Block-invariant min/max range (verbatim from score_fs_pair).
+    let pair_min = p.base_min + p.field_mins.iter().sum::<f64>();
+    let pair_max = p.base_max + p.field_maxs.iter().sum::<f64>();
+    let range = pair_max - pair_min;
+
+    for li in 0..size - 1 {
+        let ri = row_id(offset + li);
+        for lj in (li + 1)..size {
+            let rj = row_id(offset + lj);
+            let pk = if ri < rj { (ri, rj) } else { (rj, ri) };
+            if excluded(pk.0, pk.1) {
+                continue;
+            }
+            let mut total_weight = 0.0_f64;
+            let mut has_regular_evidence = false;
+            for f in 0..n_fields {
+                let ca = codes[f][li];
+                let cb = codes[f][lj];
+                if ca >= 0 && cb >= 0 {
+                    has_regular_evidence = true;
+                    let lvl = match &matrices[f] {
+                        Some((vlen, mat)) => mat[ca as usize * vlen + cb as usize] as usize,
+                        None => {
+                            // High-cardinality field: per-pair (baseline path).
+                            let a = get_field(f, offset + li).unwrap();
+                            let b = get_field(f, offset + lj).unwrap();
+                            let sim = field_similarity(
+                                p.scorer_ids[f],
+                                a,
+                                b,
+                                p.surname_freq,
+                                p.name_aliases,
+                            );
+                            fs_level_from_sim(
+                                sim,
+                                p.levels[f],
+                                p.partial_thresholds[f],
+                                p.field_thresholds[f],
+                            )
+                        }
+                    };
+                    total_weight += p.match_weights[f][lvl];
+                } else if p.missing_disagree {
+                    has_regular_evidence = true;
+                    total_weight += p.match_weights[f][0];
+                }
+            }
+            let normalized = if !p.calibrated && p.require_positive_evidence && total_weight <= 0.0
+            {
+                -1.0
+            } else if !p.calibrated && !has_regular_evidence && total_weight == 0.0 {
+                0.5
+            } else {
+                fs_normalize(total_weight, p.calibrated, p.prior_w, pair_min, range)
+            };
+            if normalized >= threshold {
+                out.push((pk.0, pk.1, normalized));
+            }
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,6 +858,127 @@ mod tests {
         for (sim, want) in [(1.0, 3usize), (0.93, 2), (0.85, 1), (0.5, 0)] {
             assert_eq!(fs_level_from_sim(sim, 4, 0.8, Some(&ts)), want);
         }
+    }
+
+    #[test]
+    fn factorized_matches_per_pair_scoring() {
+        // 3 jaro_winkler fields, 3 levels. first_name repeats (matrix-ized),
+        // last_name is CONSTANT within the block (V=1, matrix), a 3rd field is
+        // mostly-distinct (per-pair gate) + carries a null. Every pair must score
+        // identically to the reference score_fs_pair, and the emitted (canonical
+        // pair, score) set must match exactly.
+        let mw = vec![vec![-2.0_f64, 0.5, 3.0]; 3];
+        let field_mins = [-2.0_f64, -2.0, -2.0];
+        let field_maxs = [3.0_f64, 3.0, 3.0];
+        let regular_min: f64 = field_mins.iter().sum();
+        let regular_max: f64 = field_maxs.iter().sum();
+        let (min_weight, weight_range) = (regular_min, regular_max - regular_min);
+        let p = FsPairParams {
+            scorer_ids: &[0, 0, 0],
+            levels: &[3, 3, 3],
+            partial_thresholds: &[0.7, 0.7, 0.7],
+            field_thresholds: &[None, None, None],
+            match_weights: &mw,
+            field_mins: &field_mins,
+            field_maxs: &field_maxs,
+            base_min: min_weight - regular_min,
+            base_max: min_weight + weight_range - regular_max,
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: false,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
+            tf_tables: &[],
+            emb_vectors: &[],
+            emb_dims: &[],
+            require_positive_evidence: false,
+            missing_disagree: false,
+        };
+        // rows[r] = [first, last (constant), other]; None = null.
+        let rows: [[Option<&str>; 3]; 8] = [
+            [Some("john"), Some("smith"), Some("a@x.com")],
+            [Some("jon"), Some("smith"), Some("b@x.com")],
+            [Some("john"), Some("smith"), None],
+            [Some("mary"), Some("smith"), Some("c@x.com")],
+            [Some("john"), Some("smith"), Some("a@x.com")],
+            [Some("jon"), Some("smith"), Some("d@x.com")],
+            [Some("mary"), Some("smith"), Some("c@x.com")],
+            [Some("jane"), Some("smith"), None],
+        ];
+        let get = |f: usize, r: usize| rows[r][f];
+        let row_id = |r: usize| r as i64;
+        let threshold = 0.3_f64;
+
+        // Reference: mirror the per-pair span loop.
+        let mut want: Vec<(i64, i64, f64)> = Vec::new();
+        let noop_ne = |_: usize, _: usize| None;
+        for i in 0..rows.len() - 1 {
+            for j in (i + 1)..rows.len() {
+                let s = score_fs_pair(i, j, &p, get, noop_ne);
+                if s >= threshold {
+                    want.push((i as i64, j as i64, s));
+                }
+            }
+        }
+
+        let mut got: Vec<(i64, i64, f64)> = Vec::new();
+        let handled = score_fs_block_factorized(
+            0,
+            rows.len(),
+            &p,
+            get,
+            row_id,
+            |_a, _b| false,
+            threshold,
+            &mut got,
+        );
+        assert!(
+            handled,
+            "eligible config should be handled by the factorized path"
+        );
+        assert_eq!(got.len(), want.len(), "emitted pair count differs");
+        for (g, w) in got.iter().zip(want.iter()) {
+            assert_eq!((g.0, g.1), (w.0, w.1), "pair order/identity differs");
+            assert!((g.2 - w.2).abs() < 1e-12, "score differs: {g:?} vs {w:?}");
+        }
+    }
+
+    #[test]
+    fn factorized_declines_embedding_and_ne() {
+        let mw = vec![vec![0.0_f64, 1.0]];
+        let mins = [0.0_f64];
+        let maxs = [1.0_f64];
+        let base = FsPairParams {
+            scorer_ids: &[FS_SCORER_EMBEDDING_COSINE],
+            levels: &[2],
+            partial_thresholds: &[0.7],
+            field_thresholds: &[None],
+            match_weights: &mw,
+            field_mins: &mins,
+            field_maxs: &maxs,
+            base_min: 0.0,
+            base_max: 0.0,
+            ne_scorer_ids: &[],
+            ne_thresholds: &[],
+            ne_weights: &[],
+            calibrated: false,
+            prior_w: 0.0,
+            surname_freq: None,
+            name_aliases: None,
+            tf_tables: &[],
+            emb_vectors: &[None],
+            emb_dims: &[0],
+            require_positive_evidence: false,
+            missing_disagree: false,
+        };
+        let get = |_f: usize, _r: usize| Some("x");
+        let mut out = Vec::new();
+        assert!(
+            !score_fs_block_factorized(0, 4, &base, get, |r| r as i64, |_, _| false, 0.0, &mut out),
+            "embedding field must decline"
+        );
     }
 
     #[test]
@@ -897,7 +1179,7 @@ mod tests {
             match_weights: &mw,
             field_mins: &field_mins,
             field_maxs: &field_maxs,
-            base_min: min_weight - regular_min, // 0
+            base_min: min_weight - regular_min,                // 0
             base_max: min_weight + weight_range - regular_max, // 0
             ne_scorer_ids: &[],
             ne_thresholds: &[],
@@ -933,7 +1215,10 @@ mod tests {
 
         // Disagree: the null field is forced to level 0 (-4) and counts observed.
         // total = 5 + (-4) = 1. normalized = (1 - (-7)) / 18 = 8/18.
-        let p_dis = FsPairParams { missing_disagree: true, ..base };
+        let p_dis = FsPairParams {
+            missing_disagree: true,
+            ..base
+        };
         let s_dis = score_fs_pair(0, 1, &p_dis, get, noop_ne);
         assert!(
             (s_dis - (8.0 / 18.0)).abs() < 1e-12,
