@@ -132,15 +132,50 @@ fn bv_lowest_set(v: &[u64]) -> Option<usize> {
     None
 }
 
-/// `Peq[c]` = bitmask (one bit per position) of where `c` occurs in `pattern`.
-fn peq_map<T: Eq + Hash>(pattern: &[T]) -> HashMap<&T, Vec<u64>> {
-    let nw = nwords(pattern.len()).max(1);
-    let mut m: HashMap<&T, Vec<u64>> = HashMap::new();
-    for (i, c) in pattern.iter().enumerate() {
-        let e = m.entry(c).or_insert_with(|| vec![0u64; nw]);
-        e[i / 64] |= 1u64 << (i % 64);
+/// Multiword position bitmap: `get(c)` is a length-`nw` limb slice with a bit set
+/// at each position where `c` occurs in the pattern. A Latin-1 pattern uses a flat
+/// stack-of-limbs array indexed by codepoint -- no hashing, no per-char alloc; a
+/// non-Latin-1 pattern (CJK / emoji) falls back to a HashMap. The flat path is
+/// what makes long-string scoring competitive: the HashMap peq for a 600-char
+/// pattern is ~16us (600 char-hashes + ~27 small Vec allocs) vs ~3us flat, and
+/// that build dominated our per-pair document cost. Byte-identical either way.
+enum MwPeq {
+    Flat { masks: Vec<u64>, nw: usize },
+    Hash(HashMap<char, Vec<u64>>),
+}
+
+impl MwPeq {
+    #[inline]
+    fn get<'a>(&'a self, c: char, empty: &'a [u64]) -> &'a [u64] {
+        match self {
+            MwPeq::Flat { masks, nw } => {
+                let ci = c as usize;
+                if ci < 256 {
+                    &masks[ci * nw..ci * nw + nw]
+                } else {
+                    empty
+                }
+            }
+            MwPeq::Hash(map) => map.get(&c).map(Vec::as_slice).unwrap_or(empty),
+        }
     }
-    m
+}
+
+fn peq_multiword(pattern: &[char]) -> MwPeq {
+    let nw = nwords(pattern.len()).max(1);
+    if pattern.iter().all(|&c| (c as u32) < 256) {
+        let mut masks = vec![0u64; 256 * nw];
+        for (i, &c) in pattern.iter().enumerate() {
+            masks[(c as usize) * nw + i / 64] |= 1u64 << (i % 64);
+        }
+        MwPeq::Flat { masks, nw }
+    } else {
+        let mut map: HashMap<char, Vec<u64>> = HashMap::new();
+        for (i, &c) in pattern.iter().enumerate() {
+            map.entry(c).or_insert_with(|| vec![0u64; nw])[i / 64] |= 1u64 << (i % 64);
+        }
+        MwPeq::Hash(map)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +383,7 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
     // instead of the O(window) inner scan. Same match/transposition counts ->
     // byte-identical similarity.
     let nw = nwords(len1);
-    let peq = peq_map(s1);
+    let peq = peq_multiword(s1);
     let empty = vec![0u64; nw];
     let mut p_flag = vec![0u64; nw]; // matched pattern positions
     let mut t_flag_pos: Vec<usize> = Vec::new(); // matched text positions, ascending
@@ -360,7 +395,7 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
         if lo > hi {
             continue;
         }
-        let pm = peq.get(&cj).unwrap_or(&empty);
+        let pm = peq.get(cj, &empty);
         for i in 0..nw {
             cand[i] = pm[i] & !p_flag[i];
         }
@@ -454,7 +489,7 @@ pub fn jaro_winkler_chars(s1: &[char], s2: &[char]) -> f64 {
 /// PATTERN `a` is packed one bit per position; each text char advances the
 /// vertical-delta vectors `pv`/`mv` with a fixed set of word ops. Integer result
 /// identical to the naive Wagner-Fischer DP and to rapidfuzz (proven in tests).
-pub fn levenshtein_distance<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
+pub fn levenshtein_distance(a: &[char], b: &[char]) -> usize {
     if a.is_empty() {
         return b.len();
     }
@@ -464,7 +499,7 @@ pub fn levenshtein_distance<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
     let m = a.len();
     let nw = nwords(m);
     let tmask = top_mask(m);
-    let peq = peq_map(a);
+    let peq = peq_multiword(a);
     let empty = vec![0u64; nw];
     let top_word = (m - 1) / 64;
     let top_bit = 1u64 << ((m - 1) % 64);
@@ -481,8 +516,8 @@ pub fn levenshtein_distance<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
     let mut t = vec![0u64; nw];
     let mut t2 = vec![0u64; nw];
 
-    for cb in b {
-        let eq = peq.get(cb).unwrap_or(&empty);
+    for &cb in b {
+        let eq = peq.get(cb, &empty);
         for i in 0..nw {
             xv[i] = eq[i] | mv[i];
             t[i] = eq[i] & pv[i];
@@ -546,14 +581,14 @@ pub fn levenshtein_normalized_similarity(a: &str, b: &str) -> f64 {
 /// `V = (V + (V & Peq[c])) | (V - (V & Peq[c]))`, and the LCS length is the count
 /// of ZERO bits left in `V`. Integer result identical to the naive DP and to
 /// rapidfuzz's LCS kernel (proven in tests, incl. the multiword boundaries).
-fn lcs_length<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
+fn lcs_length(a: &[char], b: &[char]) -> usize {
     if a.is_empty() || b.is_empty() {
         return 0;
     }
     let m = a.len();
     let nw = nwords(m);
     let tmask = top_mask(m);
-    let peq = peq_map(a);
+    let peq = peq_multiword(a);
     let empty = vec![0u64; nw];
 
     let mut v = vec![u64::MAX; nw];
@@ -561,8 +596,8 @@ fn lcs_length<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
     let mut u = vec![0u64; nw];
     let mut add = vec![0u64; nw];
     let mut sub = vec![0u64; nw];
-    for cb in b {
-        let p = peq.get(cb).unwrap_or(&empty);
+    for &cb in b {
+        let p = peq.get(cb, &empty);
         for i in 0..nw {
             u[i] = v[i] & p[i];
         }
