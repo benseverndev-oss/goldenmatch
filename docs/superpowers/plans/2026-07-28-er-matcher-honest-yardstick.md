@@ -17,9 +17,10 @@
 | Path | Change | Responsibility |
 |---|---|---|
 | `scripts/er_matcher/sources/splits.py` | **Modify** | Add `entity_keys_from_edges` (connected-components entity keying); keep `split_of` |
-| `scripts/er_matcher/sources/leipzig.py` | **Modify** | Build gold edges, key records to entities, split on the entity key, generate negatives per-split, expose `record_pools()` |
-| `scripts/er_matcher/sources/base.py` | **Modify** | Add `record_pools()` to the source protocol/ABC |
-| `scripts/er_matcher/sources/febrl.py` | **Modify** | Expose `record_pools()` (group by `_entity_of`'s split); split logic unchanged |
+| `scripts/er_matcher/sources/leipzig.py` | **Modify** | Build gold edges, key records to entities, split on the entity key, generate negatives per-split, add concrete `record_pools()` |
+| `scripts/er_matcher/sources/febrl.py` | **Modify** | Add concrete `record_pools()` (group by `_entity_of`'s split); split logic unchanged |
+| `scripts/er_matcher/test_leipzig.py` | **Modify** | Entity-split + `record_pools` leakage tests |
+| `scripts/er_matcher/test_febrl.py` | **Modify** | `record_pools` leakage test |
 | `scripts/er_matcher/fs_enrich.py` | **Create** | Pure: `soft_confidence`, `select_hard_negatives`, `enrich` orchestration, cache key |
 | `scripts/er_matcher/build_corpus.py` | **Modify** | Build the real goldenmatch FS scorer/blocker closure; call `fs_enrich.enrich` |
 | `scripts/er_matcher/train.py` | **Modify** | Read per-row `confidence`; drop the fixed 0.9/0.1 default path |
@@ -122,7 +123,7 @@ def entity_keys_from_edges(
 
 - [ ] **Step 6: Wire entity splits into `leipzig.py`.** Replace the record-level `split_of(eid_a, ...)` with: build gold edges from `_read_gold_pairs` (the perfect-match mapping), compute `key_of = entity_keys_from_edges(all_record_ids, gold_edges)`, and assign each record's split via `split_of(key_of[record_id], seed=..., val_frac=..., test_frac=...)` (reuse the seed/fracs the loader already passes). Move negative generation to happen AFTER records are split, over each split's record pool only (per the leakage-free ordering). Keep the FEBRL loader's split logic unchanged (it already splits at entity level via `_entity_of`).
 
-- [ ] **Step 6b: Expose per-split record pools (needed by Task 6 mining).** `PairSource.splits()` yields labeled *pairs* only; hard-negative mining needs the raw per-split *record pool* (including never-paired records). Add a method to the source protocol — `record_pools(self) -> dict[str, list[dict]]` returning `{split: [record dicts]}`, where each record is assigned to the split of its entity (the same `split_of(key_of[record_id], ...)` used in Step 6, so pools are leakage-consistent with the pairs). Implement it in `sources/base.py` (protocol/ABC), `sources/leipzig.py` (group `tableA`+`tableB` records by their entity's split), and `sources/febrl.py` (group records by `_entity_of`'s split). Sources with no meaningful record pool may return `{}`.
+- [ ] **Step 6b: Expose per-split record pools (needed by Task 6 mining).** `PairSource.splits()` yields labeled *pairs* only; hard-negative mining needs the raw per-split *record pool* (including never-paired records). Add a CONCRETE method `record_pools(self) -> dict[str, list[dict]]` returning `{split: [record dicts]}` to `sources/leipzig.py` (group `tableA`+`tableB` records by their entity's split) and `sources/febrl.py` (group records by `_entity_of`'s split), each record assigned via the same `split_of(key_of[record_id], ...)` used in Step 6 so pools are leakage-consistent with the pairs. **Do NOT add it to the `PairSource` Protocol in `base.py`** — that Protocol is `runtime_checkable` and the existing `test_sources_base.py::Dummy` would fail `isinstance`. Instead, Task 6 calls it defensively via `getattr(source, "record_pools", lambda: {})()`, so only bundle/generate sources that define it get mined; magellan/ncvr are untouched.
 
 - [ ] **Step 6c: Test `record_pools` leakage-consistency.** Add a test asserting: (a) every record id in `record_pools()` appears in exactly one split, and (b) for a known gold-linked record pair, both records land in the same split as their pairs do. Run: `uv run python -m pytest scripts/er_matcher/test_leipzig.py scripts/er_matcher/test_febrl.py -k record_pool -v`. Expected: PASS.
 
@@ -365,18 +366,20 @@ def _assistant(msgs):
     return next(m["content"] for m in msgs if m["role"] == "assistant")
 
 def test_row_confidence_overrides_constant():
-    cfg = _make_cfg()                       # same TrainConfig the other tests build
-    row = {"a": _rec(), "b": _rec(), "label": "match", "confidence": 0.62}
-    msgs = example_to_messages(row, cfg)
+    cfg = tr.TrainConfig()                    # the file already builds cfg inline this way
+    row = _row(match=True)                    # existing helper -> a fully-merged row
+    row["confidence"] = 0.62
+    msgs = tr.example_to_messages(row, cfg)
     assert '"confidence":0.62' in _assistant(msgs)
 
 def test_missing_confidence_falls_back_to_constant():
-    cfg = _make_cfg()
-    row = {"a": _rec(), "b": _rec(), "label": "match"}    # no confidence
-    msgs = example_to_messages(row, cfg)
+    cfg = tr.TrainConfig()
+    row = _row(match=True)                     # _row does not set confidence
+    row.pop("confidence", None)
+    msgs = tr.example_to_messages(row, cfg)
     assert '"confidence":0.9' in _assistant(msgs)         # DEFAULT_MATCH_CONF
 ```
-(`_make_cfg`/`_rec` = the minimal `TrainConfig` + record helpers already used in `test_train_helpers.py`; reuse them, don't invent new shapes.)
+(`tr` = the `train` module alias and `_row(match: bool)` = the row helper, both already in `test_train_helpers.py`. Reuse them; do not invent `_make_cfg`/`_rec`.)
 
 - [ ] **Step 3: Run to verify it fails.** Run: `uv run python -m pytest scripts/er_matcher/test_train_helpers.py -k confidence -v`. Expected: FAIL (the current code ignores `row["confidence"]`).
 
@@ -400,46 +403,50 @@ This task uses the heavy goldenmatch package, so it is verified by a real corpus
 - [ ] **Step 2: Write `_make_fs_scorer(records, domain)`** in `build_corpus.py` using the Step 1 posterior path. Heavy goldenmatch imports stay INSIDE the function (box-safety):
 
 ```python
-def _make_fs_scorer(records: list[dict], domain: str):
-    """Build (scorer, candidates_fn, tau, scorer_cfg_str) from goldenmatch's FS
-    posterior for a single split's record pool. scorer(a,b) MUST return P(match) in
-    [0,1]. Heavy imports local."""
+def _make_fs_scorer(train_records: list[dict], domain: str):
+    """Fit goldenmatch's FS posterior ONCE on the TRAIN record pool; return the scorer
+    plus the config needed to block/score any split. scorer(a,b) MUST return P(match) in
+    [0,1]. Heavy imports local (box-safety)."""
     import pyarrow as pa
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
-    from goldenmatch.core.blocker import build_blocks
     # + score_pair_probabilistic and the fields/EMResult per Step 1 discovery
 
-    table = pa.Table.from_pylist(records)
-    cfg, em = _fit_fs_posterior(table)         # auto_configure_probabilistic_df (Step 1)
+    cfg, em = _fit_fs_posterior(pa.Table.from_pylist(train_records))  # Step 1
     fields = _fields_from_config(cfg)          # runtime MatchkeyFields (Step 1)
-    tau = _threshold_from_config(cfg, em)      # FS threshold; 0.5 if absent
+    tau = _threshold_from_config(cfg, em)      # EMResult.calibrated_link_threshold; 0.5 if None
 
     def scorer(a: dict, b: dict) -> float:
         p = _score_posterior(a, b, fields, em)  # score_pair_probabilistic (Step 1)
         return min(max(float(p), 0.0), 1.0)     # guaranteed [0,1]
 
-    def candidates_fn(recs: list[dict]) -> list[dict]:
-        blocks = build_blocks(pa.Table.from_pylist(recs), cfg.blocking)
-        return _pairs_from_blocks(blocks, recs)  # within-block pairs; gold_match from labels
-
     scorer_cfg = cfg.model_dump_json()          # stable string for the cache key
-    return scorer, candidates_fn, tau, scorer_cfg
+    return scorer, tau, cfg.blocking, scorer_cfg
+
+
+def _make_candidates(records: list[dict], blocking_cfg):
+    """Block WITHIN a single split's record pool (leakage-safe) -> candidate pairs
+    tagged with gold_match from the source's gold mapping."""
+    import pyarrow as pa
+    from goldenmatch.core.blocker import build_blocks
+    blocks = build_blocks(pa.Table.from_pylist(records), blocking_cfg)
+    return _pairs_from_blocks(blocks, records)   # gold_match = not gold-linked
 ```
-(Implement `_fit_fs_posterior`, `_fields_from_config`, `_threshold_from_config`, `_score_posterior`, `_pairs_from_blocks` per Step 1 + the `BlockResult` shape at `blocker.py:266`. `_pairs_from_blocks` sets `gold_match` from the source's gold mapping — a mined pair is a non-match iff the two records are not gold-linked.)
+(Implement `_fit_fs_posterior`, `_fields_from_config`, `_threshold_from_config`, `_score_posterior`, `_pairs_from_blocks` per Step 1 + the `BlockResult` shape at `blocker.py:266`. `_pairs_from_blocks` sets `gold_match` from the source's gold mapping — a mined pair is a non-match iff the two records are not gold-linked. Fitting the EM on TRAIN only avoids refitting on held-out val/test and dodges EM degeneracy on the smaller pools.)
 
 - [ ] **Step 2b: Verify the score is in [0,1] AND separates** (spec risk: garbage-in). After building the scorer for one split, assert every score is within `[0,1]`, then score ~200 known-match and ~200 known-non-match pairs and print `mean(score|match)` vs `mean(score|non-match)`. If scores fall outside `[0,1]`, or the means don't separate, STOP and surface — the config/EM fit is wrong and soft targets built on it would be garbage (use the Step 1 fallback or fix the config before proceeding).
 
 - [ ] **Step 3: Call `fs_enrich.enrich` per split** in `build_corpus.py`, threading the cache. Get the per-split record pool from the source's new `record_pools()` (Task 1 Step 6b): `pools = source.record_pools()`. For each split, build the scorer over that split's pool and enrich that split's pairs:
 
 ```python
-pools = source.record_pools()
+pools = getattr(source, "record_pools", lambda: {})()   # {} for magellan/ncvr -> no mining
+scorer, tau, blocking_cfg, scorer_cfg = _make_fs_scorer(pools.get("train", []), source.domain)
 for split, split_pairs in blended_by_split.items():
     recs = pools.get(split, [])
-    scorer, candidates_fn, tau, scorer_cfg = _make_fs_scorer(recs, source.domain)
+    candidates_fn = (lambda r: _make_candidates(r, blocking_cfg)) if recs else (lambda r: [])
     enriched = enrich(split_pairs, records=recs, scorer=scorer,
                       candidates_fn=candidates_fn, tau=tau, delta=DELTA, mine_cap=MINE_CAP)
 ```
-Cache the enriched output under `fs_enrich.cache_key(corpus_hash=..., scorer_cfg=scorer_cfg, tau=tau, delta=DELTA)` so rebuilds skip the FS pass. Write the enriched pairs (now carrying `confidence`) to the corpus JSONL. `DELTA`/`MINE_CAP` are module constants (start `DELTA=0.1`, `MINE_CAP` ~= the count of existing synthetic hard negatives per split so mined negatives augment rather than dominate).
+Cache the enriched output under `fs_enrich.cache_key(corpus_hash=..., scorer_cfg=scorer_cfg, tau=tau, delta=DELTA)` so rebuilds skip the FS pass. Write the enriched pairs (now carrying `confidence`) to the corpus JSONL. `DELTA`/`MINE_CAP` are module constants (start `DELTA=0.1`). **To honor the spec's "reduced share of synthetic negatives":** when mining is active for a source, reduce that source's synthetic hard-negative generation (lower its `hard_frac` or count) by roughly the mined count so total negatives stay balanced rather than growing — set `MINE_CAP` and the synthetic reduction as a matched pair (both tunable knobs).
 
 - [ ] **Step 4: Guard `eval_only` sources.** Confirm the enrichment loop only runs over `bundle`/`generate` sources; `magellan`/`ncvr` stay untouched (they never enter training). Re-run `test_build_corpus.py` to confirm the eval_only contribution invariant still holds.
 
