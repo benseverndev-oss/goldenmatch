@@ -4281,6 +4281,16 @@ def _run_dedupe_pipeline(
                     "GoldenCheck quality weighting: %d penalized cell(s)",
                     len(quality_scores),
                 )
+            # Bench diagnostic: distinguish None (weighting off / no members) from
+            # an EMPTY {} (weighting on, zero penalized cells) from a real signal.
+            # An empty-but-non-None dict still forces golden off the fast columnar
+            # path (_polars_native_eligible checks `is not None`), so this count is
+            # the routing signal we want to see in the profile.
+            from goldenmatch.core.bench import record_metric as _rec_qs
+            _rec_qs(
+                "golden_quality_scores_len",
+                -1 if quality_scores is None else len(quality_scores),
+            )
 
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
@@ -4524,6 +4534,15 @@ def _run_dedupe_pipeline(
                                     provenance=_provenance_on,
                                     cluster_pair_scores=cluster_pair_scores,
                                 )
+
+    # Bench diagnostic: which golden builder actually ran. golden_fused_used
+    # True => the Arrow-native fused kernel produced the frame; else a non-empty
+    # golden_records means the slow per-cluster list[dict] batch builder ran
+    # (fused declined / fast-columnar ineligible). Disambiguates the golden-stage
+    # wall for the quality-weighting screw investigation.
+    from goldenmatch.core.bench import record_metric as _rec_golden
+    _rec_golden("golden_fused_used", bool(golden_fused_used))
+    _rec_golden("golden_records_built", len(golden_records))
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated

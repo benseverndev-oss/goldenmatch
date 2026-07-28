@@ -779,13 +779,19 @@ def run_golden_fused_arrow(
     empty_f64 = pa.array([], type=pa.float64())
     qweights: list[Any] = [empty_f64 for _ in user_cols]
     if quality_scores is not None:
-        if "__row_id__" in sdf.columns:
-            row_ids_list = sdf.column("__row_id__").to_list()
-        else:
-            row_ids_list = list(range(n))
-        for ci, c in enumerate(user_cols):
-            w = [float(quality_scores.get((rid, c), 1.0)) for rid in row_ids_list]
-            qweights[ci] = pa.array(w, type=pa.float64())
+        # Bench diagnostic: this densely materializes an N*user_cols weight
+        # channel in Python from a (typically sparse or empty) quality_scores
+        # dict -- the suspected cost when quality_weighting is on. Timed so the
+        # profile shows how much of the golden stage is this prep vs the kernel.
+        from goldenmatch.core.bench import stage as _bench_stage
+        with _bench_stage("golden_qweights_build_fused"):
+            if "__row_id__" in sdf.columns:
+                row_ids_list = sdf.column("__row_id__").to_list()
+            else:
+                row_ids_list = list(range(n))
+            for ci, c in enumerate(user_cols):
+                w = [float(quality_scores.get((rid, c), 1.0)) for rid in row_ids_list]
+                qweights[ci] = pa.array(w, type=pa.float64())
 
     # ── Stage 4: confidence_majority per-cluster pair-score edges ─────────────
     # Mirror build_golden_records_batch (golden.py:969-980): per cluster, remap
