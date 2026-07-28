@@ -327,3 +327,55 @@ mod tests {
         assert_eq!(parent[&1], 4);
     }
 }
+
+/// Group `member_id`s by `cluster_id`, preserving Python's
+/// `dict.setdefault(cid, []).append(mid)` semantics EXACTLY: cluster_ids in
+/// first-appearance order, members per cluster in input order. Byte-identical to
+/// the `by_cid` build in `cluster_frames_to_dict`. Returns
+/// `(cluster_ids, member_lists)` aligned by index (so Python zips them into the
+/// dict). The assignments frame is sorted by cluster_id in practice, but this
+/// does not rely on it -- the first-appearance HashMap index handles any order.
+pub fn group_members_by_cluster(
+    cluster_id: &[i64],
+    member_id: &[i64],
+) -> (Vec<i64>, Vec<Vec<i64>>) {
+    use std::collections::HashMap;
+    let n = cluster_id.len().min(member_id.len());
+    let mut index: HashMap<i64, usize> = HashMap::new();
+    let mut cids: Vec<i64> = Vec::new();
+    let mut lists: Vec<Vec<i64>> = Vec::new();
+    for i in 0..n {
+        let cid = cluster_id[i];
+        let mid = member_id[i];
+        match index.get(&cid) {
+            Some(&slot) => lists[slot].push(mid),
+            None => {
+                index.insert(cid, lists.len());
+                cids.push(cid);
+                lists.push(vec![mid]);
+            }
+        }
+    }
+    (cids, lists)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::group_members_by_cluster;
+
+    #[test]
+    fn matches_setdefault_semantics() {
+        // first-appearance cid order, input-order members (incl. unsorted input).
+        let cids = [1i64, 1, 2, 1, 3, 2];
+        let mids = [10i64, 11, 20, 12, 30, 21];
+        let (out_cids, lists) = group_members_by_cluster(&cids, &mids);
+        assert_eq!(out_cids, vec![1, 2, 3]);
+        assert_eq!(lists, vec![vec![10, 11, 12], vec![20, 21], vec![30]]);
+    }
+
+    #[test]
+    fn empty() {
+        let (c, l) = group_members_by_cluster(&[], &[]);
+        assert!(c.is_empty() && l.is_empty());
+    }
+}
