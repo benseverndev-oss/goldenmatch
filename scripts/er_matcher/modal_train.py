@@ -27,6 +27,8 @@ This file is imported by NOTHING (no tests, no CPU path) -- it's executed only b
 """
 from __future__ import annotations
 
+import os
+
 import modal  # noqa: I001 -- only ever run via `modal run`, never imported elsewhere
 
 APP_NAME = "goldenmatch-er-matcher-train"
@@ -71,8 +73,14 @@ _image = (
         remote_path="/root/goldenmatch/core/er_matcher",
     )
     .add_local_dir("scripts/er_matcher", remote_path="/root/er_matcher")
-    .add_local_dir("data/er_matcher", remote_path="/root/data/er_matcher")
 )
+
+# The training corpus (data/er_matcher/*.jsonl from gen_pairs.py) is consumed only by
+# train_*/eval_model. zeroshot_eval fetches unseen benchmarks fresh into the volume, so
+# the corpus need not exist just to build the shared image -- mount it only when present
+# (lets the zero-shot path run from a fresh worktree with no local training data).
+if os.path.isdir("data/er_matcher"):
+    _image = _image.add_local_dir("data/er_matcher", remote_path="/root/data/er_matcher")
 
 app = modal.App(APP_NAME)
 _out_vol = modal.Volume.from_name("er-matcher-out", create_if_missing=True)
