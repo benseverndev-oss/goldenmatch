@@ -263,3 +263,189 @@ def eval_model(limit: int = 0) -> None:
 def evaluate(limit: int = 0) -> None:
     eval_model.remote(limit=limit)
     print("eval done -> `modal volume get er-matcher-out eval_results.json`")
+
+
+@app.function(
+    image=_image,
+    gpu=GPU_FULL,
+    timeout=3 * 60 * 60,
+    volumes={"/out": _out_vol},
+    secrets=[modal.Secret.from_name("er-matcher-hf")],
+)
+def zeroshot_eval(dataset: str = "walmart_amazon", allow_fetch: bool = True, limit: int = 0) -> None:
+    """Zero-shot P(match) via teacher-forced next-token logits (SP3 Task 5).
+
+    Unlike `eval_model` (which generates full JSON and parses it), this scores
+    each pair by teacher-forcing the exact JSON prefix the SFT target starts
+    with and reading off P(true) vs P(false) at the next token -- a single
+    forward pass per pair, and a real-valued confidence usable for temperature
+    calibration. Fits T on `val`, reports F1 (via eval.run_eval, the same
+    machinery as the rest of the harness) + raw/calibrated ECE on `test`.
+    """
+    import json
+    import os
+    import sys
+    from pathlib import Path
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.insert(0, "/root")
+    sys.path.insert(0, "/root/er_matcher")
+    import calibration as calib  # the mounted scripts/er_matcher/calibration.py (pure)
+    import eval as ev  # the mounted scripts/er_matcher/eval.py (pure metrics module)
+    from goldenmatch.core.er_matcher.prompt import build_chat
+    from sources.magellan import MagellanSource
+
+    mpath = "/out/model/merged"
+    tok = AutoTokenizer.from_pretrained(mpath)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            mpath, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2",
+        )
+        .cuda()
+        .eval()
+    )
+
+    # Resolve the two value-token ids ONCE, before the loop. The SFT target
+    # (prompt.render_target) emits COMPACT json.dumps(..., separators=(",", ":"))
+    # -- confirmed by test_render_target_is_compact_json's literal
+    # '{"match":true,...}' -- so the token right after the teacher-forced
+    # `{"match":` prefix has NO leading space (unlike json's default ": "
+    # separator). Using " true"/" false" here would silently resolve the wrong
+    # token ids and corrupt every P(match) this function produces.
+    true_id_list = tok.encode("true", add_special_tokens=False)
+    false_id_list = tok.encode("false", add_special_tokens=False)
+    if len(true_id_list) != 1:
+        raise RuntimeError(
+            f"expected 'true' to tokenize to a single token id, got {true_id_list} "
+            f"(decoded: {[tok.decode([t]) for t in true_id_list]!r}) -- the "
+            "teacher-forced logit contract assumes a single-token value"
+        )
+    if len(false_id_list) != 1:
+        raise RuntimeError(
+            f"expected 'false' to tokenize to a single token id, got {false_id_list} "
+            f"(decoded: {[tok.decode([t]) for t in false_id_list]!r}) -- the "
+            "teacher-forced logit contract assumes a single-token value"
+        )
+    true_id = true_id_list[0]
+    false_id = false_id_list[0]
+
+    if allow_fetch:
+        os.environ["GOLDENMATCH_ALLOW_FETCH"] = "1"
+    root = Path(f"/out/magellan/{dataset}")
+    splits = MagellanSource(dataset, root).splits()
+    _out_vol.commit()  # persist the freshly-fetched dataset on the volume
+
+    # run_eval scores each test pair once for "overall" AND again per-domain;
+    # the val-split temperature fit also revisits pairs -- memoize the single
+    # forward pass per (a, b) like eval_model's generative cache.
+    cache: dict[tuple[int, int], tuple[float, float]] = {}
+
+    def score(a: dict, b: dict) -> tuple[float, float]:
+        """Return (p_match, z) via one teacher-forced forward pass."""
+        key = (id(a), id(b))
+        if key in cache:
+            return cache[key]
+        text = (
+            tok.apply_chat_template(build_chat(a, b), tokenize=False, add_generation_prompt=True)
+            + '{"match":'
+        )
+        inputs = tok(text, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            out = model(**inputs)
+        logits = out.logits[0, -1, :]
+        pair = torch.softmax(torch.stack([logits[true_id], logits[false_id]]), dim=0)
+        p_match = float(pair[0])
+        z = calib.logit(p_match)
+        cache[key] = (p_match, z)
+        return p_match, z
+
+    val_rows = splits["val"]
+    if limit:
+        val_rows = val_rows[:limit]
+    z_list: list[float] = []
+    val_labels: list[bool] = []
+    for row in val_rows:
+        _, z = score(row["a"], row["b"])
+        z_list.append(z)
+        val_labels.append(row["label"] == "match")
+    T = calib.fit_temperature(z_list, val_labels)
+    print(f"[zeroshot_eval] fitted temperature T={T:.4f} on {len(val_rows)} val pairs")
+
+    test_rows = splits["test"]
+    if limit:
+        test_rows = test_rows[:limit]
+
+    verdicts: dict[tuple[int, int], dict] = {}
+    p_raw: list[float] = []
+    p_cal: list[float] = []
+    y: list[bool] = []
+    true_probs: list[float] = []
+    non_probs: list[float] = []
+    for row in test_rows:
+        a, b = row["a"], row["b"]
+        p_match, z = score(a, b)
+        match = p_match > 0.5
+        confidence = p_match if match else 1.0 - p_match
+        verdicts[(id(a), id(b))] = {"match": match, "confidence": confidence}
+        p_raw.append(p_match)
+        p_cal.append(calib.apply_temperature(z, T=T))
+        is_match = row["label"] == "match"
+        y.append(is_match)
+        (true_probs if is_match else non_probs).append(p_match)
+
+    def matcher(a: dict, b: dict) -> dict | None:
+        # run_eval calls this with the SAME dict objects from test_rows, so
+        # identity keys are stable -- avoids re-running the forward pass.
+        return verdicts[(id(a), id(b))]
+
+    print(f"[zeroshot_eval] scoring {len(test_rows)} test pairs ({dataset})...")
+    scorecard_test = ev.run_eval({"test": test_rows}, matcher)
+    f1 = scorecard_test["splits"]["test"]["overall"]["f1"]
+
+    raw_ece = calib.ece_from_probs(p_raw, y)
+    calibrated_ece = calib.ece_from_probs(p_cal, y)
+    n = len(y)
+
+    card = ev.build_zeroshot_scorecard(
+        {dataset: {"f1": f1, "raw_ece": raw_ece, "calibrated_ece": calibrated_ece, "n": n}}
+    )
+    # build_zeroshot_scorecard's "gate" entry is a GateResult dataclass, not a
+    # plain dict -- convert before json.dump.
+    card_json = {
+        name: {**row, "gate": {"passed": row["gate"].passed, "checks": row["gate"].checks}}
+        for name, row in card.items()
+    }
+
+    # WATCH-ITEM (informational, does not gate): if the token-id resolution
+    # above were wrong, this separation would collapse toward ~0.5/0.5.
+    mean_true = sum(true_probs) / len(true_probs) if true_probs else 0.0
+    mean_non = sum(non_probs) / len(non_probs) if non_probs else 0.0
+    print(
+        f"[zeroshot_eval] separation: mean P(match) true={mean_true:.4f} "
+        f"non={mean_non:.4f} (must be true>non or token-id resolution is wrong)"
+    )
+
+    results = {
+        "dataset": dataset,
+        "f1": f1,
+        "temperature": T,
+        "raw_ece": raw_ece,
+        "calibrated_ece": calibrated_ece,
+        "n": n,
+        "separation": {"mean_p_match_true": mean_true, "mean_p_match_non": mean_non},
+        "scorecard": card_json,
+    }
+    with open("/out/zeroshot_eval_results.json", "w") as f:
+        json.dump(results, f, indent=2)
+    _out_vol.commit()
+    print("[zeroshot_eval] scorecard:", json.dumps(card_json, indent=2))
+
+
+@app.local_entrypoint()
+def zeroshot(dataset: str = "walmart_amazon", limit: int = 0) -> None:
+    zeroshot_eval.remote(dataset=dataset, limit=limit)
+    print("zeroshot eval done -> `modal volume get er-matcher-out zeroshot_eval_results.json`")
