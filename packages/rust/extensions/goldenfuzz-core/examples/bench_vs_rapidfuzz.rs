@@ -21,7 +21,9 @@ fn next(state: &mut u64) -> u64 {
 
 fn rand_str(rng: &mut u64, len: usize) -> String {
     const AB: &[u8] = b"abcdefghijklmnopqrstuvwxyz ";
-    (0..len).map(|_| AB[(next(rng) as usize) % AB.len()] as char).collect()
+    (0..len)
+        .map(|_| AB[(next(rng) as usize) % AB.len()] as char)
+        .collect()
 }
 
 // Build `n` (a, b) pairs where b is a lightly-corrupted a (realistic match input).
@@ -51,54 +53,99 @@ fn time<F: FnMut() -> f64>(iters: usize, mut f: F) -> f64 {
 
 fn main() {
     let mut rng: u64 = 0xC0FFEE12345678;
-    let classes = [("name", 13usize, 200_000usize), ("address", 35, 100_000), ("document", 600, 4_000)];
-    println!("{:<10} {:>6} {:>12} {:>12} {:>8}", "class", "len", "goldenfuzz", "rapidfuzz", "ratio");
+    let classes = [
+        ("name", 13usize, 200_000usize),
+        ("address", 35, 100_000),
+        ("document", 600, 4_000),
+    ];
+    println!(
+        "{:<10} {:>6} {:>12} {:>12} {:>8}",
+        "class", "len", "goldenfuzz", "rapidfuzz", "ratio"
+    );
     println!("{}", "-".repeat(52));
     for (name, len, n) in classes {
         let pairs = corpus(&mut rng, len, n);
         for (label, ours, theirs) in [
             (
                 "jaro_winkler",
-                Box::new(|p: &[(String, String)]| time(p.len(), {
-                    let mut i = 0;
-                    move || { let (a, b) = &p[i % p.len()]; i += 1; strsim::jaro_winkler(a, b) }
-                })) as Box<dyn Fn(&[(String, String)]) -> f64>,
-                Box::new(|p: &[(String, String)]| time(p.len(), {
-                    let mut i = 0;
-                    move || { let (a, b) = &p[i % p.len()]; i += 1;
-                        rf_jw::normalized_similarity(a.chars(), b.chars()) }
-                })) as Box<dyn Fn(&[(String, String)]) -> f64>,
+                Box::new(|p: &[(String, String)]| {
+                    time(p.len(), {
+                        let mut i = 0;
+                        move || {
+                            let (a, b) = &p[i % p.len()];
+                            i += 1;
+                            strsim::jaro_winkler(a, b)
+                        }
+                    })
+                }) as Box<dyn Fn(&[(String, String)]) -> f64>,
+                Box::new(|p: &[(String, String)]| {
+                    time(p.len(), {
+                        let mut i = 0;
+                        move || {
+                            let (a, b) = &p[i % p.len()];
+                            i += 1;
+                            rf_jw::normalized_similarity(a.chars(), b.chars())
+                        }
+                    })
+                }) as Box<dyn Fn(&[(String, String)]) -> f64>,
             ),
             (
                 "levenshtein",
-                Box::new(|p: &[(String, String)]| time(p.len(), {
-                    let mut i = 0;
-                    move || { let (a, b) = &p[i % p.len()]; i += 1;
-                        strsim::levenshtein_normalized_similarity(a, b) }
-                })) as Box<dyn Fn(&[(String, String)]) -> f64>,
-                Box::new(|p: &[(String, String)]| time(p.len(), {
-                    let mut i = 0;
-                    move || { let (a, b) = &p[i % p.len()]; i += 1;
-                        rf_lev::normalized_similarity(a.chars(), b.chars()) }
-                })) as Box<dyn Fn(&[(String, String)]) -> f64>,
+                Box::new(|p: &[(String, String)]| {
+                    time(p.len(), {
+                        let mut i = 0;
+                        move || {
+                            let (a, b) = &p[i % p.len()];
+                            i += 1;
+                            strsim::levenshtein_normalized_similarity(a, b)
+                        }
+                    })
+                }) as Box<dyn Fn(&[(String, String)]) -> f64>,
+                Box::new(|p: &[(String, String)]| {
+                    time(p.len(), {
+                        let mut i = 0;
+                        move || {
+                            let (a, b) = &p[i % p.len()];
+                            i += 1;
+                            rf_lev::normalized_similarity(a.chars(), b.chars())
+                        }
+                    })
+                }) as Box<dyn Fn(&[(String, String)]) -> f64>,
             ),
             (
                 "indel/ratio",
-                Box::new(|p: &[(String, String)]| time(p.len(), {
-                    let mut i = 0;
-                    move || { let (a, b) = &p[i % p.len()]; i += 1; strsim::indel_ratio(a, b) }
-                })) as Box<dyn Fn(&[(String, String)]) -> f64>,
-                Box::new(|p: &[(String, String)]| time(p.len(), {
-                    let mut i = 0;
-                    move || { let (a, b) = &p[i % p.len()]; i += 1;
-                        rf_fuzz::ratio(a.chars(), b.chars()) }
-                })) as Box<dyn Fn(&[(String, String)]) -> f64>,
+                Box::new(|p: &[(String, String)]| {
+                    time(p.len(), {
+                        let mut i = 0;
+                        move || {
+                            let (a, b) = &p[i % p.len()];
+                            i += 1;
+                            strsim::indel_ratio(a, b)
+                        }
+                    })
+                }) as Box<dyn Fn(&[(String, String)]) -> f64>,
+                Box::new(|p: &[(String, String)]| {
+                    time(p.len(), {
+                        let mut i = 0;
+                        move || {
+                            let (a, b) = &p[i % p.len()];
+                            i += 1;
+                            rf_fuzz::ratio(a.chars(), b.chars())
+                        }
+                    })
+                }) as Box<dyn Fn(&[(String, String)]) -> f64>,
             ),
         ] {
             let g = ours(&pairs);
             let r = theirs(&pairs);
-            println!("{:<10} {:>6} {:>10.1}ns {:>10.1}ns {:>7.2}x",
-                     format!("{name}/{label}"), len, g, r, g / r);
+            println!(
+                "{:<10} {:>6} {:>10.1}ns {:>10.1}ns {:>7.2}x",
+                format!("{name}/{label}"),
+                len,
+                g,
+                r,
+                g / r
+            );
         }
     }
     println!("\nratio = goldenfuzz / rapidfuzz  (1.0 = parity, <1 faster, >1 slower)");

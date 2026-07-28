@@ -33,10 +33,72 @@ fn levenshtein(a: &str, b: &str) -> f64 {
     gf::levenshtein_normalized_similarity(a, b)
 }
 
-/// Indel normalized similarity in `[0, 1]` (== rapidfuzz `fuzz.ratio`).
+/// Indel normalized similarity in `[0, 1]` (== rapidfuzz `fuzz.ratio` / 100).
 #[pyfunction]
 fn indel(a: &str, b: &str) -> f64 {
     gf::indel_ratio(a, b)
+}
+
+// ---- fuzz.* composite scorers (all in [0, 100], byte-identical to rapidfuzz) --
+
+/// `fuzz.ratio`: Indel normalized similarity * 100.
+#[pyfunction]
+fn ratio(a: &str, b: &str) -> f64 {
+    gf::ratio(a, b)
+}
+
+/// `fuzz.partial_ratio`: best `ratio` of the shorter string aligned in the longer.
+#[pyfunction]
+fn partial_ratio(a: &str, b: &str) -> f64 {
+    gf::partial_ratio(a, b)
+}
+
+/// `fuzz.token_sort_ratio`: sort tokens, join, `ratio`.
+#[pyfunction]
+fn token_sort_ratio(a: &str, b: &str) -> f64 {
+    gf::token_sort_ratio(a, b)
+}
+
+/// `fuzz.token_set_ratio`: compare unique / common words via `ratio`.
+#[pyfunction]
+fn token_set_ratio(a: &str, b: &str) -> f64 {
+    gf::token_set_ratio(a, b)
+}
+
+/// `fuzz.token_ratio` = `max(token_set_ratio, token_sort_ratio)`.
+#[pyfunction]
+fn token_ratio(a: &str, b: &str) -> f64 {
+    gf::token_ratio(a, b)
+}
+
+/// `fuzz.partial_token_sort_ratio`: sort tokens, join, `partial_ratio`.
+#[pyfunction]
+fn partial_token_sort_ratio(a: &str, b: &str) -> f64 {
+    gf::partial_token_sort_ratio(a, b)
+}
+
+/// `fuzz.partial_token_set_ratio`: unique / common words via `partial_ratio`.
+#[pyfunction]
+fn partial_token_set_ratio(a: &str, b: &str) -> f64 {
+    gf::partial_token_set_ratio(a, b)
+}
+
+/// `fuzz.partial_token_ratio` = max of the sorted-list / sorted-diff partials.
+#[pyfunction]
+fn partial_token_ratio(a: &str, b: &str) -> f64 {
+    gf::partial_token_ratio(a, b)
+}
+
+/// `fuzz.WRatio`: the composite weighted ratio. Empty input -> 0.
+#[pyfunction]
+fn w_ratio(a: &str, b: &str) -> f64 {
+    gf::w_ratio(a, b)
+}
+
+/// `fuzz.QRatio` = `ratio`, but returns 0 when either string is empty.
+#[pyfunction]
+fn q_ratio(a: &str, b: &str) -> f64 {
+    gf::q_ratio(a, b)
 }
 
 /// One-vs-many top-k: score `query` against every choice (query bitmap built
@@ -106,6 +168,17 @@ fn _goldenfuzz(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(jaro_winkler, m)?)?;
     m.add_function(wrap_pyfunction!(levenshtein, m)?)?;
     m.add_function(wrap_pyfunction!(indel, m)?)?;
+    // fuzz.* composite scorers ([0, 100])
+    m.add_function(wrap_pyfunction!(ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(partial_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(token_sort_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(token_set_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(token_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(partial_token_sort_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(partial_token_set_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(partial_token_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(w_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(q_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(extract, m)?)?;
     m.add_function(wrap_pyfunction!(cdist, m)?)?;
     m.add_class::<PyBatchComparator>()?;
