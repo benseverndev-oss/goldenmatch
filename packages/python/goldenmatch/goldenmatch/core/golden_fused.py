@@ -856,6 +856,7 @@ def run_golden_fused_arrow(
         # (verified). A column with no flagged cells keeps the empty array =>
         # the kernel's unweighted branch.
         import pyarrow.compute as _pc_qw
+
         from goldenmatch.core.bench import stage as _bench_stage
         with _bench_stage("golden_qweights_build_fused"):
             if "__row_id__" in sdf.columns:
