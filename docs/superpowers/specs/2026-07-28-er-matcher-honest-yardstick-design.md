@@ -28,6 +28,8 @@ This is deliberately a data + measurement step. Model scaling (7B), hyperparamet
 
 New module **`scripts/er_matcher/fs_enrich.py`**, one focused unit. Its decision logic is pure and box-testable; the heavy goldenmatch FS matcher is **injected** as a `scorer(a, b) -> float` (match probability) callable so the box suite never imports it. `build_corpus.py` wires the real goldenmatch scorer; unit tests wire a stub.
 
+**Building the injected scorer/blocker (confirmed API, plan-level detail).** goldenmatch's real entry points are not zero-arg: `goldenmatch.core.scorer.score_pair(a, b, fields: list[MatchkeyField]) -> float` needs per-field weights/scorers, and `goldenmatch.core.blocker.build_blocks(lf: LazyFrame, config: BlockingConfig)` needs a Polars frame + blocking config. So `build_corpus.py` builds a **closure** that first resolves a matchkey + blocking config for each source — most likely via `auto_configure` keyed off the per-source `domain` field in `sources.yaml` — then adapts `score_pair`/`build_blocks` to the `scorer(a, b) -> float` and `candidates(records) -> pairs` interfaces `fs_enrich` consumes. The plan pins the exact config-resolution entry point; `fs_enrich` itself stays agnostic to how the scorer was built.
+
 ### Data flow
 
 ```
@@ -60,7 +62,7 @@ So a match the matcher was sure of -> ~0.95; a match it nearly missed -> ~0.6. T
 
 ### Core 2 — entity-level splits
 
-Derive a stable **entity key** per record from each benchmark's gold match mapping: records connected by a gold match edge form one entity (connected components over the match graph). Split on the entity key so every record of an entity lands in exactly one split. FEBRL already carries an entity id (the corruption anchor); this mainly changes `sources/leipzig.py` and `sources/splits.py`. The Leipzig gold mapping is bipartite (tableA<->tableB); connected components still yield correct transitive clusters.
+Derive a stable **entity key** per record from each benchmark's gold match mapping: records connected by a gold match edge form one entity (connected components over the match graph). Split on the entity key so every record of an entity lands in exactly one split. The connected-components entity-keying helper lives in **`sources/splits.py`** (shared, mirroring how `split_of` is already shared there) and is consumed by `sources/leipzig.py`. FEBRL already splits at entity level (`_entity_of` from `rec_id`, `split_of` called once per entity), so it is unchanged. The Leipzig gold mapping is bipartite (tableA<->tableB); connected components still yield correct transitive clusters.
 
 ### Core 3 — hard-negative mining
 
