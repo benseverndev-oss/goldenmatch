@@ -996,11 +996,11 @@ version = "3.2.0"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
     { name = "goldencheck-types" },
+    { name = "goldenfuzz" },
     { name = "openpyxl" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
@@ -1051,6 +1051,7 @@ requires-dist = [
     { name = "connectorx", marker = "extra == 'db'", specifier = ">=0.3" },
     { name = "goldencheck-native", marker = "extra == 'native'", directory = "packages/rust/extensions/goldencheck-native" },
     { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
+    { name = "goldenfuzz", specifier = ">=0.1.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
     { name = "numpy", marker = "extra == 'baseline'", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30" },
@@ -1064,7 +1065,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "scipy", marker = "extra == 'baseline'", specifier = ">=1.11" },
@@ -1106,12 +1106,12 @@ source = { editable = "packages/python/goldenflow" }
 dependencies = [
     { name = "fastapi" },
     { name = "goldenflow-native" },
+    { name = "goldenfuzz" },
     { name = "phonenumbers" },
     { name = "pydantic" },
     { name = "python-dateutil" },
     { name = "python-multipart" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
@@ -1182,6 +1182,7 @@ requires-dist = [
     { name = "goldencheck", marker = "extra == 'check'", editable = "packages/python/goldencheck" },
     { name = "goldenflow", extras = ["check", "excel", "db", "mcp", "agent", "s3", "gcs", "polars", "parquet", "native"], marker = "extra == 'all'", editable = "packages/python/goldenflow" },
     { name = "goldenflow-native", directory = "packages/rust/extensions/native-flow" },
+    { name = "goldenfuzz", specifier = ">=0.1.1" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.14" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
@@ -1198,7 +1199,6 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "textual", specifier = ">=0.50" },
@@ -1219,6 +1219,19 @@ dependencies = [
 requires-dist = [{ name = "pyarrow", specifier = ">=10" }]
 
 [[package]]
+name = "goldenfuzz"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/71/0ec2c890edae20bb64bb4b220d755ffb18710e0bfe108cb6c78002c39b4a/goldenfuzz-0.1.1.tar.gz", hash = "sha256:bc03a87d80942c86a29899b83944c8c42fbc7625df78a320d28fc8d217bca820", size = 31185, upload-time = "2026-07-28T17:11:44.482Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/9b/93ebaee542dcc9204d540f323e932f32dd0bc76d0cb2d79bb392c7133feb/goldenfuzz-0.1.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f978ca53a81a106763826cb16ef0adf5dc9b13480c483d812a375c1a8fa69527", size = 290376, upload-time = "2026-07-28T17:11:39.368Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/e0/8d376b1bdcd223f8a4758e29d23b5cc8d94dcd9b9279aabd633108526866/goldenfuzz-0.1.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:46f78993ca609b33b9a3ed5f34d504f2212b15fca44cfe16611046ac8ce4a287", size = 281809, upload-time = "2026-07-28T17:11:40.41Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/e1/e7f72ceb8cca02fb3026c35898edd8d049b51e40c81129117c14ec434327/goldenfuzz-0.1.1-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e0b3bb2302137afa945444dd75f6ac837e8d4721fe77ed44badcf575f8bd0213", size = 308028, upload-time = "2026-07-28T17:11:41.644Z" },
+    { url = "https://files.pythonhosted.org/packages/77/d2/fac913a57b65ff344f30181af280e7f9ecae7b3ef0dc36b50414bed13103/goldenfuzz-0.1.1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:6590191e8d7ce3f58eeed8c5e5d96e23b1203223d2f82d764562271829c6a93f", size = 313716, upload-time = "2026-07-28T17:11:42.541Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/4f/d22c6ca10b702dcdb210e994b40739b46372d86a6695c545c5bc7c7267fb/goldenfuzz-0.1.1-cp311-abi3-win_amd64.whl", hash = "sha256:52cfe2b458e025853c1b51d7c8e8adfcc0f1d2a65dd38b738d663831a12fbd93", size = 185609, upload-time = "2026-07-28T17:11:43.503Z" },
+]
+
+[[package]]
 name = "goldenmatch"
 version = "3.10.0"
 source = { editable = "packages/python/goldenmatch" }
@@ -1233,7 +1246,6 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "rich" },
     { name = "textual" },
     { name = "typer" },
@@ -1287,6 +1299,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "rapidfuzz" },
     { name = "ruff" },
 ]
 documents = [
@@ -1431,7 +1444,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
+    { name = "rapidfuzz", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = ">=2.56.0" },
     { name = "redshift-connector", marker = "extra == 'redshift'", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0" },
@@ -1463,6 +1476,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "rapidfuzz" },
     { name = "ruff" },
 ]
 
@@ -1478,6 +1492,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "ruff", specifier = ">=0.6" },
 ]
 
@@ -2018,9 +2033,9 @@ version = "0.6.0"
 source = { editable = "packages/python/infermap" }
 dependencies = [
     { name = "goldencheck-types" },
+    { name = "goldenfuzz" },
     { name = "polars" },
     { name = "pyyaml" },
-    { name = "rapidfuzz" },
     { name = "scipy" },
     { name = "typer" },
 ]
@@ -2067,6 +2082,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.30" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9" },
     { name = "goldencheck-types", editable = "packages/python/goldencheck-types" },
+    { name = "goldenfuzz", specifier = ">=0.1.0" },
     { name = "infermap", extras = ["postgres", "mysql", "duckdb", "excel", "llm"], marker = "extra == 'all'", editable = "packages/python/infermap" },
     { name = "infermap-native", marker = "extra == 'native'", directory = "packages/rust/extensions/infermap-native" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1" },
@@ -2078,7 +2094,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rapidfuzz", specifier = ">=3.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "scipy", specifier = ">=1.11" },
     { name = "typer", specifier = ">=0.12" },
