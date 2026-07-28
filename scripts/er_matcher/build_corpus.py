@@ -147,6 +147,7 @@ def _fs_enrich_source(
             tau=tau,
             delta=delta,
             mine_cap=mine_cap,
+            domain=entry.domain,
         )
         mined = sum(1 for r in enriched if r.get("negative_kind") == "fs_mined")
         result[split] = _rebalance_negatives(enriched, mined)

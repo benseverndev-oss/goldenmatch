@@ -93,10 +93,13 @@ def test_enrich_attaches_soft_conf_and_appends_mined_negs():
         tau=0.5,
         delta=0.1,
         mine_cap=10,
+        domain="product",
     )
     assert all(0.0 < p["confidence"] < 1.0 for p in out)
     mined = [p for p in out if (p["eid_a"], p["eid_b"]) == ("e", "f")]
     assert len(mined) == 1 and mined[0]["label"] == "no_match"
+    # mined negs must carry the source domain so run_eval can bucket by it
+    assert mined[0]["domain"] == "product"
     assert mined[0]["negative_kind"] == "fs_mined"
 
 

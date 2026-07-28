@@ -71,6 +71,7 @@ def enrich(
     tau: float = 0.5,
     delta: float = 0.1,
     mine_cap: int,
+    domain: str | None = None,
 ) -> list[dict]:
     """Attach FS-score-driven soft confidence to every pair, and append near-threshold
     gold non-matches mined from candidates_fn(records). Pure given injected scorer +
@@ -107,6 +108,7 @@ def enrich(
                 "label": "no_match",
                 "eid_a": c["eid_a"],
                 "eid_b": c["eid_b"],
+                "domain": domain,  # mined negs inherit the source domain (run_eval buckets by it)
                 "confidence": round(conf, 4),
                 "fs_score": round(c["score"], 4),
                 "negative_kind": "fs_mined",
