@@ -727,6 +727,13 @@ def run_golden_fused_arrow(
     # NON-STRING columns (file-based dedupe with native dtypes) keep the exact
     # Python str() formatting -- pyarrow's string cast diverges from Python str()
     # for floats/bools/etc., so that path stays on the reference loop.
+    # col_maps (raw value -> code) is read ONLY by the conditional predicate
+    # lowering's _code_of (Stage 6); with no list-form field_rules there are no
+    # conditionals and it is never consulted. Building it means a Python dict of
+    # size = #distinct values -- ~N for high-cardinality columns (name/email),
+    # i.e. the same O(N) Python work dictionary_encode just moved into C. So build
+    # it ONLY when conditionals exist; otherwise skip and use the map-less factor.
+    _needs_col_maps = any(isinstance(e, list) for e in rules.field_rules.values())
     import pyarrow.compute as _pc_fac
     from goldenmatch.core.bench import stage as _bench_stage
     with _bench_stage("golden_fused_factorize"):
@@ -740,14 +747,18 @@ def run_golden_fused_arrow(
                     _arr = _arr.chunk(0) if _arr.num_chunks else pa.array([], type=_arr.type)
             if pa.types.is_string(_arr.type) or pa.types.is_large_string(_arr.type):
                 _dic = _pc_fac.dictionary_encode(_arr)
-                col_maps[c] = {v: i for i, v in enumerate(_dic.dictionary.to_pylist())}
+                if _needs_col_maps:
+                    col_maps[c] = {v: i for i, v in enumerate(_dic.dictionary.to_pylist())}
                 text_cols.append(_pc_fac.cast(_arr, pa.string()))
                 code_cols.append(_pc_fac.fill_null(_dic.indices.cast(pa.int64()), -1))
             else:
                 values = _arr.to_pylist()
                 text = [None if v is None else str(v) for v in values]
-                codes, vmap = _factorize_with_map(values)
-                col_maps[c] = vmap
+                if _needs_col_maps:
+                    codes, vmap = _factorize_with_map(values)
+                    col_maps[c] = vmap
+                else:
+                    codes = _factorize_codes(values)
                 text_cols.append(pa.array(text, type=pa.string()))
                 code_cols.append(pa.array(codes, type=pa.int64()))
 
