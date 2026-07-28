@@ -4,7 +4,7 @@
 // dominates. Build+run: cargo run --release --example bench_batch
 use std::time::Instant;
 
-use goldenfuzz_core::{indel_ratio, jaro_winkler, levenshtein_normalized_similarity, BatchComparator, Scorer};
+use goldenfuzz_core::{indel_ratio, jaro_winkler, levenshtein_normalized_similarity, BatchComparator};
 use rapidfuzz::distance::{jaro_winkler as rf_jw, levenshtein as rf_lev};
 use rapidfuzz::fuzz as rf_fuzz;
 
