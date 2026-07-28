@@ -1,0 +1,35 @@
+# goldenphonetic — the thin pyo3/maturin WRAPPER over the pyo3-free
+# `goldenphonetic-core` crate. Same pattern as the sibling `goldenfuzz-py` /
+# `hnsw-py` / `embed-py` wheels: the core stays pyo3-free (usable from Rust cores /
+# DataFusion / wasm), and the pyo3 dependency is confined to THIS wheel.
+# `pip install goldenphonetic` gets the jellyfish-compatible, byte-identical
+# phonetic encoders (soundex / metaphone / nysiis / match_rating).
+#
+# Standalone workspace (empty [workspace]) so pyo3's `extension-module` feature is
+# not unified with any embedding crate's `auto-initialize` (mutually incompatible),
+# mirroring the sibling wheels.
+[workspace]
+
+[package]
+name = "goldenphonetic-py"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Ben Severn <benzsevern@gmail.com>"]
+description = "PyO3 extension module for goldenphonetic (jellyfish-compatible phonetic encoders) over goldenphonetic-core"
+
+[lib]
+# Produces the ext; installed as goldenphonetic/_goldenphonetic.abi3.so. The
+# #[pymodule] is `_goldenphonetic`, so the init symbol is PyInit__goldenphonetic.
+name = "_goldenphonetic"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: one stable-ABI artifact spans CPython 3.11-3.13.
+pyo3 = { version = ">=0.23.3, <0.25", features = ["extension-module", "abi3-py311"] }
+# The pyo3-free kernel this wheel wraps. Zero C deps.
+goldenphonetic-core = { path = "../goldenphonetic-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

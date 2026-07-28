@@ -9495,6 +9495,14 @@
       "path": "packages/rust/extensions/postgres"
     },
     {
+      "name": "goldenphonetic-core",
+      "path": "packages/rust/extensions/goldenphonetic-core"
+    },
+    {
+      "name": "goldenphonetic-py",
+      "path": "packages/rust/extensions/goldenphonetic-py"
+    },
+    {
       "name": "goldenpipe-core",
       "path": "packages/rust/extensions/goldenpipe-core"
     },
