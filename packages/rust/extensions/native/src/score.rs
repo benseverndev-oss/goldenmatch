@@ -1285,13 +1285,24 @@ pub fn score_block_pairs_fs_arrow(
 
     // Per-block FS scorer shared by the sequential and rayon paths (mirrors
     // score_block_pairs_arrow's score_span).
-    // Factorized-comparison prototype (GOLDENMATCH_FS_FACTORIZE=1): compute the
-    // string-similarity level on DISTINCT value-pairs per (block, field) instead
-    // of per record pair. Byte-identical; declines (returns false) for
-    // embedding/NE/TF configs, then the per-pair loop below runs. Off by default.
+    // Factorized comparison (DEFAULT ON): compute the string-similarity level on
+    // DISTINCT value-pairs per (block, field) instead of per record pair -- within
+    // a block the string VALUES repeat (constant blocking-key field, first_name,
+    // ...), so a V*V level matrix replaces size*size field_similarity calls
+    // (measured -34% kernel CPU / -16% bucket_score, byte-identical). Declines
+    // (returns false) for embedding/NE configs, then the per-pair loop below runs.
+    // `GOLDENMATCH_FS_FACTORIZE=0` forces the per-pair path (A/B / safety valve).
     let factorize_on = std::env::var("GOLDENMATCH_FS_FACTORIZE")
-        .map(|v| !matches!(v.as_str(), "" | "0" | "false" | "False" | "no" | "off"))
-        .unwrap_or(false);
+        .map(|v| !matches!(v.as_str(), "0" | "false" | "False" | "no" | "off"))
+        .unwrap_or(true);
+    // Per-field matrix gate: build the V*V matrix only when avg >= min_repeat rows
+    // per distinct value (`min_repeat * V <= size`). Default 2; tune without a
+    // rebuild via GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT.
+    let factorize_min_repeat: usize = std::env::var("GOLDENMATCH_FS_FACTORIZE_MIN_REPEAT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(2);
     let score_span = |offset: usize, size: usize| -> Vec<(i64, i64, f64)> {
         let mut local: Vec<(i64, i64, f64)> = Vec::new();
         if size >= 2 {
@@ -1303,6 +1314,7 @@ pub fn score_block_pairs_fs_arrow(
                     |f, row| fields[f].get(row),
                     |row| row_ids.value(row),
                     |a, b| exclude_ref.contains(&(a, b)),
+                    factorize_min_repeat,
                     threshold,
                     &mut local,
                 )

@@ -694,6 +694,7 @@ pub fn score_fs_block_factorized<'d, F, R, X>(
     get_field: F,
     row_id: R,
     excluded: X,
+    min_repeat: usize,
     threshold: f64,
     out: &mut Vec<(i64, i64, f64)>,
 ) -> bool
@@ -703,13 +704,14 @@ where
     X: Fn(i64, i64) -> bool,
 {
     let n_fields = p.scorer_ids.len();
+    // Negative-evidence + embedding fields are not (yet) factorized: NE fires on a
+    // separate value/threshold rule and embedding similarity lives in row vectors,
+    // not the string value. TF-adjustment IS supported (per-value diagonal bonus).
     if !p.ne_scorer_ids.is_empty() {
         return false;
     }
     for f in 0..n_fields {
-        if p.scorer_ids[f] == FS_SCORER_EMBEDDING_COSINE
-            || matches!(p.tf_tables.get(f), Some(Some(_)))
-        {
+        if p.scorer_ids[f] == FS_SCORER_EMBEDDING_COSINE {
             return false;
         }
     }
@@ -717,10 +719,14 @@ where
         return true;
     }
 
-    // Per-field: factorize block values -> codes (-1 null, else 0..V) + an
-    // optional V*V level matrix (built only when values repeat enough to pay).
+    // Per-field: factorize block values -> codes (-1 null, else 0..V), an optional
+    // V*V level matrix (built only when values repeat enough to pay), and an
+    // optional per-distinct-value TF bonus (the Winkler term-frequency adjustment,
+    // which fires ONLY on an exact-equal TOP-level agreement == a same-value pair,
+    // so it is a per-value diagonal contribution).
     let mut codes: Vec<Vec<i32>> = Vec::with_capacity(n_fields);
     let mut matrices: Vec<Option<(usize, Vec<u8>)>> = Vec::with_capacity(n_fields);
+    let mut tf_bonus: Vec<Option<Vec<f64>>> = Vec::with_capacity(n_fields);
     for f in 0..n_fields {
         let mut code_of: HashMap<&str, i32> = HashMap::new();
         let mut distinct: Vec<&str> = Vec::new();
@@ -738,7 +744,10 @@ where
             }
         }
         let vlen = distinct.len();
-        if vlen >= 2 && 2 * vlen <= size {
+        // Matrix only when values repeat enough to pay for the V*V build:
+        // `min_repeat * V <= size` (avg >= min_repeat rows per value). A constant
+        // field (V=1) or a low-cardinality field passes; email (V~size) does not.
+        if vlen >= 2 && min_repeat.max(1) * vlen <= size {
             let mut mat = vec![0u8; vlen * vlen];
             for a in 0..vlen {
                 for b in a..vlen {
@@ -762,6 +771,34 @@ where
             matrices.push(Some((vlen, mat)));
         } else {
             matrices.push(None);
+        }
+        // TF bonus per distinct value: mirrors score_fs_pair's `level == top &&
+        // a == b`. a == b iff same code, so the pair's level is the diagonal
+        // (value vs itself). bonus[c] = tf.adjustment(v) when that diagonal level
+        // is the top level, else 0.0.
+        if let Some(Some(tf)) = p.tf_tables.get(f) {
+            let top = (p.levels[f] as usize).saturating_sub(1);
+            let bonus: Vec<f64> = distinct
+                .iter()
+                .map(|&v| {
+                    let sim =
+                        field_similarity(p.scorer_ids[f], v, v, p.surname_freq, p.name_aliases);
+                    let lvl = fs_level_from_sim(
+                        sim,
+                        p.levels[f],
+                        p.partial_thresholds[f],
+                        p.field_thresholds[f],
+                    );
+                    if lvl == top {
+                        tf.adjustment(v)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            tf_bonus.push(Some(bonus));
+        } else {
+            tf_bonus.push(None);
         }
         codes.push(col);
     }
@@ -808,6 +845,13 @@ where
                         }
                     };
                     total_weight += p.match_weights[f][lvl];
+                    // Winkler TF: same value (ca == cb) at top level -> add the
+                    // precomputed per-value bonus (0.0 when not top-level).
+                    if ca == cb {
+                        if let Some(bonus) = &tf_bonus[f] {
+                            total_weight += bonus[ca as usize];
+                        }
+                    }
                 } else if p.missing_disagree {
                     has_regular_evidence = true;
                     total_weight += p.match_weights[f][0];
@@ -931,6 +975,7 @@ mod tests {
             get,
             row_id,
             |_a, _b| false,
+            2,
             threshold,
             &mut got,
         );
@@ -942,6 +987,177 @@ mod tests {
         for (g, w) in got.iter().zip(want.iter()) {
             assert_eq!((g.0, g.1), (w.0, w.1), "pair order/identity differs");
             assert!((g.2 - w.2).abs() < 1e-12, "score differs: {g:?} vs {w:?}");
+        }
+    }
+
+    #[test]
+    fn factorized_parity_across_configs() {
+        // Assert factorized == per-pair over every within-block pair, across the
+        // config surface (scorers, level counts, missing-disagree, calibrated,
+        // require-positive-evidence, TF) and LCG-generated blocks with heavy value
+        // repeats + nulls (exercising matrices, the per-field gate, and null-pairs).
+        fn check(p: &FsPairParams, vals: &[Vec<Option<String>>], size: usize, threshold: f64) {
+            let get = |f: usize, r: usize| vals[f][r].as_deref();
+            let mut want: Vec<(i64, i64, f64)> = Vec::new();
+            for i in 0..size - 1 {
+                for j in (i + 1)..size {
+                    let s = score_fs_pair(i, j, p, get, |_, _| None);
+                    if s >= threshold {
+                        want.push((i as i64, j as i64, s));
+                    }
+                }
+            }
+            let mut got: Vec<(i64, i64, f64)> = Vec::new();
+            let ok = score_fs_block_factorized(
+                0,
+                size,
+                p,
+                get,
+                |r| r as i64,
+                |_, _| false,
+                2,
+                threshold,
+                &mut got,
+            );
+            assert!(ok, "eligible config should be handled");
+            assert_eq!(got.len(), want.len(), "pair count differs");
+            for (g, w) in got.iter().zip(want.iter()) {
+                assert_eq!((g.0, g.1), (w.0, w.1), "pair identity/order differs");
+                assert!((g.2 - w.2).abs() < 1e-12, "score differs: {g:?} vs {w:?}");
+            }
+        }
+
+        // Deterministic LCG block: each of `n_fields` columns draws from a small
+        // pool (forces repeats) with a null every `null_every` rows.
+        fn block(
+            mut s: u64,
+            size: usize,
+            n_fields: usize,
+            null_every: usize,
+        ) -> Vec<Vec<Option<String>>> {
+            let pool = [
+                "john", "jon", "jane", "mary", "john", "smith", "smyth", "al", "al", "bob",
+            ];
+            (0..n_fields)
+                .map(|_| {
+                    (0..size)
+                        .map(|i| {
+                            s = s
+                                .wrapping_mul(6364136223846793005)
+                                .wrapping_add(1442695040888963407);
+                            if null_every > 0 && i % null_every == 0 {
+                                None
+                            } else {
+                                Some(pool[(s >> 33) as usize % pool.len()].to_string())
+                            }
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+
+        let size = 24usize;
+        // Base config knobs varied across cases.
+        for &scorer in &[0u8, 1, 2, 3] {
+            for &levels in &[2u8, 3, 4] {
+                for &(md, cal, rpe) in &[
+                    (false, false, false),
+                    (true, false, false),
+                    (false, true, false),
+                    (false, false, true),
+                ] {
+                    let n_fields = 3usize;
+                    let scorer_ids = vec![scorer; n_fields];
+                    let levels_v = vec![levels; n_fields];
+                    let partials = vec![0.7_f64; n_fields];
+                    let fthresh: Vec<Option<&[f64]>> = vec![None; n_fields];
+                    // A monotone weight ladder per field.
+                    let mw: Vec<Vec<f64>> =
+                        vec![(0..levels).map(|l| l as f64 - 1.0).collect(); n_fields];
+                    let fmins: Vec<f64> = mw.iter().map(|w| *w.first().unwrap()).collect();
+                    let fmaxs: Vec<f64> = mw.iter().map(|w| *w.last().unwrap()).collect();
+                    let rmin: f64 = fmins.iter().sum();
+                    let rmax: f64 = fmaxs.iter().sum();
+                    let p = FsPairParams {
+                        scorer_ids: &scorer_ids,
+                        levels: &levels_v,
+                        partial_thresholds: &partials,
+                        field_thresholds: &fthresh,
+                        match_weights: &mw,
+                        field_mins: &fmins,
+                        field_maxs: &fmaxs,
+                        base_min: 0.0,
+                        base_max: 0.0,
+                        ne_scorer_ids: &[],
+                        ne_thresholds: &[],
+                        ne_weights: &[],
+                        calibrated: cal,
+                        prior_w: if cal { -1.5 } else { 0.0 },
+                        surname_freq: None,
+                        name_aliases: None,
+                        tf_tables: &[],
+                        emb_vectors: &[],
+                        emb_dims: &[],
+                        require_positive_evidence: rpe,
+                        missing_disagree: md,
+                    };
+                    let _ = (rmin, rmax);
+                    for &null_every in &[0usize, 5] {
+                        let vals = block(
+                            0x9E3779B97F4A7C15 ^ (scorer as u64),
+                            size,
+                            n_fields,
+                            null_every,
+                        );
+                        check(&p, &vals, size, -1.0);
+                    }
+                }
+            }
+        }
+
+        // TF case: a jaro_winkler field carrying a TF table (Winkler adjustment).
+        {
+            let mut freqs = HashMap::new();
+            freqs.insert("john".to_string(), 0.2_f64);
+            freqs.insert("mary".to_string(), 0.05);
+            freqs.insert("al".to_string(), 0.3);
+            let tf = TfTable {
+                freqs,
+                collision: 0.1,
+            };
+            let scorer_ids = vec![0u8, 0];
+            let levels_v = vec![3u8, 3];
+            let partials = vec![0.7, 0.7];
+            let fthresh: Vec<Option<&[f64]>> = vec![None, None];
+            let mw = vec![vec![-1.0, 0.5, 2.0], vec![-1.0, 0.5, 2.0]];
+            let fmins = [-1.0, -1.0];
+            let fmaxs = [2.0, 2.0];
+            let tf_tables = vec![Some(tf), None];
+            let p = FsPairParams {
+                scorer_ids: &scorer_ids,
+                levels: &levels_v,
+                partial_thresholds: &partials,
+                field_thresholds: &fthresh,
+                match_weights: &mw,
+                field_mins: &fmins,
+                field_maxs: &fmaxs,
+                base_min: 0.0,
+                base_max: 0.0,
+                ne_scorer_ids: &[],
+                ne_thresholds: &[],
+                ne_weights: &[],
+                calibrated: false,
+                prior_w: 0.0,
+                surname_freq: None,
+                name_aliases: None,
+                tf_tables: &tf_tables,
+                emb_vectors: &[],
+                emb_dims: &[],
+                require_positive_evidence: false,
+                missing_disagree: false,
+            };
+            let vals = block(0xDEADBEEF, size, 2, 5);
+            check(&p, &vals, size, -1.0);
         }
     }
 
@@ -976,7 +1192,17 @@ mod tests {
         let get = |_f: usize, _r: usize| Some("x");
         let mut out = Vec::new();
         assert!(
-            !score_fs_block_factorized(0, 4, &base, get, |r| r as i64, |_, _| false, 0.0, &mut out),
+            !score_fs_block_factorized(
+                0,
+                4,
+                &base,
+                get,
+                |r| r as i64,
+                |_, _| false,
+                2,
+                0.0,
+                &mut out
+            ),
             "embedding field must decline"
         );
     }
