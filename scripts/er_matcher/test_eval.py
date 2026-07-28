@@ -106,3 +106,62 @@ def test_gate_regression_check():
 def test_gate_missing_split_fails_cleanly():
     g = ev.evaluate_gate({"splits": {}}, split="test")
     assert g.passed is False
+
+
+# --- zero-shot scorecard (SP3 Task 3) ----------------------------------------
+def _per_benchmark():
+    return {
+        "walmart_amazon": {"f1": 0.80, "raw_ece": 0.20, "calibrated_ece": 0.05, "n": 500},
+        "beer": {"f1": 0.60, "raw_ece": 0.50, "calibrated_ece": 0.4, "n": 100},
+    }
+
+
+def test_zeroshot_scorecard_sota_populated_display_only():
+    sc = ev.build_zeroshot_scorecard(_per_benchmark())
+    wa = sc["walmart_amazon"]
+    assert wa["sota"] == {
+        "deepmatcher_f1": 0.669,
+        "ditto_f1": 0.868,
+        "source": "DeepMatcher (Mudgal+ 2018) / Ditto (Li+ 2020)",
+    }
+    # SOTA (ditto 0.868) beats our F1 (0.80) but that must NOT flip the gate --
+    # SOTA is display-only, not a gate input.
+    assert wa["sota"]["ditto_f1"] > wa["f1"]
+    assert wa["gate"].passed is True
+
+
+def test_zeroshot_scorecard_gate_fails_below_floor():
+    sc = ev.build_zeroshot_scorecard(_per_benchmark())
+    beer = sc["beer"]
+    assert beer["sota"]["source"].startswith("DeepMatcher")
+    assert beer["gate"].passed is False
+    assert any(
+        c["check"] == "absolute_floor" and not c["passed"] for c in beer["gate"].checks
+    )
+
+
+def test_zeroshot_scorecard_gate_uses_calibrated_not_raw_ece():
+    # raw_ece (0.4) alone would fail calibration for a max_ece of 0.15, but the
+    # gate must read calibrated_ece (0.05) -- prove it by checking the passing
+    # row's calibration check detail references the calibrated value.
+    sc = ev.build_zeroshot_scorecard(_per_benchmark())
+    wa = sc["walmart_amazon"]
+    cal_check = next(c for c in wa["gate"].checks if c["check"] == "calibration")
+    assert cal_check["passed"] is True
+    assert "0.0500" in cal_check["detail"]  # calibrated_ece, not raw_ece (0.20)
+
+
+def test_zeroshot_scorecard_echoes_n_and_metrics():
+    sc = ev.build_zeroshot_scorecard(_per_benchmark())
+    assert sc["beer"]["n"] == 100
+    assert sc["beer"]["raw_ece"] == 0.50
+    assert sc["beer"]["calibrated_ece"] == 0.4
+    assert sc["beer"]["f1"] == 0.60
+
+
+def test_zeroshot_scorecard_unknown_benchmark_sota_none():
+    sc = ev.build_zeroshot_scorecard(
+        {"unknown_bench": {"f1": 0.90, "raw_ece": 0.1, "calibrated_ece": 0.05, "n": 10}}
+    )
+    assert sc["unknown_bench"]["sota"] is None
+    assert sc["unknown_bench"]["gate"].passed is True
