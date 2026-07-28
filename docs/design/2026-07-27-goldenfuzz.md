@@ -31,22 +31,21 @@ rapidfuzz 0.5, scalar per-pair, corrupted-pair corpus:
 
 | workload            | jaro-winkler | levenshtein | indel |
 |---------------------|-------------:|------------:|------:|
-| names (~13 chars)   | **0.68x**    | **0.65x**   | **0.62x** |
-| addresses (~35)     | **0.78x**    | **0.89x**   | **0.48x** |
-| documents (~600)    | 2.4x         | 2.4x        | 4.0x  |
+| names (~13 chars)   | **0.58x**    | **0.78x**   | **0.29x** |
+| addresses (~35)     | **0.91x**    | **0.92x**   | **0.38x** |
+| documents (~600)    | **0.91x**    | **1.00x**   | 1.61x |
 
-`< 1.0` = goldenfuzz faster. **We win the ER-common case (short fields) by
-~1.1-2x; rapidfuzz wins long strings** (a 13-char jaro is 146ns for us vs 214ns
-for them; a 600-char jaro is 50us vs 21us).
+`< 1.0` = goldenfuzz faster. **We now beat or match rapidfuzz on short fields AND
+documents**, except document-indel (1.61x, an algorithm/SIMD gap, not allocation).
 
-The long-string gap is NOT (mostly) SIMD — it is the **multiword HashMap peq**:
-building the position bitmap for a 600-char pattern costs **16.4us** on the
-HashMap path (600 SipHash char-hashes + ~27 small `Vec` allocs), a third of our
-50us and more than the entire scan. A byte-indexed *flat* multiword peq builds
-the same thing in **1.5us (11x)**. So the long-string fix is the same
-allocation-elimination as the short path, extended to the multiword tier — far
-more tractable than SIMD, and it should make us competitive/faster than rapidfuzz
-on documents too. SIMD-batch `cdist` is a *separate* axis (one-vs-many).
+How the long-string gap was closed (it was NOT SIMD): the per-pair document cost
+was dominated by the **multiword HashMap peq** — building the position bitmap for
+a 600-char pattern cost **16.4us** (600 SipHash char-hashes + ~27 small `Vec`
+allocs), a third of the 50us and more than the entire scan. Replacing it with a
+byte-indexed *flat* multiword peq (~3us, no hashing/alloc) took document jaro
+2.4x->0.91x and levenshtein 2.4x->1.00x, byte-identically. The residual
+document-indel gap is the scan itself (SIMD territory). SIMD-batch `cdist` is a
+*separate* one-vs-many axis.
 
 How we got here:
 - #2159: naive DP -> multiword bit-parallel. Big win on long strings, but
@@ -105,15 +104,15 @@ Gaps for an external "beats rapidfuzz everywhere" claim, in priority order:
   own named crate; `score-core` depends on and re-exports it (zero behaviour
   change, zero fixture churn — byte-identical). Establishes the boundary and the
   name without committing to publish.
-- **Then (measured, tractable): multiword allocation-free peq.** Closes the
-  per-pair long-string gap (the 16.4us HashMap peq). Same technique as the short
-  path. After this we expect to match/beat rapidfuzz on documents too, per-pair.
-- **Gate to publish externally** (PyPI + npm + crates.io): only after the
-  multiword peq lands AND a `process.extract` / top-k API exists (SIMD-batch
-  `cdist` is optional — needed only to beat rapidfuzz's *batch* path). Until then
-  a public "rapidfuzz alternative" lacking top-k is not compelling. The pitch is
-  *portability + provable identity + domain-awareness* (and now speed), not just
-  "faster."
+- **Done: multiword allocation-free (flat) peq.** Replaced the 16.4us HashMap
+  peq; document jaro/levenshtein now beat/match rapidfuzz, byte-identically.
+  Remaining per-pair gap is document-indel (1.61x, scan-bound → SIMD).
+- **Gate to publish externally** (PyPI + npm + crates.io): only after a
+  `process.extract` / top-k API exists (SIMD-batch `cdist` and the document-indel
+  scan are optional — needed only to beat rapidfuzz's *batch* path / last scalar
+  gap). Until then a public "rapidfuzz alternative" lacking top-k is not
+  compelling. The pitch: *portability + provable identity + domain-awareness +
+  now genuinely faster on the ER-common case*.
 - **Not now:** a Python `goldenfuzz` wheel is a separate packaging/publish/triage
   burden on top of the 7-package suite. The internal crate keeps the option open
   at ~zero cost.
