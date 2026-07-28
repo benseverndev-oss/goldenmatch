@@ -112,11 +112,14 @@ class LeipzigSource:
         # two records are always unioned into the same entity, so eid_a and
         # eid_b resolve to the same split -- no record/pair-level leakage.
         key_of = self._key_of(entities, gold_pairs)
+        # Precompute once (not per-split-per-entity) -- record_split maps
+        # every record id to its split via a single split_of hash each.
+        record_split: dict[str, str] = {rid: self._split_of_record(key_of, rid) for rid in entities}
 
         out: dict[str, list[Row]] = {"train": [], "val": [], "test": []}
 
         for eid_a, eid_b in gold_pairs:
-            split = self._split_of_record(key_of, eid_a)
+            split = record_split[eid_a]
             out[split].append(self._row(entities, eid_a, eid_b, "match"))
 
         # Negatives are synthesized PER SPLIT, over that split's record pool
@@ -127,7 +130,7 @@ class LeipzigSource:
             n_positives = len(split_rows)
             if n_positives == 0:
                 continue
-            split_rec_ids = [rid for rid in entities if self._split_of_record(key_of, rid) == split]
+            split_rec_ids = [rid for rid, rid_split in record_split.items() if rid_split == split]
             split_entities = {rid: entities[rid] for rid in split_rec_ids}
             oversample = max(
                 _MIN_NEGATIVE_OVERSAMPLE, round(n_positives * _NEGATIVE_OVERSAMPLE_FRAC)

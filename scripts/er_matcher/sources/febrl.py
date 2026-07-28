@@ -41,12 +41,11 @@ def _is_org(rec_id: str) -> bool:
 class FebrlSource:
     """PairSource for FEBRL-style synthetic person data: a single record
     table where each entity contributes one "org" record plus zero or
-    more "dup" records. Splits are assigned at the ENTITY level (unlike
-    Leipzig's record/pair-level split) since every record belonging to a
-    FEBRL entity lives in the same source table -- clean entity-level
-    no-leak across train/val/test is both achievable and required here.
-    Positives and negatives are generated WITHIN each split so no
-    entity's records ever appear in more than one split.
+    more "dup" records. Splits are assigned at the ENTITY level: every
+    record belonging to a FEBRL entity lives in the same source table, so
+    clean entity-level no-leak across train/val/test is both achievable
+    and required here. Positives and negatives are generated WITHIN each
+    split so no entity's records ever appear in more than one split.
     """
 
     license = "MPL-1.1"
@@ -94,9 +93,12 @@ class FebrlSource:
             "eid_b": eid_b,
         }
 
-    def splits(self) -> dict[str, list[Row]]:
-        records = self._read_records()
-
+    def _entities_and_splits(
+        self, records: dict[str, dict]
+    ) -> tuple[dict[str, list[str]], dict[str, str]]:
+        """Group every record by its entity (`_entity_of`), then hash each
+        entity's split once. Shared by `splits()` and `record_pools()` so
+        the entity-grouping + split-hash logic lives in exactly one place."""
         entities: dict[str, list[str]] = {}
         for rec_id in records:
             entities.setdefault(_entity_of(rec_id), []).append(rec_id)
@@ -105,6 +107,11 @@ class FebrlSource:
             eid: split_of(eid, seed=self.seed, val_frac=self.val_frac, test_frac=self.test_frac)
             for eid in entities
         }
+        return entities, entity_split
+
+    def splits(self) -> dict[str, list[Row]]:
+        records = self._read_records()
+        entities, entity_split = self._entities_and_splits(records)
 
         out: dict[str, list[Row]] = {"train": [], "val": [], "test": []}
 
@@ -170,15 +177,7 @@ class FebrlSource:
         by a later task (hard-negative mining) that needs the full record
         pool for a split, not just the sampled pairs."""
         records = self._read_records()
-
-        entities: dict[str, list[str]] = {}
-        for rec_id in records:
-            entities.setdefault(_entity_of(rec_id), []).append(rec_id)
-
-        entity_split: dict[str, str] = {
-            eid: split_of(eid, seed=self.seed, val_frac=self.val_frac, test_frac=self.test_frac)
-            for eid in entities
-        }
+        _entities, entity_split = self._entities_and_splits(records)
 
         pools: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
         for rec_id, fields in records.items():
