@@ -732,3 +732,43 @@ def test_fs_external_blocks_dedupe_routing(monkeypatch):
     assert calls["external"] >= 1
     assert calls["bucket"] == 0
     assert calls["batched"] == 0
+
+
+# ── factorized comparison (GOLDENMATCH_FS_FACTORIZE, default ON) == per-pair ──
+
+
+def _repeat_names_df() -> pl.DataFrame:
+    """One big block (constant zip) with HEAVY first/last-name repeats + a null,
+    so the factorized matrices actually engage (V << block size) alongside the
+    per-field per-pair gate and the null-pair path."""
+    firsts = ["John", "Jon", "John", "Mary", "John", "Jon", "Mary", "Jane",
+              "John", "Mary", None, "Jon"]
+    lasts = ["Smith"] * len(firsts)  # constant -> V=1 matrix
+    return pl.DataFrame(
+        {
+            "__row_id__": list(range(1, len(firsts) + 1)),
+            "first_name": firsts,
+            "last_name": lasts,
+            "zip": ["90210"] * len(firsts),  # constant block key
+        }
+    )
+
+
+@native_required
+def test_fs_factorize_matches_per_pair(monkeypatch):
+    """The factorized path (distinct value-pair level matrices) emits byte-for-byte
+    the SAME scored pairs as the per-pair path -- verified at the
+    score_probabilistic_bucket_native integration level across two shapes: the
+    multi-block frame and a heavy-repeat block that exercises the matrices + a
+    null. (The kernel-level parity is also covered by fs-core's Rust unit tests.)"""
+    for df in (_multiblock_df(), _repeat_names_df()):
+        mk = _mk()
+        em = train_em(df, mk, n_sample_pairs=200)
+        sdf, sizes = _block_sorted(df)
+
+        monkeypatch.setenv("GOLDENMATCH_FS_FACTORIZE", "1")
+        fac_on = _pairset(score_probabilistic_bucket_native(sdf, sizes, mk, em))
+        monkeypatch.setenv("GOLDENMATCH_FS_FACTORIZE", "0")
+        fac_off = _pairset(score_probabilistic_bucket_native(sdf, sizes, mk, em))
+
+        assert fac_on == fac_off, "factorized comparison diverged from per-pair"
