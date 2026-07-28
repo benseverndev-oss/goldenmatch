@@ -163,3 +163,24 @@ class FebrlSource:
                 )
 
         return out
+
+    def record_pools(self) -> dict[str, list[dict]]:
+        """Per-split raw record pool (every record grouped by its entity's
+        split via `_entity_of`), leakage-consistent with `splits()` -- used
+        by a later task (hard-negative mining) that needs the full record
+        pool for a split, not just the sampled pairs."""
+        records = self._read_records()
+
+        entities: dict[str, list[str]] = {}
+        for rec_id in records:
+            entities.setdefault(_entity_of(rec_id), []).append(rec_id)
+
+        entity_split: dict[str, str] = {
+            eid: split_of(eid, seed=self.seed, val_frac=self.val_frac, test_frac=self.test_frac)
+            for eid in entities
+        }
+
+        pools: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+        for rec_id, fields in records.items():
+            pools[entity_split[_entity_of(rec_id)]].append(fields)
+        return pools

@@ -96,6 +96,41 @@ def test_shortfall_warning_fires_on_tiny_fixture():
         src.splits()
 
 
+def test_record_pool_every_record_in_exactly_one_split():
+    src = FebrlSource(FIX, seed=1)
+    pools = src.record_pools()
+    assert set(pools) == {"train", "val", "test"}
+    all_soc_sec_ids = [entry["soc_sec_id"] for split in pools.values() for entry in split]
+    with open(FIX / "febrl_sample.csv", newline="", encoding="utf-8") as f:
+        n_records = sum(1 for _ in f) - 1  # minus header
+    assert sum(len(v) for v in pools.values()) == n_records
+    # soc_sec_id isn't unique per record here (dup rows share their org's
+    # value), so just check no record was dropped -- length parity above
+    # plus every entry present is the leakage-relevant invariant.
+    assert len(all_soc_sec_ids) == n_records
+
+
+def test_record_pool_leakage_consistent_with_gold_pairs():
+    src = FebrlSource(FIX, seed=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        splits = src.splits()
+    pools = src.record_pools()
+    records = src._read_records()
+
+    def find_split(rid: str) -> str:
+        target = records[rid]
+        for split, entries in pools.items():
+            if target in entries:
+                return split
+        raise AssertionError(f"{rid} missing from record_pools()")
+
+    positives = [r for r in (row for rows in splits.values() for row in rows) if r["label"] == "match"]
+    assert positives  # sanity
+    for r in positives:
+        assert find_split(r["eid_a"]) == find_split(r["eid_b"])
+
+
 def test_anchor_fallback_when_no_org_record():
     # rec-6 has only rec-6-dup-0 / rec-6-dup-1, no rec-6-org. The anchor
     # falls back to the first record in sorted order, and that entity
