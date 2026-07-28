@@ -3,6 +3,8 @@
 
 # Golden Suite
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.benseverndev-oss%2Fgoldenmatch.svg)](https://mcptoplist.com/server/io.github.benseverndev-oss%2Fgoldenmatch)
+
 **Zero-config entity resolution that scales — dedupe & match messy records from a laptop CSV to 100M+ rows. No training data, no tuning.**
 
 The headline package, **GoldenMatch**, does the matching — fuzzy + exact + probabilistic (Fellegi-Sunter) + LLM — and **beats hand-tuned Splink out of the box** (96.4% F1 on DBLP-ACM), identical in Python, edge-safe TypeScript, and SQL. It even runs on **unstructured input**: extract records from PDFs and images, then dedupe. Around it sits a full data-quality suite — Check, Flow, Analysis, Pipe, InferMap — with a Rust layer for Postgres / DuckDB and optional WebAssembly acceleration behind the TS ports.
