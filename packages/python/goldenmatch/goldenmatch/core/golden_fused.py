@@ -710,19 +710,78 @@ def run_golden_fused_arrow(
     # predicate lowering's `code_of` so a `when:` literal resolves to the SAME
     # code space as the referenced column's factorized winner value.
     col_maps: dict[str, dict] = {}
-    # Bench diagnostic: this is the Stage-1 driver-side factorization -- per user
-    # column, a 5M .to_list() + a 5M str() list-comp + a 5M Python-dict factorize.
-    # At 5M x user_cols that is ~N*cols str() + dict ops in Python; suspected
-    # bulk of the golden stage. Timed to confirm before an arrow-native rewrite.
+    # Stage-1 factorization: produce the per-column integer code array (grouping
+    # key for equality/majority/unanimous; null -> -1) + the raw-value->code map
+    # (col_maps, for conditional predicate lowering) + the text array (str form,
+    # for longest_value/most_complete tie-breaks).
+    #
+    # STRING columns (the FS hot path -- dedupe_df pre-casts every user column to
+    # Utf8) take the arrow-native route: pyarrow.compute.dictionary_encode does
+    # the factorization in C. It is BYTE-IDENTICAL to the Python reference
+    # _factorize_with_map -- pyarrow builds the dictionary in first-appearance
+    # order, so the codes match exactly, and nulls become the -1 sentinel via
+    # fill_null (verified across nulls / repeats / string-numerics). str(v) == v
+    # for strings, so `text` is the column itself. This drops the ~N*user_cols
+    # Python .to_list() + str() + dict-factorize (measured ~7-8s / 5M).
+    #
+    # NON-STRING columns (file-based dedupe with native dtypes) keep the exact
+    # Python str() formatting -- pyarrow's string cast diverges from Python str()
+    # for floats/bools/etc., so that path stays on the reference loop.
+    # col_maps (raw value -> code) is read ONLY by the conditional predicate
+    # lowering's _code_of (Stage 6); with no list-form field_rules there are no
+    # conditionals and it is never consulted. Building it means a Python dict of
+    # size = #distinct values -- ~N for high-cardinality columns (name/email),
+    # i.e. the same O(N) Python work dictionary_encode just moved into C. So build
+    # it ONLY when conditionals exist; otherwise skip and use the map-less factor.
+    _needs_col_maps = any(isinstance(e, list) for e in rules.field_rules.values())
+    import pyarrow.compute as _pc_fac
+
     from goldenmatch.core.bench import stage as _bench_stage
+    from goldenmatch.core.frame import is_polars_dataframe as _ipd_fac
+
+    # dictionary_encode is byte-identical to the reference _factorize_with_map
+    # ONLY for GENUINE string columns: a polars Object/mixed column (e.g. int 1
+    # and str "1" together) is coerced to string by .to_arrow() (both -> "1"),
+    # collapsing codes the reference keeps distinct (1 != "1") and flipping
+    # unanimous_or_null. Restrict the fast path to real Utf8 columns; everything
+    # else uses the EXACT reference path over `sdf.column(c).to_list()` (raw seam
+    # values, no arrow coercion). Arrow-frame string columns are always genuine
+    # (arrow has no object type; to_list == to_arrow there).
+    _pl_str_cols = None
+    if _ipd_fac(sdf.native):
+        import polars as _pl_fac
+
+        _pl_str_cols = {
+            _n for _n, _dt in sdf.native.schema.items() if _dt == _pl_fac.String
+        }
     with _bench_stage("golden_fused_factorize"):
         for c in user_cols:
-            values = sdf.column(c).to_list()
-            text = [None if v is None else str(v) for v in values]
-            codes, vmap = _factorize_with_map(values)
-            col_maps[c] = vmap
-            text_cols.append(pa.array(text, type=pa.string()))
-            code_cols.append(pa.array(codes, type=pa.int64()))
+            _arr = sdf.column(c).to_arrow()
+            if isinstance(_arr, pa.ChunkedArray):
+                # combine_chunks returns an Array on some pyarrow versions and a
+                # single-chunk ChunkedArray on others -- normalize to one Array.
+                _arr = _arr.combine_chunks()
+                if isinstance(_arr, pa.ChunkedArray):
+                    _arr = _arr.chunk(0) if _arr.num_chunks else pa.array([], type=_arr.type)
+            _genuine_str = (
+                pa.types.is_string(_arr.type) or pa.types.is_large_string(_arr.type)
+            ) and (_pl_str_cols is None or c in _pl_str_cols)
+            if _genuine_str:
+                _dic = _pc_fac.dictionary_encode(_arr)
+                if _needs_col_maps:
+                    col_maps[c] = {v: i for i, v in enumerate(_dic.dictionary.to_pylist())}
+                text_cols.append(_pc_fac.cast(_arr, pa.string()))
+                code_cols.append(_pc_fac.fill_null(_dic.indices.cast(pa.int64()), -1))
+            else:
+                values = sdf.column(c).to_list()
+                text = [None if v is None else str(v) for v in values]
+                if _needs_col_maps:
+                    codes, vmap = _factorize_with_map(values)
+                    col_maps[c] = vmap
+                else:
+                    codes = _factorize_codes(values)
+                text_cols.append(pa.array(text, type=pa.string()))
+                code_cols.append(pa.array(codes, type=pa.int64()))
 
     # ── Stage 2: source_priority + most_recent extra keys ────────────────────
     empty_i64 = pa.array([], type=pa.int64())
