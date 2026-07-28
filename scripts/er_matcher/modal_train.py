@@ -199,7 +199,16 @@ def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
     function argument.
     """
     qlora = config_name == "qlora-4bit"
-    train_full.with_options(gpu=gpu).remote(qlora=qlora)
+    fn = train_full
+    if gpu != GPU_FULL:
+        # runtime GPU retarget needs modal.Function.with_options (newer modal);
+        # fall back to the decorator's GPU_FULL when it's unavailable (modal 1.4.x).
+        if hasattr(fn, "with_options"):
+            fn = fn.with_options(gpu=gpu)
+        else:
+            print(f"[warn] runtime GPU override to {gpu!r} needs modal.with_options "
+                  f"(unavailable here); using decorator default {GPU_FULL!r}")
+    fn.remote(qlora=qlora)
     print("full run done -> `modal volume get er-matcher-out model/merged` "
           "(quantize + publish per plan §Phase 4)")
 
