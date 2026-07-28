@@ -539,24 +539,26 @@ def run_golden_fused_arrow(
     # Spec 4.3: within-cluster members must be __row_id__-ascending for the
     # kernel's first-occurrence tie-breaks to match the reference.
     sort_cols = ["__cluster_id__", "__row_id__"] if "__row_id__" in fr.columns else ["__cluster_id__"]
-    if _is_pl:
-        _sdf_native = fr.native.sort(sort_cols)
-        # Drop singletons (size <= 1), mirroring _multi_df_from_frames'
-        # size > 1 filter. The window filter preserves the sort order.
-        _sdf_native = _sdf_native.filter(pl.len().over("__cluster_id__") > 1)
-        sdf = to_frame(_sdf_native)
-    else:
-        sdf = fr.sort(sort_cols)
-        # Sorted input -> run_lengths gives per-cluster sizes in order; the
-        # repeated size>1 mask is the window filter's arrow twin.
-        _sizes = sdf.run_lengths("__cluster_id__")
-        if any(sz <= 1 for sz in _sizes):
-            import pyarrow as pa
+    from goldenmatch.core.bench import stage as _bench_stage
+    with _bench_stage("golden_fused_sort_filter"):
+        if _is_pl:
+            _sdf_native = fr.native.sort(sort_cols)
+            # Drop singletons (size <= 1), mirroring _multi_df_from_frames'
+            # size > 1 filter. The window filter preserves the sort order.
+            _sdf_native = _sdf_native.filter(pl.len().over("__cluster_id__") > 1)
+            sdf = to_frame(_sdf_native)
+        else:
+            sdf = fr.sort(sort_cols)
+            # Sorted input -> run_lengths gives per-cluster sizes in order; the
+            # repeated size>1 mask is the window filter's arrow twin.
+            _sizes = sdf.run_lengths("__cluster_id__")
+            if any(sz <= 1 for sz in _sizes):
+                import pyarrow as pa
 
-            _mask: list[bool] = []
-            for sz in _sizes:
-                _mask.extend([sz > 1] * sz)
-            sdf = to_frame(sdf.native.filter(pa.array(_mask)))
+                _mask: list[bool] = []
+                for sz in _sizes:
+                    _mask.extend([sz > 1] * sz)
+                sdf = to_frame(sdf.native.filter(pa.array(_mask)))
 
     user_cols = [c for c in sdf.columns if not _is_internal(c) and c != "__cluster_id__"]
 

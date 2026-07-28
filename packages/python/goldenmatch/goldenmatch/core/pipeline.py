@@ -4337,10 +4337,11 @@ def _run_dedupe_pipeline(
                 )
                 from goldenmatch.core.frame import to_frame as _tf_golden
 
-                _golden_source = _tf_golden(collected_df).select([
-                    c for c in _collected_frame.columns
-                    if not any(c.startswith(p) for p in _internal_prefixes)
-                ]).native
+                with stage("golden_slim_source"):
+                    _golden_source = _tf_golden(collected_df).select([
+                        c for c in _collected_frame.columns
+                        if not any(c.startswith(p) for p in _internal_prefixes)
+                    ]).native
             # Source per-cluster pair scores from the view so the slow builder's
             # confidence_majority survivorship weights by edge confidence instead
             # of degrading to count-majority (the frames-out cluster dict carries
@@ -4352,12 +4353,17 @@ def _run_dedupe_pipeline(
             )
             _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
             if not _frames_fast_eligible:
-                _psv = _pair_score_view()
-                if _psv is not None:
-                    _frames_pair_scores = {
-                        cid: {(a, b): s for (a, b, s) in edges}
-                        for cid, edges in _psv.iter_clusters()
-                    }
+                # Bench diagnostic: this builds a {cluster: {(a,b): score}} dict
+                # over every scored pair (~10.7M at 5M) -- but ONLY
+                # confidence_majority survivorship reads it; most_complete never
+                # does. Suspected bulk of the golden stage's unaccounted wall.
+                with stage("golden_pair_score_view_build"):
+                    _psv = _pair_score_view()
+                    if _psv is not None:
+                        _frames_pair_scores = {
+                            cid: {(a, b): s for (a, b, s) in edges}
+                            for cid, edges in _psv.iter_clusters()
+                        }
             # Fused-golden routing (spec 2026-07-09, default-on): try the Arrow-
             # native kernel on the SAME multi_df the classic from-frames builder
             # assembles internally (via _multi_df_from_frames), so a non-None
