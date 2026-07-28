@@ -51,8 +51,8 @@ def test_native_and_python_agree(monkeypatch: pytest.MonkeyPatch) -> None:
     assert py == nat
 
 
-def test_python_clusters_rapidfuzz_metric() -> None:
-    """The Python path scores candidate pairs with rapidfuzz's Levenshtein
+def test_python_clusters_levenshtein_metric() -> None:
+    """The Python path scores candidate pairs with goldenfuzz's Levenshtein
     (`1 - dist/maxlen`) -- the identical metric to the native kernel. Verify it
     groups near-duplicate variants and leaves distinct values apart."""
     from goldencheck.profilers.fuzzy_values import _python_clusters
@@ -70,10 +70,12 @@ def test_python_clusters_rapidfuzz_metric() -> None:
     assert all("Wonka" not in g for g in grouped)
 
 
-def test_rapidfuzz_ratio_matches_reference_levenshtein() -> None:
-    """Lock the metric: rapidfuzz's `1 - dist/maxlen` equals a plain DP
-    Levenshtein ratio, so clustering can't drift from the native kernel."""
-    from rapidfuzz.distance import Levenshtein as RL
+def test_levenshtein_ratio_matches_reference() -> None:
+    """Lock the metric against a self-owned reference: goldenfuzz's Levenshtein
+    normalized similarity equals a plain textbook DP `1 - dist/maxlen`, so
+    clustering can't drift from the native kernel. Correctness is pinned to the
+    algorithm (the DP below), not to any third-party library."""
+    import goldenfuzz
 
     def dp(a: str, b: str) -> int:
         prev = list(range(len(b) + 1))
@@ -87,4 +89,4 @@ def test_rapidfuzz_ratio_matches_reference_levenshtein() -> None:
     for a, b in [("acme corp", "acme corp."), ("globex inc", "globex incorporated"),
                  ("initech", "wonka"), ("", "x"), ("same", "same")]:
         m = max(len(a), len(b)) or 1
-        assert abs((1 - RL.distance(a, b) / m) - (1 - dp(a, b) / m)) < 1e-9
+        assert abs(goldenfuzz.levenshtein(a, b) - (1 - dp(a, b) / m)) < 1e-9

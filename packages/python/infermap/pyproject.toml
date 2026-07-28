@@ -20,7 +20,10 @@ classifiers = [
 ]
 dependencies = [
     "polars>=1.0",
-    "rapidfuzz>=3.0",
+    # Jaro-Winkler for the FuzzyNameScorer pure-Python fallback. goldenfuzz is our
+    # owned string-metric kernel (replaces the former rapidfuzz runtime dep). The
+    # native infermap-core kernel is the primary path; this backs the pure fallback.
+    "goldenfuzz>=0.1.0",
     "scipy>=1.11",
     "pyyaml>=6.0",
     "typer>=0.12",
