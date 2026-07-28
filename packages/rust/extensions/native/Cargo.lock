@@ -531,6 +531,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "goldenfuzz-core"
+version = "0.1.1"
+
+[[package]]
 name = "goldenmatch-autoconfig-core"
 version = "0.1.0"
 dependencies = [
@@ -607,6 +611,7 @@ version = "0.1.0"
 name = "goldenmatch-score-core"
 version = "0.1.0"
 dependencies = [
+ "goldenfuzz-core",
  "regex",
  "rustc-hash",
  "unicode-normalization",
