@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rapidfuzz import fuzz
+import goldenfuzz
 
 # Common column name aliases
 ALIASES: dict[str, list[str]] = {
@@ -39,6 +39,7 @@ def name_similarity(source: str, target: str) -> float:
     if s_canonical and t_canonical and s_canonical == t_canonical:
         return 0.95
 
-    # Fuzzy match using Jaro-Winkler
-    score = fuzz.WRatio(s_lower, t_lower) / 100.0
+    # Fuzzy match using a weighted composite ratio (goldenfuzz's owned WRatio,
+    # byte-identical to rapidfuzz's fuzz.WRatio -- no rapidfuzz at runtime).
+    score = goldenfuzz.WRatio(s_lower, t_lower) / 100.0
     return score
