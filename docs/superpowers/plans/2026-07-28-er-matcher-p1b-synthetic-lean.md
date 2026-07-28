@@ -110,6 +110,8 @@ def test_domains_declared():
     assert set(DOMAINS) == {"crm_contact", "organization", "business"}
     for d in DOMAINS.values():
         assert d.strong_id in d.fields          # strong id is one of the fields
+        assert d.name_field in d.fields         # name field (for negative blocking) is a field
+        assert d.name_field != d.strong_id      # name shared by hard negs, strong id differs
 
 def test_build_record_yields_all_fields():
     from vocab import Vocab
@@ -129,10 +131,10 @@ def test_build_record_deterministic():
 
 - [ ] **Step 2: Run -> FAIL.**
 
-- [ ] **Step 3: Implement `schemas.py`.** A small `Domain` dataclass `(fields: list[str], strong_id: str)`. `DOMAINS = {...}`:
-  - `crm_contact`: fields `["first","last","email","phone","company","title","street","city","state","zip"]`, strong_id `"email"`.
-  - `organization`: fields `["legal_name","dba","website_domain","ein","address"]`, strong_id `"ein"`.
-  - `business`: fields `["name","email","phone","city","state","website"]`, strong_id `"website"`.
+- [ ] **Step 3: Implement `schemas.py`.** A small `Domain` dataclass `(fields: list[str], strong_id: str, name_field: str)` (`name_field` = the name-bearing field hard negatives collide on; `strong_id` = the field that stays distinct, so a same-name pair with a different strong id is a true non-match). `DOMAINS = {...}`:
+  - `crm_contact`: fields `["first","last","email","phone","company","title","street","city","state","zip"]`, strong_id `"email"`, name_field `"last"`.
+  - `organization`: fields `["legal_name","dba","website_domain","ein","address"]`, strong_id `"ein"`, name_field `"legal_name"`.
+  - `business`: fields `["name","email","phone","city","state","website"]`, strong_id `"website"`, name_field `"name"`.
   `build_record(domain, vocab, rng) -> dict` composes a plausible record from `vocab` (e.g. email = `f"{first}.{last}@{company_slug}.com"`; phone = a seeded 10-digit; ein = seeded 9-digit; website/website_domain from company slug). Deterministic given rng. Keep helpers tiny and pure.
 
 - [ ] **Step 4: Run -> PASS.**  **Step 5: Commit** `feat(er-matcher): synthetic domain schemas (crm/org/business + strong-id)`.
@@ -201,7 +203,9 @@ def test_profiles_exist():
 from generate import SyntheticSource
 
 def _src(**kw):
-    return SyntheticSource(name="synthetic", seed=20260728, n_entities=60,
+    # n_entities kept generous so per-domain surname collisions (needed by the
+    # hard-negative test) reliably occur under Zipf-weighted census draws.
+    return SyntheticSource(name="synthetic", seed=20260728, n_entities=180,
                            profile="light", **kw)
 
 def test_deterministic_byte_identical():
@@ -249,7 +253,7 @@ def test_hard_negative_shares_name_but_conflicts_on_strong_id():
 
 - [ ] **Step 2: Run -> FAIL.**
 
-- [ ] **Step 3: Implement `SyntheticSource`.** Constructor `(name, seed, n_entities=..., profile="light", domain_weights=None, val_frac=0.15, test_frac=0.15)`. Build entities across the 3 domains (round-robin or weighted), each with a stable `eid` like `f"{domain}:{i}"`. For each entity: a base record (`build_record`) and >=1 corrupted duplicate (`corrupt_record`) -> positives = base vs dup (mirror febrl's star topology; positives are same-entity). Assign each entity to a split via `split_of(eid, seed=seed, val_frac=..., test_frac=...)`. Negatives per split via `synth_negatives(split_entities, block_keys=[<name field per domain>], hard_frac=0.5, seed=seed, n=n_positives)`, dropping same-entity sampled pairs (mirror febrl). Emit `Row`s with `source="synthetic"`, `dataset=name`, `domain=<entity domain>`, `eid_a/eid_b`. Implement `record_pools()` mirroring febrl (every record grouped by its entity's split; raw field dicts). Follow febrl's `_entities_and_splits` factoring to keep `splits()` and `record_pools()` leakage-consistent. NOTE negatives must be blocked/generated WITHIN a domain (a crm vs org "negative" is trivially non-matching and useless) - partition `synth_negatives` by domain (use its `partition_of=lambda eid: eid.split(":")[0]`).
+- [ ] **Step 3: Implement `SyntheticSource`.** Constructor `(name, seed, n_entities=..., profile="light", domain_weights=None, val_frac=0.15, test_frac=0.15)`. Build entities across the 3 domains (round-robin or weighted), each with a stable `eid` like `f"{domain}:{i}"`. For each entity: a base record (`build_record`) and >=1 corrupted duplicate (`corrupt_record`) -> positives = base vs dup (mirror febrl's star topology; positives are same-entity). Assign each entity to a split via `split_of(eid, seed=seed, val_frac=..., test_frac=...)`. **Negatives: call `synth_negatives` once PER DOMAIN per split**, with that domain's `DOMAINS[domain].name_field` as `block_keys` (so hard negatives genuinely collide on the name-bearing field for ALL three domains, not just one), `hard_frac=0.5`, `seed=seed`, `n=<that domain's positive count in the split>`; drop same-entity sampled pairs (mirror febrl). A single cross-domain `synth_negatives` call is WRONG here: the three domains use different name fields (`last`/`legal_name`/`name`), so one fixed `block_keys` would give empty keys (random, not hard negatives) for two of them. Emit `Row`s with `source="synthetic"`, `dataset=name`, `domain=<entity domain>`, `eid_a/eid_b`. Implement `record_pools()` mirroring febrl (every record grouped by its entity's split; raw field dicts). Follow febrl's `_entities_and_splits` factoring to keep `splits()` and `record_pools()` leakage-consistent.
 
 - [ ] **Step 4: Run -> PASS**, then the whole package: `uv run python -m pytest scripts/er_matcher/synthetic/ -q`.
 
@@ -263,9 +267,19 @@ def test_hard_negative_shares_name_but_conflicts_on_strong_id():
 
 - [ ] **Step 1: Read** `sources_config.py:137-142` (`_BUILDERS`) and an existing `sources.yaml` entry (e.g. `febrl`) to mirror the shape + how `seed`/config are threaded to the factory.
 
-- [ ] **Step 2: Add the `synthetic` entry to `sources.yaml`** (`loader: synthetic`, `mechanism: generate`, `domain: multi` or per-domain, plus `n_entities`, `profile`, `weight`). Match the field names the other entries + `SourceEntry` use.
+- [ ] **Step 2: Add the `synthetic` entry to `sources.yaml`.** Loader-specific args MUST nest under `kwargs:` (top-level unknown keys make `load_sources` raise via `_KNOWN_ENTRY_KEYS`). Mirror an existing entry's exact shape:
+```yaml
+synthetic:
+  loader: synthetic
+  mechanism: generate
+  domain: multi          # SyntheticSource sets a per-ROW domain internally; this is just the entry's required field
+  weight: 1.0            # illustrative (blend ratios deferred)
+  kwargs:
+    n_entities: 3000
+    profile: light
+```
 
-- [ ] **Step 3: Add the factory** to `_BUILDERS`: `"synthetic": lambda e, seed: SyntheticSource(name=e.name, seed=seed, n_entities=e.params.get("n_entities", ...), profile=e.params.get("profile","light"))` (adapt to the real `SourceEntry`/param plumbing you read in Step 1). Local import of `SyntheticSource` inside the factory or at module top per the file's convention (SyntheticSource is pure, so a top import is fine).
+- [ ] **Step 3: Add the factory** to `_BUILDERS`, matching the existing builders' `(e, seed) + **e.kwargs` style (the real `SourceEntry` exposes `.name` / `.domain` / `.kwargs` - there is NO `.params`): `"synthetic": lambda e, seed: SyntheticSource(name=e.name, seed=seed, **e.kwargs)`. `SyntheticSource.__init__`'s own defaults cover `n_entities`/`profile` when omitted. Do NOT forward `e.domain` (the source is multi-domain; domain is per-row). Top import of `SyntheticSource` is fine (it's pure).
 
 - [ ] **Step 4: Test wiring** (extend `test_sources_config.py` or add a small test): building the `synthetic` entry returns a `SyntheticSource` whose `.splits()` yields rows; and `isinstance(SyntheticSource(...), PairSource)` holds (it exposes `name` + `splits`). Run with the goldenmatch-shadow env (Task-header note) since `sources_config` imports the loaders.
 
