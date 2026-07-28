@@ -137,6 +137,29 @@ def measured_max_seq_len(
     return max(multiple_of, min(rounded, cap))
 
 
+# --- total-step estimate (pure) ------------------------------------------------
+def estimate_total_steps(
+    token_lengths: list[int], *, seq_len: int, per_device_batch: int,
+    grad_accum: int, epochs: float,
+) -> int:
+    """Measured (packing-aware) total optimizer-step estimate for ``epochs``
+    over ``token_lengths`` (the SAME per-row serialized-pair token lengths fed
+    to ``measured_max_seq_len``).
+
+    NOT a rows/batch calculation -- packing concatenates variable-length rows
+    into fixed-``seq_len`` packed sequences, so the number of packed sequences
+    (and thus steps) is ``sum(token_lengths) / seq_len``, not ``len(rows) /
+    batch``. Deliberately avoids depending on trl's packed dataloader object
+    (``SFTTrainer.get_train_dataloader()`` raises ``TypeError`` on a packed
+    run -- it's a lengthless ``IterableDataset`` -- so this stays a pure,
+    torch-free estimate computable straight from the token-length list).
+    Floors both the packed-sequence count and steps-per-epoch at 1 so a tiny
+    slice/corpus never estimates zero steps. Pure -- unit-tested."""
+    packed = max(1, math.ceil(sum(token_lengths) / seq_len))
+    steps_per_epoch = max(1, math.ceil(packed / (per_device_batch * grad_accum)))
+    return int(steps_per_epoch * epochs)
+
+
 # --- chat-target construction (pure) -----------------------------------------
 def example_to_messages(row: dict[str, Any], cfg: TrainConfig) -> list[dict[str, str]]:
     """Turn a gen_pairs JSONL row ({a, b, label}) into the full chat sequence:
@@ -191,6 +214,19 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+# --- CLI overrides (pure) ------------------------------------------------------
+def apply_overrides(cfg: TrainConfig, args: Any) -> TrainConfig:
+    """Apply CLI overrides onto a loaded ``TrainConfig``, re-validating if
+    anything changed. Currently just ``--qlora-4bit/--no-qlora-4bit``
+    (``args.qlora_4bit`` is ``None`` when neither flag was passed, meaning
+    "use config.yaml's value" -- only an explicit True/False overrides it).
+    Pure, box-safe -- unit-tested without a GPU (test_train_qlora_override.py)."""
+    if args.qlora_4bit is not None:
+        cfg.qlora_4bit = args.qlora_4bit
+        cfg.validate()
+    return cfg
+
+
 # --- training entrypoint (lazy heavy deps) -----------------------------------
 def main(argv: Iterable[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="LoRA SFT the OSS ER-matcher (Qwen2.5-3B).")
@@ -202,17 +238,26 @@ def main(argv: Iterable[str] | None = None) -> int:
     ap.add_argument("--smoke-steps", type=int, default=200)
     ap.add_argument("--smoke-rows", type=int, default=4000)
     ap.add_argument("--metrics-out", type=Path, default=None)
+    ap.add_argument("--sweep", action="store_true",
+                    help="SP2 Task 6: run the learning-curve sweep (10/25/50/100%% data "
+                         "slices, args.smoke_steps each) instead of a single training run")
+    ap.add_argument("--qlora-4bit", action=argparse.BooleanOptionalAction, default=None,
+                    help="override config.yaml's qlora_4bit (--qlora-4bit / --no-qlora-4bit); "
+                         "default None = use config.yaml's value")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     cfg = load_config(args.config)
+    cfg = apply_overrides(cfg, args)
     # Heavy deps live in the sibling runtime module, imported here ONLY -- CPU
     # import of THIS module (for the pure helpers + tests) stays clean. The
     # script dir is on sys.path when run as `python scripts/er_matcher/train.py`
     # or from modal_train.py's mounted copy.
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from _train_runtime import run_training  # type: ignore[import-not-found]
+    from _train_runtime import run_sweep, run_training  # type: ignore[import-not-found]
 
+    if args.sweep:
+        return run_sweep(cfg, args)
     return run_training(cfg, args)
 
 

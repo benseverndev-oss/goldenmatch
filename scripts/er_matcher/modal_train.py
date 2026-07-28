@@ -31,6 +31,11 @@ import modal  # noqa: I001 -- only ever run via `modal run`, never imported else
 
 APP_NAME = "goldenmatch-er-matcher-train"
 GPU_SMOKE = "A10G"     # cheapest adequate; the smoke run confirms/updates the tier
+GPU_SWEEP = "A100-40GB"  # the benchmark sweep runs here: a 3B model is slow on A10G
+                         # (~7.2 s/step); A100 is ~2.5x faster AND ~same cost (per-second
+                         # billing), so the ~40-min benchmark is faster + cheaper than A10G.
+                         # Full run also uses A100-40GB so step-time extrapolation is
+                         # consistent; the cheapest-tier-that-fits is reported as advisory.
 GPU_FULL = "A100-40GB"  # right-sized from the P3a peak-mem measurement
 
 # Pin the training stack; flash-attn built against the torch/CUDA in the image.
@@ -87,13 +92,36 @@ def train_smoke(smoke_steps: int = 200, smoke_rows: int = 4000) -> None:
 
 @app.function(
     image=_image,
+    gpu=GPU_SWEEP,
+    timeout=2 * 60 * 60,
+    volumes={"/out": _out_vol},
+    secrets=[modal.Secret.from_name("er-matcher-hf")],
+)
+def train_sweep(qlora: bool) -> None:
+    """Smoke-scale sweep for one quantization variant (config-matrix benchmark)."""
+    name = "qlora-4bit" if qlora else "bf16-lora"
+    _run([
+        "--sweep",
+        "--qlora-4bit" if qlora else "--no-qlora-4bit",
+        "--smoke-steps", "200",
+        "--smoke-rows", "4000",
+        "--metrics-out", f"/out/sweep_metrics_{name}.json",
+        "--out-dir", "/out/sweep",
+    ])
+
+
+@app.function(
+    image=_image,
     gpu=GPU_FULL,
     timeout=6 * 60 * 60,
     volumes={"/out": _out_vol},
     secrets=[modal.Secret.from_name("er-matcher-hf")],
 )
-def train_full() -> None:
-    _run(["--out-dir", "/out/model"])
+def train_full(qlora: bool = False) -> None:
+    _run([
+        "--qlora-4bit" if qlora else "--no-qlora-4bit",
+        "--out-dir", "/out/model",
+    ])
 
 
 def _run(extra_argv: list[str]) -> None:
@@ -125,3 +153,44 @@ def main(smoke: bool = False, smoke_steps: int = 200, smoke_rows: int = 4000) ->
         train_full.remote()
         print("full run done -> `modal volume get er-matcher-out model/merged` "
               "(quantize + publish per plan §Phase 4)")
+
+
+@app.local_entrypoint()
+def benchmark() -> None:
+    """Run the bf16-lora vs qlora-4bit smoke sweep for both config-matrix variants.
+
+    `config_matrix` runs locally (this entrypoint executes on the laptop, not
+    in the container), so put the script dir on sys.path before importing it.
+    """
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(__file__))
+    import config_matrix
+
+    # spawn() (non-blocking) so BOTH variants run in PARALLEL and both survive
+    # `--detach` after the local orchestrator disconnects -- unlike blocking
+    # remote() calls, which run sequentially and leave the not-yet-triggered
+    # variant unlaunched if the parent process dies mid-sweep.
+    handles = []
+    for name, cfg in config_matrix.expand_configs({"qlora_4bit": False}):
+        print(f"spawning sweep: {name}")
+        handles.append(train_sweep.spawn(qlora=cfg["qlora_4bit"]))
+
+    print(f"both sweeps spawned (parallel, detached): {[h.object_id for h in handles]}")
+    print("when both finish -> `modal volume get er-matcher-out 'sweep_metrics_*.json' <dir>`"
+          " -> `python scripts/er_matcher/run_benchmark.py --sweep-dir <dir>`")
+
+
+@app.local_entrypoint()
+def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
+    """Full training run, targeting a human-picked GPU tier for the chosen config.
+
+    `gpu=...` is fixed at `@app.function` decoration time, so retargeting the
+    tier at run time goes through `.with_options(gpu=...)` instead of a
+    function argument.
+    """
+    qlora = config_name == "qlora-4bit"
+    train_full.with_options(gpu=gpu).remote(qlora=qlora)
+    print("full run done -> `modal volume get er-matcher-out model/merged` "
+          "(quantize + publish per plan §Phase 4)")
