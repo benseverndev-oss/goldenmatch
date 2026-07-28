@@ -6,9 +6,11 @@ bit-parallel `score-core::strsim`).
 as of the single-word fast path (#2212), *beat* rapidfuzz per-pair on the
 ER-common case (short strings), byte-identically. The differentiator for a
 standalone product is **portability + provable cross-surface identity + domain
-comparators**, not raw speed. Extract a named `goldenfuzz-core` crate now (cheap,
-good hygiene); publish externally only once we commit to closing the two real
-gaps (SIMD-batch `cdist`; a `process.extract`-style API).
+comparators**, and now speed too. The `goldenfuzz-core` crate is extracted and
+carries the full API (per-pair scorers + `process.extract` / `cdist` /
+`BatchComparator`); the only remaining perf gap is rapidfuzz's SIMD scan on batch
+levenshtein/indel. Publishing externally is now a packaging decision, not a
+capability blocker.
 
 ---
 
@@ -81,21 +83,19 @@ array-jaccard / cosine.
 |-----------------------------------|:----------:|:---------:|
 | jaro-winkler / lev / indel / damerau | yes (byte-identical) | yes |
 | token-sort / q-gram               | yes        | yes       |
-| **SIMD-batch `cdist`** (one-vs-many) | **no**  | yes (the long-string win) |
-| **`process.extract` / top-k API** | **no**     | yes       |
-| `score_cutoff` early-exit pruning | partial    | yes       |
+| `process.extract` / `cdist` / top-k | **yes** (amortised query peq) | yes |
+| `score_cutoff` filtering          | yes        | yes       |
+| **SIMD-batch scan** (batch lev/indel) | **no**  | yes (its last batch win) |
 | cross-surface (Py/JS/SQL/wasm)    | **yes**    | no        |
 | no-native-dep fallback            | **yes**    | no        |
 | domain comparators (date/geo/...) | **yes**    | no        |
 
-Gaps for an external "beats rapidfuzz everywhere" claim, in priority order:
-1. **Multiword allocation-free peq** (measured lever) — the per-pair long-string
-   gap is the HashMap peq (16.4us of 50us). Extend the byte/Latin-1 flat peq to
-   the multiword tier (no HashMap, no `Vec<char>`). Tractable; likely closes the
-   scalar document gap outright.
-2. **`process.extract` / top-k** — the ergonomic one-vs-many entry everyone uses.
-3. **SIMD-batch `cdist`** — a *separate* one-vs-many amortisation + SIMD-lane
-   axis. Hardest; only needed to beat rapidfuzz's batch path, not its scalar one.
+Only remaining gap for "beats rapidfuzz everywhere": the **SIMD scan** — rapidfuzz
+still wins *batch* levenshtein/indel on documents (~1.3-1.6x) via SIMD lanes in
+the DP scan itself. Everything else (per-pair short + document jaro/lev, the
+amortised batch, top-k) is byte-identical and competitive-or-faster. SIMD is a
+separate, block-based effort; optional for the "portability + identity + domain +
+faster-on-the-common-case" pitch.
 
 ## 5. Roadmap + decision gates
 
@@ -106,13 +106,14 @@ Gaps for an external "beats rapidfuzz everywhere" claim, in priority order:
   name without committing to publish.
 - **Done: multiword allocation-free (flat) peq.** Replaced the 16.4us HashMap
   peq; document jaro/levenshtein now beat/match rapidfuzz, byte-identically.
-  Remaining per-pair gap is document-indel (1.61x, scan-bound → SIMD).
-- **Gate to publish externally** (PyPI + npm + crates.io): only after a
-  `process.extract` / top-k API exists (SIMD-batch `cdist` and the document-indel
-  scan are optional — needed only to beat rapidfuzz's *batch* path / last scalar
-  gap). Until then a public "rapidfuzz alternative" lacking top-k is not
-  compelling. The pitch: *portability + provable identity + domain-awareness +
-  now genuinely faster on the ER-common case*.
+- **Done: `process.extract` / `cdist` / `BatchComparator` + `Scorer`.** The
+  ergonomic one-vs-many + top-k API, query peq built once; byte-identical, short
+  ~parity and documents beat/parity rapidfuzz except the SIMD scan.
+- **Publish gate met** for the intended pitch. Remaining before a public "beats
+  rapidfuzz everywhere" claim: the SIMD scan (optional) and the packaging work
+  (PyPI + npm + crates.io: semver, docs, benchmarks, issue triage) — a decision,
+  not a blocker. The pitch: *portability + provable identity + domain-awareness +
+  faster on the ER-common case*.
 - **Not now:** a Python `goldenfuzz` wheel is a separate packaging/publish/triage
   burden on top of the 7-package suite. The internal crate keeps the option open
   at ~zero cost.
@@ -122,9 +123,9 @@ Gaps for an external "beats rapidfuzz everywhere" claim, in priority order:
 - Crate extraction: ~1 focused PR, mechanical, low risk (pure move + re-export).
 - Multiword allocation-free peq: ~1 PR, same technique as the short path,
   byte-identical; measured to remove the dominant long-string cost.
-- `process.extract`: moderate; mostly API + `score_cutoff` plumbing.
-- SIMD-batch `cdist`: real work (block-based bit-parallel across lanes), the
-  hardest item; needed only for the external "beat the batch path too" claim.
+- `process.extract` / `cdist` / `BatchComparator`: DONE.
+- SIMD scan: real work (block-based bit-parallel across lanes), the hardest item;
+  needed only to beat rapidfuzz's batch levenshtein/indel on documents.
 - Publishing: not a code problem — semver, docs, benchmarks, issue triage.
 
 The honest summary: goldenfuzz is already a *better fit* than rapidfuzz for the
