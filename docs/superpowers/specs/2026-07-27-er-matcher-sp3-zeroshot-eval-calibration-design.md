@@ -43,7 +43,8 @@ eval set: **Walmart-Amazon** (primary) and **Beer** (small/fast) — both
 DeepMatcher/Magellan datasets (cite-only, **fetch-at-build, eval-only, never
 bundled**), which `MagellanSource` already parses. These are structurally
 similar (2-table product matching) but never in training → a clean zero-shot
-generalization claim. Fetched behind `GOLDENMATCH_ALLOW_FETCH` via `fetch_data.py`.
+generalization claim. Fetched behind `GOLDENMATCH_ALLOW_FETCH` via
+`MagellanSource.fetch()` (see §Components).
 
 ### 2. Logit-based confidence (the calibratable probability)
 
@@ -95,9 +96,9 @@ verdict). Pull + report the citable scorecard.
 
 - `scripts/er_matcher/calibration.py` — **create**: pure `fit_temperature`,
   `apply_temperature`, ECE helpers (box-safe, tested).
-- `scripts/er_matcher/eval.py` — **modify**: allow a logit-derived confidence path
-  in scoring (or a `matcher` that returns a real P(match)); wire `evaluate_gate`
-  inputs. Keep the pure metrics pure.
+- `scripts/er_matcher/eval.py` — **modify**: support a matcher whose `confidence`
+  is the logit-derived **P(predicted class)** (per §2 — NOT raw P(match)); wire
+  `evaluate_gate` inputs. Keep the pure metrics pure.
 - `scripts/er_matcher/sources/magellan.py` — **modify**: implement the existing
   `MagellanSource.fetch()` stub (the `TODO(#magellan-fetch)` + `_DEEPMATCHER_BASE_URL`)
   to download the unseen DeepMatcher datasets (Walmart-Amazon, Beer) behind
@@ -128,7 +129,7 @@ trainer).
 - **Logit extraction mechanics:** getting the exact verdict-boolean token position
   under the chat template + tokenizer needs care (which token = "match"). Verified
   on the first real run (watch: P(match) should separate matches from non-matches).
-- **Calibration slice:** temperature is fit on a held-out slice of the SAME unseen
-  benchmark (or a mix) — must be disjoint from the scored pairs to avoid optimism.
+- **Calibration slice:** temperature is fit on the Magellan `valid` split and the
+  F1/ECE are scored on `test` (§3) — disjoint by construction, leakage-free.
 - **Zero-shot numbers will be LOWER** than the 0.98 in-distribution number — that's
   the point (honest generalization), not a regression.
