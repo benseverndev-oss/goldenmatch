@@ -127,7 +127,6 @@ def test_result_as_dict_serializable():
 
 def test_retrieve_similar_fuzzy_ranks_lexically():
     import polars as pl
-
     from goldenmatch.core.retrieval import retrieve_similar_fuzzy
 
     df = pl.DataFrame(
@@ -179,7 +178,6 @@ def test_retrieve_similar_fuzzy_fallback_matches_goldenfuzz():
 
 def test_retrieve_similar_fuzzy_bad_scorer():
     import polars as pl
-
     from goldenmatch.core.retrieval import retrieve_similar_fuzzy
 
     with pytest.raises(ValueError):
