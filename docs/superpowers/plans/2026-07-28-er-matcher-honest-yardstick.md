@@ -435,7 +435,7 @@ def _make_candidates(records: list[dict], blocking_cfg):
 
 - [ ] **Step 2b: Verify the score is in [0,1] AND separates** (spec risk: garbage-in). After building the scorer for one split, assert every score is within `[0,1]`, then score ~200 known-match and ~200 known-non-match pairs and print `mean(score|match)` vs `mean(score|non-match)`. If scores fall outside `[0,1]`, or the means don't separate, STOP and surface — the config/EM fit is wrong and soft targets built on it would be garbage (use the Step 1 fallback or fix the config before proceeding).
 
-- [ ] **Step 3: Call `fs_enrich.enrich` per split** in `build_corpus.py`, threading the cache. Get the per-split record pool from the source's new `record_pools()` (Task 1 Step 6b): `pools = source.record_pools()`. For each split, build the scorer over that split's pool and enrich that split's pairs:
+- [ ] **Step 3: Call `fs_enrich.enrich` per split** in `build_corpus.py`, threading the cache. Get the per-split record pools defensively (Task 1 Step 6b) via `getattr(source, "record_pools", lambda: {})()` — `{}` for sources without it (magellan/ncvr), so they are skipped, not crashed on. Fit the scorer once on the train pool and enrich each split's pairs:
 
 ```python
 pools = getattr(source, "record_pools", lambda: {})()   # {} for magellan/ncvr -> no mining
