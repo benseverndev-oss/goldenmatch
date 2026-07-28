@@ -159,6 +159,162 @@ fn jaro_calculate_similarity(p_len: usize, t_len: usize, common: usize, mut tran
     sim / 3.0
 }
 
+// ---------------------------------------------------------------------------
+// Single-word fast path (patterns <= 64 codepoints, Latin-1)
+// ---------------------------------------------------------------------------
+//
+// The multiword path heap-allocates a HashMap peq + limb vectors PER CALL, which
+// dominates on short fields (names / addresses / dates): ~20x the actual
+// bit-parallel work, and measurably SLOWER than the naive two-row DP it replaced
+// on that regime. Almost every ER field is <= 64 codepoints and Latin-1, so a
+// stack `[u64; 256]` position bitmap + a single u64 DP register cover it with
+// ZERO heap -- the scalar scorer then beats rapidfuzz on the common case. Longer
+// or non-Latin-1 (CJK / emoji) patterns fall through to the multiword path.
+// Byte-identical to it (fuzzed vs the multiword + rapidfuzz oracle to the exact
+// 64-codepoint boundary).
+
+const SW_MAX: usize = 64;
+
+/// Stack position-bitmap for a pattern of <= 64 Latin-1 codepoints. `None` when
+/// the pattern is too long or holds a codepoint >= 256 (multiword handles those).
+#[inline]
+fn sw_peq(pat: &[char]) -> Option<[u64; 256]> {
+    if pat.len() > SW_MAX {
+        return None;
+    }
+    let mut peq = [0u64; 256];
+    for (i, &c) in pat.iter().enumerate() {
+        let ci = c as u32;
+        if ci >= 256 {
+            return None;
+        }
+        peq[ci as usize] |= 1u64 << i;
+    }
+    Some(peq)
+}
+
+#[inline]
+fn sw_get(peq: &[u64; 256], c: char) -> u64 {
+    let ci = c as u32;
+    if ci < 256 {
+        peq[ci as usize]
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn sw_mask(m: usize) -> u64 {
+    if m >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << m) - 1
+    }
+}
+
+/// ASCII position bitmap (`[u64; 128]`, half the `char` tier's 2 KiB, and no
+/// `Vec<char>` at the call site). Caller guarantees `pat` is ASCII and
+/// `pat.len() <= 64`; the `& 0x7f` keeps the index in range defensively.
+#[inline]
+fn byte_peq(pat: &[u8]) -> [u64; 128] {
+    let mut peq = [0u64; 128];
+    for (i, &c) in pat.iter().enumerate() {
+        peq[(c & 0x7f) as usize] |= 1u64 << i;
+    }
+    peq
+}
+
+/// Single-word Allison-Dix LCS. Caller guarantees `s1.len() <= 64`. Generic over
+/// the symbol type so both the `char` (Latin-1, `[u64; 256]` peq) and the `u8`
+/// (ASCII, `[u64; 128]` peq) tiers share one monomorphised body; `get` is the
+/// position-bitmap lookup, inlined to a single bounds-checked array index.
+fn lcs_length_sw<T: Copy>(s1: &[T], s2: &[T], get: impl Fn(T) -> u64) -> usize {
+    let m = s1.len();
+    let mask = sw_mask(m);
+    let mut v = mask;
+    for &c in s2 {
+        let p = get(c);
+        let u = v & p;
+        v = (v.wrapping_add(u) & mask) | (v - u);
+    }
+    m - (v & mask).count_ones() as usize
+}
+
+/// Single-word Myers Levenshtein. Caller guarantees `1 <= s1.len() <= 64`.
+fn levenshtein_distance_sw<T: Copy>(s1: &[T], s2: &[T], get: impl Fn(T) -> u64) -> usize {
+    let m = s1.len();
+    let mask = sw_mask(m);
+    let top = 1u64 << (m - 1);
+    let mut pv = mask;
+    let mut mv = 0u64;
+    let mut score = m;
+    for &c in s2 {
+        let eq = get(c);
+        let xv = eq | mv;
+        let xh = ((((eq & pv).wrapping_add(pv)) ^ pv) | eq) & mask;
+        let ph = (mv | !(xh | pv)) & mask;
+        let mh = pv & xh;
+        if ph & top != 0 {
+            score += 1;
+        } else if mh & top != 0 {
+            score -= 1;
+        }
+        let ph = ((ph << 1) | 1) & mask;
+        let mh = (mh << 1) & mask;
+        pv = (mh | !(xv | ph)) & mask;
+        mv = ph & xv;
+    }
+    score
+}
+
+/// Single-word FlaggedChars Jaro. Caller guarantees `s1.len() <= 64` (and, via
+/// the `len1 == 1 && len2 == 1` short-circuit in the dispatcher, `len2 >= 2` when
+/// `len1 == 1`). Same match/transposition order as the multiword path.
+fn jaro_similarity_sw<T: Copy + PartialEq>(s1: &[T], s2: &[T], get: impl Fn(T) -> u64) -> f64 {
+    let len1 = s1.len();
+    let len2 = s2.len();
+    let bound = std::cmp::max(len1, len2) / 2 - 1;
+    let mut p_flag = 0u64;
+    // Matched TEXT positions in ascending j order. The TEXT (s2) may be longer
+    // than 64, so a u64 position bitmask would overflow; there are at most
+    // `common <= len1 <= 64` matches, so a fixed stack array holds them.
+    let mut t_pos = [0usize; SW_MAX];
+    let mut nt = 0usize;
+    let hi_max = len1 - 1;
+    for (j, &cj) in s2.iter().enumerate() {
+        let lo = j.saturating_sub(bound);
+        let hi = std::cmp::min(j + bound, hi_max);
+        if lo > hi {
+            continue;
+        }
+        let window = (((1u128 << (hi + 1)) - 1) ^ ((1u128 << lo) - 1)) as u64;
+        let cand = get(cj) & window & !p_flag;
+        if cand != 0 {
+            p_flag |= cand & cand.wrapping_neg(); // blsi: lowest set bit
+            t_pos[nt] = j;
+            nt += 1;
+        }
+    }
+    let common = p_flag.count_ones() as usize;
+    if common == 0 {
+        return 0.0;
+    }
+    // Pair the k-th flagged pattern char (ascending) with the k-th matched text
+    // char (ascending j order); count positional disagreements.
+    let mut transposition = 0usize;
+    let mut pf = p_flag;
+    let mut k = 0usize;
+    while pf != 0 {
+        let i = pf.trailing_zeros() as usize;
+        if s1[i] != s2[t_pos[k]] {
+            transposition += 1;
+        }
+        pf &= pf - 1;
+        k += 1;
+    }
+    jaro_calculate_similarity(len1, len2, common, transposition)
+}
+
 /// Jaro similarity on `[0, 1]`, matching `rapidfuzz::distance::jaro` at
 /// `score_cutoff = 0.0`. `s1`/`s2` are codepoint slices.
 fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
@@ -174,6 +330,13 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
     }
     if len1 == 1 && len2 == 1 {
         return if s1[0] == s2[0] { 1.0 } else { 0.0 };
+    }
+
+    // Single-word fast path for a <= 64-codepoint Latin-1 pattern (accented
+    // names etc.; pure ASCII already took the byte tier in jaro_winkler).
+    // Byte-identical to the multiword path below.
+    if let Some(peq) = sw_peq(s1) {
+        return jaro_similarity_sw(s1, s2, |c: char| sw_get(&peq, c));
     }
 
     // rapidfuzz bound = max(len1, len2) / 2 - 1 (both >= 1 here, so >= 0).
@@ -235,14 +398,26 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
 /// `rapidfuzz::distance::jaro_winkler::normalized_similarity` with the default
 /// `prefix_weight = 0.1`. Operates on Unicode codepoints.
 pub fn jaro_winkler(a: &str, b: &str) -> f64 {
+    // ASCII single-word fast path (the common ER field): work on the byte slices
+    // directly -- no `Vec<char>`, a 1 KiB stack peq -- so this beats rapidfuzz on
+    // short names/addresses. len 0/1 (and the `1,1` jaro edge) route to the char
+    // path, which owns the edge cases; a >= 2 keeps the jaro `bound` non-negative.
+    if a.is_ascii() && b.is_ascii() && (2..=SW_MAX).contains(&a.len()) {
+        let ab = a.as_bytes();
+        let bb = b.as_bytes();
+        let peq = byte_peq(ab);
+        let jaro = jaro_similarity_sw(ab, bb, |x: u8| peq[(x & 0x7f) as usize]);
+        return jaro_winkler_combine(ab, bb, jaro);
+    }
     let s1: Vec<char> = a.chars().collect();
     let s2: Vec<char> = b.chars().collect();
     jaro_winkler_chars(&s1, &s2)
 }
 
-/// Slice form (lets `score_one`/callers avoid re-collecting when they already
-/// hold `Vec<char>`). `prefix_weight` fixed at rapidfuzz's default 0.1.
-pub fn jaro_winkler_chars(s1: &[char], s2: &[char]) -> f64 {
+/// Jaro-Winkler prefix boost + `Metricf64` round-trip, shared by the char and
+/// byte tiers. `jaro` is the raw Jaro similarity of the same two slices.
+#[inline]
+fn jaro_winkler_combine<T: PartialEq>(s1: &[T], s2: &[T], jaro: f64) -> f64 {
     const PREFIX_WEIGHT: f64 = 0.1;
     // Common prefix, capped at 4 (rapidfuzz `.take(4).take_while(eq)`).
     let mut prefix = 0usize;
@@ -253,20 +428,22 @@ pub fn jaro_winkler_chars(s1: &[char], s2: &[char]) -> f64 {
             break;
         }
     }
-    // score_cutoff = 0.0 on the normalized_similarity path, so the jaro cutoff
-    // adjustment (only fires when cutoff > 0.7) is a no-op and omitted.
-    let mut sim = jaro_similarity(s1, s2);
+    let mut sim = jaro;
     if sim > 0.7 {
         sim += prefix as f64 * PREFIX_WEIGHT * (1.0 - sim);
     }
-    // jaro_winkler is a `Metricf64` SIMILARITY metric with `maximum == 1.0`, so
-    // rapidfuzz's `normalized_similarity` returns it as `1.0 - normalized_distance`
-    // = `1.0 - (1.0 - sim)` (division by the 1.0 maximum is exact). That double
-    // round-trip shifts the last ULP vs the raw `sim`; replicating it is required
-    // for byte-identical output (proven by the parity test). The integer metrics
-    // (levenshtein/indel) have no such round-trip — their `1.0 - dist/maximum` is
-    // already the final form.
+    // jaro_winkler is a `Metricf64` similarity metric with `maximum == 1.0`, so
+    // the normalized round-trip is `1.0 - (1.0 - sim)` (see the parity note).
     1.0 - (1.0 - sim)
+}
+
+/// Slice form (lets `score_one`/callers avoid re-collecting when they already
+/// hold `Vec<char>`). `prefix_weight` fixed at rapidfuzz's default 0.1.
+pub fn jaro_winkler_chars(s1: &[char], s2: &[char]) -> f64 {
+    // score_cutoff = 0.0 on the normalized_similarity path, so the jaro cutoff
+    // adjustment (only fires when cutoff > 0.7) is a no-op and omitted. The
+    // prefix boost + Metricf64 round-trip are shared with the byte tier.
+    jaro_winkler_combine(s1, s2, jaro_similarity(s1, s2))
 }
 
 // ---------------------------------------------------------------------------
@@ -337,13 +514,26 @@ pub fn levenshtein_distance<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
 /// `rapidfuzz::distance::levenshtein::normalized_similarity`:
 /// `1.0 - dist / max(len1, len2)` (`maximum == 0 -> 0` distance -> 1.0 sim).
 pub fn levenshtein_normalized_similarity(a: &str, b: &str) -> f64 {
+    // ASCII single-word fast path (no Vec<char>, 1 KiB stack peq).
+    if a.is_ascii() && b.is_ascii() && (1..=SW_MAX).contains(&a.len()) {
+        let ab = a.as_bytes();
+        let bb = b.as_bytes();
+        let maximum = std::cmp::max(ab.len(), bb.len());
+        let peq = byte_peq(ab);
+        let dist = levenshtein_distance_sw(ab, bb, |x: u8| peq[(x & 0x7f) as usize]);
+        return 1.0 - (dist as f64 / maximum as f64);
+    }
     let s1: Vec<char> = a.chars().collect();
     let s2: Vec<char> = b.chars().collect();
     let maximum = std::cmp::max(s1.len(), s2.len());
     if maximum == 0 {
         return 1.0;
     }
-    let dist = levenshtein_distance(&s1, &s2);
+    // Latin-1 char tier for accented short patterns; else multiword.
+    let dist = match sw_peq(&s1) {
+        Some(peq) if !s1.is_empty() => levenshtein_distance_sw(&s1, &s2, |c: char| sw_get(&peq, c)),
+        _ => levenshtein_distance(&s1, &s2),
+    };
     1.0 - (dist as f64 / maximum as f64)
 }
 
@@ -391,13 +581,30 @@ fn lcs_length<T: Eq + Hash>(a: &[T], b: &[T]) -> usize {
 /// indel distance `= len1 + len2 - 2*lcs`, maximum `= len1 + len2`,
 /// `sim = 1.0 - dist / maximum` (`maximum == 0 -> 1.0`).
 pub fn indel_ratio(a: &str, b: &str) -> f64 {
+    // ASCII single-word fast path (no Vec<char>, 1 KiB stack peq). lcs_length_sw
+    // is safe for an empty side (returns 0), so `a.len()` may be 0..=64 here.
+    if a.is_ascii() && b.is_ascii() && a.len() <= SW_MAX {
+        let ab = a.as_bytes();
+        let bb = b.as_bytes();
+        let maximum = ab.len() + bb.len();
+        if maximum == 0 {
+            return 1.0;
+        }
+        let peq = byte_peq(ab);
+        let lcs = lcs_length_sw(ab, bb, |x: u8| peq[(x & 0x7f) as usize]);
+        return 1.0 - ((maximum - 2 * lcs) as f64 / maximum as f64);
+    }
     let s1: Vec<char> = a.chars().collect();
     let s2: Vec<char> = b.chars().collect();
     let maximum = s1.len() + s2.len();
     if maximum == 0 {
         return 1.0;
     }
-    let lcs = lcs_length(&s1, &s2);
+    // Latin-1 char tier for accented short patterns; else multiword.
+    let lcs = match sw_peq(&s1) {
+        Some(peq) => lcs_length_sw(&s1, &s2, |c: char| sw_get(&peq, c)),
+        None => lcs_length(&s1, &s2),
+    };
     let dist = maximum - 2 * lcs;
     1.0 - (dist as f64 / maximum as f64)
 }
@@ -534,6 +741,54 @@ mod tests {
             let ml = [40usize, 64, 65, 100, 128, 130, 200][(next(&mut rng) as usize) % 7];
             let a = gen(&mut rng, ml);
             let b = gen(&mut rng, ml);
+            check_pair(&a, &b);
+        }
+    }
+
+    #[test]
+    fn fast_path_short_pattern_long_text_and_fallback() {
+        // The single-word fast path gates on the PATTERN (<=64), but the TEXT can
+        // be arbitrarily long -> exercise short-pattern / long-text pairs (the
+        // regime the equal-length corpus never hits), plus non-Latin-1 codepoints
+        // that must fall through to the multiword path. All vs the rapidfuzz oracle.
+        let mut rng: u64 = 0x5EED_F00D_1234;
+        for _ in 0..20_000 {
+            let a = gen(&mut rng, 64); // pattern: 0..=64 (single-word regime)
+            let b = gen(&mut rng, 300); // text: 0..=300 (spills far past 64)
+            check_pair(&a, &b);
+        }
+        // Non-Latin-1 (codepoint >= 256) forces sw_peq -> None -> multiword.
+        let uni = ["日本語abc", "Ωμέγα x", "naïve 日", "abc日def", "Ω", "café日"];
+        for a in uni {
+            for b in uni {
+                check_pair(a, b);
+                assert!(sw_peq(&a.chars().collect::<Vec<_>>()).is_none() || a.is_ascii());
+            }
+        }
+    }
+
+    #[test]
+    fn byte_tier_ascii_parity() {
+        // Pure-ASCII inputs take the byte tier (u8 core, [u64;128], no Vec<char>).
+        // Cover the guard edges (0/1/2/64/65 pattern lengths, empty text) plus a
+        // large asymmetric fuzz (short pattern, long text), all vs rapidfuzz.
+        const AB: &[char] = &['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', ' ', '1', '2'];
+        let mk = |len: usize, off: usize| -> String {
+            (0..len).map(|i| AB[(i + off) % AB.len()]).collect()
+        };
+        for &(la, lb) in &[
+            (0usize, 0usize), (0, 5), (5, 0), (1, 1), (1, 9), (9, 1),
+            (2, 2), (2, 200), (64, 64), (64, 200), (65, 3), (66, 66),
+        ] {
+            check_pair(&mk(la, 0), &mk(lb, 3));
+        }
+        let mut rng: u64 = 0xA5C11_0FF1CE;
+        for _ in 0..30_000 {
+            let la = (next(&mut rng) as usize) % 65; // 0..=64: pattern in byte-tier range
+            let lb = (next(&mut rng) as usize) % 200; // text may spill past 64
+            let a: String = (0..la).map(|_| AB[(next(&mut rng) as usize) % AB.len()]).collect();
+            let b: String = (0..lb).map(|_| AB[(next(&mut rng) as usize) % AB.len()]).collect();
+            assert!(a.is_ascii() && b.is_ascii());
             check_pair(&a, &b);
         }
     }

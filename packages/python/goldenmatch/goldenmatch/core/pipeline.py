@@ -1266,8 +1266,8 @@ def _resolve_identities(
             )
             return summary.as_dict()
         except Exception as e:
-            logger.warning("Distributed identity resolution failed: %s", e)
-            return None
+            logger.error("Distributed identity resolution failed: %s", e)
+            raise
 
     # In-memory path (legacy, unchanged).
     store = _open_identity_store(config)
@@ -1294,8 +1294,13 @@ def _resolve_identities(
         )
         return summary.as_dict()
     except Exception as e:
-        logger.warning("Identity resolution failed: %s", e)
-        return None
+        # A REQUESTED identity resolution (config.identity.enabled) that fails must
+        # not masquerade as success -- silently returning None commits no graph
+        # while dedupe_df reports ok (this once made a broken Postgres write, "COPY
+        # cannot be used in pipeline mode", look like a fast successful write).
+        # Surface it so a failed write is a failed run, not silent data loss.
+        logger.error("Identity resolution failed: %s", e)
+        raise
     finally:
         try:
             store.close()

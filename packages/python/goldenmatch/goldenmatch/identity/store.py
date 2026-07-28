@@ -263,6 +263,9 @@ class IdentityStore:
         # commit. Set for every backend so ``_exec`` needs no hasattr guard.
         self._sqlite_batch = 0
         self._sqlite_pending = 0
+        # The active psycopg pipeline (Postgres) while inside ``write_pipeline``;
+        # ``bulk_copy_barrier`` suspends/reopens it around bulk COPY flushes.
+        self._active_pipeline = None
         # Optional psycopg_pool.ConnectionPool for postgres. When set, methods
         # check out a pooled conn for each call. Default None preserves the
         # legacy per-store single-conn behavior the existing tests rely on.
@@ -706,19 +709,56 @@ class IdentityStore:
         per-statement round-trip (see ``_write_pipeline_enabled``). No-op for
         SQLite / Mongo and when the kill-switch is set.
 
-        COPY is not permitted in pipeline mode, so the caller must flush any bulk
-        COPY accumulators OUTSIDE this block (still inside ``bulk_writes``). Reads
-        issued inside a pipeline still work -- psycopg auto-syncs to fetch a
-        result -- but each such sync forfeits batching, so callers should
-        pre-fetch reads (e.g. ``get_identities``) before the write loop and pass
-        ``return_id=False`` to the write helpers that would otherwise read back a
-        generated id.
+        COPY is not permitted in pipeline mode, so bulk-COPY flushes must run
+        OUTSIDE this block; ``bulk_copy_barrier`` suspends the pipeline around each
+        flush so ``resolve_clusters`` (which interleaves per-record writes and bulk
+        flushes in one loop) can flush unconditionally. Reads issued inside a
+        pipeline still work -- psycopg auto-syncs to fetch a result -- but each such
+        sync forfeits batching, so callers should pre-fetch reads (e.g.
+        ``get_identities``) before the write loop and pass ``return_id=False`` to
+        the write helpers that would otherwise read back a generated id.
         """
         if self._backend == "postgres" and _write_pipeline_enabled():
-            with self._conn.pipeline():
+            self._active_pipeline = self._conn.pipeline()
+            self._active_pipeline.__enter__()
+            try:
                 yield
+            finally:
+                # A bulk_copy_barrier may have swapped in a fresh pipeline; exit
+                # whatever is currently active, not the one captured on entry.
+                pipe = self._active_pipeline
+                self._active_pipeline = None
+                if pipe is not None:
+                    pipe.__exit__(None, None, None)
         else:
             yield
+
+    @contextlib.contextmanager
+    def bulk_copy_barrier(self) -> Iterator[None]:
+        """Suspend an active psycopg pipeline for the duration of a bulk COPY.
+
+        COPY cannot run inside psycopg pipeline mode ("COPY cannot be used in
+        pipeline mode"), yet ``resolve_clusters`` flushes its bulk-COPY
+        accumulators from WITHIN the ``write_pipeline`` loop. This exits the active
+        pipeline (syncing any pending statements), runs the COPY in normal mode,
+        then reopens a fresh pipeline inside the same ``bulk_writes`` transaction.
+        No-op when no pipeline is active (SQLite / Mongo / the kill-switch), so the
+        caller wraps every ``_flush_bulk`` unconditionally. Before this, the COPY
+        raised inside the pipeline and the caller (pipeline.py) swallowed it,
+        committing zero rows while reporting success.
+        """
+        pipe = getattr(self, "_active_pipeline", None)
+        if pipe is None:
+            yield
+            return
+        self._active_pipeline = None
+        pipe.__exit__(None, None, None)      # sync + close the current pipeline
+        try:
+            yield
+        finally:
+            newpipe = self._conn.pipeline()
+            newpipe.__enter__()
+            self._active_pipeline = newpipe
 
     def _sqlite_stage(self, stage: str, cols: list[str], df: Any) -> None:
         """Load ``df[cols]`` into a per-connection TEMP staging table, replacing

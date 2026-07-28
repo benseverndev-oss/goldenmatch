@@ -55,6 +55,33 @@ def test_measured_max_seq_len_p95_rounded_capped():
     assert tr.measured_max_seq_len([3, 4, 5], percentile=95.0, cap=1024, multiple_of=64) == 64
 
 
+def test_estimate_total_steps_concrete_arithmetic():
+    # 10 rows of 100 tokens each = 1000 tokens; seq_len=200 -> 5 packed seqs
+    # (1000/200); batch*accum=2 -> ceil(5/2)=3 steps/epoch; epochs=2 -> 6.
+    lengths = [100] * 10
+    assert tr.estimate_total_steps(
+        lengths, seq_len=200, per_device_batch=1, grad_accum=2, epochs=2.0,
+    ) == 6
+    # non-integer packed/step-per-epoch results round UP (ceil), not down.
+    # 999 tokens / 200 -> ceil(4.995) = 5 packed seqs; /2 -> ceil(2.5) = 3;
+    # *1 epoch -> 3.
+    assert tr.estimate_total_steps(
+        [999], seq_len=200, per_device_batch=1, grad_accum=2, epochs=1.0,
+    ) == 3
+
+
+def test_estimate_total_steps_floors_at_one():
+    # empty token_lengths -> sum=0 -> packed floors at 1 -> steps_per_epoch
+    # floors at 1 -> epochs=1.0 -> 1 (never claims zero steps).
+    assert tr.estimate_total_steps(
+        [], seq_len=200, per_device_batch=16, grad_accum=2, epochs=1.0,
+    ) == 1
+    # a single tiny row still yields >=1 packed sequence and >=1 step/epoch.
+    assert tr.estimate_total_steps(
+        [1], seq_len=200, per_device_batch=16, grad_accum=2, epochs=3.0,
+    ) == 3
+
+
 def _row(match: bool) -> dict:
     return {
         "a": {"name": "Acme Corp", "city": "Boston", "id": "A1"},
