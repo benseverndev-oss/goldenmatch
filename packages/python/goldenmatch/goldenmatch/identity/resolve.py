@@ -12,6 +12,7 @@ duplicate events. Edges deduplicate on the UNIQUE constraint in storage.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -923,9 +924,13 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                     summary.created += 1
                     bulk_cluster_ids.add(cluster_id)
                     # Flush at a cluster boundary once the accumulator reaches the
-                    # batch bound -- keeps the write side O(batch), not O(N).
+                    # batch bound -- keeps the write side O(batch), not O(N). The
+                    # barrier suspends the psycopg pipeline so the bulk COPY can run
+                    # (COPY is forbidden in pipeline mode); no-op off Postgres.
                     if len(bulk_record_rows) >= bulk_flush_threshold:
-                        _flush_bulk()
+                        with getattr(store, "bulk_copy_barrier",
+                                     contextlib.nullcontext)():
+                            _flush_bulk()
                     continue
 
 
@@ -1194,7 +1199,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         # remainder. Order inside ``_flush_bulk`` puts identities first so the
         # source_records FK is valid.
         if use_bulk_fast_path:
-            _flush_bulk()
+            with getattr(store, "bulk_copy_barrier", contextlib.nullcontext)():
+                _flush_bulk()
             if bulk_totals["nodes"]:
                 log.info(
                     "resolve_clusters bulk fast-path (%s): %d clusters / "
