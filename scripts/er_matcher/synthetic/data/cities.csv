@@ -1,0 +1,147 @@
+city,state,zip_prefix
+New York,NY,100
+Brooklyn,NY,112
+Buffalo,NY,142
+Rochester,NY,146
+Albany,NY,122
+Yonkers,NY,107
+Syracuse,NY,132
+Los Angeles,CA,900
+San Diego,CA,921
+San Jose,CA,951
+San Francisco,CA,941
+Fresno,CA,937
+Sacramento,CA,958
+Long Beach,CA,908
+Oakland,CA,946
+Bakersfield,CA,933
+Anaheim,CA,928
+Riverside,CA,925
+Chicago,IL,606
+Aurora,IL,605
+Naperville,IL,605
+Rockford,IL,611
+Joliet,IL,604
+Peoria,IL,616
+Springfield,IL,627
+Houston,TX,770
+San Antonio,TX,782
+Dallas,TX,752
+Austin,TX,787
+Fort Worth,TX,761
+El Paso,TX,799
+Arlington,TX,760
+Corpus Christi,TX,784
+Plano,TX,750
+Laredo,TX,780
+Philadelphia,PA,191
+Pittsburgh,PA,152
+Allentown,PA,181
+Erie,PA,165
+Reading,PA,196
+Scranton,PA,185
+Phoenix,AZ,850
+Tucson,AZ,857
+Mesa,AZ,852
+Chandler,AZ,852
+Scottsdale,AZ,852
+Glendale,AZ,853
+Tempe,AZ,852
+San Antonio,TX,782
+Columbus,OH,432
+Cleveland,OH,441
+Cincinnati,OH,452
+Toledo,OH,436
+Akron,OH,443
+Dayton,OH,454
+Indianapolis,IN,462
+Fort Wayne,IN,468
+Evansville,IN,477
+South Bend,IN,466
+Jacksonville,FL,322
+Miami,FL,331
+Tampa,FL,336
+Orlando,FL,328
+St. Petersburg,FL,337
+Hialeah,FL,330
+Fort Lauderdale,FL,333
+Tallahassee,FL,323
+Charlotte,NC,282
+Raleigh,NC,276
+Greensboro,NC,274
+Durham,NC,277
+Winston-Salem,NC,271
+Seattle,WA,981
+Spokane,WA,992
+Tacoma,WA,984
+Vancouver,WA,986
+Denver,CO,802
+Colorado Springs,CO,809
+Aurora,CO,800
+Fort Collins,CO,805
+Boston,MA,021
+Worcester,MA,016
+Springfield,MA,011
+Cambridge,MA,021
+Detroit,MI,482
+Grand Rapids,MI,495
+Warren,MI,480
+Sterling Heights,MI,483
+Ann Arbor,MI,481
+Portland,OR,972
+Eugene,OR,974
+Salem,OR,973
+Nashville,TN,372
+Memphis,TN,381
+Knoxville,TN,379
+Chattanooga,TN,374
+Las Vegas,NV,891
+Reno,NV,895
+Henderson,NV,890
+Atlanta,GA,303
+Augusta,GA,309
+Columbus,GA,319
+Savannah,GA,314
+Baltimore,MD,212
+Annapolis,MD,214
+Milwaukee,WI,532
+Madison,WI,537
+Green Bay,WI,543
+Minneapolis,MN,554
+Saint Paul,MN,551
+Duluth,MN,558
+Kansas City,MO,641
+Saint Louis,MO,631
+Springfield,MO,658
+New Orleans,LA,701
+Baton Rouge,LA,708
+Shreveport,LA,711
+Oklahoma City,OK,731
+Tulsa,OK,741
+Albuquerque,NM,871
+Santa Fe,NM,875
+Salt Lake City,UT,841
+Provo,UT,846
+Omaha,NE,681
+Lincoln,NE,685
+Wichita,KS,672
+Topeka,KS,666
+Boise,ID,837
+Richmond,VA,232
+Virginia Beach,VA,234
+Norfolk,VA,235
+Providence,RI,029
+Hartford,CT,061
+New Haven,CT,065
+Manchester,NH,031
+Portland,ME,041
+Burlington,VT,054
+Wilmington,DE,198
+Charleston,SC,294
+Columbia,SC,292
+Birmingham,AL,352
+Montgomery,AL,361
+Little Rock,AR,722
+Jackson,MS,392
+Anchorage,AK,995
+Honolulu,HI,968
