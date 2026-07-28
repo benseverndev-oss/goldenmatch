@@ -2486,6 +2486,24 @@ def score_buckets(
                 f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
                 flush=True,
             )
+            # Split the `kernel` bar into the Rust call (compute + pyo3
+            # Vec<tuple> conversion) vs the Python pair-marshal loop
+            # (`[(a,b,round(float(s),4)) ...]`), recorded in probabilistic.py.
+            from goldenmatch.core.probabilistic import _FS_NATIVE_DBG as _fnd
+
+            _nat = _fnd["native_s"]
+            _mar = _fnd["marshal_s"]
+            _kt = _nat + _mar
+            if _kt > 0:
+                print(
+                    "[score_buckets][DEBUG] kernel split "
+                    f"({_fnd['n_calls']} native calls / {_fnd['n_pairs']} pairs):\n"
+                    f"  rust  (mod.score_block_pairs_fs* incl pyo3 tuple conv): "
+                    f"{_nat:7.3f}s ({100.0 * _nat / _kt:5.1f}%)\n"
+                    f"  marshal (Python [(a,b,round(float(s),4)) ...] loop):    "
+                    f"{_mar:7.3f}s ({100.0 * _mar / _kt:5.1f}%)",
+                    flush=True,
+                )
     if _arrow:
         import pyarrow as _pa
 

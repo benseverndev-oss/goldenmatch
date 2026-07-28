@@ -17,6 +17,8 @@ import logging
 import math
 import os
 import random
+import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import combinations
@@ -3608,6 +3610,29 @@ def _fs_embedding_vectors(frame, mk: MatchkeyConfig, n: int):
     return emb_vectors, emb_dims
 
 
+# BUCKET_DEBUG: split the native FS scoring kernel into the Rust call (compute +
+# pyo3 Vec<tuple> conversion) vs the Python pair-marshal loop
+# (`[(a,b,round(float(s),4)) ...]` over every emitted pair). Thread-safe because
+# the bucket workers run in a ThreadPoolExecutor. score_buckets prints this in
+# its BUCKET_DEBUG summary. Zero cost when off (one env read per bucket call).
+_FS_NATIVE_DBG = {"native_s": 0.0, "marshal_s": 0.0, "n_pairs": 0, "n_calls": 0}
+_FS_NATIVE_DBG_LOCK = threading.Lock()
+
+
+def _fs_native_dbg_on() -> bool:
+    return os.environ.get("GOLDENMATCH_BUCKET_DEBUG", "0") not in (
+        "0", "", "false", "False", "no", "off",
+    )
+
+
+def _fs_native_dbg_record(native_s: float, marshal_s: float, n_pairs: int) -> None:
+    with _FS_NATIVE_DBG_LOCK:
+        _FS_NATIVE_DBG["native_s"] += native_s
+        _FS_NATIVE_DBG["marshal_s"] += marshal_s
+        _FS_NATIVE_DBG["n_pairs"] += n_pairs
+        _FS_NATIVE_DBG["n_calls"] += 1
+
+
 def _score_fs_native_frame(
     frame,
     size_list,
@@ -3804,6 +3829,8 @@ def _score_fs_native_frame(
                 field_arrays[_i] = _pa.array([""] * n, type=_pa.large_string())
         if use_handle:
             opt_kwargs["exclude_set"] = exclude_handle
+        _dbg = _fs_native_dbg_on()
+        _t0 = time.perf_counter() if _dbg else 0.0
         pairs = mod.score_block_pairs_fs_arrow(
             row_ids_arrow, field_arrays, [int(s) for s in size_list],
             scorer_ids, levels, partials, weights, calibrated, prior_w,
@@ -3811,7 +3838,11 @@ def _score_fs_native_frame(
             exclude=excl if excl else None,
             **opt_kwargs,
         )
-        return [(a, b, round(float(s), 4)) for a, b, s in pairs]
+        _t1 = time.perf_counter() if _dbg else 0.0
+        out = [(a, b, round(float(s), 4)) for a, b, s in pairs]
+        if _dbg:
+            _fs_native_dbg_record(_t1 - _t0, time.perf_counter() - _t1, len(out))
+        return out
 
     field_values = [_field_values_for_block(frame, f, n) for f in mk.fields]
     # record_embedding is always observed (see the arrow branch above) — pin its
@@ -3821,13 +3852,19 @@ def _score_fs_native_frame(
             field_values[_i] = [""] * n
     if use_handle:
         opt_kwargs["exclude_set"] = exclude_handle
+    _dbg = _fs_native_dbg_on()
+    _t0 = time.perf_counter() if _dbg else 0.0
     pairs = mod.score_block_pairs_fs(
         row_ids, [int(s) for s in size_list], field_values, scorer_ids, levels,
         partials, weights, calibrated, prior_w, min_weight, weight_range,
         link_threshold, excl,
         **opt_kwargs,
     )
-    return [(a, b, round(float(s), 4)) for a, b, s in pairs]
+    _t1 = time.perf_counter() if _dbg else 0.0
+    out = [(a, b, round(float(s), 4)) for a, b, s in pairs]
+    if _dbg:
+        _fs_native_dbg_record(_t1 - _t0, time.perf_counter() - _t1, len(out))
+    return out
 
 
 def score_probabilistic_native(
