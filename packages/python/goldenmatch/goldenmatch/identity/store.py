@@ -647,6 +647,12 @@ class IdentityStore:
     # SQLite path is single-process and the row-by-row upsert_* methods are
     # plenty fast for that scale.
 
+    # Class-level default so stores built via ``IdentityStore.__new__`` (test
+    # fakes that bypass __init__, e.g. test_postgres_bulk_payload_parity) still
+    # resolve the flag to False -> normal upsert path. __init__ sets the instance
+    # attribute; ``initial_load_writes`` flips it per-instance during a build.
+    _pg_initial_load: bool = False
+
     # The four bulk-written identity tables, in FK parent -> child order
     # (source_records references identity_nodes). ``initial_load_writes`` toggles
     # UNLOGGED child-first / LOGGED parent-first so the permanent->unlogged FK
