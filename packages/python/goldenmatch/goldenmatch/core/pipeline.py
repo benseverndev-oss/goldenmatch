@@ -4709,10 +4709,18 @@ def _run_dedupe_pipeline(
     if cluster_frames is not None:
         from goldenmatch.core.frame import to_frame as _tf_cs
 
-        _sizes = _tf_cs(cluster_frames.metadata).column("size").to_list()
-        _multi_member = sum(1 for s in _sizes if s > 1)
-        _matched_records = sum(s for s in _sizes if s > 1)
+        # Seam-native (columnar, no per-row Python): multi-member count = sum of
+        # the `size > 1` bool column; matched records = sum of `size` over the
+        # multi-member rows. `_n_clusters` (metadata height) feeds the lazy
+        # `results["clusters"]` so `len()` never forces the dict build.
+        _mf = _tf_cs(cluster_frames.metadata).with_gt_column("size", 1, "__multi__")
+        _n_clusters = _mf.height
+        _multi_member = int(_mf.column("__multi__").sum() or 0)
+        _matched_records = int(
+            _mf.filter_mask(_mf.column("__multi__")).column("size").sum() or 0
+        )
     else:
+        _n_clusters = len(clusters)
         _multi_member = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
         _matched_records = sum(
             c.get("size", 0) for c in clusters.values() if c.get("size", 0) > 1
@@ -4738,7 +4746,7 @@ def _run_dedupe_pipeline(
         "clusters": (
             _tc_clusters
             if _tc_clusters is not None
-            else LazyClusterDict(_clusters_dict)
+            else LazyClusterDict(_clusters_dict, count=_n_clusters)
             if cluster_frames is not None
             else _clusters_dict()
         ),
