@@ -846,19 +846,53 @@ def run_golden_fused_arrow(
     empty_f64 = pa.array([], type=pa.float64())
     qweights: list[Any] = [empty_f64 for _ in user_cols]
     if quality_scores is not None:
-        # Bench diagnostic: this densely materializes an N*user_cols weight
-        # channel in Python from a (typically sparse or empty) quality_scores
-        # dict -- the suspected cost when quality_weighting is on. Timed so the
-        # profile shows how much of the golden stage is this prep vs the kernel.
+        # Densify the per-column weight channel WITHOUT the N*user_cols Python
+        # dict-get loop. quality_scores is sparse ({(row_id,col): weight}, ~276K
+        # cells out of N*cols at 5M); regrouping it by column touches only those
+        # cells, then each column's dense weight vector is built with Arrow C
+        # kernels: index_in (hash-lookup of the sorted-frame row_ids into that
+        # column's flagged row_ids, order-preserving) -> take -> fill_null(1.0).
+        # Byte-identical to `[quality_scores.get((rid,col),1.0) for rid in rows]`
+        # (verified). A column with no flagged cells keeps the empty array =>
+        # the kernel's unweighted branch.
+        import pyarrow.compute as _pc_qw
         from goldenmatch.core.bench import stage as _bench_stage
         with _bench_stage("golden_qweights_build_fused"):
             if "__row_id__" in sdf.columns:
-                row_ids_list = sdf.column("__row_id__").to_list()
+                _rid_qw = sdf.column("__row_id__").to_arrow()
+                if isinstance(_rid_qw, pa.ChunkedArray):
+                    _rid_qw = _rid_qw.combine_chunks()
+                    if isinstance(_rid_qw, pa.ChunkedArray):
+                        _rid_qw = _rid_qw.chunk(0) if _rid_qw.num_chunks else pa.array([], type=pa.int64())
+                _rid_qw = _pc_qw.cast(_rid_qw, pa.int64())
             else:
-                row_ids_list = list(range(n))
-            for ci, c in enumerate(user_cols):
-                w = [float(quality_scores.get((rid, c), 1.0)) for rid in row_ids_list]
-                qweights[ci] = pa.array(w, type=pa.float64())
+                _rid_qw = pa.array(range(n), type=pa.int64())
+            # One pass over the SPARSE dict, grouped by column (not N*cols).
+            _col_pos = {c: ci for ci, c in enumerate(user_cols)}
+            _by_col: dict[int, tuple[list[int], list[float]]] = {}
+            for (rid, c), wt in quality_scores.items():
+                ci = _col_pos.get(c)
+                if ci is None:
+                    continue
+                bucket = _by_col.get(ci)
+                if bucket is None:
+                    bucket = ([], [])
+                    _by_col[ci] = bucket
+                bucket[0].append(rid)
+                bucket[1].append(float(wt))
+            # Every column gets a DENSE weight array (matching the old loop, which
+            # set one for every column when quality_scores is not None -> the
+            # kernel's weighted branch uniformly). A column with no flagged cells
+            # uses an empty value_set: index_in -> all null -> fill_null -> all 1.0.
+            for ci in range(len(user_cols)):
+                rids, wts = _by_col.get(ci, ([], []))
+                _idx = _pc_qw.index_in(
+                    _rid_qw, value_set=pa.array(rids, type=pa.int64())
+                )
+                _w = _pc_qw.fill_null(
+                    _pc_qw.take(pa.array(wts, type=pa.float64()), _idx), 1.0
+                )
+                qweights[ci] = _w.combine_chunks() if isinstance(_w, pa.ChunkedArray) else _w
 
     # ── Stage 4: confidence_majority per-cluster pair-score edges ─────────────
     # Mirror build_golden_records_batch (golden.py:969-980): per cluster, remap
