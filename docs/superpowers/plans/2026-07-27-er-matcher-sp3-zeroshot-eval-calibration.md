@@ -54,16 +54,19 @@ def test_fit_temperature_softens_overconfident():
 def test_apply_temperature():
     assert abs(apply_temperature(2.0, T=2.0) - sigmoid(1.0)) < 1e-9  # sigmoid(z/T)
 
-def test_perfectly_calibrated_T_near_one():
-    # logits that already match label frequencies -> T ~ 1
-    logits = [0.0]*100
-    labels = [i < 50 for i in range(100)]  # 50% at p=0.5
-    assert 0.5 < fit_temperature(logits, labels) < 2.0
+def test_well_calibrated_T_near_one():
+    # NON-degenerate + already-calibrated: rows at P(match)=0.7 that are 70% True,
+    # and rows at 0.3 that are 30% True -> a genuine NLL minimum at T~1.
+    # (Do NOT use logits=[0.0]*N: sigmoid(0/T)=0.5 for ALL T -> flat objective,
+    # underdetermined, minimizer can't return a meaningful T.)
+    logits = [logit(0.7)]*100 + [logit(0.3)]*100
+    labels = [i < 70 for i in range(100)] + [i < 30 for i in range(100)]
+    assert 0.7 < fit_temperature(logits, labels) < 1.4   # near 1
 ```
 - [ ] **Step 2:** run -> FAIL.
 - [ ] **Step 3:** implement `calibration.py` (stdlib `math` only):
   - `sigmoid(z)`, `logit(p)` (clamp p to (eps, 1-eps)).
-  - `fit_temperature(logits, labels, *, lo=0.05, hi=10.0, iters=50) -> float`: minimize NLL `sum(-y*log(sigmoid(z/T)) - (1-y)*log(1-sigmoid(z/T)))` over T by a bounded 1-D search (golden-section or a coarse grid + refine — pure Python, no scipy). Return the T minimizing NLL.
+  - `fit_temperature(logits, labels, *, lo=0.05, hi=10.0, iters=50) -> float`: minimize NLL `sum(-y*log(sigmoid(z/T)) - (1-y)*log(1-sigmoid(z/T)))` over T by a bounded 1-D search (golden-section or a coarse grid + refine — pure Python, no scipy). Return the T minimizing NLL. **Tie-break toward T=1.0** when the objective is flat/near-flat (degenerate/underdetermined data) so it never returns a boundary value spuriously.
   - `apply_temperature(z, *, T) -> float` = `sigmoid(z / T)`.
   - `ece_from_probs(probs, labels, *, bins=10) -> float`: standard binned ECE of `P(positive)` vs the positive `label` (this is the P(match)-vs-label ECE the spec §2 reports separately; distinct from eval.py's correctness-based ECE).
 - [ ] **Step 4:** run -> PASS.
@@ -82,7 +85,7 @@ def test_perfectly_calibrated_T_near_one():
 **Files:** Modify `scripts/er_matcher/eval.py`, `test_eval.py`
 
 - [ ] **Step 1: failing test** — `build_zeroshot_scorecard(per_benchmark: dict) -> dict` where each entry is `{"f1", "raw_ece", "calibrated_ece", "n"}`; returns per-benchmark rows with the SOTA comparison column (via `sota_baselines.sota_for`) and an `evaluate_gate` verdict using an INFORMATIONAL zero-shot floor (`abs_floor=0.65`, the SOTA-baseline slots UNSET). Assert: SOTA is a display field (not a gate input — the gate passes/fails only on abs_floor + calibration, independent of SOTA); calibrated_ece is what the gate's calibration check reads.
-- [ ] **Step 2-4:** implement `build_zeroshot_scorecard` composing `sota_baselines` + `evaluate_gate` (pass `abs_floor=0.65`, leave `hosted_boost_f1`/`fs_baseline_f1`/`baseline_f1` = None). Keep `run_eval`/`evaluate_gate`/`confusion`/`prf1` UNCHANGED (pure). Green; existing `test_eval.py` stays green.
+- [ ] **Step 2-4:** implement `build_zeroshot_scorecard` composing `sota_baselines` + `evaluate_gate`. **Shape mapping:** `evaluate_gate` reads `scorecard["splits"][split]["overall"]["f1"/"ece"]`, so per benchmark synthesize that nested shape from the flat entry and map `calibrated_ece -> overall["ece"]` (the gate's calibration check reads the calibrated value; `f1 -> overall["f1"]`). Pass `abs_floor=0.65`, leave `hosted_boost_f1`/`fs_baseline_f1`/`baseline_f1` = None. Keep `run_eval`/`evaluate_gate`/`confusion`/`prf1` UNCHANGED (pure). Green; existing `test_eval.py` stays green.
 - [ ] **Step 5:** commit `feat(er-matcher): zero-shot scorecard (F1 + SOTA display + informational gate)`.
 
 ---
@@ -93,7 +96,7 @@ def test_perfectly_calibrated_T_near_one():
 
 **Files:** Modify `scripts/er_matcher/sources/magellan.py`
 
-- [ ] Implement the existing `fetch()` stub (below the `GOLDENMATCH_ALLOW_FETCH` guard, the `TODO(#magellan-fetch)`): download the DeepMatcher `Structured/{Walmart-Amazon,Beer}` archives from `_DEEPMATCHER_BASE_URL` (confirm the exact URL from the DeepMatcher data repo — `pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/`), sha256-verify, unpack into the source root so `load_from_dir()` reads `tableA/tableB/train/valid/test.csv`. Keep the guard + eval_only. `urllib`/`zipfile` inside `fetch()` (not the import path).
+- [ ] Implement the existing `fetch()` stub (below the `GOLDENMATCH_ALLOW_FETCH` guard, the `TODO(#magellan-fetch)`): download the DeepMatcher `Structured/{Walmart-Amazon,Beer}` archives, sha256-verify, unpack into the source root so `load_from_dir()` reads `tableA/tableB/train/valid/test.csv`. Keep the guard + eval_only. `urllib`/`zipfile` inside `fetch()` (not the import path). **NOTE the existing `_DEEPMATCHER_BASE_URL` is likely `.../~anhai/data/deepmatcher_data/` (missing the `1`) — the correct anhaidgroup host is `.../~anhai/data1/deepmatcher_data/`; fix the constant, don't just append. Confirm exact archive URLs + pin sha256, and confirm per-dataset zip vs exploded-CSV dir before wiring `zipfile`.**
 - [ ] The PURE `load_from_dir` parse is already tested; add a small test only if a new pure helper is introduced. The download is exercised by Task 6's real run (network — box-safe suite must not fetch).
 - [ ] Commit `feat(er-matcher): implement MagellanSource.fetch for unseen eval datasets`.
 
@@ -101,7 +104,7 @@ def test_perfectly_calibrated_T_near_one():
 
 **Files:** Modify `scripts/er_matcher/modal_train.py`
 
-- [ ] New `@app.function(gpu=GPU_FULL, ...)` `zeroshot_eval(dataset: str, allow_fetch: bool = True)` + a local_entrypoint. Loads `/out/model/merged`. For each pair: build the chat + teacher-force the verdict prefix `{"match":`, run a FORWARD pass (or `generate(..., max_new_tokens=1, output_scores=True, return_dict_in_generate=True)`) to get the next-token logits, read the logits for the ` true`/` false` token ids (resolve the exact ids via the tokenizer once), softmax -> `P(match)`, `z = logit(P(match))`. Verdict `match = P(match) > 0.5`; `confidence = P(match) if match else 1-P(match)` (P(predicted class), per spec §2).
+- [ ] New `@app.function(gpu=GPU_FULL, ...)` `zeroshot_eval(dataset: str, allow_fetch: bool = True)` + a local_entrypoint. Loads `/out/model/merged`. For each pair: apply the chat template, then teacher-force the EXACT verdict prefix the SFT emits — `{"match":` with **NO trailing space** (the space is the leading char of the value token). Run a FORWARD pass (or `generate(..., max_new_tokens=1, output_scores=True, return_dict_in_generate=True)`) to get the next-token logits; read the logits at the ` true` / ` false` token ids (leading-space; resolve both ids ONCE via `tok.encode(" true")`/`" false"` and verify they're single tokens), softmax over just those two -> `P(match)`, `z = logit(P(match))`. Verdict `match = P(match) > 0.5` (= the greedy argmax, consistent with the generated verdict); `confidence = P(match) if match else 1-P(match)` (P(predicted class), per spec §2).
 - [ ] Fit temperature on the `valid` split's `(z, label)`; score `test` via `eval.run_eval` with the (calibrated) matcher; compute raw vs calibrated ECE; call `eval.build_zeroshot_scorecard`. Write `zeroshot_eval_results.json` to the volume.
 - [ ] Watch-item for the real run: `P(match)` must SEPARATE matches from non-matches (mean P(match) higher on true matches) — else the token-id resolution is wrong. Print a quick separation stat.
 - [ ] Commit `feat(er-matcher): zeroshot_eval entrypoint (logit-derived P(match) + temp scaling)`.
