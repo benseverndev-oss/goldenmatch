@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import random
 
-from vocab import Vocab
+from vocab import Vocab, _capitalize_surname
 
 
 def test_vocab_deterministic_per_seed():
@@ -29,6 +29,14 @@ def test_surname_draw_is_frequency_weighted():
 def test_vocab_size_past_ceiling():
     v = Vocab()
     assert v.n_surnames > 1000 and v.n_first_names > 50  # >> old 900-combo ceiling
+
+
+def test_mc_mac_surname_casing():
+    # str.title() alone would yield "Mcdonald" / "Macarthur" -- wrong for name matching.
+    assert _capitalize_surname("MCDONALD") == "McDonald"
+    assert _capitalize_surname("MACARTHUR") == "MacArthur"
+    # non Mc/Mac names are unaffected (plain title-case)
+    assert _capitalize_surname("SMITH") == "Smith"
 
 
 def test_sample_full_name_and_address_shape():

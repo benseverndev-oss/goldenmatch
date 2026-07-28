@@ -69,7 +69,7 @@ class Vocab:
         draw = rng.random() * self._total_weight
         idx = bisect.bisect_right(self._cum_weights, draw)
         idx = min(idx, len(self._surnames) - 1)
-        return self._surnames[idx].title()
+        return _capitalize_surname(self._surnames[idx])
 
     def sample_first_name(self, rng) -> str:
         """Uniform draw over the bundled given-name list (lean: no frequency weighting)."""
@@ -94,6 +94,22 @@ class Vocab:
             "state": state,
             "zip": f"{zip_prefix}{zip_suffix}",
         }
+
+
+def _capitalize_surname(name: str) -> str:
+    """Title-case a surname, re-capitalizing the letter after a leading Mc/Mac.
+
+    ``str.title()`` alone turns ``MCDONALD`` into ``Mcdonald`` and
+    ``MACARTHUR`` into ``Macarthur``. Mc/Mac-prefixed names are ~2.6% of the
+    bundled census surnames, so this matters for a name-matching vocab.
+    """
+    titled = name.title()
+    lower = name.lower()
+    if lower.startswith("mc") and len(titled) > 2:
+        return titled[:2] + titled[2].upper() + titled[3:]
+    if lower.startswith("mac") and len(titled) > 3:
+        return titled[:3] + titled[3].upper() + titled[4:]
+    return titled
 
 
 def _load_surnames(path: str) -> tuple[list[str], dict[str, int], list[int]]:
