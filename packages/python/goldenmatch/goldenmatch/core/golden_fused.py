@@ -735,6 +735,7 @@ def run_golden_fused_arrow(
     # it ONLY when conditionals exist; otherwise skip and use the map-less factor.
     _needs_col_maps = any(isinstance(e, list) for e in rules.field_rules.values())
     import pyarrow.compute as _pc_fac
+
     from goldenmatch.core.bench import stage as _bench_stage
     with _bench_stage("golden_fused_factorize"):
         for c in user_cols:
