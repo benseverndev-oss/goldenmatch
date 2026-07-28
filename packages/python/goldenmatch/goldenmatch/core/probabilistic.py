@@ -3615,7 +3615,10 @@ def _fs_embedding_vectors(frame, mk: MatchkeyConfig, n: int):
 # (`[(a,b,round(float(s),4)) ...]` over every emitted pair). Thread-safe because
 # the bucket workers run in a ThreadPoolExecutor. score_buckets prints this in
 # its BUCKET_DEBUG summary. Zero cost when off (one env read per bucket call).
-_FS_NATIVE_DBG = {"native_s": 0.0, "marshal_s": 0.0, "n_pairs": 0, "n_calls": 0}
+_FS_NATIVE_DBG = {
+    "prep_s": 0.0, "native_s": 0.0, "marshal_s": 0.0,
+    "n_pairs": 0, "n_calls": 0, "n_single_block": 0, "single_block_prep_s": 0.0,
+}
 _FS_NATIVE_DBG_LOCK = threading.Lock()
 
 
@@ -3625,12 +3628,18 @@ def _fs_native_dbg_on() -> bool:
     )
 
 
-def _fs_native_dbg_record(native_s: float, marshal_s: float, n_pairs: int) -> None:
+def _fs_native_dbg_record(
+    prep_s: float, native_s: float, marshal_s: float, n_pairs: int, single_block: bool
+) -> None:
     with _FS_NATIVE_DBG_LOCK:
+        _FS_NATIVE_DBG["prep_s"] += prep_s
         _FS_NATIVE_DBG["native_s"] += native_s
         _FS_NATIVE_DBG["marshal_s"] += marshal_s
         _FS_NATIVE_DBG["n_pairs"] += n_pairs
         _FS_NATIVE_DBG["n_calls"] += 1
+        if single_block:
+            _FS_NATIVE_DBG["n_single_block"] += 1
+            _FS_NATIVE_DBG["single_block_prep_s"] += prep_s
 
 
 def _score_fs_native_frame(
@@ -3659,6 +3668,9 @@ def _score_fs_native_frame(
     """
     from goldenmatch.core._native_loader import native_module
     from goldenmatch.core.frame import to_frame as _tf_w6
+
+    _dbg_entry = _fs_native_dbg_on()
+    _t_entry = time.perf_counter() if _dbg_entry else 0.0
 
     if exclude_pairs is None:
         exclude_pairs = set()
@@ -3829,8 +3841,7 @@ def _score_fs_native_frame(
                 field_arrays[_i] = _pa.array([""] * n, type=_pa.large_string())
         if use_handle:
             opt_kwargs["exclude_set"] = exclude_handle
-        _dbg = _fs_native_dbg_on()
-        _t0 = time.perf_counter() if _dbg else 0.0
+        _t0 = time.perf_counter() if _dbg_entry else 0.0
         pairs = mod.score_block_pairs_fs_arrow(
             row_ids_arrow, field_arrays, [int(s) for s in size_list],
             scorer_ids, levels, partials, weights, calibrated, prior_w,
@@ -3838,10 +3849,13 @@ def _score_fs_native_frame(
             exclude=excl if excl else None,
             **opt_kwargs,
         )
-        _t1 = time.perf_counter() if _dbg else 0.0
+        _t1 = time.perf_counter() if _dbg_entry else 0.0
         out = [(a, b, round(float(s), 4)) for a, b, s in pairs]
-        if _dbg:
-            _fs_native_dbg_record(_t1 - _t0, time.perf_counter() - _t1, len(out))
+        if _dbg_entry:
+            _fs_native_dbg_record(
+                _t0 - _t_entry, _t1 - _t0, time.perf_counter() - _t1,
+                len(out), len(size_list) == 1,
+            )
         return out
 
     field_values = [_field_values_for_block(frame, f, n) for f in mk.fields]
@@ -3852,18 +3866,20 @@ def _score_fs_native_frame(
             field_values[_i] = [""] * n
     if use_handle:
         opt_kwargs["exclude_set"] = exclude_handle
-    _dbg = _fs_native_dbg_on()
-    _t0 = time.perf_counter() if _dbg else 0.0
+    _t0 = time.perf_counter() if _dbg_entry else 0.0
     pairs = mod.score_block_pairs_fs(
         row_ids, [int(s) for s in size_list], field_values, scorer_ids, levels,
         partials, weights, calibrated, prior_w, min_weight, weight_range,
         link_threshold, excl,
         **opt_kwargs,
     )
-    _t1 = time.perf_counter() if _dbg else 0.0
+    _t1 = time.perf_counter() if _dbg_entry else 0.0
     out = [(a, b, round(float(s), 4)) for a, b, s in pairs]
-    if _dbg:
-        _fs_native_dbg_record(_t1 - _t0, time.perf_counter() - _t1, len(out))
+    if _dbg_entry:
+        _fs_native_dbg_record(
+            _t0 - _t_entry, _t1 - _t0, time.perf_counter() - _t1,
+            len(out), len(size_list) == 1,
+        )
     return out
 
 
