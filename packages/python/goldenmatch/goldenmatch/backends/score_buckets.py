@@ -1889,6 +1889,12 @@ def score_buckets(
         # fragments glibc's malloc arena on Linux (1.4 GB / 30s RSS climb).
         from goldenmatch.core.frame import to_frame as _tf
 
+        # BUCKET_DEBUG: the probabilistic (FS) worker records the same
+        # prep/kernel/post split as the fast path (_dbg_rows) -- the fast-path
+        # _dbg mechanism (thread-safe list) is used, NOT bench.stage(), because
+        # workers run in a ThreadPoolExecutor whose threads don't inherit the
+        # recorder ContextVar. `kernel` here is score_probabilistic_bucket_native.
+        _t_prep0 = time.perf_counter() if _bucket_debug else 0.0
         sorted_frame = _tf(bucket_df).sort(["__block_key__"])
         sorted_df = sorted_frame.native
         # Pre-materialized run sizes (seam run_lengths == the old
@@ -1981,6 +1987,10 @@ def score_buckets(
                 score_probabilistic_bucket_native,
             )
 
+            # prep = entry through the keep-mask filter; kernel = the native
+            # score call(s); post = source/target pair filters (BUCKET_DEBUG).
+            _prep_s = (time.perf_counter() - _t_prep0) if _bucket_debug else 0.0
+            _t_kern0 = time.perf_counter() if _bucket_debug else 0.0
             pairs: list[tuple[int, int, float]] = []
             local_blocks = 0
             if kept_size_list:
@@ -2004,7 +2014,12 @@ def score_buckets(
                         )
                         local_blocks += 1
                 offset += s
+            _kern_s = (time.perf_counter() - _t_kern0) if _bucket_debug else 0.0
+            _t_post0 = time.perf_counter() if _bucket_debug else 0.0
             if not pairs and local_blocks == 0:
+                if _bucket_debug:
+                    with _dbg_lock:
+                        _dbg_rows.append((_prep_s, _kern_s, 0.0, local_blocks, 0))
                 return [], 0
             # Same post-filters as the per-block loop below (the native kernel
             # doesn't know about source_lookup / target_ids).
@@ -2018,6 +2033,10 @@ def score_buckets(
                     (a, b, s) for a, b, s in pairs
                     if (a in target_ids) != (b in target_ids)
                 ]
+            if _bucket_debug:
+                _post_s = time.perf_counter() - _t_post0
+                with _dbg_lock:
+                    _dbg_rows.append((_prep_s, _kern_s, _post_s, local_blocks, len(pairs)))
             return pairs, local_blocks
 
         def _score_block_frame(block_df) -> list[tuple[int, int, float]] | None:
@@ -2462,7 +2481,7 @@ def score_buckets(
                 f"{n_calls} calls / {n_blocks} blocks / {n_pairs} pairs "
                 f"(set GOLDENMATCH_BUCKET_DEBUG=0 to silence):\n"
                 f"  prep   (sort+group_by+to_arrow): {prep_s:7.3f}s ({_pct(prep_s):5.1f}%)\n"
-                f"  kernel (score_block_pairs_arrow): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
+                f"  kernel (native score_block/bucket): {kern_s:7.3f}s ({_pct(kern_s):5.1f}%)\n"
                 f"  post   (match-mode filter):       {post_s:7.3f}s ({_pct(post_s):5.1f}%)\n"
                 f"  total in-worker: {tot_s:.3f}s; slowest single kernel call: {slowest[1]:.3f}s",
                 flush=True,
