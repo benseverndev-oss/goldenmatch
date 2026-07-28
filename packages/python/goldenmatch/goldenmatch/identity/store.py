@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Iterable, Iterator
@@ -48,7 +49,11 @@ def _write_pipeline_enabled() -> bool:
     ).strip() != "0"
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+
+# Relationship field names are interpolated into a JSON path / column expression,
+# so they are validated against this before use (never user free-text at the SQL).
+_SAFE_FIELD = re.compile(r"[A-Za-z0-9_]+")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_nodes (
@@ -165,6 +170,26 @@ CREATE TABLE IF NOT EXISTS identity_record_block_keys (
 CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
 CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
 CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
+
+-- semantic-graph: entity<->entity relationship edges derived from a shared
+-- NON-identity attribute (two entities on one clinic phone, one address, ...).
+-- Distinct from evidence_edges (which is record-level, WITHIN an entity); this is
+-- entity-level, BETWEEN entities. The UNIQUE key omits run_name on purpose so a
+-- re-resolve is idempotent (INSERT OR IGNORE de-dupes across runs). Endpoints are
+-- canonicalized entity_a_id < entity_b_id so each pair is stored once.
+CREATE TABLE IF NOT EXISTS identity_relationships (
+    entity_a_id   TEXT NOT NULL,
+    entity_b_id   TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    field         TEXT NOT NULL,
+    shared_value  TEXT,
+    dataset       TEXT,
+    recorded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+);
+CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
+CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
+CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
 """
 
 
@@ -374,6 +399,27 @@ class IdentityStore:
             # + indexes, idempotent on fresh (already carries it from ``_SCHEMA``)
             # and migrated DBs.
             self._ensure_block_index_table()
+        if version < 7:
+            # v6 -> v7: entity<->entity relationship edges (semantic-graph). CREATE
+            # TABLE IF NOT EXISTS + indexes, idempotent on fresh (already in
+            # ``_SCHEMA``) and migrated DBs.
+            self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS identity_relationships (
+                    entity_a_id   TEXT NOT NULL,
+                    entity_b_id   TEXT NOT NULL,
+                    kind          TEXT NOT NULL,
+                    field         TEXT NOT NULL,
+                    shared_value  TEXT,
+                    dataset       TEXT,
+                    recorded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+                );
+                CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
+                """
+            )
         if version < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -566,6 +612,21 @@ class IdentityStore:
         CREATE INDEX IF NOT EXISTS idx_rbk_block  ON identity_record_block_keys(pass_sig, block_key);
         CREATE INDEX IF NOT EXISTS idx_rbk_entity ON identity_record_block_keys(entity_id);
         CREATE INDEX IF NOT EXISTS idx_rbk_record ON identity_record_block_keys(record_id);
+
+        -- semantic-graph: entity<->entity relationship edges (see _SCHEMA).
+        CREATE TABLE IF NOT EXISTS identity_relationships (
+            entity_a_id   TEXT NOT NULL,
+            entity_b_id   TEXT NOT NULL,
+            kind          TEXT NOT NULL,
+            field         TEXT NOT NULL,
+            shared_value  TEXT,
+            dataset       TEXT,
+            recorded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_a_id, entity_b_id, kind, shared_value)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rel_a    ON identity_relationships(entity_a_id);
+        CREATE INDEX IF NOT EXISTS idx_rel_b    ON identity_relationships(entity_b_id);
+        CREATE INDEX IF NOT EXISTS idx_rel_kind ON identity_relationships(kind);
         """
         with self._conn.cursor() as cur:
             cur.execute(ddl)
@@ -1488,6 +1549,120 @@ class IdentityStore:
         per_entity = {r["eid"]: int(r["n"]) for r in per_entity_rows}
         source_breakdown = {r["source"]: int(r["n"]) for r in source_rows}
         return per_entity, source_breakdown
+
+    # ----- Semantic-graph: entity<->entity relationships -----
+
+    def relationship_groups(
+        self, field: str, dataset: str | None,
+        min_entities: int, max_entities: int,
+    ) -> list[tuple[str, list[str]]]:
+        """Distinct entities that share a value of ``field`` (a payload key),
+        grouped in ONE query. Returns ``[(shared_value, [entity_id, ...]), ...]``
+        for values held by between ``min_entities`` and ``max_entities`` distinct
+        entities. The field is read out of the JSON ``payload`` column; the
+        cardinality gate runs in SQL so only qualifying groups come back."""
+        if self._backend == "mongo":
+            raise NotImplementedError("relationship_groups: not supported on mongo")
+        if not _SAFE_FIELD.fullmatch(field):
+            raise ValueError(f"unsafe relationship field name: {field!r}")
+        if self._backend == "postgres":
+            vexpr = f"((sr.payload)::jsonb ->> '{field}')"
+            agg = "string_agg(DISTINCT sr.entity_id, ',')"
+        else:
+            vexpr = f"json_extract(sr.payload, '$.{field}')"
+            agg = "group_concat(DISTINCT sr.entity_id)"
+        ds = "" if dataset is None else " AND sr.dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        sql = (
+            f"SELECT {vexpr} AS v, {agg} AS eids "
+            "FROM source_records sr "
+            f"WHERE sr.entity_id IS NOT NULL AND {vexpr} IS NOT NULL "
+            f"AND {vexpr} != ''{ds} "
+            f"GROUP BY {vexpr} "
+            "HAVING COUNT(DISTINCT sr.entity_id) >= ? "
+            "AND COUNT(DISTINCT sr.entity_id) <= ?"
+        )
+        rows = self._fetchall(sql, params + (min_entities, max_entities))
+        return [(r["v"], str(r["eids"]).split(",")) for r in rows]
+
+    def add_relationships(self, rows: list[tuple]) -> int:
+        """Insert ``(entity_a, entity_b, kind, field, shared_value, dataset)``
+        relationship edges, idempotently. Endpoints are canonicalized
+        (a < b) and the PRIMARY KEY de-dupes across runs. Returns rows attempted."""
+        if not rows:
+            return 0
+        norm = []
+        for a, b, kind, field, val, dataset in rows:
+            if a == b:
+                continue
+            lo, hi = (a, b) if a < b else (b, a)
+            norm.append((lo, hi, kind, field, val, dataset))
+        if not norm:
+            return 0
+        if self._backend == "mongo":
+            raise NotImplementedError("add_relationships: not supported on mongo")
+        if self._backend == "postgres":
+            sql = (
+                "INSERT INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+            )
+            with self._conn.cursor() as cur:
+                cur.executemany(sql, norm)
+        else:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                norm,
+            )
+        return len(norm)
+
+    def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
+        """Every relationship edge touching ``entity_id`` (either endpoint),
+        as ``{other_entity_id, kind, field, shared_value}``."""
+        if self._backend == "mongo":
+            raise NotImplementedError("get_relationships: not supported on mongo")
+        rows = self._fetchall(
+            "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
+            "FROM identity_relationships "
+            "WHERE entity_a_id = ? OR entity_b_id = ?",
+            (entity_id, entity_id),
+        )
+        out = []
+        for r in rows:
+            other = r["entity_b_id"] if r["entity_a_id"] == entity_id else r["entity_a_id"]
+            out.append({"other_entity_id": other, "kind": r["kind"],
+                        "field": r["field"], "shared_value": r["shared_value"]})
+        return out
+
+    def count_relationships(self) -> int:
+        if self._backend == "mongo":
+            raise NotImplementedError("count_relationships: not supported on mongo")
+        row = self._fetchone("SELECT COUNT(*) AS n FROM identity_relationships", ())
+        return int(row["n"]) if row else 0
+
+    def list_relationships(
+        self, dataset: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """All relationship edges as ``{entity_a_id, entity_b_id, kind, field,
+        shared_value}`` (optionally dataset-scoped). Used by the GoldenGraph
+        export."""
+        if self._backend == "mongo":
+            raise NotImplementedError("list_relationships: not supported on mongo")
+        where = "" if dataset is None else " WHERE dataset = ?"
+        params: tuple = () if dataset is None else (dataset,)
+        rows = self._fetchall(
+            "SELECT entity_a_id, entity_b_id, kind, field, shared_value "
+            f"FROM identity_relationships{where}",
+            params,
+        )
+        return [
+            {"entity_a_id": r["entity_a_id"], "entity_b_id": r["entity_b_id"],
+             "kind": r["kind"], "field": r["field"], "shared_value": r["shared_value"]}
+            for r in rows
+        ]
 
     def emit_event(
         self, event: IdentityEvent, *, return_id: bool = True

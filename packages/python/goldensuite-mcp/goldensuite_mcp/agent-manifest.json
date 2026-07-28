@@ -1330,6 +1330,16 @@
               "description": "Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it."
             },
             {
+              "name": "relationships",
+              "type": "list[RelationshipRule]",
+              "required": false,
+              "default": "[]",
+              "nested": [
+                "RelationshipRule"
+              ],
+              "description": "Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged."
+            },
+            {
               "name": "stitching",
               "type": "ChannelStitchConfig | None",
               "required": false,
@@ -2063,6 +2073,38 @@
             }
           ],
           "doc": "Learning Memory learning parameters."
+        },
+        {
+          "name": "RelationshipRule",
+          "fields": [
+            {
+              "name": "field",
+              "type": "str",
+              "required": true,
+              "description": "Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer')."
+            },
+            {
+              "name": "kind",
+              "type": "str",
+              "required": true,
+              "description": "Relationship label for the emitted edge (e.g. 'shares_phone', 'same_address')."
+            },
+            {
+              "name": "min_entities",
+              "type": "int",
+              "required": false,
+              "default": "2",
+              "description": "A shared value must be held by at least this many distinct entities to emit edges."
+            },
+            {
+              "name": "max_fanout",
+              "type": "int",
+              "required": false,
+              "default": "50",
+              "description": "Skip values shared by more than this many distinct entities (hub values like a switchboard line are not pairwise relationships)."
+            }
+          ],
+          "doc": "One rule for deriving entity-to-entity relationship edges from a shared,"
         },
         {
           "name": "ChannelStitchConfig",

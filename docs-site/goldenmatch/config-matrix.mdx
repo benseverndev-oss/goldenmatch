@@ -373,6 +373,7 @@ _Identity Graph configuration._
 | `source_pk_column` | str \| None | `None` | Column supplying each record's source primary key for stable record ids; a payload hash is used when unset. |
 | `emit_singletons` | bool | `True` | Whether single-record clusters also get a durable entity id. |
 | `weak_confidence_threshold` | float | `0.6` | Cluster confidence below which the bottleneck pair is flagged as a conflict for steward review; 0 disables it. |
+| `relationships` | list[RelationshipRule] | `[]` | [`RelationshipRule`](#relationshiprule) -- Rules deriving entity-to-entity relationship edges from shared non-identity attributes; empty leaves identity resolution unchanged. |
 | `stitching` | ChannelStitchConfig \| None | `None` | [`ChannelStitchConfig`](#channelstitchconfig) -- Cross-device/channel stitching configuration; None leaves identity resolution unchanged. |
 | `survivorship` | SurvivorshipConfig \| None | `None` | [`SurvivorshipConfig`](#survivorshipconfig) -- Identity golden-record survivorship configuration; None keeps the default flat golden record. |
 | `stabilization` | StabilizationConfig \| None | `None` | [`StabilizationConfig`](#stabilizationconfig) -- Cross-run entity stabilization configuration; None runs no stabilize pass. |
@@ -539,6 +540,16 @@ _Learning Memory learning parameters._
 |---|---|---|---|
 | `threshold_min_corrections` | int | `10` | Minimum stored corrections before learned thresholds are tuned from them. |
 | `weights_min_corrections` | int | `50` | Minimum stored corrections before learned field weights are tuned from them. |
+
+### `RelationshipRule`
+_One rule for deriving entity-to-entity relationship edges from a shared,_
+
+| Field | Type | Default | Choices / notes |
+|---|---|---|---|
+| `field` | str | **required** | Payload field whose shared value relates two entities (e.g. 'phone_number', 'zip5', 'employer'). |
+| `kind` | str | **required** | Relationship label for the emitted edge (e.g. 'shares_phone', 'same_address'). |
+| `min_entities` | int | `2` | A shared value must be held by at least this many distinct entities to emit edges. |
+| `max_fanout` | int | `50` | Skip values shared by more than this many distinct entities (hub values like a switchboard line are not pairwise relationships). |
 
 ### `ChannelStitchConfig`
 _Cross-device / channel stitching configuration (#1110, epic #1108)._

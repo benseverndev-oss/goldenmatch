@@ -1288,6 +1288,7 @@ def _resolve_identities(
             source_pk_col=config.identity.source_pk_column,
             emit_singletons=config.identity.emit_singletons,
             weak_confidence_threshold=config.identity.weak_confidence_threshold,
+            relationships=config.identity.relationships,
             pair_score_view=pair_score_view,
             cluster_frames=cluster_frames,
         )
