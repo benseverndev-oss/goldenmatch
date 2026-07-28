@@ -194,3 +194,72 @@ def full(config_name: str = "bf16-lora", gpu: str = GPU_FULL) -> None:
     train_full.with_options(gpu=gpu).remote(qlora=qlora)
     print("full run done -> `modal volume get er-matcher-out model/merged` "
           "(quantize + publish per plan §Phase 4)")
+
+
+@app.function(
+    image=_image,
+    gpu=GPU_FULL,
+    timeout=3 * 60 * 60,
+    volumes={"/out": _out_vol},
+    secrets=[modal.Secret.from_name("er-matcher-hf")],
+)
+def eval_model(limit: int = 0) -> None:
+    """Load the merged model and score match-F1 on the held-out test split via
+    generative inference (build_chat -> generate -> parse_verdict), using
+    eval.run_eval for overall + per-domain P/R/F1 + calibration."""
+    import json
+    import sys
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.insert(0, "/root")
+    sys.path.insert(0, "/root/er_matcher")
+    import eval as ev  # the mounted scripts/er_matcher/eval.py (pure metrics module)
+    from goldenmatch.core.er_matcher.prompt import build_chat, parse_verdict
+
+    mpath = "/out/model/merged"
+    tok = AutoTokenizer.from_pretrained(mpath)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            mpath, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2",
+        )
+        .cuda()
+        .eval()
+    )
+
+    # run_eval scores each pair once for "overall" AND again per-domain -- memoize
+    # so a slow generative matcher only does one generation per pair.
+    cache: dict[tuple[int, int], dict | None] = {}
+
+    def matcher(a: dict, b: dict) -> dict | None:
+        key = (id(a), id(b))
+        if key in cache:
+            return cache[key]
+        text = tok.apply_chat_template(build_chat(a, b), tokenize=False, add_generation_prompt=True)
+        inputs = tok(text, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            out = model.generate(**inputs, max_new_tokens=64, do_sample=False,
+                                 pad_token_id=tok.eos_token_id)
+        gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        v = parse_verdict(gen)
+        cache[key] = v
+        return v
+
+    rows = [json.loads(ln) for ln in open("/root/data/er_matcher/test.jsonl") if ln.strip()]
+    if limit:
+        rows = rows[:limit]
+    print(f"[eval] scoring {len(rows)} test pairs (memoized generative matcher)...")
+    scorecard = ev.run_eval({"test": rows}, matcher)
+    with open("/out/eval_results.json", "w") as f:
+        json.dump(scorecard, f, indent=2)
+    _out_vol.commit()
+    print("[eval] overall:", json.dumps(scorecard["splits"]["test"]["overall"], indent=2))
+
+
+@app.local_entrypoint()
+def evaluate(limit: int = 0) -> None:
+    eval_model.remote(limit=limit)
+    print("eval done -> `modal volume get er-matcher-out eval_results.json`")
