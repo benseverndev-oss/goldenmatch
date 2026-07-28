@@ -4281,6 +4281,16 @@ def _run_dedupe_pipeline(
                     "GoldenCheck quality weighting: %d penalized cell(s)",
                     len(quality_scores),
                 )
+            # Bench diagnostic: distinguish None (weighting off / no members) from
+            # an EMPTY {} (weighting on, zero penalized cells) from a real signal.
+            # An empty-but-non-None dict still forces golden off the fast columnar
+            # path (_polars_native_eligible checks `is not None`), so this count is
+            # the routing signal we want to see in the profile.
+            from goldenmatch.core.bench import record_metric as _rec_qs
+            _rec_qs(
+                "golden_quality_scores_len",
+                -1 if quality_scores is None else len(quality_scores),
+            )
 
     # Golden-record construction was the hidden N²-shaped stage that the
     # bench harness surfaced at 11K rows (36% of wall before this rewrite):
@@ -4327,10 +4337,11 @@ def _run_dedupe_pipeline(
                 )
                 from goldenmatch.core.frame import to_frame as _tf_golden
 
-                _golden_source = _tf_golden(collected_df).select([
-                    c for c in _collected_frame.columns
-                    if not any(c.startswith(p) for p in _internal_prefixes)
-                ]).native
+                with stage("golden_slim_source"):
+                    _golden_source = _tf_golden(collected_df).select([
+                        c for c in _collected_frame.columns
+                        if not any(c.startswith(p) for p in _internal_prefixes)
+                    ]).native
             # Source per-cluster pair scores from the view so the slow builder's
             # confidence_majority survivorship weights by edge confidence instead
             # of degrading to count-majority (the frames-out cluster dict carries
@@ -4341,13 +4352,21 @@ def _run_dedupe_pipeline(
                 and _polars_native_eligible(golden_rules, quality_scores=quality_scores)
             )
             _frames_pair_scores: dict[int, dict[tuple[int, int], float]] | None = None
-            if not _frames_fast_eligible:
-                _psv = _pair_score_view()
-                if _psv is not None:
-                    _frames_pair_scores = {
-                        cid: {(a, b): s for (a, b, s) in edges}
-                        for cid, edges in _psv.iter_clusters()
-                    }
+            # Only confidence_majority survivorship consumes pair scores; on any
+            # other strategy (the default most_complete) this {cluster:{(a,b):s}}
+            # dict over every scored pair (~10.7M at 5M) is built, passed to the
+            # builder, and never read -- measured at 32.8s / 71% of the golden
+            # stage. Gate the build so the default config skips it entirely
+            # (byte-identical: the builder + kernel both accept None here).
+            from goldenmatch.core.golden import _config_uses_confidence_majority
+            if not _frames_fast_eligible and _config_uses_confidence_majority(golden_rules):
+                with stage("golden_pair_score_view_build"):
+                    _psv = _pair_score_view()
+                    if _psv is not None:
+                        _frames_pair_scores = {
+                            cid: {(a, b): s for (a, b, s) in edges}
+                            for cid, edges in _psv.iter_clusters()
+                        }
             # Fused-golden routing (spec 2026-07-09, default-on): try the Arrow-
             # native kernel on the SAME multi_df the classic from-frames builder
             # assembles internally (via _multi_df_from_frames), so a non-None
@@ -4358,7 +4377,10 @@ def _run_dedupe_pipeline(
             _fused_golden_df = None
             if not _frames_fast_eligible:
                 from goldenmatch.core.golden import _multi_df_from_frames
-                _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
+                # Bench diagnostic: the assignments->source join that assembles
+                # multi_df, timed apart from the fused kernel it feeds.
+                with stage("golden_multi_df_join"):
+                    _fused_multi_df = _multi_df_from_frames(_golden_source, cluster_frames)
                 _fused_golden_df = _try_fused_golden(
                     _fused_multi_df,
                     golden_rules,
@@ -4524,6 +4546,15 @@ def _run_dedupe_pipeline(
                                     provenance=_provenance_on,
                                     cluster_pair_scores=cluster_pair_scores,
                                 )
+
+    # Bench diagnostic: which golden builder actually ran. golden_fused_used
+    # True => the Arrow-native fused kernel produced the frame; else a non-empty
+    # golden_records means the slow per-cluster list[dict] batch builder ran
+    # (fused declined / fast-columnar ineligible). Disambiguates the golden-stage
+    # wall for the quality-weighting screw investigation.
+    from goldenmatch.core.bench import record_metric as _rec_golden
+    _rec_golden("golden_fused_used", bool(golden_fused_used))
+    _rec_golden("golden_records_built", len(golden_records))
 
     # Build golden DataFrame (slow path: walks the list[dict] returned by
     # build_golden_records_batch. The fast path above already populated

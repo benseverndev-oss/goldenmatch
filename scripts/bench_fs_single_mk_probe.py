@@ -125,8 +125,16 @@ def main() -> int:
     print(f"dedupe_wall_s={wall:.2f}  clusters={n_clusters}")
     print(f"peak_rss_sampled_mb={sampler.peak:.0f}  ru_maxrss_mb={ru_peak:.0f}")
     print(f"peak_over_baseload_mb={sampler.peak - rss_after_load:.0f}")
-    for k in ("record_count", "scored_pair_count", "cluster_count", "block_count"):
+    # Print the headline metrics first (stable order), then any others the
+    # pipeline recorded (e.g. golden_fused_used / golden_quality_scores_len for
+    # the golden-stage instrumentation) so new diagnostics surface without a
+    # whitelist edit.
+    _headline = ("record_count", "scored_pair_count", "cluster_count", "block_count")
+    for k in _headline:
         if k in metrics:
+            print(f"metric {k}={metrics[k]}")
+    for k in sorted(metrics):
+        if k not in _headline:
             print(f"metric {k}={metrics[k]}")
     print(f"\n{'stage':36s} {'wall_s':>9s} {'peak_rss_mb':>12s}")
     for k in sorted(set(timings) | set(peaks_kb), key=lambda k: -(peaks_kb.get(k, 0))):
