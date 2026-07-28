@@ -5,6 +5,7 @@ the never-0/1 invariant -- pure stdlib, box-safe (no torch/scipy/numpy/network).
 from __future__ import annotations
 
 import os
+import random
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -23,6 +24,7 @@ def test_select_keeps_near_threshold_gold_nonmatches_only():
         _cand("c", "d", 0.99, True),  # gold MATCH -> reject (not a negative)
         _cand("e", "f", 0.05, False),  # far below band -> reject (easy)
         _cand("g", "h", 0.48, False),  # near tau, gold NON-match -> KEEP
+        _cand("i", "j", 0.51, True),  # near tau but gold MATCH -> reject (proves gold gate)
     ]
     out = select_hard_negatives(cands, tau=0.5, delta=0.1, cap=10)
     kept = {(c["a_id"], c["b_id"]) for c in out}
@@ -34,6 +36,15 @@ def test_select_caps_and_is_deterministic():
     out = select_hard_negatives(cands, tau=0.5, delta=0.1, cap=5)
     assert len(out) == 5
     assert out == select_hard_negatives(cands, tau=0.5, delta=0.1, cap=5)  # deterministic
+
+
+def test_select_is_order_independent():
+    cands = [_cand(f"a{i}", f"b{i}", 0.5, False) for i in range(20)]
+    shuffled = cands[:]
+    random.Random(0).shuffle(shuffled)
+    assert select_hard_negatives(shuffled, tau=0.5, delta=0.1, cap=5) == select_hard_negatives(
+        cands, tau=0.5, delta=0.1, cap=5
+    )
 
 
 def test_soft_confidence_monotonic_and_clamped():
