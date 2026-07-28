@@ -7,7 +7,31 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from sources.splits import split_of  # noqa: E402
+from sources.splits import entity_keys_from_edges, split_of  # noqa: E402
+
+
+def test_connected_components_merges_transitively():
+    keys = entity_keys_from_edges(
+        ["A1", "A2", "B1", "B2"],
+        [("A1", "B1"), ("B1", "A2")],
+    )
+    assert keys["A1"] == keys["B1"] == keys["A2"]
+    assert keys["B2"] != keys["A1"]
+    assert keys["A1"] == "A1"
+
+
+def test_singletons_get_own_key():
+    keys = entity_keys_from_edges(["X", "Y"], [])
+    assert keys["X"] == "X" and keys["Y"] == "Y" and keys["X"] != keys["Y"]
+
+
+def test_entity_split_has_no_leakage():
+    ids = [f"A{i}" for i in range(50)] + [f"B{i}" for i in range(50)]
+    edges = [(f"A{i}", f"B{i}") for i in range(50)]
+    keys = entity_keys_from_edges(ids, edges)
+    sp = {rid: split_of(keys[rid], seed=1, val_frac=0.15, test_frac=0.15) for rid in ids}
+    for i in range(50):
+        assert sp[f"A{i}"] == sp[f"B{i}"]
 
 
 def test_str_and_int_eid_parity():

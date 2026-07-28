@@ -166,13 +166,17 @@ def example_to_messages(row: dict[str, Any], cfg: TrainConfig) -> list[dict[str,
     the shared system+user prompt (build_chat) + the assistant TARGET verdict.
 
     The target is the exact JSON the model must emit at inference (render_target),
-    so training and serving share one contract. ``reason`` is a compact,
-    deterministic agreement summary (never-black-box; not free-form so the model
-    can't learn to hallucinate prose). Round-trips through parse_verdict by
-    construction (asserted in tests)."""
+    so training and serving share one contract. Confidence prefers the row's own
+    ``confidence`` (the FS-score-driven soft target some corpora carry) and falls
+    back to ``cfg.match_confidence``/``cfg.nomatch_confidence`` only when the row
+    has none -- an honest-yardstick label beats the fixed 0.9/0.1 constant.
+    ``reason`` is a compact, deterministic agreement summary (never-black-box; not
+    free-form so the model can't learn to hallucinate prose). Round-trips through
+    parse_verdict by construction (asserted in tests)."""
     a, b, label = row["a"], row["b"], row["label"]
     match = label == "match"
-    conf = cfg.match_confidence if match else cfg.nomatch_confidence
+    default_conf = cfg.match_confidence if match else cfg.nomatch_confidence
+    conf = row.get("confidence", default_conf)
     reason = _auto_reason(a, b, match)
     return [*build_chat(a, b), {"role": "assistant", "content": render_target(match, conf, reason)}]
 

@@ -92,6 +92,26 @@ def _row(match: bool) -> dict:
     }
 
 
+def _assistant(msgs: list[dict]) -> str:
+    return next(m["content"] for m in msgs if m["role"] == "assistant")
+
+
+def test_row_confidence_overrides_constant():
+    cfg = tr.TrainConfig()
+    row = _row(match=True)
+    row["confidence"] = 0.62
+    msgs = tr.example_to_messages(row, cfg)
+    assert '"confidence":0.62' in _assistant(msgs)
+
+
+def test_missing_confidence_falls_back_to_constant():
+    cfg = tr.TrainConfig()
+    row = _row(match=True)
+    row.pop("confidence", None)
+    msgs = tr.example_to_messages(row, cfg)
+    assert '"confidence":0.9' in _assistant(msgs)  # DEFAULT_MATCH_CONF
+
+
 def test_example_to_messages_shape_and_roundtrip():
     cfg = tr.TrainConfig()
     for match in (True, False):
