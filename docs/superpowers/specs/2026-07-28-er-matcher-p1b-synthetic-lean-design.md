@@ -51,7 +51,7 @@ Implements the `PairSource` protocol (`name`, `splits() -> {train,val,test}` of 
 - `sources.yaml`: add a `synthetic` entry (`loader: synthetic, mechanism: generate`, per-domain config, seed/profile).
 - `sources_config._BUILDERS`: add a `"synthetic": lambda e, seed: SyntheticSource(...)` factory (the earlier plan omitted this; `generate` is already in `_VALID_MECHANISMS`).
 - `build_corpus.py`: no change needed - the `generate` mechanism already folds a source into the corpus identically to `bundle` (`_ROW_MECHANISMS = {"bundle","generate"}`), and `_fs_enrich_source` already calls `record_pools()` via `getattr`.
-- `gen_pairs.py`: rewire to delegate to the `synthetic` package while keeping its CLI + deterministic-output contract so `test_gen_pairs.py` stays green (back-compat path).
+- `gen_pairs.py`: **left untouched** for the lean cut. It is a legacy standalone generator (domains: people/healthcare/business) that is NOT wired into the corpus (it writes JSONL directly, has no `sources.yaml` entry). Rewiring it would force a domain reconciliation (its people/healthcare vs the new crm/org) for zero lean-test benefit, so we build `SyntheticSource` fresh and leave `gen_pairs.py` + `test_gen_pairs.py` alone (they stay green trivially). Consolidating `gen_pairs.py` into the `synthetic` engine is **deferred to full Phase 1b**.
 - Eval: add **Fodors-Zagats** to `sources/magellan.py::_URL_NAMES`, a `sota_baselines.py` row (published DeepMatcher/Ditto F1), runnable via `zeroshot_eval --dataset fodors_zagats`. `eval_only` (held-out, never trains/mines). Exact fetch URL + SOTA numbers confirmed during implementation (as WA/Beer were in SP3).
 
 ## Testing
@@ -61,7 +61,7 @@ Box-safe pure units (no GPU/network/goldenmatch import):
 - `schemas`: each domain yields its declared fields; strong-id key present.
 - `corruption`: each channel's behavior (a typo mutates ~1 char, nickname maps known names, format-variant reshapes phone/email, etc.); seeded determinism.
 - `generate`: same-seed -> byte-identical; ~50/50 match balance; all 3 domains present; `record_pools()` leakage-consistency (every record in exactly one split; gold-linked share a split); hard negatives share a name but conflict on the strong-id key.
-- `gen_pairs` back-compat: existing `test_gen_pairs.py` stays green.
+- `gen_pairs.py` is untouched, so `test_gen_pairs.py` stays green with no changes.
 
 The FS enrichment of synthetic pairs is verified by a real corpus build (`build_corpus --fs-enrich` with synthetic enabled -> synthetic rows carry FS-driven `confidence` + some `fs_mined` negatives). The retrain + eval are verified by the real Modal run (same boundary as SP2/SP3/SP3.5).
 
@@ -78,3 +78,4 @@ The FS enrichment of synthetic pairs is verified by a real corpus build (`build_
 - Richer `--profile` levels beyond light/heavy.
 - Blend-ratio / person-upweight tuning.
 - Additional held-out benchmarks.
+- Consolidating the legacy `gen_pairs.py` into the `synthetic` engine.
