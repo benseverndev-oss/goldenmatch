@@ -282,6 +282,17 @@ def evaluate(limit: int = 0) -> None:
     print("eval done -> `modal volume get er-matcher-out eval_results.json`")
 
 
+@app.local_entrypoint()
+def evaluate_detached(limit: int = 0) -> None:
+    """Fire-and-forget in-distribution eval: spawn eval_model and return immediately.
+    Run with `modal run --detach ...::evaluate_detached` so the spawned call survives
+    the client exit (the generative scan of the full test split takes ~30-60 min).
+    Poll `modal volume get er-matcher-out eval_results.json` for the result."""
+    call = eval_model.spawn(limit=limit)
+    print(f"eval spawned (detached): {call.object_id} -> poll "
+          "`modal volume get er-matcher-out eval_results.json`")
+
+
 @app.function(
     image=_image,
     gpu=GPU_FULL,
